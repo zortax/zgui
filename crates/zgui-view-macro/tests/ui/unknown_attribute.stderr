@@ -1,0 +1,7 @@
+error: `aria:` is not an attribute namespace
+
+       note: the namespaces are `class:`, `style:`, `var:`, `attr:`, `prop:`, `state:`, `custom_state:`, `on:`, `a11y:`, `let:`
+  --> tests/ui/unknown_attribute.rs:15:27
+   |
+15 |     let _ = view! { Thing(aria:label = "Save") };
+   |                           ^^^^

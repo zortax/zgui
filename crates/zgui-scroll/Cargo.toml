@@ -1,0 +1,31 @@
+[package]
+name = "zgui-scroll"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L5 — systems. Every dependency is inherited: `foo.workspace = true`.
+#
+# Layout owns scroll *regions* — which boxes scroll, how large their content is, where the
+# scrollport sits. This crate owns scroll *offsets*, which are state that changes many times a
+# second and must never re-enter style or layout. It therefore names the document (to mark the one
+# bit a scroll produces), the layout store (to read the region an offset is clamped against) and
+# the vocabulary a scroll is reported in — and nothing above any of them.
+[dependencies]
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+rustc-hash.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+# Box keys are fabricated in the tests that are about the bookkeeping rather than about a document:
+# which container an offset belongs to is a map key, and a map key needs no layout engine behind it.
+zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+
+[lints]
+workspace = true

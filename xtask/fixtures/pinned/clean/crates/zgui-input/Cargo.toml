@@ -1,0 +1,7 @@
+[package]
+name = "zgui-input"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }

@@ -1,0 +1,21 @@
+[package]
+name = "zgui-svg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L4 — engines. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+# The colour a document's paints are expressed in, and the space they are interpolated in.
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+
+# The geometry a resolved document is expressed in. Both are pure data, which is what lets a
+# parsed document be handed to either rasteriser without either one being named here.
+kurbo.workspace = true
+peniko.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+usvg.workspace = true
+
+[lints]
+workspace = true

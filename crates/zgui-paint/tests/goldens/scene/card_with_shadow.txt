@@ -1,0 +1,10 @@
+scene viewport=256x256
+damage full
+passes 0 clip_layers=0 culled=0
+primitives 6 batches=5
+  quad order=1 bounds=rect(0, 0, 256, 256) fill=solid srgb(1, 1, 1, 1)
+  shadow order=2 bounds=rect(2, 6, 252, 124) blur=4 color=premul_srgb[0, 0, 0, 0.25] element=rect(16, 16, 224, 96) radii=[22, 12, 22, 12, 22, 12, 22, 12] element_radii=[20, 10, 20, 10, 20, 10, 20, 10]
+  quad order=3 bounds=rect(16, 16, 224, 96) fill=solid srgb(0.9333, 0.9333, 0.9333, 1) border=[2, 2, 2, 2] stroke=solid srgb(0.2, 0.4, 0.6, 1) style=dashed radii=[20, 10, 20, 10, 20, 10, 20, 10]
+  shadow order=4 bounds=rect(16, 16, 224, 96) blur=0 color=premul_srgb[1, 1, 1, 1] element=rect(16, 16, 224, 96) radii=[20, 10, 20, 10, 20, 10, 20, 10] element_radii=[20, 10, 20, 10, 20, 10, 20, 10] inset
+  quad order=5 bounds=rect(18, 18, 220, 24) fill=solid srgb(0.2, 0.2, 0.2, 1)
+  quad order=6 bounds=rect(14, 14, 228, 100) fill=none border=[2, 2, 2, 2] stroke=solid srgb(0, 0.4, 1, 1) style=solid radii=[22, 12, 22, 12, 22, 12, 22, 12]

@@ -1,0 +1,7 @@
+error: `(` cannot begin a node
+
+       note: a node takes one attribute list, immediately after its name
+  --> tests/ui/second_attribute_list.rs:15:29
+   |
+15 |     let _ = view! { Thing() (class = "a") };
+   |                             ^

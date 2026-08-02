@@ -1,0 +1,22 @@
+error[E0277]: `Thing` is missing the required prop `label`
+  --> tests/ui/missing_required_prop.rs:21:21
+   |
+21 |     let _ = view! { Thing(times = 2) };
+   |                     ^^^^^ `label` was never given
+   |
+help: the trait `HasLabel` is not implemented for `__thing_props::Unset`
+  --> tests/ui/missing_required_prop.rs:8:1
+   |
+ 8 | #[component]
+   | ^^^^^^^^^^^^
+help: the trait `HasLabel` is implemented for `__thing_props::Set`
+  --> tests/ui/missing_required_prop.rs:8:1
+   |
+ 8 | #[component]
+   | ^^^^^^^^^^^^
+note: required by a bound in `ThingPropsBuilder::<__PropLabel>::build`
+  --> tests/ui/missing_required_prop.rs:8:1
+   |
+ 8 | #[component]
+   | ^^^^^^^^^^^^ required by this bound in `ThingPropsBuilder::<__PropLabel>::build`
+   = note: this error originates in the attribute macro `component` (in Nightly builds, run with -Z macro-backtrace for more info)

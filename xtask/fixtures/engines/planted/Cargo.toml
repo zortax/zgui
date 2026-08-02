@@ -1,0 +1,6 @@
+# Fixture workspace for `cargo xtask ledger engines`.
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+layout = { version = "0.12.2", package = "taffy" }

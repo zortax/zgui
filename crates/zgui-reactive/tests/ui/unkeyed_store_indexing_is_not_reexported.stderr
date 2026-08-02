@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `zgui_reactive::StoreFieldIterator`
+ --> tests/ui/unkeyed_store_indexing_is_not_reexported.rs:4:5
+  |
+4 | use zgui_reactive::StoreFieldIterator;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `StoreFieldIterator` in the root
+  |
+help: consider importing this trait instead
+  |
+4 - use zgui_reactive::StoreFieldIterator;
+4 + use reactive_stores::StoreFieldIterator;
+  |

@@ -1,0 +1,15 @@
+error[E0277]: cannot add `Point<CssPx, Device>` to `Point<CssPx, Css>`
+ --> tests/ui/add_points_from_different_spaces.rs:8:17
+  |
+8 |     let _ = css + device;
+  |                 ^ no implementation for `Point<CssPx, Css> + Point<CssPx, Device>`
+  |
+  = help: the trait `Add<Point<CssPx, Device>>` is not implemented for `Point<CssPx, Css>`
+help: `Point<T, S>` implements trait `Add<Rhs>`
+ --> src/point.rs
+  |
+  | impl<T: Unit, S: Space> Add<Self> for Point<T, S> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Add`
+...
+  | impl<T: Unit, S: Space> Add<Size<T, S>> for Point<T, S> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Add<Size<T, S>>`

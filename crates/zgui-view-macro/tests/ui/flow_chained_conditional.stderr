@@ -1,0 +1,8 @@
+error: `else` takes a block
+
+       note: each arm is its own conditional, and an outer arm changing rebuilds the ones inside it
+       help: write `else { if move || … { … } else { … } }`
+  --> tests/ui/flow_chained_conditional.rs:12:47
+   |
+12 |         if move || open.get() { "open" } else if move || shut.get() { "shut" } else { "neither" }
+   |                                               ^^

@@ -1,0 +1,54 @@
+zgui
+Copyright 2026 Leonard Seibold
+
+This product includes software developed as part of the GPUI project
+(https://github.com/zed-industries/zed and its community edition fork),
+licensed under the Apache License, Version 2.0.
+
+Portions of the wgpu rendering backend — the batched primitive pipelines,
+the sprite atlas allocator, and the accompanying WGSL shaders — are derived
+from that work and have been modified. Files containing derived code retain
+an attribution header identifying their origin.
+
+This product also includes software developed as part of the Windows Terminal
+project (https://github.com/microsoft/terminal), Copyright (c) Microsoft
+Corporation, licensed under the MIT License. The gamma-correction ratio table
+used when rendering text is derived from that work and has been modified.
+
+## Derived files
+
+Every file below carries a `DERIVED-FROM:` header naming its origin and licence.
+The table and the headers are checked against each other by `cargo xtask ledger
+attribution`: a derived file with no row here, or a row here with no derived file,
+fails the build.
+
+| File | Origin | Licence |
+|---|---|---|
+| `crates/zgui-geom/src/snap/mod.rs` | the GPUI project | Apache-2.0 |
+| `crates/zgui-geom/src/snap/bounds.rs` | the GPUI project | Apache-2.0 |
+| `crates/zgui-geom/src/snap/stroke.rs` | the GPUI project | Apache-2.0 |
+| `crates/zgui-scene/src/order/tree.rs` | the GPUI project | Apache-2.0 |
+| `crates/zgui-color/src/gamma.rs` | the Windows Terminal project | MIT |
+| `crates/zgui-layout/src/inline/leaf_shell.rs` | the taffy project | MIT |
+| `crates/zgui-render-wgpu/src/shader/sdf.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/blur.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/paint.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/quad.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/shadow.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/sprite.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/sprite_mono.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/sprite_color.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/subpixel.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-render-wgpu/src/shader/text.wgsl` | the Windows Terminal project | MIT |
+
+## Bundled fonts
+
+The font files below are used only by `zgui-text-parley`'s test suite, which runs with system font
+enumeration disabled so that shaped advances and rendered pixels are the same on every machine.
+They are not linked into any library and are not redistributed as part of a built artefact.
+
+| File | Family | Copyright | Licence |
+|---|---|---|---|
+| `crates/zgui-text-parley/tests/fonts/NotoSans-Regular.ttf` | Noto Sans | The Noto Project Authors | SIL Open Font License 1.1 |
+| `crates/zgui-text-parley/tests/fonts/NotoSansArabic-Regular.ttf` | Noto Sans Arabic | The Noto Project Authors | SIL Open Font License 1.1 |
+| `crates/zgui-text-parley/tests/fonts/NotoZnamennyMusicalNotation-Regular.ttf` | Noto Znamenny Musical Notation | The Noto Project Authors | SIL Open Font License 1.1 |

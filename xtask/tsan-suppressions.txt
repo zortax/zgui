@@ -1,0 +1,23 @@
+# ThreadSanitizer suppressions for `cargo xtask tsan`.
+#
+# Every entry here is a report the sanitiser cannot avoid making and that is not a finding against
+# this workspace. An entry costs the run its coverage of whatever it names, so each one states the
+# access it hides, why the sanitiser sees it, and why it is not a defect. Nothing is added to make a
+# run green.
+#
+# The runner that reads this file also runs a deliberate data race in the same configuration and
+# fails when that race is *not* reported, so a suppression written wide enough to hide real work
+# would be caught by the control rather than by review.
+
+# The style engine's own rule tree.
+#
+# Both sides of the report are `style::rule_tree::core::StrongRuleNode::ensure_child`: a read of the
+# child map through a `parking_lot::RwLock` upgradable read guard, and the insert that follows once
+# the guard has been upgraded to a write guard. In the source both accesses are inside the same
+# lock, so there is no race. The sanitiser cannot see the edge because it models synchronisation by
+# intercepting pthread primitives, and `parking_lot`'s contended path parks and unparks with a bare
+# `SYS_futex` syscall instead. That is why the report appears only under sustained load: the
+# uncontended path is plain atomics and is modelled correctly.
+#
+# No memory owned by this workspace is on either access.
+race:style::rule_tree

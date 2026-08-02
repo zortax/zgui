@@ -1,0 +1,7 @@
+error: `for` has no `else`
+
+       note: an empty list renders nothing; to show something instead, wrap it in `if move || !rows.get().is_empty() { … } else { … }`
+  --> tests/ui/flow_list_with_an_alternative.rs:11:81
+   |
+11 |         for item in move || items.get(), key = |item: &usize| *item { {*item} } else { "empty" }
+   |                                                                                 ^^^^

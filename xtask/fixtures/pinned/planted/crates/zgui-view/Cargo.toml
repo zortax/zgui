@@ -1,0 +1,13 @@
+[package]
+name = "zgui-view"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+# PLANTED VIOLATION: the view layer's list is pinned to exactly four crates, and a document is
+# the one thing it must never be able to see.
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }

@@ -1,0 +1,6 @@
+scene viewport=200x120
+damage full
+passes 0 clip_layers=0 culled=0
+primitives 2 batches=1
+  quad order=1 bounds=rect(0, 0, 200, 120) fill=solid srgb(0.8667, 0.8667, 0.8667, 1)
+  quad order=2 bounds=rect(8, 8, 120, 32) fill=solid srgb(0.1333, 0.1333, 0.1333, 1)

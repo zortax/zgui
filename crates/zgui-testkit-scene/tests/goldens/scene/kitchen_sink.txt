@@ -1,0 +1,18 @@
+scene viewport=256x256
+damage full
+passes 1 clip_layers=0 culled=0
+  pass 0 region=rect(32, 32, 64, 48) clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]] instanced=true composite_order=5 items=1
+primitives 12 batches=12
+  shadow order=1 bounds=rect(-5, -3, 266, 122) blur=4 color=premul_srgb[0, 0, 0, 0.25] element=rect(8, 8, 240, 96)
+  quad order=2 bounds=rect(8, 8, 240, 96) fill=linear from=(0, 0) to=(256, 0) in oklab shorter stops=[srgb(1, 0, 0, 1)@0, oklch(0.7, 0.1, 320, 1)@1] border=[2, 2, 2, 2] stroke=solid srgb(0.2, 0.4, 0.6, 1) style=dashed radii=[6, 6, 6, 6, 6, 6, 6, 6]
+  decoration order=3 bounds=rect(16, 40, 64, 2) color=premul_srgb[0.9, 0.1, 0.1, 1] thickness=1 style=wavy clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]]
+  mono_sprite order=3 bounds=rect(16, 16, 8, 16) color=premul_srgb[0, 0, 0, 1] tile=mono:0#0 texels=rect(0, 0, 8, 16) clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]]
+  subpixel_sprite order=3 bounds=rect(32, 16, 8, 16) color=premul_srgb[0, 0, 0, 1] tile=subpixel:0#1 texels=rect(8, 0, 8, 16)
+  color_sprite order=3 bounds=rect(48, 16, 16, 16) tile=color:0#2 texels=rect(16, 0, 8, 16) radii=[8, 8, 8, 8, 8, 8, 8, 8] clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6] > mask mono:0#3 texels=rect(24, 0, 8, 16) transform=#0 source=path]
+  external order=3 bounds=rect(160, 16, 64, 48) texture=#7
+  group_start order=4 bounds=rect(8, 24, 120, 80) opacity=0.5 blend=Multiply/SrcOver filters=[blur(3)] source=rect(-1, 15, 138, 98)
+  vector_composite pass 0 region=rect(32, 32, 64, 48) clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]] instanced=true composite_order=5 items=1
+    vector order=5 id=#1 ink=rect(40, 32, 48, 48) fill=solid srgb(0.2, 0.4, 0.6, 1) fill_rule=EvenOdd d="M 88,56 C 88,69.246 77.246,80 64,80 C 50.754,80 40,69.246 40,56 C 40,42.754 50.754,32 64,32 C 77.246,32 88,42.754 88,56 Z" clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]]
+  group_end order=6 bounds=rect(8, 24, 120, 80) opacity=0.5 blend=Multiply/SrcOver filters=[blur(3)] source=rect(-1, 15, 138, 98)
+  quad order=7 bounds=rect(200, 200, 32, 32) fill=solid srgb(0.2, 0.4, 0.6, 1) transform=#1 [[0.9689, 0.2474, 0, 0], [-0.2474, 0.9689, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+  backdrop order=7 bounds=rect(140, 120, 100, 60) filters=[saturate(1.8), blur(2)] source=rect(134, 114, 112, 72)

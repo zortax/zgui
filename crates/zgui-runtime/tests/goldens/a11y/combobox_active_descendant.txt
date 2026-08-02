@@ -1,0 +1,2 @@
+focus #4
+#1 ComboBox label="Fruit" expanded=true has_popup=Listbox controls=[#2] owns=[#2] active_descendant=#3

@@ -1,0 +1,8 @@
+error[E0599]: no method named `colour` found for struct `ThingPropsBuilder<__PropLabel>` in the current scope
+  --> tests/ui/unknown_prop.rs:14:40
+   |
+ 8 | #[component]
+   | ------------ method `colour` not found for this struct
+...
+14 |     let _ = view! { Thing(label = "a", colour = "red") };
+   |                                        ^^^^^^ method not found in `ThingPropsBuilder<__thing_props::Set>`

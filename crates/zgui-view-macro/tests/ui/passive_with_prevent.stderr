@@ -1,0 +1,5 @@
+error: `:passive` promises never to suppress the default behaviour, and `:prevent` suppresses it
+  --> tests/ui/passive_with_prevent.rs:15:52
+   |
+15 |     let _ = view! { Thing(on:click:passive:prevent = |_| {}) };
+   |                                                    ^

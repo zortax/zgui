@@ -1,0 +1,5 @@
+error: `on:click` needs a handler: `on:click=…`
+  --> tests/ui/listener_without_a_handler.rs:15:30
+   |
+15 |     let _ = view! { Thing(on:click) };
+   |                              ^^^^^

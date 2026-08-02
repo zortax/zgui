@@ -1,0 +1,15 @@
+error[E0425]: cannot find function `on_cleanup` in crate `zgui_reactive`
+ --> tests/ui/owner_on_cleanup_is_not_reexported.rs:6:20
+  |
+6 |     zgui_reactive::on_cleanup(|| ());
+  |                    ^^^^^^^^^^ not found in `zgui_reactive`
+  |
+help: consider importing this function
+  |
+5 + use reactive_graph::owner::on_cleanup;
+  |
+help: if you import `on_cleanup`, refer to it directly
+  |
+6 -     zgui_reactive::on_cleanup(|| ());
+6 +     on_cleanup(|| ());
+  |

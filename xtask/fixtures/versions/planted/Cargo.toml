@@ -1,0 +1,22 @@
+# Fixture workspace for `cargo xtask ledger versions`.
+[workspace]
+members = []
+
+[workspace.dependencies]
+# PLANTED VIOLATION: not pinned to an exact patch release.
+stylo = "0.19.0"
+# PLANTED VIOLATION: without `effects` the whole UI compiles, runs and never updates.
+reactive_graph = { version = "=0.2.14" }
+reactive_stores = "=0.4.3"
+any_spawner = "=0.3.0"
+wgpu = "29.0.4"
+# PLANTED VIOLATION: losing `float_layout` deletes floats with no error at all.
+taffy = { version = "0.12.2", default-features = false, features = [
+    "std",
+    "flexbox",
+    "grid",
+    "block_layout",
+    "content_size",
+    "calc",
+    "detailed_layout_info",
+] }

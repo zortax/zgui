@@ -1,0 +1,10 @@
+[package]
+name = "zgui-style"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+stylo = "=0.19.0"
+# The engine's own length unit and geometry, which the table permits this crate to name.
+app_units = "0.7.8"
+euclid = "0.22.14"

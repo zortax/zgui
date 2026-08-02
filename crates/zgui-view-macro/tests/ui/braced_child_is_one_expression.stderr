@@ -1,0 +1,5 @@
+error: a braced child is one expression
+  --> tests/ui/braced_child_is_one_expression.rs:14:33
+   |
+14 |     let _ = view! { Holder { {a b} } };
+   |                                 ^

@@ -1,0 +1,33 @@
+[package]
+name = "zgui-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# L8 — the measurement harness. Every dependency is inherited from the paths below.
+#
+# The shipped component gallery, driven in process against the headless platform with the real
+# cascade, the real layout, the real font engine and the real glyph rasteriser. Two things run on
+# top of that: the *scenarios*, five end-to-end interactions each with a band around every number
+# it reports, which is what a gate compares one run against the recorded ones; and the *phases*,
+# the exploratory measurements and differentials a person reaches for once a band has gone red.
+[dependencies]
+zgui = { path = "../zgui", version = "0.1.0" }
+zgui-ui = { path = "../zgui-ui", version = "0.1.0" }
+zgui-ui-icons = { path = "../zgui-ui-icons", version = "0.1.0" }
+zgui-ui-primitives = { path = "../zgui-ui-primitives", version = "0.1.0" }
+zgui-ui-tokens = { path = "../zgui-ui-tokens", version = "0.1.0" }
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# The counters have to be compiled in, or every band stays green while measuring nothing.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+
+[lints]
+workspace = true

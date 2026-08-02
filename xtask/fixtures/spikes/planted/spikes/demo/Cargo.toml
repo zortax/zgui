@@ -1,0 +1,6 @@
+# PLANTED VIOLATION: no `# RETIRE: phase NN` header, so nothing ever deletes this spike.
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2024"
+publish = false

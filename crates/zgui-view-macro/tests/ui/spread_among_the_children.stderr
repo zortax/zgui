@@ -1,0 +1,7 @@
+error: a spread forwards a bundle of attributes, so it goes in the attribute list
+
+       help: write it between the parentheses: `Card({..attrs})`
+  --> tests/ui/spread_among_the_children.rs:16:41
+   |
+16 |     let _ = view! { Thing(class = "c") {..attrs} };
+   |                                         ^

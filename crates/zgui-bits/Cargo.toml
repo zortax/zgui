@@ -1,0 +1,25 @@
+[package]
+name = "zgui-bits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+bitflags.workspace = true
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+# Only ever switched on by the `loom` feature below, which swaps the crate's atomics for the
+# model checker's instrumented ones.
+loom = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+# Builds every atomic in the crate out of `loom`'s instrumented primitives so the concurrency
+# model checks under `tests/` can explore every interleaving. A build with this feature on
+# panics outside `loom::model`, so it is for `cargo test --features loom` and nothing else.
+loom = ["dep:loom"]
+
+[lints]
+workspace = true

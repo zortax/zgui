@@ -1,0 +1,8 @@
+[package]
+name = "zgui-geom"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# PLANTED VIOLATION: phase 1 may not depend on a crate that arrives in phase 2.
+zgui-color = { path = "../zgui-color", version = "0.1.0" }

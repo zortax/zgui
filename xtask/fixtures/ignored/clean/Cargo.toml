@@ -1,0 +1,4 @@
+# Fixture workspace for `cargo xtask ledger ignored`.
+[workspace]
+members = ["crates/*"]
+resolver = "3"

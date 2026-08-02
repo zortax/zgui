@@ -1,0 +1,7 @@
+error: control flow takes no attributes
+
+       note: attributes belong on an element inside the body
+  --> tests/ui/flow_control_takes_no_attributes.rs:11:70
+   |
+11 |         for item in move || items.get(), key = |item: &usize| *item, (class = "x") { {*item} }
+   |                                                                      ^

@@ -1,0 +1,121 @@
+error[E0277]: `Rc<String>` cannot be sent between threads safely
+  --> tests/ui/memo_over_a_local_value.rs:18:18
+   |
+18 |     let shared = Memo::new(move |_| Rc::new(String::from("a")));
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<String>` cannot be sent between threads safely
+   |
+   = help: the trait `Send` is not implemented for `Rc<String>`
+note: required by a bound in `Memo::<T>::new`
+  --> $CARGO/reactive_graph-$VERSION/src/computed/memo.rs
+   |
+   |     T: Send + Sync + 'static,
+   |        ^^^^ required by this bound in `Memo::<T>::new`
+...
+   |     pub fn new(fun: impl Fn(Option<&T>) -> T + Send + Sync + 'static) -> Self
+   |            --- required by a bound in this associated function
+
+error[E0277]: `Rc<String>` cannot be shared between threads safely
+  --> tests/ui/memo_over_a_local_value.rs:18:18
+   |
+18 |     let shared = Memo::new(move |_| Rc::new(String::from("a")));
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<String>` cannot be shared between threads safely
+   |
+   = help: the trait `Sync` is not implemented for `Rc<String>`
+note: required by a bound in `Memo::<T>::new`
+  --> $CARGO/reactive_graph-$VERSION/src/computed/memo.rs
+   |
+   |     T: Send + Sync + 'static,
+   |               ^^^^ required by this bound in `Memo::<T>::new`
+...
+   |     pub fn new(fun: impl Fn(Option<&T>) -> T + Send + Sync + 'static) -> Self
+   |            --- required by a bound in this associated function
+
+error[E0277]: `Rc<String>` cannot be sent between threads safely
+  --> tests/ui/memo_over_a_local_value.rs:18:18
+   |
+18 |     let shared = Memo::new(move |_| Rc::new(String::from("a")));
+   |                  ^^^^ `Rc<String>` cannot be sent between threads safely
+   |
+   = help: the trait `Send` is not implemented for `Rc<String>`
+help: the trait `Storage<T>` is implemented for `SyncStorage`
+  --> $CARGO/reactive_graph-$VERSION/src/owner/storage.rs
+   |
+   | / impl<T> Storage<T> for SyncStorage
+   | | where
+   | |     T: Send + Sync + 'static,
+   | |_____________________________^
+   = note: required for `SyncStorage` to implement `Storage<Rc<String>>`
+note: required by a bound in `Memo`
+  --> $CARGO/reactive_graph-$VERSION/src/computed/memo.rs
+   |
+   | pub struct Memo<T, S = SyncStorage>
+   |            ---- required by a bound in this struct
+   | where
+   |     S: Storage<T>,
+   |        ^^^^^^^^^^ required by this bound in `Memo`
+
+error[E0277]: `Rc<String>` cannot be shared between threads safely
+  --> tests/ui/memo_over_a_local_value.rs:18:18
+   |
+18 |     let shared = Memo::new(move |_| Rc::new(String::from("a")));
+   |                  ^^^^ `Rc<String>` cannot be shared between threads safely
+   |
+   = help: the trait `Sync` is not implemented for `Rc<String>`
+help: the trait `Storage<T>` is implemented for `SyncStorage`
+  --> $CARGO/reactive_graph-$VERSION/src/owner/storage.rs
+   |
+   | / impl<T> Storage<T> for SyncStorage
+   | | where
+   | |     T: Send + Sync + 'static,
+   | |_____________________________^
+   = note: required for `SyncStorage` to implement `Storage<Rc<String>>`
+note: required by a bound in `Memo`
+  --> $CARGO/reactive_graph-$VERSION/src/computed/memo.rs
+   |
+   | pub struct Memo<T, S = SyncStorage>
+   |            ---- required by a bound in this struct
+   | where
+   |     S: Storage<T>,
+   |        ^^^^^^^^^^ required by this bound in `Memo`
+
+error[E0599]: the method `get` exists for struct `Memo<Rc<String>>`, but its trait bounds were not satisfied
+  --> tests/ui/memo_over_a_local_value.rs:19:50
+   |
+19 |       let _ = view! { Thing(label = move || shared.get().to_string()) };
+   |                                                    ^^^ method cannot be called on `Memo<Rc<String>>` due to unsatisfied trait bounds
+   |
+  ::: $RUST/alloc/src/rc.rs
+   |
+   | / pub struct Rc<
+   | |     T: ?Sized,
+   | |     #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global,
+   | | > {
+   | |_- doesn't satisfy `Rc<String>: Send` or `Rc<String>: Sync`
+   |
+  ::: $CARGO/reactive_graph-$VERSION/src/computed/memo.rs
+   |
+   |   pub struct Memo<T, S = SyncStorage>
+   |   ----------------------------------- doesn't satisfy 5 bounds
+   |
+  ::: $CARGO/reactive_graph-$VERSION/src/owner/storage.rs
+   |
+   |   pub struct SyncStorage;
+   |   ---------------------- doesn't satisfy `SyncStorage: Storage<ArcMemo<Rc<String>>>` or `SyncStorage: Storage<Rc<String>>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `Memo<Rc<String>>: With`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `Memo<Rc<String>>: zgui::prelude::Read`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `Memo<Rc<String>>: Track`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `Memo<Rc<String>>: ReadUntracked`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `SyncStorage: Storage<ArcMemo<Rc<String>>>`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `SyncStorage: Storage<Rc<String>>`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `Rc<String>: Send`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`
+           `Rc<String>: Sync`
+           which is required by `Memo<Rc<String>>: zgui::prelude::Get`

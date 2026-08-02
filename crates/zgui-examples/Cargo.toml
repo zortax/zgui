@@ -1,0 +1,48 @@
+[package]
+name = "zgui-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# L8 — product. Every dependency is inherited: `foo.workspace = true`.
+#
+# One dependency for the framework, deliberately. These are ordinary applications, and an
+# application depends on the umbrella crate and nothing else: if a view, a component, a style sheet
+# or an entry point needed anything further, the examples here would not compile, which is the
+# point of keeping them in a package of their own rather than beside the crate they exercise.
+#
+# The inspector is the exception, and it is a tool rather than part of the framework: an
+# application that wants one mounts it as a component and therefore names the crate that defines
+# it, exactly as it would name any other component library. Nothing in `zgui` re-exports it,
+# because an application that does not want a developer tool linked in should not have one.
+[dependencies]
+zgui = { path = "../zgui", version = "0.1.0" }
+zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
+
+[[example]]
+name = "counter"
+path = "../../examples/counter.rs"
+
+[[example]]
+name = "todo"
+path = "../../examples/todo.rs"
+
+[[example]]
+name = "styled"
+path = "../../examples/styled.rs"
+
+[[example]]
+name = "tally"
+path = "../../examples/tally.rs"
+
+[[example]]
+name = "resize"
+path = "../../examples/resize.rs"
+
+[[example]]
+name = "vector"
+path = "../../examples/vector.rs"
+
+[lints]
+workspace = true

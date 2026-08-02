@@ -1,0 +1,42 @@
+[package]
+name = "zgui-a11y"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L5 — systems. Every dependency is inherited: `foo.workspace = true`.
+#
+# The accessibility projection: a document, the geometry laid out for it and the semantics written
+# onto it, turned into the tree an assistive technology reads — and the actions that technology
+# sends back, turned into the same intents a pointer produces. It names no view layer and no window
+# system: what it answers with is a node key and an intent, and whoever holds the frame carries it
+# out.
+[dependencies]
+# The invalidation bits, so that a rebuild is driven by the accessibility phase alone.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+# Which node an assistive technology may put focus on is the same question the tab key asks, and
+# two answers to it would be two tab orders.
+zgui-input = { path = "../zgui-input", version = "0.1.0" }
+# Where a node ended up: an accessibility node's bounds are the fragment tree's answer, and a
+# consumer told the wrong ones draws its highlight over the wrong control.
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+# The coordinate systems that geometry is expressed in. A fragment's rectangle is in its own space,
+# so a rectangle sent to a consumer outside this process is only meaningful with the matrix that
+# space resolved to — and a name for a space does not change when that matrix does, which is what
+# makes a published rectangle go stale with nothing having touched the element.
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+# The interchange vocabulary itself. Every type crossing this crate's outward edge is one of
+# accesskit's, because a parallel copy would convert on every property of every node.
+accesskit.workspace = true
+
+[dev-dependencies]
+# A projection is a claim about a real document, so the tests build one — with real interning, real
+# edits and the real invalidation lattice — rather than a stand-in written to suit the assertion.
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "zgui-platform-headless"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# A platform backend with no windowing system behind it, so it names none. The clock is a value a
+# test moves, the input is a script, and the surface is a buffer — which is what makes the frame
+# loop's parking behaviour assertable at all.
+[dependencies]
+accesskit.workspace = true
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[lints]
+workspace = true

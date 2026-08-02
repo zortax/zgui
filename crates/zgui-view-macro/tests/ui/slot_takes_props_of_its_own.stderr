@@ -1,0 +1,8 @@
+error: a slot takes props of its own, and nothing that belongs to an element
+
+       note: a slot is not an element, so it has nowhere to put a listener, an attribute or a state
+       help: put them on an element inside the slot's children
+  --> tests/ui/slot_takes_props_of_its_own.rs:24:33
+   |
+24 |             CardHeader(slot, on:click = |_| {}) { "Total" }
+   |                                 ^^^^^

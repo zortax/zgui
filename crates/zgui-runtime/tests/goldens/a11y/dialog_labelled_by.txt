@@ -1,0 +1,14 @@
+tree root=#1
+focus #1
+#1 Window children=[#2]
+#2 GenericContainer children=[#3 #8]
+#3 GenericContainer children=[#4 #5 #6 #7]
+#4 GenericContainer
+#5 GenericContainer
+#6 GenericContainer
+#7 GenericContainer
+#8 GenericContainer children=[#9 #10]
+#9 Button label="Delete" expanded=true has_popup=Dialog owns=[#10]
+#10 Dialog modal labelled_by=[#11] described_by=[#12] popup_for=#9 children=[#11 #12]
+#11 GenericContainer label="Delete file?"
+#12 GenericContainer label="This cannot be undone."

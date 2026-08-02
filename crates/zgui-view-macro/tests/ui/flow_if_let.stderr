@@ -1,0 +1,7 @@
+error: `if let` is not part of the view grammar
+
+       help: compute it outside the view, or use a braced child with a `match`
+ --> tests/ui/flow_if_let.rs:9:24
+  |
+9 |     let _ = view! { if let Some(text) = label { {text} } };
+  |                        ^^^

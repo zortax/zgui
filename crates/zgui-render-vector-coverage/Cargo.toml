@@ -1,0 +1,22 @@
+[package]
+name = "zgui-render-vector-coverage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+bytemuck.workspace = true
+kurbo.workspace = true
+peniko.workspace = true
+tracing.workspace = true
+wgpu.workspace = true
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+
+[lints]
+workspace = true

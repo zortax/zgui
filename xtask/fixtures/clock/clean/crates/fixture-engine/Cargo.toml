@@ -1,0 +1,11 @@
+[package]
+name = "fixture-engine"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+wall-clock = []
+
+[[test]]
+name = "wall_clock"
+required-features = ["wall-clock"]

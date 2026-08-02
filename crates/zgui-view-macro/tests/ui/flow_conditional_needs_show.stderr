@@ -1,0 +1,12 @@
+error[E0433]: cannot find type `ShowProps` in this scope
+ --> tests/ui/flow_conditional_needs_show.rs:9:21
+  |
+9 |     let _ = view! { if move || open { "shown" } };
+  |                     ^^ use of undeclared type `ShowProps`
+  |
+help: consider importing one of these structs
+  |
+5 + use crate::zgui::ShowProps;
+  |
+5 + use zgui_view::ShowProps;
+  |

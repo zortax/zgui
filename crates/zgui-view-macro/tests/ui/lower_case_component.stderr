@@ -1,0 +1,15 @@
+error: a component's name is upper camel case, because a lower-case name in a view names an element
+
+       help: `thing()` is an element; a component is written `Thing()`
+ --> tests/ui/lower_case_component.rs:9:4
+  |
+9 | fn thing(#[prop(into)] label: String) -> impl IntoView {
+  |    ^^^^^
+
+warning: unused import: `zgui_view::prelude::*`
+ --> tests/ui/lower_case_component.rs:5:5
+  |
+5 | use zgui_view::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

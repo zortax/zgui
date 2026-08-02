@@ -1,0 +1,7 @@
+error: a row binds one name
+
+       help: bind the row and destructure in the body
+  --> tests/ui/flow_row_binds_one_name.rs:11:13
+   |
+11 |         for (at, gap) in move || pairs.get(), key = |pair: &(usize, usize)| pair.0 { {gap} }
+   |             ^

@@ -1,0 +1,15 @@
+[package]
+name = "zgui-interned"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+rustc-hash.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

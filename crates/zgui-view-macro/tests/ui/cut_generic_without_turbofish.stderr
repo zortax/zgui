@@ -1,0 +1,5 @@
+error: an attribute value is one expression, and this is not one: comparison operators cannot be chained
+  --> tests/ui/cut_generic_without_turbofish.rs:15:41
+   |
+15 |     let _ = view! { Thing(items = Vec<u8>::new()) };
+   |                                         ^

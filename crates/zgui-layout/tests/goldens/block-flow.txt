@@ -1,0 +1,8 @@
+element fc=block at=(0, 0) size=(300 x 400) content=(300 x 88) baseline=16.8 last-baseline=68.8
+  element fc=block at=(0, 0) size=(300 x 40) content=(300 x 24) baseline=16.8 paint-order=[2]
+    anon-inline-root fc=inline at=(0, 0) size=(300 x 24) content=(40 x 24) baseline=16.8
+      text fc=inline text="title" at=(0, 0) size=(0 x 0)
+  element fc=block at=(0, 40) size=(300 x 48) content=(276 x 24) border=(2 2 2 2) padding=(10 10 10 10) baseline=28.8
+    element fc=block at=(12, 12) size=(276 x 24) baseline=16.8 paint-order=[6]
+      anon-inline-root fc=inline at=(0, 0) size=(276 x 24) content=(40 x 24) baseline=16.8
+        text fc=inline text="words" at=(0, 0) size=(0 x 0)

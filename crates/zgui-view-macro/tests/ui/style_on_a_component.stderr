@@ -1,0 +1,7 @@
+error: a whole `style` attribute on a component would replace whatever the component itself set
+
+       help: forward one declaration at a time: `style:gap="1rem"`
+  --> tests/ui/style_on_a_component.rs:15:35
+   |
+15 |     let _ = view! { Thing(style = "gap: 1rem") };
+   |                                   ^^^^^^^^^^^

@@ -1,0 +1,20 @@
+[package]
+name = "zgui-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+#
+# No windowing library and no graphics API appear here, in any section: that absence is the whole
+# contract. `raw-window-handle` is the one graphics-adjacent name, and it is confined to the
+# `GpuSurface` sub-trait so a backend with no GPU simply does not implement it.
+[dependencies]
+accesskit.workspace = true
+raw-window-handle.workspace = true
+thiserror.workspace = true
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[lints]
+workspace = true

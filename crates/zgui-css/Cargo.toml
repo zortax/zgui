@@ -1,0 +1,29 @@
+[package]
+name = "zgui-css"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+
+# The style engine, named here so that nothing above this crate has to. The whole point of the
+# facade is that vendoring, patching or replacing the engine touches this manifest and not the
+# sixteen crates that read computed styles.
+servo_arc.workspace = true
+cssparser.workspace = true
+stylo.workspace = true
+stylo_atoms.workspace = true
+stylo_static_prefs.workspace = true
+
+# The engine's exact length unit and the geometry its container-query hook answers in. Both appear
+# in engine signatures in *return* position, where no inference trick and no re-export through the
+# engine itself can avoid naming the crate, so they are named here once and nowhere else.
+app_units.workspace = true
+euclid.workspace = true
+
+[lints]
+workspace = true

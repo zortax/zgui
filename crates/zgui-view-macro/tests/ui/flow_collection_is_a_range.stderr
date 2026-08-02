@@ -1,0 +1,8 @@
+error: a list re-reads its collection, so `in` takes a closure
+
+       note: `for` in a view is not Rust's `for`; it names a list that rebuilds itself
+       help: write `in move || 0..10`
+ --> tests/ui/flow_collection_is_a_range.rs:8:34
+  |
+8 |     let _ = view! { for index in 0..10, key = |index: &usize| *index { {*index} } };
+  |                                  ^

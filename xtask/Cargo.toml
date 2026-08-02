@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# xtask is the workspace's own gate runner. It stays dependency-light on purpose: it has to
+# build before anything else does, on a checkout where nothing else compiles yet.
+[dependencies]
+thiserror.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

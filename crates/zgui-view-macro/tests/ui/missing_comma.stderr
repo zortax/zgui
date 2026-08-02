@@ -1,0 +1,7 @@
+error: attributes are separated by commas
+
+       help: write one between them: `class = "a", on:click = f`
+  --> tests/ui/missing_comma.rs:15:45
+   |
+15 |     let _ = view! { Thing(attr:data-a = "1" attr:data-b = "2") };
+   |                                             ^^^^

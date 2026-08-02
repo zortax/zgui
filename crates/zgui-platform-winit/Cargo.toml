@@ -1,0 +1,66 @@
+[package]
+name = "zgui-platform-winit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# The production platform backend: a real event loop, real windows, the desktop's clipboards and
+# the accessibility adapter. It is the only crate in the tree that names a windowing library, which
+# is what confines a windowing migration to one manifest and one set of translation tables.
+[dependencies]
+accesskit.workspace = true
+accesskit_winit.workspace = true
+arboard.workspace = true
+raw-window-handle.workspace = true
+smithay-clipboard.workspace = true
+tracing.workspace = true
+winit.workspace = true
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[dev-dependencies]
+# The renderer the surface handles are handed to, and the runtime driven over this backend. Both
+# are here so that the seams this crate opens have a consumer inside the workspace rather than a
+# promise that some future application will wire them.
+zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0" }
+
+# A process may create exactly one event loop, ever, and on most desktops only on its own first
+# thread. So each property asserted against a real loop is its own program, and none of them runs
+# under a test harness that would put it on a spawned thread.
+[[test]]
+name = "both_backends"
+path = "tests/both_backends.rs"
+harness = false
+
+[[test]]
+name = "wake_signal"
+path = "tests/wake_signal.rs"
+harness = false
+
+[[test]]
+name = "wake_deadline"
+path = "tests/wake_deadline.rs"
+harness = false
+
+[[test]]
+name = "wake_idle"
+path = "tests/wake_idle.rs"
+harness = false
+
+[[test]]
+name = "wake_occluded"
+path = "tests/wake_occluded.rs"
+harness = false
+
+[lints]
+workspace = true

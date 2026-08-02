@@ -1,0 +1,25 @@
+# The floor each converted suite may never fall below.
+#
+# Both numbers are a floor. A run with fewer tests fails even if every one of them
+# passes, because deleting or refusing a failing test is the easiest way to raise a
+# pass rate and the least honest.
+
+[block-flow]
+tests = 2
+passing = 2
+
+[css-sizing]
+tests = 2
+passing = 2
+
+[flexbox]
+tests = 2
+passing = 2
+
+[float]
+tests = 1
+passing = 1
+
+[grid]
+tests = 2
+passing = 2

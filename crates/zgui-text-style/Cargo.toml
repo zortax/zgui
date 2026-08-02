@@ -1,0 +1,24 @@
+[package]
+name = "zgui-text-style"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L4 — engines. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-css = { path = "../zgui-css", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+
+rustc-hash.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+# The lowering counters are read back in `tests/counters.rs`, which has to work in an optimised
+# build too, so the feature that keeps them live is switched on for the test targets.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+
+[lints]
+workspace = true

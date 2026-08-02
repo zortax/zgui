@@ -1,0 +1,11 @@
+[package]
+name = "zgui-style"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+stylo = "=0.19.0"
+# PLANTED VIOLATION: the reference implementation may be read, never linked.
+gpui = "0.1"
+# PLANTED VIOLATION: only zgui-layout may name the layout engine, whatever key it is renamed to.
+layout.workspace = true

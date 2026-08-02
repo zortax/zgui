@@ -1,0 +1,58 @@
+[package]
+name = "zgui-paint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L4 — engines. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+# Generation-checked handles, which a fragment key is one of.
+zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
+# Glyph tiles and mask tiles are named by the primitives this crate emits.
+zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+# The damage set this stage grows and then reads.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-css = { path = "../zgui-css", version = "0.1.0" }
+# The roots of the subtrees a frame removed, which is the one rectangle no live fragment can
+# report, and the node identity a fragment is attributed to.
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+# Fragments, their ink, their clips and the read-extent registry this stage expands damage over.
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+# What the device can do decides what is emitted, not only how it is drawn: without dual-source
+# blending there is no subpixel sprite to emit at all.
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# Vector documents. The paint stage is where a document becomes primitives, so it is where the
+# document model is named; the reader itself is behind that crate's own parse boundary.
+zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
+# The glyph formats and the paragraph identifiers a text fragment names.
+zgui-text = { path = "../zgui-text", version = "0.1.0" }
+
+rustc-hash.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# The paint key that decides *damage* is computed there; this crate's lowering key must stay a
+# subset of it, and the test that says so needs both.
+zgui-style = { path = "../zgui-style", version = "0.1.0" }
+# The counters have to be compiled in, or every budget stays green while measuring nothing.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+# The properties a drawing's outlines arrive on, which a fixture has to write the way a view does.
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[lints]
+workspace = true
+
+# The acceptance suite drives a real cascade, a real box tree and a real layout pass, because a
+# paint stage tested against hand-written fragments is a paint stage tested against a guess.
+[dev-dependencies.zgui-text-style]
+path = "../zgui-text-style"
+
+[dev-dependencies.zgui-interned]
+path = "../zgui-interned"

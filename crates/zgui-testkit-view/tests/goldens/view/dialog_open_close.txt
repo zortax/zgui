@@ -1,0 +1,24 @@
+create #4 #marker
+create #5 surface
+classes #5 [dialog]
+create #6 #marker
+create #7 control
+classes #7 [close]
+create #8 #marker
+create #9 #text
+text #9 "Close"
+insert #8 into #7
+insert #9 into #7 before #8
+insert #6 into #5
+insert #7 into #5 before #6
+detach #3
+insert #4 into #1 before #2
+insert #5 into #1 before #4
+create #10 #marker
+detach #9
+detach #8
+detach #7
+detach #6
+detach #5
+detach #4
+insert #10 into #1 before #2

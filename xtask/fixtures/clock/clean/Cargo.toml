@@ -1,0 +1,3 @@
+# Fixture workspace for `cargo xtask ledger clock`.
+[workspace]
+members = ["crates/*", "gate"]

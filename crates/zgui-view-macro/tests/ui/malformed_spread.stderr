@@ -1,0 +1,7 @@
+error: a braced attribute spreads a forwarded bundle and must start with `..`: `{..attrs}`
+
+       help: a braced *child* goes in the block, not in the parentheses
+  --> tests/ui/malformed_spread.rs:16:27
+   |
+16 |     let _ = view! { Thing({forwarded}) };
+   |                           ^^^^^^^^^^^

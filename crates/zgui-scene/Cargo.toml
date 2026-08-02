@@ -1,0 +1,25 @@
+[package]
+name = "zgui-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+bytemuck.workspace = true
+kurbo.workspace = true
+peniko.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
+zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

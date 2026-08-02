@@ -1,0 +1,7 @@
+# PLANTED VIOLATION: retires in phase 2, but the tree already holds a phase-4 crate.
+# RETIRE: phase 2
+[package]
+name = "outlived"
+version = "0.1.0"
+edition = "2024"
+publish = false

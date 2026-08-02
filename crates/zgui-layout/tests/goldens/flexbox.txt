@@ -1,0 +1,10 @@
+element fc=flex at=(0, 0) size=(300 x 100) content=(300 x 62) baseline=92.8 last-baseline=54.8 paint-order=[1, 4, 7]
+  element fc=block at=(0, 38) size=(155 x 24) baseline=16.8 paint-order=[5]
+    anon-inline-root fc=inline at=(0, 0) size=(155 x 24) content=(24 x 24) baseline=16.8
+      text fc=inline text="two" at=(0, 0) size=(0 x 0)
+  element fc=block at=(163, 38) size=(89 x 24) baseline=16.8 paint-order=[2]
+    anon-inline-root fc=inline at=(0, 0) size=(89 x 24) content=(24 x 24) baseline=16.8
+      text fc=inline text="one" at=(0, 0) size=(0 x 0)
+  element fc=block at=(260, 38) size=(40 x 24) baseline=16.8 paint-order=[8]
+    anon-inline-root fc=inline at=(0, 0) size=(40 x 24) baseline=16.8
+      text fc=inline text="three" at=(0, 0) size=(0 x 0)

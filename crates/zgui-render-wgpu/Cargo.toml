@@ -1,0 +1,32 @@
+[package]
+name = "zgui-render-wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+bincode.workspace = true
+bytemuck.workspace = true
+futures.workspace = true
+# Named only to turn on the decoding of a shader representation. The type itself is reached through
+# `wgpu::naga`, so if the two ever resolved to different builds of it this crate would not compile.
+naga = { workspace = true, features = ["deserialize"] }
+tracing.workspace = true
+# `naga-ir` is what lets a pipeline be built from a representation rather than from WGSL text.
+wgpu = { workspace = true, features = ["naga-ir"] }
+zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+
+# Parsing the shaders once per build rather than once per launch.
+[build-dependencies]
+bincode.workspace = true
+naga = { workspace = true, features = ["wgsl-in", "serialize"] }
+
+[lints]
+workspace = true

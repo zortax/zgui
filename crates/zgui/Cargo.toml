@@ -1,0 +1,64 @@
+[package]
+name = "zgui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
+#
+# The crate an application depends on, and the only one it has to name. Everything here is a
+# re-export or the wiring that turns the framework's seams into a running desktop program: the
+# window backend, the graphics device, the font engine and the rasteriser, each of which is a
+# decision the layers below deliberately leave open and an application should not have to make
+# before its first line of interface.
+[dependencies]
+# The tile store, the display list and the damage set: an application that draws through a device
+# this framework has no backend for implements the renderer contract, and cannot do that without
+# naming what its methods take.
+zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+# The text engine is a shaper wrapped in the measurer layout asks its questions through, and that
+# wrapper lives with the layout algorithms that call it.
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+# What rasterises the vector parts of a display list. A renderer with none attached plans a
+# drawing's passes and then composites an unwritten scratch, which is an icon that is not there —
+# so this is wiring rather than a choice an application should be asked to make.
+zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
+zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-text = { path = "../zgui-text", version = "0.1.0" }
+zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0" }
+zgui-view-macro = { path = "../zgui-view-macro", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[dev-dependencies]
+# Driving the same application over buffers, which is how the wiring above is asserted on with no
+# display server and no graphics device.
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# The stage marks a profiling run reads back. The counters have to be compiled in, or every budget
+# stays green while measuring nothing — which is why this names the feature rather than relying on
+# whatever another crate happened to turn on.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+
+[features]
+# Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
+# cannot execute a budget and report an unoptimised number as a regression; the gate switches it on
+# and runs that target in release.
+wall-clock = []
+
+# The budgets for the path from an input event to a finished frame. Compiled only when the gate
+# asks for it, and run by the gate in release.
+[[test]]
+name = "wall_clock"
+required-features = ["wall-clock"]
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+error: `{..}` spreads nothing
+
+       help: name the bundle to spread: `{..attrs}`
+  --> tests/ui/spread_of_nothing.rs:15:27
+   |
+15 |     let _ = view! { Thing({..}) };
+   |                           ^^^^

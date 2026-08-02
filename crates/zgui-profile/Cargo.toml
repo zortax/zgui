@@ -1,0 +1,21 @@
+[package]
+name = "zgui-profile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[features]
+# Keeps the frame counters live in a build that would otherwise drop them. They are compiled in
+# whenever debug assertions are on, so this is what a release-mode test harness switches on to be
+# able to read them.
+counters = []
+
+[lints]
+workspace = true

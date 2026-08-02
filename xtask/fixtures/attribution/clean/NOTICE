@@ -1,0 +1,7 @@
+Fixture NOTICE.
+
+## Derived files
+
+| File | Origin | Licence |
+|---|---|---|
+| `crates/zgui-render-wgpu/src/quad.wgsl` | the GPUI project | Apache-2.0 |

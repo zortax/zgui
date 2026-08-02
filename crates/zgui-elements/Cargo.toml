@@ -1,0 +1,31 @@
+[package]
+name = "zgui-elements"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L6 — frontend. Every dependency is inherited: `foo.workspace = true`.
+#
+# The vocabulary is written against the view layer's seams and nothing else, so an element built
+# here drives a native document, a browser's own nodes or a recorder without knowing which.
+[dependencies]
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+# `<vector>`'s paths are Béziers, and this is the crate that fixes what a Bézier is for everything
+# downstream of it — the icon set, the chart marks and the rasteriser all name the same type, so a
+# path crosses from a view to the raster with no conversion anywhere.
+kurbo.workspace = true
+
+[dev-dependencies]
+zgui-view = { path = "../zgui-view", version = "0.1.0", features = ["stub-backend"] }
+# The `view!` grammar is compiled against this vocabulary here rather than in the macro's own
+# crate: the macro arrives first, so it is this crate that can name both.
+zgui-view-macro = { path = "../zgui-view-macro", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+trybuild.workspace = true
+
+[lints]
+workspace = true

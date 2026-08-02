@@ -1,0 +1,9 @@
+error: a condition is re-read when what it reads changes, so `if` takes a closure
+
+       note: `chosen` may already be a closure; if it is, write `Show(when = chosen) { … }`
+       note: `if` is written as `Show`, so the view needs `Show` in scope
+       help: write `if move || chosen`
+ --> tests/ui/flow_condition_is_a_name.rs:9:24
+  |
+9 |     let _ = view! { if chosen { "shown" } };
+  |                        ^^^^^^

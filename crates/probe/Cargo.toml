@@ -1,0 +1,26 @@
+[package]
+name = "probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# probe is the stack-compiles canary: it exists to prove that every external engine still
+# builds together on the pinned toolchain with the pinned feature sets. It is the one member
+# exempt from the engine-naming ledger, and `cargo xtask ledger engines` names it explicitly.
+[dependencies]
+accesskit.workspace = true
+accesskit_winit.workspace = true
+parley.workspace = true
+reactive_graph.workspace = true
+reactive_stores.workspace = true
+stylo.workspace = true
+taffy.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+vello.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

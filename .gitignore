@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+*.pdb
+.DS_Store
+/.idea
+/.vscode
+perf.data*
+flamegraph.svg
+/tools/view-rewrite/target
+/docs/perf
+/docs/planning
+/docs/research
+/docs/shots
+/docs/component-library.md

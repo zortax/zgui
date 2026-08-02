@@ -1,0 +1,6 @@
+[package]
+name = "fixture-stage"
+version = "0.1.0"
+
+[dependencies]
+fixture-profile = { path = "../fixture-profile", version = "0.1.0" }

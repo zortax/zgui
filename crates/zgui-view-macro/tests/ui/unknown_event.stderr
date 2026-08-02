@@ -1,0 +1,7 @@
+error: `on:clik` is not an event
+
+       help: there is an event called `on:click`
+  --> tests/ui/unknown_event.rs:15:30
+   |
+15 |     let _ = view! { Thing(on:clik = |_| {}) };
+   |                              ^^^^

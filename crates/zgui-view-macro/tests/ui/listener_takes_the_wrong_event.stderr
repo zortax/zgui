@@ -1,0 +1,37 @@
+error[E0631]: type mismatch in closure arguments
+  --> tests/ui/listener_takes_the_wrong_event.rs:20:30
+   |
+20 |     let _ = view! { Thing(on:click = move |ev: &mut EventCx<'_, KeyDown>| { let _ = ev; }) };
+   |                              ^^^^^   ------------------------------------ found signature defined here
+   |                              |
+   |                              expected due to this
+   |
+   = note: expected closure signature `for<'a, 'b> fn(&'a mut zgui::EventCx<'b, zgui::events::Click>) -> _`
+              found closure signature `fn(&mut zgui::EventCx<'_, zgui::events::KeyDown>) -> _`
+note: required by a bound in `zgui::Attrs::listener`
+  --> $WORKSPACE/crates/zgui-view/src/binding/attrs.rs
+   |
+   |     pub fn listener<E: crate::event::EventType>(
+   |            -------- required by a bound in this associated function
+...
+   |         handler: impl Fn(&mut EventCx<'_, E>) + 'static,
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Attrs::listener`
+
+error[E0631]: type mismatch in closure arguments
+  --> tests/ui/listener_takes_the_wrong_event.rs:21:30
+   |
+21 |     let _ = view! { Thing(on:key_down = move |ev: &mut EventCx<'_, Click>| { let _ = ev; }) };
+   |                              ^^^^^^^^   ---------------------------------- found signature defined here
+   |                              |
+   |                              expected due to this
+   |
+   = note: expected closure signature `for<'a, 'b> fn(&'a mut zgui::EventCx<'b, zgui::events::KeyDown>) -> _`
+              found closure signature `fn(&mut zgui::EventCx<'_, zgui::events::Click>) -> _`
+note: required by a bound in `zgui::Attrs::listener`
+  --> $WORKSPACE/crates/zgui-view/src/binding/attrs.rs
+   |
+   |     pub fn listener<E: crate::event::EventType>(
+   |            -------- required by a bound in this associated function
+...
+   |         handler: impl Fn(&mut EventCx<'_, E>) + 'static,
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Attrs::listener`

@@ -1,0 +1,7 @@
+# The pin moves deliberately, in its own commit, with CI green on the new toolchain first.
+# Nightly is required for edition 2024 together with the trait-solver behaviour the style
+# engine's generic associated types depend on. There is no stable-Rust build.
+[toolchain]
+channel = "nightly-2026-04-16"
+components = ["rustfmt", "clippy", "rust-src", "miri"]
+profile = "minimal"

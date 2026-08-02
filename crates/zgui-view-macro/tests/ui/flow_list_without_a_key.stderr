@@ -1,0 +1,7 @@
+error: a list needs a key, so a row keeps its identity when the collection changes
+
+       help: `for row in c, key = |row: &Row| row.id { … }`
+  --> tests/ui/flow_list_without_a_key.rs:10:53
+   |
+10 |     let _ = view! { for item in move || items.get() { {*item} } };
+   |                                                     ^

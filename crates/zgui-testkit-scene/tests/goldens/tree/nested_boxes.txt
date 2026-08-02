@@ -1,0 +1,5 @@
+root width=800
+  header width=800
+    title width=240
+    actions width=120
+  body width=800

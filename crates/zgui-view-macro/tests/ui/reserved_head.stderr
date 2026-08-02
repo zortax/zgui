@@ -1,0 +1,7 @@
+error: `while` is reserved and has no meaning in a view
+
+       note: `for` and `if` are the control flow a view has; anything else is a component
+  --> tests/ui/reserved_head.rs:14:30
+   |
+14 |     let _ = view! { Holder { while(open = flag) { "x" } } };
+   |                              ^^^^^

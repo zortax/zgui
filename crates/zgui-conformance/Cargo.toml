@@ -1,0 +1,34 @@
+[package]
+name = "zgui-conformance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Never published: this is the instrument the framework is measured with, not part of it.
+publish = false
+
+# L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+# The parity register, the engine's own property list, and the computed styles a lint reads.
+zgui-css = { path = "../zgui-css", version = "0.1.0" }
+# The document a converted test is built into, and the box and fragment trees it lays out into.
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-style = { path = "../zgui-style", version = "0.1.0" }
+# Geometry, names, and the identifier tables a fragment pass writes into.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The deterministic shaper and the golden-comparison machinery every rendering here is checked
+# with. A conformance run that depended on the fonts installed on the machine would measure the
+# machine.
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-text = { path = "../zgui-text", version = "0.1.0" }
+zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
+
+# The style engine's own property definitions are a TOML file, and it is the second input the
+# absent-reason cross-check is answered from.
+toml.workspace = true
+
+[lints]
+workspace = true

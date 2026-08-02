@@ -1,0 +1,7 @@
+error: an `if` needs a body: what is shown while the condition holds
+
+       note: `if` is written as `Show`, so the view needs `Show` in scope
+  --> tests/ui/flow_conditional_without_a_body.rs:10:43
+   |
+10 |     let _ = view! { if move || open.get() { } };
+   |                                           ^^^

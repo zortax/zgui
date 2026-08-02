@@ -1,0 +1,9 @@
+[package]
+name = "zgui-vocab"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+accesskit = "0.24.1"
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }

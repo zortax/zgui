@@ -1,0 +1,20 @@
+# Fixture workspace for `cargo xtask ledger versions`.
+[workspace]
+members = []
+
+[workspace.dependencies]
+stylo = "=0.19.0"
+reactive_graph = { version = "=0.2.14", features = ["effects"] }
+reactive_stores = "=0.4.3"
+any_spawner = "=0.3.0"
+wgpu = "29.0.4"
+taffy = { version = "0.12.2", default-features = false, features = [
+    "std",
+    "flexbox",
+    "grid",
+    "block_layout",
+    "float_layout",
+    "content_size",
+    "calc",
+    "detailed_layout_info",
+] }

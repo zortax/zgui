@@ -1,0 +1,13 @@
+[package]
+name = "zgui-vocab"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+accesskit = "0.24.1"
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+
+[dev-dependencies]
+# PLANTED VIOLATION: a development dependency is still something the crate can see.
+taffy = "0.12.2"

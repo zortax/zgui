@@ -1,0 +1,19 @@
+[package]
+name = "zgui-atlas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+etagere.workspace = true
+rustc-hash.workspace = true
+thiserror.workspace = true
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

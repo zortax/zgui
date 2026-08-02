@@ -1,0 +1,7 @@
+error: a list re-reads its collection, so `in` takes a closure
+
+       help: write `in move || items.get()`
+  --> tests/ui/flow_collection_read_once.rs:10:33
+   |
+10 |     let _ = view! { for item in items.get(), key = |item: &usize| *item { {*item} } };
+   |                                 ^^^^^

@@ -1,0 +1,29 @@
+[package]
+name = "zgui-devtools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L8 — the inspector. Every dependency is a path to a crate below it.
+#
+# It sits above the framework rather than inside it: nothing here is reachable from `zgui`, and an
+# application that does not name this crate carries none of it. That is the whole of what makes it
+# optional — an inspector compiled into every build is an inspector whose cost has to be argued
+# about, and one that is a dependency an application adds is one that costs nothing to leave out.
+[dependencies]
+zgui = { path = "../zgui", version = "0.1.0" }
+zgui-css = { path = "../zgui-css", version = "0.1.0" }
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+# The parity declarations, read straight from the crates that make them: the inspector reports
+# what this build supports, and a table copied from them would report what it used to support.
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-style = { path = "../zgui-style", version = "0.1.0" }
+zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
+zgui-view-dom = { path = "../zgui-view-dom", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+
+[dev-dependencies]
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+
+[lints]
+workspace = true

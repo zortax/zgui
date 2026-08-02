@@ -1,0 +1,30 @@
+[package]
+name = "zgui-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L6 — frontend. Every dependency is inherited: `foo.workspace = true`.
+#
+# The list is exactly four, and CI asserts it: `cargo xtask ledger pinned`. The view layer is
+# written entirely against the three traits it declares, so it can see no document, no style
+# engine, no layout engine, no renderer and no window system. A backend for any of those is
+# substitutable precisely because none of them is nameable here.
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+# The in-memory backend this crate's own examples and tests build against. Off by default, so an
+# application links none of it; turned on for the test and documentation-test builds by the
+# development dependency below.
+[features]
+stub-backend = []
+
+[dev-dependencies]
+proptest.workspace = true
+zgui-view = { path = ".", features = ["stub-backend"] }
+
+[lints]
+workspace = true

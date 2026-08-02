@@ -1,0 +1,15 @@
+create #1 root
+create #2 control
+classes #2 [button]
+class #2 danger off
+listen #2 click
+create #3 #marker
+create #4 #text
+text #4 "Save"
+insert #3 into #2
+insert #4 into #2 before #3
+insert #2 into #1
+handler #2 click target
+class #2 danger on
+handler #2 click target
+class #2 danger off

@@ -1,0 +1,42 @@
+[package]
+name = "zgui-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L8 — product. Every dependency is inherited: `foo.workspace = true`.
+#
+# Three edges, and every one of them is a crate an application depends on too: the umbrella, the
+# headless behaviours, the design tokens and the icons. Nothing here reaches past the public API,
+# because anything these components need, an application author needs as well — so a fourth edge,
+# into the framework's own crates, would be a hole in that API rather than a convenience.
+[dependencies]
+zgui = { path = "../zgui", version = "0.1.0" }
+zgui-ui-icons = { path = "../zgui-ui-icons", version = "0.1.0" }
+zgui-ui-primitives = { path = "../zgui-ui-primitives", version = "0.1.0" }
+zgui-ui-tokens = { path = "../zgui-ui-tokens", version = "0.1.0" }
+
+[dev-dependencies]
+zgui-testkit-view = { path = "../zgui-testkit-view", version = "0.1.0" }
+# Reading the computed tree back out of a live window, for fixtures that ask where a page's
+# scrollable size actually came from rather than only what it is.
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+# Driving the same components over buffers, with the real router, the real hit test and the real
+# activation defaults under them. Dispatching an event straight at a node answers what a component
+# does *given* a click; only this answers whether a pointer press and release ever becomes one.
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# A graphics device, and what rasterises the vector parts of a display list on it. Everything else
+# written about a drawing in this package stops at the display list, and a display list is satisfied
+# by a rasteriser that writes nothing — so the gallery's pixels are read back off a real device,
+# through the same two crates a window is drawn through.
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
+# The map the ink measurement tallies colours in.
+rustc-hash.workspace = true
+# The accessibility tree, read by the consumer a screen reader's platform adapter is built on.
+# Asserting on the tree this library *publishes* is asserting on our own structure; this applies
+# the updates the way a real client does and asks the result the questions a reader asks.
+accesskit_consumer.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,7 @@
+error: `hello` is a name, not a node
+
+       help: text is a string literal `"hello"`; a value goes in braces: `{hello}`; a childless element is written `hello()`; children go in a block: `hello { … }`
+  --> tests/ui/bare_word_text.rs:14:30
+   |
+14 |     let _ = view! { Holder { hello } };
+   |                              ^^^^^

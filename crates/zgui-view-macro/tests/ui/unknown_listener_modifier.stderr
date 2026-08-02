@@ -1,0 +1,7 @@
+error: `:onc` is not a listener modifier
+
+       note: the modifiers are `:capture`, `:passive`, `:once`, `:prevent` and `:stop`
+  --> tests/ui/unknown_listener_modifier.rs:15:36
+   |
+15 |     let _ = view! { Thing(on:click:onc = |_| {}) };
+   |                                    ^^^

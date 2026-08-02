@@ -1,0 +1,191 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  debug:
+    name: debug — fmt, clippy, test, ledgers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+      # rust-toolchain.toml pins the toolchain; rustup honours it on first use.
+      - name: show toolchain
+        run: rustc --version --verbose
+      - uses: Swatinem/rust-cache@v2
+      - name: record clean debug build time
+        run: |
+          start=$(date +%s)
+          cargo build --workspace
+          echo "clean debug build: $(( $(date +%s) - start ))s" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: cargo xtask ci
+        run: cargo xtask ci
+
+  release:
+    name: release — build and test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+      - uses: Swatinem/rust-cache@v2
+      # The wall-clock budgets are deliberately not here. They live behind a feature this does not
+      # turn on, and `cargo xtask ci` runs them in release as one of its steps, so a local gate run
+      # and this workflow execute the same assertions rather than only this one doing so.
+      - run: cargo build --workspace --release
+      - run: cargo test --workspace --release
+
+  doc:
+    name: doc — every published crate, warnings denied
+    runs-on: ubuntu-24.04
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps
+
+  miri:
+    # The arena is the only crate with an `unsafe` block, and miri is the only thing that checks
+    # its aliasing claims. Too slow for `cargo xtask ci`, so it runs here.
+    name: miri — the arena's aliasing claims
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri test -p zgui-arena
+
+  miri-dom:
+    # The document's own aliasing claims: a handle is a reference into an arena that keeps growing
+    # underneath it, and the record holds a raw pointer back to the store that owns it. `tests/cells`
+    # is the single-threaded file written for this run.
+    #
+    # `tests/shared` is the other half and is not optional: every method in the crate that stores
+    # something through a shared borrow is exercised there by two threads over a handful of nodes,
+    # which is what makes miri's data-race detection reach them. `tests/workers` runs the same
+    # shapes at realistic width and is far too big for the interpreter, so a race that lives on a
+    # `&self` write path is visible here and nowhere else in CI.
+    #
+    # The flags are not preference. `string_cache-0.9.0/src/atom.rs:262` reconstructs a pointer from
+    # a packed integer while dropping a dynamic atom, which the default Stacked Borrows model
+    # rejects, and every crate above this one that holds an atom inherits the same need; the arena's
+    # own miri run keeps the defaults precisely because it holds none.
+    name: miri — the document's aliasing claims
+    runs-on: ubuntu-24.04
+    env:
+      MIRIFLAGS: -Zmiri-tree-borrows -Zmiri-permissive-provenance -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri test -p zgui-dom --test cells
+      # The batched change API derives an exclusive reference from a cell on every call, including
+      # from inside a nested batch, and is sound exactly while no two of them are live at once.
+      # `tests/aliasing` is the shape that breaks the rule if the rule is not kept.
+      - run: cargo miri test -p zgui-dom --test aliasing
+      - run: cargo miri test -p zgui-dom --test shared
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows -Zmiri-permissive-provenance -Zmiri-disable-isolation -Zmiri-preemption-rate=0.5
+
+  tsan:
+    # The parallel style traversal is the one place in the tree where several threads read and
+    # write the same records, and neither miri nor loom can reach it: the interpreter runs a single
+    # thread, and the model checker only covers the primitives that were written against it. So the
+    # threads are run for real with ThreadSanitizer linked in.
+    #
+    # `cargo xtask tsan` is not a wrapper for convenience. It runs a *deliberate* data race — the
+    # selector-flag write done without an atomic — in the same invocation, under the same flags and
+    # the same suppression file, and fails the job when that race is not reported. A sanitiser job
+    # that silently instruments nothing is worse than no job at all, because it reads as protection;
+    # the control is what tells the two apart. It also fails when the suppression file cannot be
+    # read, which is the other way a run comes back green about the wrong configuration.
+    #
+    # The suppression file is `xtask/tsan-suppressions.txt` and carries one entry, for stylo's own
+    # rule tree: both sides of that report are inside one `parking_lot::RwLock` whose contended path
+    # parks on a bare futex syscall the sanitiser cannot model.
+    #
+    # `-Zbuild-std` is required rather than preferred: an uninstrumented `std` leaves the sanitiser
+    # blind to everything that synchronises through it.
+    name: tsan — the threaded targets, and the control that proves it was watching
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The sanitised objects live in a target directory of their own, so the ordinary cache
+          # key would neither save nor restore them.
+          workspaces: ". -> target/tsan"
+      - run: cargo xtask tsan
+
+  loom:
+    # `DirtyCell`'s concurrency proof only exists under the `loom` feature, which no other job
+    # switches on, so without this job the model checks compile to nothing and never run.
+    name: loom — the DirtyCell interleavings
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p zgui-bits --features loom
+
+  features:
+    # Every optional feature in the workspace, built and linted, because a feature nothing
+    # compiles is a feature that rots.
+    name: features — the optional cargo features
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p zgui-bits --all-targets --features loom -- -D warnings
+      - run: cargo clippy -p zgui-profile --all-targets --features counters -- -D warnings
+      - run: cargo test -p zgui-profile --release --features counters
+
+  llvmpipe:
+    # Software rasterisation, so the GPU work has a deterministic machine to run on.
+    # Wired now; the renderer spikes and the pixel goldens are what will use it.
+    name: llvmpipe — software GPU
+    runs-on: ubuntu-24.04
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      WGPU_BACKEND: vulkan
+      VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+      ZGUI_GPU_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: install system libraries and the software rasteriser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            mesa-vulkan-drivers vulkan-tools libvulkan1
+      - name: show the adapter
+        run: vulkaninfo --summary || true
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace

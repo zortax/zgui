@@ -1,0 +1,7 @@
+error: `<` cannot begin a node
+
+       help: a node is a call and a block: `Button(class = "x") { "Save" }`
+  --> tests/ui/tag_in_node_position.rs:15:21
+   |
+15 |     let _ = view! { <Thing/> };
+   |                     ^

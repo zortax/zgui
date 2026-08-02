@@ -1,0 +1,74 @@
+error[E0277]: `Rc<(dyn Fn() + 'static)>` cannot be shared between threads safely
+  --> tests/ui/listeners_with_handlers.rs:23:39
+   |
+23 | const _: () = zgui_dom::assert_sync::<DocumentStore>();
+   |                                       ^^^^^^^^^^^^^ `Rc<(dyn Fn() + 'static)>` cannot be shared between threads safely
+   |
+   = help: within `[ListenerSet; 1024]`, the trait `Sync` is not implemented for `Rc<(dyn Fn() + 'static)>`
+note: required because it appears within the type `PhantomData<Rc<(dyn Fn() + 'static)>>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<Rc<(dyn Fn() + 'static)>>`
+  --> $RUST/alloc/src/raw_vec/mod.rs
+   |
+   | pub(crate) struct RawVec<T, A: Allocator = Global> {
+   |                   ^^^^^^
+note: required because it appears within the type `Vec<Rc<(dyn Fn() + 'static)>>`
+  --> $RUST/alloc/src/vec/mod.rs
+   |
+   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+   |            ^^^
+note: required because it appears within the type `ListenerSet`
+  --> tests/ui/listeners_with_handlers.rs:14:8
+   |
+14 | struct ListenerSet {
+   |        ^^^^^^^^^^^
+   = note: required because it appears within the type `[ListenerSet; 1024]`
+   = note: required for `std::ptr::Unique<[ListenerSet; 1024]>` to implement `Sync`
+note: required because it appears within the type `Box<[ListenerSet; 1024]>`
+  --> $RUST/alloc/src/boxed.rs
+   |
+   | pub struct Box<
+   |            ^^^
+note: required because it appears within the type `paged_vec::page::Page<ListenerSet>`
+  --> $WORKSPACE/crates/zgui-arena/src/paged_vec/page.rs
+   |
+   | pub(crate) struct Page<V>(Box<[V; PAGE_LEN]>);
+   |                   ^^^^
+note: required because it appears within the type `Option<paged_vec::page::Page<ListenerSet>>`
+  --> $RUST/core/src/option.rs
+   |
+   | pub enum Option<T> {
+   |          ^^^^^^
+note: required because it appears within the type `PhantomData<Option<paged_vec::page::Page<ListenerSet>>>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<Option<paged_vec::page::Page<ListenerSet>>>`
+  --> $RUST/alloc/src/raw_vec/mod.rs
+   |
+   | pub(crate) struct RawVec<T, A: Allocator = Global> {
+   |                   ^^^^^^
+note: required because it appears within the type `Vec<Option<paged_vec::page::Page<ListenerSet>>>`
+  --> $RUST/alloc/src/vec/mod.rs
+   |
+   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+   |            ^^^
+note: required because it appears within the type `PagedVec<Key<NodeInner>, ListenerSet>`
+  --> $WORKSPACE/crates/zgui-arena/src/paged_vec/mod.rs
+   |
+   | pub struct PagedVec<K: ArenaKey, V> {
+   |            ^^^^^^^^
+note: required because it appears within the type `DocumentStore`
+  --> tests/ui/listeners_with_handlers.rs:19:8
+   |
+19 | struct DocumentStore {
+   |        ^^^^^^^^^^^^^
+note: required by a bound in `assert_sync`
+  --> src/lib.rs
+   |
+   | pub const fn assert_sync<T: Sync>() {}
+   |                             ^^^^ required by this bound in `assert_sync`

@@ -1,0 +1,31 @@
+[package]
+name = "zgui-view-macro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L6 — frontend. Every dependency is inherited: `foo.workspace = true`.
+#
+# The expansion names `zgui-view` and `zgui-elements` and nothing else, so an application that
+# writes `view!` depends on those two rather than on this crate's own dependency list.
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+# The crates the expansion names. They are development dependencies rather than dependencies
+# because a proc-macro crate's own build must not link the runtime it generates calls into: these
+# are here so that this crate's tests, documentation examples and `trybuild` fixtures compile the
+# code the macros emit.
+[dev-dependencies]
+trybuild.workspace = true
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0", features = ["stub-backend"] }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[lints]
+workspace = true

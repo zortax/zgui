@@ -1,0 +1,36 @@
+[package]
+name = "zgui-testkit-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
+#
+# The half of the test instrument that needs a view layer above it: a backend that records what a
+# component asked its tree to do, a host that answers geometry a test declared, and input a test
+# synthesises. It names no document, no style engine and no window system, which is what makes a
+# component test a test of the component.
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+# The in-memory tree and the in-memory host are the view layer's own, and this crate records what
+# passes through them rather than keeping a second tree that could disagree with the first.
+zgui-view = { path = "../zgui-view", version = "0.1.0", features = ["stub-backend"] }
+# Typing is a framework default, so a harness that drives a component has to perform it — over the
+# very model a window drives, because a second one would let a component pass here and be silent
+# in a window.
+zgui-edit = { path = "../zgui-edit", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+# The shape of a dump, its golden comparison and its blessing: a transcript is a tree dump, and a
+# second implementation of "how a golden is compared" would eventually disagree with the first.
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# A component test needs a component. The element vocabulary is the smallest real one there is, and
+# using it here is what makes these tests a check of the harness against what it will be pointed at
+# rather than against a stand-in written to suit it.
+zgui-elements = { path = "../zgui-elements", version = "0.1.0" }

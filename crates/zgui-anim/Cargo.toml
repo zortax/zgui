@@ -1,0 +1,26 @@
+[package]
+name = "zgui-anim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L5 — systems. Every dependency is inherited: `foo.workspace = true`.
+#
+# No engine is named here, and that is the property this crate exists to keep checkable: the
+# mechanical half of the animation tick is the style engine's, reached through `zgui-style`, and
+# every decision made on what it reports is made here.
+[dependencies]
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+zgui-style = { path = "../zgui-style", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[dev-dependencies]
+# The counters are compiled out of an optimised build unless this feature asks for them, and the
+# budgets have to be readable from `cargo test --release` as well as from a debug build.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+
+[lints]
+workspace = true

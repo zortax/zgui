@@ -1,0 +1,7 @@
+error: `data-x` is a name, not an identifier, so it cannot name a property
+
+       help: an arbitrary attribute is written `attr:data-x=…`
+  --> tests/ui/name_is_not_an_identifier.rs:15:27
+   |
+15 |     let _ = view! { Thing(data-x = "1") };
+   |                           ^^^^

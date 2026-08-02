@@ -1,0 +1,4 @@
+element fc=flex at=(0, 0) size=(300 x 40) content=(150 x 40) baseline=40
+  element fc=block at=(240, 0) size=(60 x 40) content=(0 x 0)
+  element fc=block at=(200, 0) size=(40 x 40) content=(0 x 0)
+  element fc=block at=(150, 0) size=(50 x 40) content=(0 x 0)

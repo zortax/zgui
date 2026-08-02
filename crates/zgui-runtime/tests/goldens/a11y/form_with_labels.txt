@@ -1,0 +1,14 @@
+tree root=#1
+focus #1
+#1 Window children=[#2]
+#2 GenericContainer children=[#3 #8]
+#3 GenericContainer children=[#4 #5 #6 #7]
+#4 GenericContainer
+#5 GenericContainer
+#6 GenericContainer
+#7 GenericContainer
+#8 GenericContainer children=[#9 #10 #11 #12]
+#9 GenericContainer label="Full name"
+#10 TextInput required labelled_by=[#9] described_by=[#11] error_message=#12
+#11 GenericContainer label="As it appears on your passport"
+#12 GenericContainer label="Required"

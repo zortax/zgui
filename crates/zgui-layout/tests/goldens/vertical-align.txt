@@ -1,0 +1,60 @@
+vertical-align: baseline
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 24.800003)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: sub
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 28.000004)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: super
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 19.360004)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: text-top
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 52.000004)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: text-bottom
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 28.000004)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: middle
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 40.800003)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: top
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 0)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: bottom
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 80)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: 10px
+  context paragraph=0 rtl=false
+    line 0 top=0 height=120 baseline=64.8 offset=0 width=92 text=0..4
+    box line=0 at=(0, 14.800003)
+    fragment Box at=(0, 0) size=(400 x 120)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 120)
+vertical-align: 50%
+  context paragraph=0 rtl=false
+    line 0 top=0 height=155.2 baseline=100 offset=0 width=92 text=0..4
+    box line=0 at=(0, 0)
+    fragment Box at=(0, 0) size=(400 x 155)
+    fragment Line { paragraph: ParagraphId(0), line: 0 } at=(0, 0) size=(92 x 155.2)

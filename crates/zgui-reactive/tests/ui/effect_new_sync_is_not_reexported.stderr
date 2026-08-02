@@ -1,0 +1,15 @@
+error[E0433]: cannot find `Effect` in `zgui_reactive`
+ --> tests/ui/effect_new_sync_is_not_reexported.rs:5:20
+  |
+5 |     zgui_reactive::Effect::new_sync(|_: Option<()>| ());
+  |                    ^^^^^^ could not find `Effect` in `zgui_reactive`
+  |
+help: consider importing this struct
+  |
+4 + use reactive_graph::effect::Effect;
+  |
+help: if you import `Effect`, refer to it directly
+  |
+5 -     zgui_reactive::Effect::new_sync(|_: Option<()>| ());
+5 +     Effect::new_sync(|_: Option<()>| ());
+  |

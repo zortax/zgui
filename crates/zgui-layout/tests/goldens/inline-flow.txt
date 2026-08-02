@@ -1,0 +1,7 @@
+context paragraph=0 rtl=false
+  line 0 top=0 height=36 baseline=25.2 offset=12 width=222 text=0..24
+  line 1 top=36 height=32 baseline=56 offset=0 width=192 text=24..42
+  box line=1 at=(0, 36)
+  fragment Box at=(0, 0) size=(240 x 68)
+  fragment Line { paragraph: ParagraphId(0), line: 0 } at=(12, 0) size=(222 x 36)
+  fragment Line { paragraph: ParagraphId(0), line: 1 } at=(0, 36) size=(192 x 32)

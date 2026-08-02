@@ -1,0 +1,19 @@
+[package]
+name = "zgui-arena"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "paged_vec"
+harness = false
+
+[lints]
+workspace = true

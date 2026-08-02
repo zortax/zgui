@@ -1,0 +1,5 @@
+error: a `for` needs a row: what one item looks like
+  --> tests/ui/flow_list_without_a_row.rs:10:81
+   |
+10 |     let _ = view! { for item in move || items.get(), key = |item: &usize| *item { } };
+   |                                                                                 ^^^

@@ -1,0 +1,8 @@
+error[E0308]: mismatched types
+ --> tests/ui/scale_applied_backwards.rs:8:19
+  |
+8 |     let _ = css * to_css;
+  |                   ^^^^^^ expected `Scale<Css, Device>`, found `Scale<Device, Css>`
+  |
+  = note: expected struct `Scale<Css, Device>`
+             found struct `Scale<Device, Css>`

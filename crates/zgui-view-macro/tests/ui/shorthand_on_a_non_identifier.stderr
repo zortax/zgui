@@ -1,0 +1,7 @@
+error: `data-x` is not an identifier, so there is no variable of that name to stand in for it
+
+       help: give it a value: `data-x={…}`
+  --> tests/ui/shorthand_on_a_non_identifier.rs:15:27
+   |
+15 |     let _ = view! { Thing(data-x) };
+   |                           ^^^^

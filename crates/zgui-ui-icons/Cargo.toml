@@ -1,0 +1,31 @@
+[package]
+name = "zgui-ui-icons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L8 — product. Every dependency is inherited: `foo.workspace = true`.
+#
+# One dependency, and it is the umbrella crate an application depends on. An icon is a drawing and
+# a component, both of which an application author writes with exactly this API: a second edge here
+# would be a hole in that API rather than a convenience.
+[dependencies]
+zgui = { path = "../zgui", version = "0.1.0" }
+
+[dev-dependencies]
+zgui-testkit-view = { path = "../zgui-testkit-view", version = "0.1.0" }
+# Driving a real window over buffers, with no display server and no graphics device. An icon that
+# reaches the document and paints nothing is a blank space nothing above this line can see, so the
+# component is asserted on where an application meets it: a frame, and what was in it.
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# A graphics device, and what rasterises the vector parts of a display list on it. Every other
+# assertion about an icon stops at the display list handed to a renderer, and a display list is
+# satisfied by a rasteriser that writes nothing — so the pixels are read back off a real device,
+# through the same two crates a window is drawn through.
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
+# The colours the fixture scenes are painted with.
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+
+[lints]
+workspace = true

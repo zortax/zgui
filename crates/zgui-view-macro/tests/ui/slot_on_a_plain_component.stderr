@@ -1,0 +1,17 @@
+error[E0599]: no method named `card_header` found for struct `CardPropsBuilder<__PropChildren>` in the current scope
+  --> tests/ui/slot_on_a_plain_component.rs:24:13
+   |
+16 |   #[component]
+   |   ------------ method `card_header` not found for this struct
+...
+23 | /         Card {
+24 | |             CardHeader(slot) { "Total" }
+   | |            -^^^^^^^^^^ method not found in `CardPropsBuilder`
+   | |____________|
+   |
+
+error[E0080]: evaluation panicked: `Card` is given a slot child, so it needs `#[component(slot_aware)]`
+  --> tests/ui/slot_on_a_plain_component.rs:23:9
+   |
+23 |         Card {
+   |         ^^^^ evaluation of `main::_` failed here

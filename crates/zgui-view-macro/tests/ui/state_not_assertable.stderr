@@ -1,0 +1,9 @@
+error: `state:hover` is not one of the states a view may set
+
+       note: the states a view may set are `checked`, `disabled`, `indeterminate`, `invalid`, `open`, `placeholder_shown`, `read_only`, `required`
+       help: an author-defined state is written `custom_state:hover=…`, and matches `:state(hover)` in CSS
+       note: `hover` is computed by the input system from what the pointer and the keyboard did, so a view cannot assert it
+  --> tests/ui/state_not_assertable.rs:15:33
+   |
+15 |     let _ = view! { Thing(state:hover = true) };
+   |                                 ^^^^^

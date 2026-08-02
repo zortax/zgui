@@ -1,0 +1,9 @@
+[package]
+name = "zgui-input"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+# PLANTED VIOLATION: nothing below the view layer may name it.
+zgui-view = { path = "../zgui-view", version = "0.1.0" }

@@ -1,0 +1,7 @@
+error: `format!` is a macro call, not a node
+
+       help: a macro call is a value, so it goes in braces: `{format!(…)}`
+  --> tests/ui/macro_child.rs:15:30
+   |
+15 |     let _ = view! { Holder { format!("{n} left") } };
+   |                              ^^^^^^

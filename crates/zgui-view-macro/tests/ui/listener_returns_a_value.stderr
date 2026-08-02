@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+  --> tests/ui/listener_returns_a_value.rs:15:47
+   |
+15 |     let _ = view! { Thing(on:click = move |_| 42) };
+   |                                               ^^ expected `()`, found integer
+   |
+help: consider ignoring the value
+   |
+15 |     let _ = view! { Thing(on:click = move |_| _ = 42) };
+   |                                               +++

@@ -1,0 +1,16 @@
+[package]
+name = "zgui-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+bytemuck.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+trybuild.workspace = true
+
+[lints]
+workspace = true

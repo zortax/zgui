@@ -1,0 +1,26 @@
+[package]
+name = "zgui-reactive"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+#
+# This is the only crate in the workspace permitted to name `reactive_graph`, `reactive_stores`,
+# `any_spawner` or `send_wrapper`, so the reactive engine can be pinned, feature-checked and
+# wrapped in exactly one place. `reactive_graph`'s `effects` feature is forced from the workspace
+# manifest: without it every effect compiles, runs and silently never re-runs.
+[dependencies]
+any_spawner.workspace = true
+futures.workspace = true
+reactive_graph.workspace = true
+reactive_stores.workspace = true
+send_wrapper.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+trybuild.workspace = true
+
+[lints]
+workspace = true

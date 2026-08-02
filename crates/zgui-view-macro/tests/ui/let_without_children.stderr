@@ -1,0 +1,5 @@
+error: `let:` names an argument for children that are not there
+  --> tests/ui/let_without_children.rs:14:32
+   |
+14 |     let _ = view! { Holder(let:item) };
+   |                                ^^^^

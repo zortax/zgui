@@ -1,0 +1,8 @@
+error: a condition is re-read when what it reads changes, so `if` takes a closure
+
+       note: `if` is written as `Show`, so the view needs `Show` in scope
+       help: write `if move || open.get()`
+  --> tests/ui/flow_condition_read_once.rs:10:24
+   |
+10 |     let _ = view! { if open.get() { "shown" } };
+   |                        ^^^^

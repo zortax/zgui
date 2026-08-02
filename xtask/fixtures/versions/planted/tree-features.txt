@@ -1,0 +1,2 @@
+probe v0.1.0 (/fixture/crates/probe)
+└── reactive_graph feature "nightly"

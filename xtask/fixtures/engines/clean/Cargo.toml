@@ -1,0 +1,8 @@
+# Fixture workspace for `cargo xtask ledger engines`.
+[workspace]
+members = ["crates/*"]
+
+# A renamed engine: the ledger must see through the key to the package it stands for, and must
+# still accept the crate the table permits to name it.
+[workspace.dependencies]
+layout = { version = "0.12.2", package = "taffy" }
