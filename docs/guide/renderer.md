@@ -20,12 +20,15 @@ pub trait Renderer {
     fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle;
     fn release_external(&mut self, handle: TextureHandle);
     fn memory(&self) -> MemoryReport;
+    fn target_pool(&self) -> TargetPoolReport { TargetPoolReport::EMPTY }
+    fn release_cached_targets(&mut self) -> u64 { 0 }
+    fn acquire_block(&self) -> Duration { Duration::ZERO }
     fn texture_sink(&mut self) -> &mut dyn TextureSink;
 }
 ```
 
-Eight methods, and the frame calls every one of them. There is no method here that exists for one
-implementation's convenience.
+The contract has eight required methods and three methods with defaults. A renderer that has no
+pooled targets and never blocks during surface acquisition can keep the three defaults.
 
 `RenderTarget` is a description, not a resource: an extent in device pixels, the ratio between the
 coordinates an author writes and the pixels the output has, and whether the surface is opaque. A
@@ -54,15 +57,15 @@ What the caller actually has to know is whether the *work was submitted* — bec
 composed everything into its target and then failed to acquire a surface has still updated that
 target. Redrawing it would repeat work that has already happened.
 
-`FrameOutcome::retires_damage` is the authority, and it inverts the naive rule: every skip reason
-retires damage **except** `SkipReason::Unconfigured`, which is the one case where nothing was
-recorded at all.
+`FrameOutcome::retires_damage` is the authority. It inverts the naive rule: most skip reasons retire
+damage. `SkipReason::Unconfigured` and `SkipReason::DeviceUnavailable` retain damage because no work
+was recorded.
 
-Two skip reasons additionally say *do not ask for another frame*: `Occluded`, because a window that
-is not visible will be made visible by a platform event and not by a busy loop; and `Undamaged`,
-because a frame that damaged nothing would damage nothing next time either. Presenting an undamaged
-frame also spends a swap-chain image copying the target onto the surface unchanged, which makes the
-*next* frame wait a whole refresh interval for one.
+Three skip reasons also say *do not ask for another frame*: `Occluded`, `Undamaged`, and
+`DeviceUnavailable`. A platform event wakes an occluded window. A new frame cannot improve an
+undamaged frame or a device that could not be rebuilt. Presenting an undamaged frame also spends a
+swap-chain image to copy an unchanged target. This can make the next frame wait for one refresh
+interval.
 
 ## Rule three: publish capabilities before the frame is built, not after
 
@@ -112,6 +115,20 @@ The sink is handed out mutably and per call rather than held by whoever caches, 
 do not survive `configure` on a lost device. A borrow kept across frames would outlive what it
 names.
 
+## Target pools and presentation pacing
+
+`target_pool` reports reusable targets for isolated content. Do not include the persistent frame
+target in this report. The frame target is a live resource, not a cache. Report the resident bytes,
+the lent bytes, and the lifetime lease count in `TargetPoolReport`.
+
+`release_cached_targets` frees pooled targets that are not lent out and returns the number of bytes
+freed. The runtime uses this method to enforce cache budgets. A renderer that does not pool isolated
+targets keeps the default implementation.
+
+`acquire_block` reports how long the most recent frame waited for a presentable surface. The runtime
+uses this duration to pace later frames. Return zero when acquisition does not block or when the
+renderer does not present to a surface.
+
 ## Vector content: `VectorRaster`
 
 Path rendering is a second, separate contract, so that a device without compute can fall back to a
@@ -121,7 +138,7 @@ simpler rasteriser without the renderer changing.
 pub trait VectorRaster: 'static {
     fn plan(&mut self, passes: &ScenePassPlan) -> VectorPlan;
     fn clear_targets(&mut self, plan: &VectorPlan);
-    fn prepare(&mut self, frame: &VectorFrame<'_>) -> Result<(), VectorError>;
+    fn prepare(&mut self, frame: &mut VectorFrame<'_>) -> Result<(), VectorError>;
     fn memory(&self) -> MemoryReport;
 }
 ```

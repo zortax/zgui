@@ -51,15 +51,24 @@ const SHEET: &str = css!(
 );
 ```
 
-**A component's own sheet, scoped.** `style!` declares a stylesheet belonging to one component and
-scoped to a generated class nothing else can collide with. `:scope` is rewritten to that class at
-compile time, so the rules are ordinary CSS with no run-time rewriting. The class is derived from
-the name and the text, so it is stable across builds and changes when the sheet does.
+**A component's own sheet, scoped.** `style!` generates a type with `CLASS` and `CSS` constants.
+`CLASS` is unique to the name and sheet text. The macro rewrites `:scope` to that class at compile
+time, so the rules need no run-time rewriting. The component must install `CSS` and put `CLASS` on
+the element that owns the scope. Installing the same name and text again is a no-op. Installing new
+text under the same name replaces the sheet without moving it in cascade order.
 
 ```rust,ignore
 style! { pub Button =>
     ":scope { display: inline-flex; align-items: center; }"
     ":scope[data-disabled] { opacity: .5; }"
+}
+
+#[component]
+fn StyledButton(children: Children) -> impl IntoView {
+    install_stylesheet(Button::CLASS, Button::CSS);
+    view! {
+        control(class = Button::CLASS) {{children.into_view_once()}}
+    }
 }
 ```
 
@@ -153,7 +162,9 @@ counts *implemented*, *not yet implemented* and *out of reach* as three separate
 out-of-reach row says what an application should write instead.
 
 A property counts as implemented only when setting it on a fixture visibly changes the fragment tree
-or the answer hit testing gives. A declaration with no such observable consequence fails the build.
+or the answer hit testing gives. If the deterministic harness cannot observe the consequence, the
+property must be listed with a reason. An unlisted declaration with no observable consequence fails
+the build.
 
 If something does not work, that file is the first place to look; it will either say what to write
 instead or it is a bug.

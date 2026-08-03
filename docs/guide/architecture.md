@@ -8,10 +8,10 @@ zgui](browser.md) names the places a consumer plugs into.
 
 ## The shape of it
 
-zgui is a **retained** framework. Nothing is rebuilt per frame that did not change: not the
-document, not the computed styles, not the box tree, not the shaped paragraphs, not the display
-list, and not the pixels. Every stage keeps its result and is handed a description of what became
-invalid.
+zgui is a **retained** framework. It keeps the document, computed styles, box tree, shaped
+paragraphs, per-fragment paint recordings, and rendered pixels. A frame rebuilds only the data that
+became invalid. The paint stage assembles a finished scene from recordings that intersect the damage
+set, and the renderer keeps pixels outside that set.
 
 ```text
   components and signals            zgui-view, zgui-view-macro, zgui-elements, zgui-reactive
@@ -47,36 +47,41 @@ than a shared object.
 
 ## The frame
 
-`zgui-runtime` is the crate that runs the diagram. One frame, in order:
+`zgui-runtime` is the crate that runs the diagram. One frame has these phases, in this order:
 
-1. **Input.** The platform reports an event. `zgui-input` resolves what was under the pointer from
-   the previous frame's fragments, and builds the capture/target/bubble path. `zgui-runtime` calls
-   the listeners on it.
-2. **Reactive settle.** Listener bodies write signals. Writing marks observers; it does not run
-   them. Once dispatch is finished, the frame flushes the reactive graph, and the effects that ran
-   mutate the document through the same seam a view builds through.
-3. **Restyle.** The style engine walks only the elements that owe a restyle, computes their styles,
-   and turns what changed into obligations for the stages below — a colour change is repaint damage,
-   a width change is relayout.
-4. **Layout.** Box-tree patches are applied for the subtrees that changed, taffy is run over the
-   dirty region, and paragraphs are shaped or re-broken only where their content or their available
-   width moved. The result is a fragment tree.
-5. **Paint.** The stacking-order walk replays the display-list recording for fragments that did not
-   change and re-emits only those that did, culled against the damage rectangles.
-6. **Draw.** The renderer is handed the finished display list and the damage set, and composes into
-   a target it keeps between frames. Outside the damage, last frame's pixels are still correct and
-   are not touched.
-7. **Publish.** The accessibility tree is diffed and published, and the frame probe — the seam the
-   inspector attaches to — is called once with the window as it was left.
+1. **Accept work.** The runtime dispatches queued platform events, fires due timers, advances
+   scrolling and gestures, reconfigures the surface, and samples running animations. Between two
+   queued events, it settles reactive work so the second event sees the document changes from the
+   first event.
+2. **Reactive settle.** Listener bodies, timers, and completed tasks write signals. Writing marks
+   observers; it does not run them. The frame flushes the reactive graph, calls the script-engine
+   checkpoint, and carries out queued view commands.
+3. **Restyle.** The style engine walks only the elements that owe a restyle. It computes their
+   styles and turns each change into obligations for the stages below. For example, a colour change
+   causes repaint damage and a width change causes relayout.
+4. **Layout.** The runtime patches changed box-tree regions and runs taffy over the dirty region. It
+   shapes or re-breaks paragraphs only when their content or available width changes. It then
+   delivers geometry observations. An observation can cause at most two additional
+   flush-restyle-layout passes. The runtime also updates hit targets under stationary pointers and
+   plans the caret.
+5. **Paint.** The stacking-order walk replays the display-list recording for unchanged fragments.
+   It re-emits changed fragments and culls them against the damage rectangles.
+6. **Draw.** The renderer receives the finished display list and the damage set. It composes into a
+   target that it keeps between frames. Pixels outside the damage keep their values from the
+   previous frame.
+7. **Publish and schedule.** The runtime publishes the accessibility update, recycles frame-local
+   document data, applies renderer pacing information, and calls the frame probe with the final
+   window state.
 
-Then the loop parks. It burns nothing until a document mutation, an input event, work completing on
-another thread, or a deadline asks for another frame. Those four are the entire list, and a frame
-that raises several requests inside itself costs one more frame, not several.
+Then the loop parks. A queued platform event or a wake can request a frame. The loop can also wake
+at the earliest deadline for an animation, a timer, a held gesture, a paced resize, a caret blink,
+a held presentation, or a renderer retry. Repeated requests are coalesced.
 
 ## Crates, by layer
 
-Dependencies point strictly downward. The layer of a crate is stated at the top of its manifest and
-checked mechanically.
+Dependencies can point within a layer or to a lower layer. They do not point to a higher layer. The
+layer of a crate is stated at the top of its manifest, and the manifest graph is checked
+mechanically.
 
 | Layer | Crates | What the layer is |
 |---|---|---|
@@ -88,15 +93,18 @@ checked mechanically.
 | L5 systems | `zgui-input`, `zgui-scroll`, `zgui-a11y`, `zgui-anim`, `zgui-edit` | Behaviour over a laid-out document: hit testing and dispatch, scrolling, the accessibility projection, transitions and animations, text editing. |
 | L6 frontend | `zgui-view`, `zgui-view-dom`, `zgui-view-macro`, `zgui-elements` | How an interface is described, and the three seams it is described against. |
 | L7 runtime and tooling | `zgui-runtime`, `zgui`, `zgui-testkit-scene`, `zgui-testkit-view`, `zgui-conformance` | The frame pipeline, the umbrella crate an application depends on, and the instruments. |
-| L8 product | `zgui-ui`, `zgui-ui-primitives`, `zgui-ui-tokens`, `zgui-ui-icons`, `zgui-devtools`, `zgui-examples` | The component library, the inspector, the worked applications. Ordinary consumers of the public API. |
+| L8 product | `zgui-ui`, `zgui-ui-primitives`, `zgui-ui-tokens`, `zgui-ui-icons`, `zgui-devtools`, `zgui-examples`, `zgui-bench` | The component library, the inspector, the worked applications, and the measurement harness. Ordinary consumers of the public API. |
 
 `zgui` is the crate an application depends on. Everything else is reachable through it, and an
 application that only wants to describe an interface never names any of the others.
 
+The unpublished `probe` crate is outside these product layers. It is a compile canary that verifies
+that all pinned external engines can build together.
+
 ## The seams
 
 A seam is a trait with an implementation on each side and no third party allowed to reach across it.
-The framework has twenty of them; these are the ones a consumer is most likely to meet.
+These are the seams a consumer is most likely to meet.
 
 | Seam | Crate | What plugs in |
 |---|---|---|
@@ -106,12 +114,12 @@ The framework has twenty of them; these are the ones a consumer is most likely t
 | `Dom`, `ViewHost`, `EventSink` | `zgui-view` | The node tree, the engine that laid it out, and where a handler's commands go. |
 | `SheetLoader`, `ReplacedContent`, `LinkResolver`, `PresentationalHints` | `zgui-dom` | The four things a document language brings that a document core cannot define for itself. |
 | `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `GlyphRaster` | `zgui-text` | A font engine, or a fixed-metrics stand-in for tests. |
-| `HostBinding` | `zgui-runtime` | An embedded script engine's three frame hooks. |
+| `HostBinding` | `zgui-runtime` | An embedded script engine's event, frame, and shutdown hooks. |
 | `FrameProbe` | `zgui-runtime` | A reader of the window as each frame left it. |
 | `MeasureContent` | `zgui-layout` | The measurement of anything layout cannot size itself. |
 
-Each of these exists because there are two things behind it that we actually build. A trait with one
-implementation is an indirection, not a boundary.
+Most of these seams have two in-tree implementations. `HostBinding` is the exception: zgui provides
+the no-op binding, and a downstream script engine provides the active binding.
 
 ## The three ideas the design turns on
 

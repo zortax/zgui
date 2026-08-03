@@ -51,9 +51,11 @@ it in the same frame. `assert_owner` is the debug guard, and the debug-build ass
 
 Writing a signal marks its observers and wakes their tasks. It does not run them.
 
-The frame loop calls `flush()` once per frame, which polls every ready task to a stall under a
-bounded iteration budget and reports whether another frame is owed. This is why a listener can write
-five signals without five restyles: they are all marked, and one flush settles them.
+The frame loop calls `flush()` in the reactive phase. It also flushes between queued input events so
+a later event sees changes from an earlier event. After layout, it can flush again when a geometry
+observation changes a view. Each call polls every ready task to a stall under a bounded iteration
+budget and reports whether another frame is owed. Thus, one listener can write five signals without
+causing five restyles: one flush settles all five writes.
 
 A wake that arrives from **anywhere else** — a worker thread, a completed download, a timer — is
 routed to the `FrameWaker`, which asks the platform for a redraw. Without that second edge, a task
@@ -62,7 +64,7 @@ An implementation of `FrameWaker` must be callable from any thread, must not blo
 idempotent: a hundred wakes between two frames must cost one frame, not a hundred.
 
 ```rust,ignore
-let (count, doubled) = root.with(|| {
+let (count, doubled, _effect) = root.with(|| {
     let count = RwSignal::new(1);
     let doubled = RwSignal::new(0);
     let effect = RenderEffect::new(move |_| doubled.set(count.get() * 2));
@@ -138,9 +140,9 @@ provide_local_context(MyPanelHandle(node));
 let handle = use_local_context::<MyPanelHandle>();
 ```
 
-`provide_context` requires `Send + Sync`; `provide_local_context` does not. Use a **newtype** for
-anything whose type is not already specific — `String` or `bool` as a context key collides with
-every other use of that type in the process.
+`provide_context` requires `Send + Sync`; `provide_local_context` does not. Use a **newtype** for a
+value whose type is not specific. Contexts are keyed by type. A second `String` or `bool` context in
+the same scope replaces the first, and a value in a nested scope shadows the outer value.
 
 ### 3. A cleanup closure that is not `Send`: `on_cleanup_local`
 

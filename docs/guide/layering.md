@@ -1,13 +1,15 @@
 # The layering rules
 
-zgui is forty-eight crates. That number is only defensible if the graph between them is a rule
-rather than an accident, and if the rule is checked by a machine rather than remembered by a person.
-This document is the rule.
+zgui has forty-eight crates under `crates/`. Forty-seven are in the layered product graph. The
+unpublished `probe` crate is a compile canary for the pinned external engines and is not in a layer.
+The graph must follow a machine-checked rule. This document gives that rule.
 
 ## The one rule
 
-**Dependencies point strictly downward through nine layers.** A crate's layer is declared at the top
-of its manifest, and a crate may depend on crates in a lower layer and on nothing else.
+**Dependencies do not point to a higher layer.** The graph has nine layers. Each layered crate
+declares its layer at the top of its manifest. A crate can depend on crates in the same layer or in a
+lower layer. Same-layer dependencies are used when one stage in a layer supplies data to another
+stage in that layer.
 
 | Layer | Name | What belongs there |
 |---|---|---|
@@ -21,7 +23,9 @@ of its manifest, and a crate may depend on crates in a lower layer and on nothin
 | L7 | runtime and tooling | The frame pipeline, the umbrella crate, the test instruments. |
 | L8 | product | The component library, the inspector, the worked applications. |
 
-`cargo xtask ledger` fails the build on a violation. It is a gate, not a convention.
+`cargo xtask ledger` checks the manifest graph against the implementation-phase order. It also
+checks the named architectural edges in this guide. The layer label documents the classification;
+the ledger checks the actual dependencies.
 
 ## Why the rule earns its cost
 
@@ -41,10 +45,10 @@ exercised with no graphics device. The frame loop is exercised with no display s
 is a special test mode; it is what the layering already made possible.
 
 **A second implementation is an implementation, not a fork.** There are two platform backends, two
-vector rasterisers, two text metric sources, and a capture renderer beside the real one. Each of
-those exists because the boundary above it names no library.
+vector rasterisers, two text metric sources, and a capture renderer beside the GPU renderer. Each
+of those exists because the boundary above it names no library.
 
-## The four ledgers that enforce it
+## The four checks that enforce it
 
 The layer rule alone is not enough, because a downward edge can still be the wrong edge. Four
 narrower checks run beside it.
@@ -142,10 +146,10 @@ carries a comment saying what it is for:
 name = "zgui-layout"
 version.workspace = true
 
-# L4 — engines. Every dependency is inherited: `foo.workspace = true`.
+# L4 — engines. External dependencies are inherited: `foo.workspace = true`.
 [dependencies]
 taffy.workspace = true
-zgui-css = { path = "../zgui-css" }
+zgui-css = { path = "../zgui-css", version = "0.1.0" }
 ```
 
 Every external dependency is declared once, in `[workspace.dependencies]`, and inherited with

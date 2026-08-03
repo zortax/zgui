@@ -34,9 +34,9 @@ impl Tag for Div {
 ```
 
 Implementing `Tag` outside the element crate is how a document language of one's own joins the same
-builder machinery: `<html::div/>` in a view is a call to a function returning an `Element` over that
-language's marker. Typed attributes come along with it, so an editor completes attribute names and
-reports a mistake against the thing it names.
+builder machinery. `html::div()` in a view is a call to a function that returns an `Element` over
+that language's marker. Typed attributes come with the element, so an editor completes attribute
+names and reports a mistake against the item that defines them.
 
 You would also supply a user-agent stylesheet for your vocabulary, installed at
 `SheetOrigin::UserAgent`, which is where a document language's display defaults belong.
@@ -168,12 +168,13 @@ order within a frame is fixed and is the whole content of the contract:
 1. `before_dispatch`, once per event, before the first listener on its path. Answering `false` means
    the event is not dispatched at all, which is what an engine intercepting an event for its own
    dispatcher does.
-2. `checkpoint`, after the frame's reactive work has settled — where the engine's queued work is
-   drained, so that anything it writes is picked up by the *same* frame's restyle.
-3. `before_paint`, after layout and before anything is emitted. This is where an animation-frame
-   callback belongs: early enough that what it writes is painted in this frame rather than the next.
-   The frame's timestamp is handed over so a callback measuring elapsed time reads the clock the
-   rest of the frame read.
+2. `checkpoint`, after the frame's reactive work has settled. Drain the engine's queued work here.
+   Direct document changes are included in the same frame's restyle. A signal write needs a later
+   flush.
+3. `before_paint`, after layout and geometry observation delivery, and before paint emission. Use
+   this hook for work that must occur at that boundary. A document or signal change made here is
+   processed in the next frame because restyle and layout are complete. The frame timestamp lets
+   the callback use the same clock value as the rest of the frame.
 
 Nothing in this framework implements `HostBinding`. It exists so that somebody building a browser
 has one object to install rather than a fork of the loop.
@@ -189,15 +190,14 @@ Four seams, so a font engine can be replaced or absent without a consumer changi
 | `ParagraphShaper` | a text engine | layout, once per paragraph and many times per width |
 | `GlyphRaster` | a rasteriser | painting, once per distinct glyph |
 
-The split between shaping and breaking is the thing to preserve in any implementation: shaping is
-expensive and breaking is cheap — roughly twenty-eight to one on a thousand words — and layout asks
-a paragraph for its size at many candidate widths while it resolves the flex or grid around it. A
-shaper that re-shaped per width would make every flex container quadratic.
+Preserve the split between shaping and breaking. Shaping is the expensive operation. Line breaking
+is the cheap operation. Layout can ask for the size of one paragraph at many candidate widths while
+it resolves a flex or grid container. Do not shape the paragraph again for each width.
 
 ### 8. A different node tree entirely — `Dom`, `ViewHost`, `EventSink` (L6)
 
-The three above are for putting a language *on* zgui's document. These three are for putting zgui's
-*view layer* on something else — a browser's own nodes, a transcript recorder, a remote tree.
+The preceding seams put a language *on* zgui's document. These three seams put zgui's *view layer*
+on something else, such as a browser's own nodes, a transcript recorder, or a remote tree.
 
 | Trait | What it answers |
 |---|---|
