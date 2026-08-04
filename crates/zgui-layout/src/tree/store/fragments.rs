@@ -38,11 +38,20 @@ impl LayoutStore {
 
     /// The identifier one shaped paragraph is named by, issuing one if it has none.
     pub fn intern_paragraph(&mut self, key: zgui_text::ParagraphKey) -> ParagraphId {
-        if let Some(index) = self.paragraphs.iter().position(|held| *held == key) {
-            return ParagraphId(index as u32);
+        if let Some(&held) = self.paragraph_index.get(&key) {
+            return held;
         }
-        self.paragraphs.push(key);
-        ParagraphId((self.paragraphs.len() - 1) as u32)
+        let slot = self.free_paragraphs.pop().unwrap_or_else(|| {
+            self.paragraphs.push(None);
+            (self.paragraphs.len() - 1) as u32
+        });
+        let id = ParagraphId(slot);
+        self.paragraphs[slot as usize] = Some(super::ParagraphRecord { key, users: 0 });
+        self.paragraph_index.insert(key, id);
+        // Normally retained immediately by `set_inline_resolution`. Filing it here as well makes
+        // an abandoned interning reclaimable without turning reclamation into a full-table scan.
+        self.unused_paragraphs.push(id);
+        id
     }
 
     /// The shaped paragraph one identifier names, if any fragment draws it.
@@ -52,7 +61,86 @@ impl LayoutStore {
     /// fragments costs a word; whoever draws the glyphs needs the engine's own key, and this is
     /// the single place the two are related.
     pub fn paragraph_key(&self, id: ParagraphId) -> Option<zgui_text::ParagraphKey> {
-        self.paragraphs.get(id.index() as usize).copied()
+        self.paragraphs
+            .get(id.index() as usize)
+            .and_then(|entry| entry.as_ref())
+            .map(|entry| entry.key)
+    }
+
+    /// Keys named by at least one current inline resolution.
+    pub fn active_paragraph_keys(&self) -> Vec<zgui_text::ParagraphKey> {
+        self.paragraphs
+            .iter()
+            .flatten()
+            .filter(|entry| entry.users > 0)
+            .map(|entry| entry.key)
+            .collect()
+    }
+
+    /// How many unique shaping keys current inline resolutions name.
+    pub fn active_paragraph_count(&self) -> usize {
+        self.active_paragraphs
+    }
+
+    /// Whether a current inline resolution still names `key`.
+    pub fn paragraph_is_active(&self, key: zgui_text::ParagraphKey) -> bool {
+        self.paragraph_index
+            .get(&key)
+            .and_then(|id| self.paragraphs.get(id.index() as usize))
+            .and_then(|entry| entry.as_ref())
+            .is_some_and(|entry| entry.users > 0)
+    }
+
+    /// Reclaims identifiers no current resolution names.
+    ///
+    /// Called only after fragment diffing. Deferring reuse until then guarantees that a new
+    /// paragraph cannot compare equal to an old fragment merely because it inherited its slot.
+    pub fn reclaim_paragraphs(&mut self) -> usize {
+        let mut reclaimed = 0;
+        for id in std::mem::take(&mut self.unused_paragraphs) {
+            let slot = id.index() as usize;
+            let Some(held) = self.paragraphs.get_mut(slot) else {
+                continue;
+            };
+            let Some(entry) = held.as_ref() else {
+                continue;
+            };
+            if entry.users > 0 {
+                continue;
+            }
+            let key = entry.key;
+            *held = None;
+            self.paragraph_index.remove(&key);
+            self.free_paragraphs.push(slot as u32);
+            reclaimed += 1;
+        }
+        reclaimed
+    }
+
+    pub(crate) fn retain_paragraph(&mut self, id: ParagraphId) {
+        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
+            if entry.users == 0 {
+                self.active_paragraphs += 1;
+            }
+            entry.users = entry
+                .users
+                .checked_add(1)
+                .expect("paragraph user count overflowed");
+        }
+    }
+
+    pub(crate) fn release_paragraph(&mut self, id: ParagraphId) {
+        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
+            debug_assert!(entry.users > 0, "released an unretained paragraph");
+            if entry.users == 0 {
+                return;
+            }
+            entry.users -= 1;
+            if entry.users == 0 {
+                self.active_paragraphs -= 1;
+                self.unused_paragraphs.push(id);
+            }
+        }
     }
 
     /// One fragment, for modification.

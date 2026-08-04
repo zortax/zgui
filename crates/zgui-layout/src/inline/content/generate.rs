@@ -60,6 +60,7 @@ pub(crate) fn build(
     let runs = builder.finish();
     let sources = builder.runs.iter().map(|run| run.source).collect();
     Generated {
+        key: std::sync::OnceLock::new(),
         text: builder.text,
         map: builder.map,
         runs,

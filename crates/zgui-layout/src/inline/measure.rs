@@ -108,7 +108,8 @@ pub(crate) fn compute<C: MeasureContent>(
         paragraph: &generated.paragraph,
         scale,
     };
-    let summary = tree.content().shape(&content);
+    let paragraph_key = generated.key(&content);
+    let summary = tree.content().shape_keyed(paragraph_key, &content);
 
     // An inline-axis intrinsic probe is a question about the glyphs alone. Answering it from the
     // shaped result is not an optimisation of the general path: breaking at a candidate width would

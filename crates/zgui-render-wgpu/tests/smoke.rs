@@ -128,3 +128,30 @@ fn a_second_frame_of_the_same_scene_is_identical_to_the_first() {
         "composing the same scene twice must produce the same pixels"
     );
 }
+
+#[test]
+fn an_unchanged_second_frame_does_not_upload_side_tables_again() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(zgui_geom::Size::new(SIDE, SIDE));
+    pattern(&mut scene);
+    scene.finish(&DamageSet::full());
+
+    let first = renderer
+        .draw(&scene, &DamageSet::full())
+        .stats()
+        .expect("the first frame reached its target")
+        .bytes_uploaded;
+    let second = renderer
+        .draw(&scene, &DamageSet::full())
+        .stats()
+        .expect("the second frame reached its target")
+        .bytes_uploaded;
+
+    assert!(
+        second < first,
+        "the unchanged frame uploads instances and blocks ({second} bytes), not the side tables from the first frame ({first} bytes)"
+    );
+}

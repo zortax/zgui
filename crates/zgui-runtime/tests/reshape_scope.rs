@@ -117,6 +117,37 @@ fn opened() -> (
     (dark, hot, harness)
 }
 
+/// The same fixture with every text element sharing one paragraph cache key.
+fn opened_with_identical_text() -> (
+    RwSignal<u8>,
+    zgui_platform_headless::Harness<zgui_runtime::Runtime>,
+) {
+    let hot = RwSignal::new(0u8);
+    let mut harness = support::app_with_text(CSS, move |cx: &mut BuildCx<'_>| {
+        fn word(hot: RwSignal<u8>, bit: u8) -> zgui_elements::Element<zgui_elements::Text> {
+            zgui_elements::text()
+                .attribute(AttrName::new("data-hot"), move || {
+                    (hot.get() & (1 << bit) != 0).then(|| "1".to_owned())
+                })
+                .child("aa")
+        }
+
+        Box::new(
+            zgui_elements::column()
+                .class("page")
+                .child(word(hot, 0))
+                .child(word(hot, 1))
+                .child(word(hot, 2))
+                .child(word(hot, 3))
+                .child(zgui_elements::control())
+                .into_view()
+                .build(cx),
+        ) as Box<dyn zgui_view::Anchor>
+    });
+    harness.settle(16);
+    (hot, harness)
+}
+
 /// Damages the whole window without moving anything in it, so that every glyph is drawn again.
 ///
 /// The display list holds what the frame emitted, and a frame that repainted one label emitted one
@@ -248,6 +279,32 @@ fn one_element_leaving_a_shared_slot_reshapes_its_own_text_and_no_other() {
         [120, 120, 10, 10, 10, 10, 10, 10, 10, 10],
         "the element that left the slot is not drawn in its new colour, or one that stayed \
          followed it"
+    );
+}
+
+#[test]
+fn changing_one_of_two_identical_paragraphs_keeps_the_shared_old_shaping() {
+    let _turn = zgui_profile::counter::exclusive();
+    let (hot, mut harness) = opened_with_identical_text();
+
+    let counted = moved(&mut harness, |_| hot.set(0b0001));
+
+    nothing_document_wide(
+        &counted,
+        "one of several identical paragraphs changing brush",
+    );
+    assert_eq!(
+        counted.paragraphs_evicted, 0,
+        "the old key is still active in three sibling contexts and must remain cached"
+    );
+    assert_eq!(
+        counted.text_shaped, 1,
+        "only the one context with the new brush needs a new shaped result"
+    );
+    assert_eq!(
+        every_grey(&mut harness),
+        [120, 120, 10, 10, 10, 10, 10, 10, 10, 10],
+        "the changed context and the siblings sharing its old key were not independently drawn"
     );
 }
 

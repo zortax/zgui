@@ -15,7 +15,7 @@ pub(crate) mod generate;
 pub(crate) mod memo;
 pub(crate) mod styles;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use zgui_dom::side::BoxKey;
 use zgui_text::{StyledRun, TextMap};
@@ -70,6 +70,8 @@ pub(crate) struct Item {
 /// resolved afresh on every measure call, because both can move while this stays valid.
 #[derive(Clone, Debug)]
 pub(crate) struct Generated {
+    /// The shaping key, computed at most once however many widths layout probes.
+    key: OnceLock<zgui_text::ParagraphKey>,
     /// The string the shaper is handed.
     pub(crate) text: String,
     /// How to get from an offset in it back to the document.
@@ -88,6 +90,16 @@ pub(crate) struct Generated {
 }
 
 impl Generated {
+    /// The cache key for this flattened context.
+    ///
+    /// Inline-box sizes deliberately do not enter a shaping key; only their stable identifiers and
+    /// offsets do. They may therefore vary between width probes while this answer remains valid.
+    pub(crate) fn key(&self, content: &zgui_text::ParagraphContent<'_>) -> zgui_text::ParagraphKey {
+        *self
+            .key
+            .get_or_init(|| zgui_text::ParagraphKey::of(content))
+    }
+
     /// The item one of the shaper's inline boxes belongs to.
     pub(crate) fn item(&self, id: u64) -> Option<&Item> {
         self.items.iter().find(|item| item.id == id)

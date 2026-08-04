@@ -25,18 +25,17 @@
 //! workloads, and the margin is a judgement that something past both of them should be bounded
 //! rather than unbounded.
 
-/// How many shaped paragraphs a window holds before the shaping cache is dropped.
+/// How many shaped paragraphs a window holds before inactive shaping is evicted.
 ///
 /// Above both workloads the module note derives it from. A virtualized list is what this exists
 /// for: its rows are recycled, so the *document* never holds more than a screenful, but every
 /// distinct string that has scrolled past leaves a shaped result behind under its own key — ten
 /// thousand rows leave ten thousand of them, and a hundred thousand leave a hundred thousand.
 ///
-/// The cost of reaching it is severe and is the reason the number is not lower: dropping shaped
-/// paragraphs invalidates every measurement taken from one, so the frame that reaches this limit
-/// re-measures and re-lays-out the whole document. See
-/// [`ParagraphShapingBudget`](crate::budget::caches::ParagraphShapingBudget) for why it is all of
-/// them and not the coldest few.
+/// Current inline resolutions pin the entries they name. Crossing the limit therefore removes old
+/// text versions and content no longer present, coldest first, without invalidating the live box
+/// tree. A document whose active text alone exceeds the limit remains over it rather than being
+/// made to reshape on every frame.
 pub const SHAPED_PARAGRAPHS: usize = 16_384;
 
 /// How many placed drawings a window holds before the vector cache is dropped.

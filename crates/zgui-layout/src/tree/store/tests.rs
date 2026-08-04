@@ -3,6 +3,7 @@
 use zgui_arena::DocumentId;
 use zgui_css::StyleDraft;
 use zgui_geom::{DevicePx, Edges, Point, Size};
+use zgui_text::ParagraphKey;
 
 use crate::node::box_node::BoxNode;
 use crate::node::kind::{BoxKind, FormattingContext};
@@ -32,6 +33,29 @@ fn a_removed_box_stops_being_named_by_its_element() {
     assert!(store.contains(key), "the frame is not over");
     store.recycle();
     assert!(!store.contains(key));
+}
+
+#[test]
+fn paragraph_ids_are_interned_while_active_and_reused_after_reclamation() {
+    let mut store = LayoutStore::new(DocumentId::FIRST);
+    let key = ParagraphKey(11);
+    let id = store.intern_paragraph(key);
+    assert_eq!(store.intern_paragraph(key), id);
+
+    store.retain_paragraph(id);
+    assert!(store.paragraph_is_active(key));
+    assert_eq!(store.reclaim_paragraphs(), 0);
+
+    store.release_paragraph(id);
+    assert_eq!(store.reclaim_paragraphs(), 1);
+    assert_eq!(store.paragraph_key(id), None);
+
+    let replacement = store.intern_paragraph(ParagraphKey(22));
+    assert_eq!(
+        replacement, id,
+        "a dead paragraph left its slot growing forever"
+    );
+    assert_eq!(store.paragraph_key(replacement), Some(ParagraphKey(22)));
 }
 
 #[test]

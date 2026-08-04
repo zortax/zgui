@@ -25,6 +25,7 @@ use crate::shape::style::LoweredStyle;
 /// and back would round-trip, while a caret placed from a cluster and a click resolved to one would
 /// land a prefix apart from each other on the screen.
 pub(crate) fn shape(
+    key: ParagraphKey,
     content: &ParagraphContent<'_>,
     strut: StrutMetrics,
     controls: Controls,
@@ -61,7 +62,7 @@ pub(crate) fn shape(
         prefix: prefix.len(),
     };
     ShapedParagraph::new(
-        ParagraphKey::of(content),
+        key,
         content.text.to_owned(),
         content.map.clone(),
         ContentWidths {

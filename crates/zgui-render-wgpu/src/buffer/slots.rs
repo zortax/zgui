@@ -2,6 +2,7 @@
 
 use bytemuck::Pod;
 
+use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// A uniform buffer holding many values, each addressed by a dynamic offset.
@@ -52,7 +53,7 @@ impl SlotBuffer {
 
     /// Stages `value` in a fresh slot and returns the dynamic offset that will name it.
     ///
-    /// The offset is valid once [`SlotBuffer::upload`] has run, which is why the two are separate:
+    /// The offset is valid once [`SlotBuffer::upload_with`] has run, which is why the two are separate:
     /// a frame plans every block it needs, uploads them together, and only then builds the bind
     /// group that reads them.
     pub fn stage<T: Pod>(&mut self, value: &T) -> u32 {
@@ -64,10 +65,15 @@ impl SlotBuffer {
         offset as u32
     }
 
-    /// Uploads everything staged, reallocating if this frame needs more room than the last.
-    pub fn upload(&mut self, gpu: &Gpu) {
+    /// Uploads everything staged through a reusable mapped belt.
+    pub fn upload_with(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> u64 {
         if self.staged.is_empty() {
-            return;
+            return 0;
         }
         let needed = self.staged.len() as u64;
         let outgrown = match &self.buffer {
@@ -82,11 +88,15 @@ impl SlotBuffer {
                 mapped_at_creation: false,
             }));
         }
-        let buffer = self
-            .buffer
-            .as_ref()
-            .expect("a non-empty upload has just allocated a buffer");
-        gpu.queue().write_buffer(buffer, 0, &self.staged);
+        belt.write(
+            gpu,
+            encoder,
+            self.buffer
+                .as_ref()
+                .expect("a non-empty upload has allocated a buffer"),
+            0,
+            &self.staged,
+        )
     }
 
     /// The binding a bind group names: one slot's worth of the buffer, moved by a dynamic offset.

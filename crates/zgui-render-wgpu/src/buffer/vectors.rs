@@ -1,6 +1,7 @@
 //! The instances every vector composite of a frame is drawn from.
 
 use crate::buffer::instances::StorageBuffer;
+use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 use crate::pipeline::vector::VectorInstance;
 
@@ -38,9 +39,14 @@ impl VectorInstances {
         (first, self.staged.len() as u32 - first)
     }
 
-    /// Uploads everything staged this frame.
-    pub fn upload(&mut self, gpu: &Gpu) {
-        self.buffer.write(gpu, &self.staged);
+    /// Uploads this frame's instances through a reusable mapped belt.
+    pub fn upload_with(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> u64 {
+        self.buffer.upload(gpu, belt, encoder, &self.staged)
     }
 
     /// The binding a bind group names.

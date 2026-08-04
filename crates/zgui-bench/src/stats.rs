@@ -246,7 +246,7 @@ pub(crate) fn report(size: &str, phase: &str, boxes: usize, fragments: usize, ma
         "f.restyled",
         "d.prelayout",
         "d.postexpand",
-        "p.glyphs",
+        "p.finish",
         "f.end",
     ] {
         let mut counts: HashMap<&str, usize> = HashMap::new();

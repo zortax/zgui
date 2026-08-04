@@ -21,6 +21,7 @@ pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 
+use rustc_hash::FxHashMap;
 use zgui_arena::{ArenaKind, ChunkArena, DocumentId, DomainId, PagedVec, SlotVec};
 use zgui_dom::NodeKey;
 use zgui_dom::side::{BoxKey, BoxList};
@@ -72,7 +73,15 @@ pub struct LayoutStore {
     /// A fragment names a paragraph by its position here rather than by the key its glyphs are
     /// cached under, so that the identifier a fragment carries stays small and stays this store's
     /// to issue — there is one paragraph identity in the document, and it is this one.
-    paragraphs: Vec<zgui_text::ParagraphKey>,
+    paragraphs: Vec<Option<ParagraphRecord>>,
+    /// Shaping key to its compact document-local identifier.
+    paragraph_index: FxHashMap<zgui_text::ParagraphKey, crate::fragment::ParagraphId>,
+    /// Paragraph slots safe to reuse on a later frame.
+    free_paragraphs: Vec<u32>,
+    /// Paragraphs whose last inline resolution was released since the last fragment diff.
+    unused_paragraphs: Vec<crate::fragment::ParagraphId>,
+    /// Unique paragraph keys named by at least one current inline resolution.
+    active_paragraphs: usize,
     /// The fragments destroyed since the last pass drained this list.
     ///
     /// A fragment ceases to exist for two quite different reasons — a box produced fewer pieces
@@ -105,6 +114,12 @@ pub struct LayoutStore {
     laid_out: Option<(u32, u32)>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ParagraphRecord {
+    key: zgui_text::ParagraphKey,
+    users: u32,
+}
+
 impl LayoutStore {
     /// An empty store for one document.
     pub fn new(document: DocumentId) -> Self {
@@ -120,6 +135,10 @@ impl LayoutStore {
                 document,
             )),
             paragraphs: Vec::new(),
+            paragraph_index: FxHashMap::default(),
+            free_paragraphs: Vec::new(),
+            unused_paragraphs: Vec::new(),
+            active_paragraphs: 0,
             retired: Vec::new(),
             retired_boxes: Vec::new(),
             read_extents: Vec::new(),
@@ -199,6 +218,7 @@ impl LayoutStore {
                 .get_mut(source)
                 .retain(|&mut it| it != key);
         }
+        self.take_inline_resolution(key);
         self.layout.remove(key);
         if self.root == Some(key) {
             self.root = None;

@@ -14,9 +14,33 @@ impl LayoutStore {
 
     /// Records what one inline formatting context resolved to.
     pub fn set_inline_resolution(&mut self, key: BoxKey, resolution: InlineResolution) {
+        if self.layout.get(key).is_none() {
+            return;
+        }
+        let previous = self
+            .layout
+            .get(key)
+            .and_then(|state| state.inline.as_ref())
+            .map(|held| held.paragraph);
+        let next = resolution.paragraph;
+        if previous != Some(next) {
+            if let Some(previous) = previous {
+                self.release_paragraph(previous);
+            }
+            self.retain_paragraph(next);
+        }
         if let Some(state) = self.layout.get_mut(key) {
             state.inline = Some(Box::new(resolution));
         }
+    }
+
+    /// Removes one inline resolution and releases the paragraph identifier it held.
+    pub(crate) fn take_inline_resolution(&mut self, key: BoxKey) -> Option<Box<InlineResolution>> {
+        let resolution = self.layout.get_mut(key)?.inline.take();
+        if let Some(held) = &resolution {
+            self.release_paragraph(held.paragraph);
+        }
+        resolution
     }
 
     /// How many times this store has flattened an inline formatting context into the string a

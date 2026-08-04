@@ -55,6 +55,12 @@ counters! {
     /// Text runs shaped, which is the expensive half of laying out text.
     TextShaped => text_shaped, Group::BackendNeutral;
 
+    /// Generated text bytes handed to a shaping pass.
+    ///
+    /// Read beside [`Counter::TextShaped`]: one enormous paragraph and one short label are both one
+    /// shape, while their costs are not remotely alike.
+    TextBytesShaped => text_bytes_shaped, Group::BackendNeutral;
+
     /// Paragraphs broken into lines again while reusing the shaping they already had.
     TextRebroken => text_rebroken, Group::BackendNeutral;
 
@@ -244,6 +250,24 @@ counters! {
     /// Bytes copied to the GPU.
     BytesUploaded => bytes_uploaded, Group::RendererSpecific;
 
+    /// Individual atlas rectangles copied to GPU textures.
+    AtlasTextureWrites => atlas_texture_writes, Group::RendererSpecific;
+
+    /// Non-empty staged atlas upload batches submitted to the queue.
+    AtlasUploadBatches => atlas_upload_batches, Group::RendererSpecific;
+
+    /// Side-table slots flattened again for a renderer.
+    ///
+    /// Read beside upload bytes: this stays at zero for unchanged tables and exposes a CPU-side
+    /// regression even when the upload cache still happens to hide it.
+    SideTableSlotsPrepared => side_table_slots_prepared, Group::RendererSpecific;
+
+    /// Reusable upload chunks allocated rather than reclaimed from an earlier submission.
+    ///
+    /// Ordinarily non-zero only while the belt grows to its working set. A recurring value points
+    /// directly at GPU backlog or a workload that repeatedly exceeds that working set.
+    UploadChunksAllocated => upload_chunks_allocated, Group::RendererSpecific;
+
     /// Frames the loop actually drew.
     ///
     /// Named for what it counts. A window with nothing moving in it is supposed to leave this
@@ -265,6 +289,9 @@ counters! {
 
     /// Rasterised entries the texture atlas is holding right now.
     AtlasEntriesLive => atlas_entries_live, Group::Live;
+
+    /// Glyph placement or blank-raster answers remembered beside the atlas.
+    GlyphEntriesLive => glyph_entries_live, Group::Live;
 
     /// Layers the vector scratch texture is allocated with right now.
     ScratchLayers => scratch_layers, Group::Live;

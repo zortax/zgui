@@ -93,11 +93,20 @@ impl ParagraphShaper for Shaper {
     type Engine = ShapedLayout;
 
     fn shape(&mut self, content: &ParagraphContent<'_>) -> ShapedParagraph<Self::Engine> {
+        self.shape_keyed(zgui_text::ParagraphKey::of(content), content)
+    }
+
+    fn shape_keyed(
+        &mut self,
+        key: zgui_text::ParagraphKey,
+        content: &ParagraphContent<'_>,
+    ) -> ShapedParagraph<Self::Engine> {
         let strut = match content.runs.first() {
             Some(run) => self.strut(&run.style),
             None => self.strut(&TextStyle::initial()),
         };
         build::shape(
+            key,
             content,
             strut,
             self.controls,

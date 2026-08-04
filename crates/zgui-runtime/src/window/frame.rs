@@ -648,10 +648,18 @@ impl Window {
         // is asked which contexts the named elements' text is in, and only the paragraphs it names
         // are thrown away. One control changing colour is one control's shaping, and answering it
         // with the window's costs a whole-document reflow for a change nothing else can see.
-        let reshape = zgui_layout::text::reshape::scope(
-            &mut self.layout.borrow_mut(),
+        let mut layout = self.layout.borrow_mut();
+        let mut reshape = zgui_layout::text::reshape::scope(
+            &mut layout,
             split.into_iter().map(|(node, _run)| node),
         );
+        // A shaping key may be shared by an unaffected context. The changed context no longer
+        // names its old key after `scope`, but deleting an entry another resolution still names
+        // would leave that paragraph pointing at nothing.
+        reshape
+            .paragraphs
+            .retain(|key| !layout.paragraph_is_active(*key));
+        drop(layout);
         let dropped = self.text.forget_paragraphs(&reshape.paragraphs);
         zgui_profile::latency::note_with("t.reshaped", || format!("{dropped}/{}", reshape.boxes));
     }
@@ -813,6 +821,7 @@ impl Window {
             root,
             &mut self.damage,
         );
+        layout.reclaim_paragraphs();
         // The fragments name their matrices by an index into the table that was just filled, so
         // the two go to the view layer together: a box's place on the screen is only answerable
         // from both, and a view asking between frames must not be answered from one of them and
@@ -961,7 +970,7 @@ impl Window {
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.scene);
             let after = glyph_counts();
-            zgui_profile::latency::note_with("p.glyphs", || {
+            zgui_profile::latency::note_with("p.finish", || {
                 format!(
                     "raster={} placed={} prims={} skipped={}",
                     after.1 - before.1,
@@ -984,7 +993,6 @@ impl Window {
         // sorted by. Costs an empty-list check on a frame every one of whose rasters was placed as
         // it was reached, which is every frame that rasterises as it walks.
         self.scene.resolve_resources(self.content.registry());
-        mark("p.finish");
         self.scene.finish(&self.damage);
         // Before the renderer indexes a dense array of matrices with the numbers this list carries.
         // A primitive whose coordinate system changed hands under it draws a real box's content
@@ -997,6 +1005,7 @@ impl Window {
             // draws, and the tiles that did not stay queued for the next one.
             tracing::warn!(target: "zgui::paint", %error, "an atlas upload was refused");
         }
+        mark("p.budget");
         // After the walk and after the flush, and it can be nowhere else. Before the walk it would
         // be measured against the previous frame's working set; before the flush it would discard
         // the uploads this frame is about to draw from. Nothing at all happens to a cache that

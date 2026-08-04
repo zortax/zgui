@@ -3,4 +3,5 @@
 pub mod instances;
 pub mod slots;
 pub mod uniforms;
+pub mod upload;
 pub mod vectors;

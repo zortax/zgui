@@ -361,6 +361,7 @@ impl Atlas {
         // Before a single byte: a write into a texture that has not been created yet is the one
         // ordering this queue can get wrong, and the sink's contract says it never happens.
         self.device.replay(sink)?;
+        sink.begin_uploads()?;
         let mut written = 0;
         let mut flushed = 0;
         let mut failure = None;
@@ -382,6 +383,9 @@ impl Atlas {
                 }
             }
         }
+        // Accepted writes have to leave even when a later one failed; only those writes are
+        // drained below, and the rest remain queued for the next attempt.
+        sink.finish_uploads();
         self.pending.drain(..flushed);
         self.pending_bytes -= written;
         match failure {

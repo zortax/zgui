@@ -1,8 +1,8 @@
 //! The buffers a frame's instances and side tables are written into.
 
 use bytemuck::Pod;
-use zgui_profile::{Counter, counter};
 
+use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// A storage buffer that grows to the largest thing it has been asked to hold.
@@ -33,26 +33,50 @@ impl StorageBuffer {
         }
     }
 
-    /// Writes `values` into the buffer, growing it if they do not fit, and says how many bytes it
-    /// wrote.
-    ///
-    /// The count is returned as well as recorded, because upload volume is a cost that grows with
-    /// content and is invisible in a frame time until it is the whole frame time — and a frame's
-    /// own figure is not something a process-wide counter can answer.
-    pub fn write<T: Pod>(&mut self, gpu: &Gpu, values: &[T]) -> u64 {
-        let bytes: &[u8] = bytemuck::cast_slice(values);
-        if bytes.len() as u64 > self.capacity {
-            // Growth doubles rather than fitting exactly, so a scene that adds one primitive per
-            // frame reallocates a logarithmic number of times instead of every frame.
-            self.capacity = (bytes.len() as u64).next_power_of_two().max(Self::MINIMUM);
+    /// Copies all `values` through the renderer's reusable staging belt.
+    pub fn upload<T: Pod>(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+        values: &[T],
+    ) -> u64 {
+        self.upload_range(gpu, belt, encoder, values, 0, values.len())
+    }
+
+    /// Copies one element range, or the whole slice when growing replaced the target buffer.
+    pub fn upload_range<T: Pod>(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+        values: &[T],
+        start: usize,
+        end: usize,
+    ) -> u64 {
+        let all = bytemuck::cast_slice(values);
+        let needed = all.len() as u64;
+        let grew = needed > self.capacity;
+        if grew {
+            self.capacity = needed.next_power_of_two().max(Self::MINIMUM);
             self.buffer = allocate(gpu, self.label, self.capacity);
         }
-        if bytes.is_empty() {
+        if all.is_empty() || start == end && !grew {
             return 0;
         }
-        gpu.queue().write_buffer(&self.buffer, 0, bytes);
-        counter::add(Counter::BytesUploaded, bytes.len() as u64);
-        bytes.len() as u64
+        let element = size_of::<T>();
+        let (start, end) = if grew {
+            (0, values.len())
+        } else {
+            (start, end)
+        };
+        belt.write(
+            gpu,
+            encoder,
+            &self.buffer,
+            (start * element) as u64,
+            &all[start * element..end * element],
+        )
     }
 
     /// The binding a bind group names.

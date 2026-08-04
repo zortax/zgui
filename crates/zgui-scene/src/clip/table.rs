@@ -121,14 +121,25 @@ impl ClipTable {
         matrix_of: &dyn Fn(SpatialId) -> Option<Matrix4>,
     ) -> ResolvedClip {
         let mut resolved = ResolvedClip::unbounded();
-        let mut rounded = 0;
-        for link in self.links(id) {
+        let mut rounded = 0usize;
+        // Walk towards the root instead of materialising and reversing the chain. Intersections
+        // commute; rounded tests are shifted down so the two outermost survive; and the first mask
+        // seen is the innermost one, which is the one the former outer-to-inner overwrite kept.
+        let mut cursor = id;
+        loop {
+            let Some(node) = self.get(cursor) else {
+                break;
+            };
+            let ClipNode::Link { link, parent, .. } = node else {
+                break;
+            };
+            let link = *link;
             match link {
                 ClipLink::RoundedRect { rect, radii, space } => {
                     let (rect, radii) = placed(rect, radii, matrix_of(space));
                     intersect(&mut resolved.aabb, rect);
-                    if link.is_rounded() && rounded < Self::MAX_INLINE_ROUNDED {
-                        resolved.rounded[rounded] = RoundedTest {
+                    if link.is_rounded() {
+                        let test = RoundedTest {
                             rect: [
                                 rect.origin.x.0,
                                 rect.origin.y.0,
@@ -146,11 +157,23 @@ impl ClipTable {
                                 radii.bottom_left.y.0,
                             ],
                         };
-                        rounded += 1;
+                        if rounded == 0 {
+                            resolved.rounded[0] = test;
+                            rounded = 1;
+                        } else {
+                            resolved.rounded[1] = resolved.rounded[0];
+                            resolved.rounded[0] = test;
+                            rounded = Self::MAX_INLINE_ROUNDED;
+                        }
                     }
                 }
-                ClipLink::Mask { tile, .. } => resolved.mask = Some(tile),
+                ClipLink::Mask { tile, .. } => {
+                    if resolved.mask.is_none() {
+                        resolved.mask = Some(tile);
+                    }
+                }
             }
+            cursor = *parent;
         }
         resolved.rounded_count = rounded as u32;
         resolved
@@ -159,12 +182,14 @@ impl ClipTable {
     /// Whether `id` is deeper than one draw call can apply, and so needs its content drawn into a
     /// target of its own.
     pub fn needs_group_target(&self, id: ClipId) -> bool {
-        let links = self.links(id);
-        let rounded = links.iter().filter(|link| link.is_rounded()).count();
-        let masks = links
-            .iter()
-            .filter(|link| matches!(link, ClipLink::Mask { .. }))
-            .count();
+        let mut rounded = 0;
+        let mut masks = 0;
+        let mut cursor = id;
+        while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
+            rounded += usize::from(link.is_rounded());
+            masks += usize::from(matches!(link, ClipLink::Mask { .. }));
+            cursor = *parent;
+        }
         rounded > Self::MAX_INLINE_ROUNDED || masks > 1
     }
 
@@ -303,10 +328,22 @@ fn placed(
         matrix.transform_point(x, y + height, 0.0),
         matrix.transform_point(x + width, y + height, 0.0),
     ];
-    let left = corners.iter().map(|point| point[0]).fold(f32::MAX, f32::min);
-    let right = corners.iter().map(|point| point[0]).fold(f32::MIN, f32::max);
-    let top = corners.iter().map(|point| point[1]).fold(f32::MAX, f32::min);
-    let bottom = corners.iter().map(|point| point[1]).fold(f32::MIN, f32::max);
+    let left = corners
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::MAX, f32::min);
+    let right = corners
+        .iter()
+        .map(|point| point[0])
+        .fold(f32::MIN, f32::max);
+    let top = corners
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::MAX, f32::min);
+    let bottom = corners
+        .iter()
+        .map(|point| point[1])
+        .fold(f32::MIN, f32::max);
     let moved = Rect::new(
         Point::new(DevicePx(left), DevicePx(top)),
         Size::new(DevicePx(right - left), DevicePx(bottom - top)),

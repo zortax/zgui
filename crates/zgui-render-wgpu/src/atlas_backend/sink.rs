@@ -7,6 +7,7 @@ use zgui_atlas::{SinkError, TextureFormat, TextureId, TextureSink};
 use zgui_geom::{Device, Rect, Size};
 use zgui_profile::{Counter, counter};
 
+use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// The atlas textures, and the bind group each of them is read through.
@@ -26,6 +27,12 @@ pub struct AtlasTextures {
     sampler: wgpu::Sampler,
     /// The layout the bind groups are built against.
     layout: wgpu::BindGroupLayout,
+    /// Reusable staging storage for batched atlas writes.
+    uploader: UploadBelt,
+    /// Encoder open between the texture sink's batch boundaries.
+    upload_encoder: Option<wgpu::CommandEncoder>,
+    /// Whether writes are currently being collected into a batch.
+    batching: bool,
 }
 
 /// One atlas texture.
@@ -59,6 +66,9 @@ impl AtlasTextures {
             textures: BTreeMap::new(),
             sampler,
             layout,
+            uploader: UploadBelt::default(),
+            upload_encoder: None,
+            batching: false,
         }
     }
 
@@ -70,6 +80,11 @@ impl AtlasTextures {
     /// How many bytes every atlas texture occupies.
     pub fn bytes(&self) -> u64 {
         self.textures.values().map(|entry| entry.bytes).sum()
+    }
+
+    /// Mapped and in-flight atlas upload buffers.
+    pub fn staging_bytes(&self) -> u64 {
+        self.uploader.bytes()
     }
 }
 
@@ -139,6 +154,19 @@ impl TextureSink for AtlasTextures {
         if width == 0 || height == 0 {
             return Ok(());
         }
+        if self.batching {
+            let encoder = self.upload_encoder.get_or_insert_with(|| {
+                self.gpu
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("zgui.atlas.upload"),
+                    })
+            });
+            self.uploader
+                .write_texture(&self.gpu, encoder, &entry.texture, bounds, format, bytes);
+            counter::bump(Counter::AtlasTextureWrites);
+            return Ok(());
+        }
         self.gpu.queue().write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &entry.texture,
@@ -162,8 +190,27 @@ impl TextureSink for AtlasTextures {
                 depth_or_array_layers: 1,
             },
         );
+        counter::bump(Counter::AtlasTextureWrites);
         counter::add(Counter::BytesUploaded, bytes.len() as u64);
         Ok(())
+    }
+
+    fn begin_uploads(&mut self) -> Result<(), SinkError> {
+        debug_assert!(!self.batching, "atlas upload batches do not nest");
+        self.batching = true;
+        self.uploader.begin_frame(&self.gpu);
+        Ok(())
+    }
+
+    fn finish_uploads(&mut self) {
+        self.batching = false;
+        let Some(encoder) = self.upload_encoder.take() else {
+            return;
+        };
+        self.uploader.finish();
+        self.gpu.queue().submit([encoder.finish()]);
+        counter::bump(Counter::AtlasUploadBatches);
+        self.uploader.recall();
     }
 
     fn destroy_texture(&mut self, texture: TextureId) {

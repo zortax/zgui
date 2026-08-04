@@ -175,6 +175,35 @@ fn a_thousand_scrolls_grow_no_clip_entry() {
 }
 
 #[test]
+fn carrying_a_stable_clip_publishes_its_rewritten_slot() {
+    let mut clips = ClipTable::rooted();
+    let link = ClipLink::rect(rect(10.0, 40.0, 120.0, 60.0));
+    let id = clips.push(ClipId::ROOT, link);
+    let before = clips.version();
+    let carried = Size::new(DevicePx(0.0), DevicePx(-8.0));
+
+    assert_eq!(
+        clips.push_shifted(
+            ClipId::ROOT,
+            ClipLink::rect(rect(10.0, 32.0, 120.0, 60.0)),
+            carried
+        ),
+        id,
+        "scrolling keeps the interned identity"
+    );
+    let mut changed = Vec::new();
+    assert_eq!(
+        clips.changes_since(before, &mut changed),
+        crate::ChangeCoverage::Delta
+    );
+    assert_eq!(
+        changed,
+        vec![id],
+        "but the renderer sees the rewritten value"
+    );
+}
+
+#[test]
 fn a_chain_carried_somewhere_else_is_a_chain_of_its_own() {
     // The other half: naming a chain by its unscrolled rectangle must not merge two boxes that are
     // genuinely different rectangles of the document.

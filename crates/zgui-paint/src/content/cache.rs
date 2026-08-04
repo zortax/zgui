@@ -92,7 +92,8 @@ impl ContentCache {
         // What the frame inherited, published before it adds anything. A cache that is supposed to
         // reach a working set and stay there says so here; one that never stops growing says that
         // here too, and says it as a count rather than as a byte figure an allocator has smeared.
-        counter::set(Counter::AtlasEntriesLive, self.glyphs.held() as u64);
+        counter::set(Counter::AtlasEntriesLive, self.atlas.len() as u64);
+        counter::set(Counter::GlyphEntriesLive, self.glyphs.held() as u64);
     }
 
     /// What the cache is holding.
@@ -253,7 +254,9 @@ impl ContentCache {
     /// refused an allocation takes; a caller enforcing a budget wants
     /// [`ContentCache::enforce_soft_limit`], which takes as many steps as the budget needs.
     pub fn evict(&mut self) -> zgui_atlas::Eviction {
-        let freed = self.atlas.evict_least_recently_used();
+        let mut removed = Vec::new();
+        let freed = self.atlas.evict_least_recently_used_into(&mut removed);
+        self.glyphs.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -270,7 +273,9 @@ impl ContentCache {
     /// working set; before the flush it would be discarding uploads the frame is about to draw
     /// from.
     pub fn enforce_soft_limit(&mut self) -> zgui_atlas::Eviction {
-        let freed = self.atlas.evict_to_soft_limit();
+        let mut removed = Vec::new();
+        let freed = self.atlas.evict_to_soft_limit_into(&mut removed);
+        self.glyphs.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }

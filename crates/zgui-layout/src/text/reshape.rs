@@ -105,10 +105,10 @@ fn invalidate(store: &mut LayoutStore, key: BoxKey, reshape: &mut Reshape) {
         return;
     }
     store.forget_flattened(key);
-    let state = store.state_mut(key);
-    if let Some(resolution) = state.inline.take() {
+    if let Some(resolution) = store.take_inline_resolution(key) {
         reshape.paragraphs.push(resolution.key);
     }
+    let state = store.state_mut(key);
     state.first_baseline = None;
     state.last_baseline = None;
     state.forget_layout();

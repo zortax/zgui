@@ -108,6 +108,13 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         counter::add(Counter::ParagraphsEvicted, dropped as u64);
         dropped
     }
+
+    /// Drops the coldest shaped results no current layout resolution names.
+    pub fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
+        let dropped = self.cache.evict_inactive(active, count);
+        counter::add(Counter::ParagraphsEvicted, dropped as u64);
+        dropped
+    }
 }
 
 impl<S: ParagraphShaper, R> ShapedGlyphs for Paragraphs<S, R> {
@@ -140,8 +147,12 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
 
     fn shape(&mut self, content: &ParagraphContent<'_>) -> ShapedSummary {
         let key = ParagraphKey::of(content);
+        self.shape_keyed(key, content)
+    }
+
+    fn shape_keyed(&mut self, key: ParagraphKey, content: &ParagraphContent<'_>) -> ShapedSummary {
         if !self.cache.holds(key) {
-            let shaped = self.shaper.shape(content);
+            let shaped = self.shaper.shape_keyed(key, content);
             self.cache.insert(shaped);
         }
         let widths = self
@@ -176,9 +187,9 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         // string being shaped for the first time, or every string in the window on the frame a
         // change of device scale re-shapes them all.
         debug_assert!(
-            self.paints.slot_of(address).is_none_or(|slot| {
-                self.paints.get(slot) == Some(&SceneTextPaint::new(colour))
-            }),
+            self.paints
+                .slot_of(address)
+                .is_none_or(|slot| { self.paints.get(slot) == Some(&SceneTextPaint::new(colour)) }),
             "a run is being shaped into a brush slot that holds another colour: the way back from \
              its cascade result to a slot has been pointed at something else's"
         );

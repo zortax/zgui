@@ -8,7 +8,6 @@ use zgui_render::{
 };
 use zgui_scene::Scene;
 
-use crate::bind::tables::Tables;
 use crate::frame::build::PlanBuilder;
 use crate::frame::damage;
 use crate::frame::pass::Recorder;
@@ -104,10 +103,9 @@ impl Renderer for WgpuRenderer {
         }
 
         let formats = self.presentation.formats();
-        zgui_profile::latency::mark("r.buffers");
-        let tables = Tables::of(scene);
-        self.buffers.begin_frame();
-        let uploaded = self.buffers.write(&self.gpu, scene, &tables);
+        zgui_profile::latency::mark("r.tables");
+        self.buffers.prepare_tables(scene);
+        self.buffers.begin_frame(&self.gpu);
 
         // Everything the rasteriser does happens before this frame's encoder exists, because an
         // implementation submits command buffers of its own. Ordering stays exact anyway: nothing
@@ -142,16 +140,25 @@ impl Renderer for WgpuRenderer {
                 vectors.as_ref(),
             )
         };
-        zgui_profile::latency::mark("r.blocks");
-        self.buffers.upload_blocks(&self.gpu);
-
-        zgui_profile::latency::mark("r.record");
+        zgui_profile::latency::mark("r.encoder");
         let mut encoder =
             self.gpu
                 .device()
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("zgui.frame"),
                 });
+        zgui_profile::latency::mark("r.buffers");
+        let uploaded = self.buffers.upload_frame(&self.gpu, &mut encoder, scene);
+        let upload_allocations = self.buffers.upload_allocations();
+        self.buffers.finish_uploads();
+        if upload_allocations == 0 {
+            zgui_profile::latency::mark("r.record");
+        } else {
+            zgui_profile::latency::note(
+                "r.record",
+                format!("{upload_allocations} upload chunks allocated"),
+            );
+        }
         let recorded = Recorder {
             gpu: &self.gpu,
             pipelines: &mut self.pipelines,
@@ -200,6 +207,7 @@ impl Renderer for WgpuRenderer {
             draw_calls += 1;
         }
         self.gpu.queue().submit([encoder.finish()]);
+        self.buffers.recall_uploads();
         zgui_profile::latency::mark("sub.out");
 
         let response = presented.acquisition.response();
@@ -302,7 +310,7 @@ impl Renderer for WgpuRenderer {
             targets: self.composed.bytes() + self.groups.bytes(),
             scratch: 0,
             atlases: self.atlas.bytes(),
-            buffers: self.buffers.bytes(),
+            buffers: self.buffers.bytes() + self.atlas.staging_bytes(),
         };
         match &self.vectors {
             Some(raster) => own.plus(raster.memory()),

@@ -69,6 +69,15 @@ pub trait TextEngine: MeasureContent + ShapedGlyphs + ShapedClusters {
     /// paragraphs *that run is in* wrong, and says nothing about any other string in the window.
     /// The count carries the same obligation, over the same paragraphs.
     fn forget_paragraphs(&mut self, keys: &[ParagraphKey]) -> usize;
+
+    /// Drops up to `count` cold entries not named by `active` layout resolutions.
+    ///
+    /// Engines without entry-local eviction may keep their cache over its soft limit. The default
+    /// is deliberately a no-op rather than falling back to [`TextEngine::forget_shaped`], because
+    /// a soft budget must not turn an active document into a full reshape.
+    fn evict_inactive(&mut self, _active: &[ParagraphKey], _count: usize) -> usize {
+        0
+    }
 }
 
 impl<S, R> TextEngine for zgui_layout::Paragraphs<S, R>
@@ -94,6 +103,10 @@ where
 
     fn forget_paragraphs(&mut self, keys: &[ParagraphKey]) -> usize {
         zgui_layout::Paragraphs::forget_paragraphs(self, keys)
+    }
+
+    fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
+        zgui_layout::Paragraphs::evict_inactive(self, active, count)
     }
 }
 
@@ -124,6 +137,14 @@ impl MeasureContent for Box<dyn TextEngine> {
         content: &zgui_text::ParagraphContent<'_>,
     ) -> zgui_layout::measure::ShapedSummary {
         (**self).shape(content)
+    }
+
+    fn shape_keyed(
+        &mut self,
+        key: zgui_text::ParagraphKey,
+        content: &zgui_text::ParagraphContent<'_>,
+    ) -> zgui_layout::measure::ShapedSummary {
+        (**self).shape_keyed(key, content)
     }
 
     fn break_lines(
@@ -158,6 +179,10 @@ impl TextEngine for Box<dyn TextEngine> {
 
     fn forget_paragraphs(&mut self, keys: &[ParagraphKey]) -> usize {
         (**self).forget_paragraphs(keys)
+    }
+
+    fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
+        (**self).evict_inactive(active, count)
     }
 }
 
@@ -246,6 +271,10 @@ impl TextEngine for NoText {
     }
 
     fn forget_paragraphs(&mut self, _keys: &[ParagraphKey]) -> usize {
+        0
+    }
+
+    fn evict_inactive(&mut self, _active: &[ParagraphKey], _count: usize) -> usize {
         0
     }
 }

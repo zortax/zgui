@@ -129,16 +129,30 @@ impl Placements {
     /// assert_eq!(moved, vec![card, label], "a label under a card that moved is somewhere else");
     /// ```
     pub fn take_noting_moves(&mut self, tree: &SpatialTree, moved: &mut dyn FnMut(SpatialId)) {
+        self.take_noting_slots(tree, &mut |_, id| {
+            if let Some(id) = id {
+                moved(id);
+            }
+        });
+    }
+
+    /// The same, reporting every slot whose occupant or resolved matrix changed.
+    ///
+    /// Unlike [`Placements::take_noting_moves`], this also reports a slot that became vacant. That
+    /// distinction matters to a dense GPU table: the stale matrix has to be replaced by the
+    /// identity even though there is no longer an id to report.
+    pub fn take_noting_slots(
+        &mut self,
+        tree: &SpatialTree,
+        changed: &mut dyn FnMut(u32, Option<SpatialId>),
+    ) {
         let live = tree.slots().len();
         self.slots.resize(live, Slot::default());
         for (slot, held) in tree.slots().enumerate() {
             let fresh = Self::resolved(tree, held);
             let place = &mut self.slots[slot];
-            if let Some(id) = held
-                && fresh.occupant.is_some()
-                && (place.occupant != fresh.occupant || place.matrix != fresh.matrix)
-            {
-                moved(id);
+            if place.occupant != fresh.occupant || place.matrix != fresh.matrix {
+                changed(slot as u32, held);
             }
             *place = fresh;
         }

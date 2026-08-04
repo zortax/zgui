@@ -91,11 +91,11 @@ pub fn mark_all_dirty(store: &mut LayoutStore) -> u32 {
         if !held {
             continue;
         }
+        store.take_inline_resolution(key);
         let state = store.state_mut(key);
         state.forget_layout();
         state.first_baseline = None;
         state.last_baseline = None;
-        state.inline = None;
         marked += 1;
     }
     counter::add(Counter::BoxesMarkedAllDirty, u64::from(marked));

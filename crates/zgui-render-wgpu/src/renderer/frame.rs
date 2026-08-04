@@ -3,9 +3,12 @@
 use zgui_scene::Scene;
 
 use crate::bind::globals::Globals;
-use crate::bind::tables::Tables;
+use bytemuck::Pod;
+
+use crate::bind::tables::{DirtySlots, PreparedTables};
 use crate::buffer::instances::StorageBuffer;
 use crate::buffer::slots::SlotBuffer;
+use crate::buffer::upload::UploadBelt;
 use crate::buffer::vectors::VectorInstances;
 use crate::gpu::device::Gpu;
 use crate::pipeline::kind::PipelineKind;
@@ -19,6 +22,10 @@ use crate::pipeline::layout::Layouts;
 /// than the buffers do.
 #[derive(Debug)]
 pub struct FrameBuffers {
+    /// Reusable CPU-side shader tables and their per-frame dirty slots.
+    prepared: PreparedTables,
+    /// Mapped staging chunks shared by every upload in a frame.
+    uploader: UploadBelt,
     /// One block per target the frame draws into.
     pub globals: SlotBuffer,
     /// One block per draw that reads a texture of its own.
@@ -51,6 +58,8 @@ impl FrameBuffers {
     /// Allocates the buffers on `gpu`.
     pub fn new(gpu: &Gpu) -> Self {
         Self {
+            prepared: PreparedTables::default(),
+            uploader: UploadBelt::default(),
             globals: SlotBuffer::new::<Globals>(gpu, "zgui.globals"),
             blocks: SlotBuffer::new::<crate::pipeline::composite::CompositeParams>(
                 gpu,
@@ -70,38 +79,102 @@ impl FrameBuffers {
         }
     }
 
-    /// Releases every block staged for the previous frame.
-    pub fn begin_frame(&mut self) {
+    /// Releases every block staged for the previous frame and reclaims completed upload chunks.
+    pub fn begin_frame(&mut self, gpu: &Gpu) {
+        self.uploader.begin_frame(gpu);
         self.globals.reset();
         self.blocks.reset();
         self.vectors.begin_frame();
     }
 
-    /// Uploads the blocks staged while the frame was planned.
-    ///
-    /// Every bind group naming them is built afterwards, in the same frame, which is why a buffer
-    /// that grew needs no announcement: nothing is holding a name for the one it replaced.
-    pub fn upload_blocks(&mut self, gpu: &Gpu) {
-        self.globals.upload(gpu);
-        self.blocks.upload(gpu);
-        self.vectors.upload(gpu);
+    /// Incrementally prepares the shader side tables while no device work is being recorded.
+    pub fn prepare_tables(&mut self, scene: &Scene) {
+        self.prepared.update(scene);
     }
 
-    /// Writes one frame's side tables and instances, and says how many bytes that was.
-    pub fn write(&mut self, gpu: &Gpu, scene: &Scene, tables: &Tables) -> u64 {
+    /// Records every frame upload into `encoder`, and says how many bytes will be copied.
+    pub fn upload_frame(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &Scene,
+    ) -> u64 {
+        let tables = self.prepared.tables();
+        let dirty = self.prepared.dirty();
+        let mut uploaded = upload_dirty(
+            gpu,
+            &mut self.uploader,
+            encoder,
+            &mut self.clips,
+            &tables.clips,
+            &dirty.clips,
+        );
+        uploaded += upload_dirty(
+            gpu,
+            &mut self.uploader,
+            encoder,
+            &mut self.paints,
+            &tables.paints,
+            &dirty.paints,
+        );
+        uploaded += upload_dirty(
+            gpu,
+            &mut self.uploader,
+            encoder,
+            &mut self.stops,
+            &tables.stops,
+            &dirty.stops,
+        );
+        uploaded += upload_dirty(
+            gpu,
+            &mut self.uploader,
+            encoder,
+            &mut self.spatial,
+            &tables.spatial,
+            &dirty.spatial,
+        );
+
         let primitives = &scene.primitives;
-        self.clips.write(gpu, &tables.clips)
-            + self.paints.write(gpu, &tables.paints)
-            + self.stops.write(gpu, &tables.stops)
-            + self.spatial.write(gpu, &tables.spatial)
-            + self.quads.write(gpu, &primitives.quads)
-            + self.shadows.write(gpu, &primitives.shadows)
-            + self.decorations.write(gpu, &primitives.decorations)
-            + self.mono_sprites.write(gpu, &primitives.mono_sprites)
-            + self
-                .subpixel_sprites
-                .write(gpu, &primitives.subpixel_sprites)
-            + self.color_sprites.write(gpu, &primitives.color_sprites)
+        uploaded += self
+            .quads
+            .upload(gpu, &mut self.uploader, encoder, &primitives.quads);
+        uploaded += self
+            .shadows
+            .upload(gpu, &mut self.uploader, encoder, &primitives.shadows);
+        uploaded +=
+            self.decorations
+                .upload(gpu, &mut self.uploader, encoder, &primitives.decorations);
+        uploaded +=
+            self.mono_sprites
+                .upload(gpu, &mut self.uploader, encoder, &primitives.mono_sprites);
+        uploaded += self.subpixel_sprites.upload(
+            gpu,
+            &mut self.uploader,
+            encoder,
+            &primitives.subpixel_sprites,
+        );
+        uploaded +=
+            self.color_sprites
+                .upload(gpu, &mut self.uploader, encoder, &primitives.color_sprites);
+        uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
+        uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
+        uploaded += self.vectors.upload_with(gpu, &mut self.uploader, encoder);
+        uploaded
+    }
+
+    /// Makes all staging chunks readable by the submitted copy commands.
+    pub fn finish_uploads(&mut self) {
+        self.uploader.finish();
+    }
+
+    /// Reclaims staging chunks asynchronously after submission.
+    pub fn recall_uploads(&mut self) {
+        self.uploader.recall();
+    }
+
+    /// Chunks allocated this frame, useful when correlating a rare buffer-growth frame.
+    pub fn upload_allocations(&self) -> u32 {
+        self.uploader.allocations()
     }
 
     /// The bind group one draw reads its own block, texture and sampler through.
@@ -187,6 +260,7 @@ impl FrameBuffers {
             + self.mono_sprites.capacity()
             + self.subpixel_sprites.capacity()
             + self.color_sprites.capacity()
+            + self.uploader.bytes()
     }
 
     /// The bind group naming the globals and the side tables.
@@ -240,4 +314,35 @@ impl FrameBuffers {
             }],
         }))
     }
+}
+
+/// Uploads dirty slots as coalesced ranges. A half-dirty table is cheaper as one full copy.
+fn upload_dirty<T: Pod>(
+    gpu: &Gpu,
+    belt: &mut UploadBelt,
+    encoder: &mut wgpu::CommandEncoder,
+    buffer: &mut StorageBuffer,
+    values: &[T],
+    dirty: &DirtySlots,
+) -> u64 {
+    const MAX_RANGES: usize = 16;
+    let ranges = dirty
+        .slots
+        .windows(2)
+        .filter(|pair| pair[1] != pair[0] + 1)
+        .count()
+        + usize::from(!dirty.slots.is_empty());
+    if dirty.all || dirty.slots.len().saturating_mul(2) >= values.len() || ranges > MAX_RANGES {
+        return buffer.upload(gpu, belt, encoder, values);
+    }
+    let mut uploaded = 0;
+    let mut slots = dirty.slots.iter().copied().peekable();
+    while let Some(first) = slots.next() {
+        let mut end = first + 1;
+        while slots.next_if_eq(&end).is_some() {
+            end += 1;
+        }
+        uploaded += buffer.upload_range(gpu, belt, encoder, values, first as usize, end as usize);
+    }
+    uploaded
 }

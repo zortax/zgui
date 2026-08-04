@@ -70,6 +70,7 @@ impl<E> ShapedParagraph<E> {
         engine: E,
     ) -> Self {
         counter::bump(Counter::TextShaped);
+        counter::add(Counter::TextBytesShaped, text.len() as u64);
         Self {
             key,
             text,

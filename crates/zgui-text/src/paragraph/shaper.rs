@@ -6,6 +6,7 @@ use crate::geometry::strut::StrutMetrics;
 use crate::paragraph::break_request::BreakRequest;
 use crate::paragraph::broken::BrokenParagraph;
 use crate::paragraph::content::ParagraphContent;
+use crate::paragraph::key::ParagraphKey;
 use crate::paragraph::shaped::ShapedParagraph;
 
 /// Turns a paragraph into glyphs, and those glyphs into lines.
@@ -30,6 +31,24 @@ pub trait ParagraphShaper {
 
     /// Shapes one paragraph.
     fn shape(&mut self, content: &ParagraphContent<'_>) -> ShapedParagraph<Self::Engine>;
+
+    /// Shapes one paragraph whose cache key the caller has already computed.
+    ///
+    /// The default preserves existing shapers. Engines that would otherwise hash the complete
+    /// paragraph again should override it and carry `key` into the result they build.
+    fn shape_keyed(
+        &mut self,
+        key: ParagraphKey,
+        content: &ParagraphContent<'_>,
+    ) -> ShapedParagraph<Self::Engine> {
+        let shaped = self.shape(content);
+        debug_assert_eq!(
+            shaped.key(),
+            key,
+            "the caller and shaper disagree on the key"
+        );
+        shaped
+    }
 
     /// Breaks an already shaped paragraph into lines at the requested width.
     fn break_lines(

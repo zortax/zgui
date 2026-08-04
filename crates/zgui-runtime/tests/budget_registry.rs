@@ -160,13 +160,12 @@ fn the_report_names_every_registered_cache_exactly_once() {
     );
 }
 
-/// A stated level is enforced, and a level nothing reaches leaves the window alone.
+/// A stated level evicts cold entries while active shaping remains pinned.
 ///
-/// Both halves, because either alone passes for the wrong reason. A window whose caches were never
-/// over anything satisfies "under its level" by holding nothing; a policy that dropped the caches
-/// on every frame satisfies it too, and would make every frame of every document reshape.
+/// The vector cache can reach zero because its entries are rebuildable. The paragraph currently
+/// backing layout cannot: evicting it would turn a soft limit into a full reshape on every frame.
 #[test]
-fn a_cache_comes_back_under_a_level_it_is_over_and_is_untouched_under_one_it_is_not() {
+fn a_budget_drops_rebuildable_content_but_pins_active_shaping() {
     let mut app = window();
     app.settle(8);
 
@@ -182,6 +181,7 @@ fn a_cache_comes_back_under_a_level_it_is_over_and_is_untouched_under_one_it_is_
         (
             report.line(CacheId::ParagraphShaping).report.resident,
             report.line(CacheId::VectorResources).report.resident,
+            window.layout().borrow().flattenings(),
         )
     };
     assert!(
@@ -203,9 +203,23 @@ fn a_cache_comes_back_under_a_level_it_is_over_and_is_untouched_under_one_it_is_
     let window = &mut app.app_mut().windows_mut()[0];
     let report = window.budget_report();
     let over: Vec<(CacheId, u64)> = report.over_limit().collect();
-    assert!(
-        over.is_empty(),
-        "a level was stated below what the window held and the excess is still there: {over:?}"
+    assert_eq!(
+        report.line(CacheId::VectorResources).report.resident,
+        0,
+        "the rebuildable vector cache did not reach its zero limit"
+    );
+    let shaping = report.line(CacheId::ParagraphShaping).report;
+    assert_eq!(shaping.resident, held.0);
+    assert_eq!(shaping.pinned, held.0);
+    assert_eq!(
+        over,
+        vec![(CacheId::ParagraphShaping, held.0)],
+        "only the active shaped paragraph should remain over a zero soft limit"
+    );
+    assert_eq!(
+        window.layout().borrow().flattenings(),
+        held.2,
+        "enforcing a soft shaping limit rebuilt the live text contexts"
     );
 }
 

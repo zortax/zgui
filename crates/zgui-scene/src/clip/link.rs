@@ -241,4 +241,23 @@ impl Content for ClipNode {
                 .finish(),
         }
     }
+
+    fn same_stored_value(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Root, Self::Root) => true,
+            (
+                Self::Link {
+                    link,
+                    parent,
+                    shift,
+                },
+                Self::Link {
+                    link: other_link,
+                    parent: other_parent,
+                    shift: other_shift,
+                },
+            ) => link == other_link && parent == other_parent && shift == other_shift,
+            _ => false,
+        }
+    }
 }

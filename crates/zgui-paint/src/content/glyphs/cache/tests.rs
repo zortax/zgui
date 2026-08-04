@@ -8,7 +8,7 @@ use zgui_text::{
     FaceId, GlyphFormat, GlyphImage, GlyphKey, GlyphRaster, RasterStyle, SubpixelOffset,
 };
 
-use super::GlyphCache;
+use super::{COLD_ANSWERS, GlyphCache};
 
 /// A rasteriser that counts what it was asked for and answers from a script.
 struct Counting {
@@ -48,9 +48,13 @@ impl GlyphRaster for Counting {
 
 /// The key every case here asks for.
 fn key() -> GlyphKey {
+    key_for(42)
+}
+
+fn key_for(glyph: u16) -> GlyphKey {
     GlyphKey::new(
         FaceId(1),
-        42,
+        glyph,
         16.0,
         SubpixelOffset(0),
         RasterStyle::Grayscale,
@@ -130,6 +134,49 @@ fn an_evicted_tile_is_made_again_rather_than_reported_as_missing() {
         2,
         "and it was made again to do so"
     );
+}
+
+#[test]
+fn detailed_eviction_immediately_releases_the_placement_metadata() {
+    let _turn = zgui_profile::counter::exclusive();
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    let raster = Counting::new(Size::new(5, 9));
+    let mut cache = GlyphCache::default();
+
+    atlas.begin_frame();
+    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    atlas.begin_frame();
+    let mut removed = Vec::new();
+    assert_eq!(atlas.evict_least_recently_used_into(&mut removed).tiles, 1);
+    cache.forget_tiles(&removed);
+    assert_eq!(
+        cache.len(),
+        0,
+        "the evicted tile left placement metadata behind"
+    );
+
+    let before = zgui_profile::counter::snapshot();
+    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    let counted = before.delta(&zgui_profile::counter::snapshot());
+    assert_eq!(raster.calls.load(Ordering::Relaxed), 2);
+    assert_eq!(counted.rebuilt_after_eviction, 1);
+}
+
+#[test]
+fn blank_glyph_answers_are_bounded() {
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    let raster = Counting::new(Size::new(0, 0));
+    let mut cache = GlyphCache::default();
+
+    for glyph in 0..=(COLD_ANSWERS as u16) {
+        assert!(
+            cache
+                .tile_for(&mut atlas, &raster, &key_for(glyph))
+                .is_none()
+        );
+    }
+
+    assert_eq!(cache.len(), COLD_ANSWERS);
 }
 
 #[test]

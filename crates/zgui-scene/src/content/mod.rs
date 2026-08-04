@@ -16,6 +16,15 @@
 pub trait Content: Clone + PartialEq {
     /// A hash of everything equality looks at.
     fn content_hash(&self) -> u64;
+
+    /// Whether replacing a table entry with `other` changes the value a reader observes.
+    ///
+    /// Usually this is the same question as equality. A value whose stable interned identity is
+    /// deliberately narrower than what it stores can override it: a clip node, for example, keeps
+    /// one id while scrolling rewrites where its rectangle is drawn.
+    fn same_stored_value(&self, other: &Self) -> bool {
+        self == other
+    }
 }
 
 /// An incremental hash over the raw bytes of a value's fields.

@@ -4,10 +4,16 @@
 //! storage buffers rather than in the instances themselves: an N-stop gradient then costs a quad
 //! exactly as many instance bytes as a flat colour.
 
+use std::collections::HashSet;
+
 use bytemuck::{Pod, Zeroable};
 use zgui_color::{Color, ColorSpace, GradientStop, HueInterpolation, Interpolation};
 use zgui_geom::Matrix4;
-use zgui_scene::{ClipTable, GradientKind, Paint, PaintTable, ResolvedClip, Scene, SpriteTile};
+use zgui_profile::{Counter, counter};
+use zgui_scene::{
+    ChangeCoverage, ClipId, ClipLink, ClipNode, ClipTable, GradientKind, Paint, PaintId,
+    PaintTable, Placements, ResolvedClip, Scene, SpatialTree, SpriteTile, TableVersion,
+};
 
 /// One rounded-corner test of a clip chain.
 #[repr(C)]
@@ -144,6 +150,268 @@ impl Tables {
     }
 }
 
+/// Slots of one GPU table that need to be copied this frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DirtySlots {
+    /// Every slot is dirty. Used for the first frame, a journal miss, or a non-append paint edit.
+    pub all: bool,
+    /// Individual changed slots when a full copy is unnecessary.
+    pub slots: Vec<u32>,
+}
+
+impl DirtySlots {
+    /// Reuses the slot list for another frame.
+    fn clear(&mut self) {
+        self.all = false;
+        self.slots.clear();
+    }
+
+    /// Marks the whole table dirty and discards narrower work.
+    fn mark_all(&mut self) {
+        self.all = true;
+        self.slots.clear();
+    }
+
+    /// Sorts and deduplicates the changed slots before they become upload ranges.
+    fn finish(&mut self) {
+        if !self.all {
+            self.slots.sort_unstable();
+            self.slots.dedup();
+        }
+    }
+
+    /// How many entries will be prepared or uploaded for a table of `total` slots.
+    fn count(&self, total: usize) -> u64 {
+        if self.all {
+            total as u64
+        } else {
+            self.slots.len() as u64
+        }
+    }
+}
+
+/// The changes made while preparing all four side tables.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DirtyTables {
+    /// Flattened clip chains.
+    pub clips: DirtySlots,
+    /// Paint descriptors.
+    pub paints: DirtySlots,
+    /// Concatenated gradient stops.
+    pub stops: DirtySlots,
+    /// Resolved coordinate systems.
+    pub spatial: DirtySlots,
+}
+
+impl DirtyTables {
+    /// Reuses every dirty-slot list for another frame.
+    fn clear(&mut self) {
+        self.clips.clear();
+        self.paints.clear();
+        self.stops.clear();
+        self.spatial.clear();
+    }
+}
+
+/// Renderer-owned, reusable CPU copies of the shader side tables.
+///
+/// Scene tables keep stable slots and publish a bounded change journal. This cache consumes that
+/// journal without draining it, so preparing a frame with unchanged side tables is allocation-free
+/// and produces no side-table upload at all.
+#[derive(Clone, Debug, Default)]
+pub struct PreparedTables {
+    tables: Tables,
+    clips_version: TableVersion,
+    paints_version: TableVersion,
+    placements: Placements,
+    dirty: DirtyTables,
+    changed_clips: Vec<ClipId>,
+    changed_paints: Vec<PaintId>,
+    changed_clip_slots: HashSet<u32>,
+    moved_spaces: HashSet<u32>,
+}
+
+impl PreparedTables {
+    /// Updates the cached tables and records which slots changed.
+    pub fn update(&mut self, scene: &Scene) {
+        self.dirty.clear();
+        self.changed_clips.clear();
+        self.changed_paints.clear();
+        self.changed_clip_slots.clear();
+        self.moved_spaces.clear();
+
+        let clip_coverage = scene
+            .clips
+            .changes_since(self.clips_version, &mut self.changed_clips);
+        let paint_coverage = scene
+            .paints
+            .changes_since(self.paints_version, &mut self.changed_paints);
+
+        self.update_spatial(&scene.spatial);
+        self.update_paints(&scene.paints, paint_coverage);
+        self.update_clips(&scene.clips, clip_coverage);
+
+        self.clips_version = scene.clips.version();
+        self.paints_version = scene.paints.version();
+        self.dirty.clips.finish();
+        self.dirty.paints.finish();
+        self.dirty.stops.finish();
+        self.dirty.spatial.finish();
+        let prepared = self.dirty.clips.count(self.tables.clips.len())
+            + self.dirty.paints.count(self.tables.paints.len())
+            + self.dirty.stops.count(self.tables.stops.len())
+            + self.dirty.spatial.count(self.tables.spatial.len());
+        counter::add(Counter::SideTableSlotsPrepared, prepared);
+    }
+
+    /// The retained table storage, for memory reporting and tests.
+    pub fn tables(&self) -> &Tables {
+        &self.tables
+    }
+
+    /// The slots changed by the most recent [`PreparedTables::update`].
+    pub fn dirty(&self) -> &DirtyTables {
+        &self.dirty
+    }
+
+    fn update_spatial(&mut self, tree: &SpatialTree) {
+        let first = self.placements.is_empty();
+        self.placements.take_noting_slots(tree, &mut |slot, _| {
+            self.dirty.spatial.slots.push(slot);
+            self.moved_spaces.insert(slot);
+        });
+        self.tables
+            .spatial
+            .resize(self.placements.len(), GpuSpatial::default());
+        if first {
+            self.dirty.spatial.mark_all();
+        }
+        if self.dirty.spatial.all {
+            for (out, matrix) in self
+                .tables
+                .spatial
+                .iter_mut()
+                .zip(self.placements.matrices())
+            {
+                *out = GpuSpatial::of(matrix);
+            }
+        } else {
+            for (slot, matrix) in self.placements.matrices().enumerate() {
+                if self.moved_spaces.contains(&(slot as u32)) {
+                    self.tables.spatial[slot] = GpuSpatial::of(matrix);
+                }
+            }
+        }
+    }
+
+    fn update_paints(&mut self, table: &PaintTable, coverage: ChangeCoverage) {
+        if coverage == ChangeCoverage::All {
+            let rebuilt = paints(table);
+            self.tables.paints = rebuilt.paints;
+            self.tables.stops = rebuilt.stops;
+            self.dirty.paints.mark_all();
+            self.dirty.stops.mark_all();
+            return;
+        }
+        if self.changed_paints.is_empty() {
+            return;
+        }
+
+        let old_paints = self.tables.paints.len();
+        let append_only = table.slots() >= old_paints
+            && self
+                .changed_paints
+                .iter()
+                .all(|id| id.0 as usize >= old_paints);
+        if !append_only {
+            let rebuilt = paints(table);
+            self.tables.paints = rebuilt.paints;
+            self.tables.stops = rebuilt.stops;
+            self.dirty.paints.mark_all();
+            self.dirty.stops.mark_all();
+            return;
+        }
+
+        let old_stops = self.tables.stops.len();
+        for index in old_paints..table.slots() {
+            push_paint(&mut self.tables, table.get(PaintId(index as u32)));
+            self.dirty.paints.slots.push(index as u32);
+        }
+        self.dirty
+            .stops
+            .slots
+            .extend((old_stops..self.tables.stops.len()).map(|index| index as u32));
+    }
+
+    fn update_clips(&mut self, table: &ClipTable, coverage: ChangeCoverage) {
+        if coverage == ChangeCoverage::All {
+            self.tables.clips = clips_with(table, &self.placements);
+            self.dirty.clips.mark_all();
+            return;
+        }
+        self.tables.clips.resize(table.slots(), freed_clip());
+        if self.changed_clips.is_empty() && self.moved_spaces.is_empty() {
+            return;
+        }
+
+        self.changed_clip_slots
+            .extend(self.changed_clips.iter().map(|id| id.0));
+        for index in 0..table.slots() {
+            let id = ClipId(index as u32);
+            let dirty = self.changed_clip_slots.contains(&id.0)
+                || table.contains(id)
+                    && clip_chain_is_dirty(table, id, &self.changed_clip_slots, &self.moved_spaces);
+            if !dirty {
+                continue;
+            }
+            self.tables.clips[index] = if table.contains(id) {
+                gpu_clip(&table.resolve_placed(id, &|space| self.placements.get(space).copied()))
+            } else {
+                freed_clip()
+            };
+            self.dirty.clips.slots.push(index as u32);
+        }
+    }
+}
+
+/// Whether a chain itself, one of its ancestors, or one of its coordinate systems changed.
+fn clip_chain_is_dirty(
+    table: &ClipTable,
+    id: ClipId,
+    changed_clips: &HashSet<u32>,
+    moved_spaces: &HashSet<u32>,
+) -> bool {
+    let mut cursor = id;
+    while let Some(ClipNode::Link { link, parent, .. }) = table.get(cursor) {
+        if changed_clips.contains(&cursor.0) {
+            return true;
+        }
+        let space = match link {
+            ClipLink::RoundedRect { space, .. } => *space,
+            ClipLink::Mask { transform, .. } => *transform,
+        };
+        if moved_spaces.contains(&space.index()) {
+            return true;
+        }
+        cursor = *parent;
+    }
+    changed_clips.contains(&cursor.0)
+}
+
+/// Resolves clips through an already-computed placement cache.
+fn clips_with(table: &ClipTable, placements: &Placements) -> Vec<GpuClip> {
+    (0..table.slots())
+        .map(|index| {
+            let id = ClipId(index as u32);
+            if table.contains(id) {
+                gpu_clip(&table.resolve_placed(id, &|space| placements.get(space).copied()))
+            } else {
+                freed_clip()
+            }
+        })
+        .collect()
+}
+
 /// Every clip chain, resolved into what a draw call binds.
 ///
 /// One entry per slot rather than per live chain, for the reason [`spatial`] states: a primitive
@@ -224,46 +492,52 @@ fn paints(table: &PaintTable) -> Tables {
     let mut tables = Tables::default();
     for index in 0..table.slots() {
         let id = zgui_scene::PaintId(index as u32);
-        let Some(paint) = table.get(id) else {
-            tables.paints.push(GpuPaint::default());
-            continue;
-        };
-        tables.paints.push(match paint {
-            Paint::Solid(color) => GpuPaint {
-                kind: kind::SOLID,
-                color: color.to_premultiplied_srgb(),
-                ..GpuPaint::default()
-            },
-            Paint::Gradient {
-                kind: shape,
-                stops,
-                space: interpolation_space,
-                hue,
-                repeating,
-            } => {
-                let start = tables.stops.len() as u32;
-                let (encoding, written) = ramp(stops, *interpolation_space, *hue);
-                tables.stops.extend(written);
-                GpuPaint {
-                    kind: kind::GRADIENT,
-                    gradient: gradient_tag(shape),
-                    space: encoding,
-                    flags: u32::from(*repeating),
-                    geometry: gradient_geometry(shape),
-                    color: [0.0; 4],
-                    stop_start: start,
-                    stop_count: tables.stops.len() as u32 - start,
-                    pad0: 0,
-                    pad1: 0,
-                }
-            }
-            Paint::Image { .. } => GpuPaint {
-                kind: kind::IMAGE,
-                ..GpuPaint::default()
-            },
-        });
+        push_paint(&mut tables, table.get(id));
     }
     tables
+}
+
+/// Appends one paint and any stops it owns.
+fn push_paint(tables: &mut Tables, paint: Option<&Paint>) {
+    let Some(paint) = paint else {
+        tables.paints.push(GpuPaint::default());
+        return;
+    };
+    let gpu = match paint {
+        Paint::Solid(color) => GpuPaint {
+            kind: kind::SOLID,
+            color: color.to_premultiplied_srgb(),
+            ..GpuPaint::default()
+        },
+        Paint::Gradient {
+            kind: shape,
+            stops,
+            space: interpolation_space,
+            hue,
+            repeating,
+        } => {
+            let start = tables.stops.len() as u32;
+            let (encoding, written) = ramp(stops, *interpolation_space, *hue);
+            tables.stops.extend(written);
+            GpuPaint {
+                kind: kind::GRADIENT,
+                gradient: gradient_tag(shape),
+                space: encoding,
+                flags: u32::from(*repeating),
+                geometry: gradient_geometry(shape),
+                color: [0.0; 4],
+                stop_start: start,
+                stop_count: tables.stops.len() as u32 - start,
+                pad0: 0,
+                pad1: 0,
+            }
+        }
+        Paint::Image { .. } => GpuPaint {
+            kind: kind::IMAGE,
+            ..GpuPaint::default()
+        },
+    };
+    tables.paints.push(gpu);
 }
 
 /// Which shape a ramp follows.
@@ -350,10 +624,12 @@ fn premultiplied_components(stop: &GradientStop, space: ColorSpace) -> GpuStop {
 /// What a table with a freed slot uploads.
 #[cfg(test)]
 mod tests {
-    use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::{ClipId, ClipLink, ClipTable, PaintTable, ResolvedClip};
+    use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
+    use zgui_scene::{
+        ClipId, ClipLink, ClipTable, OwnSpace, PaintTable, PropertyOwner, ResolvedClip,
+    };
 
-    use super::{clips, freed_clip, gpu_clip, kind, paints};
+    use super::{PreparedTables, clips, freed_clip, gpu_clip, kind, paints};
 
     /// A device rectangle.
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
@@ -432,5 +708,69 @@ mod tests {
         let uploaded = clips(&table, &zgui_scene::SpatialTree::with_viewport());
         assert_eq!(uploaded[kept.0 as usize], gpu_clip(&table.resolve(kept)));
         assert_eq!(uploaded[kept.0 as usize].aabb, [4.0, 4.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn an_unchanged_scene_prepares_no_side_table_slot_twice() {
+        let scene = zgui_scene::Scene::new();
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+        assert!(prepared.dirty().clips.all);
+        assert!(prepared.dirty().spatial.all);
+
+        prepared.update(&scene);
+        let dirty = prepared.dirty();
+        assert!(!dirty.clips.all && dirty.clips.slots.is_empty());
+        assert!(!dirty.paints.all && dirty.paints.slots.is_empty());
+        assert!(!dirty.stops.all && dirty.stops.slots.is_empty());
+        assert!(!dirty.spatial.all && dirty.spatial.slots.is_empty());
+    }
+
+    #[test]
+    fn an_appended_paint_dirties_only_its_new_slot() {
+        let mut scene = zgui_scene::Scene::new();
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        let id = scene
+            .paints
+            .solid(zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0));
+        prepared.update(&scene);
+
+        assert_eq!(prepared.dirty().paints.slots, vec![id.0]);
+        assert!(!prepared.dirty().paints.all);
+        assert_eq!(prepared.tables().paints[id.0 as usize].kind, kind::SOLID);
+    }
+
+    #[test]
+    fn moving_a_space_dirties_its_matrix_and_dependent_clip() {
+        let mut scene = zgui_scene::Scene::new();
+        let owner = PropertyOwner::new(2).expect("a handle is never empty");
+        let space = scene.spatial.space_of(
+            scene.spatial.viewport(),
+            owner,
+            OwnSpace::of(Some(Matrix4::translation(4.0, 0.0, 0.0)), None, false),
+        );
+        let clip = scene.clips.only(ClipLink::RoundedRect {
+            rect: rect(0.0, 0.0, 10.0, 10.0),
+            radii: zgui_geom::Corners::default(),
+            space,
+        });
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        assert_eq!(
+            scene.spatial.space_of(
+                scene.spatial.viewport(),
+                owner,
+                OwnSpace::of(Some(Matrix4::translation(9.0, 0.0, 0.0)), None, false),
+            ),
+            space
+        );
+        prepared.update(&scene);
+
+        assert_eq!(prepared.dirty().spatial.slots, vec![space.index()]);
+        assert_eq!(prepared.dirty().clips.slots, vec![clip.0]);
+        assert_eq!(prepared.tables().clips[clip.0 as usize].aabb[0], 9.0);
     }
 }

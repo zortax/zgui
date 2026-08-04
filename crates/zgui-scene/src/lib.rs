@@ -124,7 +124,7 @@ pub use crate::spatial::{
     Anchoring, OwnSpace, Placements, PropertyId, PropertyNode, PropertyOwner, PropertyTree,
     SPATIAL_DOMAIN, SpatialId, SpatialNode, SpatialTree,
 };
-pub use crate::table::Table;
+pub use crate::table::{ChangeCoverage, Table, TableVersion};
 pub use crate::vector::VectorItem;
 pub use crate::vector::clip::VectorClip;
 pub use crate::vector::stroke::VectorStroke;

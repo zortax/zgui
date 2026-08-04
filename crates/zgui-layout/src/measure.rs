@@ -97,6 +97,17 @@ pub trait MeasureContent {
     /// Shapes one paragraph, or reports the shaped result already held for it.
     fn shape(&mut self, content: &ParagraphContent<'_>) -> ShapedSummary;
 
+    /// The keyed form of [`MeasureContent::shape`], for a flattened context that has already paid
+    /// to hash all of its characters.
+    fn shape_keyed(&mut self, key: ParagraphKey, content: &ParagraphContent<'_>) -> ShapedSummary {
+        let shaped = self.shape(content);
+        debug_assert_eq!(
+            shaped.key, key,
+            "the caller and measurer disagree on the key"
+        );
+        shaped
+    }
+
     /// Breaks an already shaped paragraph into lines.
     ///
     /// A key that names nothing has no lines, which is what a measurer with no text engine behind

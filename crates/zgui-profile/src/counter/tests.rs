@@ -14,7 +14,7 @@ fn exclusive() -> MutexGuard<'static, ()> {
 
 #[test]
 fn the_set_is_complete_and_has_no_duplicates() {
-    assert_eq!(Counter::COUNT, 64);
+    assert_eq!(Counter::COUNT, 70);
     assert_eq!(Counter::ALL.len(), Counter::COUNT);
 
     let names: BTreeSet<&str> = Counter::ALL.iter().map(|counter| counter.name()).collect();
@@ -33,7 +33,15 @@ fn only_the_counters_a_capture_renderer_cannot_produce_are_renderer_specific() {
         .collect();
     assert_eq!(
         renderer_specific,
-        BTreeSet::from(["draw_calls", "damage_px", "bytes_uploaded"])
+        BTreeSet::from([
+            "atlas_texture_writes",
+            "atlas_upload_batches",
+            "bytes_uploaded",
+            "damage_px",
+            "draw_calls",
+            "side_table_slots_prepared",
+            "upload_chunks_allocated",
+        ])
     );
 }
 
@@ -151,6 +159,7 @@ fn a_counter_name_states_its_polarity() {
 
 #[test]
 fn a_live_count_is_assigned_and_a_total_is_accumulated() {
+    let _guard = exclusive();
     reset();
     // The two writes are different operations and the group is what says which a counter takes.
     // A gauge that was accumulated would report the sum of every length it has ever had.

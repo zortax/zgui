@@ -5,6 +5,9 @@ pub mod id;
 #[cfg(test)]
 mod tests;
 
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use zgui_bits::EpochBitset;
@@ -12,6 +15,33 @@ use zgui_bits::EpochBitset;
 use crate::content::Content;
 
 pub use crate::table::id::TableId;
+
+/// The identity and content revision of a side table at one moment.
+///
+/// Opaque so a caller can only hand it back to the table it came from. A token from another table
+/// requests a full refresh rather than accidentally treating two equal revision numbers as the
+/// same contents.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TableVersion {
+    instance: u64,
+    revision: u64,
+}
+
+/// Whether a table could describe every slot changed since a version.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeCoverage {
+    /// `changes_since` appended every changed slot.
+    Delta,
+    /// The version belonged to another table or fell behind the bounded change journal.
+    All,
+}
+
+/// Distinguishes tables whose revision counters happen to hold the same number.
+static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
+fn next_instance() -> u64 {
+    NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed)
+}
 
 /// One interned value and its bookkeeping.
 #[derive(Clone, Debug)]
@@ -51,7 +81,7 @@ struct Entry<V> {
 /// assert_eq!(first, again, "the same content is the same id");
 /// assert_eq!(table.len(), 1);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Table<K: TableId, V: Content> {
     /// Every entry, `None` where a slot has been freed.
     entries: Vec<Option<Entry<V>>>,
@@ -64,8 +94,31 @@ pub struct Table<K: TableId, V: Content> {
     used: EpochBitset,
     /// The current frame generation.
     generation: u64,
+    /// This table, as distinct from another table at the same revision.
+    instance: u64,
+    /// The last observable stored-value change.
+    revision: u64,
+    /// Recent changed slots, retained so independent readers can catch up without draining state.
+    changes: VecDeque<(u64, u32)>,
     /// Ties the table to its id type without storing one.
     key: core::marker::PhantomData<fn() -> K>,
+}
+
+impl<K: TableId, V: Content> Clone for Table<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            entries: self.entries.clone(),
+            free: self.free.clone(),
+            by_hash: self.by_hash.clone(),
+            used: self.used.clone(),
+            generation: self.generation,
+            // A clone can diverge immediately, so it must never accept the source's token.
+            instance: next_instance(),
+            revision: 0,
+            changes: VecDeque::new(),
+            key: core::marker::PhantomData,
+        }
+    }
 }
 
 impl<K: TableId, V: Content> Default for Table<K, V> {
@@ -75,6 +128,9 @@ impl<K: TableId, V: Content> Default for Table<K, V> {
 }
 
 impl<K: TableId, V: Content> Table<K, V> {
+    /// How many individual changes a reader may fall behind before it has to refresh everything.
+    const CHANGE_HISTORY: usize = 4096;
+
     /// An empty table.
     pub fn new() -> Self {
         Self {
@@ -83,8 +139,46 @@ impl<K: TableId, V: Content> Table<K, V> {
             by_hash: FxHashMap::default(),
             used: EpochBitset::new(),
             generation: 0,
+            instance: next_instance(),
+            revision: 0,
+            changes: VecDeque::new(),
             key: core::marker::PhantomData,
         }
+    }
+
+    /// A token naming the table and its current observable contents.
+    pub fn version(&self) -> TableVersion {
+        TableVersion {
+            instance: self.instance,
+            revision: self.revision,
+        }
+    }
+
+    /// Appends the slots changed since `version` into `changed`.
+    ///
+    /// Duplicate slots are possible when one entry changed more than once; a consumer preparing
+    /// ranges can sort and deduplicate them with its other dirty sources. [`ChangeCoverage::All`]
+    /// means the caller must refresh every slot instead.
+    pub fn changes_since(&self, version: TableVersion, changed: &mut Vec<K>) -> ChangeCoverage {
+        if version.instance != self.instance || version.revision > self.revision {
+            return ChangeCoverage::All;
+        }
+        if version.revision == self.revision {
+            return ChangeCoverage::Delta;
+        }
+        let Some(&(oldest, _)) = self.changes.front() else {
+            return ChangeCoverage::All;
+        };
+        if version.revision < oldest.saturating_sub(1) {
+            return ChangeCoverage::All;
+        }
+        changed.extend(
+            self.changes
+                .iter()
+                .filter(|(revision, _)| *revision > version.revision)
+                .map(|(_, slot)| K::from_index(*slot)),
+        );
+        ChangeCoverage::Delta
     }
 
     /// Starts a new frame: a new generation, and nothing marked as used in it yet.
@@ -135,7 +229,11 @@ impl<K: TableId, V: Content> Table<K, V> {
         let hash = value.content_hash();
         if let Some(slot) = self.lookup(hash, &value) {
             if let Some(entry) = self.entries[slot as usize].as_mut() {
+                let changed = !entry.value.same_stored_value(&value);
                 entry.value = value;
+                if changed {
+                    self.note_change(slot);
+                }
             }
             self.touch(slot);
             return K::from_index(slot);
@@ -158,6 +256,7 @@ impl<K: TableId, V: Content> Table<K, V> {
             }
         };
         self.by_hash.entry(hash).or_default().push(slot);
+        self.note_change(slot);
         self.touch(slot);
         K::from_index(slot)
     }
@@ -308,6 +407,19 @@ impl<K: TableId, V: Content> Table<K, V> {
         }
         self.used.forget(slot as usize);
         self.free.push(slot);
+        self.note_change(slot);
+    }
+
+    /// Records one observable slot change in the bounded journal.
+    fn note_change(&mut self, slot: u32) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("a side table cannot change u64::MAX times");
+        if self.changes.len() == Self::CHANGE_HISTORY {
+            self.changes.pop_front();
+        }
+        self.changes.push_back((self.revision, slot));
     }
 
     /// The slot holding `value`, if any.

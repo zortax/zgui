@@ -20,23 +20,15 @@ use crate::text::TextEngine;
 /// can be counted exactly is how many results are held, so that is the unit and the level is stated
 /// in it.
 ///
-/// # Why eviction is all of them
+/// Current inline resolutions pin their shaping. Everything else is an old version or content no
+/// longer present in the document, and can be removed without invalidating layout.
 ///
-/// [`ParagraphCache`](zgui_text::ParagraphCache) records no per-entry last use and the layout store
-/// cannot say which boxes were measured from which paragraph, so there is no coldest few to take
-/// and no way to invalidate exactly what dropping them invalidated. Dropping all of it and marking
-/// the whole tree dirty is the operation that exists, it is correct, and it is expensive — which is
-/// the reason the level is set high rather than the reason to pretend a finer one exists.
+/// # Full invalidation is reserved for an explicit reset
 ///
-/// # The invalidation is not optional and is done here
-///
-/// Every measurement taken from a dropped paragraph goes with it: a box's cached size, its
-/// baselines and the lines an inline formatting context resolved were all computed from shaped runs
-/// that no longer exist, and a layout served from that cache asks for none of them again. Dropping
-/// the shaping without marking the tree is how a document silently lays itself out with no glyphs
-/// in it, on that frame and on every frame after. So the adapter holds the layout store as well as
-/// the engine, and neither [`evict`](Budgeted::evict) nor [`forget`](Budgeted::forget) can be
-/// reached without it.
+/// Budget eviction only chooses entries no current inline resolution names, so no cached
+/// measurement depends on what it drops. An explicit [`forget`](Budgeted::forget), such as device
+/// recovery or a font-set reset, still drops active results too; that operation marks the whole
+/// layout tree dirty before any cached measurement can be served from missing shaping.
 pub struct ParagraphShapingBudget<'a> {
     /// What holds the shaped results.
     text: &'a mut dyn TextEngine,
@@ -87,13 +79,14 @@ impl Budgeted for ParagraphShapingBudget<'_> {
     }
 
     fn report(&self) -> CacheReport {
+        let resident = self.text.shaped_held().paragraphs as u64;
+        let active = self.layout.borrow().active_paragraph_count() as u64;
         CacheReport {
-            resident: self.text.shaped_held().paragraphs as u64,
-            // Nothing. A shaped paragraph that is on the screen right now is not lost by being
-            // dropped — the next layout pass shapes it again — so unlike a retained atlas tile
-            // there is no set here that eviction must not touch. What dropping one costs is the
-            // reshape and the relayout, and that is the rebuild cost rather than a pin.
-            pinned: 0,
+            resident,
+            // A current resolution is both visible state and a dependency of cached measurements.
+            // It is a soft-limit pin: an active document larger than the limit remains over rather
+            // than being deliberately made to reshape on every frame.
+            pinned: active.min(resident),
             last_used: self.tracked.last_used(),
             rebuild_cost: rebuild::RESHAPED,
             speculative: 0,
@@ -106,12 +99,10 @@ impl Budgeted for ParagraphShapingBudget<'_> {
             .note(epoch, self.text.shaped_held().hits, false);
     }
 
-    /// Drops every shaped paragraph, whatever `units` asked for.
-    ///
-    /// All or nothing, for the reason on the type: there is no coldest few to take. What comes back
-    /// is therefore everything that was held, which is at least what was asked for.
-    fn evict(&mut self, _units: u64, _epoch: SceneEpoch) -> u64 {
-        self.drop_shaping() as u64
+    /// Drops only cold entries no current inline resolution names.
+    fn evict(&mut self, units: u64, _epoch: SceneEpoch) -> u64 {
+        let active = self.layout.borrow().active_paragraph_keys();
+        self.text.evict_inactive(&active, units as usize) as u64
     }
 
     fn forget(&mut self) {

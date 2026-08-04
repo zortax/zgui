@@ -21,6 +21,8 @@
 //! the world rather than properties of the glyph: a face registered later, or an eviction, makes
 //! the same key succeed, and a remembered failure would outlive its cause.
 
+use std::collections::VecDeque;
+
 use rustc_hash::FxHashMap;
 use zgui_atlas::{Atlas, AtlasKey, AtlasTile};
 use zgui_geom::{Device, DevicePx, Point, Size};
@@ -63,9 +65,22 @@ struct Remembered {
 /// question than the one a frame is asking.
 #[derive(Debug, Default)]
 pub(crate) struct GlyphCache {
-    /// One entry per key anything has ever asked for and got an answer to.
+    /// Tile-backed entries plus a bounded set of blank-glyph answers.
     entries: FxHashMap<GlyphKey, Remembered>,
+    /// The way back from an atlas eviction to the placement that named its tile.
+    by_tile: FxHashMap<AtlasKey, GlyphKey>,
+    /// Blank answers in insertion order, for bounding answers that own no atlas tile.
+    blank_order: VecDeque<GlyphKey>,
+    /// Recently evicted glyphs, so rebuilding them remains distinguishable from a first sighting.
+    evicted: FxHashMap<GlyphKey, u64>,
+    /// Tombstones in insertion order.
+    evicted_order: VecDeque<(GlyphKey, u64)>,
+    /// Monotonic identity for distinguishing a stale queue item from a newer tombstone.
+    eviction_clock: u64,
 }
+
+/// Metadata with no atlas allocation is useful but must not grow with the life of the process.
+const COLD_ANSWERS: usize = 4_096;
 
 /// The things a frame writes to while it places glyphs.
 ///
@@ -115,6 +130,11 @@ impl GlyphCache {
     /// and the placement it carries would be attached to whatever took that key's place.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.by_tile.clear();
+        self.blank_order.clear();
+        self.evicted.clear();
+        self.evicted_order.clear();
+        self.eviction_clock = 0;
     }
 
     /// How many keys have a remembered answer.
@@ -150,6 +170,10 @@ impl GlyphCache {
             // because the two say opposite things: a first sighting of a glyph is the cache
             // working, and a second one is the budget taking back something still in use.
             counter::bump(Counter::RebuiltAfterEviction);
+            self.entries.remove(key);
+            self.by_tile.remove(&atlas_key);
+        } else if self.forget_eviction(key) {
+            counter::bump(Counter::RebuiltAfterEviction);
         }
         self.rasterise(atlas, raster, key)
     }
@@ -173,6 +197,8 @@ impl GlyphCache {
                     size: image.size,
                 },
             );
+            self.blank_order.push_back(*key);
+            self.prune_blanks();
             return None;
         }
         let prepared = AtlasGlyph::of(key, &image);
@@ -182,14 +208,20 @@ impl GlyphCache {
         let tile = atlas
             .get_or_insert(prepared.key, extent, || prepared.texels)
             .ok()?;
-        self.entries.insert(
+        if let Some(previous) = self.entries.insert(
             *key,
             Remembered {
                 tile: Some(prepared.key),
                 placement: image.placement,
                 size: image.size,
             },
-        );
+        ) {
+            if let Some(previous) = previous.tile {
+                self.by_tile.remove(&previous);
+            }
+        }
+        self.by_tile.insert(prepared.key, *key);
+        self.forget_eviction(key);
         Some(Rasterised {
             tile,
             key: prepared.key,
@@ -202,6 +234,57 @@ impl GlyphCache {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Removes placement records for atlas tiles that have just been evicted.
+    pub(crate) fn forget_tiles(&mut self, removed: &[AtlasKey]) {
+        for atlas_key in removed {
+            let Some(glyph) = self.by_tile.remove(atlas_key) else {
+                continue;
+            };
+            if self
+                .entries
+                .get(&glyph)
+                .is_some_and(|entry| entry.tile == Some(*atlas_key))
+            {
+                self.entries.remove(&glyph);
+                self.remember_eviction(glyph);
+            }
+        }
+    }
+
+    fn prune_blanks(&mut self) {
+        while self.blank_order.len() > COLD_ANSWERS {
+            let Some(key) = self.blank_order.pop_front() else {
+                break;
+            };
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|entry| entry.tile.is_none())
+            {
+                self.entries.remove(&key);
+            }
+        }
+    }
+
+    fn remember_eviction(&mut self, key: GlyphKey) {
+        self.eviction_clock = self.eviction_clock.wrapping_add(1);
+        let token = self.eviction_clock;
+        self.evicted.insert(key, token);
+        self.evicted_order.push_back((key, token));
+        while self.evicted.len() > COLD_ANSWERS {
+            let Some((oldest, token)) = self.evicted_order.pop_front() else {
+                break;
+            };
+            if self.evicted.get(&oldest) == Some(&token) {
+                self.evicted.remove(&oldest);
+            }
+        }
+    }
+
+    fn forget_eviction(&mut self, key: &GlyphKey) -> bool {
+        self.evicted.remove(key).is_some()
     }
 }
 

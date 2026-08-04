@@ -3,7 +3,7 @@
 use zgui_geom::Matrix4;
 
 use crate::id::ClipId;
-use crate::table::Table;
+use crate::table::{ChangeCoverage, Table};
 
 /// A table of transforms, which is the smallest content there is to intern.
 fn table() -> Table<ClipId, Matrix4> {
@@ -135,4 +135,55 @@ fn a_freed_slot_is_reused_and_the_hash_index_does_not_keep_a_ghost() {
     // The evicted content is genuinely gone rather than still reachable through its old hash.
     let reinterned = table.intern(shifted(1.0));
     assert_ne!(reinterned, second);
+}
+
+#[test]
+fn a_reader_sees_only_changes_after_its_version() {
+    let mut table = table();
+    let before = table.version();
+    let first = table.intern(shifted(1.0));
+    let after_first = table.version();
+    let second = table.intern(shifted(2.0));
+
+    let mut changes = Vec::new();
+    assert_eq!(
+        table.changes_since(after_first, &mut changes),
+        ChangeCoverage::Delta
+    );
+    assert_eq!(changes, vec![second]);
+
+    changes.clear();
+    assert_eq!(
+        table.changes_since(before, &mut changes),
+        ChangeCoverage::Delta
+    );
+    assert_eq!(changes, vec![first, second]);
+}
+
+#[test]
+fn reinterning_unchanged_content_does_not_publish_a_change() {
+    let mut table = table();
+    table.intern(shifted(1.0));
+    let settled = table.version();
+    table.intern(shifted(1.0));
+
+    let mut changes = Vec::new();
+    assert_eq!(
+        table.changes_since(settled, &mut changes),
+        ChangeCoverage::Delta
+    );
+    assert!(changes.is_empty());
+}
+
+#[test]
+fn a_clone_rejects_the_sources_version() {
+    let mut table = table();
+    table.intern(shifted(1.0));
+    let source = table.version();
+    let cloned = table.clone();
+
+    assert_eq!(
+        cloned.changes_since(source, &mut Vec::new()),
+        ChangeCoverage::All
+    );
 }

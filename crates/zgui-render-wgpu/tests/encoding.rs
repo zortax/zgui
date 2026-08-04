@@ -18,7 +18,6 @@ use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{Device, Size};
 use zgui_render_wgpu::bind::globals::{Globals, SubpixelOrder};
-use zgui_render_wgpu::bind::tables::Tables;
 use zgui_render_wgpu::pipeline::Pipelines;
 use zgui_render_wgpu::pipeline::kind::PipelineKind;
 use zgui_render_wgpu::renderer::frame::FrameBuffers;
@@ -172,12 +171,18 @@ fn compose_into(
 
     let mut pipelines = Pipelines::new(gpu);
     let mut buffers = FrameBuffers::new(gpu);
-    buffers.begin_frame();
-    buffers.write(gpu, scene, &Tables::of(scene));
+    buffers.prepare_tables(scene);
+    buffers.begin_frame(gpu);
     let globals = buffers
         .globals
         .stage(&Globals::new(size, SubpixelOrder::default()));
-    buffers.upload_blocks(gpu);
+    let mut encoder = gpu
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("test.compose"),
+        });
+    buffers.upload_frame(gpu, &mut encoder, scene);
+    buffers.finish_uploads();
     let frame = buffers
         .frame_bind_group(gpu, pipelines.layouts())
         .expect("the block describing the target has just been uploaded");
@@ -185,11 +190,6 @@ fn compose_into(
         .instance_bind_group(gpu, pipelines.layouts(), PipelineKind::Quad)
         .expect("the quad pipeline draws instances");
 
-    let mut encoder = gpu
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("test.compose"),
-        });
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("test.compose"),
@@ -216,5 +216,6 @@ fn compose_into(
         pass.draw(0..4, 0..scene.primitives.quads.len() as u32);
     }
     gpu.queue().submit([encoder.finish()]);
+    buffers.recall_uploads();
     readback::read(gpu, &texture, format, size)
 }

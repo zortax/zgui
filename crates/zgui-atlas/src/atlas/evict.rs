@@ -32,6 +32,11 @@ impl Atlas {
     /// The frame's own working set is safe from it by construction, because looking an entry up is
     /// what marks it.
     pub fn evict_least_recently_used(&mut self) -> Eviction {
+        self.evict_least_recently_used_into(&mut Vec::new())
+    }
+
+    /// The detailed form of [`Atlas::evict_least_recently_used`], appending the keys removed.
+    pub fn evict_least_recently_used_into(&mut self, removed: &mut Vec<AtlasKey>) -> Eviction {
         let Some(generation) = self.evictable().map(|(_, age, _)| age).min() else {
             return Eviction::default();
         };
@@ -48,6 +53,7 @@ impl Atlas {
         };
         for (key, texels) in doomed {
             if self.remove(key) {
+                removed.push(key);
                 eviction.tiles += 1;
                 eviction.texels += texels;
             }
@@ -86,12 +92,17 @@ impl Atlas {
     /// Resident bytes fall only when a whole texture empties, so the loop is over textures rather
     /// than tiles and a single step may free a great many tiles and no bytes at all.
     pub fn evict_to_soft_limit(&mut self) -> Eviction {
+        self.evict_to_soft_limit_into(&mut Vec::new())
+    }
+
+    /// The detailed form of [`Atlas::evict_to_soft_limit`], appending the keys removed.
+    pub fn evict_to_soft_limit_into(&mut self, removed: &mut Vec<AtlasKey>) -> Eviction {
         let Some(soft) = self.limits.soft_bytes else {
             return Eviction::default();
         };
         let mut total = Eviction::default();
         while self.resident_bytes() > soft {
-            let step = self.evict_least_recently_used();
+            let step = self.evict_least_recently_used_into(removed);
             if step.is_empty() {
                 break;
             }

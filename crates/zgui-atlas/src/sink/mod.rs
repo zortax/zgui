@@ -33,6 +33,14 @@ pub trait TextureSink {
         format: TextureFormat,
     ) -> Result<(), SinkError>;
 
+    /// Starts a group of texture writes.
+    ///
+    /// The default is deliberately empty. Device sinks may use the boundary to combine many
+    /// writes into reusable staging storage and one submission.
+    fn begin_uploads(&mut self) -> Result<(), SinkError> {
+        Ok(())
+    }
+
     /// Writes `bytes` into `bounds` of `texture`.
     ///
     /// The bytes are tightly packed rows of `format` texels, top row first, with no padding
@@ -44,6 +52,9 @@ pub trait TextureSink {
         format: TextureFormat,
         bytes: &[u8],
     ) -> Result<(), SinkError>;
+
+    /// Finishes the group begun by [`TextureSink::begin_uploads`].
+    fn finish_uploads(&mut self) {}
 
     /// Releases `texture` and everything in it.
     ///
@@ -76,6 +87,14 @@ impl<S: TextureSink + ?Sized> TextureSink for &mut S {
         bytes: &[u8],
     ) -> Result<(), SinkError> {
         (**self).write_texture(texture, bounds, format, bytes)
+    }
+
+    fn begin_uploads(&mut self) -> Result<(), SinkError> {
+        (**self).begin_uploads()
+    }
+
+    fn finish_uploads(&mut self) {
+        (**self).finish_uploads();
     }
 
     fn destroy_texture(&mut self, texture: TextureId) {

@@ -1,7 +1,7 @@
 //! What a stage of a frame is called in words, and which part of the pipeline it belongs to.
 //!
 //! The timeline is read out of the latency marks the frame loop writes, and those are named for the
-//! person who put them there: `f.restyle`, `p.glyphs`, `acq.out`. That is the right name to write in
+//! person who put them there: `f.restyle`, `p.finish`, `acq.out`. That is the right name to write in
 //! the source and the wrong one to show somebody trying to find out why their window is slow, so
 //! this maps one to the other.
 //!
@@ -121,18 +121,20 @@ fn exact(name: &str) -> Option<(&'static str, Category)> {
         "d.postexpand" => ("Damage after expansion", Paint),
         // Paint.
         "p.expand" => ("Expand the damage", Paint),
-        "p.emit" => ("Emit the display list", Paint),
+        "p.emit" => ("Emit and rasterise text", Paint),
         "p.finish" => ("Finish the scene", Paint),
         "p.upload" => ("Upload textures", Paint),
-        "p.glyphs" => ("Rasterise glyphs", Paint),
+        "p.budget" => ("Enforce cache budgets", Paint),
         "p.draw" => ("Draw", Paint),
         // The renderer.
         "draw.in" => ("Hand the scene to the renderer", Render),
         "draw.undamaged" => ("Skip an undamaged frame", Render),
+        "r.tables" => ("Prepare GPU tables", Render),
         "r.buffers" => ("Update GPU buffers", Render),
         "r.vectors" => ("Encode vector paths", Render),
         "r.plan" => ("Plan the passes", Render),
         "r.blocks" => ("Build the draw blocks", Render),
+        "r.encoder" => ("Create the command encoder", Render),
         "r.record" => ("Record GPU commands", Render),
         // The device and the compositor.
         "acq.in" | "acq.out" => ("Acquire the surface", Gpu),
@@ -184,8 +186,12 @@ mod tests {
         );
         assert_eq!(describe("f.layout"), (Some("Lay out"), Category::Layout));
         assert_eq!(
-            describe("p.glyphs"),
-            (Some("Rasterise glyphs"), Category::Paint)
+            describe("p.emit"),
+            (Some("Emit and rasterise text"), Category::Paint)
+        );
+        assert_eq!(
+            describe("p.budget"),
+            (Some("Enforce cache budgets"), Category::Paint)
         );
         assert_eq!(describe("pres.out"), (Some("Present"), Category::Gpu));
     }
