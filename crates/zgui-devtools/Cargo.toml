@@ -11,7 +11,10 @@ license.workspace = true
 # optional — an inspector compiled into every build is an inspector whose cost has to be argued
 # about, and one that is a dependency an application adds is one that costs nothing to leave out.
 [dependencies]
-zgui = { path = "../zgui", version = "0.1.0" }
+# `instrument` is what puts component boundaries in the document, which is what the tree tab reads.
+# Asked for here rather than by the application: linking the inspector is the decision, and an
+# application that had to enable a feature as well would be one whose tree tab was silently empty.
+zgui = { path = "../zgui", version = "0.1.0", features = ["instrument"] }
 zgui-css = { path = "../zgui-css", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 # The parity declarations, read straight from the crates that make them: the inspector reports
@@ -24,6 +27,10 @@ zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["count
 
 [dev-dependencies]
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# The tests reach into the document to find a node by class, which is what a person picking with
+# the pointer does and what a headless test cannot.
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-view-dom = { path = "../zgui-view-dom", version = "0.1.0" }
 
 [lints]
 workspace = true

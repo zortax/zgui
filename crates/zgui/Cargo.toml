@@ -49,6 +49,11 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 
 [features]
+# Records which component each part of the document came from, so a development tool can show a
+# component tree. Off by default; `zgui-devtools` asks for it, so linking the inspector turns it on
+# and a program that does not link the inspector pays nothing for it.
+instrument = ["zgui-view/instrument"]
+
 # Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
 # cannot execute a budget and report an unoptimised number as a regression; the gate switches it on
 # and runs that target in release.

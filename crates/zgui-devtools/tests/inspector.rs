@@ -74,12 +74,18 @@ fn f12_opens_the_inspector_with_nothing_focused() {
     run(&mut harness, 4);
     let shown = text(&harness);
     assert!(
-        shown.contains("Element") && shown.contains("Timeline"),
+        shown.contains("Elements") && shown.contains("Timeline"),
         "the tab strip is not in the document: {shown:.400}"
     );
+    // The elements tab opens on the tree alone. The detail pane is what a *selection* opens, and
+    // an empty one standing open under the tree would take half the panel to say nothing.
     assert!(
-        shown.contains("Nothing picked"),
-        "the element tab does not say that nothing is picked: {shown:.400}"
+        shown.contains("Components") && shown.contains("All nodes"),
+        "the elements tab is not showing the tree: {shown:.400}"
+    );
+    assert!(
+        !shown.contains("Nothing picked"),
+        "the detail pane is open with nothing picked: {shown:.400}"
     );
 }
 

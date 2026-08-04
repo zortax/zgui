@@ -183,13 +183,23 @@ fn scrolling_by_one_row_builds_one_row_and_destroys_one() {
     // The rows that did not move were not rebuilt: a keyed list keeps them, and a windowed list
     // that rebuilt its whole body on every scroll would be a list that virtualises nothing.
     let transcript = harness.window.transcript.to_string();
-    let created = transcript.matches("create").count();
+    // Markers are left out on both sides of the comparison: `per_row` is measured from the element
+    // count, and an instrumented build brackets every component with a pair of markers, so
+    // counting them here would compare two different units.
+    let created = transcript
+        .lines()
+        .filter(|line| line.starts_with("create") && !line.ends_with("#marker"))
+        .count();
     assert!(
         created <= per_row + 1,
         "one row moved and {created} nodes were created (a row is {per_row}):\n{transcript}",
     );
     assert!(
-        transcript.matches("remove").count() <= per_row + 1,
+        transcript
+            .lines()
+            .filter(|line| line.starts_with("remove") && !line.ends_with("#marker"))
+            .count()
+            <= per_row + 1,
         "one row moved and more than one was taken out:\n{transcript}",
     );
 }

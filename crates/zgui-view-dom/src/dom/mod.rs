@@ -5,7 +5,7 @@ mod build;
 mod nodes;
 mod query;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use zgui_dom::{Document, EverythingMatters, NodeIndex, StyleFilter};
@@ -68,6 +68,8 @@ pub struct DocumentDom {
     handlers: Rc<RefCell<Handlers>>,
     /// Who is watching which of a node's measurements.
     observations: Rc<RefCell<Observations>>,
+    /// How many batches of changes have been made to the document.
+    revision: Cell<u64>,
 }
 
 impl DocumentDom {
@@ -93,7 +95,19 @@ impl DocumentDom {
             roots,
             handlers: Rc::new(RefCell::new(Handlers::new())),
             observations: Rc::new(RefCell::new(Observations::new())),
+            revision: Cell::new(0),
         }
+    }
+
+    /// How many batches of changes this document has taken.
+    ///
+    /// Monotonic, and only ever compared with itself: two readings that are equal mean nothing a
+    /// view wrote has changed in between, which is what a tool checks before rebuilding anything
+    /// expensive out of the tree. It counts batches rather than nodes, so it moves for a class
+    /// somebody toggled as well as for a row somebody added — over-counting costs a comparison
+    /// that finds nothing, where under-counting would show a stale tree.
+    pub fn revision(&self) -> u64 {
+        self.revision.get()
     }
 
     /// Which document this drives, as the view layer numbers documents.
@@ -185,6 +199,10 @@ impl DocumentDom {
     /// from that and no useful thing to do with a document that describes neither its old state
     /// nor its new one, so it is reported where it happened rather than carried further.
     pub(crate) fn edit<R>(&self, body: impl FnOnce(&mut zgui_dom::Edit<'_>) -> R) -> R {
+        // Counted here because this is the funnel: structure, text, attributes, classes and inline
+        // style all reach the document through one of these, so a reader comparing the number
+        // against the one it last saw knows whether anything a view wrote has changed at all.
+        self.revision.set(self.revision.get().wrapping_add(1));
         let filter = Rc::clone(&self.filter.borrow());
         self.document
             .borrow()

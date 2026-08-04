@@ -8,11 +8,15 @@
 
 mod element;
 pub(crate) mod frame;
+pub(crate) mod reactive;
 mod timeline;
+pub(crate) mod tree;
 
 pub(crate) use crate::sample::element::{Declaration, Element, sample_element};
 pub(crate) use crate::sample::frame::{Frame, sample_frame};
-pub(crate) use crate::sample::timeline::{Stage, sample_timeline};
+pub(crate) use crate::sample::reactive::{Reactive, sample_reactive};
+pub(crate) use crate::sample::timeline::{Stage, frame_total_us, sample_timeline};
+pub(crate) use crate::sample::tree::{Tree, sample_tree};
 
 /// A number of bytes, spelled the way a person reads it.
 pub(crate) fn bytes(count: u64) -> String {

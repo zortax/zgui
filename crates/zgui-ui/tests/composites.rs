@@ -501,7 +501,7 @@ fn the_gap_in_a_pager_is_announced_rather_than_hidden() {
         }
     });
     let gap = harness.find("zui-pagination__ellipsis");
-    let icon = harness.window.dom.tree().children(gap)[0];
+    let icon = harness.children(gap)[0];
     assert_eq!(
         harness.semantics(icon).label,
         Some(SharedString::from("More pages"))

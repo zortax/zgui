@@ -22,6 +22,12 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 [features]
 stub-backend = []
 
+# Records which component each part of the document came from, for a development tool that wants to
+# show a component tree. Off by default and not free: with it on, every `#[component]` instance
+# brackets its content with a pair of marker nodes and registers what they mean. A program links it
+# by linking something that asks for it — `zgui-devtools` does — and pays nothing otherwise.
+instrument = []
+
 [dev-dependencies]
 proptest.workspace = true
 zgui-view = { path = ".", features = ["stub-backend"] }

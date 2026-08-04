@@ -1,11 +1,12 @@
 //! A still document with the panel open draws nothing, on every tab.
 //!
-//! The property the whole design rests on, and the one the panel is most able to break: two of the
-//! five tabs show numbers that move every frame *because the panel is showing them*. A counter
-//! delta includes the panel's own re-render; a stage duration is the time that re-render took. So
-//! the naive discipline — compare before writing — cannot converge on those two, and a window with
-//! either of them open asks for a frame every refresh interval for as long as it is open, on a page
-//! nobody is touching.
+//! The property the whole design rests on, and the one the panel is most able to break. Two tabs
+//! show numbers that move every frame *because the panel is showing them*: a counter delta includes
+//! the panel's own re-render, and a stage duration is the time that re-render took. So the naive
+//! discipline — compare before writing — cannot converge on those two, and a window with either of
+//! them open asks for a frame every refresh interval for as long as it is open, on a page nobody is
+//! touching. The tree tab is the same hazard by another route: its rows are elements of the very
+//! document it samples, so a tree that included them would grow every time it was drawn.
 //!
 //! Three hundred vsyncs is five seconds at 60 Hz. A window that wakes even once in that time on a
 //! document that has not changed is a window whose battery cost is the inspector's.

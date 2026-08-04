@@ -55,7 +55,38 @@ use crate::view::view::{IntoView, View};
 /// assert!(cleaned.get());
 /// window.unmount();
 /// ```
-pub struct Scoped<F>(F);
+pub struct Scoped<F> {
+    /// The body.
+    body: F,
+    /// Which component this is an instance of, when it is one.
+    ///
+    /// Always carried, whether or not anything reads it: it is one `&'static` word, it lets
+    /// `#[component]` expand to the same code in every build, and a macro that had to know which
+    /// features its caller enabled would be a macro that breaks when a dependency turns one on.
+    #[cfg_attr(
+        not(feature = "instrument"),
+        expect(
+            dead_code,
+            reason = "carried in every build so the macro expands to one thing; read only when \
+                      the instrument feature is on"
+        )
+    )]
+    meta: Option<&'static ComponentMeta>,
+}
+
+/// Where a component was declared, and what it is called.
+///
+/// Written by `#[component]` as a constant of the props type, so the strings are in the binary
+/// rather than built at run time and the whole record costs nothing to carry around.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ComponentMeta {
+    /// The component's path, as `module::path::Name`.
+    pub name: &'static str,
+    /// The file it was declared in.
+    pub file: &'static str,
+    /// The line it was declared on.
+    pub line: u32,
+}
 
 impl<F, V> Scoped<F>
 where
@@ -64,7 +95,19 @@ where
 {
     /// Wraps a body in a scope of its own.
     pub fn new(body: F) -> Self {
-        Self(body)
+        Self { body, meta: None }
+    }
+
+    /// The same, for a body that is one instance of the component `meta` describes.
+    ///
+    /// What `#[component]` calls. With the `instrument` feature on, the content is bracketed by a
+    /// pair of marker nodes a development tool can read the component's extent from; without it,
+    /// this is [`Scoped::new`] carrying one extra word it never looks at.
+    pub fn named(meta: &'static ComponentMeta, body: F) -> Self {
+        Self {
+            body,
+            meta: Some(meta),
+        }
     }
 }
 
@@ -74,6 +117,9 @@ pub struct ScopedState<S> {
     owner: Owner,
     /// The built body.
     inner: S,
+    /// The markers bracketing the content, when this is an instrumented component instance.
+    #[cfg(feature = "instrument")]
+    markers: Option<(NodeId, NodeId)>,
 }
 
 impl<F, V> View for Scoped<F>
@@ -85,9 +131,23 @@ where
 
     fn build(self, cx: &mut BuildCx<'_>) -> Self::State {
         let owner = cx.owner().child();
+        // The pair, made before the body runs so the registration is in place by the time anything
+        // inside it is built — a tool sampling mid-build would otherwise see the content of a
+        // component whose boundary it has no name for.
+        #[cfg(feature = "instrument")]
+        let markers = self.meta.map(|meta| {
+            let pair = (cx.dom().create_marker(), cx.dom().create_marker());
+            crate::instrument::register(pair.0, pair.1, meta, &owner);
+            pair
+        });
         let scoped = cx.to_owned_cx().with_owner(owner.clone());
-        let inner = owner.with(|| self.0().into_view().build(&mut scoped.cx()));
-        ScopedState { owner, inner }
+        let inner = owner.with(|| (self.body)().into_view().build(&mut scoped.cx()));
+        ScopedState {
+            owner,
+            inner,
+            #[cfg(feature = "instrument")]
+            markers,
+        }
     }
 
     fn rebuild(self, state: &mut Self::State, cx: &mut BuildCx<'_>) {
@@ -96,24 +156,62 @@ where
         // the scope outlives every run of the body and would otherwise accumulate one run's worth
         // of reactive state per rebuild for as long as the view stays mounted.
         state.owner.with_cleanup(|| {
-            self.0()
+            (self.body)()
                 .into_view()
                 .rebuild(&mut state.inner, &mut scoped.cx());
         });
     }
 }
 
+/// What the registry holds is forgotten when the state that made it goes, whether or not anybody
+/// unmounted it first.
+///
+/// Tied to the drop rather than to the unmount because those are not the same event: content
+/// replaced inside a hole is unmounted and dropped, but a state dropped without being unmounted —
+/// which is what happens when a whole subtree is discarded — would otherwise leave its pair in the
+/// map for the life of the program. The map is keyed on nodes that no longer exist at that point,
+/// so the leak is also a source of wrong answers, not only of memory.
+#[cfg(feature = "instrument")]
+impl<S> Drop for ScopedState<S> {
+    fn drop(&mut self) {
+        if let Some((open, close)) = self.markers {
+            crate::instrument::deregister(open, close);
+        }
+    }
+}
+
 impl<S: Anchor> Anchor for ScopedState<S> {
     fn mount(&mut self, dom: &DomHandle, parent: NodeId, before: Option<NodeId>) {
+        // Both markers first, then the content between them: what the pair means is "everything
+        // from here to there came from this component", so the content has to land inside it.
+        #[cfg(feature = "instrument")]
+        if let Some((open, close)) = self.markers {
+            dom.insert(parent, open, before);
+            dom.insert(parent, close, before);
+            self.inner.mount(dom, parent, Some(close));
+            return;
+        }
         self.inner.mount(dom, parent, before);
     }
 
     fn unmount(&mut self, dom: &DomHandle) {
         self.inner.unmount(dom);
+        #[cfg(feature = "instrument")]
+        if let Some((open, close)) = self.markers {
+            dom.detach(open);
+            dom.detach(close);
+        }
         self.owner.cleanup();
     }
 
     fn first_node(&self) -> Option<NodeId> {
+        // The open marker when there is one: it is placed before anything the body built and stays
+        // put across a rebuild, which makes it a steadier answer than the body's own first node —
+        // that moves whenever the first thing the body renders is replaced.
+        #[cfg(feature = "instrument")]
+        if let Some((open, _)) = self.markers {
+            return Some(open);
+        }
         self.inner.first_node()
     }
 }
@@ -204,6 +302,66 @@ mod tests {
             "5",
             "the rebuilt body's own signal drives the rebuilt view"
         );
+        state.unmount(&fixture.dom);
+    }
+
+    /// A named scope brackets what it built, and stops claiming those nodes when it goes.
+    ///
+    /// The whole contract the component tree is read through: an open marker, the content, a close
+    /// marker, and nothing left in the registry once the state is dropped.
+    #[cfg(feature = "instrument")]
+    #[test]
+    fn a_named_scope_brackets_its_content_and_forgets_it_afterwards() {
+        use crate::instrument::{MarkerRole, at};
+        use crate::view::scope::ComponentMeta;
+
+        static META: ComponentMeta = ComponentMeta {
+            name: "demo::Widget",
+            file: "demo.rs",
+            line: 7,
+        };
+
+        let fixture = Fixture::new();
+        let mut state = Scoped::named(&META, || "body").build(&mut fixture.cx());
+        state.mount(&fixture.dom, fixture.root, None);
+
+        let open = state.first_node().expect("the open marker is the first node");
+        let Some(MarkerRole::Open(tag)) = at(open) else {
+            panic!("the scope's first node is not a registered component boundary");
+        };
+        assert_eq!(tag.name, "demo::Widget");
+        assert_eq!((tag.file, tag.line), ("demo.rs", 7));
+        // The content is still the content: a boundary that changed what the document says would
+        // be a boundary that changed the program.
+        assert_eq!(fixture.text(), "body");
+
+        state.unmount(&fixture.dom);
+        drop(state);
+        assert_eq!(
+            at(open),
+            None,
+            "the pair outlived the state that registered it"
+        );
+    }
+
+    /// An unnamed scope is exactly what it was before: no markers, no registration.
+    ///
+    /// What keeps the feature honest. Every conditional, list and hole in the program is an
+    /// unnamed scope, and instrumenting those would put a boundary in the tree per control flow
+    /// construct rather than per component.
+    #[cfg(feature = "instrument")]
+    #[test]
+    fn an_unnamed_scope_registers_nothing() {
+        use crate::instrument::at;
+
+        let fixture = Fixture::new();
+        let mut state = Scoped::new(|| "body").build(&mut fixture.cx());
+        state.mount(&fixture.dom, fixture.root, None);
+
+        if let Some(first) = state.first_node() {
+            assert_eq!(at(first), None, "an unnamed scope registered a boundary");
+        }
+        assert_eq!(fixture.text(), "body");
         state.unmount(&fixture.dom);
     }
 

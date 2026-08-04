@@ -20,10 +20,15 @@ mod support;
 use zgui::geom::{CssPx, Device, DevicePx, Size};
 use zgui_devtools::DevTools;
 
-use support::{box_of, find_box, resize, run, sized};
+use support::{
+    box_of, centre, find_box, frames_over, moved, pressed, released, resize, run, sized,
+};
 
 /// How close two lengths have to be to be the same length.
 const CLOSE: f32 = 0.5;
+
+/// How wide the panel is before anybody drags it.
+const DEFAULT: f32 = 560.0;
 
 /// A window `height` tall over a page of `rows` rows, with the panel open.
 fn opened_over(
@@ -52,8 +57,8 @@ fn the_panel_is_as_tall_as_the_viewport_and_no_taller() {
                 panel.size.height.0
             );
             assert!(
-                (panel.size.width.0 - 420.0).abs() < CLOSE,
-                "the panel is {}px wide rather than the 420 the sheet asks for",
+                (panel.size.width.0 - DEFAULT).abs() < CLOSE,
+                "the panel is {}px wide rather than the {DEFAULT} it opens at",
                 panel.size.width.0
             );
         }
@@ -106,10 +111,14 @@ fn the_application_keeps_the_width_the_panel_does_not_take() {
         "the panel is not in the document, so this proves nothing about where it is"
     );
     let application = box_of(&harness, "page");
+    let divider = box_of(&harness, "zgui-devtools__divider");
+    let expected = 1080.0 - DEFAULT - divider.size.width.0;
     assert!(
-        (application.size.width.0 - 660.0).abs() < CLOSE,
-        "the application is {}px wide in a 1080px window beside a 420px panel",
-        application.size.width.0
+        (application.size.width.0 - expected).abs() < CLOSE,
+        "the application is {}px wide in a 1080px window beside a {DEFAULT}px panel and a \
+         {}px divider",
+        application.size.width.0,
+        divider.size.width.0
     );
 }
 
@@ -148,6 +157,120 @@ fn scrolling_the_application_leaves_the_panel_where_it_is() {
     );
 }
 
+/// Drags the divider `by` CSS pixels, negative being leftwards, and lets the window settle.
+///
+/// The press has to land on the divider itself, so it is found rather than guessed: the panel's
+/// width is what this is about to change, and a test that computed the divider's position from the
+/// width it expects would pass whatever the divider did.
+fn drag_divider(harness: &mut zgui_platform_headless::Harness<zgui::runtime::Runtime>, by: f32) {
+    let scale = harness.app().windows()[0].scale().get();
+    let grip = centre(box_of(harness, "zgui-devtools__divider"), scale);
+    harness.deliver_to_first(pressed(grip));
+    harness.settle(16);
+    harness.deliver_to_first(moved(zgui::geom::Point::new(
+        CssPx(grip.x.0 + by),
+        CssPx(grip.y.0),
+    )));
+    harness.settle(16);
+    harness.deliver_to_first(released(zgui::geom::Point::new(
+        CssPx(grip.x.0 + by),
+        CssPx(grip.y.0),
+    )));
+    run(harness, 8);
+}
+
+/// Dragging the divider towards the application widens the panel by what the pointer moved.
+#[test]
+fn dragging_the_divider_resizes_the_panel() {
+    let mut harness = opened_over(0, 720.0);
+    drag_divider(&mut harness, -100.0);
+
+    let panel = box_of(&harness, "zgui-devtools");
+    assert!(
+        (panel.size.width.0 - (DEFAULT + 100.0)).abs() < CLOSE,
+        "a 100px drag left made the {DEFAULT}px panel {}px wide",
+        panel.size.width.0
+    );
+
+    // And the application gave up exactly that width rather than being covered by it.
+    let application = box_of(&harness, "page");
+    let divider = box_of(&harness, "zgui-devtools__divider");
+    let expected = 1080.0 - panel.size.width.0 - divider.size.width.0;
+    assert!(
+        (application.size.width.0 - expected).abs() < CLOSE,
+        "the panel took {}px and the application is {}px of a 1080px window",
+        panel.size.width.0,
+        application.size.width.0
+    );
+}
+
+/// The drag stops at both ends rather than running off them.
+#[test]
+fn the_divider_clamps_at_both_ends() {
+    // Far enough right to ask for a negative width.
+    let mut harness = opened_over(0, 720.0);
+    drag_divider(&mut harness, 900.0);
+    let panel = box_of(&harness, "zgui-devtools");
+    assert!(
+        (panel.size.width.0 - 280.0).abs() < CLOSE,
+        "dragged 900px right the panel is {}px wide rather than the 280px floor",
+        panel.size.width.0
+    );
+
+    // And far enough left to ask for the whole window, which would take the divider off the edge
+    // with it and leave no way back.
+    let mut harness = opened_over(0, 720.0);
+    drag_divider(&mut harness, -900.0);
+    let panel = box_of(&harness, "zgui-devtools");
+    let application = box_of(&harness, "page");
+    assert!(
+        application.size.width.0 >= 160.0 - CLOSE,
+        "dragged 900px left the application is {}px wide, under the 160px it keeps",
+        application.size.width.0
+    );
+    assert!(
+        panel.size.width.0 < 1080.0,
+        "the panel took the whole window"
+    );
+}
+
+/// A divider nobody is holding lets the window idle again.
+///
+/// The drag itself draws frames, as it must. What matters is that letting go ends them: a resize
+/// that left a signal being written every frame would keep the window awake for as long as the
+/// panel stayed open, which is the one cost the inspector is not allowed to have.
+#[test]
+fn a_released_divider_returns_the_window_to_idle() {
+    let mut harness = opened_over(0, 720.0);
+    drag_divider(&mut harness, -60.0);
+    run(&mut harness, 64);
+
+    let frames = frames_over(&mut harness, 120);
+    assert_eq!(frames, 0, "a released divider drew {frames} frames");
+}
+
+/// The width outlives the panel being closed and opened again.
+#[test]
+fn the_width_survives_closing_and_reopening() {
+    let tools = DevTools::new();
+    let mut harness = sized(tools, Size::new(DevicePx(1080.0), DevicePx(720.0)), 0);
+    tools.set_open(true);
+    run(&mut harness, 8);
+    drag_divider(&mut harness, -80.0);
+    let dragged = box_of(&harness, "zgui-devtools").size.width.0;
+
+    tools.set_open(false);
+    run(&mut harness, 8);
+    tools.set_open(true);
+    run(&mut harness, 8);
+
+    let reopened = box_of(&harness, "zgui-devtools").size.width.0;
+    assert!(
+        (reopened - dragged).abs() < CLOSE,
+        "the panel was dragged to {dragged}px and came back {reopened}px wide"
+    );
+}
+
 /// A closed inspector leaves the application exactly the window's width.
 #[test]
 fn a_closed_inspector_takes_no_width_from_the_application() {
@@ -162,5 +285,38 @@ fn a_closed_inspector_takes_no_width_from_the_application() {
         (application.size.width.0 - 1080.0).abs() < CLOSE,
         "a closed inspector narrowed the application to {}px",
         application.size.width.0
+    );
+}
+
+/// A closed inspector leaves the application the window's height as well as its width.
+///
+/// The host and the application wrapper are boxes the inspector adds around a view that was a
+/// direct child of the root. The root is a block of the window's height, and a block's child is as
+/// tall as its own content — so a wrapper that does not say otherwise turns a view that filled the
+/// window into a view with the window's leftover height empty underneath it, and only while the
+/// panel is *shut*, which is the state an application spends most of its life in.
+#[test]
+fn a_closed_inspector_leaves_the_application_the_window_s_height() {
+    let tools = DevTools::new();
+    let harness = sized(tools, Size::new(DevicePx(1080.0), DevicePx(720.0)), 0);
+
+    let application = box_of(&harness, "zgui-devtools-app");
+    assert!(
+        (application.size.height.0 - 720.0).abs() < CLOSE,
+        "with the panel shut the application is {}px tall in a 720px window",
+        application.size.height.0
+    );
+}
+
+/// And an open one still does.
+#[test]
+fn an_open_inspector_leaves_the_application_the_window_s_height() {
+    let harness = opened_over(0, 720.0);
+
+    let application = box_of(&harness, "zgui-devtools-app");
+    assert!(
+        (application.size.height.0 - 720.0).abs() < CLOSE,
+        "with the panel open the application is {}px tall in a 720px window",
+        application.size.height.0
     );
 }

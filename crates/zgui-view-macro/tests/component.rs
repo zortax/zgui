@@ -55,6 +55,29 @@ fn a_component_identifies_itself_by_module_path_and_name() {
     );
 }
 
+/// A component says where it was written, not where the macro was.
+///
+/// What the inspector's component tree shows against each row, and the reason it is worth having:
+/// "this row is a `Label`" is a smaller answer than "this row is the `Label` on line 21 of this
+/// file", which is a place to put a cursor.
+#[test]
+fn a_component_says_which_file_and_line_it_was_declared_on() {
+    let meta = LabelProps::COMPONENT_META;
+    assert_eq!(meta.name, LabelProps::COMPONENT_ID);
+    assert!(
+        meta.file.ends_with("component.rs"),
+        "a component declared in this file says it came from {}",
+        meta.file
+    );
+    // The declaration is above this test, so its line is a real one and is before this one.
+    assert!(meta.line > 0, "the line is {}", meta.line);
+    assert!(
+        meta.line < ::core::line!(),
+        "the declaration is above this assertion but reports line {}",
+        meta.line
+    );
+}
+
 /// A component that registers a cleanup, to prove where its scope ends.
 #[component]
 fn Ephemeral(

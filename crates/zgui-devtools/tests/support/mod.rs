@@ -49,16 +49,17 @@ pub(crate) fn Page(
     }
 }
 
-/// What the page looks like, and the inspector's own sheet beside it.
+/// What the page looks like.
+///
+/// The inspector's own sheet is deliberately *not* here: the panel installs it from its own body,
+/// and every assertion in these tests about where the panel is is therefore also an assertion that
+/// it did.
 pub(crate) fn sheet() -> String {
-    format!(
-        "{}\n{}",
-        "root { background-color: #101010 }
-         .page { padding: 20px }
-         .row { height: 48px }
-         .target { width: 120px; height: 48px; padding: 7px; border: 3px solid #ff0000 }",
-        zgui_devtools::SHEET
-    )
+    "root { background-color: #101010 }
+     .page { padding: 20px }
+     .row { height: 48px }
+     .target { width: 120px; height: 48px; padding: 7px; border: 3px solid #ff0000 }"
+        .to_owned()
 }
 
 /// A renderer that accepts a frame and holds nothing, so the test needs no graphics device.
@@ -172,6 +173,40 @@ pub(crate) fn sized(
     harness
 }
 
+/// Opens a window with `view` inside the inspector, for a test that needs its own page.
+pub(crate) fn mounted<V: IntoView + 'static>(
+    tools: DevTools,
+    view: impl Fn() -> V + Clone + 'static,
+) -> Harness<Runtime> {
+    let size = Size::new(DevicePx(900.0), DevicePx(700.0));
+    let runtime = zgui::runtime::App::new()
+        .with_title("inspector")
+        .with_size(size.width.0, size.height.0)
+        .with_stylesheet(sheet())
+        .with_probe(tools.probe())
+        .with_renderer(Box::new(
+            |_: &std::sync::Arc<dyn Surface>, target: RenderTarget| {
+                Ok::<_, AppError>(Box::new(Blind {
+                    target: Some(target),
+                    sink: Sink,
+                }) as Box<dyn Renderer>)
+            },
+        ))
+        .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
+            let view = view.clone();
+            Box::new(
+                view! { Inspector(tools = tools) {{view()}} }
+                    .into_view()
+                    .build(cx),
+            )
+        })
+        .expect("the reactive runtime installs");
+    let mut harness = Harness::new(runtime);
+    harness.deliver_to_first(SurfaceEvent::Resized(size));
+    harness.settle(256);
+    harness
+}
+
 /// Resizes the window and lets it settle.
 pub(crate) fn resize(harness: &mut Harness<Runtime>, size: Size<DevicePx, Device>) {
     harness.deliver_to_first(SurfaceEvent::Resized(size));
@@ -228,6 +263,34 @@ pub(crate) fn moved(at: Point<CssPx, Css>) -> SurfaceEvent {
         modifiers: Modifiers::NONE,
         timestamp: Timestamp::ORIGIN,
     }
+}
+
+/// A pointer press at `at`.
+pub(crate) fn pressed(at: Point<CssPx, Css>) -> SurfaceEvent {
+    SurfaceEvent::Pointer {
+        action: PointerAction::Pressed,
+        event: PointerEvent::mouse(at).with_button(zgui::vocab::PointerButton::Primary),
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    }
+}
+
+/// A pointer release at `at`.
+pub(crate) fn released(at: Point<CssPx, Css>) -> SurfaceEvent {
+    SurfaceEvent::Pointer {
+        action: PointerAction::Released,
+        event: PointerEvent::mouse(at).with_button(zgui::vocab::PointerButton::Primary),
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    }
+}
+
+/// The centre of `rect`, in the CSS pixels a pointer event is delivered in.
+pub(crate) fn centre(rect: Rect<DevicePx, Device>, scale: f32) -> Point<CssPx, Css> {
+    Point::new(
+        CssPx((rect.origin.x.0 + rect.size.width.0 / 2.0) / scale),
+        CssPx((rect.origin.y.0 + rect.size.height.0 / 2.0) / scale),
+    )
 }
 
 /// Puts focus inside the application by pressing <kbd>Tab</kbd>.
@@ -295,6 +358,47 @@ pub(crate) fn find_box(harness: &Harness<Runtime>, class: &str) -> Option<Rect<D
         }
     }
     None
+}
+
+/// The node of the first element carrying `class`.
+pub(crate) fn node_with_class(
+    harness: &Harness<Runtime>,
+    class: &str,
+) -> Option<zgui::view::NodeId> {
+    let window = harness.app().windows().first().expect("a window");
+    let document = window.document().borrow();
+    let store = document.store();
+    (0..store.len()).find_map(|slot| {
+        let index = zgui_dom::NodeIndex::new(u32::try_from(slot).ok()?);
+        let carries = store
+            .classes_of(index)
+            .iter()
+            .any(|held| held.0.as_ref() == class);
+        carries.then(|| zgui_view_dom::id::to_view(store.key_of(index)))
+    })
+}
+
+/// The open marker of the first instance of the component whose name ends in `name`.
+///
+/// What a tree row for a component is keyed by, so a test can fold one away or pick it without
+/// going through the pointer.
+pub(crate) fn component_named(
+    harness: &Harness<Runtime>,
+    name: &str,
+) -> Option<zgui::view::NodeId> {
+    use zgui::view::instrument::{self, MarkerRole};
+
+    let window = harness.app().windows().first().expect("a window");
+    let document = window.document().borrow();
+    let store = document.store();
+    (0..store.len()).find_map(|slot| {
+        let index = zgui_dom::NodeIndex::new(u32::try_from(slot).ok()?);
+        let node = zgui_view_dom::id::to_view(store.key_of(index));
+        match instrument::at(node) {
+            Some(MarkerRole::Open(tag)) if tag.name.ends_with(name) => Some(node),
+            _ => None,
+        }
+    })
 }
 
 /// How many boxes the document was laid out into.

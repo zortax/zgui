@@ -22,7 +22,6 @@
 //! fn main() -> Result<(), zgui::Error> {
 //!     let tools = DevTools::new();
 //!     app()
-//!         .with_stylesheet(zgui_devtools::SHEET)
 //!         .with_probe(tools.probe())
 //!         .run(move || {
 //!             let tools = tools.clone();
@@ -30,6 +29,10 @@
 //!         })
 //! }
 //! ```
+//!
+//! The panel installs its own style sheet from its own body, so the application's sheet is left
+//! alone: there is nothing to merge, and an application that changes its own styling cannot
+//! accidentally drop the inspector's.
 //!
 //! Nothing in the framework depends on this crate, so an application that does not name it carries
 //! none of it: no panel, no probe, no per-frame sampling. That is the whole of what makes the
@@ -67,5 +70,5 @@ mod probe;
 mod sample;
 mod state;
 
-pub use crate::panel::{Inspector, InspectorProps, SHEET};
-pub use crate::state::{DevTools, Tab};
+pub use crate::panel::{Inspector, InspectorProps};
+pub use crate::state::{DevTools, Tab, TreeMode};

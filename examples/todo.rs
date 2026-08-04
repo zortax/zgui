@@ -3,6 +3,11 @@
 //! Run it with `cargo run -p zgui-examples --example todo`. Type to write an item, press Enter to
 //! add it, click an item to tick it off, and click its `x` to remove it.
 //!
+//! It also has the inspector wired in, which is what an application does to get one: press
+//! <kbd>F12</kbd> for the panel, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> to pick an element,
+//! <kbd>F8</kbd> to freeze it. The Tree tab shows this file's own components against the lines they
+//! are written on.
+//!
 //! What it is worth reading for:
 //!
 //! * **the list is keyed.** `for … in …, key = …` re-runs its reconciliation when the *set* of
@@ -18,6 +23,11 @@
 //!   downcast anywhere, and `Key::inserted_text` is what turns a press into the text it means.
 
 use zgui::prelude::*;
+#[allow(
+    unused_imports,
+    reason = "the tag names the component and the macro names its props type"
+)]
+use zgui_devtools::{DevTools, Inspector, InspectorProps};
 
 /// One item of the list.
 ///
@@ -197,10 +207,14 @@ const SHEET: &str = css!(
 );
 
 fn main() -> Result<(), zgui::Error> {
+    // Two lines: a view to draw the panel in, and a probe to read each frame through. The panel
+    // installs its own style sheet, so `SHEET` below is this application's and nothing else's.
+    let tools = DevTools::new();
     app()
         .with_application_id("dev.zgui.Todo")
         .with_title("Todo")
         .with_size(520.0, 520.0)
         .with_stylesheet(SHEET)
-        .run(|| view! { Todos() })
+        .with_probe(tools.probe())
+        .run(move || view! { Inspector(tools = tools) {Todos()} })
 }

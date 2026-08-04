@@ -34,10 +34,25 @@ impl Harness {
     }
 
     /// The only child of the window's root, which is what a single mounted component is.
+    ///
+    /// Markers are not children for this purpose. A component's content is bracketed by a pair of
+    /// them in an instrumented build, and every conditional inside one leaves another behind — so a
+    /// count that included them would be counting where things may go rather than what is there.
     pub fn only_child(&self) -> NodeId {
-        let children = self.window.dom.tree().children(self.window.root);
+        let children = self.children(self.window.root);
         assert_eq!(children.len(), 1, "one component was mounted");
         children[0]
+    }
+
+    /// A node's children, without the markers among them.
+    pub fn children(&self, node: NodeId) -> Vec<NodeId> {
+        self.window
+            .dom
+            .tree()
+            .children(node)
+            .into_iter()
+            .filter(|child| !self.window.dom.tree().is_marker(*child))
+            .collect()
     }
 
     /// Every element under the window's root, in tree order, the root itself first.
@@ -46,7 +61,7 @@ impl Harness {
         let mut stack = vec![self.window.root];
         while let Some(node) = stack.pop() {
             out.push(node);
-            let mut children = self.window.dom.tree().children(node);
+            let mut children = self.children(node);
             children.reverse();
             stack.extend(children);
         }

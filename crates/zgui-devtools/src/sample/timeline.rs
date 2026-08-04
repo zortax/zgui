@@ -51,6 +51,33 @@ pub(crate) fn sample_timeline() -> Vec<Stage> {
     stages().unwrap_or_default()
 }
 
+/// How many records are read to find the last complete frame's duration.
+///
+/// A frame writes on the order of thirty-five — marks *and* the notes between them — and this has
+/// to reach back over the frame in progress to the whole of the one before it, which is two of
+/// them. Sixty-four was not enough and failed in the way that is hardest to see: it found the last
+/// `f.end` and not the `f.begin` belonging to it, so the chart stayed empty rather than wrong.
+const SPAN: usize = 192;
+
+/// How long the last complete frame took, in microseconds.
+///
+/// The same span the strip is built from, measured rather than itemised: the chart wants one number
+/// per frame and building the stage list to add them up would be an allocation per stage for a
+/// figure the two boundary marks already carry.
+pub(crate) fn frame_total_us() -> Option<f64> {
+    let marks = zgui_profile::latency::last(SPAN);
+    let end = marks.iter().rposition(|mark| mark.stage == "f.end")?;
+    let begin = marks[..end]
+        .iter()
+        .rposition(|mark| mark.stage == "f.begin")?;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a frame is microseconds, so the nanosecond span is far inside f64"
+    )]
+    let us = marks[end].at_ns.saturating_sub(marks[begin].at_ns) as f64 / 1000.0;
+    Some(us)
+}
+
 /// The stages, or nothing when the last [`WINDOW`] marks hold no complete frame.
 fn stages() -> Option<Vec<Stage>> {
     let marks = zgui_profile::latency::last(WINDOW);

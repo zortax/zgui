@@ -31,6 +31,6 @@ pub use crate::view::hole::Hole;
 pub use crate::view::list::ListState;
 pub use crate::view::option::OptionState;
 pub use crate::view::reactive::ReactiveState;
-pub use crate::view::scope::{Scoped, ScopedState};
+pub use crate::view::scope::{ComponentMeta, Scoped, ScopedState};
 pub use crate::view::text::TextState;
 pub use crate::view::view::{IntoView, View};

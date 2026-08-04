@@ -36,6 +36,14 @@ pub(crate) struct Frame {
     pub(crate) memory: MemoryReport,
     /// What every budgeted cache is holding, and the level each states.
     pub(crate) budget: Vec<Held>,
+    /// How many nodes the document holds.
+    pub(crate) nodes: usize,
+    /// What those nodes cost in records, arena slots, key tables and columns.
+    ///
+    /// The host side of the answer, which the renderer's report says nothing about: a window whose
+    /// device memory is flat while its document keeps growing is a leak in the view layer, and
+    /// without this number the memory tab would show that as "nothing is wrong".
+    pub(crate) document: u64,
 }
 
 /// One cache's occupancy, as the panel shows it.
@@ -82,6 +90,8 @@ impl Default for Frame {
             counters: Vec::new(),
             memory: MemoryReport::ZERO,
             budget: Vec::new(),
+            nodes: 0,
+            document: 0,
         }
     }
 }
@@ -116,6 +126,19 @@ pub(crate) fn sample_frame(
 ) -> Frame {
     let scene = window.scene();
     let damage = window.damage();
+    let (nodes, document) = {
+        let store = window.document().borrow();
+        let store = store.store();
+        let nodes = store.len();
+        #[expect(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a per-node average times a node count is bytes, which is what it is shown as"
+        )]
+        let held = (store.bytes_per_node() * nodes as f64) as u64;
+        (nodes, held)
+    };
     let mut counters: Vec<(&'static str, u64)> = moved
         .iter()
         .filter(|(_, value)| **value > 0)
@@ -142,5 +165,7 @@ pub(crate) fn sample_frame(
                 unit: line.report.unit,
             })
             .collect(),
+        nodes,
+        document,
     }
 }

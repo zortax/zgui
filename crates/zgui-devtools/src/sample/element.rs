@@ -49,6 +49,46 @@ pub(crate) struct Declaration {
     pub(crate) value: String,
     /// Whether it computed to something other than its initial value.
     pub(crate) authored: bool,
+    /// The colour to paint beside it, when the whole value names one.
+    ///
+    /// Worked out here rather than while drawing, because it is a question about the value and the
+    /// answer does not change until the value does.
+    pub(crate) swatch: Option<String>,
+}
+
+/// The colour `value` names, when the whole of it names one.
+///
+/// Deliberately conservative, and the guard is what makes it so: the value has to be *one* colour
+/// and nothing else. `background-image: linear-gradient(rgb(0,0,0), rgb(255,255,255))` contains two
+/// colours and is not one, and a swatch painted from a value the engine will read differently is
+/// worse than no swatch — it is a second answer, quietly disagreeing with the first.
+///
+/// The text is handed back rather than a parsed colour: the panel paints it by declaring it, so
+/// whatever the engine makes of the string is exactly what is shown.
+fn swatch(value: &str) -> Option<String> {
+    /// The functional notations a computed colour is serialised in.
+    const FUNCTIONS: [&str; 9] = [
+        "rgb(", "rgba(", "hsl(", "hsla(", "color(", "oklab(", "oklch(", "lab(", "lch(",
+    ];
+
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("transparent") {
+        return Some(value.to_owned());
+    }
+    if let Some(hex) = value.strip_prefix('#')
+        && matches!(hex.len(), 3 | 4 | 6 | 8)
+        && hex.chars().all(|digit| digit.is_ascii_hexdigit())
+    {
+        return Some(value.to_owned());
+    }
+    let lowered = value.to_ascii_lowercase();
+    let named = FUNCTIONS
+        .iter()
+        .any(|function| lowered.starts_with(function));
+    // One call and one only: a value holding two is a gradient, a shadow, or a shorthand, and none
+    // of those is a colour this can stand beside.
+    let single = value.ends_with(')') && value.matches('(').count() == 1;
+    (named && single).then(|| value.to_owned())
 }
 
 /// The boxes of the box model, outermost first.
@@ -152,6 +192,7 @@ fn declarations(style: zgui_css::ComputedStyle) -> Vec<Declaration> {
                 zgui_css::parity::observe::differs_from_initial(&style, &initial, property);
             out.push(Declaration {
                 property: property.to_owned(),
+                swatch: swatch(&value),
                 value,
                 authored,
             });
@@ -164,9 +205,11 @@ fn declarations(style: zgui_css::ComputedStyle) -> Vec<Declaration> {
             zgui_css::parity::observe::differs_from_initial(&style, &initial, longhand.css_name)
         })
         .filter_map(|longhand| {
+            let value = zgui_css::parity::observe::computed_value(&style, longhand.css_name)?;
             Some(Declaration {
                 property: longhand.css_name.to_owned(),
-                value: zgui_css::parity::observe::computed_value(&style, longhand.css_name)?,
+                swatch: swatch(&value),
+                value,
                 authored: true,
             })
         })
@@ -174,4 +217,41 @@ fn declarations(style: zgui_css::ComputedStyle) -> Vec<Declaration> {
     authored.sort_by(|left, right| left.property.cmp(&right.property));
     out.append(&mut authored);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::swatch;
+
+    #[test]
+    fn a_value_that_is_one_colour_is_painted() {
+        assert_eq!(
+            swatch("rgb(122, 162, 247)").as_deref(),
+            Some("rgb(122, 162, 247)")
+        );
+        assert!(swatch("rgba(0, 0, 0, 0.5)").is_some());
+        assert!(swatch("#7aa2f7").is_some());
+        assert!(swatch("#7aa2f780").is_some());
+        assert!(swatch("transparent").is_some());
+        assert!(swatch("oklch(0.7 0.1 250)").is_some());
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_colour_is_left_alone() {
+        assert_eq!(swatch("16px"), None);
+        assert_eq!(swatch("block"), None);
+        assert_eq!(swatch("#zzz"), None, "not hexadecimal");
+        assert_eq!(swatch("#7aa2f"), None, "not a length a hex colour comes in");
+    }
+
+    #[test]
+    fn a_value_holding_more_than_one_colour_is_not_one() {
+        // The case the guard exists for. A swatch painted from the first colour in a gradient is a
+        // second answer quietly disagreeing with the value printed beside it.
+        assert_eq!(
+            swatch("linear-gradient(rgb(0, 0, 0), rgb(255, 255, 255))"),
+            None
+        );
+        assert_eq!(swatch("rgb(0, 0, 0) 0px 1px 2px"), None, "a shadow");
+    }
 }

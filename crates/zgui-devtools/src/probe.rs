@@ -26,6 +26,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
+use zgui::geom::{Css, CssPx, Point, Rect, Size};
 use zgui::prelude::*;
 use zgui::runtime::{FrameProbe, Window};
 use zgui::view::NodeId;
@@ -44,6 +45,13 @@ use crate::state::DevTools;
 /// idles. A window that has idled runs no frames, so the probe does not run either and the
 /// cadence never comes round again until something real happens.
 const CADENCE: u32 = 30;
+
+/// How many frames the frame-time graph keeps.
+///
+/// Half a minute at 60 Hz. Long enough to still hold a stutter somebody is turning round to
+/// describe, and it costs one `f64` a frame — the graph reduces them to a couple of hundred columns
+/// when it draws, so the length of this is a question about memory rather than about the drawing.
+const HISTORY: usize = 1800;
 
 /// What is installed with [`DevTools::probe`](crate::DevTools::probe).
 pub(crate) struct Sampler {
@@ -66,6 +74,17 @@ pub(crate) struct Sampler {
     /// Summed rather than sampled: the point of the cadence is that the frames in between are not
     /// published, not that what they did is thrown away.
     pending: RefCell<BTreeMap<&'static str, u64>>,
+    /// What the document's revision was when the tree was last read.
+    ///
+    /// The tree is the most expensive sample here — it is the whole document — and it only changes
+    /// when the document does, which the revision answers in one comparison.
+    revision: Cell<u64>,
+    /// Which tree was last read, so switching between them shows the other one at once.
+    mode: Cell<crate::state::TreeMode>,
+    /// What was picked when the enclosing component was last resolved.
+    aimed: Cell<Option<NodeId>>,
+    /// How long each of the last few frames took, before it is published.
+    history: RefCell<Vec<f64>>,
 }
 
 impl Sampler {
@@ -79,6 +98,10 @@ impl Sampler {
             countdown: Cell::new(0),
             showing: Cell::new(crate::Tab::default()),
             pending: RefCell::new(BTreeMap::new()),
+            revision: Cell::new(0),
+            mode: Cell::new(crate::state::TreeMode::default()),
+            aimed: Cell::new(None),
+            history: RefCell::new(Vec::new()),
         }
     }
 
@@ -133,14 +156,96 @@ impl FrameProbe for Sampler {
         // unconditionally would mean the panel changed every frame and the window never settled —
         // with the timeline hidden, which is most of the time, that would be a window kept awake
         // for a number nobody is looking at.
-        if due && tab == crate::Tab::Timeline {
-            let timeline = sample_timeline();
-            if state.timeline.get_untracked() != timeline {
-                state.timeline.set(timeline);
+        if tab == crate::Tab::Timeline {
+            // Every frame, because the chart's whole point is the frame that was slow — and that is
+            // never the frame the panel happens to be showing. Kept off the signal until the
+            // cadence comes round, so what accumulates is a vector rather than a redraw.
+            if let Some(us) = crate::sample::frame_total_us() {
+                let mut history = self.history.borrow_mut();
+                // A ring in a vector: the oldest goes when it is full. `remove(0)` on eighteen
+                // hundred `f64` is a memmove of fourteen kilobytes once a frame, which is nothing
+                // beside the frame that just ran.
+                if history.len() >= HISTORY {
+                    history.remove(0);
+                }
+                history.push(us);
+            }
+            if due {
+                let timeline = sample_timeline();
+                if state.timeline.get_untracked() != timeline {
+                    state.timeline.set(timeline);
+                }
+                let history = self.history.borrow().clone();
+                if state.history.get_untracked() != history {
+                    state.history.set(history);
+                }
             }
         }
 
+        // The tree, only while its own tab is showing, and only when the document it describes has
+        // actually moved. The revision counts every batch of changes a view made, so two equal
+        // readings mean there is nothing to rebuild — which is what makes a tab that samples the
+        // whole document cost nothing on a document nobody is touching.
+        //
+        // The panel's own subtree is left out of the walk. Without that the tree would contain the
+        // rows that draw it, so drawing it would grow it, and it would never converge.
+        if tab == crate::Tab::Elements {
+            let revision = window.dom().revision();
+            let mode = state.tree_mode.get_untracked();
+            let moved = self.revision.replace(revision) != revision;
+            let switched = self.mode.replace(mode) != mode;
+            if moved || switched || due {
+                let ours: Vec<NodeId> = [
+                    state.panel.get_untracked(),
+                    state.overlay.get_untracked(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                let tree =
+                    crate::sample::sample_tree(window, mode, &ours, state.app.get_untracked());
+                if state.tree.get_untracked().as_deref() != Some(tree.as_ref()) {
+                    state.tree.set(Some(tree));
+                }
+            }
+        }
+
+        // What is alive, only while its own tab is showing. It moves when components mount or
+        // unmount, which is a document change, so the revision gates it exactly as it gates the
+        // tree — and the cadence catches anything that changed without touching the document.
+        if tab == crate::Tab::Reactivity {
+            let revision = window.dom().revision();
+            let moved = self.revision.replace(revision) != revision;
+            if moved || due {
+                let reactive = crate::sample::sample_reactive();
+                if state.reactive.get_untracked() != reactive {
+                    state.reactive.set(reactive);
+                }
+            }
+        }
+
+        // Where the outline goes. Published on every frame the panel is open rather than only on
+        // the tree tab, because picking runs from whichever tab is showing — and it is one lookup
+        // when something is hovered and nothing at all when nothing is.
+        let outline = state
+            .highlighted
+            .get_untracked()
+            .and_then(|node| outline_of(window, node));
+        if state.highlight_box.get_untracked() != outline {
+            state.highlight_box.set(outline);
+        }
+
         let picked = state.picked.get_untracked();
+        // Which component built what is picked, so the tree can select something a reader can see
+        // when the pointer picked a node the components view does not have a row for. Resolved only
+        // when the pick moves: it is a walk over one sibling list per level of the document, which
+        // is cheap once and pointless every frame.
+        if self.aimed.replace(picked) != picked {
+            let inside = picked.and_then(|node| crate::sample::tree::component_of(window, node));
+            if state.picked_component.get_untracked() != inside {
+                state.picked_component.set(inside);
+            }
+        }
         // The style listing is rebuilt when the picked element changes, and also when the frame
         // restyled anything: a picked element whose rules now match differently would otherwise
         // keep showing the values it had when it was picked, which is the one failure that makes an
@@ -171,4 +276,60 @@ impl FrameProbe for Sampler {
     fn describe(&self) -> &str {
         "the zgui-devtools inspector"
     }
+}
+
+/// Where the outline for `node` goes, in CSS pixels, or nothing when it occupies no space.
+///
+/// An element is its own box. A component is a *marker*, which has no box at all — what it occupies
+/// is whatever its content does, so the answer is the union of the boxes between its open marker
+/// and its close. That is a walk along one sibling list, and only while something is hovered.
+fn outline_of(window: &Window, node: NodeId) -> Option<Rect<CssPx, Css>> {
+    let scale = window.scale().get();
+    let host = window.host();
+    let union = match extent_of(window, node) {
+        None => host.window_box(node)?,
+        Some(nodes) => nodes
+            .into_iter()
+            .filter_map(|inside| host.window_box(inside))
+            .filter(|found| found.size.width.0 > 0.0 && found.size.height.0 > 0.0)
+            .reduce(|left, right| left.union(right))?,
+    };
+    Some(Rect::new(
+        Point::new(
+            CssPx(union.origin.x.0 / scale),
+            CssPx(union.origin.y.0 / scale),
+        ),
+        Size::new(
+            CssPx(union.size.width.0 / scale),
+            CssPx(union.size.height.0 / scale),
+        ),
+    ))
+}
+
+/// The nodes between `open` and its matching close, when `open` is a component boundary.
+///
+/// `None` for anything that is not one, which is every element and every marker belonging to a
+/// conditional or a list.
+fn extent_of(window: &Window, open: NodeId) -> Option<Vec<NodeId>> {
+    use zgui::view::instrument::{self, MarkerRole};
+
+    let MarkerRole::Open(tag) = instrument::at(open)? else {
+        return None;
+    };
+    let document = window.document().borrow();
+    if !zgui_view_dom::id::is_live(&document, open) {
+        return None;
+    }
+    let index = zgui_view_dom::id::resolve(&document, open);
+    let mut inside = Vec::new();
+    let mut next = document.store().core(index).next_sibling();
+    while let Some(sibling) = next {
+        let id = zgui_view_dom::id::to_view(document.store().key_of(sibling));
+        if instrument::at(id) == Some(MarkerRole::Close(tag.instance)) {
+            break;
+        }
+        inside.push(id);
+        next = document.store().core(sibling).next_sibling();
+    }
+    Some(inside)
 }

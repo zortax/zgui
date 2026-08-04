@@ -123,6 +123,19 @@ impl StubDom {
         node.name.map(|name| name.as_str().to_owned())
     }
 
+    /// Whether `node` is a position marker rather than an element or a run of text.
+    ///
+    /// Markers are how the framework holds a place in a child list — for content that comes and
+    /// goes, and, in an instrumented build, for the boundaries of a component. They are part of
+    /// sibling order and of nothing else, so a test asking *what did this build* has to leave them
+    /// out or it is counting the punctuation as well as the words.
+    pub fn is_marker(&self, node: NodeId) -> bool {
+        let tree = self.tree.borrow();
+        tree.nodes
+            .get(&node)
+            .is_some_and(|node| node.kind == Some(StubKind::Marker))
+    }
+
     /// An element's class list.
     pub fn classes(&self, node: NodeId) -> Vec<ClassName> {
         self.tree

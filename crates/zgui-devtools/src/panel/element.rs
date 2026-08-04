@@ -18,7 +18,10 @@ pub(crate) fn ElementPanel(
     let element = tools.element;
     let picking = tools.picking;
     view! {
-        column(class = "zgui-devtools__body") {
+        column(
+            class = "zgui-devtools__body zgui-devtools__split-detail",
+            style:height = move || Some(format!("{:.0}px", tools.detail.get()))
+        ) {
             if move || element.get().is_some() {
                 text(class = "zgui-devtools__head") {
                     {move || element.get().map_or_else(String::new, |it| selector(&it))}
@@ -31,15 +34,15 @@ pub(crate) fn ElementPanel(
                 }
                 text(class = "zgui-devtools__head") {"box model, device pixels"}
                 column(class = "zgui-devtools__box zgui-devtools__box-border") {
-                        text(class = "zgui-devtools__note") {
+                        text(class = "zgui-devtools__note zgui-devtools__note-border") {
                             {move || element.get().map_or_else(String::new, |it| extent("border", it.boxes.border))}
                         }
                     column(class = "zgui-devtools__box zgui-devtools__box-padding") {
-                            text(class = "zgui-devtools__note") {
+                            text(class = "zgui-devtools__note zgui-devtools__note-padding") {
                                 {move || element.get().map_or_else(String::new, |it| extent("padding", it.boxes.padding))}
                             }
                         column(class = "zgui-devtools__box zgui-devtools__box-content") {
-                                text(class = "zgui-devtools__note") {
+                                text(class = "zgui-devtools__note zgui-devtools__note-content") {
                                     {move || element.get().map_or_else(String::new, |it| extent("content", it.boxes.content))}
                                 }
                         }
@@ -54,6 +57,15 @@ pub(crate) fn ElementPanel(
                 {
                     row(class = "zgui-devtools__row") {
                         text(class = "zgui-devtools__key") {{row.property.clone()}}
+                        // A colour is the one computed value a serialisation genuinely cannot
+                        // convey: `rgb(122, 162, 247)` is four tokens and a number nobody pictures.
+                        // Painted beside it, the same row answers "which blue" at a glance.
+                        Show(when = {let has = row.swatch.is_some(); move || has}) {
+                            box(
+                                class = "zgui-devtools__swatch",
+                                style:background-color = {row.swatch.clone()}
+                            )
+                        }
                         text(
                             class = "zgui-devtools__value",
                             class:zgui-devtools__value-quiet = !row.authored

@@ -33,8 +33,18 @@ impl Harness {
     }
 
     /// The only child of the window's root, which is what a single mounted component is.
+    ///
+    /// Markers are not children for this purpose: an instrumented build brackets a component's
+    /// content with a pair of them, and they take part in sibling order and nothing else.
     pub fn only_child(&self) -> NodeId {
-        let children = self.window.dom.tree().children(self.window.root);
+        let children: Vec<NodeId> = self
+            .window
+            .dom
+            .tree()
+            .children(self.window.root)
+            .into_iter()
+            .filter(|child| !self.window.dom.tree().is_marker(*child))
+            .collect();
         assert_eq!(children.len(), 1, "one component was mounted");
         children[0]
     }

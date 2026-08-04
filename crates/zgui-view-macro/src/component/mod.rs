@@ -78,6 +78,11 @@ pub(crate) fn expand(attribute: TokenStream, item: TokenStream) -> syn::Result<T
     let turbofish = ty_generics.as_turbofish();
     let fields: Vec<&syn::Ident> = props.iter().map(|prop| &prop.field).collect();
     let identity = format!("The module path and name of [`{name}`], for tooling.");
+    let meta_doc = format!(
+        "Where [`{name}`] was declared, for tooling.\n\n\
+         Read by the inspector's component tree, which shows each instance against the file and \
+         line its component was written on."
+    );
     let slots_doc = format!("Whether [`{name}`] takes slot children.");
     let render_doc = format!(
         "Builds [`{name}`] with these props, in a reactive scope of its own.\n\n\
@@ -96,6 +101,14 @@ pub(crate) fn expand(attribute: TokenStream, item: TokenStream) -> syn::Result<T
             pub const COMPONENT_ID: &'static str =
                 ::core::concat!(::core::module_path!(), "::", ::core::stringify!(#name));
 
+            #[doc = #meta_doc]
+            pub const COMPONENT_META: ::zgui::expansion::view::ComponentMeta =
+                ::zgui::expansion::view::ComponentMeta {
+                    name: Self::COMPONENT_ID,
+                    file: ::core::file!(),
+                    line: ::core::line!(),
+                };
+
             #[doc = #slots_doc]
             #[doc(hidden)]
             pub const ACCEPTS_SLOTS: bool = #slot_aware;
@@ -103,7 +116,10 @@ pub(crate) fn expand(attribute: TokenStream, item: TokenStream) -> syn::Result<T
             #[doc = #render_doc]
             #[cfg_attr(debug_assertions, track_caller)]
             pub fn render(self) -> impl ::zgui::expansion::view::IntoView {
-                ::zgui::expansion::view::Scoped::new(move || #name #turbofish (#(self.#fields),*))
+                ::zgui::expansion::view::Scoped::named(
+                    &Self::COMPONENT_META,
+                    move || #name #turbofish (#(self.#fields),*),
+                )
             }
         }
     })

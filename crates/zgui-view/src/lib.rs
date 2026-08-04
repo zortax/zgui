@@ -92,6 +92,8 @@ pub mod expansion;
 pub mod flow;
 pub mod host;
 pub mod id;
+#[cfg(feature = "instrument")]
+pub mod instrument;
 pub mod node_ref;
 pub mod prelude;
 pub mod scroll;
@@ -127,7 +129,9 @@ pub use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 pub use crate::sheet::{Stylesheet, install_stylesheet, remove_stylesheet};
 pub use crate::time::{IntervalHandle, TimeoutHandle, Timers, set_interval, set_timeout};
 pub use crate::value::{IntoReactiveValue, ReactiveValue};
-pub use crate::view::{Anchor, AnyView, Children, ChildrenFn, Either, IntoView, Scoped, View};
+pub use crate::view::{
+    Anchor, AnyView, Children, ChildrenFn, ComponentMeta, Either, IntoView, Scoped, View,
+};
 
 /// The interned names an attribute is written with.
 ///
