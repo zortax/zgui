@@ -427,6 +427,37 @@ impl Runtime {
         }
     }
 
+    /// Answers the paste requests a frame recorded, with the clipboard's text.
+    ///
+    /// The read is the blocking one, which the contract offers for exactly this caller: one
+    /// already on the loop, on a desktop that ordinarily has the answer at once. A clipboard that
+    /// is empty, refuses, or holds something other than text answers no paste at all — the field
+    /// stays as it was, which is what pasting nothing does everywhere else on the desktop.
+    fn answer_pastes(cx: &dyn PlatformCx, window: &mut Window) {
+        let wanted = window.take_paste_requests();
+        if wanted.is_empty() {
+            return;
+        }
+        let text = match cx.clipboard().read_blocking(
+            zgui_platform::ClipboardKind::Standard,
+            zgui_platform::ClipboardFormat::Text,
+        ) {
+            Ok(data) => match data.as_text() {
+                Some(text) => text.to_owned(),
+                None => return,
+            },
+            Err(error) => {
+                tracing::debug!(target: "zgui::app", %error, "the clipboard had nothing to paste");
+                return;
+            }
+        };
+        for node in wanted {
+            window.paste(node, text.clone());
+        }
+        // The answer is applied by a frame, and nothing else knows one is owed.
+        window.request_frame();
+    }
+
     /// Closes the window drawing into `surface`.
     fn close_window(&mut self, surface: SurfaceId) {
         if let Some(position) = self
@@ -494,7 +525,10 @@ impl AppHandler for Runtime {
                         window.held_a_frame();
                     } else {
                         window.frame(clock.as_ref());
+                        // The copies first and the pastes second, so a copy and a paste from the
+                        // same batch paste what was just copied rather than what preceded it.
                         Self::put_on_clipboard(cx, window);
+                        Self::answer_pastes(cx, window);
                     }
                 }
             }

@@ -236,6 +236,18 @@ pub struct Window {
     /// has one. Dropping it instead is a cut that deletes the text and copies nothing, which is the
     /// worst of the two failures because the text is gone.
     clipboard: Vec<String>,
+    /// Elements whose paste is waiting for the clipboard to be read.
+    ///
+    /// The same boundary as [`Window::clipboard`], crossed the other way: the chord is recognised
+    /// inside a frame, the clipboard is readable only from the loop that owns the platform, and
+    /// so the request is recorded here and answered by whoever has one.
+    wants_paste: Vec<zgui_dom::NodeKey>,
+    /// Clipboard text on its way into an element, waiting for the frame that will type it in.
+    ///
+    /// A paste edits the document and announces an input event, and both of those are a frame's
+    /// to do: applying the text from outside one would begin a dispatch in the middle of a loop
+    /// turn, against boxes no frame has settled.
+    pastes: Vec<(zgui_dom::NodeKey, String)>,
     /// What the surface has been told about text input, and what it is owed.
     ime: zgui_input::Ime,
     /// Platform events that arrived since the last frame.
@@ -479,6 +491,8 @@ impl Window {
             vertical_goal: None,
             selecting: None,
             clipboard: Vec::new(),
+            wants_paste: Vec::new(),
+            pastes: Vec::new(),
             ime: zgui_input::Ime::new(),
             queued: Vec::new(),
             scope: Some(scope),
@@ -576,6 +590,16 @@ impl Window {
     /// replace whatever the user copied in between with text they had already pasted.
     pub fn take_clipboard(&mut self) -> Vec<String> {
         core::mem::take(&mut self.clipboard)
+    }
+
+    /// Takes the elements whose paste requests are waiting for the clipboard's text.
+    pub fn take_paste_requests(&mut self) -> Vec<zgui_dom::NodeKey> {
+        core::mem::take(&mut self.wants_paste)
+    }
+
+    /// Hands a paste request the text it was waiting for; the next frame types it in.
+    pub fn paste(&mut self, node: zgui_dom::NodeKey, text: String) {
+        self.pastes.push((node, text));
     }
 
     /// Records that the frame that was asked for is now running.

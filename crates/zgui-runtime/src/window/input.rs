@@ -42,9 +42,16 @@ impl Window {
     /// one poll of a pool with nothing in it for every event that wrote nothing, which is what a
     /// stream of pointer moves is.
     pub(crate) fn drain_input(&mut self, timestamp: Timestamp) -> bool {
+        let mut owed = false;
+        // The answers to paste requests an earlier frame recorded, applied ahead of this frame's
+        // own events and settled like one of them, so a handler for the input a paste announces
+        // has mounted whatever it opens before the next event is routed.
+        for (node, text) in core::mem::take(&mut self.pastes) {
+            self.apply_paste(node, &text, timestamp);
+            owed |= self.settle_between_events(timestamp);
+        }
         let events = core::mem::take(&mut self.queued);
         let last = events.len().saturating_sub(1);
-        let mut owed = false;
         for (position, event) in events.iter().enumerate() {
             self.dispatch_one(event, timestamp);
             if position < last {
@@ -296,6 +303,12 @@ impl Window {
         if let Some(text) = edited.clipboard.clone() {
             self.clipboard.push(text);
         }
+        // A paste is the same boundary crossed the other way, and takes one step more because the
+        // text is not known yet: the element is recorded here, whoever holds the platform context
+        // reads the clipboard for it, and the frame after that types the answer in.
+        if edited.paste {
+            self.wants_paste.push(node);
+        }
         if edited.handled {
             // The caret moved, so the blink starts again from now: a caret that kept its own phase
             // would be dark for half the keystrokes that produced it.
@@ -311,6 +324,30 @@ impl Window {
             self.report_input(node, value, edited.selection, timestamp);
         }
         edited.handled
+    }
+
+    /// Types clipboard text into an element, as the answer to a paste it asked for.
+    ///
+    /// The tail is the tail of [`edit_focused`](Window::edit_focused) — the caret written and
+    /// restarted, the new value announced — because to everything above, this is a keystroke that
+    /// happened to arrive by another route. The model itself decides whether the element may still
+    /// be typed into, so a field disabled between the request and the answer takes nothing.
+    fn apply_paste(&mut self, node: zgui_dom::NodeKey, text: &str, timestamp: Timestamp) {
+        let edited = {
+            let document = self.document.borrow();
+            self.editors.paste(&document, node, text)
+        };
+        if let Some(selection) = edited.selection.clone() {
+            self.host.write_selection(node, selection);
+        }
+        if edited.handled {
+            self.vertical_goal = None;
+            self.carets.restart(self.clock.now());
+            self.report_caret();
+        }
+        if let Some(value) = edited.value {
+            self.report_input(node, value, edited.selection, timestamp);
+        }
     }
 
     /// The vertical motion a key press asks for, or nothing when it asks for none.

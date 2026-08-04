@@ -169,7 +169,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(self.selection),
-            clipboard: None,
+            ..Response::default()
         }
     }
 
@@ -215,6 +215,14 @@ impl Editor {
                 response.clipboard = clipboard;
                 response
             }
+            // Handled even when nothing will come back — a clipboard can be empty — because the
+            // chord belongs to the field either way: a control-v that fell through to a shortcut
+            // bar would do something other than paste precisely when there is nothing to paste.
+            Command::RequestPaste => Response {
+                handled: true,
+                paste: true,
+                ..Response::default()
+            },
             Command::Paste(text) => self.replace_selection(&text, EditKind::Replace),
         }
     }
@@ -337,7 +345,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(after),
-            clipboard: None,
+            ..Response::default()
         }
     }
 
@@ -407,7 +415,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(selection),
-            clipboard: None,
+            ..Response::default()
         }
     }
 
@@ -422,7 +430,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(selection),
-            clipboard: None,
+            ..Response::default()
         }
     }
 
@@ -453,7 +461,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(selection),
-            clipboard: None,
+            ..Response::default()
         }
     }
 
@@ -483,7 +491,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(after),
-            clipboard: None,
+            ..Response::default()
         }
     }
 
@@ -499,7 +507,7 @@ impl Editor {
             handled: true,
             splice: Some(splice),
             selection: Some(self.selection),
-            clipboard: None,
+            ..Response::default()
         }
     }
 }

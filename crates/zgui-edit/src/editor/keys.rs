@@ -50,6 +50,7 @@ pub fn command(event: &KeyEvent, modifiers: Modifiers) -> Option<Command> {
         Key::Named(NamedKey::Space) if !command => Some(Command::Insert(" ".to_owned())),
         Key::Named(NamedKey::Copy) => Some(Command::Copy),
         Key::Named(NamedKey::Cut) => Some(Command::Cut),
+        Key::Named(NamedKey::Paste) => Some(Command::RequestPaste),
         Key::Named(NamedKey::Undo) => Some(Command::Undo),
         Key::Named(NamedKey::Redo) => Some(Command::Redo),
         Key::Character(text) if command => shortcut(text, modifiers),
@@ -69,6 +70,9 @@ fn shortcut(text: &str, modifiers: Modifiers) -> Option<Command> {
         "a" => Some(Command::SelectAll),
         "c" => Some(Command::Copy),
         "x" => Some(Command::Cut),
+        // A request rather than a paste, because the text is not here to paste: the clipboard is
+        // the platform's, and whoever holds it answers with [`Command::Paste`].
+        "v" => Some(Command::RequestPaste),
         "z" if modifiers.shift() => Some(Command::Redo),
         "z" => Some(Command::Undo),
         "y" => Some(Command::Redo),
@@ -151,6 +155,18 @@ mod tests {
         assert_eq!(
             command(&character("Z"), Modifiers::CONTROL | Modifiers::SHIFT),
             Some(Command::Redo)
+        );
+    }
+
+    #[test]
+    fn control_v_asks_for_the_clipboard_and_a_plain_v_is_typed() {
+        assert_eq!(
+            command(&character("v"), Modifiers::CONTROL),
+            Some(Command::RequestPaste)
+        );
+        assert_eq!(
+            command(&character("v"), Modifiers::NONE),
+            Some(Command::Insert("v".to_owned()))
         );
     }
 

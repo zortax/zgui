@@ -69,6 +69,12 @@ pub struct Edited {
     pub selection: Option<core::ops::Range<usize>>,
     /// Text the model asks to be placed on the clipboard.
     pub clipboard: Option<String>,
+    /// Whether the model asks for the clipboard's text.
+    ///
+    /// The model can no more read the clipboard than write one: the request travels out to
+    /// whoever holds the platform context, and the answer comes back through
+    /// [`Editors::paste`].
+    pub paste: bool,
     /// The whole text afterwards, when the event changed it.
     ///
     /// `None` when only the caret moved. This is what separates the event that reports a new value
@@ -351,8 +357,34 @@ impl Editors {
             handled: response.handled,
             selection: response.selection.map(|selection| selection.range()),
             clipboard: response.clipboard,
+            paste: response.paste,
             value,
         }
+    }
+
+    /// Pastes clipboard text into an element, replacing the selection as one undoable change.
+    ///
+    /// The other half of the request [`Edited::paste`] carries out: whoever read the clipboard
+    /// hands the text back in here. Line breaks survive only where they can be typed — a
+    /// single-line field joins the lines with spaces, because a break nothing displays would put
+    /// a value in the field the user cannot see and cannot delete.
+    pub fn paste(&mut self, document: &Document, node: NodeKey, text: &str) -> Edited {
+        let text = if Self::takes_line_breaks(document, node) {
+            text.to_owned()
+        } else {
+            text.split(['\r', '\n'])
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        // Text that boiled away entirely — an empty clipboard, a lone line break — pastes
+        // nothing rather than replacing the selection with nothing, which would be a delete.
+        if text.is_empty() {
+            return Edited::default();
+        }
+        self.deliver(document, node, |editor| {
+            editor.apply(zgui_edit::Command::Paste(text))
+        })
     }
 
     /// The value an element has stopped being edited on, once, or nothing when it has not changed.
@@ -783,6 +815,67 @@ mod tests {
             super::Edited::default()
         );
         assert!(editors.is_empty());
+    }
+
+    #[test]
+    fn control_v_asks_for_the_clipboard_instead_of_typing_a_v() {
+        // The request has to travel out, because the text is not here to paste: the clipboard
+        // belongs to the platform, and the model can only ask.
+        let (document, field) = field("field", &["ab"]);
+        let key = document.store().key_of(field);
+        let mut editors = Editors::new();
+        let edited = editors.key(&document, key, &letter("v"), Modifiers::CONTROL);
+        assert!(edited.handled, "the chord belongs to the field");
+        assert!(edited.paste, "and it is a request for the clipboard");
+        assert_eq!(edited.value, None, "nothing was typed yet");
+    }
+
+    #[test]
+    fn a_paste_replaces_the_selection_and_reports_the_new_value() {
+        let (document, field) = field("field", &["abc"]);
+        let key = document.store().key_of(field);
+        let mut editors = Editors::new();
+        editors.select(&document, key, 0..2);
+        let edited = editors.paste(&document, key, "XY");
+        assert!(edited.handled);
+        assert_eq!(edited.value.as_deref(), Some("XYc"));
+        assert_eq!(edited.selection, Some(2..2), "the caret sits after the paste");
+        let node = document
+            .store()
+            .core(field)
+            .first_child()
+            .expect("the field's text node");
+        assert_eq!(text_of(&document, node), "XYc");
+    }
+
+    #[test]
+    fn a_paste_into_a_single_line_field_joins_the_lines_and_an_editor_keeps_them() {
+        // A field must not hold a break nothing displays; an editor is exactly where the breaks
+        // belong.
+        let (document, single) = field("field", &[]);
+        let key = document.store().key_of(single);
+        let mut editors = Editors::new();
+        let edited = editors.paste(&document, key, "one\r\ntwo\nthree");
+        assert_eq!(edited.value.as_deref(), Some("one two three"));
+
+        let (document, multi) = field("editor", &[]);
+        let key = document.store().key_of(multi);
+        let mut editors = Editors::new();
+        let edited = editors.paste(&document, key, "one\ntwo");
+        assert_eq!(edited.value.as_deref(), Some("one\ntwo"));
+    }
+
+    #[test]
+    fn pasting_nothing_at_all_leaves_the_selection_alone() {
+        // Replacing the selection with an empty string is a delete, and a paste that found the
+        // clipboard empty must not become one.
+        let (document, field) = field("field", &["abc"]);
+        let key = document.store().key_of(field);
+        let mut editors = Editors::new();
+        editors.select(&document, key, 0..2);
+        let edited = editors.paste(&document, key, "\n");
+        assert_eq!(edited, super::Edited::default());
+        assert_eq!(editors.value(key).as_deref(), Some("abc"));
     }
 
     #[test]

@@ -31,6 +31,12 @@ pub enum Command {
     Copy,
     /// Copy the selection and remove it.
     Cut,
+    /// Ask for the clipboard's text.
+    ///
+    /// An editor cannot read the clipboard any more than it can write one — the clipboard belongs
+    /// to the platform — so this answers with a request in the response, and the text comes back
+    /// as [`Command::Paste`].
+    RequestPaste,
     /// Replace the selection with this text, as one change.
     Paste(String),
 }
@@ -50,6 +56,11 @@ pub struct Response {
     pub selection: Option<Selection>,
     /// Text the editor asks to be placed on the clipboard.
     pub clipboard: Option<String>,
+    /// Whether the editor asks for the clipboard's text.
+    ///
+    /// The request travels out because the answer cannot be produced here: whoever holds the
+    /// clipboard reads it and feeds the text back as [`Command::Paste`].
+    pub paste: bool,
 }
 
 impl Response {

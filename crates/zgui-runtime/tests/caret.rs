@@ -555,6 +555,44 @@ fn a_cut_puts_the_text_on_the_clipboard_and_takes_it_out_of_the_document() {
 }
 
 #[test]
+fn a_paste_replaces_the_selection_with_the_platform_clipboard_text() {
+    // The whole round trip, which no crate proves on its own: the chord recognised in the model,
+    // the request carried out of the frame, the clipboard read where the platform context is, and
+    // the answer typed in by the frame after — with the caret and the glyphs to show for it.
+    let mut script = scripted("abcdef");
+    script
+        .harness
+        .platform()
+        .clipboard()
+        .write(
+            ClipboardKind::Standard,
+            zgui_platform::ClipboardData::Text("XY".into()),
+            zgui_platform::ClipboardWriteOptions::default(),
+        )
+        .expect("the headless clipboard takes text");
+
+    script.shortcut("a");
+    script.shortcut("v");
+
+    assert_eq!(
+        script.selection(),
+        Some(2..2),
+        "the caret has to sit after the pasted text"
+    );
+    assert_eq!(
+        script.glyphs(),
+        2,
+        "the paste reached the model or the clipboard and stopped short of the screen"
+    );
+    let line = script.line();
+    assert!(
+        script.caret_at(line.origin.x.0 + ADVANCE * 2.0),
+        "the caret was moved in the model and not painted: {:?}",
+        script.carets()
+    );
+}
+
+#[test]
 fn an_element_nobody_can_type_into_gets_no_caret_from_a_click() {
     // A caret painted into a paragraph is a framework that lets a person type into text they
     // cannot edit. Proving that requires the *same* window to be able to produce a caret at all:
