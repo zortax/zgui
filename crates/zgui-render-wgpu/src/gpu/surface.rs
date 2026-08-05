@@ -5,6 +5,14 @@ use zgui_geom::{Device, Size};
 use crate::gpu::device::Gpu;
 use crate::gpu::formats::Formats;
 
+/// A surface wait long enough to be visible as an application stall.
+pub(crate) const HUMAN_VISIBLE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether a surface operation took long enough to report as a stall.
+pub(crate) fn human_visible_wait(elapsed: std::time::Duration) -> bool {
+    elapsed >= HUMAN_VISIBLE_WAIT
+}
+
 /// How many frames the driver may have in flight before it blocks.
 ///
 /// Two is one being composited and one being drawn. More adds latency between an input event and
@@ -155,7 +163,20 @@ impl ConfiguredSurface {
             self.config.height = size.height.max(1) as u32;
         }
         zgui_profile::latency::mark("cfg.in");
+        let began = std::time::Instant::now();
         self.surface.configure(gpu.device(), &self.config);
+        let elapsed = began.elapsed();
+        if human_visible_wait(elapsed) {
+            tracing::warn!(
+                stage = "configure",
+                elapsed_ms = elapsed.as_millis() as u64,
+                width = self.config.width,
+                height = self.config.height,
+                present_mode = ?self.config.present_mode,
+                frame_latency = self.config.desired_maximum_frame_latency,
+                "surface operation blocked the event-loop thread"
+            );
+        }
         zgui_profile::latency::note(
             "cfg.out",
             format!("{}x{}", self.config.width, self.config.height),
@@ -219,5 +240,23 @@ impl ConfiguredSurface {
             }),
             None => texture.create_view(&wgpu::TextureViewDescriptor::default()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{HUMAN_VISIBLE_WAIT, human_visible_wait};
+
+    #[test]
+    fn only_human_visible_surface_waits_are_reported_as_stalls() {
+        assert!(!human_visible_wait(
+            HUMAN_VISIBLE_WAIT - Duration::from_nanos(1)
+        ));
+        assert!(human_visible_wait(HUMAN_VISIBLE_WAIT));
+        assert!(human_visible_wait(
+            HUMAN_VISIBLE_WAIT + Duration::from_nanos(1)
+        ));
     }
 }

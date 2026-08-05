@@ -297,7 +297,10 @@ fn renderer(
             "this window offers no handles a graphics API can draw into".to_owned(),
         )));
     };
-    let builder = Builder::new();
+    let presented = Arc::clone(surface);
+    let builder = Builder::new().with_pre_present(Box::new(move || {
+        presented.pre_present_notify();
+    }));
     let drawable = builder
         .instance()
         .create_surface(handles)

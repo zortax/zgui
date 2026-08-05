@@ -38,7 +38,9 @@ use crate::target::swapchain::Presentation;
 ///
 /// A compositor wants to be told that a frame is coming before it arrives, and the call that tells
 /// it belongs to whatever owns the native window. This is where that call is made, at the one
-/// point in the frame where it is meaningful.
+/// point in the frame where it is meaningful. It runs only for an acquisition that will actually
+/// be presented: announcing a frame after an acquisition failed can leave a compositor waiting for
+/// a surface commit that never comes.
 pub type PrePresent = Box<dyn Fn() + Send + Sync>;
 
 /// How a renderer was built, which is what it needs to rebuild itself.
@@ -86,6 +88,12 @@ pub struct WgpuRenderer {
     faults: FaultInjector,
     /// Whether the next frame has to redraw the whole surface whatever its damage set says.
     full_damage_next: bool,
+    /// Whether the composed target still has to reach the surface.
+    ///
+    /// A failed acquisition happens after composition, so its damage is retired, but no surface
+    /// received the composed target. The retry may therefore have no new damage and still owe the
+    /// final copy and presentation.
+    present_composed_next: bool,
     /// The surface being drawn for.
     target: RenderTarget,
     /// Which way round the display's subpixels run.
@@ -177,6 +185,7 @@ impl WgpuRenderer {
             // Nothing has ever been composed, so the first frame cannot rely on what the target
             // holds however small its damage set is.
             full_damage_next: true,
+            present_composed_next: false,
             target,
             subpixel_order: SubpixelOrder::default(),
             externals: BTreeMap::new(),

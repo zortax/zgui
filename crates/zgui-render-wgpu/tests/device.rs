@@ -6,7 +6,7 @@ use zgui_bits::DamageSet;
 use zgui_geom::{Scale, Size};
 use zgui_render::{RenderTarget, Renderer};
 use zgui_render_wgpu::wgpu;
-use zgui_render_wgpu::{Builder, SrgbTier};
+use zgui_render_wgpu::{Acquisition, Builder, SrgbTier};
 use zgui_scene::{BackdropFilter, Filter, GroupBoundary, Quad, Scene};
 
 use support::{SIDE, device_lock, opaque, plain_renderer, present, rect};
@@ -154,7 +154,7 @@ fn resizing_keeps_the_composed_target_within_its_size_class_and_still_draws() {
 }
 
 #[test]
-fn a_frame_tells_the_compositor_it_is_coming_exactly_once_and_only_after_it_exists() {
+fn only_a_frame_that_will_be_presented_tells_the_compositor_it_is_coming() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -179,14 +179,37 @@ fn a_frame_tells_the_compositor_it_is_coming_exactly_once_and_only_after_it_exis
     let mut scene = Scene::new();
     scene.begin_frame(Size::new(SIDE, SIDE));
     scene.finish(&DamageSet::full());
-    for frames in 1..=3 {
+
+    for answer in [
+        Acquisition::Timeout,
+        Acquisition::Occluded,
+        Acquisition::Outdated,
+        Acquisition::Lost,
+        Acquisition::Validation,
+    ] {
+        renderer.inject_surface_fault(answer, 1);
         renderer.draw(&scene, &DamageSet::full());
         assert_eq!(
             notified.load(Ordering::Relaxed),
-            frames,
-            "one announcement per frame"
+            0,
+            "a {answer:?} acquisition announced a frame that cannot be presented"
         );
     }
+
+    renderer.draw(&scene, &DamageSet::new());
+    assert_eq!(
+        notified.load(Ordering::Relaxed),
+        1,
+        "the successful retry did not present the composed target after the failures"
+    );
+
+    renderer.inject_surface_fault(Acquisition::Suboptimal, 1);
+    renderer.draw(&scene, &DamageSet::full());
+    assert_eq!(
+        notified.load(Ordering::Relaxed),
+        2,
+        "a suboptimal texture is still presented and must be announced"
+    );
 }
 
 #[test]

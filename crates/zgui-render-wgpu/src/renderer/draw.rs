@@ -97,7 +97,7 @@ impl Renderer for WgpuRenderer {
         // waits a whole refresh interval to acquire one. This is checked after the widening above,
         // so a frame that has to redraw everything for a reason of the renderer's own never
         // reaches it.
-        if damage.is_empty() {
+        if damage.is_empty() && !self.present_composed_next {
             zgui_profile::latency::mark("draw.undamaged");
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
@@ -201,6 +201,18 @@ impl Renderer for WgpuRenderer {
         // how much earlier than it needed to be the frame was started.
         self.acquire_block = asked.elapsed();
         zgui_profile::latency::note("acq.out", presented.acquisition.name());
+        if crate::gpu::surface::human_visible_wait(self.acquire_block) {
+            tracing::warn!(
+                stage = "acquire",
+                elapsed_ms = self.acquire_block.as_millis() as u64,
+                width = self.target.size.width,
+                height = self.target.size.height,
+                present_mode = ?crate::gpu::surface::PRESENT_MODE,
+                frame_latency = crate::gpu::surface::FRAME_LATENCY,
+                acquisition = presented.acquisition.name(),
+                "surface operation blocked the event-loop thread"
+            );
+        }
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
             self.blit(&mut encoder, view, formats.blit_undoes_srgb());
@@ -211,7 +223,13 @@ impl Renderer for WgpuRenderer {
         zgui_profile::latency::mark("sub.out");
 
         let response = presented.acquisition.response();
-        if let Some(notify) = &self.pre_present {
+        // Composition succeeded whichever answer acquisition gave, but only a presenting answer
+        // copied that persistent target to the surface. A retry with no new damage must still run
+        // through acquisition and the final blit rather than taking the undamaged early return.
+        self.present_composed_next = !response.presents;
+        if response.presents
+            && let Some(notify) = &self.pre_present
+        {
             notify();
         }
         if let Some(texture) = presented.surface_texture {

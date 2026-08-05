@@ -4,8 +4,19 @@ use std::sync::Arc;
 
 use zgui_platform::{PlatformError, Surface};
 use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::Builder;
+use zgui_render_wgpu::{Builder, renderer::PrePresent};
 use zgui_runtime::AppError;
+
+/// The compositor notification belonging to `surface`, kept alive with it.
+fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
+    let surface = Arc::clone(surface);
+    pre_present_callback(move || surface.pre_present_notify())
+}
+
+/// Boxes a platform notification for the renderer seam.
+fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent {
+    Box::new(notify)
+}
 
 /// Opens a graphics device for `surface` and returns the renderer that draws into it.
 ///
@@ -25,7 +36,7 @@ pub(crate) fn renderer(
         )));
     };
 
-    let builder = Builder::new();
+    let builder = Builder::new().with_pre_present(pre_present(surface));
     // The surface has to be created from the instance the device is opened from, which is why the
     // window's handles go to the renderer rather than the other way round. The shared handle keeps
     // the window alive for as long as anything draws through it.
@@ -40,4 +51,28 @@ pub(crate) fn renderer(
     // so there is no machine on which this leaves a window with no drawings in it.
     zgui_render_vector_vello::attach(&mut renderer, target.size);
     Ok(Box::new(renderer))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn the_default_renderer_callback_runs_its_platform_notification() {
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&notifications);
+        let notify = pre_present_callback(move || {
+            recorded.fetch_add(1, Ordering::Relaxed);
+        });
+
+        notify();
+
+        assert_eq!(
+            notifications.load(Ordering::Relaxed),
+            1,
+            "the renderer callback did not run its platform notification"
+        );
+    }
 }

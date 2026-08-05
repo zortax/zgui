@@ -402,7 +402,10 @@ fn open_device(
             "this window offers no handles a graphics API can draw into".to_owned(),
         ))
     })?;
-    let builder = zgui_render_wgpu::Builder::new();
+    let presented = Arc::clone(surface);
+    let builder = zgui_render_wgpu::Builder::new().with_pre_present(Box::new(move || {
+        presented.pre_present_notify();
+    }));
     let drawable = builder
         .instance()
         .create_surface(handles)

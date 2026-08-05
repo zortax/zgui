@@ -68,7 +68,10 @@ impl Builder {
     /// Runs `notify` between submitting a frame's work and presenting it.
     ///
     /// That is the one point in a frame where telling a compositor that one is coming is
-    /// meaningful: after the work exists, before it is handed over.
+    /// meaningful: after the work exists, before it is handed over. A window-backed renderer
+    /// should connect this to the notification supplied by whatever owns the native window. The
+    /// callback runs only when the acquisition produced a frame that will be presented; a failed
+    /// acquisition never leaves the compositor waiting for a commit that will not arrive.
     pub fn with_pre_present(mut self, notify: PrePresent) -> Self {
         self.pre_present = Some(notify);
         self
@@ -103,7 +106,9 @@ impl Builder {
     ///
     /// The surface must have been created from [`Builder::instance`]. It is configured here, under
     /// a validation error scope, because configuring it is the only way to find out whether an
-    /// adapter can actually present to it.
+    /// adapter can actually present to it. Before calling this, a window integration should attach
+    /// its compositor notification through [`Builder::with_pre_present`], so queued redraws can be
+    /// paced without blocking the thread that handles window events.
     pub fn for_surface(
         self,
         target: RenderTarget,
