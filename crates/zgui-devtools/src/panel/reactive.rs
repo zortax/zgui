@@ -4,7 +4,6 @@
 //! be asked. The dependency edges a graph view would need are private to `reactive_graph` — the
 //! subscriber sets are `pub(crate)`, and the public traits only add to and remove from them — so
 //! "which effects would re-run if this signal changed" is not a question this build can answer.
-//! The panel says so in the tab rather than leaving somebody to wonder why the list is empty.
 //!
 //! What it can answer is the one that catches real bugs: every signal, memo and effect belongs to
 //! the scope that was current when it was made, every component instance is one scope, and a view

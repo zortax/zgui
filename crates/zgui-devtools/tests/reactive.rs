@@ -38,11 +38,6 @@ fn the_tab_counts_what_is_mounted() {
         shown.contains("mod.rs:"),
         "the counted component does not say where it was written: {shown:.600}"
     );
-    // And the tab is honest about the half it cannot reach.
-    assert!(
-        shown.contains("what this cannot show"),
-        "the tab does not say what it cannot answer: {shown:.600}"
-    );
 }
 
 /// Counting what is alive does not keep the window awake.

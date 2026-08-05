@@ -281,21 +281,6 @@ impl DevTools {
         self.picked.get_untracked()
     }
 
-    /// Depth and label of every tree row. For tests.
-    #[must_use]
-    #[doc(hidden)]
-    pub fn debug_rows(&self) -> Vec<String> {
-        self.tree
-            .get_untracked()
-            .map(|tree| {
-                tree.rows
-                    .iter()
-                    .map(|row| format!("{:>2} {}{}", row.depth, "  ".repeat(row.depth as usize), row.label))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// The component the picked node was built by, when it was built by one.
     #[must_use]
     pub fn picked_component(&self) -> Option<NodeId> {

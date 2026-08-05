@@ -101,9 +101,20 @@ pub trait MeasureContent {
     /// to hash all of its characters.
     fn shape_keyed(&mut self, key: ParagraphKey, content: &ParagraphContent<'_>) -> ShapedSummary {
         let shaped = self.shape(content);
-        debug_assert_eq!(
-            shaped.key, key,
-            "the caller and measurer disagree on the key"
+        // A measurer that shaped something has to agree with the caller: the caller has already
+        // hashed the content, and two keys for one paragraph means the shaping and every later
+        // break are held under different names.
+        //
+        // A measurer that shaped *nothing* is the one answer allowed to differ. [`NoContent`] — and
+        // the runtime's own text engine when no shaper is installed — reports the default key to
+        // everything, which is the same "names nothing" key [`MeasureContent::break_lines`] is
+        // documented to answer to. Requiring it to agree here would make a measurer that is working
+        // exactly as specified trip an assertion on the first paragraph it is asked about.
+        debug_assert!(
+            shaped.key == key || shaped.key == ParagraphKey::default(),
+            "the caller and measurer disagree on the key: the caller says {key:?} and the \
+             measurer says {:?}",
+            shaped.key
         );
         shaped
     }
