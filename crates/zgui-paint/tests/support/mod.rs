@@ -37,6 +37,8 @@ pub(crate) struct Element {
     pub(crate) replaced: bool,
     /// The outlines it draws, as path notation, and the space they are written in.
     pub(crate) drawing: Option<(&'static str, Option<&'static str>)>,
+    /// The retained canvas it shows, as the packed token-and-revision reference.
+    pub(crate) canvas: Option<i64>,
     /// Its children.
     pub(crate) children: Vec<Element>,
 }
@@ -49,6 +51,7 @@ impl Element {
             classes: &[],
             replaced: false,
             drawing: None,
+            canvas: None,
             children: Vec::new(),
         }
     }
@@ -68,6 +71,15 @@ impl Element {
     /// The same element, drawing the given outlines in a space of its own.
     pub(crate) fn drawing(mut self, paths: &'static str, view_box: Option<&'static str>) -> Self {
         self.drawing = Some((paths, view_box));
+        self
+    }
+
+    /// The same element, showing a retained canvas scene.
+    pub(crate) fn canvas(mut self, handle: &zgui_canvas::SceneHandle) -> Self {
+        self.canvas = Some(zgui_vocab::prop::drawing::canvas_value(
+            handle.token().0,
+            handle.revision(),
+        ));
         self
     }
 
@@ -491,6 +503,17 @@ fn append(document: &mut Document, parent: NodeIndex, element: &Element) -> Node
                         Some(zgui_vocab::PropValue::from(view_box)),
                     );
                 }
+            })
+            .expect("the fixture document is not poisoned");
+    }
+    if let Some(reference) = element.canvas {
+        document
+            .edit(&zgui_dom::EverythingMatters, |edit| {
+                edit.set_property(
+                    index,
+                    zgui_vocab::PropKey::new(zgui_vocab::prop::drawing::CANVAS),
+                    Some(zgui_vocab::PropValue::Integer(reference)),
+                );
             })
             .expect("the fixture document is not poisoned");
     }

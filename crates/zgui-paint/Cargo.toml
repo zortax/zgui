@@ -28,6 +28,9 @@ zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # Vector documents. The paint stage is where a document becomes primitives, so it is where the
 # document model is named; the reader itself is behind that crate's own parse boundary.
 zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
+# The retained scenes `canvas` elements name by token; the paint stage is where the token is
+# resolved back into shapes, because the shapes are paint-side state the document never holds.
+zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
 # The glyph formats and the paragraph identifiers a text fragment names.
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 

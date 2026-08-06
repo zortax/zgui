@@ -73,6 +73,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod canvas;
 pub mod element;
 pub mod expansion;
 pub mod focus;
@@ -87,6 +88,7 @@ use zgui_interned::ElementName;
 /// so an application that draws one names this crate and nothing else.
 pub use kurbo;
 
+pub use crate::canvas::{CanvasHandle, DrawCx, DrawnCanvas};
 pub use crate::element::{Element, ElementState};
 pub use crate::focus::Focus;
 pub use crate::tag::{

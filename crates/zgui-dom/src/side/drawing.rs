@@ -60,13 +60,31 @@ pub fn view_box(store: &DocumentStore, node: NodeKey) -> Option<[f32; 4]> {
     }
 }
 
+/// The retained canvas scene `node` shows, as its token and revision.
+///
+/// The pair is a *name* into the paint-side registry, not the shapes; see
+/// [`drawing::CANVAS`](zgui_vocab::prop::drawing::CANVAS) for the packing and what the revision
+/// buys. Nothing for an element carrying no canvas.
+pub fn canvas(store: &DocumentStore, node: NodeKey) -> Option<(u32, u32)> {
+    match store
+        .columns()
+        .props
+        .get(node)?
+        .get(PropKey::new(drawing::CANVAS))
+    {
+        Some(PropValue::Integer(value)) => Some(drawing::canvas_ref(*value)),
+        _ => None,
+    }
+}
+
 /// Whether `node` draws any outlines at all.
 ///
 /// This is what decides that an element's box produces a drawing rather than a plain box, so it is
-/// deliberately the same test [`path_data`] and [`document`] answer between them: a box built from
-/// one answer and painted from the other would be a piece of geometry nothing draws into.
+/// deliberately the same test [`path_data`], [`document`] and [`canvas`] answer between them: a
+/// box built from one answer and painted from the other would be a piece of geometry nothing
+/// draws into.
 pub fn draws(store: &DocumentStore, node: NodeKey) -> bool {
-    path_data(store, node).is_some() || document(store, node).is_some()
+    path_data(store, node).is_some() || document(store, node).is_some() || canvas(store, node).is_some()
 }
 
 #[cfg(test)]
@@ -115,6 +133,28 @@ mod tests {
     fn an_empty_string_is_no_drawing_rather_than_an_empty_one() {
         let (document, node) = one(&[(drawing::PATHS, "   ")]);
         assert!(!draws(document.store(), node));
+    }
+
+    #[test]
+    fn a_canvas_reference_makes_an_element_draw() {
+        let mut document = Document::new();
+        let index = document.append(
+            document.document_index(),
+            NodeKind::Element,
+            ElementName::new("canvas"),
+        );
+        document
+            .edit(&EverythingMatters, |edit| {
+                edit.set_property(
+                    index,
+                    PropKey::new(drawing::CANVAS),
+                    Some(PropValue::Integer(drawing::canvas_value(9, 4))),
+                );
+            })
+            .expect("not poisoned");
+        let node = document.store().key_of(index);
+        assert_eq!(super::canvas(document.store(), node), Some((9, 4)));
+        assert!(draws(document.store(), node));
     }
 
     #[test]

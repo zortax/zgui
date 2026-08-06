@@ -148,6 +148,38 @@ impl VectorCache {
         })
     }
 
+    /// The placed shapes a retained canvas scene draws.
+    ///
+    /// The scene is resolved by token out of the paint-side registry and placed exactly as a
+    /// document's shapes are — same fit, same per-shape paint, same cache. The revision rides in
+    /// the data key, so a mutated scene misses the cache once and an untouched one hands back the
+    /// same allocations for the rasteriser's encoding cache to recognise.
+    ///
+    /// A token whose scene has died draws nothing: the application dropped every handle while an
+    /// element still named it, and inventing a picture for it would be worse than a blank.
+    fn canvas(
+        &self,
+        node: NodeKey,
+        token: u32,
+        revision: u32,
+        view_box: Option<[f32; 4]>,
+        box_: Placement,
+    ) -> Option<Drawing> {
+        let scene = zgui_canvas::resolve(zgui_canvas::CanvasToken(token))?;
+        let placed = fit::onto(box_.content_box, view_box, box_.scale);
+        let data = format!("canvas:{token}:{revision}");
+        Some(self.store(node, &data, placed, None, || {
+            let scene = scene
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            scene
+                .shapes()
+                .iter()
+                .map(|shape| zgui_svg::document::place::shape(shape, placed))
+                .collect()
+        }))
+    }
+
     /// The placed outlines a vector document draws.
     ///
     /// A document that cannot be read draws nothing rather than falling back to something else:
@@ -176,12 +208,18 @@ pub struct Vectors<'a> {
 }
 
 impl VectorSource for Vectors<'_> {
-    /// A document wins over path notation when an element carries both.
+    /// A canvas wins over a document, and a document over path notation, when an element
+    /// carries more than one.
     ///
-    /// It has to be one of them and not both: a document brings its own space with it, so drawing
-    /// the notation as well would draw two pictures fitted by two different matrices into one box.
+    /// It has to be one of them and not several: each brings its own space with it, so drawing
+    /// two would draw two pictures fitted by two different matrices into one box. In practice
+    /// each source belongs to its own element name and the order is never exercised.
     fn drawing(&self, node: NodeKey, placement: Placement) -> Option<Drawing> {
         let store = self.document.store();
+        if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
+            let view_box = zgui_dom::side::drawing::view_box(store, node);
+            return self.cache.canvas(node, token, revision, view_box, placement);
+        }
         if let Some(source) = zgui_dom::side::drawing::document(store, node) {
             return self.cache.documented(node, source, placement);
         }
@@ -328,6 +366,121 @@ mod tests {
             &before.shapes[0].path,
             &after.shapes[0].path
         ));
+    }
+
+    /// A document with one `<canvas>` naming the given scene.
+    fn canvas_document(handle: &zgui_canvas::SceneHandle) -> (Document, zgui_dom::NodeKey) {
+        let mut document = Document::new();
+        let index = document.append(
+            document.document_index(),
+            NodeKind::Element,
+            ElementName::new("canvas"),
+        );
+        let key = document.store().key_of(index);
+        write_reference(&document, index, handle);
+        (document, key)
+    }
+
+    /// Writes the scene's current token-and-revision onto the element, as the binding would.
+    fn write_reference(
+        document: &Document,
+        index: zgui_dom::NodeIndex,
+        handle: &zgui_canvas::SceneHandle,
+    ) {
+        document
+            .edit(&zgui_dom::EverythingMatters, |edit| {
+                edit.set_property(
+                    index,
+                    PropKey::new(drawing::CANVAS),
+                    Some(PropValue::Integer(drawing::canvas_value(
+                        handle.token().0,
+                        handle.revision(),
+                    ))),
+                );
+            })
+            .expect("not poisoned");
+    }
+
+    /// An eight-unit triangle with its own solid fill.
+    fn triangle() -> zgui_canvas::Shape {
+        let mut path = zgui_scene::kurbo::BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((8.0, 0.0));
+        path.line_to((4.0, 8.0));
+        path.close_path();
+        zgui_canvas::ShapeBuilder::new(path)
+            .fill(zgui_canvas::Brush::Solid(zgui_color::Color::srgb(
+                1.0, 0.0, 0.0, 1.0,
+            )))
+            .build()
+    }
+
+    #[test]
+    fn a_canvas_scene_is_resolved_placed_and_held_by_its_revision() {
+        let handle = zgui_canvas::SceneHandle::new();
+        handle.edit(|scene| scene.push(triangle()));
+        let (document, node) = canvas_document(&handle);
+        let cache = VectorCache::new();
+
+        let first = cache
+            .frame(&document)
+            .drawing(node, placement(24.0))
+            .expect("the canvas draws");
+        assert_eq!(first.shapes.len(), 1);
+        assert!(
+            first.shapes[0].fill.is_some(),
+            "the shape's own paint survives the crossing"
+        );
+        let second = cache
+            .frame(&document)
+            .drawing(node, placement(24.0))
+            .expect("still draws");
+        assert!(
+            std::sync::Arc::ptr_eq(&first.shapes[0].path, &second.shapes[0].path),
+            "an untouched canvas in an untouched box is the same allocation, which is what the \
+             rasteriser's encoding cache keys on"
+        );
+
+        // A mutation moves the revision; once the binding rewrites the property, the cache misses
+        // exactly once and the new shape arrives.
+        handle.edit(|scene| {
+            scene.clear();
+            scene.push(triangle());
+        });
+        let index = document.store().index_of(node).expect("live");
+        write_reference(&document, index, &handle);
+        let third = cache
+            .frame(&document)
+            .drawing(node, placement(24.0))
+            .expect("still draws");
+        assert!(!std::sync::Arc::ptr_eq(
+            &first.shapes[0].path,
+            &third.shapes[0].path
+        ));
+    }
+
+    #[test]
+    fn a_dead_scene_draws_nothing_rather_than_something_else() {
+        let handle = zgui_canvas::SceneHandle::new();
+        handle.edit(|scene| scene.push(triangle()));
+        let (document, node) = canvas_document(&handle);
+        let cache = VectorCache::new();
+        assert!(
+            cache
+                .frame(&document)
+                .drawing(node, placement(24.0))
+                .is_some()
+        );
+        drop(handle);
+        // The held entry is not consulted for a token that no longer resolves: the application
+        // dropped the scene, and a picture served from a cache it can no longer reach is a
+        // picture it can never change again.
+        assert!(
+            cache
+                .frame(&document)
+                .drawing(node, placement(24.0))
+                .is_none()
+        );
     }
 
     #[test]

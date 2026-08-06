@@ -37,14 +37,37 @@ pub const VIEW_BOX: &str = "viewBox";
 /// stage the same way, and nothing below the view layer ever performs I/O.
 pub const DOCUMENT: &str = "svg";
 
+/// The property a canvas's retained scene is named by.
+///
+/// The value is an integer packing a scene token and its revision, written by
+/// [`canvas_value`] and read back by [`canvas_ref`]. It is a *name*, not the shapes: a retained
+/// scene lives in a paint-side registry, and what the document needs is exactly what the packing
+/// carries — which scene, for resolution, and which revision, so that every mutation is a value
+/// change and therefore a repaint.
+pub const CANVAS: &str = "canvas";
+
+/// Packs a canvas token and revision into the integer [`CANVAS`] carries.
+///
+/// The revision is kept to its low thirty-two bits. A canvas mutated four billion times wraps,
+/// and the cost of a wrap landing exactly on a held value is one missed repaint of one canvas —
+/// noted here so the trade is a decision rather than a surprise.
+pub fn canvas_value(token: u32, revision: u64) -> i64 {
+    ((token as i64) << 32) | (revision & 0xFFFF_FFFF) as i64
+}
+
+/// Reads back what [`canvas_value`] packed, as the token and the truncated revision.
+pub fn canvas_ref(value: i64) -> (u32, u32) {
+    ((value >> 32) as u32, value as u32)
+}
+
 /// Whether a change to `name` can change what an element draws.
 ///
-/// The paint stage reads exactly these three properties, so a write to any of them has to be
+/// The paint stage reads exactly these four properties, so a write to any of them has to be
 /// reported as a repaint and a write to anything else must not be — a field whose value changes on
 /// every keystroke is a property too, and repainting for it would repaint on every keystroke for
 /// nothing.
 pub fn paints(name: &str) -> bool {
-    name == PATHS || name == VIEW_BOX || name == DOCUMENT
+    name == PATHS || name == VIEW_BOX || name == DOCUMENT || name == CANVAS
 }
 
 /// Reads the four numbers of a view box, or nothing if they are not four numbers.
@@ -86,9 +109,25 @@ mod tests {
         assert!(paints(PATHS));
         assert!(paints(VIEW_BOX));
         assert!(paints(DOCUMENT));
+        assert!(paints(super::CANVAS));
         assert!(
             !paints("value"),
             "a field's text changes on every keystroke and paints nothing by itself"
+        );
+    }
+
+    #[test]
+    fn a_canvas_reference_survives_the_packing() {
+        assert_eq!(super::canvas_ref(super::canvas_value(7, 0)), (7, 0));
+        assert_eq!(
+            super::canvas_ref(super::canvas_value(u32::MAX, 41)),
+            (u32::MAX, 41)
+        );
+        let wrapped = super::canvas_value(3, (1u64 << 32) + 5);
+        assert_eq!(
+            super::canvas_ref(wrapped),
+            (3, 5),
+            "the revision is truncated, which the packing's doc declares as the trade"
         );
     }
 

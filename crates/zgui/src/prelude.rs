@@ -45,3 +45,6 @@ pub use zgui_view_macro::{component, css, slot, style, variants, view};
 
 /// What `tabindex` takes.
 pub use zgui_elements::Focus;
+
+/// Drawing into a `canvas` element: the retained handle, and what a draw closure receives.
+pub use zgui_elements::{CanvasHandle, DrawCx};

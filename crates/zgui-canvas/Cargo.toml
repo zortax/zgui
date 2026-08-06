@@ -1,0 +1,23 @@
+[package]
+name = "zgui-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L4 — engines, beside zgui-svg: pure shape data, no renderer and no view machinery. Every
+# dependency is inherited: `foo.workspace = true`.
+[dependencies]
+# The colour a canvas's brushes are expressed in.
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+
+# The shape vocabulary a canvas produces is zgui-svg's own, so everything downstream — fitting,
+# per-shape paint, the vector rasteriser — consumes a canvas exactly as it consumes a document.
+zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
+
+kurbo.workspace = true
+peniko.workspace = true
+rustc-hash.workspace = true
+smallvec.workspace = true
+
+[lints]
+workspace = true

@@ -14,6 +14,13 @@ zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# `<canvas>`'s scenes: the element carries the handle machinery, so the shapes an application
+# draws are registered and named here without the view layer ever holding them as data.
+zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
+# The content-size observation is delivered in device pixels and the draw closure speaks CSS
+# pixels; the conversion needs the geometry vocabulary.
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+
 # `<vector>`'s paths are Béziers, and this is the crate that fixes what a Bézier is for everything
 # downstream of it — the icon set, the chart marks and the rasteriser all name the same type, so a
 # path crosses from a view to the raster with no conversion anywhere.
@@ -25,6 +32,7 @@ zgui-view = { path = "../zgui-view", version = "0.1.0", features = ["stub-backen
 # crate: the macro arrives first, so it is this crate that can name both.
 zgui-view-macro = { path = "../zgui-view-macro", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
 trybuild.workspace = true
 
 [lints]

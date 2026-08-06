@@ -47,6 +47,9 @@ row                          { display: flex; flex-direction: row; }
 column, stack                { display: flex; flex-direction: column; }
 text, label                  { display: inline; }
 image, canvas, vector        { display: inline-block; }
+/* HTML's canvas default, because an unstyled canvas that is invisible reads as broken; an
+   unstyled vector collapsing to nothing reads as "give it a size", which it should. */
+canvas                       { width: 300px; height: 150px; }
 scroll                       { display: block; overflow: auto; }
 spacer                       { display: block; flex: 1 1 auto; }
 

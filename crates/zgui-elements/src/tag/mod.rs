@@ -23,7 +23,7 @@
 //! | [`image()`] | a picture | an inline block |
 //! | [`vector()`] | shapes, drawn from paths | an inline block |
 //! | [`scroll()`] | content larger than the space for it | a block that scrolls |
-//! | [`canvas()`] | pixels something else produces | an inline block |
+//! | [`canvas()`] | shapes the application draws and mutates | an inline block, 300×150 unstyled |
 //! | [`editor()`] | text the user changes | a block |
 //! | [`field()`] | one value the user enters | a block |
 //! | [`control()`] | something the user operates | a block |

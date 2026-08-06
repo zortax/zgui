@@ -112,6 +112,9 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-render-vector-coverage",
             "zgui-ui-icons",
             "zgui-ui-primitives",
+            // A canvas scene's shapes are Béziers in the same vocabulary a document resolves to,
+            // which is what lets a canvas ride the whole vector pipeline unchanged.
+            "zgui-canvas",
         ],
     ),
     (
@@ -125,6 +128,8 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-svg",
             "zgui-ui-icons",
             "zgui-ui-primitives",
+            // Fill rules on a canvas shape are the same fill rules a document's shapes carry.
+            "zgui-canvas",
         ],
     ),
     ("etagere", &["zgui-atlas"]),

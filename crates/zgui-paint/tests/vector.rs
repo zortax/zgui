@@ -68,6 +68,61 @@ fn an_element_carrying_outlines_reaches_a_rasteriser_through_the_emit_walk() {
     );
 }
 
+/// A retained canvas reaches the rasteriser the same way, carrying its own per-shape paint.
+///
+/// This is the whole canvas feature in one walk: the element carries a token, the cache resolves
+/// it out of the registry, the shapes keep the fills the application gave them — not the
+/// element's colour — and the emit walk hands the rasteriser one item per painted shape.
+#[test]
+fn a_canvas_scene_reaches_a_rasteriser_with_its_own_paints() {
+    let handle = zgui_canvas::SceneHandle::new();
+    handle.edit(|scene| {
+        let mut path = zgui_scene::kurbo::BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((24.0, 0.0));
+        path.line_to((24.0, 24.0));
+        path.close_path();
+        scene.push(
+            zgui_canvas::ShapeBuilder::new(path)
+                .fill(zgui_canvas::Brush::Solid(zgui_color::Color::srgb(
+                    1.0, 0.0, 0.0, 1.0,
+                )))
+                .build(),
+        );
+        let mut line = zgui_scene::kurbo::BezPath::new();
+        line.move_to((0.0, 24.0));
+        line.line_to((24.0, 0.0));
+        scene.push(
+            zgui_canvas::ShapeBuilder::new(line)
+                .stroke(zgui_canvas::Brush::Inherited { alpha: 1.0 }, 2.0)
+                .build(),
+        );
+    });
+    let tree = Element::new("root")
+        .children(vec![Element::new("mark").canvas(&handle)]);
+    let mut harness = Harness::new(tree, CSS);
+    let cache = VectorCache::new();
+    let report = harness.paint_vectors(&cache);
+
+    assert!(report.primitives > 0, "the canvas emitted nothing");
+    let shapes = shapes(harness.scene());
+    assert_eq!(
+        shapes.len(),
+        2,
+        "one filled shape and one stroked shape: {shapes:?}"
+    );
+    assert!(
+        shapes[0].contains("fill=solid srgb(1, 0, 0, 1)"),
+        "the first shape keeps its own red, not the element's colour: {}",
+        shapes[0]
+    );
+    assert!(
+        shapes[1].contains("srgb(0, 0.502, 1, 1)"),
+        "the inherited brush resolves to the element's computed colour: {}",
+        shapes[1]
+    );
+}
+
 /// A drawing is scaled to the box it is drawn in, which is what makes one icon constant serve
 /// every size a design system asks for.
 #[test]

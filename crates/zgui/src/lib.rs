@@ -148,6 +148,8 @@ pub use zgui_elements::expansion;
 
 /// Where a glyph tile or a decoded image is kept, and how it reaches a device.
 pub use zgui_atlas as atlas;
+/// What a `canvas` element is drawn with: scenes, shapes and brushes.
+pub use zgui_canvas as canvas;
 /// The damage a frame has to redraw.
 pub use zgui_bits as bits;
 /// The element vocabulary, as builders.
