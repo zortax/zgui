@@ -207,7 +207,9 @@ impl NoText {
 
 impl MeasureContent for NoText {
     fn measure(&mut self, request: zgui_layout::MeasureRequest<'_>) -> zgui_layout::Measured {
-        zgui_layout::NoContent.measure(request)
+        // Natural sizing, not nothing: shaping no text is this engine's identity, but how big a
+        // picture is was never a text question, and the request carries the answer.
+        zgui_layout::NaturalSize.measure(request)
     }
 
     fn shape(

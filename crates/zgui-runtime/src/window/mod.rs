@@ -146,13 +146,10 @@ pub struct Window {
     check_spatial_dependencies: bool,
     /// The glyph tiles and decoded images this window draws from.
     content: ContentCache,
-    /// The intrinsic sizes of the nodes whose content is a decoded image.
-    ///
-    /// One slot of the [`ReplacedMux`](crate::replaced::ReplacedMux) installed on the document;
-    /// the image loader writes it, layout reads it through the document's replaced hook.
-    replaced_images: Arc<crate::replaced::IntrinsicTable>,
     /// The same, for the nodes whose content is an externally rendered surface.
     replaced_surfaces: Arc<crate::replaced::IntrinsicTable>,
+    /// The pictures this window's `image` elements name: decode state, texels, and who shows what.
+    images: crate::images::ImageLoader,
     /// The outlines this window's drawings have already been placed into their boxes as.
     vectors: zgui_paint::VectorCache,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
@@ -423,6 +420,17 @@ impl Window {
                 Arc::clone(&replaced_surfaces),
             ])));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
+        // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
+        let images = crate::images::ImageLoader::new(
+            Arc::clone(&replaced_images),
+            (zgui_atlas::AtlasLimits::default().max_texture_size - 2).max(1) as u32,
+        );
+        let sources = images.source_queue();
+        dom.set_attribute_hook(Rc::new(move |node, name, value| {
+            if name.as_str() == "src" {
+                sources.borrow_mut().push((node, value.map(str::to_owned)));
+            }
+        }));
         let dom_handle = DomHandle::from_rc(Rc::clone(&dom) as Rc<dyn zgui_view::Dom>);
         let document_id = dom.document_id();
 
@@ -507,8 +515,8 @@ impl Window {
             content: ContentCache::new(
                 zgui_atlas::AtlasLimits::default().with_soft_bytes(ATLAS_SOFT_BYTES),
             ),
-            replaced_images,
             replaced_surfaces,
+            images,
             vectors: zgui_paint::VectorCache::new(),
             budgets: crate::budget::Budgets::new(),
             raster,

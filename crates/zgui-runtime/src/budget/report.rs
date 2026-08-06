@@ -112,12 +112,19 @@ pub mod rebuild {
     /// re-lays-out every box the paragraph is in.
     pub const RESHAPED: u64 = 100;
 
+    /// Reproduced by decoding a source that has to be read again first.
+    ///
+    /// Image texels are this: the loader keeps the path or the bytes URL, and getting the pixels
+    /// back is a file read and a codec run on the blocking pool — dearer than anything reproduced
+    /// from memory, but honestly reproducible, which for years this rung's neighbour below said
+    /// they were not.
+    pub const DECODED: u64 = 1000;
+
     /// Not reproducible from anything this process holds.
     ///
-    /// Decoded image texels are this: the bytes arrived from the application already decoded, this
-    /// framework links no codec and keeps no path to the file, and nothing here can ask for them
-    /// again. A cache at this rung reports everything it holds as pinned; the rung exists so that
-    /// an ordering which somehow reached it still puts it last.
+    /// Texels an embedder attached directly, with no source the runtime can go back to, are this.
+    /// A cache at this rung reports everything it holds as pinned; the rung exists so that an
+    /// ordering which somehow reached it still puts it last.
     pub const UNREPRODUCIBLE: u64 = u64::MAX;
 }
 

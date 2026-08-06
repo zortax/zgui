@@ -25,8 +25,11 @@ impl CacheRegistry for Window {
             &mut self.content,
             self.budgets.tracked(CacheId::GlyphAtlas),
         ));
+        let decoded_bytes = self.budgets.limits().decoded_image_bytes;
         visit(&mut DecodedImagesBudget::new(
+            &mut self.images,
             &mut self.content,
+            decoded_bytes,
             self.budgets.tracked(CacheId::DecodedImages),
         ));
         let shaped = self.budgets.limits().shaped_paragraphs;

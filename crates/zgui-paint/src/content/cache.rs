@@ -176,6 +176,30 @@ impl ContentCache {
         Ok(())
     }
 
+    /// Attaches already-shared texels to a replaced node, under a caller-chosen atlas handle.
+    ///
+    /// The sharing is the point, twice over: every node attached under one `handle` resolves to
+    /// **one atlas tile**, and the texels arrive behind an [`Arc`](std::sync::Arc) rather than by
+    /// value, so a loader that decoded a file once serves any number of elements showing it
+    /// without copying a byte. The texels obey the same contract as
+    /// [`set_image`](ContentCache::set_image): premultiplied, gamma-encoded sRGB, four bytes per
+    /// pixel, top row first.
+    ///
+    /// # Errors
+    ///
+    /// [`ImageError::WrongByteCount`] when the buffer does not match the extent.
+    pub fn set_image_shared(
+        &mut self,
+        id: ReplacedId,
+        handle: u64,
+        size: Size<u32, Device>,
+        texels: std::sync::Arc<Vec<u8>>,
+    ) -> Result<(), ImageError> {
+        let content = Content::shared(handle, size, texels)?;
+        self.images.insert(id, content);
+        Ok(())
+    }
+
     /// Attaches a texture this framework does not own to a replaced node.
     pub fn set_external(&mut self, id: ReplacedId, texture: ExternalTextureId) {
         self.images.insert(id, Content::External(texture));

@@ -76,6 +76,13 @@ pub struct BoxNode {
     /// Width over height, as `aspect-ratio` measures it. It is recorded on the box because
     /// `aspect-ratio: auto` defers to it and no style carries it.
     pub natural_ratio: Option<f32>,
+    /// The natural size its replaced content reported when this box was built, in CSS pixels.
+    ///
+    /// Captured beside the ratio for the same reason the ratio is: the intrinsic is consulted at
+    /// box building, and layout — which runs with the document out of reach — needs the answer,
+    /// not the source. Carried into every [`MeasureRequest`](crate::measure::MeasureRequest) for
+    /// this box.
+    pub natural: Option<zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>>,
     /// The grid line and area names, if this box is a grid container that names any.
     pub grid: Option<Box<GridNames>>,
 }
@@ -98,6 +105,7 @@ impl BoxNode {
             replaced: None,
             draws_vector: false,
             natural_ratio: None,
+            natural: None,
             grid: None,
         }
     }

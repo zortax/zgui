@@ -325,6 +325,26 @@ impl Harness {
         ReplacedId::new(self.document.store().key_of(self.element(name)))
     }
 
+    /// The replaced identifiers of every element of one name, in document order.
+    pub(crate) fn replaced_ids(&self, name: &str) -> Vec<ReplacedId> {
+        let mut out = Vec::new();
+        let mut stack = vec![self.root];
+        while let Some(index) = stack.pop() {
+            let core = self.document.store().core(index);
+            if core.local_name().as_str() == name {
+                out.push(ReplacedId::new(self.document.store().key_of(index)));
+            }
+            let mut children = Vec::new();
+            let mut child = core.first_child();
+            while let Some(index) = child {
+                children.push(index);
+                child = self.document.store().core(index).next_sibling();
+            }
+            stack.extend(children.into_iter().rev());
+        }
+        out
+    }
+
     /// Emits a frame with the whole surface damaged.
     pub(crate) fn paint_everything(&mut self) -> zgui_paint::PaintReport {
         self.damage = DamageSet::full();

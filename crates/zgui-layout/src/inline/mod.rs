@@ -81,11 +81,13 @@ pub(crate) fn measure_leaf<C: MeasureContent>(
     }
     let scale = tree.device().scale;
     let style = tree.store().node(key).style.clone();
+    let natural = tree.store().node(key).natural;
     tree.content().measure(MeasureRequest {
         box_: key,
         style: &style,
         known,
         available,
+        natural,
         scale,
         final_pass: run_mode == RunMode::PerformLayout,
     })

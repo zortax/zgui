@@ -58,6 +58,33 @@ impl Content {
         size: Size<u32, Device>,
         texels: Vec<u8>,
     ) -> Result<Self, ImageError> {
+        Self::under_key(
+            AtlasKey::new(handle(id), TextureKind::Color),
+            size,
+            std::sync::Arc::new(texels),
+        )
+    }
+
+    /// Builds a decoded entry under a caller-chosen handle, so nodes can share one tile.
+    ///
+    /// The handle is namespaced away from the per-node ones: a loader's counter and a node's
+    /// packed name must never meet in the atlas, because the atlas would then serve one node's
+    /// pixels for the other's.
+    pub(crate) fn shared(
+        handle: u64,
+        size: Size<u32, Device>,
+        texels: std::sync::Arc<Vec<u8>>,
+    ) -> Result<Self, ImageError> {
+        const SHARED: u64 = 1 << 63;
+        Self::under_key(AtlasKey::new(SHARED | handle, TextureKind::Color), size, texels)
+    }
+
+    /// The entry both constructors build, once the bytes are checked against the extent.
+    fn under_key(
+        key: AtlasKey,
+        size: Size<u32, Device>,
+        texels: std::sync::Arc<Vec<u8>>,
+    ) -> Result<Self, ImageError> {
         let expected = size.width as usize * size.height as usize * 4;
         if texels.len() != expected {
             return Err(ImageError::WrongByteCount {
@@ -66,11 +93,7 @@ impl Content {
                 actual: texels.len(),
             });
         }
-        Ok(Self::Decoded {
-            key: AtlasKey::new(handle(id), TextureKind::Color),
-            size,
-            texels: std::sync::Arc::new(texels),
-        })
+        Ok(Self::Decoded { key, size, texels })
     }
 
     /// How many bytes of decoded texels this entry is holding outside the atlas.

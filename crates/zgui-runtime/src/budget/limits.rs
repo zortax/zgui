@@ -1,10 +1,10 @@
 //! The levels the entry-counted caches are held to, and what each number is derived from.
 //!
-//! Two of the five registered caches are budgeted in entries, and both numbers are stated here
-//! rather than at their use so that the derivation is in one place and can be argued with. The
-//! byte-counted caches are not here: the glyph atlas's level is
-//! [`ATLAS_SOFT_BYTES`](crate::window::ATLAS_SOFT_BYTES) and belongs beside the window that installs
-//! it, and the other two state no level at all — see their adapters for why.
+//! Two of the registered caches are budgeted in entries and one — decoded images — in bytes, and
+//! the numbers are stated here rather than at their use so that the derivation is in one place
+//! and can be argued with. The glyph atlas's level is
+//! [`ATLAS_SOFT_BYTES`](crate::window::ATLAS_SOFT_BYTES) and belongs beside the window that
+//! installs it; the remaining caches state no level at all — see their adapters for why.
 //!
 //! # Where the numbers come from
 //!
@@ -38,6 +38,17 @@
 /// made to reshape on every frame.
 pub const SHAPED_PARAGRAPHS: usize = 16_384;
 
+/// How many decoded-image bytes a window holds before sources nothing shows are dropped.
+///
+/// The one byte-counted level here, because unlike the atlas's it did not exist until the runtime
+/// grew a loader that can decode again: now that it can, texels for sources no live element shows
+/// are honestly reproducible and worth bounding. Sixty-four MiB is sixteen full-screen 4k images'
+/// worth of history — far past what a scrolled gallery keeps useful, far under what letting every
+/// picture that ever scrolled past accumulate would cost. What is on screen is pinned: a window
+/// whose *live* pictures alone exceed the level stays over it rather than blanking one of them,
+/// exactly as the paragraph level behaves for live text.
+pub const DECODED_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// How many placed drawings a window holds before the vector cache is dropped.
 ///
 /// The same derivation, and far cheaper to reach: a placed drawing is produced again by parsing the
@@ -62,6 +73,8 @@ pub struct CacheLimits {
     pub shaped_paragraphs: usize,
     /// How many placed drawings may be held.
     pub placed_drawings: usize,
+    /// How many decoded-image bytes may be held for sources nothing shows.
+    pub decoded_image_bytes: u64,
 }
 
 impl Default for CacheLimits {
@@ -70,6 +83,7 @@ impl Default for CacheLimits {
         Self {
             shaped_paragraphs: SHAPED_PARAGRAPHS,
             placed_drawings: PLACED_DRAWINGS,
+            decoded_image_bytes: DECODED_IMAGE_BYTES,
         }
     }
 }

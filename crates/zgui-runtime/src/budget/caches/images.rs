@@ -1,50 +1,56 @@
-//! The decoded texels attached to replaced nodes.
+//! The decoded texels the image loader holds.
+//!
+//! This adapter used to state no level, and its essay said why: the texels arrived from the
+//! application already decoded, nothing in the process could produce one again, so every byte was
+//! pinned for ever. The loader changed the premise. A picture now arrives *by name* — a path or a
+//! bytes URL — and the loader can decode it again, which makes the bytes honestly evictable and
+//! the level enforceable.
 
 use zgui_paint::ContentCache;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};
 use crate::budget::report::{CacheId, CacheReport, CacheUnit, rebuild};
+use crate::images::ImageLoader;
 
-/// The pictures attached to this window's replaced nodes, as the budget sees them.
+/// The pictures this window has decoded, as the budget sees them.
 ///
-/// # It states no level, and that is the honest answer
+/// # What is pinned and what is not
 ///
-/// Every byte here is pinned, because nothing in this process can produce one again. The texels
-/// arrive from the application already decoded — this framework links no codec, holds no path to
-/// the file one came from and has no way to ask for it — so freeing them does not cost a rebuild,
-/// it loses the picture until whatever attached it attaches it again.
+/// A source some live element shows is pinned: evicting it would blank a picture that is on the
+/// screen until a re-decode lands, which is a flicker no budget is entitled to cause. A source
+/// nothing shows — the history a scrolled gallery leaves behind — is the evictable part, and an
+/// entry is dropped whole because half a picture is nothing.
 ///
-/// A level would therefore be a level that could never be enforced: the first frame over it would
-/// report an excess, eviction would free nothing, and the excess would still be there on every
-/// frame after. An assertion written against that fails forever, so the number would be raised
-/// until it stopped firing — and a number chosen by being raised until it stops firing is not a
-/// budget. What bounds this cache is the application, which decides what it attaches.
-///
-/// It is registered all the same, for the two things registration is for: the report says what the
-/// window is spending, and [`forget`](Budgeted::forget) is the one path that does drop these. That
-/// is what makes "a window with every cache empty" a state this window can actually be put into,
-/// and it is not a memory-pressure step — a caller reaching for it has to expect to attach the
-/// pictures again.
-///
-/// # Nothing in the runtime attaches one yet
-///
-/// Verified rather than assumed: the only callers of
-/// [`ContentCache::set_image`](zgui_paint::ContentCache::set_image) in this workspace are
-/// `zgui-paint`'s own tests. An embedder reaches it through the content cache directly, so the
-/// cache is real and its bytes are real, and a window driven by this framework's own frame loop
-/// reports zero here until one does.
+/// [`forget`](Budgeted::forget) is stronger, as everywhere: it drops the shown ones too, and the
+/// loader re-decodes them from their sources on the next settle. The old caveat — that a
+/// forgotten window draws blanks until the application re-attaches — is gone; what remains of it
+/// is the decode's own latency.
 pub struct DecodedImagesBudget<'a> {
-    /// Where the texels are.
+    /// Who owns the texels and can produce them again.
+    loader: &'a mut ImageLoader,
+    /// Where the per-node attachments the eviction has to detach live.
     content: &'a mut ContentCache,
+    /// The level sources nothing shows are held under.
+    limit: u64,
     /// This cache's own history.
     tracked: &'a mut Tracked,
 }
 
 impl<'a> DecodedImagesBudget<'a> {
-    /// The adapter over one window's attached images.
-    pub fn new(content: &'a mut ContentCache, tracked: &'a mut Tracked) -> Self {
-        Self { content, tracked }
+    /// The adapter over one window's decoded images.
+    pub(crate) fn new(
+        loader: &'a mut ImageLoader,
+        content: &'a mut ContentCache,
+        limit: u64,
+        tracked: &'a mut Tracked,
+    ) -> Self {
+        Self {
+            loader,
+            content,
+            limit,
+            tracked,
+        }
     }
 }
 
@@ -53,41 +59,38 @@ impl Budgeted for DecodedImagesBudget<'_> {
         CacheId::DecodedImages
     }
 
-    /// None, and the reason is on the type.
     fn limit(&self) -> Option<u64> {
-        None
+        Some(self.limit)
     }
 
     fn report(&self) -> CacheReport {
-        let held = self.content.image_bytes();
+        let held = self.loader.held_bytes();
+        let evictable = self.loader.evictable_bytes();
         CacheReport {
             resident: held,
-            // All of it. Nothing here is evictable, ever.
-            pinned: held,
+            pinned: held - evictable,
             last_used: self.tracked.last_used(),
-            rebuild_cost: rebuild::UNREPRODUCIBLE,
+            rebuild_cost: rebuild::DECODED,
             speculative: 0,
             unit: CacheUnit::Bytes,
         }
     }
 
     fn observe(&mut self, epoch: SceneEpoch) {
-        // A picture is resolved through the cache on every frame that draws it — there is no
-        // replay path that reaches the texels without asking for them — so the lookup total alone
-        // is the whole signal.
+        // A picture is resolved through the content cache on every frame that draws it — there is
+        // no replay path that reaches the texels without asking for them — so the lookup total
+        // alone is the whole signal.
         self.tracked.note(epoch, self.content.image_hits(), false);
     }
 
-    /// Nothing, always.
-    ///
-    /// Not a stub: it is the same answer the report gives, which is that every byte held here is
-    /// pinned. A caller that wanted these bytes back wants [`forget`](Budgeted::forget) and has to
-    /// accept what that costs.
-    fn evict(&mut self, _units: u64, _epoch: SceneEpoch) -> u64 {
-        0
+    fn evict(&mut self, units: u64, _epoch: SceneEpoch) -> u64 {
+        self.loader.evict(units)
     }
 
     fn forget(&mut self) {
+        self.loader.forget(self.content);
+        // Anything an embedder attached around the loader goes too; that half really is
+        // unreproducible from here, exactly as the old essay said.
         self.content.forget_images();
     }
 }

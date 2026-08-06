@@ -193,6 +193,15 @@ impl Window {
         mark("f.commands");
         self.binding.checkpoint();
         self.carry_out_commands(timestamp);
+        // After the flush, which is where a finished decode's task pushed its result, and before
+        // the line below that closes the frame's window for producing changes: a picture that
+        // landed during this frame's own flush is shown by this frame, one settle later. A settle
+        // that *kicked* decodes is owed one more frame — the tasks it spawned have never been
+        // polled, and an unpolled future has no waker for its completion to fire.
+        mark("f.images");
+        if self.images.settle(&self.document, &mut self.content) {
+            self.request_frame();
+        }
 
         // Everything above this line is a stage that *produces* changes — events dispatched,
         // timers fired, the reactive graph flushed, commands carried out — and everything below it
@@ -1032,6 +1041,13 @@ impl Window {
             let document = self.document.borrow();
             self.vectors
                 .retain(|node| document.store().index_of(node).is_some());
+            // The image loader owes the same frame-end truth-telling: a node that left takes its
+            // attachment and its intrinsic claim with it, and a source nothing shows any more is
+            // only a cache entry, which the budget — not this — decides the fate of.
+            self.images.retain(
+                |node| document.store().index_of(node).is_some(),
+                &mut self.content,
+            );
         }
         // Before the scene is finished, which is where a sprite still carrying a name rather than a
         // placement is refused: the arrays are sorted there, and a placeholder has no texture to be

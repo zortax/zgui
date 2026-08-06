@@ -8,7 +8,7 @@ use zgui_text::{
 };
 use zgui_text_style::{TextPaint, TextStyle};
 
-use crate::measure::{MeasureContent, MeasureRequest, Measured, NoContent, ShapedSummary};
+use crate::measure::{MeasureContent, MeasureRequest, Measured, NaturalSize, ShapedSummary};
 
 /// A shaper, its shaped paragraphs and its brush table, as one measurer.
 ///
@@ -24,7 +24,7 @@ use crate::measure::{MeasureContent, MeasureRequest, Measured, NoContent, Shaped
 /// `replaced`, which is a second measurer because knowing how big a picture is has nothing to do
 /// with knowing how wide a word is.
 #[derive(Debug)]
-pub struct Paragraphs<S: ParagraphShaper, R = NoContent> {
+pub struct Paragraphs<S: ParagraphShaper, R = NaturalSize> {
     /// The engine.
     shaper: S,
     /// What it has shaped.
@@ -39,9 +39,13 @@ pub struct Paragraphs<S: ParagraphShaper, R = NoContent> {
 }
 
 impl<S: ParagraphShaper> Paragraphs<S> {
-    /// A measurer over `shaper`, with nothing to size replaced content.
+    /// A measurer over `shaper`, sizing replaced content by its reported natural size.
+    ///
+    /// That default is what a window wants: an image measures as the picture it holds. A test
+    /// that needs to control replaced answers — or refuse them — says so through
+    /// [`Paragraphs::with_replaced`].
     pub fn new(shaper: S) -> Self {
-        Self::with_replaced(shaper, NoContent)
+        Self::with_replaced(shaper, NaturalSize)
     }
 }
 

@@ -238,6 +238,7 @@ impl Builder<'_> {
                     .map(|size| size.width.0 / size.height.0)
             })
         });
+        node.natural = intrinsic.and_then(|intrinsic| intrinsic.size);
         if matches!(fc, FormattingContext::Grid) {
             let names = grid::resolve_names(style);
             if !names.is_empty() {

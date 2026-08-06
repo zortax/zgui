@@ -196,6 +196,7 @@ fn a_budget_drops_rebuildable_content_but_pins_active_shaping() {
     app.app_mut().windows_mut()[0].set_cache_limits(zgui_runtime::budget::CacheLimits {
         shaped_paragraphs: 0,
         placed_drawings: 0,
+        decoded_image_bytes: 0,
     });
     app.app_mut().windows_mut()[0].request_frame();
     app.settle(4);

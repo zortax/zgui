@@ -35,6 +35,13 @@ pub struct MeasureRequest<'a> {
     pub known: Size<Option<f32>>,
     /// The space available on each axis, with the box's own insets already taken off.
     pub available: Size<AvailableSpace>,
+    /// The natural size the box's replaced content reported when the box was built, in CSS pixels.
+    ///
+    /// Carried on the request because the measurer cannot go and ask: the intrinsic lives on the
+    /// document, and the document is not the measurer's to reach — a decode thread and a layout
+    /// worker meeting on it is exactly the aliasing the seam exists to prevent. `None` for text
+    /// and for replaced content that has not said yet.
+    pub natural: Option<zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>>,
     /// Device pixels per CSS pixel.
     pub scale: f32,
     /// Whether the answer will be kept, or is one of several probes taken to find a size.
@@ -168,6 +175,48 @@ impl MeasureContent for NoContent {
     }
 }
 
+/// A measurer that sizes replaced content by the natural size the request carries.
+///
+/// This is the production answer for a leaf the engine does not lay out: the box was built from
+/// the document's intrinsic, the request carries that intrinsic, and the content is exactly as
+/// big as it said it was — scaled to device pixels, with any axis the engine already fixed taken
+/// as fixed. Content that has reported nothing yet measures empty, which is the truthful size of
+/// a picture that has not arrived.
+///
+/// It shapes no text; pair it with a shaper through
+/// [`Paragraphs::with_replaced`](crate::text::Paragraphs::with_replaced).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NaturalSize;
+
+impl MeasureContent for NaturalSize {
+    fn measure(&mut self, request: MeasureRequest<'_>) -> Measured {
+        let natural = request.natural;
+        let side = |known: Option<f32>, axis: fn(&zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>) -> f32| {
+            known.unwrap_or_else(|| natural.as_ref().map(axis).unwrap_or(0.0) * request.scale)
+        };
+        Measured::sized(
+            side(request.known.width, |size| size.width.0),
+            side(request.known.height, |size| size.height.0),
+        )
+    }
+
+    fn shape(&mut self, _content: &ParagraphContent<'_>) -> ShapedSummary {
+        ShapedSummary::default()
+    }
+
+    fn break_lines(&mut self, _key: ParagraphKey, _request: &BreakRequest<'_>) -> BrokenParagraph {
+        BrokenParagraph::default()
+    }
+
+    fn strut(&mut self, _style: &TextStyle) -> StrutMetrics {
+        StrutMetrics::default()
+    }
+
+    fn paint_slot(&mut self, _paint: &TextPaint) -> Brush {
+        zgui_scene::PaintSlot(0)
+    }
+}
+
 impl zgui_text::ShapedGlyphs for NoContent {
     fn visit_line(
         &self,
@@ -225,6 +274,7 @@ mod tests {
                 width: AvailableSpace::Definite(200.0),
                 height: AvailableSpace::MaxContent,
             },
+            natural: None,
             scale: 1.0,
             final_pass: true,
         });

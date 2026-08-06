@@ -12,7 +12,7 @@
 //! | Cache | Unit | Level | Why that level |
 //! |---|---|---|---|
 //! | [`GlyphAtlasBudget`] | bytes | [`ATLAS_SOFT_BYTES`](crate::window::ATLAS_SOFT_BYTES) | several times a text-heavy document's glyphs, well under an unbounded atlas |
-//! | [`DecodedImagesBudget`] | bytes | none | nothing here can be freed and produced again |
+//! | [`DecodedImagesBudget`] | bytes | [`DECODED_IMAGE_BYTES`](crate::budget::limits::DECODED_IMAGE_BYTES) | the loader can decode a named source again, so off-screen history is honestly freeable |
 //! | [`ParagraphShapingBudget`] | entries | [`SHAPED_PARAGRAPHS`](crate::budget::limits::SHAPED_PARAGRAPHS) | the largest document whose every element is live, with room |
 //! | [`VectorResourcesBudget`] | entries | [`PLACED_DRAWINGS`](crate::budget::limits::PLACED_DRAWINGS) | the same, for what the per-frame retain does not bound |
 //! | [`RenderTargetsBudget`] | bytes | none | the pool enforces a ceiling of its own that it never exceeds |

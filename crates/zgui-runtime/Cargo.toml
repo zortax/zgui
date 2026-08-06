@@ -27,6 +27,7 @@ zgui-color = { path = "../zgui-color", version = "0.1.0" }
 # contrasts with whatever background the field has whichever theme is in force.
 zgui-css = { path = "../zgui-css", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-image = { path = "../zgui-image", version = "0.1.0" }
 zgui-edit = { path = "../zgui-edit", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-input = { path = "../zgui-input", version = "0.1.0" }

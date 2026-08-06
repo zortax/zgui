@@ -1,10 +1,12 @@
-//! The one registered cache a window driven by this framework's own frame loop cannot fill.
+//! What the decoded-images budget promises now that the loader can decode again.
 //!
-//! Nothing in the runtime attaches a decoded picture to a replaced node — the only callers of
-//! [`ContentCache::set_image`](zgui_paint::ContentCache::set_image) in this workspace are
-//! `zgui-paint`'s own tests, and an embedder reaches it through the content cache directly. So the
-//! registry-wide assertions run against a window in which this cache is legitimately empty, and
-//! what it promises is asserted here instead, against a cache filled the way an embedder fills one.
+//! The premise this adapter ran on for its first life — that texels were unreproducible and
+//! therefore all pinned — is gone: a picture arrives by name, and the loader keeps the name. What
+//! is asserted here is the new split: shown pictures are pinned, off-screen history is evictable
+//! whole-entries-at-a-time, and forget drops even the shown ones in the knowledge that a settle
+//! brings them back.
+
+use std::sync::Arc;
 
 use zgui_geom::Size;
 use zgui_paint::ContentCache;
@@ -12,78 +14,98 @@ use zgui_paint::ContentCache;
 use crate::budget::caches::DecodedImagesBudget;
 use crate::budget::manager::{Budgeted, Tracked};
 use crate::budget::report::rebuild;
+use crate::images::ImageLoader;
+use crate::replaced::IntrinsicTable;
 
 /// A four-by-four picture: sixty-four bytes of premultiplied texels.
 const EXTENT: u32 = 4;
 /// What those texels weigh.
 const BYTES: u64 = (EXTENT * EXTENT * 4) as u64;
 
-/// A replaced identifier for a node of the first domain.
-fn id() -> zgui_dom::host::ReplacedId {
+/// A node key of the first domain.
+fn node(n: u32) -> zgui_dom::NodeKey {
     use zgui_arena::{DomainId, Generation};
-    zgui_dom::host::ReplacedId::new(zgui_dom::NodeKey::new(
-        3,
-        Generation::FIRST,
-        DomainId::FIRST,
-    ))
+    zgui_dom::NodeKey::new(n, Generation::FIRST, DomainId::FIRST)
 }
 
-/// A cache holding one attached picture.
-fn holding_a_picture() -> ContentCache {
-    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
-    content
-        .set_image(id(), Size::new(EXTENT, EXTENT), vec![0; BYTES as usize])
-        .expect("the texels match the extent");
-    content
+/// One decoded picture's worth of texels.
+fn decoded() -> zgui_image::Decoded {
+    zgui_image::Decoded {
+        size: Size::new(EXTENT, EXTENT),
+        texels: Arc::new(vec![0; BYTES as usize]),
+    }
 }
 
-/// Every byte is pinned, so eviction may never take one.
+/// A loader holding one shown picture and one orphaned one.
+fn loader() -> ImageLoader {
+    let mut loader = ImageLoader::new(IntrinsicTable::new(), 2048);
+    loader.insert_ready_for_tests("shown.png", &[node(3)], decoded());
+    loader.insert_ready_for_tests("history.png", &[], decoded());
+    loader
+}
+
+/// The report splits shown from history, and prices a rebuild as a decode.
 #[test]
-fn nothing_attached_to_a_replaced_node_is_ever_evictable() {
-    let mut content = holding_a_picture();
+fn shown_pictures_are_pinned_and_history_is_evictable() {
+    let mut loader = loader();
+    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
     let mut tracked = Tracked::default();
-    let mut budget = DecodedImagesBudget::new(&mut content, &mut tracked);
+    let budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
 
     let report = budget.report();
+    assert_eq!(report.resident, 2 * BYTES);
+    assert_eq!(report.pinned, BYTES, "what is on the screen may not be trimmed");
+    assert_eq!(report.evictable(), BYTES, "what scrolled away may");
+    assert_eq!(report.rebuild_cost, rebuild::DECODED);
+}
+
+/// Eviction frees history and never touches what is shown, however much is asked for.
+#[test]
+fn eviction_takes_history_only() {
+    let mut loader = loader();
+    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut tracked = Tracked::default();
+    let mut budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
+
+    let freed = budget.evict(10 * BYTES, crate::budget::SceneEpoch::FIRST);
+    assert_eq!(freed, BYTES, "the orphaned entry, whole, and nothing else");
+    let report = budget.report();
     assert_eq!(report.resident, BYTES);
-    assert_eq!(
-        report.pinned, BYTES,
-        "the texels arrived already decoded and nothing here can ask for them again"
-    );
-    assert_eq!(report.evictable(), 0);
-    assert_eq!(report.rebuild_cost, rebuild::UNREPRODUCIBLE);
+    assert_eq!(report.pinned, BYTES);
 
-    assert_eq!(
-        budget.evict(BYTES, crate::budget::SceneEpoch::FIRST),
-        0,
-        "eviction must not be able to lose a picture the application cannot be asked for again"
-    );
-    assert_eq!(budget.report().resident, BYTES);
+    assert!(loader.holds_texels_for_tests("shown.png"));
+    assert!(!loader.holds_texels_for_tests("history.png"));
 }
 
-/// It states no level, because a level it could never come back under would be a standing failure.
+/// The level is real now: it is stated, and it is the number the window's limits carry.
 #[test]
-fn it_states_no_level_at_all() {
-    let mut content = holding_a_picture();
+fn it_states_the_configured_level() {
+    let mut loader = loader();
+    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
     let mut tracked = Tracked::default();
-    let budget = DecodedImagesBudget::new(&mut content, &mut tracked);
+    let budget = DecodedImagesBudget::new(&mut loader, &mut content, 12_345, &mut tracked);
 
-    assert_eq!(budget.limit(), None);
+    assert_eq!(budget.limit(), Some(12_345));
 }
 
-/// Forget is the one path that does drop them, which is what puts a window into the cold state.
+/// Forget drops the shown pictures too — and leaves their entries behind to be decoded again,
+/// which is the difference between losing a picture and re-paying for it.
 #[test]
-fn forget_drops_what_eviction_may_not() {
-    let mut content = holding_a_picture();
+fn forget_drops_everything_but_keeps_the_names() {
+    let mut loader = loader();
+    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
     let mut tracked = Tracked::default();
-    let mut budget = DecodedImagesBudget::new(&mut content, &mut tracked);
-    assert!(!budget.report().is_empty());
+    let mut budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
 
     budget.forget();
 
     assert!(
         budget.report().is_empty(),
-        "the assertion over the whole registry says every cache is empty after this, and this is \
-         the cache that a window fixture cannot put into the state where that claim bites"
+        "the registry-wide assertion that a forgotten window holds nothing includes this cache"
+    );
+    assert!(!loader.holds_texels_for_tests("shown.png"));
+    assert!(
+        !loader.holds_texels_for_tests("history.png"),
+        "an orphan is not even worth re-decoding: it is gone entirely"
     );
 }

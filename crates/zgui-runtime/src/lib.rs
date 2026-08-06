@@ -71,6 +71,7 @@ pub mod dispatch;
 pub mod editing;
 pub mod error;
 pub mod host;
+mod images;
 mod order;
 pub mod probe;
 pub mod replaced;

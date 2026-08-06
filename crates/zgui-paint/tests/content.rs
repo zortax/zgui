@@ -125,3 +125,45 @@ fn one_image_drawn_twice_is_one_tile() {
     cache.remove_image(id);
     assert_eq!(cache.report().tiles, 1);
 }
+
+/// Two nodes attached under one shared handle resolve to one tile of one shared buffer.
+#[test]
+fn two_nodes_sharing_a_handle_share_one_tile() {
+    let tree = Element::new("root").children(vec![
+        Element::new("picture").image(),
+        Element::new("picture").image(),
+    ]);
+    let mut harness = Harness::new(tree, CSS);
+    harness.compose(200.0, 100.0);
+
+    let mut cache = ContentCache::new(AtlasLimits::default());
+    let (size, texels) = image();
+    let texels = std::sync::Arc::new(texels);
+    let ids = harness.replaced_ids("picture");
+    assert_eq!(ids.len(), 2, "the fixture has two pictures");
+    for id in &ids {
+        cache
+            .set_image_shared(*id, 7, size, std::sync::Arc::clone(&texels))
+            .expect("well formed");
+    }
+
+    harness.paint_content(&mut cache, &NoRaster);
+
+    assert_eq!(
+        harness.scene().primitives.color_sprites.len(),
+        2,
+        "each node draws its own sprite"
+    );
+    assert_eq!(
+        cache.report().tiles,
+        1,
+        "one decode shown twice is one tile, which is what the shared handle buys"
+    );
+    let mut sink = MemorySink::new();
+    cache.flush(&mut sink).expect("the in-memory sink accepts");
+    assert_eq!(
+        sink.bytes_written(),
+        16 * 8 * 4,
+        "and one upload: the second node added no bytes"
+    );
+}
