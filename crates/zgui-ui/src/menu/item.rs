@@ -12,6 +12,7 @@ use crate::menu::SHEET;
 use crate::menu::content::MenuSurface;
 use crate::menu::parts::MenuShortcutProps;
 use crate::menu::style::MenuStyle;
+use crate::support::activate_on_press;
 
 /// The handler that takes an item's highlight away as the pointer leaves it.
 ///
@@ -151,6 +152,8 @@ pub fn MenuItem(
         control(
             node_ref = node,
             tabindex = move || item.map_or(Focus::Sequential, |item| item.tabindex().get()),
+            // A menu answers the press, as every desktop's own menus do.
+            on:pointer_down = activate_on_press(),
             on:click = move |_| select(),
             // The pointer moves the keyboard rather than shadowing it: one highlight, and the two
             // ways of driving a menu cannot end up pointing at different items.

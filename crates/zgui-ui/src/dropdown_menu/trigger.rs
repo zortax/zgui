@@ -6,6 +6,7 @@ use zgui::{component, view};
 
 use crate::button::{ButtonProps, ButtonSize, ButtonVariant};
 use crate::overlay::OverlayState;
+use crate::support::activate_on_press;
 
 /// The button that opens the enclosing [`DropdownMenu`](crate::DropdownMenu).
 ///
@@ -75,6 +76,7 @@ pub fn DropdownMenuTrigger(
             variant = variant,
             size = size,
             on:key_down = on_key_down,
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if let Some(state) = state {
                     state.toggle();

@@ -10,6 +10,7 @@ use zgui_ui_icons::set::mark::CHECK;
 use crate::listbox::{ListboxOption, use_listbox_option};
 use crate::native_select::style::NativeSelectStyle;
 use crate::native_select::{FirstShown, SHEET};
+use crate::support::activate_on_press;
 
 /// One thing that can be chosen.
 ///
@@ -97,6 +98,7 @@ pub fn NativeSelectOption(
         box(
             node_ref = node,
             class = "zui-native-select__option",
+            on:pointer_down = activate_on_press(),
             on:click = move |_| take(),
             on:pointer_enter = move |_| {
                 if !disabled && let Some((listbox, id)) = registered {

@@ -4,7 +4,6 @@ mod exit;
 mod expiry;
 mod swipe;
 
-
 use zgui::prelude::*;
 use zgui::reactive::RenderEffect;
 use zgui::{component, view};
@@ -120,7 +119,10 @@ pub fn ToastItem(
         } else {
             1.0
         };
-        queue.measure(id, content.height.0 / scale + crate::toast::queue::place::GAP);
+        queue.measure(
+            id,
+            content.height.0 / scale + crate::toast::queue::place::GAP,
+        );
     });
 
     let expiry = Expiry::new(toast.stays_for(), dismiss);

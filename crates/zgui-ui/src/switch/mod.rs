@@ -10,7 +10,7 @@ use zgui::vocab::UiState;
 use zgui::{component, variants, view};
 use zgui_ui_primitives::{Binding, Controllable};
 
-use crate::support::variant_attrs;
+use crate::support::{activate_on_press, variant_attrs};
 
 /// What the switch's rules are installed under.
 const SHEET: &str = "zui-switch";
@@ -114,6 +114,7 @@ pub fn Switch(
             node_ref = element,
             class = SwitchStyle::CLASS,
             tabindex = {Focus::Sequential},
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if !disabled.get_untracked() {
                     value.toggle();

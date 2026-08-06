@@ -17,6 +17,7 @@ style! { pub ComboboxStyle =>
         padding: var(--zui-space-xs);
         min-width: 220px;
         max-height: 384px;
+        overflow-x: hidden;
         overflow-y: auto;
     }"
     // Centred and quiet: it is the answer to a search rather than a row that can be chosen, and a

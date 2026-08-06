@@ -27,12 +27,21 @@ pub(crate) const HEIGHT: f32 = 1000.0;
 #[component]
 pub(crate) fn Gallery() -> impl IntoView {
     let scheme = RwSignal::new_local(ColorScheme::Light);
+    // One preset per slot, and the provider's two slots read them. Which one is *in force* is still
+    // the scheme's business: picking a dark theme while the gallery is light changes nothing on the
+    // screen and everything about what the switch flips to.
+    let light = RwSignal::new_local(Preset::default());
+    let dark = RwSignal::new_local(Preset::default());
 
     view! {
-        ThemeProvider(scheme = scheme) {
+        ThemeProvider(
+            scheme = scheme,
+            light = Signal::derive_local(move || light.get().light()),
+            dark = Signal::derive_local(move || dark.get().dark())
+        ) {
             Toaster {
                 column(class = "page") {
-                    Masthead(scheme = scheme)
+                    Masthead(scheme = scheme, light = light, dark_theme = dark)
                     box(class = "grid") {
                         Atoms()
                         Fields()

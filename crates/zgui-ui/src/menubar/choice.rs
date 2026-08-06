@@ -13,6 +13,7 @@ use crate::menu::MenuRadioContext;
 use crate::menu::defocus_on_leave;
 use crate::menubar::style::MenubarStyle;
 use crate::menubar::{MenubarMenuContext, SHEET};
+use crate::support::activate_on_press;
 
 /// A menubar item that is on or off, with a tick where a symbol would go.
 ///
@@ -109,6 +110,7 @@ pub fn MenubarCheckboxItem(
                 }
             },
             on:pointer_leave = on_leave,
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if disabled.get_untracked() {
                     return;
@@ -236,6 +238,7 @@ pub fn MenubarRadioItem(
                 }
             },
             on:pointer_leave = on_leave,
+            on:pointer_down = activate_on_press(),
             on:click = move |_| choose(),
             {..own},
             {..attrs},

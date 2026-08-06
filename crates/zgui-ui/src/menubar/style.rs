@@ -11,7 +11,7 @@ style! { pub MenubarStyle =>
         flex-direction: row;
         align-items: center;
         gap: var(--zui-space-xs);
-        height: 36px;
+        height: 34px;
         padding: var(--zui-space-xs);
         border: 1px solid var(--zui-color-border);
         border-radius: var(--zui-radius-md);
@@ -26,6 +26,13 @@ style! { pub MenubarStyle =>
     // A title on the bar. It lights up the same way whether it was reached with the pointer, with
     // the keyboard, or by its menu being open — one appearance for one state, so that walking the
     // bar with the arrow keys looks exactly like dragging along it.
+    //
+    // `:focus-visible` rather than `:focus`, and that is the difference between a bar and a bar
+    // with a title stuck down on it. A menu hands the keyboard back to the title it came from when
+    // it closes, so a menu dismissed by a press somewhere else in the window leaves the title
+    // focused — and a title lit by plain `:focus` then reads as chosen, over a menu that is gone,
+    // until something else is clicked. Reached with the keyboard it still lights, because that is
+    // exactly when the focus is visible.
     ".zui-menubar__trigger {
         display: flex;
         flex-direction: row;
@@ -42,7 +49,7 @@ style! { pub MenubarStyle =>
         font-weight: var(--zui-type-weight-medium);
     }"
     ".zui-menubar__trigger:hover,
-     .zui-menubar__trigger:focus,
+     .zui-menubar__trigger:focus-visible,
      .zui-menubar__trigger[data-state=\"open\"] {
         background-color: var(--zui-color-accent);
         color: var(--zui-color-accent-foreground);
@@ -94,7 +101,7 @@ style! { pub MenubarStyle =>
         flex-direction: row;
         align-items: center;
         gap: var(--zui-space-sm);
-        padding: calc(var(--zui-space-base) * 1.5) var(--zui-space-sm);
+        padding: var(--zui-space-base) var(--zui-space-sm);
         border: none;
         border-radius: var(--zui-radius-sm);
         background-color: transparent;
@@ -143,7 +150,7 @@ style! { pub MenubarStyle =>
         background-color: var(--zui-color-border);
     }"
     ".zui-menubar__label {
-        padding: calc(var(--zui-space-base) * 1.5) var(--zui-space-sm);
+        padding: var(--zui-space-base) var(--zui-space-sm);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);
         line-height: var(--zui-type-leading-sm);

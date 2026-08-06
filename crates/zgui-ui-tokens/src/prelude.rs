@@ -12,7 +12,7 @@
 
 pub use crate::provider::{ThemeContext, ThemeProvider, ThemeProviderProps, Themes, use_theme};
 pub use crate::scheme::ColorScheme;
-pub use crate::theme::{THEME_SHEET, Theme, theme_sheet};
+pub use crate::theme::{Preset, THEME_SHEET, Theme, theme_sheet};
 pub use crate::token::{
     ColorTokens, Declarations, MotionTokens, RadiusTokens, ScaleTokens, ShadowTokens,
     SpacingTokens, TypeTokens,

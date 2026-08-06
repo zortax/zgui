@@ -142,8 +142,8 @@ fn the_data_table_fits_the_box_it_is_given() {
 
     use zgui::geom::{DevicePx, Size};
     use zgui::platform::SurfaceEvent;
-    use zgui_ui::prelude::*;
     use zgui_ui::data_table::Column;
+    use zgui_ui::prelude::*;
 
     struct TreeGrab(Rc<RefCell<String>>);
     impl zgui::runtime::FrameProbe for TreeGrab {
@@ -332,11 +332,11 @@ fn print_the_data_section_s_layout() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use zgui::platform::SurfaceEvent;
+    use crate::section::*;
     use zgui::geom::{DevicePx, Size};
+    use zgui::platform::SurfaceEvent;
     use zgui_ui::prelude::*;
     use zgui_ui_tokens::prelude::*;
-    use crate::section::*;
 
     struct TreeGrab(Rc<RefCell<String>>);
     impl zgui::runtime::FrameProbe for TreeGrab {
@@ -486,5 +486,74 @@ fn a_dialog_cycle_leaves_the_page_where_it_stood() {
     assert_eq!(
         before.content_size, open.content_size,
         "an open dialog grew the page behind it"
+    );
+}
+
+/// A row of overlapping discs — an avatar stack — measures the width it actually occupies.
+///
+/// Each member is unshrinkable and laps the one before it by a negative margin, and that pairing is
+/// what the flex container's intrinsic main size used to be computed wrongly for: the overlap came
+/// back multiplied by the member's whole width, so the container measured at nothing and every
+/// member piled up on the first. See the `scaled_shrink_factor` note in `vendor/taffy`.
+#[test]
+fn an_overlapping_stack_measures_its_whole_width() {
+    let mut stage = Stage::open(
+        ":root { background-color: #fff; color: #111; font-family: sans-serif }
+         .row { display: flex; flex-direction: row; flex-wrap: wrap; gap: 8px }
+         .stack { display: flex; flex-direction: row }
+         .face { width: 32px; height: 32px; flex: none; background-color: #ccc }
+         .stack > .face:not(:first-child) { margin-left: -8px }",
+        || {
+            view! {
+                box(class = "row") {
+                    box(class = "stack") {
+                        box(class = "face")
+                        box(class = "face")
+                        box(class = "face")
+                        box(class = "face")
+                    }
+                    box(class = "stack") {
+                        box(class = "face")
+                        box(class = "face")
+                        box(class = "face")
+                    }
+                }
+            }
+        },
+    );
+    stage.settle();
+
+    let stacks: Vec<_> = stage
+        .census()
+        .nodes
+        .iter()
+        .filter_map(|node| node.rect)
+        .filter(|rect| (rect.size.height.0 - 32.0).abs() < 0.5 && rect.size.width.0 > 32.5)
+        .map(|rect| (rect.origin.x.0, rect.size.width.0))
+        .collect();
+
+    // Four faces lapping by eight is 4 × 32 − 3 × 8, and three of them is 3 × 32 − 2 × 8.
+    assert!(
+        stacks.iter().any(|(_, width)| (width - 104.0).abs() < 0.5),
+        "the four-deep stack measured {stacks:?} rather than 104 wide"
+    );
+    assert!(
+        stacks.iter().any(|(_, width)| (width - 80.0).abs() < 0.5),
+        "the three-deep stack measured {stacks:?} rather than 80 wide"
+    );
+    // And the two of them stand beside each other rather than one inside the other.
+    let (first, second) = (
+        stacks
+            .iter()
+            .find(|(_, width)| (width - 104.0).abs() < 0.5)
+            .expect("the four-deep stack"),
+        stacks
+            .iter()
+            .find(|(_, width)| (width - 80.0).abs() < 0.5)
+            .expect("the three-deep stack"),
+    );
+    assert!(
+        second.0 >= first.0 + first.1,
+        "the stacks overlap: one at {first:?} and the next at {second:?}"
     );
 }

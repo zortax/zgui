@@ -9,6 +9,7 @@ use zgui_ui_primitives::use_roving_item;
 use crate::navigation_menu::SHEET;
 use crate::navigation_menu::item::NavigationMenuItemContext;
 use crate::navigation_menu::style::NavigationMenuStyle;
+use crate::support::activate_on_press;
 
 /// The control that opens one section's panel.
 ///
@@ -85,6 +86,7 @@ pub fn NavigationMenuTrigger(
             node_ref = node,
             tabindex = move || item.map_or(Focus::Sequential, |item| item.tabindex().get()),
             on:focus_in = move |_| { if let Some(item) = item { item.activate() } },
+            on:pointer_down = activate_on_press(),
             on:click = on_click,
             {..own},
             {..attrs},

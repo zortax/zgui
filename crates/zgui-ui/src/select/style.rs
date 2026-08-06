@@ -13,7 +13,7 @@ style! { pub SelectStyle =>
         justify-content: space-between;
         gap: var(--zui-space-sm);
         width: fit-content;
-        height: 36px;
+        height: 34px;
         padding: 8px 12px;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-md);
@@ -29,7 +29,7 @@ style! { pub SelectStyle =>
         transition-duration: var(--zui-motion-duration-normal);
         transition-timing-function: var(--zui-motion-ease-standard);
     }"
-":scope[data-size=\"sm\"] { height: 32px; }"
+":scope[data-size=\"sm\"] { height: 30px; }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
         box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
@@ -47,7 +47,18 @@ style! { pub SelectStyle =>
 // is as true closed as open, and a mark that spins says the surface is coming from the mark.
 ".zui-select__chevron { opacity: 0.5; pointer-events: none; }"
 ".zui-select__placeholder { color: var(--zui-color-muted-foreground); }"
-".zui-select__list { padding: var(--zui-space-xs); min-width: 128px; overflow-y: auto; }"
+// A list that scrolls down does not scroll sideways. Saying so is not belt and braces: a box
+// whose `overflow-y` is `auto` and whose `overflow-x` is left at `visible` has the `visible`
+// computed to `auto` as well, so the *only* way to have one axis scroll and the other not is to
+// name the other. A group separator reaches its own padding's width past both edges on purpose —
+// which is what puts a rule right across the list rather than a line inside it — and that overhang
+// is what a sideways bar would be offering to scroll to.
+".zui-select__list {
+        padding: var(--zui-space-xs);
+        min-width: 128px;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }"
 // The tick is laid over the right-hand padding rather than taking a column of its own, so a row
 // with a tick and a row without it start their text in the same place.
 ".zui-select__item {

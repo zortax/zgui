@@ -272,3 +272,97 @@ fn reading_one_token_group_does_not_wake_a_reader_of_another() {
     assert_eq!(color_runs, 2, "the colour group's reader re-ran");
     assert_eq!(motion_runs, 1, "the motion group's reader did not");
 }
+
+#[test]
+fn writing_a_preset_into_a_slot_re_declares_that_slot_and_leaves_the_other_alone() {
+    // What a theme chooser is. The slot is a signal the application owns, and the whole of picking
+    // a theme is writing into it: no component is told, nothing remounts, and the sheet keeps its
+    // place in the cascade.
+    let window = Window::open();
+    let light = window.scope.with(|| RwSignal::new_local(Preset::Base));
+    let _view = mount(&window, move || {
+        view! {
+            // Both sets are written under `System`, which is what lets one assertion say the dark
+            // slot did not move when the light one did.
+            ThemeProvider(
+                scheme = ColorScheme::System,
+                light = Signal::derive_local(move || light.get().light())
+            ) {
+                box(class = "page")
+            }
+        }
+    });
+
+    let before = window.host.stylesheet(THEME_SHEET).expect("installed");
+    assert!(
+        before.contains("--zui-radius-base: 10px;"),
+        "the base theme's corners are not in the sheet: {before}"
+    );
+    let dark_before = Theme::dark().radius.base;
+
+    light.set(Preset::Ember);
+    window.frame();
+
+    let after = window
+        .host
+        .stylesheet(THEME_SHEET)
+        .expect("still installed");
+    assert!(
+        after.contains(&format!(
+            "--zui-radius-base: {};",
+            Preset::Ember.light().radius.base
+        )),
+        "the chosen theme's corners never reached the sheet: {after}"
+    );
+    assert!(
+        after.contains(&format!("--zui-radius-base: {dark_before};")),
+        "choosing a light theme moved the dark slot as well: {after}"
+    );
+    assert_eq!(window.host.stylesheet_count(), 1);
+}
+
+#[test]
+fn every_preset_a_chooser_can_offer_reaches_the_document() {
+    // A preset whose declarations were dropped somewhere between the enum and the sheet would look
+    // exactly like a preset that had chosen not to change anything.
+    let window = Window::open();
+    let chosen = window.scope.with(|| RwSignal::new_local(Preset::Base));
+    let _view = mount(&window, move || {
+        view! {
+            ThemeProvider(
+                scheme = ColorScheme::Light,
+                light = Signal::derive_local(move || chosen.get().light())
+            ) {
+                box(class = "page")
+            }
+        }
+    });
+
+    for preset in Preset::ALL.iter().copied() {
+        chosen.set(preset);
+        window.frame();
+        let css = window
+            .host
+            .stylesheet(THEME_SHEET)
+            .expect("still installed");
+        let theme = preset.light();
+        assert!(
+            css.contains(&format!("--zui-color-primary: {};", theme.color.primary)),
+            "{}'s primary colour never reached the sheet",
+            preset.name()
+        );
+        assert!(
+            css.contains(&format!("--zui-radius-base: {};", theme.radius.base)),
+            "{}'s corners never reached the sheet",
+            preset.name()
+        );
+        assert!(
+            css.contains(&format!(
+                "--zui-motion-duration-normal: {};",
+                theme.motion.duration_normal
+            )),
+            "{}'s motion never reached the sheet",
+            preset.name()
+        );
+    }
+}

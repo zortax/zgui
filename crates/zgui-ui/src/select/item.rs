@@ -11,6 +11,7 @@ use zgui_ui_icons::set::mark::CHECK;
 use crate::listbox::{ListboxOption, use_listbox_option};
 use crate::select::SHEET;
 use crate::select::style::SelectStyle;
+use crate::support::activate_on_press;
 
 /// One option of a [`Select`](crate::Select).
 ///
@@ -106,6 +107,7 @@ pub fn SelectItem(
     view! {
         box(
             node_ref = node,
+            on:pointer_down = activate_on_press(),
             on:click = move |_| take(),
             on:pointer_enter = move |_| {
                 if !disabled.get_untracked()

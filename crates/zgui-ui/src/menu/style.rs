@@ -30,7 +30,7 @@ style! { pub MenuStyle =>
         flex-direction: row;
         align-items: center;
         gap: var(--zui-space-sm);
-        padding: calc(var(--zui-space-base) * 1.5) var(--zui-space-sm);
+        padding: var(--zui-space-base) var(--zui-space-sm);
         border: none;
         border-radius: var(--zui-radius-sm);
         background-color: transparent;
@@ -96,7 +96,7 @@ style! { pub MenuStyle =>
     ".zui-menu__indicator--dot .zui-icon { width: 8px; height: 8px; }"
 
     ".zui-menu__label {
-        padding: calc(var(--zui-space-base) * 1.5) var(--zui-space-sm);
+        padding: var(--zui-space-base) var(--zui-space-sm);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);
         line-height: var(--zui-type-leading-sm);

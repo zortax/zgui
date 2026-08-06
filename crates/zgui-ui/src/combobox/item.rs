@@ -12,6 +12,7 @@ use crate::combobox::SHEET;
 use crate::combobox::style::ComboboxStyle;
 use crate::listbox::{Listbox, ListboxOption, use_listbox_option};
 use crate::select::{SHEET as SELECT_SHEET, SelectStyle};
+use crate::support::activate_on_press;
 
 /// One option of a [`Combobox`](crate::Combobox).
 ///
@@ -151,6 +152,7 @@ fn ComboboxOption(
     view! {
         box(
             node_ref = node,
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if let Some((listbox, id)) = registered {
                     listbox.take(id);

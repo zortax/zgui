@@ -12,7 +12,7 @@ use crate::listbox::Listbox;
 use crate::overlay::OverlayState;
 use crate::select::SHEET;
 use crate::select::style::SelectStyle;
-use crate::support::variant_attrs;
+use crate::support::{activate_on_press, variant_attrs};
 
 variants! {
     /// The axes a [`SelectTrigger`] varies along.
@@ -134,6 +134,10 @@ pub fn SelectTrigger(
             node_ref = {state.trigger()},
             class = {SelectStyle::CLASS},
             tabindex = {Focus::Sequential},
+            // The list appears under the finger that is still going down, which is what every
+            // desktop's own select does and what makes press-drag-release over an option one
+            // gesture rather than three.
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if !disabled.get_untracked() {
                     let was_open = state.is_open_untracked();

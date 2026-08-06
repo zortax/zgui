@@ -25,6 +25,8 @@ pub struct Dispatched {
     pub called: usize,
     /// Whether the framework's own behaviour should still happen.
     pub default_allowed: bool,
+    /// Whether a handler clicked the element itself, so the release must not click it again.
+    pub activation_claimed: bool,
 }
 
 /// The commands a handler issues, routed to the host that carries them out.
@@ -97,6 +99,7 @@ pub fn run(
         return Dispatched {
             called: 0,
             default_allowed: true,
+            activation_claimed: false,
         };
     };
     let target = zgui_view_dom::id::to_view(target);
@@ -134,6 +137,7 @@ pub fn run(
     Dispatched {
         called,
         default_allowed: control.default_action() == DefaultAction::Allowed,
+        activation_claimed: control.activation_claimed(),
     }
 }
 

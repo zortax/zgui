@@ -9,6 +9,7 @@ use zgui_ui_primitives::use_roving_item;
 use crate::menu::defocus_on_leave;
 use crate::menubar::style::MenubarStyle;
 use crate::menubar::{MenubarMenuContext, SHEET};
+use crate::support::activate_on_press;
 
 /// One thing that can be chosen from a [`MenubarContent`](crate::MenubarContent).
 ///
@@ -89,6 +90,7 @@ pub fn MenubarItem(
                 }
             },
             on:pointer_leave = on_leave,
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if disabled.get_untracked() {
                     return;

@@ -50,7 +50,59 @@ pub(crate) fn Row(
     }
 }
 
-/// The bar across the top: what this is, and the switch that changes the colour scheme.
+/// A chooser for one of the [`ThemeProvider`]'s two slots.
+///
+/// The whole of what it does is write a [`Preset`] into a signal. That signal is one of the
+/// provider's slots, and the provider re-declares its custom properties when it changes — so
+/// picking "Ember" here re-colours, re-rounds and re-times every component in the window without a
+/// single one of them being told, and without the other slot moving.
+#[component]
+pub(crate) fn ThemeChooser(
+    /// What the slot is called, for a reader.
+    #[prop(into)]
+    label: String,
+    /// Which preset is in it.
+    preset: RwSignal<Preset, LocalStorage>,
+    /// What the control is marked with, for a script driving the gallery.
+    testid: &'static str,
+) -> impl IntoView {
+    let name = NodeRef::new();
+    let chosen = Binding::controlled(
+        Signal::derive_local(move || preset.get().name().to_owned()),
+        move |value: String| {
+            if let Some(picked) = Preset::from_name(&value) {
+                preset.set(picked);
+            }
+        },
+    );
+
+    view! {
+        row(class = "masthead__slot") {
+            Label(node_ref = name) {{label}}
+            Select(value = chosen) {
+                SelectTrigger(
+                    size = SelectTriggerSize::Sm,
+                    labelled_by = name,
+                    attr:data-testid = testid
+                ) {
+                    SelectValue()
+                }
+                SelectContent {
+                    {Preset::ALL
+                        .iter()
+                        .copied()
+                        .map(|preset| {
+                            view! { SelectItem(value = preset.name()) {{preset.label()}} }
+                                .into_view()
+                        })
+                        .collect::<Vec<_>>()}
+                }
+            }
+        }
+    }
+}
+
+/// The bar across the top: what this is, the two theme choosers, and the scheme switch.
 ///
 /// The switch writes to the same signal the [`ThemeProvider`] reads, so flipping it replaces the
 /// custom properties every component's style sheet resolves against. Nothing in the gallery
@@ -59,6 +111,10 @@ pub(crate) fn Row(
 pub(crate) fn Masthead(
     /// Which scheme the gallery is presenting in.
     scheme: RwSignal<ColorScheme, LocalStorage>,
+    /// Which theme is in the provider's light slot.
+    light: RwSignal<Preset, LocalStorage>,
+    /// Which theme is in its dark slot.
+    dark_theme: RwSignal<Preset, LocalStorage>,
 ) -> impl IntoView {
     let name = NodeRef::new();
     let control = NodeRef::new();
@@ -83,6 +139,8 @@ pub(crate) fn Masthead(
                 }
             }
             spacer()
+            ThemeChooser(label = "Light theme", preset = light, testid = "light-theme")
+            ThemeChooser(label = "Dark theme", preset = dark_theme, testid = "dark-theme")
             Badge(variant = BadgeVariant::Secondary, attr:data-testid = "scheme-badge") {
                 {move || scheme.get().name().to_owned()}
             }
@@ -110,7 +168,8 @@ pub(crate) const SHEET: &str = zgui::css!(
 
     .page { gap: var(--zui-space-xl); padding: var(--zui-space-xl); }
 
-    .masthead { align-items: center; gap: var(--zui-space-lg); }
+    .masthead { align-items: center; gap: var(--zui-space-lg); flex-wrap: wrap; }
+    .masthead__slot { align-items: center; gap: var(--zui-space-sm); }
     .masthead__text { gap: var(--zui-space-xs); }
     .masthead__title { font-size: var(--zui-type-size-2xl); font-weight: 700; }
     .masthead__note { font-size: var(--zui-type-size-sm); color: var(--zui-color-muted-foreground); }

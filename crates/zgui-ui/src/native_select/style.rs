@@ -12,7 +12,7 @@ style! { pub NativeSelectStyle =>
         align-items: center;
         width: fit-content;
         min-width: 0;
-        height: 36px;
+        height: 34px;
         padding: 8px 36px 8px 12px;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-md);
@@ -28,7 +28,7 @@ style! { pub NativeSelectStyle =>
         transition-duration: var(--zui-motion-duration-normal);
         transition-timing-function: var(--zui-motion-ease-standard);
     }"
-":scope[data-size=\"sm\"] { height: 32px; padding-top: 4px; padding-bottom: 4px; }"
+":scope[data-size=\"sm\"] { height: 30px; padding-top: 4px; padding-bottom: 4px; }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
         box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
@@ -56,7 +56,13 @@ style! { pub NativeSelectStyle =>
         pointer-events: none;
         user-select: none;
     }"
-".zui-native-select__list { padding: var(--zui-space-xs); min-width: 128px; overflow-y: auto; }"
+// Down and not sideways, for the reason the select's own list gives.
+".zui-native-select__list {
+        padding: var(--zui-space-xs);
+        min-width: 128px;
+        overflow-x: hidden;
+        overflow-y: auto;
+    }"
 // The rows are the select's rows, under this component's own names: the two lists have to look
 // like the same control, because to the person choosing they are.
 ".zui-native-select__option {

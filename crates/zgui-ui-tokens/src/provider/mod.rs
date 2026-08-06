@@ -58,11 +58,18 @@ pub use crate::provider::context::{ThemeContext, Themes, ThemesStoreFields, use_
 #[component]
 pub fn ThemeProvider(
     /// The tokens in force on a light surface. The framework's own when this is left out.
-    #[prop(optional, into)]
-    light: Option<crate::Theme>,
+    ///
+    /// A value or a signal. Handing it a signal is what makes the slot *switchable*: writing a
+    /// different theme into it re-declares the sheet and the whole window follows, with nothing
+    /// remounted and no component told.
+    #[prop(into, default = Signal::stored_local(crate::Theme::light()))]
+    light: Signal<crate::Theme, zgui::reactive::LocalStorage>,
     /// The tokens in force on a dark surface. The framework's own when this is left out.
-    #[prop(optional, into)]
-    dark: Option<crate::Theme>,
+    ///
+    /// Switchable in the same way, and independently: an interface can be one theme on a light
+    /// desktop and another on a dark one.
+    #[prop(into, default = Signal::stored_local(crate::Theme::dark()))]
+    dark: Signal<crate::Theme, zgui::reactive::LocalStorage>,
     /// Which scheme to present in. Defaults to whichever the desktop asked for.
     #[prop(into, default = Signal::stored_local(ColorScheme::System))]
     scheme: Signal<ColorScheme, zgui::reactive::LocalStorage>,
@@ -92,10 +99,28 @@ pub fn ThemeProvider(
     };
 
     let themes = Store::new(Themes {
-        light: light.unwrap_or_else(crate::Theme::light),
-        dark: dark.unwrap_or_else(crate::Theme::dark),
+        light: light.get_untracked(),
+        dark: dark.get_untracked(),
     });
     provide_local_context(ThemeContext::new(themes, scheme, Rc::clone(&selector)));
+
+    // The two slots are props and the store is what everything below reads, so one has to follow
+    // the other. This way round rather than the reverse: a caller that hands in a signal owns what
+    // is in its slot, and the store is this provider's published copy of it. Patching wakes only
+    // the token groups that actually differ, so swapping a theme for one that shares its motion
+    // does not wake anything reading the motion.
+    let following = RenderEffect::new(move |previous: Option<()>| {
+        let next = Themes {
+            light: light.get(),
+            dark: dark.get(),
+        };
+        // The store was seeded from these above; patching on the first run would be a second write
+        // of what it already holds.
+        if previous.is_some() {
+            use zgui::reactive::Patch as _;
+            themes.patch(next);
+        }
+    });
 
     // The sheet is a guard rather than a name, because its content is state: it stops being true
     // when this provider goes away, and the guard holds the engine it has to be removed from
@@ -131,9 +156,12 @@ pub fn ThemeProvider(
             }
         })
     };
-    // Both live exactly as long as this component: the cleanup owns the effect's handle and the
-    // sheet's guard, and the sheet goes when the provider does.
-    on_cleanup_local(move || drop(installed));
+    // All three live exactly as long as this component: the cleanup owns both effects' handles and
+    // the sheet's guard, and the sheet goes when the provider does.
+    on_cleanup_local(move || {
+        drop(following);
+        drop(installed);
+    });
 
     // `display: contents` because a theme is not a box. The element exists so that a nested
     // provider has something to declare its tokens on, and so that a style sheet can find a themed

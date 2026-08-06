@@ -27,8 +27,8 @@ style! { pub InputOtpStyle =>
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 36px;
-        height: 36px;
+        width: 34px;
+        height: 34px;
         border: 1px solid var(--zui-color-input);
         border-left-width: 0;
         background-color: var(--zui-color-control-field);

@@ -21,6 +21,8 @@ pub struct EventControl {
     propagation: Cell<Propagation>,
     /// Whether the framework's own behaviour should still happen.
     default_action: Cell<DefaultAction>,
+    /// Whether a handler activated the element itself, on the press.
+    activation_claimed: Cell<bool>,
 }
 
 impl EventControl {
@@ -37,6 +39,11 @@ impl EventControl {
     /// Whether the framework's own behaviour should still happen.
     pub fn default_action(&self) -> DefaultAction {
         self.default_action.get()
+    }
+
+    /// Whether a handler took the activation for itself, which the release must not repeat.
+    pub fn activation_claimed(&self) -> bool {
+        self.activation_claimed.get()
     }
 }
 
@@ -185,6 +192,31 @@ impl<'a, E: EventView> EventCx<'a, E> {
     pub fn synthesize<T: EventType>(&mut self, event: T) {
         let node = self.current;
         self.sink.synthesize(node, event.kind());
+    }
+
+    /// Clicks the current node now, and stops the release from clicking it again.
+    ///
+    /// Activation belongs to the release by default — press and let go over the same element — and
+    /// that is right for a button, where sliding off before letting go is how somebody changes
+    /// their mind. It is wrong for a control whose whole answer is "the moment the button goes
+    /// down": a menu, a select, a switch. Those call this from their `pointer_down` handler and
+    /// write nothing else.
+    ///
+    /// What it does *not* change is where the behaviour lives. The element is clicked through the
+    /// ordinary path, so the control's own `click` handler is still the one place that says what
+    /// activating it means — and a keyboard's Enter, or an assistive technology's default action,
+    /// reaches that same handler, because both of those are a click and neither is a press.
+    ///
+    /// ```no_run
+    /// # use zgui_view::{EventCx, events};
+    /// # fn example(ev: &mut EventCx<'_, events::PointerDown>) {
+    /// ev.activate_now();
+    /// # }
+    /// ```
+    pub fn activate_now(&mut self) {
+        self.control.activation_claimed.set(true);
+        let node = self.current;
+        self.sink.synthesize(node, EventKind::Click);
     }
 
     /// Re-types this context for a different view of the same payload.

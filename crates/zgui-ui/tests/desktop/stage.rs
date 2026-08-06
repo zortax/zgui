@@ -190,10 +190,43 @@ impl Stage {
 
     /// Presses and releases the primary button where the pointer is.
     pub fn press_release(&mut self) {
+        self.press();
+        self.release();
+    }
+
+    /// Puts the primary button down where the pointer is, and leaves it down.
+    pub fn press(&mut self) {
         let position = self.pointer;
-        let button = Some(PointerButton::Primary);
-        self.deliver(pointer(PointerAction::Pressed, position, button));
-        self.deliver(pointer(PointerAction::Released, position, button));
+        self.deliver(pointer(
+            PointerAction::Pressed,
+            position,
+            Some(PointerButton::Primary),
+        ));
+    }
+
+    /// Lets the primary button up where the pointer is.
+    pub fn release(&mut self) {
+        let position = self.pointer;
+        self.deliver(pointer(
+            PointerAction::Released,
+            position,
+            Some(PointerButton::Primary),
+        ));
+    }
+
+    /// Puts the button down over the middle of the control that says `text`, and leaves it down.
+    ///
+    /// # Panics
+    ///
+    /// Panics when nothing in the document says it, for the reason [`Self::click_saying`] does.
+    pub fn press_saying(&mut self, text: &str) {
+        let at = self
+            .census()
+            .control(text)
+            .and_then(|node| node.centre())
+            .unwrap_or_else(|| panic!("nothing laid out says {text:?} to press"));
+        self.move_to(at);
+        self.press();
     }
 
     /// Moves to `at` and clicks there, exactly as a mouse does.

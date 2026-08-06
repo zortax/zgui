@@ -24,7 +24,7 @@ style! { pub InputStyle =>
         flex-direction: row;
         align-items: center;
         overflow: hidden;
-        height: 36px;
+        height: 34px;
         width: 100%;
         min-width: 0;
         padding: 4px 12px;

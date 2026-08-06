@@ -123,7 +123,7 @@ style! { pub CalendarStyle =>
         border-radius: var(--zui-radius-md);
         font-size: var(--zui-type-size-sm);
         font-weight: var(--zui-type-weight-normal);
-        line-height: 1;
+        line-height: var(--zui-type-leading-sm);
         transition: background-color var(--zui-motion-duration-normal) var(--zui-motion-ease-standard),
                     color var(--zui-motion-duration-normal) var(--zui-motion-ease-standard);
     }"

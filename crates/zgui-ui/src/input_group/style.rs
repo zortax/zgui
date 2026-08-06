@@ -15,7 +15,7 @@ style! { pub InputGroupStyle =>
         display: flex;
         width: 100%;
         min-width: 0;
-        min-height: 36px;
+        min-height: 34px;
         align-items: center;
         flex-wrap: wrap;
         border: 1px solid var(--zui-color-input);
@@ -137,7 +137,7 @@ style! { pub InputGroupPartStyle =>
         --zui-icon-md: 14px;
     }"
 ".zui-button.zui-input-group__button[data-size=\"sm\"] {
-        height: 32px;
+        height: 30px;
         gap: calc(var(--zui-space-base) * 1.5);
         padding: 0 10px;
         border-radius: var(--zui-radius-md);
@@ -150,8 +150,8 @@ style! { pub InputGroupPartStyle =>
         --zui-icon-md: 14px;
     }"
 ".zui-button.zui-input-group__button[data-size=\"icon-sm\"] {
-        width: 32px;
-        height: 32px;
+        width: 30px;
+        height: 30px;
         padding: 0;
         border-radius: var(--zui-radius-md);
     }"

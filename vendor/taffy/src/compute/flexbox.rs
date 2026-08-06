@@ -942,6 +942,32 @@ fn collect_flex_lines<'a>(
     }
 }
 
+/// zgui local patch: the scaled flex shrink factor an item's intrinsic contribution is expressed in.
+///
+/// [§9.9.3](https://www.w3.org/TR/css-flexbox-1/#intrinsic-main-sizes) computes a container's
+/// intrinsic main size by dividing each item's shortfall — the difference between its content
+/// contribution and its flex base size — by this, taking the largest fraction on the line, and then
+/// multiplying it back out. The two halves have to name the *same* number: a round trip through a
+/// divisor and a different multiplier does not return what went in.
+///
+/// Upstream divided by `max(1, shrink x basis)` and multiplied by `max(1, shrink) x basis`, which
+/// agree only once `shrink` is at least one. The case that falls through the gap is an item with
+/// `flex-shrink: 0` and a negative margin — an overlapping stack of avatars, a button pulling its
+/// icon out of its own padding. There the shortfall is divided by one and multiplied by the item's
+/// whole flex base size, so eight pixels of overlap come back as eight times the item's width, and
+/// the container measures its content at a fraction of it or at nothing at all.
+///
+/// The spec's own wording is the multiplier: "divide by its scaled flex shrink factor having floored
+/// the flex shrink factor at 1". The product is floored at one as well, so a base size below one
+/// pixel cannot turn the division into an infinity.
+///
+/// `an_overlapping_stack_measures_its_whole_width` in `crates/zgui-ui/tests/cycle_scroll.rs` holds
+/// the workspace to it.
+#[inline]
+fn scaled_shrink_factor(item: &FlexItem) -> f32 {
+    f32_max(1.0, f32_max(1.0, item.flex_shrink) * item.inner_flex_basis)
+}
+
 /// Determine the container's main size (if not already known)
 fn determine_container_main_size(
     tree: &mut impl LayoutFlexboxContainer,
@@ -1114,8 +1140,9 @@ fn determine_container_main_size(
                             if diff > 0.0 {
                                 diff / f32_max(1.0, item.flex_grow)
                             } else if diff < 0.0 {
-                                let scaled_shrink_factor = f32_max(1.0, item.flex_shrink * item.inner_flex_basis);
-                                diff / scaled_shrink_factor
+                                // zgui local patch: the same scaled shrink factor the contribution
+                                // below is multiplied by. See `scaled_shrink_factor`.
+                                diff / scaled_shrink_factor(item)
                             } else {
                                 // We are assuming that diff is 0.0 here and that we haven't accidentally introduced a NaN
                                 0.0
@@ -1150,8 +1177,9 @@ fn determine_container_main_size(
                             let flex_contribution = if item.content_flex_fraction > 0.0 {
                                 f32_max(1.0, item.flex_grow) * flex_fraction
                             } else if item.content_flex_fraction < 0.0 {
-                                let scaled_shrink_factor = f32_max(1.0, item.flex_shrink) * item.inner_flex_basis;
-                                scaled_shrink_factor * flex_fraction
+                                // zgui local patch: the same scaled shrink factor the fraction
+                                // above was divided by. See `scaled_shrink_factor`.
+                                scaled_shrink_factor(item) * flex_fraction
                             } else {
                                 0.0
                             };

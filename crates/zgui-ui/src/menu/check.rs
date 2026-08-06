@@ -13,6 +13,7 @@ use crate::menu::content::MenuSurface;
 use crate::menu::item::defocus_on_leave;
 use crate::menu::style::MenuStyle;
 use crate::menu::{MenuContext, SHEET};
+use crate::support::activate_on_press;
 
 /// A menu item that is on or off.
 ///
@@ -105,6 +106,7 @@ pub fn MenuCheckboxItem(
         control(
             node_ref = node,
             tabindex = move || item.map_or(Focus::Sequential, |item| item.tabindex().get()),
+            on:pointer_down = activate_on_press(),
             on:click = move |_| select(),
             on:pointer_enter = move |_| {
                 if !disabled.get_untracked() {
@@ -320,6 +322,7 @@ pub fn MenuRadioItem(
         control(
             node_ref = node,
             tabindex = move || item.map_or(Focus::Sequential, |item| item.tabindex().get()),
+            on:pointer_down = activate_on_press(),
             on:click = move |_| select(),
             on:pointer_enter = move |_| {
                 if !disabled.get_untracked() {

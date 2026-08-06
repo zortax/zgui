@@ -45,7 +45,9 @@ pub(super) fn offset(entries: &[Queued], index: usize) -> f32 {
 pub(super) fn extent(entries: &[Queued], held: bool) -> f32 {
     let staying = entries.iter().filter(|entry| !entry.is_leaving());
     if held {
-        staying.map(Queued::height).fold(0.0, |total, height| total + height)
+        staying
+            .map(Queued::height)
+            .fold(0.0, |total, height| total + height)
     } else {
         let mut cards = staying;
         let front = cards.next().map_or(0.0, Queued::height);

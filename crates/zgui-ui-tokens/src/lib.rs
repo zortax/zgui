@@ -72,12 +72,36 @@
 //! reasons in [`token::color`], and re-tinting an interface is the handful of declarations listed
 //! there.
 //!
+//! # A whole theme, and the two slots it goes in
+//!
+//! The same declarations become a *value* — something switchable at run time — by going through
+//! [`Theme::with_css`] instead of through a style sheet:
+//!
+//! ```
+//! use zgui_ui_tokens::Theme;
+//!
+//! let dusk = Theme::dark().with_css(
+//!     "--zui-color-primary: oklch(0.7 0.17 295);
+//!      --zui-radius-base: 20px;
+//!      --zui-motion-duration-normal: 240ms;",
+//! );
+//! assert_eq!(dusk.radius.base, "20px");
+//! ```
+//!
+//! [`ThemeProvider`] has two slots — one theme for a light surface and one for a dark — and each
+//! takes a signal, so an application offers a *choice* of themes by writing into one. Which slot is
+//! in force is still the [`ColorScheme`]'s business and nothing to do with the theme in it.
+//!
+//! [`Preset`] is the handful this library ships, each of them exactly the call above with its own
+//! text. `examples/gallery` puts one chooser per slot beside its light/dark switch, which is the
+//! whole of what wiring this up takes.
+//!
 //! # What lives where
 //!
 //! | Module | Contents |
 //! |---|---|
 //! | [`token`] | the seven token groups, and [`Declarations`] |
-//! | [`theme`] | [`Theme`], and [`theme_sheet`] — a theme as the text of a style sheet |
+//! | [`theme`] | [`Theme`], [`Preset`], and [`theme_sheet`] — a theme as the text of a style sheet |
 //! | [`scheme`] | [`ColorScheme`] |
 //! | [`provider`] | [`ThemeProvider`], [`ThemeContext`] and [`use_theme`] |
 //! | [`prelude`] | all of the above, in one import |
@@ -95,7 +119,7 @@ pub use crate::provider::{
     ThemeContext, ThemeProvider, ThemeProviderProps, Themes, ThemesStoreFields, use_theme,
 };
 pub use crate::scheme::ColorScheme;
-pub use crate::theme::{THEME_SHEET, Theme, ThemeStoreFields, theme_sheet};
+pub use crate::theme::{Preset, THEME_SHEET, Theme, ThemeStoreFields, theme_sheet};
 pub use crate::token::{
     ColorTokens, ControlTokens, Declarations, MotionTokens, RadiusTokens, ScaleTokens,
     ShadowTokens, SpacingTokens, TypeTokens,

@@ -17,7 +17,7 @@ style! { pub DatePickerStyle =>
         justify-content: space-between;
         gap: var(--zui-space-sm);
         width: 192px;
-        height: 36px;
+        height: 34px;
         padding: 0 var(--zui-space-md);
         border: 1px solid var(--zui-color-border);
         border-radius: var(--zui-radius-md);

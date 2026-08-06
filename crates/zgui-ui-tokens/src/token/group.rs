@@ -79,6 +79,23 @@ macro_rules! group {
                     self.$field.as_str(),
                 ), )+ ]
             }
+
+            /// Sets the token written as `property`, and answers whether this group has one.
+            ///
+            /// The half of the schema that lets a theme be *read* rather than only written:
+            /// [`declare`](Self::declare) turns a group into declarations, and this turns a
+            /// declaration back into a token. What it is for is a theme somebody authored as CSS.
+            pub fn set(&mut self, property: &str, value: &str) -> bool {
+                match property {
+                    $(
+                        ::core::concat!("--zui-", $prefix, "-", $property) => {
+                            self.$field = ::std::string::String::from(value);
+                            true
+                        }
+                    )+
+                    _ => false,
+                }
+            }
         }
 
         impl ::core::default::Default for $name {

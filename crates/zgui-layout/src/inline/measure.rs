@@ -70,6 +70,20 @@ impl Ask {
     }
 }
 
+/// How far past its width a line may reach and still be treated as fitting, in device pixels.
+///
+/// A box is very often sized to hold exactly one line: its width *is* the paragraph's max-content
+/// width plus its own padding and border. Handing the paragraph back the space inside that box means
+/// adding those insets and taking them off again, and in binary floating point the round trip does
+/// not always land where it started — a shortfall of a millionth of a pixel is enough. Whether it
+/// does depends on the display's scale, because that is what makes the numbers fractional at all,
+/// which is why a row that reads as one line at 1.0 and at 1.5 breaks in two at 1.2.
+///
+/// So a line that overflows by less than a sixty-fourth of a device pixel is a line that fits. The
+/// figure is not tuned to the arithmetic: it is the layout unit a browser rounds everything to, well
+/// under anything a raster can show and orders of magnitude over the error being absorbed.
+const BREAK_TOLERANCE: f32 = 1.0 / 64.0;
+
 /// Which inline-axis question is being asked.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Constraint {
@@ -126,7 +140,7 @@ pub(crate) fn compute<C: MeasureContent>(
     }
 
     let max_advance = match ask.constraint() {
-        Constraint::Definite(width) => Some(CssPx(width)),
+        Constraint::Definite(width) => Some(CssPx(width + BREAK_TOLERANCE)),
         Constraint::MinContent => Some(summary.widths.min),
         Constraint::MaxContent => None,
     };

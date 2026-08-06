@@ -3,12 +3,16 @@
 use zgui::style;
 
 style! { pub AvatarStyle =>
+    // The circle is not cut out of the avatar. Cropping the picture is the picture's own business
+    // — it is the only child that is square and has to be made round — and an `overflow: hidden`
+    // here would take the badge with it: a mark pinned to the bottom corner of a disc lies mostly
+    // *outside* that disc, so the avatar would clip away the half of it that is the whole point,
+    // along with the ring that separates it from what is behind.
     ":scope {
         position: relative;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        overflow: hidden;
         flex: none;
         width: 32px;
         height: 32px;
@@ -30,6 +34,7 @@ style! { pub AvatarStyle =>
         width: 100%;
         height: 100%;
         aspect-ratio: 1;
+        border-radius: var(--zui-radius-full);
         object-fit: cover;
     }"
     // A picture that failed to load is taken out of the flow rather than left as a broken box, and

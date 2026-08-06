@@ -1,5 +1,7 @@
 //! The whole token schema, in one value.
 
+mod css;
+mod preset;
 mod sheet;
 
 use zgui::reactive::store::reactive_stores;
@@ -10,6 +12,7 @@ use crate::token::{
     SpacingTokens, TypeTokens,
 };
 
+pub use crate::theme::preset::Preset;
 pub use crate::theme::sheet::{THEME_SHEET, theme_sheet};
 
 /// Everything an interface's appearance is decided by, in one value.
@@ -108,6 +111,64 @@ impl Theme {
         names.extend_from_slice(ShadowTokens::PROPERTIES);
         names.extend_from_slice(MotionTokens::PROPERTIES);
         names
+    }
+
+    /// Sets one token by the custom property it is written as, and answers whether it exists.
+    ///
+    /// The inverse of [`declare`](Self::declare), one token at a time.
+    pub fn set(&mut self, property: &str, value: &str) -> bool {
+        self.scale.set(property, value)
+            || self.color.set(property, value)
+            || self.control.set(property, value)
+            || self.space.set(property, value)
+            || self.radius.set(property, value)
+            || self.typography.set(property, value)
+            || self.shadow.set(property, value)
+            || self.motion.set(property, value)
+    }
+
+    /// Lays a block of custom-property declarations over this theme, and hands it back.
+    ///
+    /// A theme is a set of CSS values, so the pleasant way to write one is as CSS — the same text
+    /// that would go in a style sheet, without having to know which Rust field holds which
+    /// property:
+    ///
+    /// ```
+    /// use zgui_ui_tokens::Theme;
+    ///
+    /// let warm = Theme::light().with_css(
+    ///     "--zui-color-primary: oklch(0.62 0.18 40);
+    ///      --zui-radius-base: 4px;
+    ///      --zui-motion-duration-normal: 90ms;",
+    /// );
+    /// assert_eq!(warm.radius.base, "4px");
+    /// ```
+    ///
+    /// Writing the same declarations in an application's own style sheet does the same thing to a
+    /// whole window, and needs none of this. Coming through the theme is what makes it a *value*:
+    /// something a provider can hold in one of its two slots, that a second provider can put a
+    /// different one of in its own subtree, and that a control can switch between at run time.
+    ///
+    /// # What it does with what it cannot use
+    ///
+    /// Ignores it, declaration by declaration, exactly as a style sheet does — a name this schema
+    /// has never heard of leaves the rest of the block standing. `/* comments */` are skipped, a
+    /// wrapping `:root { … }` or `.theme { … }` is tolerated, and a trailing semicolon is optional.
+    #[must_use]
+    pub fn with_css(mut self, declarations: &str) -> Self {
+        self.apply_css(declarations);
+        self
+    }
+
+    /// The same, in place, answering how many declarations named a token this schema has.
+    pub fn apply_css(&mut self, declarations: &str) -> usize {
+        let mut applied = 0;
+        for declaration in crate::theme::css::declarations(declarations) {
+            if self.set(declaration.property, declaration.value) {
+                applied += 1;
+            }
+        }
+        applied
     }
 
     /// Writes every token in the theme as a custom-property declaration.

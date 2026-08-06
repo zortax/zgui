@@ -2,7 +2,7 @@
 
 ## taffy 0.12.2
 
-An unmodified copy of the published `taffy 0.12.2`, carrying two local changes.
+An unmodified copy of the published `taffy 0.12.2`, carrying three local changes.
 
 ### Fixed-position content size (`CoreStyle::is_fixed_position`)
 
@@ -30,6 +30,22 @@ value other than `flex-start` moved every item by the absorbed space a second ti
 the container's edge, and a page with a phantom horizontal scrollbar behind them. The
 `an_end_justified_row_keeps_its_items_inside` fixture in `crates/zgui-ui/tests/cycle_scroll.rs`
 holds the workspace to the fixed behaviour.
+
+### The scaled flex shrink factor, in intrinsic main sizes
+
+One local fix in `src/compute/flexbox.rs` (`scaled_shrink_factor`, marked `zgui local patch`):
+
+[§9.9.3](https://www.w3.org/TR/css-flexbox-1/#intrinsic-main-sizes) sizes a flex container to its
+content by dividing each item's shortfall — its content contribution less its flex base size — by a
+scaled shrink factor, taking the largest fraction on the line, and multiplying it back out. Upstream
+divided by `max(1, shrink × basis)` and multiplied by `max(1, shrink) × basis`; the two agree only
+once `flex-shrink` is at least one, and the spec's wording ("divide by its scaled flex shrink factor
+having floored the flex shrink factor at 1") is the multiplier. An item with `flex-shrink: 0` and a
+negative margin — an overlapping stack of avatars, a button pulling its mark out of its own padding
+— therefore had its overlap come back multiplied by its whole width, and the container measured at a
+fraction of its content or at nothing. Both halves now name one function, floored at one pixel so a
+sub-pixel base size cannot divide by zero. The `an_overlapping_stack_measures_its_whole_width`
+fixture in `crates/zgui-ui/tests/cycle_scroll.rs` holds the workspace to it.
 
 The copy is consumed as a **path dependency** in the workspace `Cargo.toml`, not through
 `[patch.crates-io]`: a patch section only takes effect in the root manifest of the workspace being

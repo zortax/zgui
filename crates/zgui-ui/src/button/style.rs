@@ -14,7 +14,7 @@ style! { pub ButtonStyle =>
         align-items: center;
         justify-content: center;
         gap: var(--zui-space-sm);
-        height: 36px;
+        height: 34px;
         padding: 0 var(--zui-space-lg);
         border: 1px solid transparent;
         border-radius: var(--zui-radius-md);
@@ -49,20 +49,20 @@ style! { pub ButtonStyle =>
         --zui-icon-md: 12px;
     }"
 ":scope[data-size=\"sm\"] {
-        height: 32px;
+        height: 30px;
         gap: calc(var(--zui-space-base) * 1.5);
         padding: 0 var(--zui-space-md);
     }"
-":scope[data-size=\"lg\"] { height: 40px; padding: 0 var(--zui-space-xl); }"
-":scope[data-size=\"icon\"] { width: 36px; height: 36px; padding: 0; }"
+":scope[data-size=\"lg\"] { height: 38px; padding: 0 var(--zui-space-xl); }"
+":scope[data-size=\"icon\"] { width: 34px; height: 34px; padding: 0; }"
 ":scope[data-size=\"icon-xs\"] {
         width: 24px;
         height: 24px;
         padding: 0;
         --zui-icon-md: 12px;
     }"
-":scope[data-size=\"icon-sm\"] { width: 32px; height: 32px; padding: 0; }"
-":scope[data-size=\"icon-lg\"] { width: 40px; height: 40px; padding: 0; }"
+":scope[data-size=\"icon-sm\"] { width: 30px; height: 30px; padding: 0; }"
+":scope[data-size=\"icon-lg\"] { width: 38px; height: 38px; padding: 0; }"
 
 // # A mark at one end sits closer to the edge than a word does
 //
@@ -79,47 +79,33 @@ style! { pub ButtonStyle =>
 //
 // It applies only at the sizes that hold a word beside the mark. The `icon` sizes are square
 // and have no padding to pull out of.
-//
-// Each of these also returns the mark's `flex-shrink` to one, undoing the `flex: none` the mark
-// carries everywhere else. That pairing is what the layout engine currently cannot measure: a
-// flex item holding both an unshrinkable factor and a negative margin collapses the container's
-// max-content width to a fraction of its content, and the button comes out square with the word
-// spilling over its edge. A shrink factor of one is safe to give back here because a button never
-// lays out below its max-content width — it is `flex-shrink: 0` itself and its label never wraps
-// — so the factor exists only to keep the measurement on the sound path.
 ":scope[data-size=\"md\"] > .zui-icon:first-child,
      :scope[data-size=\"md\"] > .zui-spinner:first-child {
         margin-inline-start: calc(var(--zui-space-base) * -1);
-        flex-shrink: 1;
     }"
 ":scope[data-size=\"md\"] > .zui-icon:last-child,
      :scope[data-size=\"md\"] > .zui-spinner:last-child {
         margin-inline-end: calc(var(--zui-space-base) * -1);
-        flex-shrink: 1;
     }"
 ":scope[data-size=\"xs\"] > .zui-icon:first-child,
      :scope[data-size=\"xs\"] > .zui-spinner:first-child,
      :scope[data-size=\"sm\"] > .zui-icon:first-child,
      :scope[data-size=\"sm\"] > .zui-spinner:first-child {
         margin-inline-start: calc(var(--zui-space-base) * -0.5);
-        flex-shrink: 1;
     }"
 ":scope[data-size=\"xs\"] > .zui-icon:last-child,
      :scope[data-size=\"xs\"] > .zui-spinner:last-child,
      :scope[data-size=\"sm\"] > .zui-icon:last-child,
      :scope[data-size=\"sm\"] > .zui-spinner:last-child {
         margin-inline-end: calc(var(--zui-space-base) * -0.5);
-        flex-shrink: 1;
     }"
 ":scope[data-size=\"lg\"] > .zui-icon:first-child,
      :scope[data-size=\"lg\"] > .zui-spinner:first-child {
         margin-inline-start: calc(var(--zui-space-base) * -2);
-        flex-shrink: 1;
     }"
 ":scope[data-size=\"lg\"] > .zui-icon:last-child,
      :scope[data-size=\"lg\"] > .zui-spinner:last-child {
         margin-inline-end: calc(var(--zui-space-base) * -2);
-        flex-shrink: 1;
     }"
 
 ":scope[data-variant=\"default\"] {

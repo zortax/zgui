@@ -320,6 +320,16 @@ impl Router {
         moved
     }
 
+    /// Forgets which element one pointer was pressed on, leaving `:active` and the capture alone.
+    ///
+    /// What a handler that activated its element on the press asks for. Activation is a property of
+    /// the release — press and let go over the same element — and a control that has already acted
+    /// needs the release that ends its own press to mean nothing. The press itself is still a press:
+    /// the element stays lit while the button is down, and a drag that started on it still runs.
+    pub fn forget_press(&mut self, pointer: zgui_vocab::PointerId) {
+        self.pressed.retain(|(id, _)| *id != pointer);
+    }
+
     /// Forgets everything about an element that has gone.
     ///
     /// Without this, an element removed while it held the pointer keeps every later event aimed at

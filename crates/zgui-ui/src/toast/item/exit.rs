@@ -118,14 +118,12 @@ impl Departure {
             // the row at once and the exit was never seen. What this check exists for — an exit
             // with no animation at all — is served just as well fifty milliseconds later.
             let deferred = departure.clone();
-            *departure.pending.borrow_mut() = Some(clock.set_timeout(
-                Duration::from_millis(50),
-                move || {
+            *departure.pending.borrow_mut() =
+                Some(clock.set_timeout(Duration::from_millis(50), move || {
                     // Cleared before the ask, because a pending check is what the ask refuses on.
                     deferred.pending.borrow_mut().take();
                     deferred.settle();
-                },
-            ));
+                }));
             // And the deadline, which is what makes a dismissal that has been asked for happen
             // whatever the animations do.
             let overdue = departure.clone();

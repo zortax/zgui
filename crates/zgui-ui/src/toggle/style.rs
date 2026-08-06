@@ -10,8 +10,8 @@ style! { pub ToggleStyle =>
         align-items: center;
         justify-content: center;
         gap: var(--zui-space-sm);
-        height: 36px;
-        min-width: 36px;
+        height: 34px;
+        min-width: 34px;
         padding: 0 var(--zui-space-sm);
         border: 1px solid transparent;
         border-radius: var(--zui-radius-md);
@@ -29,13 +29,13 @@ style! { pub ToggleStyle =>
     ":scope .zui-icon { pointer-events: none; flex: none; }"
 
     ":scope[data-size=\"sm\"] {
-        height: 32px;
-        min-width: 32px;
+        height: 30px;
+        min-width: 30px;
         padding: 0 calc(var(--zui-space-base) * 1.5);
     }"
     ":scope[data-size=\"lg\"] {
-        height: 40px;
-        min-width: 40px;
+        height: 38px;
+        min-width: 38px;
         padding: 0 calc(var(--zui-space-base) * 2.5);
     }"
 

@@ -19,7 +19,7 @@ use zgui_ui_primitives::{Align, Binding, Placement, Side};
 
 use crate::listbox::{Listbox, ListboxCatalogueOfProps, ListboxOption};
 use crate::overlay::{AnchoredSurfaceProps, OverlayState};
-use crate::support::variant_attrs;
+use crate::support::{activate_on_press, variant_attrs};
 
 /// What the chooser's rules are installed under.
 pub(crate) const SHEET: &str = "zui-native-select";
@@ -258,6 +258,7 @@ pub fn NativeSelect(
             node_ref = element,
             class = NativeSelectStyle::CLASS,
             tabindex = {Focus::Sequential},
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if !disabled.get_untracked() {
                     let was_open = surface.is_open_untracked();

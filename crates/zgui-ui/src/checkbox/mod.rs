@@ -14,6 +14,8 @@ use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::mark::{CHECK, MINUS};
 use zgui_ui_primitives::{Binding, Controllable};
 
+use crate::support::activate_on_press;
+
 /// What the checkbox's rules are installed under.
 const SHEET: &str = "zui-checkbox";
 
@@ -128,6 +130,7 @@ pub fn Checkbox(
             node_ref = element,
             class = CheckboxStyle::CLASS,
             tabindex = {Focus::Sequential},
+            on:pointer_down = activate_on_press(),
             on:click = move |_| {
                 if !disabled.get_untracked() {
                     value.set(value.get_untracked().toggled());

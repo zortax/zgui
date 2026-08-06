@@ -32,6 +32,7 @@ mod painted;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use zgui::geom::{Device, DevicePx, Point};
 use zgui::prelude::UnsyncCallback;
@@ -426,5 +427,155 @@ fn dragging_a_slider_carries_its_value_with_the_pointer() {
         answers.slid.get(),
         dragged,
         "releasing the pointer moved the value again"
+    );
+}
+
+// ---- what stays lit after a surface is dismissed --------------------------------------------
+
+/// A menubar with one menu on it, and somewhere else on the page to press.
+fn menubar() -> impl Fn() -> AnyView {
+    || {
+        AnyView::new(view! {
+            ThemeProvider {
+                column(class = "page") {
+                    Menubar {
+                        MenubarMenu(value = "file") {
+                            MenubarTrigger {"File"}
+                            MenubarContent {MenubarItem {"New window"}}
+                        }
+                    }
+                    text {"elsewhere"}
+                }
+            }
+        })
+    }
+}
+
+/// The control saying `text`, rather than the text node inside it.
+///
+/// A box's text is everything under it, so a title on a bar and the glyphs in it both say the same
+/// word. The glyphs are the deepest of them and the control is the one above — which is what has to
+/// be measured here, because the fill being asked about is the control's and not the text's.
+fn control_saying(stage: &Stage, text: &str) -> NodeId {
+    let mut saying: Vec<_> = stage
+        .census()
+        .nodes
+        .iter()
+        .filter(|node| node.text == text && node.area() > 0.0)
+        .map(|node| (node.depth, node.id))
+        .collect();
+    saying.sort_unstable();
+    let (_, id) = saying[saying.len().saturating_sub(2)];
+    id
+}
+
+#[test]
+fn a_menubar_title_goes_out_again_when_its_menu_is_dismissed_from_elsewhere() {
+    // A menu hands the keyboard back to the title it came from as it closes, so after a press
+    // somewhere else in the window the title is the focused element with no menu under it. Lit by
+    // plain `:focus` it stays filled — a bar with one heading stuck down on it, over nothing.
+    let mut stage = staged!(menubar());
+    let trigger = control_saying(&stage, "File");
+    let sample = on_the_fill(&stage, trigger);
+    let elsewhere = stage
+        .census()
+        .control("elsewhere")
+        .and_then(|seen| seen.centre())
+        .expect("there is somewhere else to press");
+
+    let at_rest = stage.colour_at(sample);
+    stage.click(stage.centre_of(trigger));
+    stage.wait(SETTLED);
+    let open = stage.colour_at(sample);
+    assert_ne!(
+        open, at_rest,
+        "the menu is open and its title is painted exactly as it is when it is not"
+    );
+
+    stage.click(elsewhere);
+    stage.wait(SETTLED);
+
+    assert_eq!(
+        stage.focused(),
+        Some(trigger),
+        "the fixture is not asking anything: the menu did not hand the keyboard back, so the \
+         title would go out whatever it is lit by"
+    );
+    assert_eq!(
+        stage.colour_at(sample),
+        at_rest,
+        "the menu was dismissed from elsewhere and its title is still filled"
+    );
+}
+
+/// A tooltip on a button, and somewhere else for the pointer to go.
+fn tooltip() -> impl Fn() -> AnyView {
+    || {
+        AnyView::new(view! {
+            ThemeProvider {
+                column(class = "page") {
+                    Tooltip {
+                        TooltipTrigger {Button(variant = ButtonVariant::Outline) {"Save"}}
+                        TooltipContent(placement = {zgui_ui_primitives::Placement::BOTTOM}) {"Saves the document"}
+                    }
+                    text {"elsewhere"}
+                }
+            }
+        })
+    }
+}
+
+/// The arrow's own box, out of the surface the tooltip drew.
+///
+/// Found by its class through the census's boxes rather than by a reference, because the arrow is
+/// drawn by the content component and a caller never holds one.
+fn tooltip_arrow(stage: &Stage) -> Option<zgui::geom::Rect<DevicePx, Device>> {
+    // Ten pixels square turned on its corner, which is a box of ten root two, and the only thing
+    // that size and that shape on this page.
+    stage
+        .census()
+        .nodes
+        .iter()
+        .filter(|node| node.text.is_empty())
+        .filter_map(|node| node.rect)
+        .find(|rect| {
+            (rect.size.width.0 - 14.14).abs() < 1.0 && (rect.size.height.0 - 14.14).abs() < 1.0
+        })
+}
+
+#[test]
+fn a_tooltip_and_its_arrow_go_out_together() {
+    // The arrow is absolutely positioned, so which box it is laid out and painted against is
+    // whichever ancestor positions it. With a static surface that is the positioner *around* the
+    // panel, one box further out — and everything the panel does to itself as a whole, the arrow
+    // does not do. The exit is where that shows: the slug fades and the diamond hangs in the air
+    // at full strength until the surface is unmounted.
+    let mut stage = staged!(tooltip());
+    let trigger = control_saying(&stage, "Save");
+    let elsewhere = stage
+        .census()
+        .control("elsewhere")
+        .and_then(|seen| seen.centre())
+        .expect("there is somewhere else to point at");
+
+    stage.move_to(stage.centre_of(trigger));
+    stage.wait(SETTLED);
+    let arrow = tooltip_arrow(&stage).expect("the tooltip drew its arrow");
+    let on_the_arrow = Point::new(
+        DevicePx(arrow.origin.x.0 + arrow.size.width.0 / 2.0),
+        DevicePx(arrow.origin.y.0 + arrow.size.height.0 / 2.0),
+    );
+    let shown = stage.colour_at(on_the_arrow);
+
+    // The pointer leaves, the tooltip is asked to close, and the exit is sampled part way through
+    // rather than at either end: both ends agree whatever the arrow belongs to.
+    stage.move_to(elsewhere);
+    stage.wait(Duration::from_millis(180));
+    let leaving = stage.colour_at(on_the_arrow);
+
+    assert_ne!(
+        leaving, shown,
+        "the tooltip is going and the arrow is painted in exactly the colour it had while the \
+         tooltip was up, so it is not leaving with it"
     );
 }

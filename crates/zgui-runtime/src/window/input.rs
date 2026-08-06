@@ -205,6 +205,19 @@ impl Window {
         {
             self.carry_out_default(default, timestamp);
         }
+        // A handler that clicked its own element on the press has taken the activation, and the
+        // release that ends that press must not click it a second time. Forgetting the press is the
+        // whole of it: `:active`, the capture and the focus the press moved are all left alone,
+        // because a control that acts early is still a control being pressed.
+        if dispatched.activation_claimed
+            && let SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Pressed,
+                event: pointer,
+                ..
+            } = event
+        {
+            self.router.forget_press(pointer.id);
+        }
         // After the focus default rather than before it, because a press on a field that did not
         // have focus both focuses it and puts the caret where the press landed, and the second of
         // those is meaningless if the first has not happened yet.
@@ -354,10 +367,7 @@ impl Window {
     ///
     /// Plain and shifted arrows only: an arrow held with a command modifier belongs to whatever
     /// binds it, and answering it here would type over a shortcut.
-    fn vertical_motion(
-        event: &zgui_vocab::KeyEvent,
-        modifiers: Modifiers,
-    ) -> Option<(bool, bool)> {
+    fn vertical_motion(event: &zgui_vocab::KeyEvent, modifiers: Modifiers) -> Option<(bool, bool)> {
         if modifiers.control() || modifiers.alt() || modifiers.meta() {
             return None;
         }

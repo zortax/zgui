@@ -10,7 +10,24 @@ style! { pub TooltipStyle =>
     //
     // It takes the width of what is in it. A tooltip long enough to need wrapping is a description
     // and belongs in a hover card.
+    // `position: relative` is what puts the arrow *inside* this box rather than beside it. An
+    // absolutely positioned box is laid out and painted against its containing block, so with a
+    // static surface the arrow's containing block would be the positioner around it — one box
+    // further out than the panel it belongs to. Everything the surface then does to itself as a
+    // whole, the arrow does not do: the exit fades the slug away and leaves the diamond hanging in
+    // the air at full strength until the whole thing is unmounted.
+    //
+    // It is also the honest reading of the arrow's own offsets. `left: 50%` is meant to be half of
+    // the tooltip, and that it happened to be half of the positioner as well was an accident of the
+    // two boxes being the same width.
+    //
+    // A tooltip's motion is the shortest in the library and deliberately so. It is not a surface
+    // somebody asked for, it is a name arriving under a pointer that is already there, and anything
+    // long enough to be *watched* arriving reads as lag rather than as polish — so the fade is over
+    // in a couple of frames and the slug does not zoom at all, leaving the eight-pixel drift
+    // towards the trigger as the whole of the movement.
     ":scope {
+        position: relative;
         width: fit-content;
         padding: calc(var(--zui-space-base) * 1.5) var(--zui-space-md);
         --zui-surface-border: none;
@@ -18,6 +35,10 @@ style! { pub TooltipStyle =>
         --zui-surface-shadow: none;
         --zui-surface-fill: var(--zui-color-foreground);
         --zui-surface-ink: var(--zui-color-background);
+        --zui-surface-enter-duration: 60ms;
+        --zui-surface-exit-duration: 60ms;
+        --zui-surface-enter-scale: 1;
+        --zui-surface-exit-scale: 1;
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-xs);
         line-height: var(--zui-type-leading-xs);

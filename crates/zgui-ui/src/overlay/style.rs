@@ -10,10 +10,25 @@ style! { pub OverlayStyle =>
     // its scrollbar. A scrim one gutter short leaves a lit strip fifteen pixels wide down the right
     // of the screen, and a modal surface that dims all of the interface except the scrollbar
     // beside it has not dimmed the interface.
+    //
+    // It also softens what it dims. The blur is slight and is meant to be: enough that the page
+    // behind reads as *behind* rather than as the same page with a grey sheet over it, and not so
+    // much that it becomes a texture in its own right — what is under a dialog is context, and
+    // context that has been made interesting is a second thing to look at.
+    //
+    // Nothing here animates the blur, and nothing needs to. A `backdrop-filter` draws its blurred
+    // copy of what is beneath *inside this element*, so the element's own opacity is what fades it
+    // in: at nought the page shows through untouched, at one the blurred copy has replaced it, and
+    // the entrance already runs that number from one to the other.
+    //
+    // A caller that wants none of it sets `--zui-scrim-blur` to `0px`; a theme that wants more sets
+    // it to more. It is a property rather than a token because it is one surface's decision rather
+    // than a name the rest of the library reads.
     ":scope {
         position: fixed;
         inset: 0;
         background-color: var(--zui-color-scrim);
+        backdrop-filter: blur(var(--zui-scrim-blur, 3px));
         animation: zui-scrim-enter var(--zui-motion-duration-normal) ease both;
     }"
     // A scrim on its way out takes no pointer. The press that closed a surface is often followed
