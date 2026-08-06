@@ -146,6 +146,13 @@ pub struct Window {
     check_spatial_dependencies: bool,
     /// The glyph tiles and decoded images this window draws from.
     content: ContentCache,
+    /// The intrinsic sizes of the nodes whose content is a decoded image.
+    ///
+    /// One slot of the [`ReplacedMux`](crate::replaced::ReplacedMux) installed on the document;
+    /// the image loader writes it, layout reads it through the document's replaced hook.
+    replaced_images: Arc<crate::replaced::IntrinsicTable>,
+    /// The same, for the nodes whose content is an externally rendered surface.
+    replaced_surfaces: Arc<crate::replaced::IntrinsicTable>,
     /// The outlines this window's drawings have already been placed into their boxes as.
     vectors: zgui_paint::VectorCache,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
@@ -407,6 +414,14 @@ impl Window {
         view: impl FnOnce(&mut zgui_view::BuildCx<'_>) -> Box<dyn Anchor>,
     ) -> Self {
         let document = Rc::new(RefCell::new(Document::new()));
+        let replaced_images = crate::replaced::IntrinsicTable::new();
+        let replaced_surfaces = crate::replaced::IntrinsicTable::new();
+        document
+            .borrow_mut()
+            .install_replaced_content(Arc::new(crate::replaced::ReplacedMux::new(vec![
+                Arc::clone(&replaced_images),
+                Arc::clone(&replaced_surfaces),
+            ])));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
         let dom_handle = DomHandle::from_rc(Rc::clone(&dom) as Rc<dyn zgui_view::Dom>);
         let document_id = dom.document_id();
@@ -492,6 +507,8 @@ impl Window {
             content: ContentCache::new(
                 zgui_atlas::AtlasLimits::default().with_soft_bytes(ATLAS_SOFT_BYTES),
             ),
+            replaced_images,
+            replaced_surfaces,
             vectors: zgui_paint::VectorCache::new(),
             budgets: crate::budget::Budgets::new(),
             raster,

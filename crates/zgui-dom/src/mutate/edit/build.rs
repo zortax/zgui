@@ -44,6 +44,19 @@ impl Edit<'_> {
         self.create(NodeKind::Element, name)
     }
 
+    /// Creates a detached element whose content comes from outside the document.
+    ///
+    /// The replaced flag is part of creation rather than a later write because box building keys
+    /// off it: a node born replaced never has a box built from the wrong classification, while a
+    /// node that *became* replaced would owe a rebuild of the box it already has. The flag says
+    /// only where the content comes from; what the content *is* arrives through the installed
+    /// [`ReplacedContent`](crate::host::replaced::ReplacedContent) source, possibly much later.
+    pub fn create_replaced_element(&mut self, name: InternedName) -> NodeIndex {
+        let node = self.create(NodeKind::Element, name);
+        set_flag(self.store(), node, NodeFlags::IS_REPLACED, true);
+        node
+    }
+
     /// Creates a detached text node holding `text`.
     pub fn create_text(&mut self, text: &str) -> NodeIndex {
         let node = self.create(NodeKind::Text, InternedName::new("#text"));

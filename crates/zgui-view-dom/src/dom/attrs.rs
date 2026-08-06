@@ -56,8 +56,9 @@ impl Dom for DocumentDom {
         let Some(el) = self.live_index_of(el) else {
             return;
         };
-        let value = value.map(Into::into);
-        self.edit(|edit| edit.set_attribute(el, name, value));
+        let stored = value.map(Into::into);
+        self.edit(|edit| edit.set_attribute(el, name, stored));
+        self.note_attribute(el, name, value);
     }
 
     fn set_classes(&self, el: NodeId, classes: &[ClassName]) {
@@ -267,5 +268,60 @@ mod tests {
         let next = dom.create_element(ElementName::new("row"));
         dom.insert(dom.root(next), next, None);
         assert_eq!(dom.parent(next), Some(dom.root(next)));
+    }
+
+    #[test]
+    fn a_replaced_tag_is_born_replaced_and_its_attributes_are_heard() {
+        // The two halves of the substrate outside content stands on: an `image` element carries
+        // the replaced flag from creation — before any content exists for it — and a write to its
+        // attributes reaches the installed hook, with the value, after the write has landed.
+        let document = Rc::new(RefCell::new(Document::new()));
+        let dom = DocumentDom::new(Rc::clone(&document));
+
+        let heard: Rc<RefCell<Vec<(String, Option<String>)>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&heard);
+        dom.set_attribute_hook(Rc::new(move |_node, name, value| {
+            sink.borrow_mut()
+                .push((name.as_str().to_owned(), value.map(str::to_owned)));
+        }));
+
+        let image = dom.create_element(ElementName::new("image"));
+        let row = dom.create_element(ElementName::new("row"));
+        dom.insert(dom.root(image), image, None);
+
+        {
+            let document = document.borrow();
+            let index = dom.index_of(image);
+            assert!(
+                document
+                    .store()
+                    .core(index)
+                    .flags()
+                    .contains(zgui_dom::node::flags::NodeFlags::IS_REPLACED),
+                "an image is replaced from the moment it exists"
+            );
+            let row = dom.index_of(row);
+            assert!(
+                !document
+                    .store()
+                    .core(row)
+                    .flags()
+                    .contains(zgui_dom::node::flags::NodeFlags::IS_REPLACED),
+                "a row is not"
+            );
+        }
+
+        Dom::set_attribute(&dom, image, AttrName::new("src"), Some("photo.png"));
+        Dom::set_attribute(&dom, row, AttrName::new("src"), Some("ignored.png"));
+        Dom::set_attribute(&dom, image, AttrName::new("src"), None);
+
+        assert_eq!(
+            heard.borrow().as_slice(),
+            &[
+                ("src".to_owned(), Some("photo.png".to_owned())),
+                ("src".to_owned(), None),
+            ],
+            "the hook hears replaced elements only, removals included"
+        );
     }
 }

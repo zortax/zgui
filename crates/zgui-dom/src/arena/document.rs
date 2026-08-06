@@ -336,6 +336,28 @@ impl Document {
         let id = self.node(index).replaced_id()?;
         Some(self.store().host().replaced().intrinsic(id))
     }
+
+    /// Records that `index`'s replaced content has changed behind the document's back.
+    ///
+    /// The installed [`ReplacedContent`] source answers a *pull* — nothing notices when its answer
+    /// changes. A decode completing or a producer learning its natural size is therefore invisible
+    /// until someone says so, and this is how they say so. The box is rebuilt rather than merely
+    /// relaid out because the box captured `natural_ratio` and the replaced identifier when it was
+    /// built, and a new intrinsic can change both.
+    ///
+    /// Call it between frames, like any other mark; a node that is not replaced is marked all the
+    /// same, which is harmless and simpler than asking first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` names no live node of this document.
+    pub fn replaced_content_changed(&mut self, index: NodeIndex) {
+        crate::mutate::ancestors::mark(
+            self.store_mut(),
+            index,
+            zgui_bits::Dirty::REBUILD_BOX | zgui_bits::Dirty::RELAYOUT | zgui_bits::Dirty::REPAINT,
+        );
+    }
 }
 
 impl Default for Document {

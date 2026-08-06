@@ -96,6 +96,22 @@ impl Fixture {
         document.install_replaced_content(Arc::new(FixedIntrinsic {
             size: zgui_geom::Size::new(CssPx(natural.0), CssPx(natural.1)),
         }));
+        Self::over(document, tree, css)
+    }
+
+    /// The same, with every replaced node reporting no intrinsic at all.
+    ///
+    /// This is what an image is before its decode lands and what a surface is before its first
+    /// frame: known and unsized. It is a different fixture from a natural size of zero, which is
+    /// still `Some` — the sizing arithmetic takes different branches for the two.
+    pub(crate) fn with_unknown_intrinsics(tree: Element, css: &str) -> Self {
+        let mut document = Document::new();
+        document.install_replaced_content(Arc::new(zgui_dom::host::NoReplacedContent));
+        Self::over(document, tree, css)
+    }
+
+    /// Builds the fixture tree into `document` and cascades `css` over it.
+    fn over(mut document: Document, tree: Element, css: &str) -> Self {
         let document_index = document.document_index();
         let root = append(&mut document, document_index, &tree);
         let mut engine = StyleEngine::new(

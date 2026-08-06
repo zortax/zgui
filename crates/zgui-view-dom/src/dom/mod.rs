@@ -8,7 +8,8 @@ mod query;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use zgui_dom::{Document, EverythingMatters, NodeIndex, StyleFilter};
+use zgui_dom::{Document, EverythingMatters, NodeIndex, NodeKey, StyleFilter};
+use zgui_interned::{AttrName, ElementName};
 use zgui_view::{DocumentId, NodeId};
 
 use crate::handlers::{Handler, Handlers};
@@ -70,7 +71,28 @@ pub struct DocumentDom {
     observations: Rc<RefCell<Observations>>,
     /// How many batches of changes have been made to the document.
     revision: Cell<u64>,
+    /// The element names whose content comes from outside the document.
+    ///
+    /// An element created under one of these names is born with the replaced flag, which is what
+    /// makes its box a replaced box before any content exists for it. The list is the backend's
+    /// because the vocabulary is: the document neither knows nor cares what an `image` is.
+    replaced_tags: RefCell<Vec<ElementName>>,
+    /// Who is told when an attribute of a replaced element changes.
+    ///
+    /// The document stores the attribute either way; this is how the owner of the *content* — an
+    /// image loader, an embedded renderer's host — hears that `src` moved without polling every
+    /// node every frame. It fires only for elements whose name is in `replaced_tags`, after the
+    /// write has landed, outside the edit batch.
+    attribute_hook: RefCell<Option<AttributeHook>>,
 }
+
+/// What [`DocumentDom::set_attribute_hook`] installs.
+///
+/// The arguments are the node's document-side key, the attribute, and the value it was set to —
+/// [`None`] for a removal. The hook runs while no edit batch is open, so it may read the document,
+/// but it must not re-enter the backend to write: it fires from inside whatever wrote the
+/// attribute, and the conventional shape is to queue what was heard and act on it at the frame.
+pub type AttributeHook = Rc<dyn Fn(NodeKey, AttrName, Option<&str>)>;
 
 impl DocumentDom {
     /// Builds a backend over `document`, creating the tree shape every window has.
@@ -96,7 +118,55 @@ impl DocumentDom {
             handlers: Rc::new(RefCell::new(Handlers::new())),
             observations: Rc::new(RefCell::new(Observations::new())),
             revision: Cell::new(0),
+            replaced_tags: RefCell::new(vec![
+                ElementName::new("image"),
+                ElementName::new("surface"),
+            ]),
+            attribute_hook: RefCell::new(None),
         }
+    }
+
+    /// Adds `name` to the element names whose content comes from outside the document.
+    ///
+    /// Affects elements created afterwards; the framework's own replaced names are present from
+    /// the start.
+    pub fn add_replaced_tag(&self, name: ElementName) {
+        let mut tags = self.replaced_tags.borrow_mut();
+        if !tags.contains(&name) {
+            tags.push(name);
+        }
+    }
+
+    /// Installs the listener for attribute changes on replaced elements.
+    ///
+    /// One slot, because one consumer owns the question: the runtime multiplexes from there. See
+    /// [`AttributeHook`] for what the hook may and may not do.
+    pub fn set_attribute_hook(&self, hook: AttributeHook) {
+        *self.attribute_hook.borrow_mut() = Some(hook);
+    }
+
+    /// Whether `name` is one of the replaced element names.
+    pub(crate) fn is_replaced_tag(&self, name: &ElementName) -> bool {
+        self.replaced_tags.borrow().contains(name)
+    }
+
+    /// Fires the attribute hook for `index`, if one is installed and the element is replaced.
+    ///
+    /// Called after the edit batch that wrote the attribute has closed, so the hook reads the
+    /// document as it will be styled and laid out.
+    pub(crate) fn note_attribute(&self, index: NodeIndex, name: AttrName, value: Option<&str>) {
+        let Some(hook) = self.attribute_hook.borrow().clone() else {
+            return;
+        };
+        let key = {
+            let document = self.document.borrow();
+            let record = document.store().core(index);
+            if !self.is_replaced_tag(&record.local_name().to_interned()) {
+                return;
+            }
+            document.store().key_of(index)
+        };
+        hook(key, name, value);
     }
 
     /// How many batches of changes this document has taken.

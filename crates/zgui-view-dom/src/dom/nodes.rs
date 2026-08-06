@@ -10,9 +10,11 @@ use crate::id;
 impl DocumentDom {
     /// Creates a node of `kind` called `name`, outside the document.
     pub(crate) fn create(&self, kind: NodeKind, name: ElementName) -> NodeId {
+        let replaced = kind == NodeKind::Element && self.is_replaced_tag(&name);
         let index = self.edit(|edit| match kind {
             NodeKind::Text => edit.create_text(""),
             NodeKind::Marker => edit.create_marker(),
+            _ if replaced => edit.create_replaced_element(name),
             _ => edit.create_element(name),
         });
         id::to_view(self.document().store().key_of(index))
