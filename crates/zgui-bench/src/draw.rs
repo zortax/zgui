@@ -46,6 +46,20 @@ struct NullRenderer {
 }
 
 impl Renderer for NullRenderer {
+    /// Yes, for the same reason every other number this harness takes is a CPU number.
+    ///
+    /// This renderer holds no pixels, so it cannot really move any. What it can do is let the
+    /// *decision* run: a scroll that a real renderer would answer by translating its composed
+    /// target narrows the frame's damage, and the emit walk, the replays and the draw-order inserts
+    /// that follow from that narrowing are exactly what this harness exists to measure. Answering
+    /// false here would measure the frame the framework no longer draws.
+    ///
+    /// What it does not measure is the copy itself, which is GPU work — as is everything else this
+    /// harness leaves out by having no device.
+    fn shifts_composed_pixels(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> zgui::render::RenderCapabilities {
         zgui::render::RenderCapabilities::MINIMAL
     }

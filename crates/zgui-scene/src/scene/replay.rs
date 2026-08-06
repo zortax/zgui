@@ -30,13 +30,19 @@ impl Scene {
     /// refers to a frame that no longer exists.
     pub fn replay(&mut self, range: Range<u32>, by: Size<DevicePx, Device>) -> Range<u32> {
         let start = self.ops.len() as u32;
-        let ops: Vec<_> = self
-            .retained_ops
-            .get(range.start as usize..range.end as usize)
-            .unwrap_or_default()
-            .to_vec();
+        let (first, last) = (range.start as usize, range.end as usize);
+        // Out of bounds replays nothing at all rather than the prefix that happens to exist: a
+        // range naming a frame that is gone names none of it.
+        if first > last || last > self.retained_ops.len() {
+            return start..start;
+        }
 
-        for (position, op) in ops.into_iter().enumerate() {
+        // Indexed rather than collected. `PaintOp` is `Copy`, so one entry is copied out per
+        // iteration and the borrow of the retained log ends before the push that wants `&mut
+        // self` — where collecting the range first cost one allocation per replayed fragment per
+        // frame, which for a scrolling list is one per row for as long as the scroll lasts.
+        for position in 0..last - first {
+            let op = self.retained_ops[first + position];
             let index = op.index as usize;
             // Where this primitive's log entry will land, so the name it was *originally* pushed
             // under can be put back over the one the ordinary push path just wrote. A replayed

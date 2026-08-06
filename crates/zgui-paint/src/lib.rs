@@ -50,6 +50,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod shiftable;
 pub mod content;
 pub mod damage;
 pub mod emit;

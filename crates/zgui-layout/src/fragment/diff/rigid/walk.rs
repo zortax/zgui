@@ -90,9 +90,18 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             )
         });
 
-        let children = self.store.node(key).children.clone();
-        for child in children {
+        // Read one child at a time rather than cloning the list. The descent needs `&mut self`, so
+        // the list cannot be borrowed across it — but the borrow ends at the end of each `let`, and
+        // an arena lookup per child is cheaper than an allocation and a copy per *box*, which is
+        // what a glide of a thousand frames was paying for every box it moved.
+        //
+        // Sound because nothing this walk does reshapes the box tree: it writes fragments, box
+        // state, clip chains, the hit index and the accessibility marks, and none of those is a
+        // child list. A descent that could add or remove a box would have to take a copy again.
+        let mut position = 0;
+        while let Some(&child) = self.store.node(key).children.get(position) {
             self.subtree::<T>(child, inner, inner_shift);
+            position += 1;
         }
     }
 
@@ -164,15 +173,15 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
     /// Offsets the lines of an inline formatting context, which are drawn under the box's own
     /// clip rather than under the one it was given.
     fn offset_lines<T: Duty>(&mut self, key: BoxKey, inner: ClipId) {
-        let rest: Vec<FragKey> = self
-            .store
-            .fragments_of_box(key)
-            .iter()
-            .skip(1)
-            .copied()
-            .collect();
+        // Indexed rather than collected, for the same reason the child descent is: the loop body
+        // needs `&mut self`, and one arena lookup per line beats an allocation per box. The count
+        // is read once because this walk adds and removes no fragments — it only moves them.
+        let count = self.store.fragments_of_box(key).len();
         let by = self.by;
-        for frag in rest {
+        for position in 1..count {
+            let Some(&frag) = self.store.fragments_of_box(key).get(position) else {
+                break;
+            };
             if !T::MOVES {
                 if T::INDEXES
                     && let Some(held) = self.store.fragment(frag).map(|piece| piece.clip)

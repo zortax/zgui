@@ -143,10 +143,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: translated.p50,
                 band: Band::Time {
-                    baseline: 250.0,
+                    baseline: 44.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 217-250 us across runs; the band sits under the budget",
+                rationale: "measured at 43-45 us across runs. It was 257 before the renderer was \
+                            allowed to move the pixels it had already composed: a translation \
+                            frame now draws the band the movement uncovered instead of the port",
                 budget: Some(1_000.0),
                 spread: Some(translated),
             },
@@ -155,10 +157,13 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: recycled.p50,
                 band: Band::Time {
-                    baseline: 880.0,
+                    baseline: 1_030.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 872-892 us across runs; the band sits under the budget",
+                rationale: "measured at 1020-1042 us across runs, up from 930: a translation frame \
+                            no longer emits the port, so a recycle frame finds less of it recorded. \
+                            It is the price of the translation frame's 5.8x, it is paid on one \
+                            frame in three, and the two together are a large net win",
                 budget: Some(1_500.0),
                 spread: Some(recycled),
             },

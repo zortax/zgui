@@ -60,12 +60,35 @@ pub struct CaptureRenderer {
     frames: u64,
     /// Where its atlas tiles go: plain byte vectors, so the upload path runs for real.
     atlas: zgui_atlas::MemorySink,
+    /// Whether it claims to keep composed pixels, so a caller will narrow a scroll's damage.
+    shifts: bool,
+    /// The shift the most recent frame was asked for.
+    last_shift: Option<zgui_render::ScrollShift>,
 }
 
 impl CaptureRenderer {
     /// A renderer with nothing configured and nothing recorded.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The same renderer, claiming to keep the pixels it composed.
+    ///
+    /// It keeps none — it holds a transcript, not a target — so this is a statement made *for the
+    /// caller's benefit*: the decision to answer a scroll by moving pixels, and the narrowed damage
+    /// that follows from it, are the caller's, and this is how a test reaches them without a device.
+    /// What the shift would have copied is recorded and can be read back with
+    /// [`CaptureRenderer::last_shift`]; what it would have *looked* like needs a real renderer, and
+    /// the pixel differential is where that is checked.
+    #[must_use]
+    pub fn shifting(mut self) -> Self {
+        self.shifts = true;
+        self
+    }
+
+    /// The shift the most recent frame asked for, or `None` if it asked for none.
+    pub fn last_shift(&self) -> Option<zgui_render::ScrollShift> {
+        self.last_shift
     }
 
     /// The most recent frame's transcript, or `None` before any frame was drawn.
@@ -110,6 +133,14 @@ impl Renderer for CaptureRenderer {
 
     fn target(&self) -> Option<RenderTarget> {
         self.target
+    }
+
+    fn shifts_composed_pixels(&self) -> bool {
+        self.shifts
+    }
+
+    fn shift_composed(&mut self, shift: zgui_render::ScrollShift) {
+        self.last_shift = Some(shift);
     }
 
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {

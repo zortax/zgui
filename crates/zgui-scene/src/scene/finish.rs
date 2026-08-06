@@ -87,10 +87,38 @@ impl Scene {
             };
             op.index = mapping[op.index as usize];
         }
+
+        self.index_markers();
+    }
+
+    /// Records where each direction's markers ended up in the array they share.
+    ///
+    /// Built here because this is where the sort that decided those positions just ran, and read
+    /// by the batcher, which walks starts and ends as two streams and has to turn a cursor into
+    /// either one back into a position in the shared array.
+    fn index_markers(&mut self) {
+        self.markers.clear();
+        for (position, group) in self.primitives.groups.iter().enumerate() {
+            let position = position as u32;
+            if group.is_start {
+                self.markers.starts.push(position);
+            } else {
+                self.markers.ends.push(position);
+            }
+        }
     }
 
     /// Runs the coalescing policy and records what it cost.
     fn plan_vector_passes(&mut self, damage: &DamageSet, overlap: Overlap) {
+        // No vector items, no passes — and then the sweep below is a walk of the whole emission
+        // stream, one `ink_of` per entry and a `Vec` as long as it, to arrive at an empty plan.
+        // Every event it could raise is either a vector or something a vector is coalesced
+        // against, so with nothing to coalesce the answer is the cleared plan.
+        if self.primitives.vectors.is_empty() {
+            self.pass_plan.clear();
+            return;
+        }
+
         // The sweep is over the emission stream, which is what rule 3 is stated in terms of. It
         // agrees with draw order wherever the question can matter: anything overlapping something
         // already pushed was given a strictly higher order than it, so for every overlapping pair

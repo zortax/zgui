@@ -32,6 +32,7 @@ pub mod memory;
 pub mod outcome;
 pub mod pool;
 pub mod renderer;
+pub mod shift;
 pub mod target;
 pub mod texture;
 pub mod vector;
@@ -44,6 +45,7 @@ pub use crate::memory::MemoryReport;
 pub use crate::outcome::{FrameOutcome, FrameStats, GpuUnavailable, RejectedAdapter, SkipReason};
 pub use crate::pool::TargetPoolReport;
 pub use crate::renderer::Renderer;
+pub use crate::shift::ScrollShift;
 pub use crate::target::RenderTarget;
 pub use crate::texture::{ExternalTexture, TextureHandle};
 pub use crate::vector::{

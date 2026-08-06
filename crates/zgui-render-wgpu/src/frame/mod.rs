@@ -18,6 +18,7 @@ pub mod damage;
 pub mod fault;
 pub mod pass;
 pub mod plan;
+pub mod shift;
 pub mod present;
 pub mod segment;
 pub mod target;

@@ -40,6 +40,22 @@ impl Renderer for WgpuRenderer {
         self.atlas()
     }
 
+    /// Yes: this renderer composes every frame into a target that outlives it, so the pixels a
+    /// scroll moves are already here.
+    fn shifts_composed_pixels(&self) -> bool {
+        true
+    }
+
+    fn shift_composed(&mut self, shift: zgui_render::ScrollShift) {
+        // Recorded, not performed. The copy belongs in the frame's own encoder, ahead of the
+        // passes that redraw what the move left undefined, and that encoder does not exist yet.
+        //
+        // A second shift before a draw would be two movements of one region with only the first
+        // one's pixels to move, so the later one wins and the caller owes the whole port as damage
+        // — which it does anyway, because it only ever asks for one per frame.
+        self.pending_shift = Some(shift);
+    }
+
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
         let _frame = Phase::Render.span().entered();
         zgui_profile::latency::mark("draw.in");
@@ -85,6 +101,10 @@ impl Renderer for WgpuRenderer {
         // widened to all of it exactly once, here, rather than at each of the places that noticed.
         let everything = DamageSet::full();
         let damage = if core::mem::take(&mut self.full_damage_next) {
+            // Nothing is worth moving into a target every pixel of which is about to be drawn
+            // again, and a shift against a target the renderer has just declared it cannot rely on
+            // would move pixels that are not there.
+            self.pending_shift = None;
             &everything
         } else {
             damage
@@ -97,7 +117,7 @@ impl Renderer for WgpuRenderer {
         // waits a whole refresh interval to acquire one. This is checked after the widening above,
         // so a frame that has to redraw everything for a reason of the renderer's own never
         // reaches it.
-        if damage.is_empty() && !self.present_composed_next {
+        if damage.is_empty() && !self.present_composed_next && self.pending_shift.is_none() {
             zgui_profile::latency::mark("draw.undamaged");
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
@@ -147,6 +167,21 @@ impl Renderer for WgpuRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("zgui.frame"),
                 });
+        // Before anything this frame draws, and after nothing: the passes below clear and redraw
+        // each damage rectangle, and the pixels this moves are the ones outside them.
+        if let Some(shift) = self.pending_shift.take() {
+            let moved = crate::frame::shift::apply(
+                &self.gpu,
+                &mut encoder,
+                &self.composed,
+                &mut self.shift_scratch,
+                shift,
+            );
+            zgui_profile::latency::note(
+                "r.shift",
+                format!("by={:?} moved={moved}", shift.by),
+            );
+        }
         zgui_profile::latency::mark("r.buffers");
         let uploaded = self.buffers.upload_frame(&self.gpu, &mut encoder, scene);
         let upload_allocations = self.buffers.upload_allocations();
@@ -304,14 +339,25 @@ impl Renderer for WgpuRenderer {
         // needs it, and freeing it would buy the length of one reallocation; the group pool is the
         // part that grows with what the document nests and stays grown after it stops.
         zgui_render::TargetPoolReport {
-            resident: self.groups.bytes(),
+            // The shift scratch is here rather than beside the composed target, because unlike the
+            // composed target it *is* releasable: a window that stops scrolling never needs it
+            // again, and it is the size of one.
+            resident: self.groups.bytes()
+                + self
+                    .shift_scratch
+                    .as_ref()
+                    .map_or(0, crate::frame::shift::ShiftScratch::bytes),
             lent: self.groups.lent_bytes(),
             leases: self.groups.leases(),
         }
     }
 
     fn release_cached_targets(&mut self) -> u64 {
-        self.groups.release_unused()
+        let scratch = self
+            .shift_scratch
+            .take()
+            .map_or(0, |held| crate::frame::shift::ShiftScratch::bytes(&held));
+        self.groups.release_unused() + scratch
     }
 
     fn acquire_block(&self) -> std::time::Duration {

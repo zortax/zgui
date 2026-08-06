@@ -140,6 +140,9 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             disjoint: fragment.subtree_disjoint,
             rigid: true,
         };
+        // Recorded before the damage rather than after, so that a caller reading
+        // [`RigidMoves`](super::RigidMoves) sees every move that put a rectangle in the set.
+        self.moves.moved(moved.by);
         absorb(self.damage, before);
         absorb(self.damage, folded.subtree_ink);
 

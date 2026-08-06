@@ -42,10 +42,12 @@ pub struct SceneTexture {
 }
 
 impl SceneTexture {
-    /// The usage a composed target needs: drawn into, read by the copy, and copied out by a test.
+    /// The usage a composed target needs: drawn into, read by the copy, copied out by a test, and
+    /// copied *into* by a scroll shift moving pixels it already holds.
     const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT
         .union(wgpu::TextureUsages::TEXTURE_BINDING)
-        .union(wgpu::TextureUsages::COPY_SRC);
+        .union(wgpu::TextureUsages::COPY_SRC)
+        .union(wgpu::TextureUsages::COPY_DST);
 
     /// Allocates a target able to hold `size`, in `format`.
     ///

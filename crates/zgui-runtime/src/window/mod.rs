@@ -158,6 +158,26 @@ pub struct Window {
     raster: Arc<dyn zgui_text::GlyphRaster>,
     /// What this frame must redraw.
     damage: DamageSet,
+    /// What every fragment pass this frame ran moved rigidly, and whether it moved anything else.
+    ///
+    /// The input to deciding whether the renderer may translate pixels it already has rather than
+    /// have them drawn again. Reset at the top of each frame and merged across passes, because a
+    /// scroll delivered to a listener can relay out inside the frame that delivered it.
+    rigid_moves: zgui_layout::fragment::diff::RigidMoves,
+    /// What this frame had damaged before its first layout pass ran.
+    ///
+    /// The other half of [`Window::rigid_moves`]: the walk reports what *it* damaged beyond the
+    /// movement, and this is what was already owed before it started. Held separately because a
+    /// frame runs the walk more than once and only the first of them starts from what the frame
+    /// inherited.
+    damage_before_layout: DamageSet,
+    /// How many layout passes this frame has run, so the first can be told from the rest.
+    layout_passes: u32,
+    /// Which containers scrolled this frame, and from where to where.
+    ///
+    /// Kept because the change log is drained by the dispatch that reports the scroll to the
+    /// document, which happens well before anything decides what to draw.
+    scrolled_this_frame: Vec<zgui_scroll::report::Scrolled>,
     /// Whether the cascade moved a text colour since the display list's brushes were last copied.
     brushes_moved: bool,
     /// Which brush slot each element's text is drawn through.
@@ -473,6 +493,10 @@ impl Window {
             budgets: crate::budget::Budgets::new(),
             raster,
             damage: DamageSet::full(),
+            rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
+            damage_before_layout: DamageSet::new(),
+            layout_passes: 0,
+            scrolled_this_frame: Vec::new(),
             brushes_moved: false,
             text_slots: rustc_hash::FxHashMap::default(),
             text,

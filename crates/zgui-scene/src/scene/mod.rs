@@ -124,6 +124,14 @@ pub struct Scene {
     layer_stack: Vec<DrawOrder>,
     /// Every order a layer forced this frame, so a check knows which classes it does not own.
     forced_orders: Vec<DrawOrder>,
+    /// Where the nth marker of each direction sits in [`Primitives::groups`].
+    ///
+    /// Start and end markers share one array but are batched as two streams, so a cursor into
+    /// either stream has to be turned into a position in the shared array. Answering that by
+    /// filtering the array is a scan *per batch*, which is quadratic in the number of groups; the
+    /// two lists are built once, by [`Scene::index_markers`], out of the same sort that put the
+    /// markers in order.
+    markers: Markers,
     /// This frame's vector work.
     pass_plan: ScenePassPlan,
     /// The surface's extent, which pass regions are clamped to.
@@ -137,6 +145,32 @@ pub struct Scene {
     /// Empty for a frame every one of whose rasters was already where it was going to be, which is
     /// the ordinary case and costs a pointer. See [`mod@resolve`].
     unresolved: Vec<Unresolved>,
+}
+
+/// Where each direction's markers sit in the array the two directions share.
+///
+/// `starts[n]` is the position in [`Primitives::groups`] of the nth start marker, and `ends[n]` the
+/// same for end markers. Rebuilt once per frame from the sorted array, because that is the array a
+/// batch cursor is resolved against.
+#[derive(Debug, Default)]
+struct Markers {
+    /// Positions of the start markers, in draw order.
+    starts: Vec<u32>,
+    /// Positions of the end markers, in draw order.
+    ends: Vec<u32>,
+}
+
+impl Markers {
+    /// Empties both lists, keeping what they allocated.
+    fn clear(&mut self) {
+        self.starts.clear();
+        self.ends.clear();
+    }
+
+    /// The list for one direction.
+    fn stream(&self, is_start: bool) -> &[u32] {
+        if is_start { &self.starts } else { &self.ends }
+    }
 }
 
 impl Default for Scene {
@@ -164,6 +198,7 @@ impl Scene {
             travel: Travels::new(),
             layer_stack: Vec::new(),
             forced_orders: Vec::new(),
+            markers: Markers::default(),
             pass_plan: ScenePassPlan::default(),
             viewport: Size::new(0, 0),
             finished: false,
@@ -208,6 +243,7 @@ impl Scene {
         self.order.clear();
         self.layer_stack.clear();
         self.forced_orders.clear();
+        self.markers.clear();
         self.pass_plan.clear();
         self.unresolved.clear();
         self.viewport = viewport;

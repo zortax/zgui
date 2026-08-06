@@ -144,6 +144,12 @@ impl Window {
         self.frame_started();
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
+        // Both are this frame's answers about this frame's movement, and a frame that inherited
+        // either would decide what to draw from what the last one moved.
+        self.rigid_moves = zgui_layout::fragment::diff::RigidMoves::default();
+        self.damage_before_layout = DamageSet::new();
+        self.layout_passes = 0;
+        self.scrolled_this_frame.clear();
 
         // The events that arrived since the last frame, and the commands their handlers issued.
         zgui_profile::latency::note_with("f.drain", || self.queued.len().to_string());
@@ -825,7 +831,13 @@ impl Window {
         self.a11y_moves.clear();
         let mut marks = zgui_layout::fragment::diff::DocumentMarks::for_document(&mut document)
             .recording_moves(&mut self.a11y_moves);
-        zgui_layout::fragment::diff::rebuild(
+        // Before the first walk of the frame and no other: what stands here on a later pass is
+        // mostly the earlier pass's own movement, which is the one thing this must not collect.
+        if self.layout_passes == 0 {
+            self.damage_before_layout = self.damage;
+        }
+        self.layout_passes += 1;
+        let moved = zgui_layout::fragment::diff::rebuild(
             &mut layout,
             &mut self.hit,
             &mut tables,
@@ -833,6 +845,10 @@ impl Window {
             root,
             &mut self.damage,
         );
+        // Merged rather than assigned: a scroll delivered to a listener can re-render and relay
+        // out inside the frame that delivered it, so the frame's answer is every pass's together.
+        // The walk seeds its own `beyond` from whatever the frame had already damaged.
+        self.rigid_moves = self.rigid_moves.and(moved);
         layout.reclaim_paragraphs();
         // The fragments name their matrices by an index into the table that was just filled, so
         // the two go to the view layer together: a box's place on the screen is only answerable
@@ -903,6 +919,9 @@ impl Window {
         // Read before the sink is borrowed, because what the device can do changes what is
         // *emitted* and not only how it is drawn.
         let capabilities = self.renderer.capabilities();
+        // Decided inside the borrow below, performed after it: the copy belongs in the renderer's
+        // own frame, and the renderer is not reachable while the layout store is borrowed.
+        let shift: Option<zgui_render::ScrollShift>;
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
@@ -910,6 +929,20 @@ impl Window {
             // on both sides; the renderer would cut that to the surface anyway, and until it is
             // cut the emit walk's subtree skip cannot refuse anything, so a scroll of one screenful
             // walks and paints the whole document.
+            // Before the damage is read, and before it is grown: a scroll that can be answered by
+            // moving pixels the renderer already has replaces the whole port with the bands the
+            // move leaves undefined, and everything the frame damaged for any *other* reason is
+            // kept and drawn over them.
+            shift = self.scroll_shift(viewport).ok();
+            if let Some(shift) = shift {
+                // Everything this frame owes that the copy does not answer: what it inherited
+                // before any layout pass, what the passes damaged beyond their movement, and the
+                // bands the copy uncovers. What is dropped is exactly the movement's own damage,
+                // which is the whole port and is what the copy is for.
+                self.damage = self.damage_before_layout;
+                self.damage.absorb_set(&self.rigid_moves.beyond);
+                shift.expose_into(&mut self.damage);
+            }
             self.damage
                 .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));
             mark("p.expand");
@@ -1032,6 +1065,12 @@ impl Window {
         zgui_profile::latency::note_with("p.draw", || {
             format!("{}x{}", viewport.width, viewport.height)
         });
+        // Handed over before the draw and after the occlusion check, because a window that is not
+        // going to draw is not going to have anything to move either — and a shift recorded now and
+        // drawn against a later frame would move pixels a different scroll offset already moved.
+        if let Some(shift) = shift {
+            self.renderer.shift_composed(shift);
+        }
         self.renderer.draw(&self.scene, &self.damage)
     }
 }

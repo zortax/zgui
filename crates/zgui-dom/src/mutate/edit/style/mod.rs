@@ -93,8 +93,10 @@ impl Edit<'_> {
             (None, None) => (false, None),
             (None, Some(value)) => {
                 let mut block = PropertyDeclarationBlock::new();
-                if !parse::set(&mut block, property, &id, value) {
-                    return None;
+                // An empty block declares nothing, so anything that parses at all is a change.
+                match parse::set(&mut block, property, &id, value) {
+                    parse::Wrote::Rejected => return None,
+                    parse::Wrote::Unchanged | parse::Wrote::Changed => {}
                 }
                 (true, Some(wrapped(&lock, block)))
             }
@@ -102,12 +104,13 @@ impl Edit<'_> {
                 let mut guard = lock.write();
                 let block = block.write_with(&mut guard);
                 let changed = match value {
-                    Some(value) => {
-                        if !parse::set(block, property, &id, value) {
-                            return None;
-                        }
-                        true
-                    }
+                    Some(value) => match parse::set(block, property, &id, value) {
+                        parse::Wrote::Rejected => return None,
+                        // The whole point of the distinction: re-stating a declaration the block
+                        // already holds is not a style change, and must not become one.
+                        parse::Wrote::Unchanged => false,
+                        parse::Wrote::Changed => true,
+                    },
                     None => parse::remove(block, &id),
                 };
                 (changed, None)

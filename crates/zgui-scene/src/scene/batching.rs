@@ -209,24 +209,19 @@ impl Scene {
     ///
     /// Start and end markers share one array, so each is walked as its own stream.
     fn marker_order(&self, index: usize, is_start: bool) -> Option<DrawOrder> {
+        let position = *self.markers.stream(is_start).get(index)?;
         self.primitives
             .groups
-            .iter()
-            .filter(|group| group.is_start == is_start)
-            .nth(index)
+            .get(position as usize)
             .map(|group| group.order)
     }
 
     /// Where the `index`-th marker of `kind` sits in the shared array.
     fn marker_index(&self, index: usize, kind: PrimitiveKind) -> usize {
         let is_start = kind == PrimitiveKind::GroupStart;
-        self.primitives
-            .groups
-            .iter()
-            .enumerate()
-            .filter(|(_, group)| group.is_start == is_start)
-            .nth(index)
-            .map(|(position, _)| position)
-            .unwrap_or(index)
+        self.markers
+            .stream(is_start)
+            .get(index)
+            .map_or(index, |position| *position as usize)
     }
 }

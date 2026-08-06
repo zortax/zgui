@@ -101,6 +101,14 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
     // shape and lands somewhere else. The paint stage services that by offsetting what it recorded
     // rather than producing it again, and both rectangles have to be redrawn — the one being
     // vacated as much as the one being filled.
+    //
+    // The two are not cut to the same thing, and the asymmetry is deliberate. Where the piece has
+    // *arrived* is cut to what its clip chain admits, because a primitive the chain admits nothing
+    // of is refused before it is drawn — this row is four hundred pixels tall in a hundred-pixel
+    // port, so three quarters of it is pixels no frame will ever put anything into. Where it was
+    // is not cut at all: the chain it named belongs to a frame that is gone, and cutting a vacated
+    // rectangle to a region that has since moved is how a scrolled row's old pixels get left on
+    // the screen.
     let fixture = Fixture::new(
         Element::new("root").children(vec![
             Element::new("port").children(vec![Element::new("row")]),
@@ -152,8 +160,21 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
         "the moved row was not marked for repositioning: {:?}",
         dirty.marked
     );
+    let port_rect = zgui_layout::scroll_region::region_of(&store, port)
+        .expect("the port scrolls")
+        .scrollport;
+    let arrived = after
+        .intersection(port_rect)
+        .expect("the row is still in the port");
     assert!(covers(&frame.damage, before), "the rectangle it left");
-    assert!(covers(&frame.damage, after), "and the one it arrived at");
+    assert!(
+        covers(&frame.damage, arrived),
+        "and the part of the one it arrived at that it can actually draw in",
+    );
+    assert!(
+        !covers(&frame.damage, after),
+        "but not the three hundred pixels of it that lie outside the port, which nothing draws",
+    );
 }
 
 #[test]

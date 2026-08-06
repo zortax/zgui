@@ -88,6 +88,16 @@ pub struct WgpuRenderer {
     faults: FaultInjector,
     /// Whether the next frame has to redraw the whole surface whatever its damage set says.
     full_damage_next: bool,
+    /// The scratch a scroll shift stages its copy through, once one has been asked for.
+    ///
+    /// `None` for a window that has never shifted anything, which is every window that has never
+    /// scrolled a self-contained region.
+    shift_scratch: Option<crate::frame::shift::ShiftScratch>,
+    /// A region of the composed target whose pixels are to be moved before this frame draws.
+    ///
+    /// Taken by the next `draw`. Held rather than performed on the spot because the copy belongs in
+    /// the frame's own encoder, ahead of the passes that redraw what the move left undefined.
+    pending_shift: Option<zgui_render::ScrollShift>,
     /// Whether the composed target still has to reach the surface.
     ///
     /// A failed acquisition happens after composition, so its damage is retired, but no surface
@@ -185,6 +195,8 @@ impl WgpuRenderer {
             // Nothing has ever been composed, so the first frame cannot rely on what the target
             // holds however small its damage set is.
             full_damage_next: true,
+            shift_scratch: None,
+            pending_shift: None,
             present_composed_next: false,
             target,
             subpixel_order: SubpixelOrder::default(),

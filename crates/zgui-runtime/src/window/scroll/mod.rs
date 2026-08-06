@@ -22,6 +22,7 @@ mod asked;
 mod bar;
 mod extent;
 mod frozen;
+pub(crate) mod shift;
 
 use zgui_dom::NodeKey;
 use zgui_geom::{CssPx, Point, Scale};
@@ -364,6 +365,10 @@ impl Window {
         if moved.is_empty() {
             return;
         }
+        // Kept before the log is consumed. What the renderer may be asked to translate is decided
+        // at paint time, which is well after this, and this is the only place the frame's own
+        // movements are enumerated.
+        self.scrolled_this_frame.extend_from_slice(&moved);
         let scale = Scale::new(self.scale);
         for scrolled in moved {
             let (node, payload) = {

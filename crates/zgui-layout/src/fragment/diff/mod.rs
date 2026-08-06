@@ -24,6 +24,7 @@ use zgui_bits::{DamageSet, Dirty};
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_profile::{Counter, counter};
+use zgui_scene::ClipId;
 
 use crate::fragment::build::{Descent, Placed, Tables};
 use crate::fragment::hit::HitIndex;
@@ -88,7 +89,7 @@ pub fn rebuild(
     dirty: &mut impl FrameDirty,
     root: BoxKey,
     damage: &mut DamageSet,
-) {
+) -> RigidMoves {
     // The frame boundary for the coordinate systems. A box that gave one back during the *previous*
     // frame kept it readable for the rest of that frame — the emit walk, the hit index and anything
     // asking where a box was all still resolved it — and this is where it stops. It is here rather
@@ -102,6 +103,13 @@ pub fn rebuild(
         ..Descent::root(viewport_of(store, root), tables.spatial.viewport())
     };
     let scale = tables.device.scale;
+    // Deliberately *not* seeded with what the set already holds. A frame runs this walk more than
+    // once — a scroll is delivered to the document between two of them — and the damage standing at
+    // entry is the earlier pass's, which for a scrolling document is mostly that pass's own rigid
+    // movement. Folding it in here would label a movement as something other than a movement on
+    // every frame that reports a scroll, which is every frame of a glide. What the frame damaged
+    // before *any* pass ran is the caller's to remember, because only the caller knows which pass
+    // was the first.
     let mut pass = Pass {
         store,
         hit,
@@ -109,11 +117,13 @@ pub fn rebuild(
         dirty,
         damage,
         restacked: false,
+        moves: RigidMoves::default(),
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
         // decided before the frame and must not change part-way through one.
         passes: split::current(),
     };
     pass.visit(root, descent, None, None);
+    let moves = pass.moves;
     // Every rigid move the walk made wrote its entries and left the hierarchy above them for here,
     // so that a scroll repairs it once instead of once per entry. Nothing may query the index
     // between the walk and this line.
@@ -159,6 +169,13 @@ pub fn rebuild(
     counter::set(Counter::FragmentsLive, u64::from(store.fragment_count()));
     counter::set(Counter::BoxesLive, u64::from(store.box_capacity()));
     crate::invariants::check_if_enabled(store, hit);
+    // A bulk rebuild of the index is not damage, but it is the walk conceding that it could not
+    // service the frame incrementally, and a frame like that is not one whose pixels may be
+    // shifted.
+    RigidMoves {
+        settled: moves.settled && !restacked,
+        ..moves
+    }
 }
 
 /// The viewport a subtree is composed inside, taken from the document's own root box.
@@ -168,6 +185,123 @@ fn viewport_of(store: &LayoutStore, fallback: BoxKey) -> Size<DevicePx, Device> 
         .layout_of(key)
         .map(|layout| layout.size)
         .unwrap_or(Size::new(DevicePx(0.0), DevicePx(0.0)))
+}
+
+/// What this pass's rigid moves add up to, for a caller deciding whether pixels already on the
+/// screen can be shifted instead of drawn again.
+///
+/// A scroll moves every pixel of a scrollport, so the damage it raises is the whole port and the
+/// emit walk reaches every fragment in it. That is only unavoidable if the pixels have to be
+/// *derived* again — and they do not, when the frame moved one thing rigidly and changed nothing
+/// else. This is what says whether the frame was that frame; it is a report about the walk and
+/// decides nothing on its own, because whether the pixels may be shifted also depends on what else
+/// is drawn over the region, which this walk never looks at.
+#[derive(Clone, Copy, Debug)]
+pub struct RigidMoves {
+    /// Whether the walk serviced the frame incrementally.
+    ///
+    /// False when a fragment appeared that has no place in painting order yet, which forces a bulk
+    /// rebuild of the hit index and means the frame is not one whose pixels anyone should be
+    /// moving around.
+    pub settled: bool,
+    /// The offset the rigid moves took, when every one of them took the same one.
+    ///
+    /// `None` for a pass that moved nothing, and for one whose moves disagreed — two scrollers
+    /// gliding at once, say, which is a frame no single shift can answer.
+    pub by: Option<(f32, f32)>,
+    /// Whether two moves disagreed, which is why `by` may be `None` after something moved.
+    pub conflicted: bool,
+    /// How many subtrees were moved.
+    pub count: u32,
+    /// Everything this pass damaged for a reason other than a subtree moving rigidly.
+    ///
+    /// A caller that answers the movement by translating pixels drops the movement's own damage and
+    /// keeps this, because this is what the translation does not cover. It is a strict subset of
+    /// the pass's damage set and is never a substitute for it: a caller that refuses the
+    /// translation must use the whole set, or it will not draw where things moved.
+    ///
+    /// Speaks for the walk and not for the frame: what the frame damaged before any walk ran is
+    /// the caller's to add, because only the caller knows which walk was the first.
+    pub beyond: DamageSet,
+}
+
+impl Default for RigidMoves {
+    fn default() -> Self {
+        Self {
+            settled: true,
+            by: None,
+            conflicted: false,
+            count: 0,
+            beyond: DamageSet::new(),
+        }
+    }
+}
+
+impl RigidMoves {
+    /// Both passes' moves, for a frame that ran the walk more than once.
+    ///
+    /// A scroll delivered to a listener can re-render and relay out inside the same frame, so the
+    /// frame's answer is every pass's answer together: it moved rigidly only if *each* pass did,
+    /// and it moved by one vector only if they agree on it.
+    #[must_use]
+    pub fn and(mut self, other: Self) -> Self {
+        self.settled &= other.settled;
+        self.conflicted |= other.conflicted;
+        match (self.by, other.by) {
+            (_, None) => {}
+            (None, Some(by)) => self.by = Some(by),
+            (Some(held), Some(by)) if held == by => {}
+            (Some(_), Some(_)) => {
+                self.by = None;
+                self.conflicted = true;
+            }
+        }
+        self.count += other.count;
+        self.beyond.absorb_set(&other.beyond);
+        self
+    }
+
+    /// Records one subtree moving by `by`.
+    fn moved(&mut self, by: (f32, f32)) {
+        self.count += 1;
+        if self.conflicted {
+            return;
+        }
+        match self.by {
+            None => self.by = Some(by),
+            // Deliberately not a tolerance. Two subtrees that moved by *almost* the same vector
+            // cannot both be answered by one shift of the pixels, and the caller's fallback is the
+            // frame it would have drawn anyway.
+            Some(held) if held == by => {}
+            Some(_) => {
+                self.by = None;
+                self.conflicted = true;
+            }
+        }
+    }
+}
+
+/// The device pixels a fragment's clip chain lets it draw in.
+///
+/// A newtype rather than a bare rectangle so that a caller cannot pass a fragment's own ink where
+/// the region admitting it belongs — the two are both device-space rectangles about the same box
+/// and mean opposite things.
+#[derive(Clone, Copy, Debug)]
+struct Admitted(Rect<DevicePx, Device>);
+
+impl Admitted {
+    /// The region that cuts nothing, for damage no chain can be shown to bound.
+    fn everything() -> Self {
+        Self(Rect::new(
+            zgui_geom::Point::new(DevicePx(f32::MIN / 2.0), DevicePx(f32::MIN / 2.0)),
+            zgui_geom::Size::new(DevicePx(f32::MAX), DevicePx(f32::MAX)),
+        ))
+    }
+
+    /// `rect` cut to what is admitted, or `None` when none of it is.
+    fn cut(self, rect: Rect<DevicePx, Device>) -> Option<Rect<DevicePx, Device>> {
+        rect.intersection(self.0)
+    }
 }
 
 /// What one box's subtree reported to the box above it.
@@ -197,11 +331,57 @@ struct Pass<'a, 'b, D: FrameDirty> {
     damage: &'a mut DamageSet,
     /// Whether this walk produced a fragment that has no place in the painting order yet.
     restacked: bool,
+    /// What the walk's rigid moves add up to.
+    moves: RigidMoves,
     /// Whether a subtree that only moved is offset in one descent or in one descent per duty.
     passes: split::Passes,
 }
 
 impl<D: FrameDirty> Pass<'_, '_, D> {
+    /// Damages a rectangle for a reason other than a subtree moving rigidly.
+    ///
+    /// Every absorb in this walk goes through either this or the pair in
+    /// [`rigid`](crate::fragment::diff::rigid), and the split is the whole of what
+    /// [`RigidMoves::only`] reports: a caller may shift pixels it already has only when nothing was
+    /// composed, removed or repainted in place, and this is where "something was" is recorded.
+    fn damage_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
+        let Some(rect) = admitted.cut(rect) else {
+            return;
+        };
+        absorb(&mut self.moves.beyond, rect);
+        absorb(self.damage, rect);
+    }
+
+    /// What a fragment's clip chain admits, in device pixels.
+    ///
+    /// Damage is what has to be *drawn again*, and a box cannot draw outside the chain it is drawn
+    /// under: [`Scene::assign_order`](zgui_scene::Scene) refuses a primitive its chain admits
+    /// nothing of, so a damage rectangle beyond the chain names pixels no frame will ever put
+    /// anything into.
+    ///
+    /// This is not a refinement. It is the difference between damage bounded by the window and
+    /// damage bounded by the *document*: a virtualised list stands two spacers in for the rows it
+    /// did not build, and their border boxes are as tall as the whole list — a quarter of a million
+    /// pixels for ten thousand rows, a hundred and fifty screens. Changing one of them is a real
+    /// change owing real damage, and the damage it owes is the part of the scrollport it can be
+    /// seen in.
+    ///
+    /// Resolved through the frame's own matrices rather than read flat, because a chain inside a
+    /// transformed subtree interned its rectangles in that subtree's coordinates and the subtree
+    /// moves without the links being interned again.
+    fn admits(&self, clip: ClipId) -> Rect<DevicePx, Device> {
+        let tables = &*self.tables;
+        let spatial = &tables.spatial;
+        tables
+            .clips
+            .bounds_placed(clip, &|id| spatial.resolve(id))
+    }
+
+    /// What a fragment's chain admits, as a region damage may be cut to.
+    fn admitted(&self, clip: ClipId) -> Admitted {
+        Admitted(self.admits(clip))
+    }
+
     /// Composes one box, its fragments and everything below it.
     ///
     /// `generator` is the element the box directly above this one was styled from, which is what an
@@ -445,8 +625,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             .collect();
         for frag in stale {
             if let Some(fragment) = self.store.fragment(frag) {
+                // Where a destroyed piece *was*, so it is cut to nothing for the same reason a
+                // vacated rectangle is: the chain it named is last frame's.
                 let gone = fragment.subtree_ink;
-                absorb(self.damage, gone);
+                self.damage_beyond_a_move(gone, Admitted::everything());
             }
         }
         // The index is not touched here: `truncate_fragments` records what it destroyed, and the
@@ -650,6 +832,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         self.store.set_read_extent(frag, next.reads_outside);
 
         let own = owed.own;
+        // What this fragment's chain admits *now*, which is the region its next ink can be drawn
+        // in. Where it *was* is deliberately not cut to anything: the chain it was drawn under
+        // belongs to a frame that is gone, and the node it named holds where its clipping box has
+        // moved to since. Cutting the old rectangle to the new region is how a scrolled row's
+        // vacated pixels get left on the screen — so the old rectangle is taken whole, which is an
+        // over-approximation and is always safe.
+        let admitted = self.admitted(next.clip);
         match change {
             Change::Identical => {
                 // A colour change moves nothing, and neither does re-shaped text of the same
@@ -658,7 +847,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 // digit changed width for width — put nothing in the damage set at all and paint
                 // nothing.
                 if own.intersects(REPAINTS_IN_PLACE) {
-                    absorb(self.damage, next.ink);
+                    self.damage_beyond_a_move(next.ink, admitted);
                 }
                 if own.contains(Dirty::REHIT) {
                     self.touch_hit(frag, change);
@@ -670,18 +859,18 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     Dirty::REPOSITION | Dirty::REHIT | self.a11y(node),
                 );
                 if let Some(previous) = &previous {
-                    absorb(self.damage, previous.ink);
+                    self.damage_beyond_a_move(previous.ink, Admitted::everything());
                 }
-                absorb(self.damage, next.ink);
+                self.damage_beyond_a_move(next.ink, admitted);
                 self.touch_hit(frag, change);
             }
             Change::Changed => {
                 self.dirty
                     .mark(owed.node, Dirty::REPAINT | Dirty::REHIT | self.a11y(node));
                 if let Some(previous) = &previous {
-                    absorb(self.damage, previous.ink);
+                    self.damage_beyond_a_move(previous.ink, Admitted::everything());
                 }
-                absorb(self.damage, next.ink);
+                self.damage_beyond_a_move(next.ink, admitted);
                 self.touch_hit(frag, change);
             }
         }

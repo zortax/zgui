@@ -8,6 +8,7 @@ use crate::capabilities::RenderCapabilities;
 use crate::memory::MemoryReport;
 use crate::outcome::FrameOutcome;
 use crate::pool::TargetPoolReport;
+use crate::shift::ScrollShift;
 use crate::target::RenderTarget;
 use crate::texture::{ExternalTexture, TextureHandle};
 
@@ -47,6 +48,31 @@ pub trait Renderer {
     /// `scene` must be finished: its arrays have to be in draw order and its vector passes planned,
     /// because a renderer executes that plan rather than deriving one.
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome;
+
+    /// Whether this renderer can move pixels it has already composed.
+    ///
+    /// A renderer answering true keeps a composed target across frames, so a scroll can be answered
+    /// by translating the part of it that is still valid and drawing only the strip that is not.
+    /// One answering false is drawn for in full, exactly as before — which is why this is a
+    /// question and not an instruction: the caller narrows the damage **only** when the renderer
+    /// says it will make up the difference, and a renderer that cannot is never handed a frame
+    /// whose damage is short of what it has to draw.
+    ///
+    /// False by default, so a renderer that has not thought about it is correct.
+    fn shifts_composed_pixels(&self) -> bool {
+        false
+    }
+
+    /// Moves the still-valid pixels of a composed region, before the next [`Renderer::draw`].
+    ///
+    /// Only ever called on a renderer that answered true to
+    /// [`shifts_composed_pixels`](Renderer::shifts_composed_pixels), and always in the same frame as
+    /// the draw whose damage was narrowed for it. The caller has already established that the
+    /// region moved rigidly by whole pixels and that nothing else is drawn over it; what is owed
+    /// here is the copy and nothing else.
+    fn shift_composed(&mut self, shift: ScrollShift) {
+        let _ = shift;
+    }
 
     /// Registers a texture the renderer did not draw, so the display list can refer to it.
     ///
