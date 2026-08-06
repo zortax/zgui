@@ -157,6 +157,7 @@ pub fn rebuild(
     // Published after every retirement this pass owed has been taken, so the figure is what the
     // next frame inherits rather than what this one built before it gave anything back.
     counter::set(Counter::FragmentsLive, u64::from(store.fragment_count()));
+    counter::set(Counter::BoxesLive, u64::from(store.box_capacity()));
     crate::invariants::check_if_enabled(store, hit);
 }
 

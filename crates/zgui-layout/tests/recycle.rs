@@ -334,3 +334,89 @@ fn a_row_holding_a_box_the_scroller_lays_out_refuses_the_splice() {
         "a refused splice left the tree changed"
     );
 }
+
+// -- the slots a rebuild gives back ---------------------------------------------------------------
+
+/// A document rebuilt over and over settles at a bounded number of slots.
+///
+/// `boxtree::build` removes every box before it builds, and a removed box stays readable — and its
+/// slot withheld — until the frame that removed it is recycled. That is what makes a box key safe
+/// to hold across the stages of one frame, and it means the two documents overlap: a rebuild peaks
+/// at the old tree plus the new one, so the arena settles at twice the document and stays there.
+///
+/// Staying there is the claim. Without the recycling, every rebuild leaves a whole document's worth
+/// of `BoxNode`s undropped — each holding a `ComputedStyle`, its text and two child lists — and the
+/// arena climbs by the size of the document every time the patch path refuses, for the life of the
+/// process.
+///
+/// The number to watch is the arena's *capacity* rather than how many boxes are live. The live
+/// count reads flat straight through this failure: the document really does hold the same boxes
+/// afterwards, and it is the slots behind them that never come back.
+#[test]
+fn rebuilding_a_document_over_and_over_does_not_grow_the_box_arena() {
+    let _recording = Recording::begin();
+    let fixture = port();
+    let mut store = LayoutStore::new(fixture.document.store().document());
+
+    zgui_layout::boxtree::build(&mut store, &fixture.document);
+    store.recycle();
+    let live = store.len();
+    assert!(live > 0, "the fixture built no boxes");
+
+    // The first rebuild is the one that peaks: the outgoing tree is still holding its slots while
+    // the incoming one is allocated. Every rebuild after it reuses what that one gave back.
+    zgui_layout::boxtree::build(&mut store, &fixture.document);
+    store.recycle();
+    let settled = store.box_capacity();
+    assert!(
+        settled <= live * 2,
+        "one rebuild reached {settled} slots for a document of {live} boxes, which is more than \
+         the two trees that briefly coexist"
+    );
+
+    for round in 2..20 {
+        zgui_layout::boxtree::build(&mut store, &fixture.document);
+        store.recycle();
+        assert_eq!(
+            store.len(),
+            live,
+            "round {round} built a different number of boxes"
+        );
+        assert_eq!(
+            store.box_capacity(),
+            settled,
+            "round {round} took slots the arena should have had free, so the boxes removed by the \
+             rounds before it were never given back"
+        );
+    }
+}
+
+/// A removed box keeps its slot until the frame is recycled.
+///
+/// The other half of the same contract, and the reason the recycling is at the end of the frame
+/// rather than inside the layout pass: every stage after layout — scroll dispatch, geometry
+/// observations, re-hit, the caret, paint, the accessibility walk — may still resolve a box key it
+/// captured earlier in the frame, and a slot handed back early is a key that has silently come to
+/// mean something else.
+#[test]
+fn a_removed_box_keeps_its_slot_until_the_frame_is_recycled() {
+    let _recording = Recording::begin();
+    let fixture = port();
+    let mut store = LayoutStore::new(fixture.document.store().document());
+    zgui_layout::boxtree::build(&mut store, &fixture.document);
+    let key = store.root().expect("a root");
+    assert!(store.contains(key));
+
+    // Removing it does not take it away: the rest of the frame can still read it.
+    store.remove(key);
+    assert!(
+        store.get(key).is_some(),
+        "a box removed mid-frame stopped resolving before the frame ended"
+    );
+
+    store.recycle();
+    assert!(
+        !store.contains(key),
+        "the recycling left the removed box resolvable, so its slot was never given back"
+    );
+}

@@ -294,6 +294,18 @@ impl Window {
 
         mark("f.recycle");
         self.dom.end_frame();
+        // The box arena ends its frame here for the same reason the document's does, and it has to
+        // be here rather than inside `lay_out`: a removed box stays readable until this call, and
+        // every stage between layout and now — scroll dispatch, geometry observations, re-hit,
+        // the caret, paint, the accessibility walk — may still resolve a box key it captured
+        // earlier in the frame.
+        //
+        // A frame where `lay_out` returned before the fragment diff leaves the removed boxes
+        // undrained, so their coordinate systems are given back a frame later than usual. That is
+        // safe rather than merely tolerable: the list of retired keys is independent of the arena,
+        // so the next diff drains the same values, and a `PropertyOwner` carries the slot's
+        // occupancy counter — a name given back late can never be confused with one since reissued.
+        self.layout.borrow_mut().recycle();
         let changed_during = self.document.borrow().end_frame();
         let owed = self.gate.end_frame();
         let needs_another_frame = owed || changed_during || flush.needs_another_frame || drained;

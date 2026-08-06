@@ -25,6 +25,21 @@ use crate::node::kind::FormattingContext;
 use crate::style::calc::CalcArena;
 use crate::style::convert::length::IntrinsicSizes;
 
+/// Whether two computed styles are the same cascade result, as opposed to two that merely agree.
+///
+/// Allocation identity rather than value equality. A cascade result is a fresh allocation each time
+/// it is computed and shared by every element it was computed for, so this is a pointer comparison
+/// on the path a document full of similar elements takes. Two styles that do not share an
+/// allocation may still agree on every property, and treating those as different costs one refcount
+/// and no downstream work — every consumer keys on the property groups rather than on the style as
+/// a whole.
+pub(crate) fn same_cascade(held: &ComputedStyle, style: &ComputedStyle) -> bool {
+    ::core::ptr::eq(
+        ::core::ptr::from_ref(&**held),
+        ::core::ptr::from_ref(&**style),
+    )
+}
+
 /// The numbers a layout pass supplies that no style carries.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DeviceStyle {

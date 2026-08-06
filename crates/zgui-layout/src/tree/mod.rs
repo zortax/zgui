@@ -17,7 +17,6 @@ use zgui_profile::{Counter, counter};
 
 use crate::inline::atomic::AtomicMemo;
 use crate::inline::content::styles::TextStyles;
-use crate::intrinsic::memo::IntrinsicMemo;
 use crate::key::to_node_id;
 use crate::measure::MeasureContent;
 use crate::style::calc::CalcArena;
@@ -29,9 +28,18 @@ use crate::tree::store::LayoutStore;
 /// Layout never owns the document. What it owns is the box records and their results, and what it
 /// borrows for a pass is those plus whatever can say how big a piece of content is.
 ///
-/// The `calc()` arena and the intrinsic measurements live here rather than in the store because
-/// both are properties of *one pass*: the arena's handles stop meaning anything when the pass ends,
-/// and an intrinsic measurement is taken against a containing block that the next pass may change.
+/// The `calc()` arena lives here rather than in the store because it is a property of *one pass*:
+/// its handles stop meaning anything when the pass ends.
+///
+/// The intrinsic measurements used to live here too, on the reasoning that a measurement is taken
+/// against a containing block the next pass may change. That reasoning does not survive reading the
+/// probe that takes them: [`prepass`](crate::intrinsic::prepass) asks with no known dimensions, no
+/// parent size and an available space pinned to min-content or max-content, so no containing block
+/// enters the answer and there is nothing about it for a new pass to invalidate. They now live on
+/// the box, beside the two cache storeys they are emptied with — see
+/// [`BoxLayout::intrinsic`](crate::tree::store::state::BoxLayout::intrinsic), which carries the
+/// argument in full. Moving them is what stops a `width: fit-content` button re-measuring its whole
+/// subtree on every frame that lays anything out.
 pub struct LayoutTree<'a, C> {
     /// The boxes and their results.
     store: &'a mut LayoutStore,
@@ -41,8 +49,6 @@ pub struct LayoutTree<'a, C> {
     device: DeviceStyle,
     /// Where this pass interns `calc()`.
     calc: RefCell<CalcArena>,
-    /// What the intrinsic pre-pass measured.
-    intrinsic: IntrinsicMemo,
     /// What each atomic inline's nested layout came out at, per constraint.
     atomic: AtomicMemo,
     /// The text properties of each distinct style this pass has met.
@@ -57,7 +63,6 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             content,
             device,
             calc: RefCell::new(CalcArena::new(device.scale)),
-            intrinsic: IntrinsicMemo::default(),
             atomic: AtomicMemo::default(),
             text: TextStyles::default(),
         }
@@ -86,7 +91,11 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
                     height: AvailableSpace::Definite(viewport.height),
                 },
             );
+            // The second pass exists only to revise a gutter, so a document with no undecided
+            // gutter in it never enters one — and asking is a test against a list rather than a
+            // walk of the tree.
             if pass + 1 == crate::scroll_region::auto::MAX_PASSES
+                || self.store.no_undecided_overflow()
                 || !crate::scroll_region::auto::revise(self, root)
             {
                 break;
@@ -150,16 +159,6 @@ impl<C> LayoutTree<'_, C> {
         self.content
     }
 
-    /// What the intrinsic pre-pass measured.
-    pub fn intrinsic(&self) -> &IntrinsicMemo {
-        &self.intrinsic
-    }
-
-    /// What the intrinsic pre-pass measured, for modification.
-    pub(crate) fn intrinsic_mut(&mut self) -> &mut IntrinsicMemo {
-        &mut self.intrinsic
-    }
-
     /// The text properties of each distinct style met so far.
     pub(crate) fn text_styles_mut(&mut self) -> &mut TextStyles {
         &mut self.text
@@ -198,8 +197,8 @@ impl<C> LayoutTree<'_, C> {
     pub(crate) fn style_of(&self, key: BoxKey) -> StyleRef<'_> {
         let node = self.store.node(key);
         let measured = MeasuredSizes {
-            horizontal: self.intrinsic.get(key, crate::axis::Axis::Horizontal),
-            vertical: self.intrinsic.get(key, crate::axis::Axis::Vertical),
+            horizontal: self.store.intrinsic(key, crate::axis::Axis::Horizontal),
+            vertical: self.store.intrinsic(key, crate::axis::Axis::Vertical),
         };
         StyleRef::new(node, &self.calc, self.device, measured, node.natural_ratio)
             .with_reserved_gutter(self.store.reserved_gutter(key))

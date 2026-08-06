@@ -2,9 +2,11 @@
 
 use zgui_dom::side::BoxKey;
 
+use crate::axis::Axis;
 use crate::fragment::FragList;
 use crate::inline::content::memo::Flattened;
 use crate::inline::resolved::InlineResolution;
+use crate::style::convert::length::IntrinsicSizes;
 use crate::tree::store::LayoutStore;
 use crate::tree::store::measured::Measured;
 
@@ -18,6 +20,38 @@ pub(crate) struct BoxLayout {
     /// The two are one cache with two storeys and are always emptied together — see
     /// [`BoxLayout::forget_layout`].
     pub(crate) measured: Measured,
+    /// What this box measured at its narrowest and its widest, per axis.
+    ///
+    /// The third storey of the cache, and the one thing here that survives a pass. It is emptied by
+    /// the same call as the other two and for the same reason: it is an answer about this box's own
+    /// content, and every change to that content invalidates this box by construction.
+    ///
+    /// # Why it may be held across frames at all
+    ///
+    /// Because it does not depend on the containing block, which is the property a measurement
+    /// taken during layout does not have.
+    /// [`prepass::probe`](crate::intrinsic::prepass) asks with `known_dimensions: NONE` and
+    /// `parent_size: NONE` and an available space pinned to min-content or max-content, so a
+    /// percentage anywhere inside the subtree resolves against nothing — exactly as it would on any
+    /// other frame, at any other viewport. The answer is a function of the subtree's styles and
+    /// text, the device scale and the gutters reserved inside it, and of nothing above the box.
+    ///
+    /// Each of those clears this box's cache when it moves: a style or a text rewrite marks the box
+    /// and its ancestors through [`mark_dirty`](crate::tree::dirty::mark_dirty), a scale change goes
+    /// through [`mark_all_dirty`](crate::tree::dirty::mark_all_dirty), and a gutter decision marks
+    /// the box it was taken for. `mark_dirty` reaches this box from anywhere below it despite its
+    /// early stop, because dirtiness is upward-closed — it stops only at an ancestor that is
+    /// already holding nothing, and that ancestor cleared its own ancestors when it was marked.
+    pub(crate) intrinsic: [Option<IntrinsicSizes>; 2],
+    /// Which axes of this box are written as a content keyword.
+    ///
+    /// The authoritative half of the content-keyword roster; see
+    /// [`roster`](crate::tree::store::roster) for why the list beside it is only a hint.
+    pub(crate) content_axes: [bool; 2],
+    /// Whether this box's overflow is undecided on each axis.
+    ///
+    /// The authoritative half of the undecided-overflow roster.
+    pub(crate) undecided_overflow: (bool, bool),
     /// The engine's result before device-pixel snapping.
     pub(crate) unrounded: taffy::Layout,
     /// The engine's result the fragments this box currently holds were composed from.
@@ -71,12 +105,27 @@ pub(crate) struct BoxLayout {
 impl BoxLayout {
     /// Throws away every answer this box is holding about its own size.
     ///
-    /// Both storeys of the cache go at once, and that is the whole of why this exists rather than
-    /// each caller clearing what it happens to know about. An answer kept in one while the other
-    /// was emptied is a measurement from before whatever invalidated the box, served in preference
-    /// to taking it again — which is a document laid out to the sizes its content used to have,
-    /// with nothing anywhere reporting that anything was skipped.
+    /// All three storeys of the cache go at once, and that is the whole of why this exists rather
+    /// than each caller clearing what it happens to know about. An answer kept in one while the
+    /// others were emptied is a measurement from before whatever invalidated the box, served in
+    /// preference to taking it again — which is a document laid out to the sizes its content used
+    /// to have, with nothing anywhere reporting that anything was skipped.
     pub(crate) fn forget_layout(&mut self) {
+        self.forget_cached_sizes();
+        self.intrinsic = [None, None];
+    }
+
+    /// Throws away the two cache storeys, keeping the intrinsic answer.
+    ///
+    /// The intrinsic pre-pass alone may call this, and only immediately after computing that
+    /// answer. What it is clearing is the entries its own probes stored on the way to the answer,
+    /// which were taken while the box's keyword still read as `auto` and would otherwise be served
+    /// back during the real layout, when the keyword means a length. Keeping the answer it has just
+    /// computed is the point of the call.
+    ///
+    /// Nothing else may use it. Every other caller is invalidating the box because something it
+    /// measured has changed, and for those the intrinsic answer is exactly as stale as the rest.
+    pub(crate) fn forget_cached_sizes(&mut self) {
         self.cache.clear();
         self.measured.clear();
     }
@@ -84,6 +133,18 @@ impl BoxLayout {
     /// Whether this box is holding no answer about its own size.
     pub(crate) fn holds_no_layout(&self) -> bool {
         self.cache.is_empty() && self.measured.is_empty()
+    }
+}
+
+impl LayoutStore {
+    /// What one box measured on one axis, if it is still holding the answer.
+    pub(crate) fn intrinsic(&self, key: BoxKey, axis: Axis) -> Option<IntrinsicSizes> {
+        self.state(key)?.intrinsic[axis.index()]
+    }
+
+    /// Records what one box measured on one axis.
+    pub(crate) fn set_intrinsic(&mut self, key: BoxKey, axis: Axis, sizes: IntrinsicSizes) {
+        self.state_mut(key).intrinsic[axis.index()] = Some(sizes);
     }
 }
 

@@ -75,6 +75,7 @@ pub fn check(store: &LayoutStore, hit: &HitIndex) -> Vec<Violation> {
     all.dedup();
     for key in all {
         check_box(store, key, &mut out);
+        check_rosters(store, key, &mut out);
         check_fragments(store, hit, key, &mut out);
     }
     check_root(store, root, &mut out);
@@ -148,6 +149,36 @@ fn check_box(store: &LayoutStore, key: BoxKey, out: &mut Vec<Violation>) {
         out.push(Violation::new(format!(
             "box {} names an element that does not list it",
             key.index()
+        )));
+    }
+}
+
+/// Every box's roster memberships say what its style says.
+///
+/// The rosters are maintained rather than recomputed, so they are correct exactly as long as every
+/// place that establishes or replaces a box's style goes through
+/// [`LayoutStore::set_style`](crate::tree::store::LayoutStore::set_style). This is what notices the
+/// day a fourth one is added: a stale membership bit is not a crash, it is a `fit-content` box that
+/// is silently never measured, or a scrollport whose gutter is never revised, and neither has a
+/// symptom at the point of the mistake.
+fn check_rosters(store: &LayoutStore, key: BoxKey, out: &mut Vec<Violation>) {
+    let Some(node) = store.get(key) else {
+        return;
+    };
+    let content = crate::intrinsic::keywords::axes_of(&node.style);
+    if content != store.content_axes(key) {
+        out.push(Violation::new(format!(
+            "box {} is on the content-keyword roster as {:?} and its style says {content:?}",
+            key.index(),
+            store.content_axes(key)
+        )));
+    }
+    let overflow = crate::style::convert::overflow::undecided_axes(&node.style);
+    if overflow != store.undecided_overflow(key) {
+        out.push(Violation::new(format!(
+            "box {} is on the undecided-overflow roster as {:?} and its style says {overflow:?}",
+            key.index(),
+            store.undecided_overflow(key)
         )));
     }
 }

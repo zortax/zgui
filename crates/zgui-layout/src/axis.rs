@@ -16,6 +16,19 @@ impl Axis {
     /// Both axes, horizontal first.
     pub const BOTH: [Self; 2] = [Self::Horizontal, Self::Vertical];
 
+    /// Where this axis sits in a pair of per-axis values.
+    ///
+    /// Stated rather than taken from the discriminant, because several places store one value per
+    /// axis in a `[T; 2]` and read it back through this: an implicit numbering agrees with
+    /// [`Axis::BOTH`] only by coincidence, and the day the two disagree is the day a box is sized
+    /// by the measurement it took on the other axis.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Horizontal => 0,
+            Self::Vertical => 1,
+        }
+    }
+
     /// The other axis.
     pub const fn other(self) -> Self {
         match self {

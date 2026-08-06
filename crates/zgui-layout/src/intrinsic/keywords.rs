@@ -5,6 +5,7 @@
 //! for the keyword. Every other value goes straight through, which is why this asks the question
 //! per box rather than measuring everything.
 
+use zgui_css::ComputedStyle;
 use zgui_css::values::size::{MaxSizeValue, SizeValue};
 
 use crate::axis::Axis;
@@ -33,8 +34,15 @@ pub fn max_size_needs_measuring(value: &MaxSizeValue) -> bool {
 }
 
 /// Which of a box's axes carry a keyword that needs the content measured.
-pub fn axes_needing_measurement(style: StyleRef<'_>) -> [bool; 2] {
-    let position = style.position_group();
+///
+/// This is the sole definition of "is a content-keyword box", and both the roster that decides
+/// which boxes the pre-pass visits and the pre-pass itself answer the question by calling it. That
+/// is not tidiness. Two spellings of this predicate that drift apart give a box the roster never
+/// registers and the pre-pass would have measured: its keyword goes unanswered, reads as `auto`,
+/// and the document lays out to a size its content never asked for — with every box in it
+/// internally consistent and nothing anywhere reporting that a measurement was skipped.
+pub fn axes_of(style: &ComputedStyle) -> [bool; 2] {
+    let position = style.get_position();
     [
         size_needs_measuring(&position.width)
             || size_needs_measuring(&position.min_width)
@@ -43,6 +51,11 @@ pub fn axes_needing_measurement(style: StyleRef<'_>) -> [bool; 2] {
             || size_needs_measuring(&position.min_height)
             || max_size_needs_measuring(&position.max_height),
     ]
+}
+
+/// The same question asked of a box the layout algorithms are already looking at.
+pub fn axes_needing_measurement(style: StyleRef<'_>) -> [bool; 2] {
+    axes_of(style.style())
 }
 
 /// Whether the given axis needs measuring.

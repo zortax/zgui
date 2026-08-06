@@ -11,9 +11,9 @@
 //! and an oscillating box is better left one pixel wrong than laid out forever.
 
 use zgui_dom::side::BoxKey;
+use zgui_profile::{Counter, counter};
 
 use crate::measure::MeasureContent;
-use crate::style::convert::overflow::is_undecided;
 use crate::tree::LayoutTree;
 
 /// How many times the decision may be revised before it is taken as final.
@@ -25,20 +25,37 @@ pub const MAX_PASSES: u32 = 2;
 /// owed. The decisions themselves are kept on the boxes, so the next frame starts from the previous
 /// answer rather than from `hidden` — a scrollport that was scrolling last frame does not flicker
 /// its gutter on every keystroke inside it.
+///
+/// # Only the boxes that can change an answer
+///
+/// The undecided boxes are the ones written `overflow: auto`, and every other box in the document
+/// is one this would look at and immediately skip. So it walks the roster of them rather than the
+/// tree — see [`roster`](crate::tree::store::roster) — which makes this cost what the document
+/// *scrolls* rather than what it contains. A document with no `auto` anywhere, which is most of
+/// them, does not run at all.
+///
+/// The entries are compacted as they are read. A box whose overflow was restyled away is dropped
+/// here rather than at the restyle, and so is one that is no longer live: the roster holds every
+/// box ever registered, while the walk this replaced started at the root and so saw only boxes
+/// still attached to the tree. Reviving a detached box's gutter would mark a chain that never
+/// reaches the root, and buy a second layout pass that changes nothing.
 pub fn revise<C: MeasureContent>(tree: &mut LayoutTree<'_, C>, root: BoxKey) -> bool {
+    if tree.store().no_undecided_overflow() {
+        return false;
+    }
     let mut changed = false;
-    for key in tree.store().keys() {
-        let Some(node) = tree.store().get(key) else {
-            continue;
-        };
-        let box_ = node.style.get_box();
-        let horizontal = is_undecided(box_.overflow_x);
-        let vertical = is_undecided(box_.overflow_y);
-        if !horizontal && !vertical {
-            continue;
+    let mut roster = tree.store_mut().take_overflow_roster();
+    roster.entries.retain(|&key| {
+        if !tree.store().contains(key) {
+            return false;
         }
+        let (horizontal, vertical) = tree.store().undecided_overflow(key);
+        if !horizontal && !vertical {
+            return false;
+        }
+        counter::bump(Counter::GuttersExamined);
         let Some(layout) = tree.store().layout_of(key) else {
-            continue;
+            return true;
         };
         let held = tree.store().auto_scroll(key);
         let wanted = (
@@ -46,12 +63,14 @@ pub fn revise<C: MeasureContent>(tree: &mut LayoutTree<'_, C>, root: BoxKey) -> 
             vertical && layout.content_size.height.0 > layout.size.height.0 + EPSILON,
         );
         if wanted == held {
-            continue;
+            return true;
         }
         tree.store_mut().set_auto_scroll(key, wanted);
         crate::tree::dirty::mark_dirty(tree.store_mut(), key);
         changed = true;
-    }
+        true
+    });
+    tree.store_mut().restore_overflow_roster(roster);
     if changed {
         crate::tree::dirty::mark_dirty(tree.store_mut(), root);
     }

@@ -405,3 +405,201 @@ fn an_anonymous_box_does_not_block_its_subtree() {
         "the pass that skipped subtrees left different geometry behind"
     );
 }
+
+// -- the measurements a content keyword does not take again --------------------------------------
+
+/// A row of `fit-content` chips, each holding text of its own.
+///
+/// The shape the saving is worth something in, and the shape a real interface is full of: a chip,
+/// a button and a label are all boxes sized by what is inside them, and measuring one is a whole
+/// nested layout of its subtree taken twice — once at min-content and once at max-content.
+fn chips(count: usize) -> Element {
+    let chips: Vec<Element> = (0..count)
+        .map(|index| {
+            Element::new("chip").children(vec![Element::new("label").text(if index % 2 == 0 {
+                "a longer caption here"
+            } else {
+                "short"
+            })])
+        })
+        .collect();
+    Element::new("root").children(chips)
+}
+
+/// The sheet the chips are laid out by.
+const CHIP_SHEET: &str = "root { display: flex; flex-direction: row; width: 600px }
+     chip { display: block; width: fit-content; padding: 4px }
+     label { display: block }";
+
+/// A chip fixture, its store laid out once, and the measurer that answered for its text.
+fn settled_chips(count: usize) -> (Fixture, LayoutStore, Content) {
+    let fixture = Fixture::new(chips(count), CHIP_SHEET);
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    lay_out_only(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1);
+    (fixture, store, content)
+}
+
+/// A document full of content keywords, laid out again with nothing changed, measures nothing.
+///
+/// The pre-pass is what this is about. Every `fit-content` box in the document used to have its
+/// cache thrown away and its subtree measured afresh on every pass that ran, whatever had actually
+/// changed — so a frame that laid anything out at all re-measured every chip on the screen, and a
+/// keystroke in a text field paid for the toolbar above it.
+#[test]
+fn a_pass_over_unchanged_content_keywords_measures_nothing() {
+    let _guard = exclusive();
+    let fixture = Fixture::new(chips(12), CHIP_SHEET);
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+
+    counter::reset();
+    lay_out_only(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1);
+    assert!(
+        counter::get(Counter::SizesMeasured) > 0,
+        "the fixture measured nothing at all, so it is not exercising the pre-pass"
+    );
+    let settled_text = print::to_text(&store);
+
+    // The same store, laid out again with nothing invalidated. Ungated, so the pass really runs:
+    // the claim is about what the pass does, not about the pass being skipped.
+    counter::reset();
+    lay_out_only(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1);
+    assert_eq!(
+        counter::get(Counter::SizesMeasured),
+        0,
+        "the pass re-measured content it was already holding the answer for"
+    );
+    assert_eq!(
+        print::to_text(&store),
+        settled_text,
+        "the geometry moved on a pass that measured nothing"
+    );
+}
+
+/// And what it held is what a document with no history measures.
+///
+/// The failure this is written against is silent. A stale intrinsic answer lays every box out
+/// consistently, to a size the content stopped asking for, and nothing downstream can tell — which
+/// is why the saving is asserted here beside the comparison rather than on its own.
+#[test]
+fn a_held_intrinsic_answer_equals_the_one_a_fresh_document_measures() {
+    let _guard = exclusive();
+    let (_fixture, mut store, mut content) = settled_chips(12);
+    // A second pass, which is the one that reuses, and a third into a narrower viewport — so the
+    // reuse is exercised where the containing block moved, which is the case the answers used to be
+    // thrown away for.
+    lay_out_only(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1);
+    lay_out_only(&mut store, &mut content, 420.0, VIEWPORT.1);
+    let reused = print::to_text(&store);
+
+    let fixture = Fixture::new(chips(12), CHIP_SHEET);
+    let mut fresh = fixture.box_tree();
+    let mut fresh_content = measurer();
+    lay_out_only(&mut fresh, &mut fresh_content, 420.0, VIEWPORT.1);
+    assert_eq!(
+        reused,
+        print::to_text(&fresh),
+        "a document reusing its intrinsic answers disagrees with one measuring them afresh"
+    );
+}
+
+/// Invalidating a box throws away what it measured, along with the rest of what it was holding.
+#[test]
+fn invalidating_a_box_forgets_what_it_measured() {
+    let _guard = exclusive();
+    let (_fixture, mut store, mut content) = settled_chips(6);
+    counter::reset();
+    lay_out_only(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1);
+    assert_eq!(counter::get(Counter::SizesMeasured), 0, "held, as above");
+
+    // A scale change is the one invalidation that reaches every box at once, and every intrinsic
+    // answer is a number of device pixels, so all of them have to go.
+    zgui_layout::tree::dirty::mark_all_dirty(&mut store);
+    counter::reset();
+    lay_out_only(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1);
+    assert!(
+        counter::get(Counter::SizesMeasured) > 0,
+        "a box whose layout was thrown away served a measurement taken before it"
+    );
+}
+
+// -- the boxes the gutter fixpoint does not look at ----------------------------------------------
+
+/// One `overflow: auto` scrollport beside `filler` boxes that can decide nothing.
+fn one_port_among(filler: usize) -> Fixture {
+    let mut children = vec![
+        Element::new("port").children(
+            (0..12)
+                .map(|_| Element::new("tall"))
+                .collect::<Vec<Element>>(),
+        ),
+    ];
+    children.extend((0..filler).map(|_| Element::new("plain")));
+    Fixture::new(
+        Element::new("root").children(children),
+        "root { display: block; width: 400px }
+         port { display: block; height: 100px; overflow: auto }
+         tall { display: block; height: 40px }
+         plain { display: block; height: 2px }",
+    )
+}
+
+/// The gutter fixpoint examines the boxes that can decide a gutter, and no others.
+///
+/// The document grows by a factor of five and the work must not move: the boxes that can decide
+/// anything are the ones written `overflow: auto`, so a document of ten thousand blocks with one
+/// scrollport in it owes exactly one examination. Walking the tree to find them, which is what this
+/// used to do, made every layout pass cost the whole document — in every document, including the
+/// overwhelming majority with no `auto` in them anywhere.
+#[test]
+fn the_gutter_fixpoint_costs_what_the_document_scrolls_not_what_it_contains() {
+    let _guard = exclusive();
+    let mut examined = Vec::new();
+    for filler in [40usize, 200] {
+        let fixture = one_port_among(filler);
+        let mut store = fixture.box_tree();
+        let mut content = measurer();
+        counter::reset();
+        lay_out_only(&mut store, &mut content, 400.0, 300.0);
+        examined.push(counter::get(Counter::GuttersExamined));
+
+        // The fixture has to actually reserve a gutter, or this is measuring a fixpoint that never
+        // had a decision to take.
+        let port = store.node(store.root().expect("a root")).children[0];
+        assert_eq!(
+            store.auto_scroll(port),
+            (false, true),
+            "the scrollport did not overflow, so the fixpoint decided nothing"
+        );
+    }
+    assert_eq!(
+        examined[0], examined[1],
+        "the fixpoint examined more boxes in the larger document, so it is still walking the tree"
+    );
+    assert!(
+        examined[0] <= 2 * u64::from(zgui_layout::scroll_region::auto::MAX_PASSES),
+        "one scrollport over at most two passes is a handful of examinations, not {}",
+        examined[0]
+    );
+}
+
+/// A document with nothing undecided does not enter the fixpoint at all.
+#[test]
+fn a_document_with_nothing_undecided_never_enters_the_fixpoint() {
+    let _guard = exclusive();
+    let fixture = Fixture::new(
+        Element::new("root").children((0..200).map(|_| Element::new("plain")).collect()),
+        "root { display: block; width: 400px; overflow: hidden }
+         plain { display: block; height: 2px }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    counter::reset();
+    lay_out_only(&mut store, &mut content, 400.0, 300.0);
+    assert_eq!(
+        counter::get(Counter::GuttersExamined),
+        0,
+        "a document with no undecided gutter examined boxes for one anyway"
+    );
+}

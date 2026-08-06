@@ -9,12 +9,14 @@
 //! | `scroll` | which axes reserve a scrollbar gutter |
 //! | `laid_out` | the viewport the results now held were produced for |
 //! | `measured` | the size-only answers a box keeps beyond the engine's own nine slots |
+//! | `roster` | the boxes whose style puts them in a class some pass has to visit |
 
 mod fragments;
 mod inline;
 pub mod laid_out;
 pub(crate) mod measured;
 mod resolved;
+pub(crate) mod roster;
 mod scroll;
 pub(crate) mod state;
 
@@ -23,12 +25,14 @@ mod tests;
 
 use rustc_hash::FxHashMap;
 use zgui_arena::{ArenaKind, ChunkArena, DocumentId, DomainId, PagedVec, SlotVec};
+use zgui_css::ComputedStyle;
 use zgui_dom::NodeKey;
 use zgui_dom::side::{BoxKey, BoxList};
 
 use crate::fragment::{FragKey, FragList, Fragment};
 use crate::key::{named, slot};
 use crate::node::box_node::BoxNode;
+use crate::tree::store::roster::{Roster, Rosters};
 use crate::tree::store::state::BoxLayout;
 
 pub use crate::tree::store::resolved::ResolvedLayout;
@@ -60,6 +64,8 @@ pub struct LayoutStore {
     boxes: ChunkArena<BoxNode>,
     /// One entry per box, holding the engine's cache and the box's result.
     layout: SlotVec<BoxKey, BoxLayout>,
+    /// The boxes whose style puts them in a class some pass has to visit.
+    rosters: Rosters,
     /// The box the document is laid out from.
     root: Option<BoxKey>,
     /// Which boxes each element generated, in document order.
@@ -128,6 +134,7 @@ impl LayoutStore {
         Self {
             boxes: ChunkArena::new(box_domain),
             layout: SlotVec::for_domain(box_domain),
+            rosters: Rosters::default(),
             root: None,
             boxes_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(document)),
             fragments: ChunkArena::new(fragment_domain),
@@ -162,6 +169,17 @@ impl LayoutStore {
         self.boxes.is_empty()
     }
 
+    /// How many box slots the arena is holding, live and awaiting recycling.
+    ///
+    /// The high-water mark rather than the live count, which is what makes it the figure to watch:
+    /// [`LayoutStore::remove`] keeps a box readable until the frame is recycled, so a document that
+    /// rebuilds its whole box tree holds two documents' worth of slots until that happens. A leak
+    /// here — a removal never recycled — is invisible in [`LayoutStore::len`] and shows up only
+    /// as this number climbing frame after frame.
+    pub fn box_capacity(&self) -> u32 {
+        self.boxes.capacity()
+    }
+
     /// The box the document is laid out from, if the tree has been built.
     pub fn root(&self) -> Option<BoxKey> {
         self.root
@@ -175,12 +193,104 @@ impl LayoutStore {
     /// Adds a box, and gives it an empty result to be laid out into.
     pub fn insert(&mut self, node: BoxNode) -> BoxKey {
         let source = node.source;
+        let style = node.style.clone();
         let key = named(self.boxes.insert(node));
         self.layout.insert(key, BoxLayout::default());
+        self.classify(key, &style);
         if let Some(source) = source {
             self.boxes_of_node.get_mut(source).push(key);
         }
         key
+    }
+
+    /// Puts a new computed style on a live box, and reports whether that changed the allocation.
+    ///
+    /// The only way a box's style is ever replaced, and one of the two places it is ever
+    /// established. Assigning `node.style` directly would leave the rosters describing the style
+    /// the box used to have: a button restyled from `width: auto` to `width: fit-content` would
+    /// never be measured, and one restyled the other way would be measured for ever.
+    ///
+    /// The test is allocation identity rather than value equality, which is what the caller wants
+    /// and is documented where it is relied on — see
+    /// [`patch::style`](crate::boxtree::patch::style).
+    pub fn set_style(&mut self, key: BoxKey, style: &ComputedStyle) -> bool {
+        let Some(node) = self.boxes.get_mut(slot(key)) else {
+            return false;
+        };
+        if crate::style::same_cascade(&node.style, style) {
+            return false;
+        }
+        node.style = style.clone();
+        self.classify(key, style);
+        true
+    }
+
+    /// Records which style-defined classes a box belongs to, and enrols it in the ones it has
+    /// joined.
+    ///
+    /// Called from the two places a box's style is established: [`LayoutStore::insert`] and
+    /// [`LayoutStore::set_style`]. The membership bits are written unconditionally so that a box
+    /// leaving a class is recorded at once; the list is only appended to, because a box that is
+    /// already a member is already in it and the entries for boxes that have left are compacted
+    /// away by whoever next walks the list.
+    fn classify(&mut self, key: BoxKey, style: &ComputedStyle) {
+        let content = crate::intrinsic::keywords::axes_of(style);
+        let overflow = crate::style::convert::overflow::undecided_axes(style);
+        let Some(state) = self.layout.get_mut(key) else {
+            return;
+        };
+        let joined_content = content != [false, false] && state.content_axes == [false, false];
+        let joined_overflow =
+            overflow != (false, false) && state.undecided_overflow == (false, false);
+        state.content_axes = content;
+        state.undecided_overflow = overflow;
+        if joined_content {
+            self.rosters.content.push(key);
+        }
+        if joined_overflow {
+            self.rosters.overflow.push(key);
+        }
+    }
+
+    /// Whether no box in the document is written with a content keyword.
+    pub(crate) fn no_content_keywords(&self) -> bool {
+        self.rosters.content.is_empty()
+    }
+
+    /// Whether no box in the document has an undecided gutter.
+    pub(crate) fn no_undecided_overflow(&self) -> bool {
+        self.rosters.overflow.is_empty()
+    }
+
+    /// Takes the content-keyword roster for the duration of one pass over it.
+    pub(crate) fn take_content_roster(&mut self) -> Roster {
+        Roster::take(&mut self.rosters.content)
+    }
+
+    /// Puts it back, compacted.
+    pub(crate) fn restore_content_roster(&mut self, roster: Roster) {
+        roster.restore(&mut self.rosters.content);
+    }
+
+    /// Takes the undecided-overflow roster for the duration of one pass over it.
+    pub(crate) fn take_overflow_roster(&mut self) -> Roster {
+        Roster::take(&mut self.rosters.overflow)
+    }
+
+    /// Puts it back, compacted.
+    pub(crate) fn restore_overflow_roster(&mut self, roster: Roster) {
+        roster.restore(&mut self.rosters.overflow);
+    }
+
+    /// Which axes of a box are written with a content keyword, as the roster recorded it.
+    pub(crate) fn content_axes(&self, key: BoxKey) -> [bool; 2] {
+        self.state(key).map_or([false, false], |it| it.content_axes)
+    }
+
+    /// Which axes of a box have an undecided gutter, as the roster recorded it.
+    pub(crate) fn undecided_overflow(&self, key: BoxKey) -> (bool, bool) {
+        self.state(key)
+            .map_or((false, false), |it| it.undecided_overflow)
     }
 
     /// The record for one box.

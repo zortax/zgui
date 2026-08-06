@@ -102,23 +102,17 @@ pub fn restyle(store: &mut LayoutStore, document: &Document, nodes: &[NodeIndex]
 /// document full of similar elements takes; two that do not may still agree on every property, and
 /// rewriting in that case costs one refcount and no downstream work, because every consumer below
 /// keys on the property groups rather than on the style as a whole.
+///
+/// The write goes through [`LayoutStore::set_style`] rather than assigning the field, because a
+/// style is what the box's roster memberships were derived from and both have to move together.
 fn write(store: &mut LayoutStore, key: BoxKey, style: &ComputedStyle, relayout: bool) -> u32 {
-    let Some(node) = store.get_mut(key) else {
-        return 0;
-    };
-    if same(&node.style, style) {
+    if !store.set_style(key, style) {
         return 0;
     }
-    node.style = style.clone();
     if relayout {
         mark_dirty(store, key);
     }
     1
-}
-
-/// Whether two styles are the same cascade result, as opposed to two that merely agree.
-fn same(held: &ComputedStyle, style: &ComputedStyle) -> bool {
-    core::ptr::eq(core::ptr::from_ref(&**held), core::ptr::from_ref(&**style))
 }
 
 /// Refreshes the boxes below `key` that have no style of their own, and reports how many moved.
@@ -186,9 +180,10 @@ mod tests {
 
     use crate::node::box_node::BoxNode;
     use crate::node::kind::{BoxKind, FormattingContext};
+    use crate::style::same_cascade as same;
     use crate::tree::store::LayoutStore;
 
-    use super::{descend, same, write};
+    use super::{descend, write};
 
     /// A box of the given kind under `parent`, in both child orders.
     fn insert(store: &mut LayoutStore, parent: Option<BoxKey>, kind: BoxKind) -> BoxKey {

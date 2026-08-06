@@ -22,6 +22,18 @@ pub fn is_undecided(value: OverflowValue) -> bool {
     value == OverflowValue::Auto
 }
 
+/// Which of a box's axes need that second pass.
+///
+/// The sole definition of "is an undecided-overflow box", called both by the roster that decides
+/// which boxes the gutter fixpoint looks at and by the fixpoint itself. A box the roster misses is
+/// a scrollport whose gutter is never revised, which shows up as content that overflows a container
+/// with no scrollbar in it — see [`axes_of`](crate::intrinsic::keywords::axes_of) for the same
+/// argument made at greater length.
+pub fn undecided_axes(style: &zgui_css::ComputedStyle) -> (bool, bool) {
+    let box_ = style.get_box();
+    (is_undecided(box_.overflow_x), is_undecided(box_.overflow_y))
+}
+
 /// The same, once layout has decided whether this axis reserves a gutter.
 ///
 /// The decision is layout's rather than the style's in two cases and both go through here: an

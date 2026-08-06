@@ -40,6 +40,13 @@ counters! {
     /// Nodes whose size or position was computed again.
     NodesRelaidOut => nodes_relaid_out, Group::BackendNeutral;
 
+    /// Boxes the `overflow: auto` fixpoint examined for a gutter decision.
+    ///
+    /// The boxes written `overflow: auto`, and no others. This used to be every box in the
+    /// document, twice a layout pass, because finding them meant walking the tree — so the figure
+    /// to watch is that it tracks what the document *scrolls* rather than what it contains.
+    GuttersExamined => gutters_examined, Group::BackendNeutral;
+
     /// Times a layout pass had to start from the document root instead of a subtree.
     LayoutReachedRoot => layout_reached_root, Group::BackendNeutral;
 
@@ -286,6 +293,13 @@ counters! {
 
     /// Fragments the layout tree is holding right now.
     FragmentsLive => fragments_live, Group::Live;
+
+    /// Box slots the layout tree is holding right now, live and awaiting recycling.
+    ///
+    /// The arena's capacity rather than its live count. A removed box stays readable until the
+    /// frame is recycled, so the live count reads flat through a removal that is never given back
+    /// while the memory it holds is never returned — which is exactly the failure this watches for.
+    BoxesLive => boxes_live, Group::Live;
 
     /// Rasterised entries the texture atlas is holding right now.
     AtlasEntriesLive => atlas_entries_live, Group::Live;
