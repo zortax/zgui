@@ -33,6 +33,10 @@ zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
 zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The tokio backend for background work, off unless an application asks for it. Optional rather
+# than a dependency of `zgui-reactive` because a multi-threaded runtime is a cost every program
+# would otherwise carry to make one function work in the few that need it.
+zgui-tokio = { path = "../zgui-tokio", version = "0.1.0", optional = true }
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
@@ -53,6 +57,12 @@ zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["count
 # component tree. Off by default; `zgui-devtools` asks for it, so linking the inspector turns it on
 # and a program that does not link the inspector pays nothing for it.
 instrument = ["zgui-view/instrument"]
+
+# Routes background work to a tokio runtime, and polls the frame's tasks inside it so a UI task
+# may await a tokio timer or a socket directly. Off by default: without it the framework still
+# runs background work, on a small pool of its own with no reactor, which is what most programs
+# want. Turning it on links tokio.
+tokio = ["dep:zgui-tokio"]
 
 # Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
 # cannot execute a budget and report an unoptimised number as a regression; the gate switches it on

@@ -44,5 +44,9 @@ path = "../../examples/resize.rs"
 name = "vector"
 path = "../../examples/vector.rs"
 
+[[example]]
+name = "async"
+path = "../../examples/async.rs"
+
 [lints]
 workspace = true

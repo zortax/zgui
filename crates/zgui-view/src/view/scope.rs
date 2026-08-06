@@ -141,7 +141,14 @@ where
             pair
         });
         let scoped = cx.to_owned_cx().with_owner(owner.clone());
-        let inner = owner.with(|| (self.body)().into_view().build(&mut scoped.cx()));
+        let inner = owner.with(|| {
+            // A component owns the tasks it spawns, in its body or from any of its listeners, and
+            // they are cancelled when it unmounts. Without this the first spawn beneath it would
+            // install the set wherever it happened to land — inside an effect's scope, say, whose
+            // next re-run would then cancel tasks belonging to the component rather than to it.
+            zgui_reactive::provide_task_set();
+            (self.body)().into_view().build(&mut scoped.cx())
+        });
         ScopedState {
             owner,
             inner,

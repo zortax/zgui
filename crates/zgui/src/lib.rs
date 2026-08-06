@@ -82,6 +82,7 @@
 //! | [`mod@app`] | [`App`], the faces it draws with, and the platform it runs on |
 //! | [`elements`] | the element vocabulary, as builders, for building one by hand |
 //! | [`reactive`] | signals, memos, stores, contexts, ownership and the flush |
+//! | [`task`] | spawning on the UI thread, working off it, and getting back on to it |
 //! | [`view`](mod@view) | the view layer's own seams: the node tree, the engine, the event sink |
 //! | [`runtime`] | the frame pipeline, its windows and its timers |
 //! | [`platform`] | the windowing contract, for a backend of one's own |
@@ -157,6 +158,8 @@ pub use zgui_geom as geom;
 pub use zgui_platform as platform;
 /// Signals, memos, stores, contexts, ownership and the flush the frame loop drives.
 pub use zgui_reactive as reactive;
+/// Doing something that takes time: on the UI thread, off it, and back on to it.
+pub use zgui_reactive::task;
 /// What a frame is drawn through, for an application supplying a device of its own.
 pub use zgui_render as render;
 /// The frame pipeline, its windows and its timers.
@@ -165,6 +168,12 @@ pub use zgui_runtime as runtime;
 pub use zgui_scene as scene;
 /// Faces, shaping, metrics and glyph rasterisation, as seams.
 pub use zgui_text as text;
+/// A tokio runtime, as the executor behind [`task::background`].
+///
+/// Compiled only when the `tokio` feature is on, so an application that does not ask for a runtime
+/// does not link one. See the crate's own documentation for what installing it buys.
+#[cfg(feature = "tokio")]
+pub use zgui_tokio as tokio;
 /// The view layer: what a view is, and the three seams it is described against.
 pub use zgui_view as view;
 /// What every layer says the same things in: events, keys, roles, states and shared strings.

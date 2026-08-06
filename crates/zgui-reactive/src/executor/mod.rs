@@ -1,31 +1,33 @@
 //! The executor: one task pool per UI thread, polled once per frame.
 //!
-//! There is no background thread anywhere in the reactive layer. Every effect, every async
-//! value and every timer runs as a task on the thread that called [`install`], and those tasks
-//! advance only inside [`flush`]. That is what makes reactive work a *phase of the frame*
-//! rather than something that happens concurrently with it, and it is why an effect can touch
-//! the document at all.
+//! Every effect, every async value and every timer runs as a task on the thread that called
+//! [`install`], and those tasks advance only inside [`flush`]. That is what makes reactive work a
+//! *phase of the frame* rather than something that happens concurrently with it, and it is why an
+//! effect can touch the document at all.
 //!
 //! Three properties follow, and each has a guard:
 //!
 //! * work that becomes ready between frames still gets a frame — see [`set_frame_waker`];
 //! * a cycle of effects cannot hold the frame — see [`FlushOutcome::budget_exhausted`];
 //! * nothing runs on the wrong thread — see [`assert_ui_thread`].
+//!
+//! Nothing *reactive* ever runs on another thread. Work that is not reactive — a parse, a request,
+//! a decode — does, through [`background`](crate::background), whose result comes back here; see
+//! [`task`](crate::task) for the whole picture.
 
 mod assert;
 mod budget;
-mod frame;
-mod pool;
+mod context;
+pub(crate) mod frame;
+pub(crate) mod pool;
 mod through;
 mod ui_thread;
-mod wake;
-
-use std::future::Future;
-use std::panic::Location;
+pub(crate) mod wake;
 
 use thiserror::Error;
 
 pub use assert::{assert_owner, assert_ui_thread};
+pub use context::{PollContext, set_poll_context};
 pub use frame::{FlushOutcome, flush};
 pub use ui_thread::is_ui_thread;
 pub use wake::{FrameWaker, TestWaker, set_frame_waker};
@@ -96,39 +98,6 @@ pub fn install() -> Result<(), InstallError> {
     Ok(())
 }
 
-/// Spawns a task on the UI thread.
-///
-/// The future is polled by [`flush`], never before and never elsewhere, and a wake from any
-/// thread asks the platform for the frame that will poll it. Dropping is not possible: a task
-/// runs until it completes, so anything cancellable must observe a signal or a flag of its own.
-///
-/// Takes a `Send` future only so that it can stand in for a thread-pool spawn in code that
-/// cannot know it is single-threaded; it runs on the UI thread either way. Prefer
-/// [`spawn_local`], which asks for nothing it does not need.
-///
-/// # Panics
-///
-/// In debug builds, if called off the UI thread.
-#[track_caller]
-pub fn spawn(future: impl Future<Output = ()> + Send + 'static) {
-    pool::note_spawn_location(Location::caller());
-    any_spawner::Executor::spawn(future);
-}
-
-/// Spawns a task on the UI thread, without requiring it to be `Send`.
-///
-/// The variant to use for anything that touches the document, a node handle or a view: those
-/// types are deliberately not `Send`, and the executor never moves a task between threads.
-///
-/// # Panics
-///
-/// In debug builds, if called off the UI thread.
-#[track_caller]
-pub fn spawn_local(future: impl Future<Output = ()> + 'static) {
-    pool::note_spawn_location(Location::caller());
-    any_spawner::Executor::spawn_local(future);
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -140,6 +109,7 @@ mod tests {
     use reactive_graph::traits::{Get, Set};
 
     use super::*;
+    use crate::task::spawn_local;
 
     /// Installs a runtime and a counting waker on this test's thread.
     fn runtime() -> (Owner, Arc<TestWaker>) {

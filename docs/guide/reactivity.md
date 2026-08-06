@@ -33,8 +33,13 @@ keyword, and that is the whole static-versus-dynamic story.
 ### One thread runs reactivity
 
 `install()` claims the calling thread as the UI thread and installs a task pool that lives on it.
-Signals may be **read and written** from any thread; tasks only ever **run** on the UI thread.
-`assert_ui_thread` is the debug guard.
+Signals may be **read and written** from any thread; reactive tasks only ever **run** on the UI
+thread. `assert_ui_thread` is the debug guard.
+
+Work that is *not* reactive — a request, a parse, a decode — does run elsewhere, and says so:
+`background(..)` and `blocking(..)` take it off the UI thread and resolve back on it, and `ui()`
+hands a foreign thread a way to post a closure back. See [doing something that takes
+time](async.md).
 
 ### Nothing exists outside an owner
 

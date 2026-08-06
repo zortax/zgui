@@ -67,6 +67,12 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("reactive_stores", &["zgui-reactive"]),
     ("any_spawner", &["zgui-reactive"]),
     ("send_wrapper", &["zgui-reactive"]),
+    // A whole async runtime, kept behind one crate that an application opts into. The reason to
+    // enforce it here rather than trust it is that the cost is invisible at the call site: a
+    // second crate naming tokio "just for a channel" would put a multi-threaded runtime into the
+    // dependency graph of every program that links the framework, to buy something `futures` and
+    // `zgui-reactive`'s own executor already do.
+    ("tokio", &["zgui-tokio"]),
     (
         "accesskit",
         &[

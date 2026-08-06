@@ -10,7 +10,10 @@
 //!
 //! **One thread runs reactivity.** [`install`] claims the calling thread as the UI thread and
 //! installs a task pool that lives on it. Signals may be *read and written* from any thread;
-//! tasks only ever *run* on the UI thread. [`assert_ui_thread`] is the debug guard.
+//! reactive tasks only ever *run* on the UI thread. [`assert_ui_thread`] is the debug guard.
+//! Work that is not reactive — a parse, a request, a decode — belongs elsewhere, and [`background`]
+//! is how it gets there and comes back; [`ui`] is how a thread that was never asked about any of
+//! this gets a closure onto the UI thread. See [`task`].
 //!
 //! **Nothing exists outside an owner.** Contexts, stored values and every arena-backed handle
 //! are attached to the [`Owner`] that was current when they were created. With no current owner
@@ -57,6 +60,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`executor`] | [`install`], [`flush`], the wake edge, the iteration budget, the debug guards |
+//! | [`task`] | [`spawn`], [`background`], [`blocking`], [`ui`] and what cancels each |
 //! | [`own`] | [`Mounted`], [`Scope`] and [`on_cleanup_local`] |
 //! | [`context`] | [`provide_context`] and the `!Send` variants |
 //! | [`store`] | Keyed stores for schema-shaped state |
@@ -75,6 +79,13 @@
 //!   [`RenderEffect`], whose first run is synchronous and whose lifetime is its handle's.
 //! * the engine's own `on_cleanup`, which requires a `Send + Sync` closure and therefore cannot
 //!   capture a node handle. [`on_cleanup_local`] is the replacement.
+//!
+//! # What a task costs
+//!
+//! A task is cancelled when the scope that spawned it is disposed of, and the handle [`spawn`]
+//! returns is for cancelling early rather than for keeping it alive — dropping it does not cancel
+//! anything. That is the one place this crate departs from the framework's usual "the handle is
+//! the lifetime" shape, and [`task`] says why.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -86,6 +97,7 @@ pub mod own;
 pub mod prelude;
 pub mod reexport;
 pub mod store;
+pub mod task;
 pub mod zone;
 
 pub use canary::effects_are_enabled;
@@ -94,8 +106,8 @@ pub use context::{
     use_context, use_local_context, with_context,
 };
 pub use executor::{
-    FlushOutcome, FrameWaker, InstallError, TestWaker, assert_owner, assert_ui_thread, flush,
-    install, is_ui_thread, set_frame_waker, spawn, spawn_local,
+    FlushOutcome, FrameWaker, InstallError, PollContext, TestWaker, assert_owner, assert_ui_thread,
+    flush, install, is_ui_thread, set_frame_waker, set_poll_context,
 };
 pub use own::{Mounted, Owner, Scope, StoredValue, on_cleanup_local};
 pub use reexport::{
@@ -105,4 +117,9 @@ pub use reexport::{
     Trigger, UnsyncCallback, WriteSignal, arc_signal, create_slice, signal, signal_local,
 };
 pub use store::{ArcField, AtKeyed, Field, KeyedSubfield, Patch, Store, StoreField, Subfield};
+pub use task::{
+    Background, BackgroundSpawner, SpawnerError, Task, Ui, background, blocking, provide_task_set,
+    set_background_spawner, signal_from_stream, spawn, spawn_detached, spawn_local, spawn_stream,
+    ui,
+};
 pub use zone::{NonReactiveZone, enter_non_reactive_zone};

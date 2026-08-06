@@ -1,0 +1,24 @@
+[package]
+name = "zgui-tokio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — the tokio backend for the task layer. Every dependency is inherited: `foo.workspace = true`.
+#
+# This is the only crate in the workspace permitted to name `tokio`, and it is a crate of its own
+# so that naming it is a decision an application makes. A framework that pulled in a multi-threaded
+# runtime to offer a `background` function would charge every program for one, and most desktop
+# programs never need it: the default executor in `zgui-reactive` is four threads and no reactor,
+# which is enough for a decode or a parse.
+#
+# What this buys is the other half — `tokio::time`, `tokio::net`, `tokio::fs` and the ecosystem
+# built on them, none of which work outside a runtime context however correctly they are polled.
+[dependencies]
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+
+[lints]
+workspace = true

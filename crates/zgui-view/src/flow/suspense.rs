@@ -471,4 +471,40 @@ mod tests {
         assert_eq!(f.text(), "done");
         f.window.unmount();
     }
+
+    #[test]
+    fn unmounting_a_boundary_stops_the_await_it_was_waiting_on() {
+        let f = Fixture::new();
+        let dropped = Rc::new(Cell::new(false));
+
+        /// Records, when it is dropped, that the future holding it went away.
+        struct Witness(Rc<Cell<bool>>);
+        impl Drop for Witness {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+
+        let witness = Witness(Rc::clone(&dropped));
+        let mut state = f.window.with(|| {
+            Await::new(
+                async move {
+                    let _held = witness;
+                    core::future::pending::<&'static str>().await
+                },
+                AnyView::new,
+            )
+            .build(&mut f.cx())
+        });
+        state.mount(&f.dom, f.root, None);
+        flush();
+        assert!(!dropped.get(), "it is still waiting");
+
+        // An `Await` spawns a task, and that task belongs to the scope that built it. Without
+        // that, a boundary the user navigated away from would keep its request alive and then
+        // write into a signal whose arena entry had already gone.
+        state.unmount(&f.dom);
+        f.window.unmount();
+        assert!(dropped.get(), "the unmount cancelled it");
+    }
 }

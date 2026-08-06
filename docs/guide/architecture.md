@@ -142,5 +142,6 @@ assumed.
 - [The layering rules](layering.md) — what may depend on what, and why the rule is worth the cost.
 - [The styling model](styling.md) — sheets, origins, the cascade, and what a style change costs.
 - [The reactive model](reactivity.md) — signals, owners, the flush, and the three `Send` escapes.
+- [Doing something that takes time](async.md) — tasks, worker threads, cancellation, and tokio.
 - [Writing a `Renderer`](renderer.md) — the contract, damage, and what a second renderer must not do.
 - [Building a browser on zgui](browser.md) — the extension points, in the order a consumer meets them.

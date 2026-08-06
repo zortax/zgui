@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::task::Waker;
 
 use crate::executor::assert::assert_ui_thread;
-use crate::executor::pool;
+use crate::executor::{context, pool};
 
 /// What a flush did, and what it owes the frame that follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -83,7 +83,10 @@ pub fn flush() -> FlushOutcome {
         // Clears the flag even if a task panics. Left set, it would make every later flush look
         // re-entrant and silently do nothing, which is a frozen window with no further error.
         let _running = Running;
-        pool::poll();
+        // Before the pool, so what a closure posted from another thread writes is settled by this
+        // frame rather than by the next one — the same ordering the timer heap already uses.
+        crate::task::drain_ui_queue();
+        context::enter(pool::poll);
     }
 
     FLUSH.with_borrow_mut(|state| {

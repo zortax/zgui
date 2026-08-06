@@ -464,6 +464,9 @@ impl Window {
             // functions and find the host that way. Without this a component that schedules
             // anything panics with nothing to point at.
             zgui_view::provide_host(host_handle.clone());
+            // The window is the last owner a task can fall back to, so a spawn outside any
+            // component still dies with the window rather than outliving it.
+            zgui_reactive::provide_task_set();
             view(&mut cx.cx())
         });
         built.mount(&dom_handle, root, None);

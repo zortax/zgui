@@ -89,7 +89,26 @@ reactive_graph = { version = "=0.2.14", features = ["effects"] }
 reactive_stores = "=0.4.3"
 any_spawner = "=0.3.0"
 send_wrapper = "0.6"
-futures = "0.3"
+# `thread-pool` is the default background executor an application gets without choosing one.
+# `research/reactive.md` §3.1 rejected this feature because it made `Executor::spawn` lazily start
+# an OS pool behind the framework's back; that objection is gone, because `UiExecutor` overrides
+# both of `any_spawner`'s spawn paths and nothing reaches `futures`' own. The pool is now something
+# asked for by name, from one place, and started on first use.
+futures = { version = "0.3", features = ["thread-pool"] }
+
+# --- the tokio backend: named only by zgui-tokio ---------------------------------------------
+# `default-features = false` because this crate wants a runtime and its synchronisation, and none
+# of the process, signal or io-std machinery a default tokio brings. `rt-multi-thread` is what
+# makes background work actually concurrent; `time` and `net` are what an application installs this
+# for in the first place, and leaving them out would make `tokio::time::sleep` panic at runtime
+# inside a framework that had just promised it worked.
+tokio = { version = "1", default-features = false, features = [
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "net",
+] }
 
 # --- pure-data geometry, colour and GPU plumbing --------------------------------------------
 kurbo = "0.13.1"

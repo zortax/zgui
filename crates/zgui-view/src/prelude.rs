@@ -17,6 +17,10 @@ pub use zgui_reactive::{
     provide_local_context, signal, signal_local, take_context, update_context, use_context,
     use_local_context, with_context,
 };
+// Doing something that takes time, which is not something a view can be written without either.
+// `spawn` runs on the UI thread and may touch anything reactive; `background` and `blocking` are
+// how a caller gets off it and back again; `ui` is how anything else gets on to it.
+pub use zgui_reactive::{Task, background, blocking, spawn, spawn_local, ui};
 
 // `Binding` itself is deliberately absent: it is what an element implementation builds to keep
 // one property in step with one value, and it is reachable at `zgui::view::Binding` by the few

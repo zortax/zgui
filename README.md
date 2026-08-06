@@ -83,6 +83,7 @@ cargo run -p zgui-examples --example counter
 | [The layering rules](docs/guide/layering.md) | what may depend on what, and what the published surface promises |
 | [The styling model](docs/guide/styling.md) | sheets, the cascade, and what a style change costs |
 | [The reactive model](docs/guide/reactivity.md) | signals, owners, the flush, and the three `Send` escapes |
+| [Doing something that takes time](docs/guide/async.md) | tasks, worker threads, cancellation, and tokio |
 | [Writing a `Renderer`](docs/guide/renderer.md) | the renderer contract, damage, and vector rasterisation |
 | [Building a browser on zgui](docs/guide/browser.md) | every extension point a document language needs |
 
