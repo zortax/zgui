@@ -60,6 +60,13 @@ pub type RasterFactory = Box<dyn FnMut() -> Arc<dyn zgui_text::GlyphRaster>>;
 /// Builds the view one window holds.
 pub type ViewFactory = Box<dyn FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor>>;
 
+/// Builds the embed host one window fills its `surface` elements through.
+///
+/// Per window, like the renderer, because a host holds attachments against one window's renderer
+/// and one window's replaced nodes. An application that never shows a surface element installs
+/// none and pays nothing.
+pub type EmbedFactory = Box<dyn FnMut() -> Box<dyn crate::embed::EmbedHost>>;
+
 /// Where a runtime records why it stopped.
 ///
 /// Shared, so that the answer survives the runtime being handed to a platform backend.
@@ -118,6 +125,8 @@ pub struct App {
     metrics: Option<MetricsFactory>,
     /// What turns its glyphs into pixels.
     raster: Option<RasterFactory>,
+    /// What fills its `surface` elements.
+    embed: Option<EmbedFactory>,
 }
 
 impl Default for App {
@@ -136,6 +145,7 @@ impl App {
             text: None,
             metrics: None,
             raster: None,
+            embed: None,
         }
     }
 
@@ -212,6 +222,12 @@ impl App {
         self
     }
 
+    /// Installs what fills each window's `surface` elements.
+    pub fn with_embed(mut self, factory: EmbedFactory) -> Self {
+        self.embed = Some(factory);
+        self
+    }
+
     /// Installs what turns each window's glyphs into pixels.
     ///
     /// Without one a window lays its text out and draws no glyph at all, which is what an
@@ -274,6 +290,8 @@ pub struct Runtime {
     metrics: MetricsFactory,
     /// What turns glyphs into pixels.
     raster: RasterFactory,
+    /// What builds an embed host, when the application brought one.
+    embed: Option<EmbedFactory>,
     /// What builds the view.
     view: Option<ViewFactory>,
     /// The windows that are open.
@@ -315,6 +333,7 @@ impl Runtime {
             raster: app
                 .raster
                 .unwrap_or_else(|| Box::new(|| Arc::new(zgui_text::NoRaster))),
+            embed: app.embed,
             view: Some(view),
             windows: Vec::new(),
             gate: Arc::new(FrameGate::new()),
@@ -400,6 +419,9 @@ impl Runtime {
         // one travels and which way it points are both properties of the desktop, and a constant
         // above this line is a wheel that is wrong on every machine but the one it was written on.
         window.set_scroll_settings(cx.scroll_settings());
+        if let Some(embed) = self.embed.as_mut() {
+            window.install_embed_host(embed());
+        }
         self.windows.push(window);
         // A window that has just been built has everything to draw, and nothing else will ask.
         if let Some(window) = self.windows.last() {

@@ -27,7 +27,7 @@
 //! | [`editor()`] | text the user changes | a block |
 //! | [`field()`] | one value the user enters | a block |
 //! | [`control()`] | something the user operates | a block |
-//! | [`surface()`] | a raised region: a card, a sheet, a menu | a block |
+//! | [`surface()`] | pixels another renderer produces | an inline block |
 //! | [`spacer()`] | the space between two things | a block that grows |
 //! | [`overlay_root()`] | where portalled content goes | a fixed, window-sized block |
 //!

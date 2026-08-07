@@ -478,4 +478,9 @@ impl Renderer for Stamping {
     fn texture_sink(&mut self) -> &mut dyn TextureSink {
         self.inner.texture_sink()
     }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        // Forwarded so the wgpu companion crate reaches the real backend through this wrapper.
+        self.inner.as_any_mut()
+    }
 }

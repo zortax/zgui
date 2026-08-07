@@ -1,0 +1,34 @@
+[package]
+name = "zgui-wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The wgpu companion: what an application links to fill `surface` elements with textures another
+# renderer produced. It is the one crate that walks through `Renderer::as_any_mut` to the concrete
+# wgpu backend, and it deliberately names wgpu only through zgui-render-wgpu's re-export, so the
+# single-wgpu rule holds by construction. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+rustc-hash.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }

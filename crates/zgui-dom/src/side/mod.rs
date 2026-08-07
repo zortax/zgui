@@ -23,6 +23,7 @@ pub mod paint_key;
 pub mod place;
 pub mod props;
 pub mod semantics;
+pub mod surface;
 
 pub use crate::side::a11y_key::A11yKey;
 pub use crate::side::anim::{AnimOverride, AnimSlot};

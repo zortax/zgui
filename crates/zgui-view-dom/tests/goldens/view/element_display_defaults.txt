@@ -11,6 +11,6 @@ canvas inline flow-root
 editor block flow
 field block flow
 control block flow
-surface block flow
+surface inline flow-root
 spacer block flow
 overlay_root block flow

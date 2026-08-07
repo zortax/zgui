@@ -150,6 +150,14 @@ pub struct Window {
     replaced_surfaces: Arc<crate::replaced::IntrinsicTable>,
     /// The pictures this window's `image` elements name: decode state, texels, and who shows what.
     images: crate::images::ImageLoader,
+    /// Who fills this window's `surface` elements; [`NoEmbeds`](crate::embed::NoEmbeds) until an
+    /// application installs a host.
+    embed: Box<dyn crate::embed::EmbedHost>,
+    /// Whether the last embed sync wanted a frame per refresh; one input to the animation gate.
+    embed_animating: bool,
+    /// The wake route this window was opened with, retained so the embed sync can hand it to
+    /// producers on other threads.
+    waker: Arc<crate::wake::RuntimeWaker>,
     /// The outlines this window's drawings have already been placed into their boxes as.
     vectors: zgui_paint::VectorCache,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
@@ -517,6 +525,9 @@ impl Window {
             ),
             replaced_surfaces,
             images,
+            embed: Box::new(crate::embed::NoEmbeds),
+            embed_animating: false,
+            waker: Arc::clone(&waker),
             vectors: zgui_paint::VectorCache::new(),
             budgets: crate::budget::Budgets::new(),
             raster,
@@ -581,6 +592,19 @@ impl Window {
     /// Installs a downstream script engine on this window.
     pub fn install_binding(&mut self, binding: Box<dyn HostBinding>) {
         self.binding = binding;
+    }
+
+    /// Installs the host that fills this window's `surface` elements.
+    ///
+    /// One slot, like the frame binding above it: a window has one embed host and the host
+    /// multiplexes its producers. Installing one over another replaces it without ceremony, which
+    /// is the same contract `install_binding` states.
+    pub fn install_embed_host(&mut self, host: Box<dyn crate::embed::EmbedHost>) {
+        self.embed.shutting_down();
+        self.embed = host;
+        // Whatever the new host will show, the old host's attachments are stale now.
+        self.damage = DamageSet::full();
+        self.request_frame();
     }
 
     /// What is being drawn into.
@@ -902,6 +926,7 @@ impl Window {
     /// Unmounts the view and drops everything the window was holding on its behalf.
     pub fn close(&mut self) {
         self.binding.shutting_down();
+        self.embed.shutting_down();
         self.view = None;
         self.timers.borrow_mut().forget(self.dom.document_id());
         if let Some(scope) = self.scope.take() {

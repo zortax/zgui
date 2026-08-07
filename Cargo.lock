@@ -5538,6 +5538,7 @@ dependencies = [
  "zgui-view",
  "zgui-view-macro",
  "zgui-vocab",
+ "zgui-wgpu",
 ]
 
 [[package]]
@@ -6303,6 +6304,29 @@ dependencies = [
  "accesskit",
  "zgui-geom",
  "zgui-interned",
+]
+
+[[package]]
+name = "zgui-wgpu"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash 2.1.3",
+ "tracing",
+ "zgui-dom",
+ "zgui-elements",
+ "zgui-geom",
+ "zgui-layout",
+ "zgui-paint",
+ "zgui-platform",
+ "zgui-platform-headless",
+ "zgui-reactive",
+ "zgui-render",
+ "zgui-render-wgpu",
+ "zgui-runtime",
+ "zgui-scene",
+ "zgui-testkit-scene",
+ "zgui-view",
+ "zgui-vocab",
 ]
 
 [[package]]

@@ -49,6 +49,10 @@ name = "canvas"
 path = "../../examples/canvas.rs"
 
 [[example]]
+name = "surface"
+path = "../../examples/surface.rs"
+
+[[example]]
 name = "async"
 path = "../../examples/async.rs"
 

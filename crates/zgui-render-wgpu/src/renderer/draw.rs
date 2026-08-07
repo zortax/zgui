@@ -40,6 +40,11 @@ impl Renderer for WgpuRenderer {
         self.atlas()
     }
 
+    /// This renderer is the backend the wgpu companion crate downcasts to; see the trait method.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
     /// Yes: this renderer composes every frame into a target that outlives it, so the pixels a
     /// scroll moves are already here.
     fn shifts_composed_pixels(&self) -> bool {

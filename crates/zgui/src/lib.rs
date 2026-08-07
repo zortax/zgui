@@ -150,6 +150,8 @@ pub use zgui_elements::expansion;
 pub use zgui_atlas as atlas;
 /// What a `canvas` element is drawn with: scenes, shapes and brushes.
 pub use zgui_canvas as canvas;
+/// What a `surface` element is filled through: handles, renderers, and the shared device.
+pub use zgui_wgpu as surface;
 /// The damage a frame has to redraw.
 pub use zgui_bits as bits;
 /// The element vocabulary, as builders.

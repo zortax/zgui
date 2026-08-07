@@ -268,6 +268,9 @@ impl App {
                 Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
             }))
             .with_glyph_raster(Box::new(move || fonts.raster()))
+            // Installed by default beside the default renderer: an application with no surface
+            // elements pays one virtual call per frame, and one with them needs no wiring.
+            .with_embed(Box::new(|| Box::new(zgui_wgpu::WgpuSurfaces::new())))
             .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
                 Box::new(view().into_view().build(cx))
             })?;

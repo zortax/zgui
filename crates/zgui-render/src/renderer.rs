@@ -131,4 +131,19 @@ pub trait Renderer {
     /// survive [`configure`](Renderer::configure) on a lost device, so a borrow kept across frames
     /// would outlive what it names.
     fn texture_sink(&mut self) -> &mut dyn TextureSink;
+
+    /// This renderer as its concrete type, for a backend-specific companion crate.
+    ///
+    /// The contract above deliberately names no graphics API, and almost everything lives happily
+    /// behind it. The one thing that cannot is *handing over a texture*: an embedded producer's
+    /// texture is a device resource, and attaching it is an operation only the backend that owns
+    /// the device can define. This is the door that companion walks through, and `None` — the
+    /// default — is a renderer saying it has no such door: a capture renderer answers `None` and
+    /// an embed host degrades to bookkeeping, which is exactly what a headless test wants.
+    ///
+    /// **A wrapper renderer must forward this to what it wraps**, or everything behind the wrapper
+    /// silently loses the capability.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        None
+    }
 }

@@ -273,6 +273,11 @@ impl Window {
         // that is drawn once and then never changes again.
         mark("f.caret");
         self.plan_caret(now);
+        // After layout and the caret plan, before paint emission: the embed host binds producers
+        // to laid-out boxes, attaches whatever they presented, and absorbs the damage the emit
+        // walk below is gated on. See the `embed` module for the whole argument.
+        mark("f.embed");
+        self.sync_embeds(timestamp);
 
         self.binding.before_paint(timestamp);
         mark("f.paint");
@@ -477,6 +482,25 @@ impl Window {
         Some(gated)
     }
 
+    /// Runs the embed host's sync step, and folds what it reported into the animation gate.
+    fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
+        let mut cx = crate::embed::EmbedSyncCx {
+            document: &self.document,
+            layout: &self.layout,
+            renderer: &mut *self.renderer,
+            content: &mut self.content,
+            damage: &mut self.damage,
+            intrinsics: &self.replaced_surfaces,
+            revision: self.dom.revision(),
+            scale: self.scale,
+            occluded: self.occluded,
+            timestamp,
+            waker: &self.waker,
+        };
+        let report = self.embed.sync(&mut cx);
+        self.embed_animating = report.animating;
+    }
+
     /// Whether anything in the document is animating.
     ///
     /// One bit, read once. It is the sole input to the animation deadline, which is why it is
@@ -484,6 +508,11 @@ impl Window {
     /// restyles.
     pub fn is_animating(&self) -> bool {
         if self.is_scrolling() {
+            return true;
+        }
+        // An embedded producer that asked to run every refresh is an animation by any measure the
+        // cadence cares about: it wants the next vsync, and it stops wanting it by not asking.
+        if self.embed_animating {
             return true;
         }
         let document = self.document.borrow();

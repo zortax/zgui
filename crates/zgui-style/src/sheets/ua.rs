@@ -42,11 +42,11 @@ pub const USER_AGENT_SHEET: &str = r#"
     color: var(--zgui-foreground);
 }
 
-box, surface, field, control, editor { display: block; }
+box, field, control, editor  { display: block; }
 row                          { display: flex; flex-direction: row; }
 column, stack                { display: flex; flex-direction: column; }
 text, label                  { display: inline; }
-image, canvas, vector        { display: inline-block; }
+image, canvas, vector, surface { display: inline-block; }
 /* HTML's canvas default, because an unstyled canvas that is invisible reads as broken; an
    unstyled vector collapsing to nothing reads as "give it a size", which it should. */
 canvas                       { width: 300px; height: 150px; }
