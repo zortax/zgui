@@ -12,7 +12,10 @@ license.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
 
-[target.'cfg(target_os = "linux")'.build-dependencies]
+# Not gated on the target: a build script is compiled for every host, so the crate has to be
+# reachable everywhere the script is. Whether it is *run* is the script's own decision, taken
+# against `CARGO_CFG_TARGET_OS`. Compiling bindgen costs no libclang; running it does.
+[build-dependencies]
 bindgen.workspace = true
 
 [lints]

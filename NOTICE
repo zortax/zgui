@@ -40,6 +40,7 @@ fails the build.
 | `crates/zgui-render-wgpu/src/shader/sprite_color.wgsl` | the GPUI project | Apache-2.0 |
 | `crates/zgui-render-wgpu/src/shader/subpixel.wgsl` | the GPUI project | Apache-2.0 |
 | `crates/zgui-render-wgpu/src/shader/text.wgsl` | the Windows Terminal project | MIT |
+| `crates/zgui-drm/src/sys.rs` | the Linux kernel DRM uapi headers | MIT |
 
 ## Bundled fonts
 
