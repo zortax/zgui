@@ -133,7 +133,6 @@ impl Tag for Custom {
 /// how changes announce themselves: mutate through [`update`](CustomHandle::update), then call
 /// [`repaint`](CustomHandle::repaint) — or [`relayout`](CustomHandle::relayout) when the mutation
 /// can change the element's size or its children's placement.
-#[derive(Clone)]
 pub struct CustomHandle<T: CustomElement> {
     /// The registered implementation.
     slot: Rc<Slot>,
@@ -141,6 +140,18 @@ pub struct CustomHandle<T: CustomElement> {
     changed: ArcTrigger,
     /// Which concrete type lives in the slot, so `update` needs no downcast fallibility.
     marker: std::marker::PhantomData<T>,
+}
+
+// By hand rather than derived, because the derive would demand `T: Clone` for a clone that
+// copies two reference counts and a marker — the element itself is shared, never duplicated.
+impl<T: CustomElement> Clone for CustomHandle<T> {
+    fn clone(&self) -> Self {
+        Self {
+            slot: Rc::clone(&self.slot),
+            changed: self.changed.clone(),
+            marker: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<T: CustomElement> CustomHandle<T> {
