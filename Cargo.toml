@@ -156,6 +156,23 @@ smallvec = "1.15"
 rayon = "1.12"
 toml = "1.1"
 
+# --- the kernel's display interface: named only by zgui-drm ------------------------------------
+# `default-features = false` states the feature list in full. `std` is the only default and it is
+# back in the list below; `use-libc` stays off, so rustix takes its `linux_raw` backend on Linux
+# and a call reaches the kernel without passing through libc. `mm` is the dumb buffer's mapping,
+# `event` is polling the device for flip completion.
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "fs",
+    "mm",
+    "event",
+] }
+# Reads the vendored uapi headers at build time, for `zgui-drm` and `zgui-evdev`. The alternative
+# is transcribing every struct by hand, where one field of the wrong width silently changes an
+# ioctl request number — the number is computed from `size_of` — and the kernel then refuses the
+# call with an errno that points at nothing.
+bindgen = "0.72"
+
 # --- test and benchmark tooling ----------------------------------------------------------------
 proptest = "1.11"
 criterion = "0.8"

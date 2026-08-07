@@ -78,6 +78,12 @@ const LEDGER: &[(&str, &[&str])] = &[
     // dependency graph of every program that links the framework, to buy something `futures` and
     // `zgui-reactive`'s own executor already do.
     ("tokio", &["zgui-tokio"]),
+    // The kernel's display interface, reached with no libc. Confined to one crate for the same
+    // reason a windowing library is: what it costs to replace is what it costs to find, and a
+    // second crate issuing ioctls of its own is a second place a device can be left in a state
+    // nothing puts back.
+    ("rustix", &["zgui-drm"]),
+    ("bindgen", &["zgui-drm"]),
     (
         "accesskit",
         &[

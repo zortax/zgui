@@ -34,6 +34,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "zgui-platform-winit",
         "the Wayland clipboard's unsafe constructor",
     ),
+    ("zgui-drm", "the ioctls, and the mapping of a dumb buffer"),
 ];
 
 /// Runs the check.
