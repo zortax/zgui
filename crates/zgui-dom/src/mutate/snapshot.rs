@@ -203,18 +203,26 @@ impl SnapshotStore {
         }
     }
 
-    /// The record for `index`, creating a state-only one if there is none, and returns its key.
+    /// The record for `index`, creating one if there is none, and returns its key.
+    ///
+    /// The record always carries the element's attributes, even when only its state changed.
+    /// Installing a style sheet makes the engine ask an existing record for its classes, and it
+    /// reads them straight out of this list without asking whether the list is there — so a record
+    /// with no attributes ends that call in a panic. Which is to say: an application that installs
+    /// a component's sheet while a pointer rests on anything would stop, and the fault would look
+    /// like it belonged to whichever component happened to be first.
     fn entry(&mut self, store: &DocumentStore, index: NodeIndex) -> style::dom::OpaqueNode {
         let identity = identity_of(store, index);
         let record = store.core(index);
         if record.has_atomic(atomics::HAS_SNAPSHOT) {
             return identity;
         }
+        let attrs = collect_attributes(store, index);
         self.map.insert(
             identity,
             ServoElementSnapshot {
                 state: Some(record.state()),
-                attrs: None,
+                attrs: Some(attrs),
                 changed_attrs: Vec::new(),
                 class_changed: false,
                 id_changed: false,

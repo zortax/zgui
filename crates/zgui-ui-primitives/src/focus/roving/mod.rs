@@ -35,14 +35,20 @@ impl RovingContext {
     ///
     /// Nothing is active until the group has an item: the first item to register becomes the tab
     /// stop, so a group is tabbable from the moment it has anything in it.
+    ///
+    /// An item can outlive its group by a moment. A menu that closes disposes the group while its
+    /// items are still coming down, and each one asks who holds the tab stop as it goes — so the
+    /// answer for a group that is gone is "nobody" rather than a panic.
     pub fn active(&self) -> Option<ItemId> {
-        self.active.get()
+        self.active.try_get().flatten()
     }
 
     /// Makes `id` the group's tab stop.
+    ///
+    /// Does nothing once the group is gone. See [`RovingContext::active`].
     pub fn set_active(&self, id: ItemId) {
-        if self.active.get_untracked() != Some(id) {
-            self.active.set(Some(id));
+        if self.active.try_get_untracked().flatten() != Some(id) {
+            self.active.try_set(Some(id));
         }
     }
 
@@ -59,7 +65,8 @@ impl RovingContext {
     /// key with the item that already had the tab stop, and the group would appear to ignore it.
     fn effective_active(&self) -> Option<ItemId> {
         self.active
-            .get_untracked()
+            .try_get_untracked()
+            .flatten()
             .or_else(|| self.collection.end(false).map(|first| first.id()))
     }
 
@@ -69,7 +76,7 @@ impl RovingContext {
         let Some(next) = self.collection.step(from, steps, self.wrap) else {
             return false;
         };
-        self.active.set(Some(next.id()));
+        self.active.try_set(Some(next.id()));
         next.focus();
         true
     }
@@ -79,7 +86,7 @@ impl RovingContext {
         let Some(target) = self.collection.end(last) else {
             return false;
         };
-        self.active.set(Some(target.id()));
+        self.active.try_set(Some(target.id()));
         target.focus();
         true
     }
