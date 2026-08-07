@@ -47,7 +47,16 @@ pub fn plan_segments(
     externals: &dyn Fn(zgui_scene::ExternalTextureId) -> Option<ExternalTexture>,
     vectors: Option<&zgui_render::VectorPlan>,
 ) -> FramePlan {
-    for rect in damage::rects(damage, used) {
+    // A backdrop reads the target beneath it, so the rectangles have to cover what it reads.
+    let backdrops: Vec<_> = scene
+        .primitives
+        .backdrops
+        .iter()
+        .filter(|backdrop| !backdrop.reads_only_what_it_writes())
+        .map(|backdrop| rounded_out(backdrop.source))
+        .collect();
+
+    for rect in damage::rects_covering_backdrops(damage, used, &backdrops) {
         plan_rect(&mut builder, scene, rect, used, externals, vectors);
     }
     builder.finish()
@@ -232,6 +241,13 @@ fn plan_backdrop(
     scissor: Rect<i32, Device>,
     used: Rect<i32, Device>,
 ) {
+    // The batch stream is replayed once per damage rectangle, so a rectangle nowhere near this
+    // backdrop still reaches here. It writes nothing inside such a rectangle, and capturing what
+    // it would have read is both wasted and impossible — the read lies outside what this pass is
+    // allowed to write.
+    if clamped(backdrop.bounds, scissor, used).is_empty() {
+        return;
+    }
     let Some(source) = enclosing(backdrop.source, used) else {
         return;
     };

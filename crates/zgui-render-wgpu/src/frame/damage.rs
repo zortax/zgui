@@ -29,6 +29,43 @@ pub fn rects(damage: &DamageSet, used: Rect<i32, Device>) -> Vec<Rect<i32, Devic
         .collect()
 }
 
+/// The rectangles a frame redraws, widened to whatever a backdrop reads.
+///
+/// A backdrop samples the target beneath it, so every pixel it reads has to have been written by
+/// **this** frame. A rectangle that touches a backdrop without covering what it reads would leave
+/// the rest of the read sampling the last frame's composite — which already holds this filter's
+/// own output, so the panel smears a little further on every frame that redraws part of it.
+///
+/// A row lighting up under the pointer is exactly that case: the damage is one row, the frosted
+/// panel above it reads its whole width, and the two do not overlap the same pixels. Widening
+/// here keeps the promise the planner asserts on, and costs the panel's own area on the frames
+/// that touch it and nothing on the frames that do not.
+pub fn rects_covering_backdrops(
+    damage: &DamageSet,
+    used: Rect<i32, Device>,
+    backdrops: &[Rect<i32, Device>],
+) -> Vec<Rect<i32, Device>> {
+    let mut rects = rects(damage, used);
+    if backdrops.is_empty() || rects.is_empty() {
+        return rects;
+    }
+
+    // A backdrop the damage does not reach reads nothing this frame, so it is left alone.
+    for source in backdrops {
+        let Some(source) = source.intersection(used) else {
+            continue;
+        };
+        if source.is_empty() || !rects.iter().any(|rect| rect.intersects(source)) {
+            continue;
+        }
+        rects.retain(|rect| !source.contains_rect(*rect));
+        if !rects.iter().any(|rect| rect.contains_rect(source)) {
+            rects.push(source);
+        }
+    }
+    rects
+}
+
 /// How many device pixels a rectangle covers.
 pub fn area(rect: Rect<i32, Device>) -> u64 {
     rect.size.width.max(0) as u64 * rect.size.height.max(0) as u64
@@ -36,7 +73,7 @@ pub fn area(rect: Rect<i32, Device>) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{area, rects};
+    use super::{area, rects, rects_covering_backdrops};
     use zgui_bits::DamageSet;
     use zgui_geom::{Device, Point, Rect, Size};
 
@@ -69,6 +106,28 @@ mod tests {
         let mut damage = DamageSet::<4>::new();
         damage.absorb(Rect::new(Point::new(400, 400), Size::new(10, 10)));
         assert!(rects(&damage, used()).is_empty());
+    }
+
+    #[test]
+    fn a_rectangle_touching_a_backdrop_grows_to_cover_what_it_reads() {
+        // One row lights up under a panel that reads the width of the window.
+        let mut damage = DamageSet::<4>::new();
+        damage.absorb(Rect::new(Point::new(10, 100), Size::new(60, 4)));
+        let panel = Rect::new(Point::new(0, 96), Size::new(128, 20));
+
+        let planned = rects_covering_backdrops(&damage, used(), &[panel]);
+
+        assert_eq!(planned, vec![panel], "the panel's whole read is redrawn");
+    }
+
+    #[test]
+    fn a_backdrop_the_damage_does_not_reach_costs_nothing() {
+        let mut damage = DamageSet::<4>::new();
+        let row = Rect::new(Point::new(10, 10), Size::new(60, 4));
+        damage.absorb(row);
+        let panel = Rect::new(Point::new(0, 96), Size::new(128, 20));
+
+        assert_eq!(rects_covering_backdrops(&damage, used(), &[panel]), vec![row]);
     }
 
     #[test]
