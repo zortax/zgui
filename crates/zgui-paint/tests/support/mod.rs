@@ -317,6 +317,33 @@ impl Harness {
         report
     }
 
+    /// Emits drawings through the real shared atlas, enabling the small-vector mask route.
+    pub(crate) fn paint_cached_vectors(
+        &mut self,
+        vectors: &zgui_paint::VectorCache,
+        content: &mut zgui_paint::ContentCache,
+        raster: &dyn zgui_text::GlyphRaster,
+    ) -> zgui_paint::PaintReport {
+        self.damage = DamageSet::full();
+        self.scene.begin_frame(self.viewport);
+        content.begin_frame();
+        let report = {
+            let drawings = vectors.frame(&self.document);
+            let frame = content.frame(&self.store, &NoGlyphs, raster);
+            let mut input = PaintInput {
+                vectors: &drawings,
+                vector_masks: &frame,
+                resources: &frame,
+                scale: self.scale,
+                ..PaintInput::new(&self.store, &self.damage)
+            };
+            input.record_emitted = true;
+            self.painter.emit(&input, &mut self.scene)
+        };
+        self.scene.finish(&self.damage);
+        report
+    }
+
     /// The document, for a test that changes a property a view would have written.
     pub(crate) fn document(&self) -> &Document {
         &self.document

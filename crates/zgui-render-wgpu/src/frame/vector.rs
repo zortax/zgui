@@ -17,14 +17,10 @@ use crate::pipeline::vector::VectorInstance;
 /// # What the answer has to hold
 ///
 /// Straight — un-premultiplied — colour, in an unencoded eight-bit format, with one texel per
-/// device pixel, **at the surface's own coordinates**: the pass's [`region`](VectorPass::region)
-/// covers the texels of that region and no others. The composite premultiplies as it reads.
-///
-/// Device coordinates rather than a corner of their own is what lets two passes that do not meet on
-/// the screen share one scratch, and it is the whole reason the scratch is a function of the surface
-/// rather than of the number of passes the busiest frame of the session planned. Anything a pass did
-/// not paint has to read as fully transparent, which is what the mandatory pre-clear is for: a texel
-/// left over from the previous frame composites as *wrong* pixels rather than missing ones.
+/// device pixel, in the compact [`raster_region`](VectorPass::raster_region) assigned to the pass.
+/// The compositor maps that bin back onto the pass's surface [`region`](VectorPass::region) and
+/// premultiplies as it reads. Anything a pass did not paint has to read as fully transparent, which
+/// is what the mandatory pre-clear is for.
 pub trait VectorSource: VectorRaster {
     /// A view of whatever the rasteriser put a pass's result into.
     ///
@@ -43,13 +39,12 @@ pub trait VectorSource: VectorRaster {
 /// double-blend every overlap.
 pub fn instances_of(plan: &VectorPlan, pass: &VectorPass) -> Vec<VectorInstance> {
     let origin = pass.region.origin;
-    // The scratch is in device coordinates, so every quad reads the texels it covers and the source
-    // is the destination. A quad reading a corner of its own would be reading whichever *other*
-    // pass shares the layer, because sharing is what a device-space scratch buys.
+    let raster = pass.raster_region.origin;
+    // The destination remains in surface coordinates; the source starts at the pass's compact bin.
     if !pass.instanced {
         return vec![VectorInstance::new(
             pass.region,
-            (origin.x, origin.y),
+            (raster.x, raster.y),
             pass.clip.0,
         )];
     }
@@ -60,7 +55,11 @@ pub fn instances_of(plan: &VectorPlan, pass: &VectorPass) -> Vec<VectorInstance>
                 zgui_geom::Point::new(origin.x + item.ink.origin.x, origin.y + item.ink.origin.y),
                 item.ink.size,
             );
-            VectorInstance::new(bounds, (bounds.origin.x, bounds.origin.y), item.clip.0)
+            VectorInstance::new(
+                bounds,
+                (raster.x + item.ink.origin.x, raster.y + item.ink.origin.y),
+                item.clip.0,
+            )
         })
         .collect()
 }
@@ -92,6 +91,7 @@ mod tests {
         };
         let pass = VectorPass {
             region: Rect::new(Point::new(64, 128), Size::new(64, 32)),
+            raster_region: Rect::new(Point::new(8, 16), Size::new(64, 32)),
             target: VectorTarget(0),
             items: 0..2,
             clip: ClipId(1),
@@ -108,9 +108,8 @@ mod tests {
         assert_eq!(instances[0].bounds, [64.0, 128.0, 64.0, 32.0]);
         assert_eq!(
             [instances[0].source[0], instances[0].source[1]],
-            [64.0, 128.0],
-            "a device-space scratch is read where it is written, or the quad reads whichever other \
-             pass shares the layer"
+            [8.0, 16.0],
+            "the surface quad reads the compact bin the rasteriser assigned"
         );
         assert_eq!(instances[0].control[0], 1.0);
     }
@@ -127,7 +126,7 @@ mod tests {
         assert_eq!(instances[1].bounds, [96.0, 128.0, 16.0, 16.0]);
         assert_eq!(
             [instances[1].source[0], instances[1].source[1]],
-            [96.0, 128.0]
+            [40.0, 16.0]
         );
         assert_eq!(instances[0].control[0], 3.0);
         assert_eq!(instances[1].control[0], 5.0);

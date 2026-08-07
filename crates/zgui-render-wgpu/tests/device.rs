@@ -154,6 +154,31 @@ fn resizing_keeps_the_composed_target_within_its_size_class_and_still_draws() {
 }
 
 #[test]
+fn idle_buffer_trimming_reuploads_retained_side_tables() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let fill = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(233, 71, 29)));
+    scene.push_quad(Quad::filled(rect(8.0, 8.0, 48.0, 48.0), fill));
+    scene.finish(&DamageSet::full());
+
+    assert_eq!(
+        present(&mut renderer, &scene).rgba(24, 24),
+        [233, 71, 29, 255]
+    );
+    renderer.release_idle_resources();
+    assert_eq!(
+        present(&mut renderer, &scene).rgba(24, 24),
+        [233, 71, 29, 255],
+        "an unchanged paint table was restored after its GPU allocation was trimmed"
+    );
+}
+
+#[test]
 fn only_a_frame_that_will_be_presented_tells_the_compositor_it_is_coming() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

@@ -142,8 +142,11 @@ impl CoverageRaster {
         // Nothing at all: a layer is in the surface's own coordinates, which is what lets two passes
         // that do not meet on the screen share it. An outline is already in device space and stays
         // there.
-        let shift = Affine::IDENTITY;
-        let origin = pass.region.origin;
+        let shift = Affine::translate((
+            f64::from(pass.raster_region.origin.x - pass.region.origin.x),
+            f64::from(pass.raster_region.origin.y - pass.region.origin.y),
+        ));
+        let origin = pass.raster_region.origin;
 
         for planned in frame.plan.items_of(pass) {
             let Some(item) = frame.items.get(planned.item) else {
@@ -362,10 +365,12 @@ impl VectorRaster for CoverageRaster {
         self.regions
             .extend(passes.passes.iter().map(|planned| planned.region));
         let layering = Layering::of(&self.regions, Scratch::MAX_LAYERS);
+        let (packed, width, height) = layering.compact(&self.regions);
         self.depth = layering.layers();
         for (index, planned) in passes.passes.iter().enumerate() {
             plan.passes.push(VectorPass {
                 region: planned.region,
+                raster_region: packed[index],
                 target: layering.target(index),
                 items: planned.items.clone(),
                 clip: planned.clip,
@@ -374,8 +379,6 @@ impl VectorRaster for CoverageRaster {
         }
         // The far corner of the surface anything is drawn at, not the largest region: a layer holds
         // device pixels where they belong, so it has to reach as far as the furthest of them.
-        let width = extent_of(&self.regions, Rect::right);
-        let height = extent_of(&self.regions, Rect::bottom);
         self.scratch
             .ensure(&self.gpu, width, height, layering.layers());
         plan
@@ -459,22 +462,26 @@ impl VectorRaster for CoverageRaster {
             ..MemoryReport::ZERO
         }
     }
+
+    fn release_idle_resources(&mut self) -> u64 {
+        let mut freed = self.scratch.release();
+        freed += self.buffers.items.shrink(&self.gpu);
+        freed += self.buffers.segments.shrink(&self.gpu);
+        freed += self.buffers.runs.shrink(&self.gpu);
+        self.items.clear();
+        self.items.shrink_to_fit();
+        self.segments.clear();
+        self.segments.shrink_to_fit();
+        self.runs.clear();
+        self.runs.shrink_to_fit();
+        freed
+    }
 }
 
 impl VectorSource for CoverageRaster {
     fn view(&self, target: VectorTarget) -> Option<&wgpu::TextureView> {
         self.scratch.straight(target.0 as u32)
     }
-}
-
-/// The furthest `edge` any of `regions` reaches, in texels, and never zero.
-fn extent_of(regions: &[Rect<i32, Device>], edge: fn(Rect<i32, Device>) -> i32) -> u32 {
-    regions
-        .iter()
-        .map(|region| edge(*region).max(0) as u32)
-        .max()
-        .unwrap_or(1)
-        .max(1)
 }
 
 /// Opens a render pass that keeps what the attachment already holds.

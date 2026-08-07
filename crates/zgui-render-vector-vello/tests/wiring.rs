@@ -80,9 +80,14 @@ fn a_renderer_draws_no_path_until_it_is_attached_and_draws_one_afterwards() {
 
     zgui_render_vector_vello::attach(&mut renderer, Size::new(SIDE, SIDE));
     assert!(renderer.has_vector_raster());
+    assert!(
+        !renderer.vector_raster_initialized(),
+        "attachment configures a lazy source; an icon-free frame pays no Vello fixed cost"
+    );
 
     let scene = square();
     renderer.draw(&scene, &DamageSet::full());
+    assert!(renderer.vector_raster_initialized());
     let drawn = renderer
         .read_presented()
         .expect("a stand-in surface can be read back");

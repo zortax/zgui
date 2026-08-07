@@ -15,8 +15,13 @@
 //! is one implementation of it.
 
 mod cache;
+mod mask;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
+pub(crate) use crate::content::vectors::mask::VectorMaskCache;
+pub use crate::content::vectors::mask::{
+    NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource, VectorMaskStyle,
+};
 
 use std::sync::Arc;
 

@@ -83,6 +83,23 @@ pub enum BoxKind {
     Marker,
 }
 
+/// What the box's own fragment paints.
+///
+/// The payload lives in sparse store columns; this byte is the hot-path discriminator every box
+/// keeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PaintedContent {
+    /// Backgrounds, borders and descendants only.
+    #[default]
+    Box,
+    /// Shapes supplied by the document, a canvas, or a vector source.
+    Vector,
+    /// Content supplied through the replaced-content seam.
+    Replaced,
+    /// Content supplied by a custom element implementation.
+    Custom,
+}
+
 impl BoxKind {
     /// A short, stable name, for tree dumps and diagnostics.
     pub const fn label(self) -> &'static str {

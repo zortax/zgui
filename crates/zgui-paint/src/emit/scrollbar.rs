@@ -178,7 +178,11 @@ mod tests {
         let paint = default_paint();
         let thumb = paint.radii(ScrollbarPart::Thumb, slim(bar(), paint.thumb_thickness));
         let track = paint.radii(ScrollbarPart::Track, bar());
-        assert_eq!(thumb.top_left.x, DevicePx(3.0), "half the painted thickness");
+        assert_eq!(
+            thumb.top_left.x,
+            DevicePx(3.0),
+            "half the painted thickness"
+        );
         assert_eq!(track.top_left.x, DevicePx(0.0));
     }
 
@@ -195,7 +199,11 @@ mod tests {
     #[test]
     fn the_painted_thumb_is_a_centred_sliver_of_the_gutter_it_can_be_grabbed_in() {
         let vertical = slim(bar(), 6.0);
-        assert_eq!(vertical.left(), DevicePx(191.0), "three pixels in from each edge");
+        assert_eq!(
+            vertical.left(),
+            DevicePx(191.0),
+            "three pixels in from each edge"
+        );
         assert_eq!(vertical.size.width, DevicePx(6.0));
         assert_eq!(vertical.top(), bar().top(), "the length is untouched");
         assert_eq!(vertical.size.height, bar().size.height);

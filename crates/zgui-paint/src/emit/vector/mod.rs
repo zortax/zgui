@@ -42,6 +42,7 @@ use zgui_css::values::custom;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_scene::{ClipId, Paint, PaintRef, Scene, SpatialId, VectorId, VectorItem};
 
+use crate::content::vectors::VectorMaskSource;
 use crate::emit::paint::{gradient_paint, needs_densifying};
 use crate::lower::background::GradientSpec;
 
@@ -89,6 +90,8 @@ pub struct VectorPlacement {
     pub clip: ClipId,
     /// The transform they are drawn under, which is the box's own.
     pub transform: SpatialId,
+    /// Device pixels per CSS pixel, part of a coverage mask's raster identity.
+    pub scale: f32,
 }
 
 /// Emits one path, filled and optionally stroked, and returns how many items were pushed.
@@ -166,9 +169,35 @@ pub fn draw(
     paint: ShapePaint,
     placement: VectorPlacement,
 ) -> usize {
+    draw_with_masks(
+        scene,
+        base,
+        shapes,
+        paint,
+        &crate::content::NoVectorMasks,
+        placement,
+    )
+}
+
+/// Emits a drawing while allowing eligible solid shapes to use a monochrome mask source.
+pub fn draw_with_masks(
+    scene: &mut Scene,
+    base: VectorId,
+    shapes: &[zgui_svg::Shape],
+    paint: ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> usize {
     let mut pushed = 0;
     for (index, shape) in shapes.iter().enumerate() {
-        pushed += document::emit(scene, outline_id(base, index), shape, &paint, placement);
+        pushed += document::emit(
+            scene,
+            outline_id(base, index),
+            shape,
+            &paint,
+            masks,
+            placement,
+        );
     }
     pushed
 }

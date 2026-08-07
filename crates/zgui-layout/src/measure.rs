@@ -191,9 +191,11 @@ pub struct NaturalSize;
 impl MeasureContent for NaturalSize {
     fn measure(&mut self, request: MeasureRequest<'_>) -> Measured {
         let natural = request.natural;
-        let side = |known: Option<f32>, axis: fn(&zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>) -> f32| {
-            known.unwrap_or_else(|| natural.as_ref().map(axis).unwrap_or(0.0) * request.scale)
-        };
+        let side =
+            |known: Option<f32>,
+             axis: fn(&zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>) -> f32| {
+                known.unwrap_or_else(|| natural.as_ref().map(axis).unwrap_or(0.0) * request.scale)
+            };
         Measured::sized(
             side(request.known.width, |size| size.width.0),
             side(request.known.height, |size| size.height.0),

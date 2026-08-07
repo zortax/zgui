@@ -16,10 +16,7 @@ use zgui_runtime::budget::CacheId;
 use zgui_view::{BuildCx, IntoView, View};
 
 /// The fixture picture: two by two, opaque red, and — the part layout shows — 2×2 CSS pixels.
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/fixtures/red2x2.png"
-);
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/red2x2.png");
 
 /// No author sizing on the image at all: its size *is* the assertion. The element keeps its
 /// vocabulary default — an inline block — which is what shrink-fits to the natural size.
@@ -115,7 +112,11 @@ fn a_file_src_becomes_a_naturally_sized_box_and_survives_forget() {
         // its pictures back by itself, because it kept their names.
         window.forget_caches();
         assert_eq!(
-            window.budget_report().line(CacheId::DecodedImages).report.resident,
+            window
+                .budget_report()
+                .line(CacheId::DecodedImages)
+                .report
+                .resident,
             0,
             "forget dropped the texels"
         );
@@ -123,7 +124,12 @@ fn a_file_src_becomes_a_naturally_sized_box_and_survives_forget() {
     settle_until_shown(&mut app);
     let window = &mut app.app_mut().windows_mut()[0];
     assert!(
-        window.budget_report().line(CacheId::DecodedImages).report.resident > 0,
+        window
+            .budget_report()
+            .line(CacheId::DecodedImages)
+            .report
+            .resident
+            > 0,
         "the re-decode restored what forget dropped, from the source the loader kept"
     );
 }

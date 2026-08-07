@@ -121,6 +121,7 @@ fn scene_of(source: &str, drawn: Drawn) -> Scene {
         VectorPlacement {
             clip: ClipId::ROOT,
             transform: SpatialId::VIEWPORT,
+            scale: 1.0,
         },
     );
     scene.finish(&DamageSet::full());
@@ -592,6 +593,7 @@ fn path_notation_still_draws_in_the_elements_own_colour() {
         VectorPlacement {
             clip: ClipId::ROOT,
             transform: SpatialId::VIEWPORT,
+            scale: 1.0,
         },
     );
     scene.finish(&DamageSet::full());

@@ -38,6 +38,7 @@ rustc-hash.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+zeno.workspace = true
 
 [dev-dependencies]
 # The paint key that decides *damage* is computed there; this crate's lowering key must stay a

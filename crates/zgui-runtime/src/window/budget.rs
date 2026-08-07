@@ -21,6 +21,7 @@ use crate::window::Window;
 
 impl CacheRegistry for Window {
     fn for_each(&mut self, visit: &mut dyn FnMut(&mut dyn Budgeted)) {
+        let embed_memory = self.embed.memory();
         visit(&mut GlyphAtlasBudget::new(
             &mut self.content,
             self.budgets.tracked(CacheId::GlyphAtlas),
@@ -54,6 +55,7 @@ impl CacheRegistry for Window {
         // total rather than the small part of it that happens to be reproducible.
         visit(&mut DeviceMemoryBudget::new(
             &mut *self.renderer,
+            embed_memory.callback_owned,
             self.budgets.tracked(CacheId::DeviceMemory),
         ));
     }
@@ -121,9 +123,8 @@ impl Window {
     /// was retained only because it had been produced once already. The next frame produces all of
     /// it again, which is what makes this the operation a cold window is built with.
     ///
-    /// It is not a memory-pressure step. Decoded images go with the rest, and nothing in this
-    /// process can produce those again — see
-    /// [`DecodedImagesBudget`].
+    /// It is not a memory-pressure step. Decoded images go with the rest and are reproduced from
+    /// their retained sources on demand; directly attached content still needs its owner.
     ///
     /// It asks for a frame and redraws the whole surface. Both are owed: the display list replays
     /// ranges that name rasters which no longer exist, and the tree has been marked as needing
@@ -131,7 +132,13 @@ impl Window {
     /// last frame it drew while holding nothing any of it came from.
     pub fn forget_caches(&mut self) {
         manager::forget_all(self);
+        self.embed.content_forgotten();
         self.damage = zgui_bits::DamageSet::full();
         self.request_frame();
+    }
+
+    /// Texture bytes retained by embedded surfaces, separated by allocation ownership.
+    pub fn embed_memory_report(&self) -> crate::embed::EmbedMemoryReport {
+        self.embed.memory()
     }
 }

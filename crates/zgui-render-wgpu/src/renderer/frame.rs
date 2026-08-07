@@ -1,5 +1,8 @@
 //! The buffers, bind groups and counters one frame passes through.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use zgui_scene::Scene;
 
 use crate::bind::globals::Globals;
@@ -52,6 +55,12 @@ pub struct FrameBuffers {
     pub subpixel_sprites: StorageBuffer,
     /// The full-colour sprites.
     pub color_sprites: StorageBuffer,
+    /// Bind groups whose resources are the stable frame side-table buffers.
+    frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
+    /// One bind group per instance buffer allocation epoch.
+    instance_binds: RefCell<HashMap<PipelineKind, (u64, wgpu::BindGroup)>>,
+    /// Whether idle trimming replaced the retained side-table buffers with empty allocations.
+    tables_released: bool,
 }
 
 impl FrameBuffers {
@@ -76,6 +85,9 @@ impl FrameBuffers {
             mono_sprites: StorageBuffer::new(gpu, "zgui.mono_sprites"),
             subpixel_sprites: StorageBuffer::new(gpu, "zgui.subpixel_sprites"),
             color_sprites: StorageBuffer::new(gpu, "zgui.color_sprites"),
+            frame_bind: RefCell::new(None),
+            instance_binds: RefCell::new(HashMap::new()),
+            tables_released: false,
         }
     }
 
@@ -100,39 +112,57 @@ impl FrameBuffers {
         scene: &Scene,
     ) -> u64 {
         let tables = self.prepared.tables();
-        let dirty = self.prepared.dirty();
-        let mut uploaded = upload_dirty(
-            gpu,
-            &mut self.uploader,
-            encoder,
-            &mut self.clips,
-            &tables.clips,
-            &dirty.clips,
-        );
-        uploaded += upload_dirty(
-            gpu,
-            &mut self.uploader,
-            encoder,
-            &mut self.paints,
-            &tables.paints,
-            &dirty.paints,
-        );
-        uploaded += upload_dirty(
-            gpu,
-            &mut self.uploader,
-            encoder,
-            &mut self.stops,
-            &tables.stops,
-            &dirty.stops,
-        );
-        uploaded += upload_dirty(
-            gpu,
-            &mut self.uploader,
-            encoder,
-            &mut self.spatial,
-            &tables.spatial,
-            &dirty.spatial,
-        );
+        let mut uploaded = if self.tables_released {
+            self.tables_released = false;
+            let mut uploaded = self
+                .clips
+                .upload(gpu, &mut self.uploader, encoder, &tables.clips);
+            uploaded += self
+                .paints
+                .upload(gpu, &mut self.uploader, encoder, &tables.paints);
+            uploaded += self
+                .stops
+                .upload(gpu, &mut self.uploader, encoder, &tables.stops);
+            uploaded += self
+                .spatial
+                .upload(gpu, &mut self.uploader, encoder, &tables.spatial);
+            uploaded
+        } else {
+            let dirty = self.prepared.dirty();
+            let mut uploaded = upload_dirty(
+                gpu,
+                &mut self.uploader,
+                encoder,
+                &mut self.clips,
+                &tables.clips,
+                &dirty.clips,
+            );
+            uploaded += upload_dirty(
+                gpu,
+                &mut self.uploader,
+                encoder,
+                &mut self.paints,
+                &tables.paints,
+                &dirty.paints,
+            );
+            uploaded += upload_dirty(
+                gpu,
+                &mut self.uploader,
+                encoder,
+                &mut self.stops,
+                &tables.stops,
+                &dirty.stops,
+            );
+            uploaded += upload_dirty(
+                gpu,
+                &mut self.uploader,
+                encoder,
+                &mut self.spatial,
+                &tables.spatial,
+                &dirty.spatial,
+            );
+            uploaded
+        };
 
         let primitives = &scene.primitives;
         uploaded += self
@@ -263,13 +293,46 @@ impl FrameBuffers {
             + self.uploader.bytes()
     }
 
+    /// Shrinks device and host high-water buffers after wall-clock idleness.
+    pub fn release_idle(&mut self, gpu: &Gpu) -> u64 {
+        let mut freed = self.globals.release() + self.blocks.release();
+        freed += self.vectors.shrink(gpu);
+        freed += self.clips.shrink(gpu);
+        freed += self.paints.shrink(gpu);
+        freed += self.stops.shrink(gpu);
+        freed += self.spatial.shrink(gpu);
+        self.tables_released = true;
+        freed += self.quads.shrink(gpu);
+        freed += self.shadows.shrink(gpu);
+        freed += self.decorations.shrink(gpu);
+        freed += self.mono_sprites.shrink(gpu);
+        freed += self.subpixel_sprites.shrink(gpu);
+        freed += self.color_sprites.shrink(gpu);
+        freed += self.uploader.release_idle();
+        *self.frame_bind.borrow_mut() = None;
+        self.instance_binds.borrow_mut().clear();
+        freed
+    }
+
     /// The bind group naming the globals and the side tables.
     ///
-    /// Built per frame rather than kept, because a buffer that grew this frame is a different
+    /// Rebuilt only when a backing buffer grows, because a grown buffer is a different
     /// resource and a bind group naming the old one is stale. Seven objects a frame is the cost of
     /// never having to reason about which of them a growth invalidated.
     pub fn frame_bind_group(&self, gpu: &Gpu, layouts: &Layouts) -> Option<wgpu::BindGroup> {
-        Some(gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        let signature = [
+            self.globals.generation(),
+            self.clips.generation(),
+            self.paints.generation(),
+            self.stops.generation(),
+            self.spatial.generation(),
+        ];
+        if let Some((held, bind)) = self.frame_bind.borrow().as_ref()
+            && *held == signature
+        {
+            return Some(bind.clone());
+        }
+        let bind = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("zgui.bind.frame"),
             layout: &layouts.frame,
             entries: &[
@@ -294,7 +357,9 @@ impl FrameBuffers {
                     resource: self.spatial.binding(),
                 },
             ],
-        }))
+        });
+        *self.frame_bind.borrow_mut() = Some((signature, bind.clone()));
+        Some(bind)
     }
 
     /// The bind group naming one pipeline's instances.
@@ -305,14 +370,24 @@ impl FrameBuffers {
         kind: PipelineKind,
     ) -> Option<wgpu::BindGroup> {
         let instances = self.instances(kind)?;
-        Some(gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        let generation = instances.generation();
+        if let Some((held, bind)) = self.instance_binds.borrow().get(&kind)
+            && *held == generation
+        {
+            return Some(bind.clone());
+        }
+        let bind = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(kind.label()),
             layout: &layouts.instances,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: instances.binding(),
             }],
-        }))
+        });
+        self.instance_binds
+            .borrow_mut()
+            .insert(kind, (generation, bind.clone()));
+        Some(bind)
     }
 }
 

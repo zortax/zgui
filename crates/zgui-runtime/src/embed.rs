@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
+use zgui_geom::{Device, Size};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::ContentCache;
 use zgui_render::Renderer;
@@ -60,12 +61,33 @@ pub struct EmbedSyncCx<'a> {
     pub revision: u64,
     /// Device pixels per CSS pixel.
     pub scale: f32,
+    /// The configured surface extent, for conservative viewport visibility.
+    pub viewport: Size<i32, Device>,
     /// Whether the window is currently invisible, which is what pauses producers.
     pub occluded: bool,
     /// The frame's own clock reading, the same one animations are stepped with.
     pub timestamp: Timestamp,
     /// The thread-safe wake route a host hands to producers.
     pub waker: &'a Arc<RuntimeWaker>,
+}
+
+/// The resources a maintenance-only deadline may trim without painting or presenting.
+pub struct EmbedMaintenanceCx<'a> {
+    /// The renderer, for releasing callback-owned external registrations.
+    pub renderer: &'a mut dyn Renderer,
+    /// Replaced attachments, for detaching released callback textures.
+    pub content: &'a mut ContentCache,
+    /// The same monotonic clock frames use.
+    pub timestamp: Timestamp,
+}
+
+/// Device texture bytes retained by embeds, split by allocation ownership.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EmbedMemoryReport {
+    /// Textures zgui allocated for callback renderers; included in zgui-owned memory.
+    pub callback_owned: u64,
+    /// Textures supplied by producers; diagnostic only and never automatically released.
+    pub producer_owned: u64,
 }
 
 impl EmbedSyncCx<'_> {
@@ -101,6 +123,17 @@ pub struct EmbedSyncReport {
 pub trait EmbedHost {
     /// Runs the frame's embed work; see the module for where this sits and why.
     fn sync(&mut self, cx: &mut EmbedSyncCx<'_>) -> EmbedSyncReport;
+
+    /// Trims resources at a maintenance-only deadline, without producing a frame.
+    fn maintain(&mut self, _cx: &mut EmbedMaintenanceCx<'_>) {}
+
+    /// The content cache forgot direct attachments; retained textures must be reattached on sync.
+    fn content_forgotten(&mut self) {}
+
+    /// Texture bytes retained by this host, split by allocation owner.
+    fn memory(&self) -> EmbedMemoryReport {
+        EmbedMemoryReport::default()
+    }
 
     /// The window is going away; release everything and tell every producer.
     fn shutting_down(&mut self) {}

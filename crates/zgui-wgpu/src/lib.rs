@@ -36,15 +36,17 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use rustc_hash::FxHashMap;
-use zgui_dom::host::replaced::{Intrinsic, ReplacedId};
+use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::NodeKey;
+use zgui_dom::host::replaced::{Intrinsic, ReplacedId};
 use zgui_geom::{Css, CssPx, Device, Size};
 use zgui_reactive::FrameWaker;
 use zgui_render::{ExternalTexture, TextureHandle};
-use zgui_render_wgpu::WgpuRenderer;
 use zgui_render_wgpu::Gpu;
-use zgui_runtime::embed::{EmbedHost, EmbedSyncCx, EmbedSyncReport};
+use zgui_render_wgpu::WgpuRenderer;
+use zgui_runtime::embed::{
+    EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport,
+};
 use zgui_runtime::wake::RuntimeWaker;
 use zgui_scene::ExternalTextureId;
 use zgui_vocab::{PropKey, PropValue, Timestamp};
@@ -404,7 +406,14 @@ struct Binding {
     last_size: Option<Size<u32, Device>>,
     /// Whether the producer was last told it is visible.
     visible: bool,
+    /// The first frame timestamp at which this surface was continuously invisible.
+    invisible_since: Option<Timestamp>,
+    /// Whether the content cache currently points at this binding's external name.
+    content_attached: bool,
 }
+
+/// Cold callback textures are cheap to reproduce but expensive to retain indefinitely.
+const INVISIBLE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The wgpu embed host: install one per window, or let the umbrella crate do it.
 pub struct WgpuSurfaces {
@@ -468,12 +477,11 @@ impl EmbedHost for WgpuSurfaces {
                     binding.registered = None;
                     binding.described = None;
                     binding.attached = None;
+                    binding.content_attached = false;
                     match &mut binding.producer {
                         Producer::Handle(state) => {
                             if lost {
-                                tell(state, SurfaceEvent::DeviceLost {
-                                    gpu: share.clone(),
-                                });
+                                tell(state, SurfaceEvent::DeviceLost { gpu: share.clone() });
                             }
                         }
                         Producer::Callback { texture, drawn, .. } => {
@@ -495,10 +503,67 @@ impl EmbedHost for WgpuSurfaces {
             self.rescan(cx);
         }
 
-        let nodes: Vec<NodeKey> = self.bindings.keys().copied().collect();
-        for node in nodes {
-            let outcome = self.sync_one(node, cx, share.as_ref());
+        for (&node, binding) in &mut self.bindings {
+            let outcome = Self::sync_one(node, binding, cx, share.as_ref());
             report.animating |= outcome;
+        }
+        report
+    }
+
+    fn maintain(&mut self, cx: &mut EmbedMaintenanceCx<'_>) {
+        for (&node, binding) in &mut self.bindings {
+            if binding.visible
+                || binding
+                    .invisible_since
+                    .is_none_or(|since| cx.timestamp.saturating_since(since) < INVISIBLE_GRACE)
+            {
+                continue;
+            }
+            let Producer::Callback { texture, drawn, .. } = &mut binding.producer else {
+                // Producer-owned textures are intentionally never released by maintenance.
+                continue;
+            };
+            if texture.take().is_none() {
+                continue;
+            }
+            *drawn = false;
+            binding.content_attached = false;
+            binding.described = None;
+            cx.content.remove_image(ReplacedId::new(node));
+            if let Some(handle) = binding.registered.take() {
+                cx.renderer.release_external(handle);
+            }
+        }
+    }
+
+    fn content_forgotten(&mut self) {
+        for binding in self.bindings.values_mut() {
+            binding.content_attached = false;
+        }
+    }
+
+    fn memory(&self) -> EmbedMemoryReport {
+        let mut report = EmbedMemoryReport::default();
+        let mut producer_textures = FxHashSet::default();
+        for binding in self.bindings.values() {
+            match &binding.producer {
+                Producer::Callback { texture, .. } => {
+                    report.callback_owned += texture.as_ref().map_or(0, texture_bytes);
+                }
+                Producer::Handle(state) => {
+                    if let Some(attached) = binding.attached.as_ref()
+                        && producer_textures.insert(Arc::as_ptr(attached) as usize)
+                    {
+                        report.producer_owned += texture_bytes(attached);
+                    }
+                    let latest = lock(state).latest.clone();
+                    if let Some(latest) = latest
+                        && producer_textures.insert(Arc::as_ptr(&latest) as usize)
+                    {
+                        report.producer_owned += texture_bytes(&latest);
+                    }
+                }
+            }
         }
         report
     }
@@ -580,6 +645,8 @@ impl WgpuSurfaces {
                 attached: None,
                 last_size: None,
                 visible: false,
+                invisible_since: Some(cx.timestamp),
+                content_attached: false,
             };
 
             let id = ReplacedId::new(node);
@@ -623,24 +690,27 @@ impl WgpuSurfaces {
 
     /// One binding's frame: visibility, resizes, presents, renders. Returns whether it animates.
     fn sync_one(
-        &mut self,
         node: NodeKey,
+        binding: &mut Binding,
         cx: &mut EmbedSyncCx<'_>,
         share: Option<&GpuShare>,
     ) -> bool {
-        let Some(binding) = self.bindings.get_mut(&node) else {
-            return false;
-        };
         let id = ReplacedId::new(node);
 
         // Where the element ended up this frame, if it is on the screen at all.
-        let content_box = {
+        let (content_box, ink) = {
             let layout = cx.layout.borrow();
-            layout
+            let content_box = layout
                 .boxes_of(node)
                 .first()
                 .and_then(|key| layout.fragments_of_box(*key).first().copied())
-                .and_then(|fragment| layout.fragment(fragment).map(|fragment| fragment.content_box))
+                .and_then(|fragment| {
+                    layout
+                        .fragment(fragment)
+                        .map(|fragment| fragment.content_box)
+                });
+            let ink = zgui_layout::fragment::index::ink_of(&layout, node);
+            (content_box, ink)
         };
         let size = content_box.map(|content_box| {
             Size::<u32, Device>::new(
@@ -649,9 +719,21 @@ impl WgpuSurfaces {
             )
         });
 
-        let visible = !cx.occluded && size.is_some_and(|size| size.width > 0 && size.height > 0);
+        let viewport = zgui_geom::Rect::new(
+            zgui_geom::Point::new(zgui_geom::DevicePx(0.0), zgui_geom::DevicePx(0.0)),
+            zgui_geom::Size::new(
+                zgui_geom::DevicePx(cx.viewport.width.max(0) as f32),
+                zgui_geom::DevicePx(cx.viewport.height.max(0) as f32),
+            ),
+        );
+        let visible = !cx.occluded
+            && size.is_some_and(|size| size.width > 0 && size.height > 0)
+            && ink
+                .intersection(viewport)
+                .is_some_and(|visible| !visible.is_empty());
         if visible != binding.visible {
             binding.visible = visible;
+            binding.invisible_since = (!visible).then_some(cx.timestamp);
             if let Producer::Handle(state) = &binding.producer {
                 tell(state, SurfaceEvent::Visible(visible));
             }
@@ -695,13 +777,11 @@ impl WgpuSurfaces {
 
         match &mut binding.producer {
             Producer::Handle(state) => {
-                let taken = lock(state).latest.take();
+                let taken = visible.then(|| lock(state).latest.take()).flatten();
                 let premultiplied = lock(state).config.premultiplied;
                 if let Some(texture) = taken {
-                    let extent = Size::<i32, Device>::new(
-                        texture.width() as i32,
-                        texture.height() as i32,
-                    );
+                    let extent =
+                        Size::<i32, Device>::new(texture.width() as i32, texture.height() as i32);
                     attach(
                         cx,
                         AttachAsk {
@@ -712,10 +792,32 @@ impl WgpuSurfaces {
                             texture: &texture,
                             described: &mut binding.described,
                             registered: &mut binding.registered,
+                            content_attached: &mut binding.content_attached,
                             content_box,
                         },
                     );
                     binding.attached = Some(texture);
+                } else if visible && !binding.content_attached {
+                    if let Some(texture) = binding.attached.as_ref() {
+                        let extent = Size::<i32, Device>::new(
+                            texture.width() as i32,
+                            texture.height() as i32,
+                        );
+                        attach(
+                            cx,
+                            AttachAsk {
+                                id: binding.external,
+                                node,
+                                extent,
+                                premultiplied,
+                                texture,
+                                described: &mut binding.described,
+                                registered: &mut binding.registered,
+                                content_attached: &mut binding.content_attached,
+                                content_box,
+                            },
+                        );
+                    }
                 }
                 false
             }
@@ -750,43 +852,44 @@ impl WgpuSurfaces {
                     }));
                     *drawn = false;
                 }
-                let due = !*drawn || *animate;
-                if !due {
-                    return false;
-                }
                 let held = texture.as_ref().expect("just ensured");
-                let view = held.create_view(&wgpu::TextureViewDescriptor::default());
-                *animate = false;
-                let mut cx_render = SurfaceRenderCx {
-                    device: gpu.device(),
-                    queue: gpu.queue(),
-                    texture: held,
-                    view: &view,
-                    size,
-                    scale: cx.scale,
-                    timestamp: cx.timestamp,
-                    animate,
-                };
-                producer.render(&mut cx_render);
-                *drawn = true;
-
-                let extent =
-                    Size::<i32, Device>::new(size.width as i32, size.height as i32);
-                attach(
-                    cx,
-                    AttachAsk {
-                        id: binding.external,
-                        node,
-                        extent,
-                        // zgui's own render target: the renderer draws premultiplied, as the
-                        // whole pipeline does.
-                        premultiplied: true,
+                let due = !*drawn || *animate;
+                if due {
+                    let view = held.create_view(&wgpu::TextureViewDescriptor::default());
+                    *animate = false;
+                    let mut cx_render = SurfaceRenderCx {
+                        device: gpu.device(),
+                        queue: gpu.queue(),
                         texture: held,
-                        described: &mut binding.described,
-                        registered: &mut binding.registered,
-                        content_box,
-                    },
-                );
+                        view: &view,
+                        size,
+                        scale: cx.scale,
+                        timestamp: cx.timestamp,
+                        animate,
+                    };
+                    producer.render(&mut cx_render);
+                    *drawn = true;
+                }
+
+                if due || !binding.content_attached {
+                    let extent = Size::<i32, Device>::new(size.width as i32, size.height as i32);
+                    attach(
+                        cx,
+                        AttachAsk {
+                            id: binding.external,
+                            node,
+                            extent,
+                            // zgui's own render target: the renderer draws premultiplied, as the
+                            // whole pipeline does.
+                            premultiplied: true,
+                            texture: held,
+                            described: &mut binding.described,
+                            registered: &mut binding.registered,
+                            content_attached: &mut binding.content_attached,
+                            content_box,
+                        },
+                    );
+                }
                 *animate
             }
         }
@@ -809,6 +912,8 @@ struct AttachAsk<'a> {
     described: &'a mut Option<(Size<i32, Device>, bool)>,
     /// The renderer's handle, for later release.
     registered: &'a mut Option<TextureHandle>,
+    /// Whether the content cache currently names this external.
+    content_attached: &'a mut bool,
     /// Where the element is, for the damage the fresh pixels owe.
     content_box: Option<zgui_geom::Rect<zgui_geom::DevicePx, Device>>,
 }
@@ -830,11 +935,38 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
         .as_any_mut()
         .and_then(|any| any.downcast_mut::<WgpuRenderer>())
         .is_some_and(|renderer| renderer.attach_external(ask.id, ask.texture));
-    debug_assert!(attached, "the description above is what makes attach accept");
+    debug_assert!(
+        attached,
+        "the description above is what makes attach accept"
+    );
     cx.content.set_external(ReplacedId::new(ask.node), ask.id);
+    *ask.content_attached = true;
     if let Some(content_box) = ask.content_box {
-        cx.damage.absorb(zgui_layout::fragment::diff::pixels(content_box));
+        cx.damage
+            .absorb(zgui_layout::fragment::diff::pixels(content_box));
     }
+}
+
+/// Exact allocated texel bytes for a texture's mip chain and sample count.
+fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let format = texture.format();
+    let Some(block_bytes) = format.block_copy_size(None) else {
+        return 0;
+    };
+    let (block_width, block_height) = format.block_dimensions();
+    let base = texture.size();
+    let mut total = 0_u64;
+    for level in 0..texture.mip_level_count() {
+        let width = (base.width >> level).max(1).div_ceil(block_width);
+        let height = (base.height >> level).max(1).div_ceil(block_height);
+        let depth = (base.depth_or_array_layers >> level).max(1);
+        total += u64::from(width)
+            * u64::from(height)
+            * u64::from(depth)
+            * u64::from(block_bytes)
+            * u64::from(texture.sample_count());
+    }
+    total
 }
 
 /// The device behind the frame's renderer, if the renderer has one to give.

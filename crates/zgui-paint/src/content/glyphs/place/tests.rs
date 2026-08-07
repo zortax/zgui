@@ -17,6 +17,7 @@ use zgui_text::{
 };
 
 use crate::content::glyphs::cache::{GlyphCache, Rasterising};
+use crate::content::vectors::VectorMaskCache;
 use crate::emit::text::PlacedGlyph;
 
 /// The bearing the fixture's rasteriser reports for every glyph.
@@ -78,12 +79,14 @@ fn placed(origin: (f32, f32), positions: &[f32]) -> Vec<(PlacedGlyph, SubpixelOf
     };
     let raster = Recording::default();
     let mut cache = GlyphCache::default();
+    let mut vector_masks = VectorMaskCache::default();
     let mut atlas = Atlas::new(AtlasLimits::default());
     let mut out = Vec::new();
     super::place(
         &mut Rasterising {
             glyphs: &mut cache,
             atlas: &mut atlas,
+            vector_masks: &mut vector_masks,
             named: Vec::new(),
         },
         &raster,

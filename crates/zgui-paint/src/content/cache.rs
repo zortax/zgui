@@ -16,6 +16,7 @@ use zgui_text::{GlyphRaster, RasterPath, ShapedGlyphs};
 use crate::content::glyphs::OutlineGlyph;
 use crate::content::glyphs::{GlyphCache, Rasterising};
 use crate::content::images::{Content, ImageError};
+use crate::content::vectors::{VectorMaskCache, VectorMaskRequest, VectorMaskSource};
 use crate::emit::replaced::Source;
 use crate::emit::text::{GlyphRequest, GlyphRun, GlyphSource, PlacedGlyph, RunContent};
 use crate::walk::order::ReplacedSource;
@@ -36,6 +37,8 @@ pub struct ContentCache {
     atlas: Atlas,
     /// What each glyph rasterised to, last time anything asked.
     glyphs: GlyphCache,
+    /// Geometry identities for small solid vector masks in the monochrome atlas.
+    vector_masks: VectorMaskCache,
     /// What is attached to each replaced node.
     images: FxHashMap<ReplacedId, Content>,
     /// How many times a frame has resolved a replaced node to the content held for it.
@@ -57,6 +60,7 @@ impl ContentCache {
         Self {
             atlas: Atlas::new(limits),
             glyphs: GlyphCache::default(),
+            vector_masks: VectorMaskCache::default(),
             images: FxHashMap::default(),
             image_hits: Cell::new(0),
             registry: ResourceRegistry::new(),
@@ -111,12 +115,13 @@ impl ContentCache {
         self.atlas.resident_bytes()
     }
 
-    /// How many bytes of decoded texels are attached to replaced nodes.
+    /// How many decoded bytes are referenced by replaced-node attachments.
     ///
     /// Separate from [`ContentCache::resident_bytes`] and not part of it: those are the device's
-    /// texture memory and these are this process's own, and a picture that is both attached here
-    /// and uploaded there is spending both. Externally owned textures count for nothing, because
-    /// they are not this window's memory to budget.
+    /// texture memory and these are host references. Shared attachments are counted once per node,
+    /// so this is an attachment diagnostic rather than the window's allocation total; the runtime
+    /// image loader owns and reports that deduplicated total. Externally owned textures count for
+    /// nothing.
     pub fn image_bytes(&self) -> u64 {
         self.images.values().map(Content::held_bytes).sum()
     }
@@ -137,11 +142,9 @@ impl ContentCache {
 
     /// Detaches every image, and reports how many that threw away.
     ///
-    /// **Nothing can put them back.** The texels arrived from the application already decoded —
-    /// this framework links no codec and holds no path to the file one came from — so a window
-    /// that drops them draws nothing for those nodes until whatever attached them attaches them
-    /// again. That is why this is separate from eviction rather than a step of it, and why the
-    /// budget reports every byte here as pinned.
+    /// This cache cannot put them back by itself. A runtime loader may retain their source and
+    /// re-decode them; directly attached texels and external textures need their owner to attach
+    /// them again.
     pub fn forget_images(&mut self) -> usize {
         let held = self.images.len();
         self.images.clear();
@@ -251,6 +254,7 @@ impl ContentCache {
             writing: RefCell::new(Rasterising {
                 glyphs: &mut self.glyphs,
                 atlas: &mut self.atlas,
+                vector_masks: &mut self.vector_masks,
                 named: Vec::new(),
             }),
         }
@@ -281,6 +285,7 @@ impl ContentCache {
         let mut removed = Vec::new();
         let freed = self.atlas.evict_least_recently_used_into(&mut removed);
         self.glyphs.forget_tiles(&removed);
+        self.vector_masks.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -300,6 +305,7 @@ impl ContentCache {
         let mut removed = Vec::new();
         let freed = self.atlas.evict_to_soft_limit_into(&mut removed);
         self.glyphs.forget_tiles(&removed);
+        self.vector_masks.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -311,6 +317,7 @@ impl ContentCache {
     pub fn clear(&mut self) {
         self.atlas.clear();
         self.glyphs.clear();
+        self.vector_masks.clear();
         // Every name handed out before now pointed into a texture that is about to stop existing,
         // so they stop being names. A sprite still carrying one resolves to nothing rather than to
         // whatever has since taken that content's place.
@@ -420,6 +427,24 @@ impl ReplacedSource for FrameContent<'_> {
             named.push(key);
         }
         Some(source)
+    }
+}
+
+impl VectorMaskSource for FrameContent<'_> {
+    fn vector_mask(
+        &self,
+        request: VectorMaskRequest<'_>,
+    ) -> Option<crate::content::vectors::VectorMask> {
+        let mut writing = self.writing.borrow_mut();
+        let Rasterising {
+            atlas,
+            vector_masks,
+            named,
+            ..
+        } = &mut *writing;
+        let mask = vector_masks.tile_for(atlas, request)?;
+        named.push(mask.key);
+        Some(mask)
     }
 }
 

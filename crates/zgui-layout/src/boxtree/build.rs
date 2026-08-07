@@ -229,14 +229,12 @@ impl Builder<'_> {
             classification.fc
         };
         let mut node = BoxNode::new(style.clone(), BoxKind::Element, fc).from_element(source);
-        node.custom = custom;
         node.block_level = classification.participation == Participation::Block;
-        node.replaced = intrinsic.is_some().then_some(replaced).flatten();
-        node.draws_vector = zgui_dom::side::drawing::draws(
+        let draws_vector = zgui_dom::side::drawing::draws(
             self.document.store(),
             self.document.store().key_of(index),
         );
-        node.natural_ratio = intrinsic.and_then(|intrinsic| {
+        let natural_ratio = intrinsic.and_then(|intrinsic| {
             intrinsic.ratio.or_else(|| {
                 intrinsic
                     .size
@@ -244,14 +242,24 @@ impl Builder<'_> {
                     .map(|size| size.width.0 / size.height.0)
             })
         });
-        node.natural = intrinsic.and_then(|intrinsic| intrinsic.size);
+        let content = crate::tree::store::content::BoxContent {
+            replaced: intrinsic.zip(replaced).map(|(intrinsic, id)| {
+                crate::tree::store::content::ReplacedBox {
+                    id,
+                    ratio: natural_ratio,
+                    natural: intrinsic.size,
+                }
+            }),
+            custom: custom.map(Into::into),
+            draws_vector,
+        };
         if matches!(fc, FormattingContext::Grid) {
             let names = grid::resolve_names(style);
             if !names.is_empty() {
                 node.grid = Some(Box::new(names));
             }
         }
-        let key = self.store.insert(node);
+        let key = self.store.insert_with_content(node, content);
         counter::bump(Counter::BoxesRebuilt);
 
         let inner_cb = if establishes_containing_block(classification.positioned, fc) {

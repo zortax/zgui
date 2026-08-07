@@ -104,13 +104,26 @@ pub(crate) struct ImageLoader {
     /// What the attribute hook heard since the last settle.
     pending: Rc<RefCell<Vec<(NodeKey, Option<String>)>>>,
     /// What the decode tasks produced since the last settle.
-    completed: Rc<RefCell<Vec<(SourceKey, Result<zgui_image::Decoded, zgui_image::DecodeError>)>>>,
+    completed: Rc<
+        RefCell<
+            Vec<(
+                SourceKey,
+                Result<zgui_image::Decoded, zgui_image::DecodeError>,
+            )>,
+        >,
+    >,
     /// The bound every decode is held to, from the atlas's own limit.
     limits: zgui_image::Limits,
     /// The next atlas handle, allocated per source and never reused.
     next_handle: u64,
     /// How many decode tasks have ever been kicked; a settle that moved it owes a frame.
     kicked: u64,
+    /// Decoded bytes held across all sources.
+    ///
+    /// Maintained on state transitions so the per-frame budget report is constant-time.
+    held_bytes: u64,
+    /// The subset of [`ImageLoader::held_bytes`] belonging to sources no node shows.
+    evictable_bytes: u64,
 }
 
 impl ImageLoader {
@@ -125,6 +138,8 @@ impl ImageLoader {
             limits: zgui_image::Limits { max_dimension },
             next_handle: 0,
             kicked: 0,
+            held_bytes: 0,
+            evictable_bytes: 0,
         }
     }
 
@@ -227,7 +242,11 @@ impl ImageLoader {
 
         if let Some(previous) = previous {
             if let Some(entry) = self.entries.get_mut(&previous) {
+                let became_orphaned = entry.nodes.len() == 1 && entry.nodes.contains(&node);
                 entry.nodes.remove(&node);
+                if became_orphaned {
+                    self.evictable_bytes += entry.held_bytes();
+                }
             }
             let id = ReplacedId::new(node);
             content.remove_image(id);
@@ -254,7 +273,11 @@ impl ImageLoader {
                 attach_owed: false,
             }
         });
+        let was_orphaned = entry.nodes.is_empty();
         entry.nodes.insert(node);
+        if was_orphaned {
+            self.evictable_bytes = self.evictable_bytes.saturating_sub(entry.held_bytes());
+        }
         match &entry.state {
             // Known and unsized, which is what keeps the box replaced while the decode runs.
             State::Pending | State::Failed | State::Evicted => {
@@ -277,10 +300,20 @@ impl ImageLoader {
         let Some(entry) = self.entries.get_mut(&key) else {
             return;
         };
+        let before = entry.held_bytes();
+        self.held_bytes = self.held_bytes.saturating_sub(before);
+        if entry.nodes.is_empty() {
+            self.evictable_bytes = self.evictable_bytes.saturating_sub(before);
+        }
         match result {
             Ok(decoded) => {
                 entry.state = State::Ready(decoded);
                 entry.attach_owed = true;
+                let after = entry.held_bytes();
+                self.held_bytes += after;
+                if entry.nodes.is_empty() {
+                    self.evictable_bytes += after;
+                }
             }
             Err(error) => {
                 tracing::warn!(target: "zgui::images", src = ?key, "an image failed to decode: {error}");
@@ -306,7 +339,11 @@ impl ImageLoader {
         for node in dead {
             let key = self.by_node.remove(&node).expect("was just iterated");
             if let Some(entry) = self.entries.get_mut(&key) {
+                let became_orphaned = entry.nodes.len() == 1 && entry.nodes.contains(&node);
                 entry.nodes.remove(&node);
+                if became_orphaned {
+                    self.evictable_bytes += entry.held_bytes();
+                }
             }
             let id = ReplacedId::new(node);
             content.remove_image(id);
@@ -321,16 +358,12 @@ impl ImageLoader {
 
     /// How many decoded bytes the loader holds, over every entry.
     pub(crate) fn held_bytes(&self) -> u64 {
-        self.entries.values().map(Entry::held_bytes).sum()
+        self.held_bytes
     }
 
     /// How many decoded bytes are held for sources nothing currently shows.
     pub(crate) fn evictable_bytes(&self) -> u64 {
-        self.entries
-            .values()
-            .filter(|entry| entry.nodes.is_empty())
-            .map(Entry::held_bytes)
-            .sum()
+        self.evictable_bytes
     }
 
     /// Drops decoded texels until `want` bytes have been freed, coldest first.
@@ -350,6 +383,8 @@ impl ImageLoader {
             freed += held;
             false
         });
+        self.held_bytes = self.held_bytes.saturating_sub(freed);
+        self.evictable_bytes = self.evictable_bytes.saturating_sub(freed);
         freed
     }
 
@@ -359,8 +394,13 @@ impl ImageLoader {
     /// from the source. What this costs is the decode, which is the honest price of "a window
     /// with every cache empty".
     pub(crate) fn forget(&mut self, content: &mut ContentCache) {
+        let mut freed = 0;
+        let mut freed_evictable = 0;
         self.entries.retain(|_, entry| {
+            let held = entry.held_bytes();
             if entry.nodes.is_empty() {
+                freed += held;
+                freed_evictable += held;
                 return false;
             }
             for &node in &entry.nodes {
@@ -368,8 +408,11 @@ impl ImageLoader {
             }
             entry.state = State::Evicted;
             entry.attach_owed = true;
+            freed += held;
             true
         });
+        self.held_bytes = self.held_bytes.saturating_sub(freed);
+        self.evictable_bytes = self.evictable_bytes.saturating_sub(freed_evictable);
     }
 }
 
@@ -386,6 +429,16 @@ impl ImageLoader {
         decoded: zgui_image::Decoded,
     ) {
         let key = SourceKey::of(src);
+        if let Some(previous) = self.entries.remove(&key) {
+            let held = previous.held_bytes();
+            self.held_bytes = self.held_bytes.saturating_sub(held);
+            if previous.nodes.is_empty() {
+                self.evictable_bytes = self.evictable_bytes.saturating_sub(held);
+            }
+            for node in previous.nodes {
+                self.by_node.remove(&node);
+            }
+        }
         self.next_handle += 1;
         let entry = Entry {
             handle: self.next_handle,
@@ -393,6 +446,11 @@ impl ImageLoader {
             nodes: nodes.iter().copied().collect(),
             attach_owed: false,
         };
+        let held = entry.held_bytes();
+        self.held_bytes += held;
+        if entry.nodes.is_empty() {
+            self.evictable_bytes += held;
+        }
         for &node in nodes {
             self.by_node.insert(node, key.clone());
         }
@@ -432,7 +490,14 @@ fn intrinsic_of(decoded: &zgui_image::Decoded) -> Intrinsic {
 /// apply the result.
 fn kick(
     key: SourceKey,
-    completed: Rc<RefCell<Vec<(SourceKey, Result<zgui_image::Decoded, zgui_image::DecodeError>)>>>,
+    completed: Rc<
+        RefCell<
+            Vec<(
+                SourceKey,
+                Result<zgui_image::Decoded, zgui_image::DecodeError>,
+            )>,
+        >,
+    >,
     limits: zgui_image::Limits,
 ) {
     let work = match &key {

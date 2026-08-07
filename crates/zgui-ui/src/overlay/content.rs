@@ -80,7 +80,7 @@ pub fn OverlaySurface(
         );
 
     view! {
-        surface(node_ref = {state.content()}, {..own}, {..attrs}, class = class) {
+        box(node_ref = {state.content()}, {..own}, {..attrs}, class = class) {
             {children.into_view_once()}
         }
     }

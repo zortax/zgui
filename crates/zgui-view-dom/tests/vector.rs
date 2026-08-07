@@ -260,6 +260,7 @@ fn the_outlines_a_view_set_reach_a_renderer_as_the_list_it_wrote_in_the_colour_i
             zgui_paint::emit::vector::VectorPlacement {
                 clip: zgui_scene::ClipId::ROOT,
                 transform: zgui_scene::SpatialId::VIEWPORT,
+                scale: 1.0,
             },
         );
     }

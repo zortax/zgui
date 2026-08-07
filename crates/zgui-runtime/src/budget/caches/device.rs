@@ -32,14 +32,24 @@ use crate::budget::report::{CacheId, CacheReport, CacheUnit, rebuild};
 pub struct DeviceMemoryBudget<'a> {
     /// What owns the device resources.
     renderer: &'a mut dyn Renderer,
+    /// Callback-surface textures allocated by zgui outside the renderer proper.
+    callback_surfaces: u64,
     /// This entry's own history.
     tracked: &'a mut Tracked,
 }
 
 impl<'a> DeviceMemoryBudget<'a> {
     /// The adapter over one window's renderer.
-    pub fn new(renderer: &'a mut dyn Renderer, tracked: &'a mut Tracked) -> Self {
-        Self { renderer, tracked }
+    pub fn new(
+        renderer: &'a mut dyn Renderer,
+        callback_surfaces: u64,
+        tracked: &'a mut Tracked,
+    ) -> Self {
+        Self {
+            renderer,
+            callback_surfaces,
+            tracked,
+        }
     }
 }
 
@@ -59,7 +69,10 @@ impl Budgeted for DeviceMemoryBudget<'_> {
         // one term counted twice.
         let memory = self.renderer.memory();
         let pooled = self.renderer.target_pool().resident;
-        let resident = memory.total().saturating_sub(pooled);
+        let resident = memory
+            .total()
+            .saturating_sub(pooled)
+            .saturating_add(self.callback_surfaces);
         CacheReport {
             resident,
             // All of it. A pipeline, a swapchain and the target a frame is composed into are live

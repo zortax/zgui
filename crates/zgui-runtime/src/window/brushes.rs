@@ -299,9 +299,7 @@ mod tests {
     }
 
     /// Two elements drawn through one slot, which is what aliasing leaves behind.
-    fn sharing_one_slot(
-        color: Color,
-    ) -> (FxHashMap<SlotKey, TextSlot>, TextPaintTable, PaintSlot) {
+    fn sharing_one_slot(color: Color) -> (FxHashMap<SlotKey, TextSlot>, TextPaintTable, PaintSlot) {
         let mut table = TextPaintTable::new();
         let shared = cascade_result();
         let slot = table.slot_for(super::address(&shared), || TextPaint::new(color));
@@ -319,11 +317,7 @@ mod tests {
     }
 
     /// The colour an element is drawn in after a batch, read the way a shaped run reads it.
-    fn drawn(
-        slots: &FxHashMap<SlotKey, TextSlot>,
-        table: &TextPaintTable,
-        n: u32,
-    ) -> TextPaint {
+    fn drawn(slots: &FxHashMap<SlotKey, TextSlot>, table: &TextPaintTable, n: u32) -> TextPaint {
         let held = slots
             .get(&(node(n), TextRun::Own))
             .expect("the element was given a slot");

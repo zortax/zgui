@@ -29,6 +29,8 @@ use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_profile::{Counter, counter};
 use zgui_text::{AtlasGlyph, GlyphKey, GlyphRaster};
 
+use crate::content::vectors::VectorMaskCache;
+
 /// A tile, what the atlas holds it under, and where the pixels in it sit relative to the glyph's
 /// origin.
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +97,8 @@ pub(crate) struct Rasterising<'a> {
     pub(crate) glyphs: &'a mut GlyphCache,
     /// The tiles.
     pub(crate) atlas: &'a mut Atlas,
+    /// Geometry identities for small solid shapes stored in the monochrome atlas.
+    pub(crate) vector_masks: &'a mut VectorMaskCache,
     /// Every atlas key handed out since the list was last drained.
     ///
     /// The list is how what a fragment *drew* becomes something that can be held: a primitive
@@ -115,6 +119,7 @@ impl Rasterising<'_> {
         let Self {
             glyphs,
             atlas,
+            vector_masks: _,
             named,
         } = self;
         let rasterised = glyphs.tile_for(atlas, raster, key)?;

@@ -1,9 +1,8 @@
 //! The size-only measurements one box has already answered.
 //!
-//! The layout engine keeps a per-box cache of its own, and it is a fixed array of nine slots chosen
-//! by *shape* of question — how many dimensions were already known, and whether the rest was asked
-//! about at min-content or at max-content. Two questions of the same shape share a slot, so the
-//! second evicts the first.
+//! This is the layout engine's sole size-only cache. It keys the complete question instead of
+//! Taffy's former nine-slot approximation, so two probes that differ in a sizing input never share
+//! an answer.
 //!
 //! That is fine for a box asked a handful of questions and ruinous for a box inside a grid. Grid
 //! track sizing measures every item at min-content and again at max-content, and it does so once
@@ -14,10 +13,7 @@
 //! of 1 851 boxes, one keystroke drove **17 971** box layouts for **12** boxes that had actually
 //! changed.
 //!
-//! This is the same cache with as many slots as the questions asked. It is consulted only after the
-//! engine's own has missed, it is keyed on the whole of the engine's question rather than on part
-//! of it (see [`probe`]), and it is emptied at exactly the moments the engine's own is — which is
-//! the only thing that keeps it honest, and why both live behind
+//! It is keyed on the whole of the engine's question (see [`probe`]) and lives behind
 //! [`BoxLayout::forget_layout`](crate::tree::store::state::BoxLayout::forget_layout) rather than
 //! being cleared by whoever happens to remember.
 //!

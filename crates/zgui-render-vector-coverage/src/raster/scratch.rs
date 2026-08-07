@@ -143,6 +143,18 @@ impl Scratch {
         }
     }
 
+    /// Drops both reproducible scratch textures after wall-clock idleness.
+    pub fn release(&mut self) -> u64 {
+        let freed = self.bytes();
+        self.accumulation = None;
+        self.straight = None;
+        self.extent = (0, 0);
+        self.layers = 0;
+        self.decay.clear();
+        self.publish();
+        freed
+    }
+
     /// Clears each of `layers` in both textures, in one submitted encoder.
     ///
     /// Both, and not only the one that is written last: a pass that fails part way through leaves

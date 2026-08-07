@@ -52,8 +52,10 @@ const FRAMES: usize = 24;
 type Factory = Box<dyn Fn(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, AppError>>;
 
 /// A renderer that records the display list and claims to keep the pixels it composed.
-fn shifting(_surface: &Arc<dyn Surface>, target: RenderTarget) -> Result<Box<dyn Renderer>, AppError>
-{
+fn shifting(
+    _surface: &Arc<dyn Surface>,
+    target: RenderTarget,
+) -> Result<Box<dyn Renderer>, AppError> {
     let mut renderer = zgui_testkit_scene::CaptureRenderer::new().shifting();
     renderer.configure(target);
     Ok(Box::new(renderer))
@@ -92,9 +94,7 @@ fn listing(
                 zgui_testkit_scene::MonoShaper::new(),
             ))
         }))
-        .with_glyph_raster(Box::new(|| {
-            Arc::new(zgui_testkit_scene::MonoRaster::new())
-        }))
+        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             use zgui_view::{IntoView, View};
             let mut port = zgui_elements::column().class("port").class(port_class);

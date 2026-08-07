@@ -9,17 +9,18 @@ use crate::tree::store::LayoutStore;
 impl LayoutStore {
     /// The lines one inline formatting context resolved to.
     pub fn inline_resolution(&self, key: BoxKey) -> Option<&InlineResolution> {
-        self.layout.get(key)?.inline.as_deref()
+        self.layout.get(key)?.as_ref()?.inline.as_deref()
     }
 
     /// Records what one inline formatting context resolved to.
     pub fn set_inline_resolution(&mut self, key: BoxKey, resolution: InlineResolution) {
-        if self.layout.get(key).is_none() {
+        if self.layout.get(key).and_then(Option::as_ref).is_none() {
             return;
         }
         let previous = self
             .layout
             .get(key)
+            .and_then(Option::as_ref)
             .and_then(|state| state.inline.as_ref())
             .map(|held| held.paragraph);
         let next = resolution.paragraph;
@@ -29,14 +30,14 @@ impl LayoutStore {
             }
             self.retain_paragraph(next);
         }
-        if let Some(state) = self.layout.get_mut(key) {
+        if let Some(state) = self.layout.get_mut(key).as_mut() {
             state.inline = Some(Box::new(resolution));
         }
     }
 
     /// Removes one inline resolution and releases the paragraph identifier it held.
     pub(crate) fn take_inline_resolution(&mut self, key: BoxKey) -> Option<Box<InlineResolution>> {
-        let resolution = self.layout.get_mut(key)?.inline.take();
+        let resolution = self.layout.get_mut(key).as_mut()?.inline.take();
         if let Some(held) = &resolution {
             self.release_paragraph(held.paragraph);
         }
@@ -56,13 +57,13 @@ impl LayoutStore {
 
     /// The flattened form one inline formatting context is holding, if it is holding one.
     pub(crate) fn flattened(&self, key: BoxKey) -> Option<&Flattened> {
-        self.layout.get(key)?.flattened.as_deref()
+        self.layout.get(key)?.as_ref()?.flattened.as_deref()
     }
 
     /// Holds one inline formatting context's flattened form, replacing whatever it held.
     pub(crate) fn hold_flattened(&mut self, key: BoxKey, flattened: Flattened) {
         self.flattenings += 1;
-        if let Some(state) = self.layout.get_mut(key) {
+        if let Some(state) = self.layout.get_mut(key).as_mut() {
             state.flattened = Some(Box::new(flattened));
         }
     }
@@ -76,6 +77,7 @@ impl LayoutStore {
     pub(crate) fn forget_flattened(&mut self, key: BoxKey) -> bool {
         self.layout
             .get_mut(key)
+            .as_mut()
             .is_some_and(|state| state.flattened.take().is_some())
     }
 }

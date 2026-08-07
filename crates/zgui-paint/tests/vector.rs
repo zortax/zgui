@@ -8,6 +8,7 @@
 
 mod support;
 
+use zgui_atlas::AtlasLimits;
 use zgui_bits::DamageSet;
 use zgui_paint::VectorCache;
 use zgui_scene::Scene;
@@ -27,6 +28,122 @@ fn tree() -> Element {
     Element::new("root").children(vec![
         Element::new("mark").drawing(TRIANGLE, Some("0 0 24 24")),
     ])
+}
+
+#[test]
+fn an_eligible_drawing_uses_one_tinted_mask_and_no_vector_item() {
+    let mut harness = Harness::new(tree(), CSS);
+    let vectors = VectorCache::new();
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    harness.paint_cached_vectors(
+        &vectors,
+        &mut content,
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+
+    assert!(harness.scene().primitives.vectors.is_empty());
+    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
+    assert_eq!(content.report().tiles, 1);
+}
+
+#[test]
+fn recolouring_reuses_a_mask_but_different_geometry_allocates_another() {
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    let raster = zgui_testkit_scene::MonoRaster::new();
+
+    let mut blue = Harness::new(tree(), CSS);
+    blue.paint_cached_vectors(&VectorCache::new(), &mut content, &raster);
+    let blue_color = blue.scene().primitives.mono_sprites[0].color;
+    assert_eq!(content.report().tiles, 1);
+
+    let red_css = "root { display: block; width: 200px; height: 100px }
+                   mark { display: block; width: 48px; height: 48px; color: red }";
+    let mut red = Harness::new(tree(), red_css);
+    red.paint_cached_vectors(&VectorCache::new(), &mut content, &raster);
+    assert_ne!(red.scene().primitives.mono_sprites[0].color, blue_color);
+    assert_eq!(content.report().tiles, 1, "tint is not a mask key");
+
+    let small_css = "root { display: block; width: 200px; height: 100px }
+                     mark { display: block; width: 16px; height: 16px; color: red }";
+    let mut small = Harness::new(tree(), small_css);
+    small.paint_cached_vectors(&VectorCache::new(), &mut content, &raster);
+    assert_eq!(
+        content.report().tiles,
+        2,
+        "different geometry gets new coverage"
+    );
+}
+
+#[test]
+fn an_eligible_canvas_fill_uses_the_same_mask_route() {
+    let handle = zgui_canvas::SceneHandle::new();
+    handle.edit(|scene| {
+        let path = zgui_scene::kurbo::BezPath::from_svg(TRIANGLE).unwrap();
+        scene.push(
+            zgui_canvas::ShapeBuilder::new(path)
+                .fill(zgui_canvas::Brush::Solid(zgui_color::Color::BLACK))
+                .build(),
+        );
+    });
+    let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
+    let mut harness = Harness::new(tree, CSS);
+    let vectors = VectorCache::new();
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    harness.paint_cached_vectors(
+        &vectors,
+        &mut content,
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+
+    assert!(harness.scene().primitives.vectors.is_empty());
+    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
+}
+
+#[test]
+fn a_small_solid_canvas_stroke_uses_a_mask_instead_of_the_vector_rasteriser() {
+    let handle = zgui_canvas::SceneHandle::new();
+    handle.edit(|scene| {
+        let mut path = zgui_scene::kurbo::BezPath::new();
+        path.move_to((3.0, 12.0));
+        path.line_to((21.0, 12.0));
+        scene.push(
+            zgui_canvas::ShapeBuilder::new(path)
+                .stroke(zgui_canvas::Brush::Inherited { alpha: 1.0 }, 2.0)
+                .build(),
+        );
+    });
+    let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
+    let mut harness = Harness::new(tree, CSS);
+    let vectors = VectorCache::new();
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    harness.paint_cached_vectors(
+        &vectors,
+        &mut content,
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+
+    assert!(harness.scene().primitives.vectors.is_empty());
+    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
+    assert_eq!(content.report().tiles, 1);
+}
+
+#[test]
+fn a_transparent_fill_does_not_disqualify_a_small_solid_css_stroke() {
+    let css = "root { display: block; width: 200px; height: 100px }
+               mark { display: block; width: 24px; height: 24px;
+                      --zgui-fill: transparent; --zgui-stroke: currentColor;
+                      --zgui-stroke-width: 2px }";
+    let mut harness = Harness::new(tree(), css);
+    let vectors = VectorCache::new();
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    harness.paint_cached_vectors(
+        &vectors,
+        &mut content,
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+
+    assert!(harness.scene().primitives.vectors.is_empty());
+    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
 }
 
 /// Every line the renderer was handed for a vector item.
@@ -98,8 +215,7 @@ fn a_canvas_scene_reaches_a_rasteriser_with_its_own_paints() {
                 .build(),
         );
     });
-    let tree = Element::new("root")
-        .children(vec![Element::new("mark").canvas(&handle)]);
+    let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
     let mut harness = Harness::new(tree, CSS);
     let cache = VectorCache::new();
     let report = harness.paint_vectors(&cache);

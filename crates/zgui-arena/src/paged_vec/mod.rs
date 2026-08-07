@@ -41,9 +41,9 @@ pub use crate::paged_vec::page::PAGE_LEN;
 /// ```
 ///
 /// [`SlotVec`]: crate::SlotVec
-pub struct PagedVec<K: ArenaKey, V> {
+pub struct PagedVec<K: ArenaKey, V, const N: usize = PAGE_LEN> {
     /// The page index. A page is absent until something is written into it.
-    pages: Vec<Option<Page<V>>>,
+    pages: Vec<Option<Page<V, N>>>,
     /// The pages written to since the last compaction, which are the only ones that can have
     /// become droppable.
     written: Written,
@@ -85,7 +85,7 @@ impl Written {
     }
 }
 
-impl<K: ArenaKey, V> PagedVec<K, V> {
+impl<K: ArenaKey, V, const N: usize> PagedVec<K, V, N> {
     /// An empty table that is not tied to any arena.
     pub const fn new() -> Self {
         Self {
@@ -126,7 +126,7 @@ impl<K: ArenaKey, V> PagedVec<K, V> {
     /// so a read never allocates.
     pub fn get(&self, key: K) -> Option<&V> {
         self.check(key);
-        let (page, slot) = split(key);
+        let (page, slot) = split::<K, N>(key);
         Some(self.pages.get(page)?.as_ref()?.get(slot))
     }
 
@@ -142,7 +142,7 @@ impl<K: ArenaKey, V> PagedVec<K, V> {
             .flat_map(|(index, page)| {
                 page.iter()
                     .enumerate()
-                    .map(move |(slot, value)| ((index * PAGE_LEN + slot) as u32, value))
+                    .map(move |(slot, value)| ((index * N + slot) as u32, value))
             })
     }
 
@@ -192,13 +192,13 @@ impl<K: ArenaKey, V> PagedVec<K, V> {
     }
 }
 
-impl<K: ArenaKey, V: Default> PagedVec<K, V> {
+impl<K: ArenaKey, V: Default, const N: usize> PagedVec<K, V, N> {
     /// Borrows the value stored for a key for modification, allocating its page if needed.
     ///
     /// This is the only operation that allocates, and it allocates at most one page.
     pub fn get_mut(&mut self, key: K) -> &mut V {
         self.check(key);
-        let (page, slot) = split(key);
+        let (page, slot) = split::<K, N>(key);
         if page >= self.pages.len() {
             self.pages.resize_with(page + 1, || None);
         }
@@ -220,7 +220,7 @@ impl<K: ArenaKey, V: Default> PagedVec<K, V> {
     /// A key on an absent page is already the default, so this never allocates.
     pub fn clear(&mut self, key: K) {
         self.check(key);
-        let (index, slot) = split(key);
+        let (index, slot) = split::<K, N>(key);
         if let Some(Some(page)) = self.pages.get_mut(index) {
             *page.get_mut(slot) = V::default();
             self.written.mark(index);
@@ -228,7 +228,7 @@ impl<K: ArenaKey, V: Default> PagedVec<K, V> {
     }
 }
 
-impl<K: ArenaKey, V: Default + PartialEq> PagedVec<K, V> {
+impl<K: ArenaKey, V: Default + PartialEq, const N: usize> PagedVec<K, V, N> {
     /// Drops every page whose entries are all the default.
     ///
     /// A table that has been emptied returns to costing nothing. Run it once per frame, alongside
@@ -242,18 +242,19 @@ impl<K: ArenaKey, V: Default + PartialEq> PagedVec<K, V> {
 }
 
 /// Splits a key into the page it lives on and its slot within that page.
-fn split<K: ArenaKey>(key: K) -> (usize, usize) {
+fn split<K: ArenaKey, const N: usize>(key: K) -> (usize, usize) {
+    assert!(N > 0, "a sparse-table page must hold at least one entry");
     let index = key.index() as usize;
-    (index / PAGE_LEN, index % PAGE_LEN)
+    (index / N, index % N)
 }
 
-impl<K: ArenaKey, V> Default for PagedVec<K, V> {
+impl<K: ArenaKey, V, const N: usize> Default for PagedVec<K, V, N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: ArenaKey, V> core::fmt::Debug for PagedVec<K, V> {
+impl<K: ArenaKey, V, const N: usize> core::fmt::Debug for PagedVec<K, V, N> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("PagedVec")
             .field("pages", &self.pages())

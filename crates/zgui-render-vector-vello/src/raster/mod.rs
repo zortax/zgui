@@ -160,16 +160,6 @@ impl VelloRaster {
     }
 }
 
-/// The furthest `edge` any of `regions` reaches, in texels, and never zero.
-fn extent_of(regions: &[Rect<i32, Device>], edge: fn(Rect<i32, Device>) -> i32) -> u32 {
-    regions
-        .iter()
-        .map(|region| edge(*region).max(0) as u32)
-        .max()
-        .unwrap_or(1)
-        .max(1)
-}
-
 impl VectorRaster for VelloRaster {
     fn plan(&mut self, passes: &ScenePassPlan) -> VectorPlan {
         // The one question worth asking before anything else: a frame with no surviving path runs no
@@ -187,10 +177,12 @@ impl VectorRaster for VelloRaster {
         self.regions
             .extend(passes.passes.iter().map(|planned| planned.region));
         let layering = Layering::of(&self.regions, Scratch::MAX_LAYERS);
+        let (packed, width, height) = layering.compact(&self.regions);
         self.depth = layering.layers();
         for (index, planned) in passes.passes.iter().enumerate() {
             plan.passes.push(VectorPass {
                 region: planned.region,
+                raster_region: packed[index],
                 target: layering.target(index),
                 items: planned.items.clone(),
                 clip: planned.clip,
@@ -199,8 +191,6 @@ impl VectorRaster for VelloRaster {
         }
         // The far corner of the surface anything is drawn at, not the largest region: a layer holds
         // device pixels where they belong, so it has to reach as far as the furthest of them.
-        let width = extent_of(&self.regions, Rect::right);
-        let height = extent_of(&self.regions, Rect::bottom);
         self.scratch
             .ensure(&self.gpu, width, height, layering.layers());
         plan
@@ -244,7 +234,7 @@ impl VectorRaster for VelloRaster {
             let mut height = 0;
             for &index in &self.layered[layer] {
                 let pass = &frame.plan.passes[index];
-                let (region_width, region_height) = encode::extent(pass.region);
+                let (region_width, region_height) = encode::extent(pass.raster_region);
                 if region_width == 0 || region_height == 0 {
                     continue;
                 }
@@ -253,8 +243,8 @@ impl VectorRaster for VelloRaster {
                 self.last.unclippable += encoded.unclippable;
                 self.last.unpaintable += encoded.unpaintable;
                 self.last.flattened_transforms += encoded.flattened_transforms;
-                width = width.max(pass.region.right().max(0) as u32);
-                height = height.max(pass.region.bottom().max(0) as u32);
+                width = width.max(pass.raster_region.right().max(0) as u32);
+                height = height.max(pass.raster_region.bottom().max(0) as u32);
                 self.passes += 1;
             }
             if width == 0 || height == 0 {
@@ -345,6 +335,10 @@ impl VectorRaster for VelloRaster {
             scratch: self.scratch.bytes(),
             ..MemoryReport::ZERO
         }
+    }
+
+    fn release_idle_resources(&mut self) -> u64 {
+        self.scratch.release()
     }
 }
 

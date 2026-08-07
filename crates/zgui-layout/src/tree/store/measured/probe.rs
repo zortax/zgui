@@ -52,9 +52,7 @@ impl Constraint {
 /// its parent's is a block box of a different height.
 ///
 /// That last one is carried even though the algorithms in use ask every size-only question with it
-/// unset, and the reason is what this cache is for. The engine's own nine slots are keyed on part
-/// of the question and this is keyed on the whole of it, which is the only thing that makes it
-/// sound to consult after the engine's has missed. A field left out because nothing currently
+/// unset, and the reason is what this cache is for. A field left out because nothing currently
 /// varies it is a claim about the *caller* rather than about the question, and the day something
 /// varies it the memo answers one question with another's size — with no miss, no assertion and no
 /// symptom beyond a box of the wrong height.

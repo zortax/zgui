@@ -93,7 +93,10 @@ pub(crate) fn measure_leaf<C: MeasureContent>(
     }
     let scale = tree.device().scale;
     let style = tree.store().node(key).style.clone();
-    let natural = tree.store().node(key).natural;
+    let natural = tree
+        .store()
+        .replaced(key)
+        .and_then(|content| content.natural);
     tree.content().measure(MeasureRequest {
         box_: key,
         style: &style,

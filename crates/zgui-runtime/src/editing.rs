@@ -839,7 +839,11 @@ mod tests {
         let edited = editors.paste(&document, key, "XY");
         assert!(edited.handled);
         assert_eq!(edited.value.as_deref(), Some("XYc"));
-        assert_eq!(edited.selection, Some(2..2), "the caret sits after the paste");
+        assert_eq!(
+            edited.selection,
+            Some(2..2),
+            "the caret sits after the paste"
+        );
         let node = document
             .store()
             .core(field)

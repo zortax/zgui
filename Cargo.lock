@@ -5857,6 +5857,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.19",
  "tracing",
+ "zeno",
  "zgui-arena",
  "zgui-atlas",
  "zgui-bits",

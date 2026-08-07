@@ -351,6 +351,8 @@ pub struct Window {
     ///
     /// So it is a moment rather than a request, and the park is what comes back for it.
     retry_after: Option<Instant>,
+    /// One wall-clock deadline for shedding cold renderer and embed high-water resources.
+    maintenance_due: Option<Instant>,
     /// How many offered frames were held back so that they would start closer to being shown.
     held: u64,
     /// The clock the pacing is measured on.
@@ -425,12 +427,12 @@ impl Window {
         let document = Rc::new(RefCell::new(Document::new()));
         let replaced_images = crate::replaced::IntrinsicTable::new();
         let replaced_surfaces = crate::replaced::IntrinsicTable::new();
-        document
-            .borrow_mut()
-            .install_replaced_content(Arc::new(crate::replaced::ReplacedMux::new(vec![
+        document.borrow_mut().install_replaced_content(Arc::new(
+            crate::replaced::ReplacedMux::new(vec![
                 Arc::clone(&replaced_images),
                 Arc::clone(&replaced_surfaces),
-            ])));
+            ]),
+        ));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
         // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
         let images = crate::images::ImageLoader::new(
@@ -580,6 +582,7 @@ impl Window {
             declined: 0,
             present: crate::window::present::PresentPace::free_running(),
             retry_after: None,
+            maintenance_due: None,
             held: 0,
             clock,
             first_frame: true,

@@ -17,6 +17,8 @@ use crate::vector::target::VectorTarget;
 pub struct VectorPass {
     /// The region of the surface this pass covers, aligned outwards so a tile grid lines up.
     pub region: Rect<i32, Device>,
+    /// The compact rectangle inside `target` that holds this pass's pixels.
+    pub raster_region: Rect<i32, Device>,
     /// Where the implementation put the result.
     pub target: VectorTarget,
     /// The pass's items, indexing the plan's item list.

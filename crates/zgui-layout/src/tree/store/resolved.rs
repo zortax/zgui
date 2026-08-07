@@ -67,7 +67,7 @@ impl ResolvedLayout {
 impl LayoutStore {
     /// One box's resolved geometry, or nothing if it has not been laid out.
     pub fn layout_of(&self, key: BoxKey) -> Option<ResolvedLayout> {
-        let entry = self.layout.get(key)?;
+        let entry = self.layout.get(key)?.as_ref()?;
         Some(resolve(entry))
     }
 }

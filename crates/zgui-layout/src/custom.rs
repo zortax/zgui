@@ -185,9 +185,10 @@ pub(crate) fn measure<C: MeasureContent>(
     available: Size<AvailableSpace>,
     final_pass: bool,
 ) -> Measured {
-    let Some((token, _, _)) = tree.store().node(key).custom else {
+    let Some(custom) = tree.store().custom_content(key) else {
         return Measured::default();
     };
+    let (token, _, _) = custom.reference();
     let source = tree.custom();
     let style = tree.store().node(key).style.clone();
     let scale = tree.device().scale;
@@ -228,7 +229,12 @@ struct TreeAccess<'a, 'b, C> {
 impl<C: MeasureContent> TreeAccess<'_, '_, C> {
     /// The child box at `index`, if the element has that many.
     fn child(&self, index: usize) -> Option<BoxKey> {
-        self.tree.store().node(self.box_).children.get(index).copied()
+        self.tree
+            .store()
+            .node(self.box_)
+            .children
+            .get(index)
+            .copied()
     }
 
     /// One nested layout of `child`, at `run_mode`.

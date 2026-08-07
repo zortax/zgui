@@ -15,6 +15,7 @@
 use zgui_layout::{Fragment, FragmentKind};
 use zgui_scene::{Scene, VectorId};
 
+use crate::content::vectors::VectorMaskSource;
 use crate::content::vectors::{Placement as DrawingPlacement, VectorSource};
 use crate::emit::box_::{self, BoxPlacement};
 use crate::emit::highlight::{self, HighlightLayer, HighlightRequest, HighlightSource};
@@ -74,6 +75,8 @@ pub struct Emission<'a> {
     pub replaced: &'a dyn ReplacedSource,
     /// Where the outlines an element draws come from.
     pub vectors: &'a dyn VectorSource,
+    /// Where eligible solid paths get cached monochrome coverage.
+    pub vector_masks: &'a dyn VectorMaskSource,
     /// Where a custom element's painting comes from.
     pub custom: &'a dyn crate::content::custom::CustomPaintSource,
     /// The custom-element reference the fragment's box captured, when it has one.
@@ -209,14 +212,16 @@ fn content(
             ) else {
                 return 0;
             };
-            vector::draw(
+            vector::draw_with_masks(
                 scene,
                 VectorId(fragment.key.index()),
                 &drawing.shapes,
                 style.shape,
+                emission.vector_masks,
                 VectorPlacement {
                     clip: emission.box_placement.clip,
                     transform: emission.box_placement.transform,
+                    scale: emission.scale,
                 },
             )
         }
@@ -235,6 +240,7 @@ fn content(
                 alpha: emission.alpha,
                 scale: emission.scale,
                 shape_paint: style.shape,
+                vector_masks: emission.vector_masks,
                 vector_id: VectorId(fragment.key.index()),
                 shapes_pushed: 0,
                 pushed: 0,

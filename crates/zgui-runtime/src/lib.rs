@@ -88,7 +88,9 @@ pub use crate::app::{
 pub use crate::binding::{HostBinding, NoBinding};
 pub use crate::budget::{BudgetReport, Budgeted, CacheId, CacheReport};
 pub use crate::editing::Editors;
-pub use crate::embed::{EmbedHost, EmbedSyncCx, EmbedSyncReport, NoEmbeds};
+pub use crate::embed::{
+    EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, NoEmbeds,
+};
 pub use crate::error::AppError;
 pub use crate::host::RuntimeHost;
 pub use crate::probe::FrameProbe;

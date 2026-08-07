@@ -68,6 +68,8 @@ pub struct ScenePainter<'a> {
     pub(crate) scale: f32,
     /// The element's computed `color`, resolved for inherited brushes.
     pub(crate) shape_paint: crate::emit::vector::ShapePaint,
+    /// The shared cache used by eligible solid paths.
+    pub(crate) vector_masks: &'a dyn crate::content::vectors::VectorMaskSource,
     /// The identity vector items are encoded under, from the fragment.
     pub(crate) vector_id: VectorId,
     /// How many shapes have been pushed, so each gets a distinct sub-identity.
@@ -140,17 +142,17 @@ impl ScenePainter<'_> {
         // The fragment's identity in the high bits, the shape's index in the low: stable across
         // frames for the same fragment, distinct within it, which is what the rasteriser's
         // encoding cache keys on.
-        let id = VectorId(
-            (self.vector_id.0 << 16) | (self.shapes_pushed & 0xFFFF),
-        );
+        let id = VectorId((self.vector_id.0 << 16) | (self.shapes_pushed & 0xFFFF));
         self.pushed += crate::emit::vector::document::emit(
             self.scene,
             id,
             &placed,
             &self.shape_paint,
+            self.vector_masks,
             crate::emit::vector::VectorPlacement {
                 clip: self.clip,
                 transform: self.transform,
+                scale: self.scale,
             },
         );
     }

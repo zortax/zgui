@@ -24,6 +24,9 @@ use crate::bind::globals::SubpixelOrder;
 use crate::frame::fault::FaultInjector;
 use crate::frame::pass::AttachedTexture;
 use crate::frame::vector::VectorSource;
+
+/// A backend companion's lazy vector-rasteriser constructor.
+pub type VectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSource>;
 use crate::gpu::device::Gpu;
 use crate::pipeline::Pipelines;
 use crate::pipeline::kind::PipelineKind;
@@ -84,6 +87,8 @@ pub struct WgpuRenderer {
     sampler: wgpu::Sampler,
     /// Whatever rasterises the vector parts of a scene, when one has been attached.
     vectors: Option<Box<dyn VectorSource>>,
+    /// How to initialize `vectors` on the first frame that actually contains complex paths.
+    vector_factory: Option<VectorFactory>,
     /// Answers to give instead of asking the surface.
     faults: FaultInjector,
     /// Whether the next frame has to redraw the whole surface whatever its damage set says.
@@ -191,6 +196,7 @@ impl WgpuRenderer {
             groups,
             sampler,
             vectors: None,
+            vector_factory: None,
             faults: FaultInjector::from_environment(),
             // Nothing has ever been composed, so the first frame cannot rely on what the target
             // holds however small its damage set is.
@@ -252,6 +258,7 @@ impl WgpuRenderer {
         // twice across the changeover.
         let target = self.target;
         let subpixel_order = self.subpixel_order;
+        let vector_factory = self.vector_factory;
         let rebuilt = builder.offscreen(target, format, mutable_texture_formats)?;
         // A rasteriser holds resources of the old device, so it does not survive either. It is
         // dropped rather than carried over, and whoever attached it attaches one again — carrying
@@ -259,6 +266,7 @@ impl WgpuRenderer {
         let had_raster = self.vectors.is_some();
         *self = rebuilt;
         self.subpixel_order = subpixel_order;
+        self.vector_factory = vector_factory;
         if had_raster {
             tracing::warn!(
                 "the device was rebuilt; the vector rasteriser it held did not survive it"
@@ -335,10 +343,22 @@ impl WgpuRenderer {
     /// from what the device turned out to be able to do.
     pub fn set_vector_raster(&mut self, raster: Box<dyn VectorSource>) {
         self.vectors = Some(raster);
+        self.vector_factory = None;
+    }
+
+    /// Installs a constructor that runs only when a frame has vector passes to rasterise.
+    pub fn set_vector_factory(&mut self, factory: VectorFactory) {
+        self.vector_factory = Some(factory);
+        self.vectors = None;
     }
 
     /// Whether a vector rasteriser is attached.
     pub fn has_vector_raster(&self) -> bool {
+        self.vectors.is_some() || self.vector_factory.is_some()
+    }
+
+    /// Whether the configured rasteriser has paid its fixed initialization cost yet.
+    pub fn vector_raster_initialized(&self) -> bool {
         self.vectors.is_some()
     }
 

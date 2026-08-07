@@ -154,6 +154,18 @@ impl Scratch {
         }
     }
 
+    /// Drops reproducible scratch while keeping the rasteriser and its fixed state initialized.
+    pub fn release(&mut self) -> u64 {
+        let freed = self.bytes();
+        self.texture = None;
+        self.views.clear();
+        self.views.shrink_to_fit();
+        self.extent = (0, 0);
+        self.decay.clear();
+        self.publish();
+        freed
+    }
+
     /// Clears each of `layers` to transparent, in one submitted encoder.
     ///
     /// A whole layer rather than the region a pass will use: a pass smaller than the last one that

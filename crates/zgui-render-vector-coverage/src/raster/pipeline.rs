@@ -119,6 +119,17 @@ impl Storage {
     pub fn capacity(&self) -> u64 {
         self.capacity
     }
+
+    /// Returns a high-water buffer to the minimum bindable allocation.
+    pub fn shrink(&mut self, gpu: &Gpu) -> u64 {
+        if self.capacity <= Self::MINIMUM {
+            return 0;
+        }
+        let freed = self.capacity - Self::MINIMUM;
+        self.buffer = allocate(gpu, self.label, Self::MINIMUM);
+        self.capacity = Self::MINIMUM;
+        freed
+    }
 }
 
 /// Allocates a storage buffer.

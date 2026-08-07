@@ -26,7 +26,7 @@
 
 pub mod grid;
 
-use zgui_geom::{Device, Rect};
+use zgui_geom::{Device, Point, Rect, Size};
 
 use crate::vector::pack::grid::Grid;
 use crate::vector::target::VectorTarget;
@@ -111,6 +111,46 @@ impl Layering {
     pub fn placed(&self) -> usize {
         self.placed
     }
+
+    /// Packs each assigned layer's disjoint regions into compact shelf rows.
+    pub fn compact(&self, regions: &[Rect<i32, Device>]) -> (Vec<Rect<i32, Device>>, u32, u32) {
+        let mut packed = vec![Rect::new(Point::new(0, 0), Size::new(0, 0)); regions.len()];
+        let mut width = 1_i32;
+        let mut height = 1_i32;
+        for layer in 0..self.layers {
+            let indices: Vec<_> = (0..self.placed)
+                .filter(|&index| self.target(index).0 == u64::from(layer))
+                .collect();
+            let area: i64 = indices
+                .iter()
+                .map(|&index| {
+                    let size = regions[index].size;
+                    i64::from(size.width.max(0)) * i64::from(size.height.max(0))
+                })
+                .sum();
+            let widest = indices
+                .iter()
+                .map(|&index| regions[index].size.width.max(0))
+                .max()
+                .unwrap_or(1);
+            let shelf = ((area as f64).sqrt().ceil() as i32).max(widest).max(1);
+            let (mut x, mut y, mut row): (i32, i32, i32) = (0, 0, 0);
+            for index in indices {
+                let size = regions[index].size.non_negative();
+                if x > 0 && x.saturating_add(size.width) > shelf {
+                    y += row;
+                    x = 0;
+                    row = 0;
+                }
+                packed[index] = Rect::new(Point::new(x, y), size);
+                x += size.width;
+                row = row.max(size.height);
+                width = width.max(x);
+                height = height.max(y + row);
+            }
+        }
+        (packed, width as u32, height as u32)
+    }
 }
 
 /// The lowest open layer `span` fits in, opening one more when it fits in none and there is room.
@@ -188,6 +228,22 @@ mod tests {
                 .targets
                 .iter()
                 .all(|target| *target == VectorTarget(0))
+        );
+    }
+
+    #[test]
+    fn far_away_passes_are_packed_without_the_empty_space_between_them() {
+        let regions = [
+            region(10_000, 20_000, 16, 16),
+            region(30_000, 40_000, 16, 16),
+        ];
+        let layering = Layering::of(&regions, 4);
+        let (packed, width, height) = layering.compact(&regions);
+        assert_eq!(packed[0].size, regions[0].size);
+        assert_eq!(packed[1].size, regions[1].size);
+        assert!(
+            width <= 32 && height <= 32,
+            "compact scratch was {width} by {height}"
         );
     }
 

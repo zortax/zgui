@@ -54,9 +54,26 @@ fn shown_pictures_are_pinned_and_history_is_evictable() {
 
     let report = budget.report();
     assert_eq!(report.resident, 2 * BYTES);
-    assert_eq!(report.pinned, BYTES, "what is on the screen may not be trimmed");
+    assert_eq!(
+        report.pinned, BYTES,
+        "what is on the screen may not be trimmed"
+    );
     assert_eq!(report.evictable(), BYTES, "what scrolled away may");
     assert_eq!(report.rebuild_cost, rebuild::DECODED);
+}
+
+/// One source is one allocation even when many elements show it.
+#[test]
+fn a_shared_source_is_counted_once() {
+    let mut loader = ImageLoader::new(IntrinsicTable::new(), 2048);
+    loader.insert_ready_for_tests("shared.png", &[node(3), node(4), node(5)], decoded());
+    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut tracked = Tracked::default();
+    let budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
+
+    let report = budget.report();
+    assert_eq!(report.resident, BYTES);
+    assert_eq!(report.pinned, BYTES);
 }
 
 /// Eviction frees history and never touches what is shown, however much is asked for.

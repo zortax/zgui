@@ -307,6 +307,15 @@ impl UploadBelt {
             + self.mapping_bytes
     }
 
+    /// Drops every completed mapped chunk after the idle grace period.
+    pub fn release_idle(&mut self) -> u64 {
+        self.receive();
+        let freed = self.free.iter().map(|chunk| chunk.size).sum();
+        self.free.clear();
+        self.free.shrink_to_fit();
+        freed
+    }
+
     /// Receives only chunks whose mapping callback has already run.
     fn receive(&mut self) {
         while let Ok(mut chunk) = self.receiver.try_recv() {

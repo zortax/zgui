@@ -72,4 +72,12 @@ pub trait VectorRaster: 'static {
 
     /// What this implementation is currently holding.
     fn memory(&self) -> MemoryReport;
+
+    /// Releases reproducible scratch after a wall-clock idle grace period.
+    ///
+    /// Implementations keep their initialized pipelines and fixed state resident; this only sheds
+    /// allocations a later vector frame can recreate.
+    fn release_idle_resources(&mut self) -> u64 {
+        0
+    }
 }

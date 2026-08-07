@@ -120,7 +120,11 @@ fn only_this_box_draws_in(
 ///
 /// The walk is up the ancestors, and at every level it is the same three questions, so it costs the
 /// container's depth and the fan-out along it — never the document.
-fn backing(store: &LayoutStore, box_key: BoxKey, port: Rect<DevicePx, Device>) -> Result<(), Refusal> {
+fn backing(
+    store: &LayoutStore,
+    box_key: BoxKey,
+    port: Rect<DevicePx, Device>,
+) -> Result<(), Refusal> {
     let Some(root) = store.root() else {
         return Err(Refusal::NotAScroller);
     };
@@ -248,9 +252,11 @@ fn paints_in(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device>) -> 
             return true;
         }
     }
-    store
-        .get(key)
-        .is_some_and(|node| node.children.iter().any(|&child| paints_in(store, child, port)))
+    store.get(key).is_some_and(|node| {
+        node.children
+            .iter()
+            .any(|&child| paints_in(store, child, port))
+    })
 }
 
 /// Whether a fragment of this box actually marks a pixel, rather than merely occupying a rectangle.
@@ -288,4 +294,3 @@ fn subtree_ink(store: &LayoutStore, key: BoxKey) -> Option<Rect<DevicePx, Device
     let frag = *store.fragments_of_box(key).first()?;
     store.fragment(frag).map(|fragment| fragment.subtree_ink)
 }
-

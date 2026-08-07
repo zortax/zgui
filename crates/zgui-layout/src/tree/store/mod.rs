@@ -8,10 +8,12 @@
 //! | `inline` | what an inline formatting context resolved to |
 //! | `scroll` | which axes reserve a scrollbar gutter |
 //! | `laid_out` | the viewport the results now held were produced for |
-//! | `measured` | the size-only answers a box keeps beyond the engine's own nine slots |
+//! | `measured` | the box's complete, bounded size-only answers |
 //! | `roster` | the boxes whose style puts them in a class some pass has to visit |
 
+pub(crate) mod content;
 mod fragments;
+mod full;
 mod inline;
 pub mod laid_out;
 pub(crate) mod measured;
@@ -24,7 +26,7 @@ pub(crate) mod state;
 mod tests;
 
 use rustc_hash::FxHashMap;
-use zgui_arena::{ArenaKind, ChunkArena, DocumentId, DomainId, PagedVec, SlotVec};
+use zgui_arena::{ArenaKind, ChunkArena, DocumentId, DomainId, PagedVec};
 use zgui_css::ComputedStyle;
 use zgui_dom::NodeKey;
 use zgui_dom::side::{BoxKey, BoxList};
@@ -32,6 +34,7 @@ use zgui_dom::side::{BoxKey, BoxList};
 use crate::fragment::{FragKey, FragList, Fragment};
 use crate::key::{named, slot};
 use crate::node::box_node::BoxNode;
+use crate::tree::store::content::{BoxContent, CustomBox, ReplacedBox};
 use crate::tree::store::roster::{Roster, Rosters};
 use crate::tree::store::state::BoxLayout;
 
@@ -63,7 +66,11 @@ pub struct LayoutStore {
     /// The box records.
     boxes: ChunkArena<BoxNode>,
     /// One entry per box, holding the engine's cache and the box's result.
-    layout: SlotVec<BoxKey, BoxLayout>,
+    layout: PagedVec<BoxKey, Option<BoxLayout>, 64>,
+    /// Intrinsics and identifiers held only by replaced boxes.
+    replaced: PagedVec<BoxKey, Option<ReplacedBox>, 64>,
+    /// Registry references held only by custom boxes.
+    custom: PagedVec<BoxKey, Option<CustomBox>, 64>,
     /// The boxes whose style puts them in a class some pass has to visit.
     rosters: Rosters,
     /// The box the document is laid out from.
@@ -133,7 +140,9 @@ impl LayoutStore {
         let fragment_domain = DomainId::new(document, FRAGMENT_ARENA);
         Self {
             boxes: ChunkArena::new(box_domain),
-            layout: SlotVec::for_domain(box_domain),
+            layout: PagedVec::for_domain(box_domain),
+            replaced: PagedVec::for_domain(box_domain),
+            custom: PagedVec::for_domain(box_domain),
             rosters: Rosters::default(),
             root: None,
             boxes_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(document)),
@@ -192,10 +201,30 @@ impl LayoutStore {
 
     /// Adds a box, and gives it an empty result to be laid out into.
     pub fn insert(&mut self, node: BoxNode) -> BoxKey {
+        self.insert_with_content(node, BoxContent::default())
+    }
+
+    /// Adds a box together with the rare content payloads established while it was built.
+    pub(crate) fn insert_with_content(&mut self, mut node: BoxNode, content: BoxContent) -> BoxKey {
         let source = node.source;
         let style = node.style.clone();
+        node.painted = if content.custom.is_some() {
+            crate::node::kind::PaintedContent::Custom
+        } else if content.draws_vector {
+            crate::node::kind::PaintedContent::Vector
+        } else if content.replaced.is_some() {
+            crate::node::kind::PaintedContent::Replaced
+        } else {
+            crate::node::kind::PaintedContent::Box
+        };
         let key = named(self.boxes.insert(node));
-        self.layout.insert(key, BoxLayout::default());
+        self.layout.replace(key, Some(BoxLayout::default()));
+        if let Some(replaced) = content.replaced {
+            self.replaced.replace(key, Some(replaced));
+        }
+        if let Some(custom) = content.custom {
+            self.custom.replace(key, Some(custom));
+        }
         self.classify(key, &style);
         if let Some(source) = source {
             self.boxes_of_node.get_mut(source).push(key);
@@ -236,7 +265,7 @@ impl LayoutStore {
     fn classify(&mut self, key: BoxKey, style: &ComputedStyle) {
         let content = crate::intrinsic::keywords::axes_of(style);
         let overflow = crate::style::convert::overflow::undecided_axes(style);
-        let Some(state) = self.layout.get_mut(key) else {
+        let Some(state) = self.layout.get_mut(key).as_mut() else {
             return;
         };
         let joined_content = content != [false, false] && state.content_axes == [false, false];
@@ -329,7 +358,9 @@ impl LayoutStore {
                 .retain(|&mut it| it != key);
         }
         self.take_inline_resolution(key);
-        self.layout.remove(key);
+        self.layout.clear(key);
+        self.replaced.clear(key);
+        self.custom.clear(key);
         if self.root == Some(key) {
             self.root = None;
         }
@@ -348,6 +379,9 @@ impl LayoutStore {
     pub fn recycle(&mut self) {
         self.boxes.recycle();
         self.fragments.recycle();
+        self.layout.compact_by(Option::is_none);
+        self.replaced.compact_by(Option::is_none);
+        self.custom.compact_by(Option::is_none);
     }
 
     /// The boxes one element generated, in document order.

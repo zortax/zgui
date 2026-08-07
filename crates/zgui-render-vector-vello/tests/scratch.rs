@@ -15,9 +15,6 @@ use support::{Which, harness_at, opaque, path, quad, rect, scene_at, vector};
 /// The extent every scene here fits in.
 const SIDE: i32 = 640;
 
-/// How many frames of asking for less it takes before the texture is reallocated smaller.
-const PATIENCE: u32 = zgui_render::Decay::PATIENCE;
-
 /// A scene whose passes reach the far corner of the surface and stack `deep` high at the near one.
 fn wide(deep: u32) -> Scene {
     let mut scene = scene_at(SIDE);
@@ -91,14 +88,8 @@ fn the_scratch_shrinks_when_the_content_does() {
     );
 
     let small = narrow();
-    for frame in 0..PATIENCE - 1 {
-        raster.plan(small.pass_plan());
-        assert_eq!(
-            raster.extent(),
-            (SIDE as u32, SIDE as u32),
-            "the scratch was given back at frame {frame}, before the wait was over"
-        );
-    }
+    raster.plan(small.pass_plan());
+    assert!(raster.release_idle_resources() > 0);
     raster.plan(small.pass_plan());
     assert_eq!(
         raster.extent(),
@@ -129,7 +120,7 @@ fn the_scratch_does_not_shrink_inside_a_fling() {
     let small = narrow();
     raster.plan(large.pass_plan());
     let held = (raster.extent(), raster.layers());
-    for frame in 0..PATIENCE * 5 {
+    for frame in 0..600 {
         let scene = if frame % 30 == 0 { &large } else { &small };
         raster.plan(scene.pass_plan());
         assert_eq!(

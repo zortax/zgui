@@ -54,6 +54,22 @@ pub struct FrameReport {
     pub animated: usize,
 }
 
+/// What a parked window deadline services.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeadlineKind {
+    /// Timers, tasks, animation, resize or presentation produce a normal frame.
+    Render,
+    /// Cold-resource trimming only; no paint or presentation is requested.
+    Maintenance,
+}
+
+/// One window's earliest fixed deadline and what reaching it means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduledDeadline {
+    pub(crate) at: Instant,
+    pub(crate) kind: DeadlineKind,
+}
+
 impl Window {
     /// Queues a platform event for the next frame to dispatch, and reports whether it needs one.
     ///
@@ -355,6 +371,10 @@ impl Window {
             .wants_another_frame()
             .then(|| now + self.refresh_interval());
 
+        // Measured from when the last normal frame finished, so a continuously active document
+        // never trims a working set and a parked one gets exactly one maintenance wake.
+        self.maintenance_due = Some(clock.now() + std::time::Duration::from_secs(2));
+
         // After the cascade and therefore after everything that can start or finish an animation,
         // and against the moment the frame was built for rather than the moment it ended. This is
         // the only thing that gets an animation its next frame: an animating window asks for no
@@ -426,6 +446,11 @@ impl Window {
     /// resize's from the frame that last answered a configure, and the blink's from the caret's own
     /// origin. `now` is passed only so that a source can answer whether it has anything left to owe.
     pub fn merged_deadline(&self, now: Instant) -> Option<Instant> {
+        self.scheduled_deadline(now).map(|deadline| deadline.at)
+    }
+
+    /// The earliest deadline, keeping maintenance distinct from render-producing work.
+    pub(crate) fn scheduled_deadline(&self, now: Instant) -> Option<ScheduledDeadline> {
         let interval = self.refresh_interval();
         let animation = self.animation.due().filter(|_| !self.occluded);
         let timer = self.timers.borrow().peek_for(self.dom.document_id(), now);
@@ -449,7 +474,7 @@ impl Window {
         // animation and the blink are: a window nobody can see must not keep running the pipeline
         // to find out whether the compositor would take a frame yet.
         let retry = self.retry_after.filter(|_| !self.occluded);
-        let earliest = [
+        let render = [
             animation,
             timer,
             self.gesture_deadline(),
@@ -460,7 +485,7 @@ impl Window {
         ]
         .into_iter()
         .flatten()
-        .min()?;
+        .min();
         // No source is woken for before the moment the window would stop refusing the frame it
         // asks for. While a reconfiguration is owed and could not yet be seen,
         // [`Window::wants_a_frame`] refuses *every* frame whatever asked for it — so a moment
@@ -475,11 +500,43 @@ impl Window {
         // A held frame is a gate of exactly the same kind and is treated as one: while one is being
         // held every frame is refused, so a moment before it is released is a wake that draws
         // nothing.
-        let gated = [resize, held]
-            .into_iter()
-            .flatten()
-            .fold(earliest, Instant::max);
-        Some(gated)
+        let render = render.map(|earliest| {
+            [resize, held]
+                .into_iter()
+                .flatten()
+                .fold(earliest, Instant::max)
+        });
+        match (render, self.maintenance_due) {
+            (Some(render), Some(maintenance)) if render <= maintenance => Some(ScheduledDeadline {
+                at: render,
+                kind: DeadlineKind::Render,
+            }),
+            (Some(_), Some(maintenance)) => Some(ScheduledDeadline {
+                at: maintenance,
+                kind: DeadlineKind::Maintenance,
+            }),
+            (Some(render), None) => Some(ScheduledDeadline {
+                at: render,
+                kind: DeadlineKind::Render,
+            }),
+            (None, Some(maintenance)) => Some(ScheduledDeadline {
+                at: maintenance,
+                kind: DeadlineKind::Maintenance,
+            }),
+            (None, None) => None,
+        }
+    }
+
+    /// Services a maintenance-only deadline without building or presenting a frame.
+    pub(crate) fn maintain(&mut self, timestamp: zgui_vocab::Timestamp) {
+        self.maintenance_due = None;
+        self.renderer.release_idle_resources();
+        let mut cx = crate::embed::EmbedMaintenanceCx {
+            renderer: &mut *self.renderer,
+            content: &mut self.content,
+            timestamp,
+        };
+        self.embed.maintain(&mut cx);
     }
 
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
@@ -493,6 +550,15 @@ impl Window {
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
             scale: self.scale,
+            viewport: self.extent.map_or_else(
+                || zgui_geom::Size::new(0, 0),
+                |extent| {
+                    zgui_geom::Size::new(
+                        extent.width.0.round().max(0.0) as i32,
+                        extent.height.0.round().max(0.0) as i32,
+                    )
+                },
+            ),
             occluded: self.occluded,
             timestamp,
             waker: &self.waker,
@@ -1028,6 +1094,7 @@ impl Window {
                 highlights: self.carets.plan(),
                 replaced: &content,
                 vectors: &vectors,
+                vector_masks: &content,
                 custom: self
                     .custom_paint
                     .as_deref()

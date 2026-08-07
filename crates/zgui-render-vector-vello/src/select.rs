@@ -65,7 +65,7 @@ pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSour
     Box::new(CoverageRaster::new(gpu, width, height))
 }
 
-/// Gives `renderer` the rasteriser its own device can run, sized for a surface of `size`.
+/// Gives `renderer` a lazy rasteriser factory for its device.
 ///
 /// This is the whole of what a window has to do to draw vector content. A renderer without it plans
 /// a display list's vector passes, counts them, and composites a scratch nothing ever wrote — which
@@ -85,6 +85,6 @@ pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSour
 /// # Ok::<(), zgui_render::GpuUnavailable>(())
 /// ```
 pub fn attach(renderer: &mut zgui_render_wgpu::WgpuRenderer, size: Size<i32, Device>) {
-    let raster = for_device(renderer.gpu(), size);
-    renderer.set_vector_raster(raster);
+    let _ = size;
+    renderer.set_vector_factory(for_device);
 }

@@ -335,7 +335,11 @@ pub struct Runtime {
     /// when the loop wakes gets it wrong for the deadline that is recomputed from `now` — an
     /// animation's next tick is always in the future, so a surface animating and nothing more
     /// would be woken every tick and asked to draw on none of them.
-    parked: Vec<(SurfaceId, std::time::Instant)>,
+    parked: Vec<(
+        SurfaceId,
+        std::time::Instant,
+        crate::window::frame::DeadlineKind,
+    )>,
     /// Why the application stopped, if it did.
     failure: Failure,
 }
@@ -661,19 +665,25 @@ impl AppHandler for Runtime {
         let now = cx.clock().now();
         let mut policy = IdlePolicy::Block;
         self.parked.clear();
-        for window in &self.windows {
-            let Some(deadline) = window.merged_deadline(now) else {
+        for window in &mut self.windows {
+            let Some(deadline) = window.scheduled_deadline(now) else {
                 continue;
             };
-            if deadline > now {
-                self.parked.push((window.surface().id(), deadline));
-                policy = policy.merge(IdlePolicy::BlockUntil(deadline));
+            if deadline.at > now {
+                self.parked
+                    .push((window.surface().id(), deadline.at, deadline.kind));
+                policy = policy.merge(IdlePolicy::BlockUntil(deadline.at));
             } else {
                 // A deadline that has already passed is never installed. The platform recomputes
                 // the time remaining on every turn, finds none, and reports it reached again for
                 // ever — a loop that runs no frames while burning a core. The answer is the frame
                 // it was asking for, now, and a park on nothing.
-                window.request_frame();
+                match deadline.kind {
+                    crate::window::frame::DeadlineKind::Render => window.request_frame(),
+                    crate::window::frame::DeadlineKind::Maintenance => {
+                        window.maintain(cx.clock().timestamp())
+                    }
+                }
             }
         }
         policy
@@ -693,16 +703,21 @@ impl AppHandler for Runtime {
         // Kept for the surfaces whose own deadline is later than the one the loop parked on: the
         // park is the global minimum, so a wake is not every surface's wake.
         let mut reached = Vec::new();
-        self.parked.retain(|(surface, deadline)| {
+        self.parked.retain(|(surface, deadline, kind)| {
             if *deadline > now {
                 return true;
             }
-            reached.push(*surface);
+            reached.push((*surface, *kind));
             false
         });
-        for surface in reached {
+        for (surface, kind) in reached {
             if let Some(window) = self.window_mut(surface) {
-                window.request_frame();
+                match kind {
+                    crate::window::frame::DeadlineKind::Render => window.request_frame(),
+                    crate::window::frame::DeadlineKind::Maintenance => {
+                        window.maintain(cx.clock().timestamp())
+                    }
+                }
             }
         }
     }

@@ -74,6 +74,7 @@ impl VectorRaster for RecordingRaster {
         for (index, pass) in passes.passes.iter().enumerate() {
             plan.passes.push(VectorPass {
                 region: pass.region,
+                raster_region: pass.region,
                 target: VectorTarget(index as u64),
                 items: pass.items.clone(),
                 clip: pass.clip,

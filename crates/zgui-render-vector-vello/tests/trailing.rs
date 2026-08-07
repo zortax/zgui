@@ -75,6 +75,7 @@ fn draw_document(scene: &mut Scene, id: u32, source: &str, box_: (f32, f32, f32,
         VectorPlacement {
             clip: ClipId::ROOT,
             transform: SpatialId::VIEWPORT,
+            scale: 1.0,
         },
     );
 }

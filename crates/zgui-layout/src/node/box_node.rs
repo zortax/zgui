@@ -5,7 +5,7 @@ use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 
 use crate::node::grid_names::GridNames;
-use crate::node::kind::{BoxKind, FormattingContext, PseudoKind};
+use crate::node::kind::{BoxKind, FormattingContext, PaintedContent, PseudoKind};
 
 /// One box in the box tree.
 ///
@@ -58,39 +58,8 @@ pub struct BoxNode {
     pub block_level: bool,
     /// The text this box lays out, for a text run or a list item's mark.
     pub text: Option<Box<str>>,
-    /// The content this engine does not lay out, when the box holds any.
-    ///
-    /// Carried on the box rather than looked up again through the element, because the piece of
-    /// geometry this box is painted as has to say *what* to draw, and asking the document for it
-    /// again would be a second opinion about which box holds which content.
-    pub replaced: Option<zgui_dom::host::ReplacedId>,
-    /// Whether this box's element carries outlines to draw inside it.
-    ///
-    /// Recorded on the box because it decides what kind of piece the box produces, and that
-    /// decision is taken while fragments are composed — where the element is no longer in reach.
-    /// Only the *presence* of a drawing is here: the outlines themselves change without moving a
-    /// box, and a copy of them kept on the box would be a copy nothing refreshes.
-    pub draws_vector: bool,
-    /// The natural proportions of this box's content, for replaced content that has any.
-    ///
-    /// Width over height, as `aspect-ratio` measures it. It is recorded on the box because
-    /// `aspect-ratio: auto` defers to it and no style carries it.
-    pub natural_ratio: Option<f32>,
-    /// The natural size its replaced content reported when this box was built, in CSS pixels.
-    ///
-    /// Captured beside the ratio for the same reason the ratio is: the intrinsic is consulted at
-    /// box building, and layout — which runs with the document out of reach — needs the answer,
-    /// not the source. Carried into every [`MeasureRequest`](crate::measure::MeasureRequest) for
-    /// this box.
-    pub natural: Option<zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>>,
-    /// The registered custom element owning this box's sizing and painting, as the token and
-    /// the layout and paint revisions its reference carried when the box was built.
-    ///
-    /// The token is what layout and paint resolve the implementation by; the revisions are a
-    /// snapshot and *not* the live answer — a repaint-only bump moves the registry and the
-    /// property without rebuilding the box, which is exactly why the paint walk asks the
-    /// registry rather than this field.
-    pub custom: Option<(u32, u16, u16)>,
+    /// What this box's own fragment paints. Rare payloads live in sparse store columns.
+    pub painted: PaintedContent,
     /// The grid line and area names, if this box is a grid container that names any.
     pub grid: Option<Box<GridNames>>,
 }
@@ -110,11 +79,7 @@ impl BoxNode {
             kind,
             block_level: false,
             text: None,
-            replaced: None,
-            draws_vector: false,
-            natural_ratio: None,
-            natural: None,
-            custom: None,
+            painted: PaintedContent::Box,
             grid: None,
         }
     }

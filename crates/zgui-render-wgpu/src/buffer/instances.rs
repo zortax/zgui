@@ -18,6 +18,8 @@ pub struct StorageBuffer {
     label: &'static str,
     /// How many bytes it holds.
     capacity: u64,
+    /// Changes whenever `buffer` changes identity, for bind-group cache invalidation.
+    generation: u64,
 }
 
 impl StorageBuffer {
@@ -30,6 +32,7 @@ impl StorageBuffer {
             buffer: allocate(gpu, label, Self::MINIMUM),
             label,
             capacity: Self::MINIMUM,
+            generation: 1,
         }
     }
 
@@ -60,6 +63,7 @@ impl StorageBuffer {
         if grew {
             self.capacity = needed.next_power_of_two().max(Self::MINIMUM);
             self.buffer = allocate(gpu, self.label, self.capacity);
+            self.generation = self.generation.wrapping_add(1);
         }
         if all.is_empty() || start == end && !grew {
             return 0;
@@ -87,6 +91,23 @@ impl StorageBuffer {
     /// How many bytes it currently holds.
     pub fn capacity(&self) -> u64 {
         self.capacity
+    }
+
+    /// The identity epoch of the allocation a bind group names.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Returns an oversized high-water allocation to the minimum bindable size.
+    pub fn shrink(&mut self, gpu: &Gpu) -> u64 {
+        if self.capacity <= Self::MINIMUM {
+            return 0;
+        }
+        let freed = self.capacity - Self::MINIMUM;
+        self.buffer = allocate(gpu, self.label, Self::MINIMUM);
+        self.capacity = Self::MINIMUM;
+        self.generation = self.generation.wrapping_add(1);
+        freed
     }
 }
 

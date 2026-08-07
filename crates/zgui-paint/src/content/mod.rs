@@ -33,5 +33,6 @@ pub mod vectors;
 pub use crate::content::cache::{ContentCache, FrameContent};
 pub use crate::content::images::ImageError;
 pub use crate::content::vectors::{
-    Drawing, NoVectors, Placement as VectorPlacement, VectorCache, VectorSource, Vectors,
+    Drawing, NoVectorMasks, NoVectors, Placement as VectorPlacement, VectorCache, VectorMask,
+    VectorMaskRequest, VectorMaskSource, VectorMaskStyle, VectorSource, Vectors,
 };

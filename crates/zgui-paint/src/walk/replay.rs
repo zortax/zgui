@@ -311,7 +311,11 @@ impl PaintCache {
         // which inside a transformed subtree are that subtree's coordinates, and the clip imposed
         // there is measured in the same coordinates. The device-space ink would cross spaces with
         // the clip and answer about pixels neither of them means.
-        if !record.whole && fragment.local_ink.intersects(scene.clips.bounds(painted.clip)) {
+        if !record.whole
+            && fragment
+                .local_ink
+                .intersects(scene.clips.bounds(painted.clip))
+        {
             return Reuse::Encode;
         }
         debug_assert!(

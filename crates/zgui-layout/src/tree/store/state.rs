@@ -8,17 +8,15 @@ use crate::inline::content::memo::Flattened;
 use crate::inline::resolved::InlineResolution;
 use crate::style::convert::length::IntrinsicSizes;
 use crate::tree::store::LayoutStore;
+use crate::tree::store::full::FullLayout;
 use crate::tree::store::measured::Measured;
 
 /// One box's layout-time state: what the engine cached, and what it produced.
 #[derive(Debug, Default)]
 pub(crate) struct BoxLayout {
-    /// The engine's own per-node cache.
-    pub(crate) cache: taffy::Cache,
-    /// The size-only measurements the engine's own cache had no room to keep.
-    ///
-    /// The two are one cache with two storeys and are always emptied together — see
-    /// [`BoxLayout::forget_layout`].
+    /// The one full-layout answer a box may safely replay.
+    pub(crate) full: FullLayout,
+    /// Size-only measurements, keyed by the complete question.
     pub(crate) measured: Measured,
     /// What this box measured at its narrowest and its widest, per axis.
     ///
@@ -126,13 +124,13 @@ impl BoxLayout {
     /// Nothing else may use it. Every other caller is invalidating the box because something it
     /// measured has changed, and for those the intrinsic answer is exactly as stale as the rest.
     pub(crate) fn forget_cached_sizes(&mut self) {
-        self.cache.clear();
+        self.full.clear();
         self.measured.clear();
     }
 
     /// Whether this box is holding no answer about its own size.
     pub(crate) fn holds_no_layout(&self) -> bool {
-        self.cache.is_empty() && self.measured.is_empty()
+        self.full.is_empty() && self.measured.is_empty()
     }
 }
 
@@ -151,13 +149,14 @@ impl LayoutStore {
 impl LayoutStore {
     /// One box's layout-time state.
     pub(crate) fn state(&self, key: BoxKey) -> Option<&BoxLayout> {
-        self.layout.get(key)
+        self.layout.get(key)?.as_ref()
     }
 
     /// One box's layout-time state, for modification.
     pub(crate) fn state_mut(&mut self, key: BoxKey) -> &mut BoxLayout {
         self.layout
             .get_mut(key)
+            .as_mut()
             .expect("every live box has a layout entry")
     }
 }

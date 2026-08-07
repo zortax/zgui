@@ -33,7 +33,7 @@ pub struct Encoded {
     pub flattened_transforms: u32,
 }
 
-/// Adds one pass to `scene`, at the surface's own coordinates.
+/// Adds one pass to `scene`, translated into its compact scratch bin.
 ///
 /// The scene is not reset, because a scratch layer holds every pass assigned to it and those passes
 /// are rasterised together — one scene, one rasterisation, whatever the layer's share of the frame
@@ -46,7 +46,10 @@ pub fn pass(
     pass: &VectorPass,
 ) -> Encoded {
     let mut encoded = Encoded::default();
-    let shift = Affine::IDENTITY;
+    let shift = Affine::translate((
+        f64::from(pass.raster_region.origin.x - pass.region.origin.x),
+        f64::from(pass.raster_region.origin.y - pass.region.origin.y),
+    ));
 
     for planned in frame.plan.items_of(pass) {
         let Some(item) = frame.items.get(planned.item) else {

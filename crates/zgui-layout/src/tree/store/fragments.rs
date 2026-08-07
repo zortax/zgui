@@ -33,6 +33,7 @@ impl LayoutStore {
     pub fn fragments_of_box(&self, key: BoxKey) -> &[FragKey] {
         self.layout
             .get(key)
+            .and_then(Option::as_ref)
             .map_or(&[], |state| &state.fragments[..])
     }
 
@@ -169,7 +170,7 @@ impl LayoutStore {
         slot: usize,
         kind: FragmentKind,
     ) -> Option<FragKey> {
-        let key = *self.layout.get(box_)?.fragments.get(slot)?;
+        let key = *self.layout.get(box_)?.as_ref()?.fragments.get(slot)?;
         self.fragments
             .get(key)?
             .kind
@@ -194,7 +195,7 @@ impl LayoutStore {
             fill(&mut fragment);
             fragment
         });
-        if let Some(state) = self.layout.get_mut(box_) {
+        if let Some(state) = self.layout.get_mut(box_).as_mut() {
             state.fragments.push(key);
         }
         if let Some(node) = node {
@@ -213,7 +214,7 @@ impl LayoutStore {
     /// This is what a rebuild that produced fewer pieces than last time calls: the survivors keep
     /// their names, and the ones that ceased to exist are unregistered everywhere that named them.
     pub(crate) fn truncate_fragments(&mut self, box_: BoxKey, len: usize) {
-        let Some(state) = self.layout.get_mut(box_) else {
+        let Some(state) = self.layout.get_mut(box_).as_mut() else {
             return;
         };
         if state.fragments.len() <= len {

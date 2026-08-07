@@ -33,7 +33,7 @@ use zgui_profile::{Counter, counter};
 use zgui_render::RenderCapabilities;
 use zgui_scene::{GroupBoundary, Scene};
 
-use crate::content::vectors::{NoVectors, VectorSource};
+use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
 use crate::emit::group::{self, Isolation};
 use crate::emit::highlight::{HighlightSource, NoHighlights};
 use crate::emit::scrollbar::ScrollbarPaint;
@@ -65,6 +65,8 @@ pub struct PaintInput<'a> {
     pub replaced: &'a dyn ReplacedSource,
     /// Where the outlines an element draws come from.
     pub vectors: &'a dyn VectorSource,
+    /// Where eligible small solid vector shapes get their monochrome coverage masks.
+    pub vector_masks: &'a dyn VectorMaskSource,
     /// Where a custom element's painting comes from.
     pub custom: &'a dyn crate::content::custom::CustomPaintSource,
     /// The cache a recorded range's rasters live in, which the record holds them in.
@@ -128,6 +130,7 @@ impl<'a> PaintInput<'a> {
             highlights: &NoHighlights,
             replaced: &NoReplaced,
             vectors: &NoVectors,
+            vector_masks: &NoVectorMasks,
             custom: &crate::content::custom::NoCustom,
             resources: &NoResources,
             anim: &NoAnim,
@@ -379,9 +382,9 @@ impl Pass<'_, '_> {
         transform: Option<zgui_scene::SpatialId>,
     ) -> Rect<DevicePx, Device> {
         match self.input.placements {
-            Some(placements) => rect.union(
-                zgui_layout::fragment::transform::placed::onto_device(rect, transform, placements),
-            ),
+            Some(placements) => rect.union(zgui_layout::fragment::transform::placed::onto_device(
+                rect, transform, placements,
+            )),
             None => rect,
         }
     }
@@ -431,8 +434,9 @@ impl Pass<'_, '_> {
             highlights: self.input.highlights,
             replaced: self.input.replaced,
             vectors: self.input.vectors,
+            vector_masks: self.input.vector_masks,
             custom: self.input.custom,
-            custom_reference: self.input.store.node(fragment.box_).custom,
+            custom_reference: self.input.store.custom_reference(fragment.box_),
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
         }
@@ -520,8 +524,7 @@ impl Pass<'_, '_> {
                 zgui_layout::FragmentKind::Custom => self
                     .input
                     .store
-                    .node(fragment.box_)
-                    .custom
+                    .custom_reference(fragment.box_)
                     .map_or(0, |(token, _, _)| self.input.custom.revision(token)),
                 _ => 0,
             },

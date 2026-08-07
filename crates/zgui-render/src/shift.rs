@@ -48,7 +48,10 @@ impl ScrollShift {
     #[must_use]
     pub fn destination(&self) -> Option<Rect<i32, Device>> {
         let moved = Rect::new(
-            Point::new(self.port.origin.x + self.by.0, self.port.origin.y + self.by.1),
+            Point::new(
+                self.port.origin.x + self.by.0,
+                self.port.origin.y + self.by.1,
+            ),
             self.port.size,
         );
         moved.intersection(self.port)
@@ -99,7 +102,10 @@ impl ScrollShift {
         };
 
         // The horizontal band: whatever the vertical movement uncovered, across the whole width.
-        let (top, bottom) = (self.port.origin.y, self.port.origin.y + self.port.size.height);
+        let (top, bottom) = (
+            self.port.origin.y,
+            self.port.origin.y + self.port.size.height,
+        );
         if kept.origin.y > top {
             out(Rect::new(
                 self.port.origin,
@@ -116,7 +122,10 @@ impl ScrollShift {
 
         // The vertical band, taken only over the rows the horizontal band did not already claim, so
         // that the two are disjoint and a damage set of four rectangles is not spent on two.
-        let (left, right) = (self.port.origin.x, self.port.origin.x + self.port.size.width);
+        let (left, right) = (
+            self.port.origin.x,
+            self.port.origin.x + self.port.size.width,
+        );
         if kept.origin.x > left {
             out(Rect::new(
                 Point::new(left, kept.origin.y),
@@ -186,7 +195,10 @@ mod tests {
             by: (0, 30),
         });
         assert_eq!(exposed.len(), 1);
-        assert_eq!(exposed[0], Rect::new(Point::new(10, 20), Size::new(100, 30)));
+        assert_eq!(
+            exposed[0],
+            Rect::new(Point::new(10, 20), Size::new(100, 30))
+        );
     }
 
     #[test]

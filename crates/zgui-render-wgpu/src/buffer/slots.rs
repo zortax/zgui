@@ -29,6 +29,8 @@ pub struct SlotBuffer {
     staged: Vec<u8>,
     /// How many slots have been staged this frame.
     taken: u32,
+    /// Changes whenever `buffer` changes identity.
+    generation: u64,
 }
 
 impl SlotBuffer {
@@ -42,6 +44,7 @@ impl SlotBuffer {
             stride: size.next_multiple_of(alignment.max(1)),
             staged: Vec::new(),
             taken: 0,
+            generation: 0,
         }
     }
 
@@ -87,6 +90,7 @@ impl SlotBuffer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
+            self.generation = self.generation.wrapping_add(1);
         }
         belt.write(
             gpu,
@@ -119,6 +123,22 @@ impl SlotBuffer {
     /// How many bytes are allocated on the device.
     pub fn bytes(&self) -> u64 {
         self.buffer.as_ref().map_or(0, wgpu::Buffer::size)
+    }
+
+    /// The identity epoch of the allocation a bind group names.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Drops the high-water allocation and host staging capacity while idle.
+    pub fn release(&mut self) -> u64 {
+        let freed = self.bytes();
+        if self.buffer.take().is_some() {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        self.staged.clear();
+        self.staged.shrink_to_fit();
+        freed
     }
 
     /// How many slots this frame has staged.

@@ -372,9 +372,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     fn admits(&self, clip: ClipId) -> Rect<DevicePx, Device> {
         let tables = &*self.tables;
         let spatial = &tables.spatial;
-        tables
-            .clips
-            .bounds_placed(clip, &|id| spatial.resolve(id))
+        tables.clips.bounds_placed(clip, &|id| spatial.resolve(id))
     }
 
     /// What a fragment's chain admits, as a region damage may be cut to.
@@ -643,14 +641,18 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // A custom element before either: a registered implementation owns the box's painting
         // outright. Then a drawing before replaced content: an element carrying outlines is
         // drawing them itself, and nothing outside the document has been asked for a picture.
-        let own = if node.custom.is_some() {
-            FragmentKind::Custom
-        } else {
-            match (node.draws_vector, node.replaced) {
-                (true, _) => FragmentKind::Vector,
-                (false, Some(content)) => FragmentKind::Replaced { content },
-                (false, None) => FragmentKind::Box,
+        let own = match node.painted {
+            crate::node::kind::PaintedContent::Custom => FragmentKind::Custom,
+            crate::node::kind::PaintedContent::Vector => FragmentKind::Vector,
+            crate::node::kind::PaintedContent::Replaced => {
+                let content = self
+                    .store
+                    .replaced(key)
+                    .expect("a replaced discriminator has replaced metadata")
+                    .id;
+                FragmentKind::Replaced { content }
             }
+            crate::node::kind::PaintedContent::Box => FragmentKind::Box,
         };
         let mut kinds = vec![own];
         if let Some(resolution) = self.store.inline_resolution(key) {

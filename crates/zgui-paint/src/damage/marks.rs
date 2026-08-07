@@ -131,7 +131,10 @@ mod tests {
 
     #[test]
     fn a_line_with_nothing_drawn_on_it_reports_nothing() {
-        assert_eq!(extent(&blank_line(20.0, 12.0), &NoHighlights, 1.0, None), None);
+        assert_eq!(
+            extent(&blank_line(20.0, 12.0), &NoHighlights, 1.0, None),
+            None
+        );
     }
 
     /// The defect: a line box of no width, and a caret on it that has to survive the cull.
@@ -162,7 +165,11 @@ mod tests {
         let mut tree = SpatialTree::with_viewport();
         let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
         let moved = Matrix4::translation(100.0, 200.0, 0.0);
-        let space = tree.space_of(tree.viewport(), owner, OwnSpace::of(Some(moved), None, false));
+        let space = tree.space_of(
+            tree.viewport(),
+            owner,
+            OwnSpace::of(Some(moved), None, false),
+        );
         let placements = Placements::of(&tree);
 
         let mut fragment = blank_line(20.0, 12.0);

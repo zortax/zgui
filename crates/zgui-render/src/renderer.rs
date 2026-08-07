@@ -106,6 +106,14 @@ pub trait Renderer {
         0
     }
 
+    /// Frees cold high-water resources after a wall-clock idle grace period.
+    ///
+    /// Unlike an explicit cache forget, this keeps live presentation state and an initialized
+    /// vector rasteriser. The default can only name the portable target-pool seam.
+    fn release_idle_resources(&mut self) -> u64 {
+        self.release_cached_targets()
+    }
+
     /// How long the last frame waited to be handed a surface to present into.
     ///
     /// A queued presentation mode makes the acquisition the loop's only brake: with every image in

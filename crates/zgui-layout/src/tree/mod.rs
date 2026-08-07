@@ -215,7 +215,8 @@ impl<'a, C> LayoutTree<'a, C> {
             horizontal: self.store.intrinsic(key, crate::axis::Axis::Horizontal),
             vertical: self.store.intrinsic(key, crate::axis::Axis::Vertical),
         };
-        StyleRef::new(node, &self.calc, self.device, measured, node.natural_ratio)
+        let natural_ratio = self.store.replaced(key).and_then(|content| content.ratio);
+        StyleRef::new(node, &self.calc, self.device, measured, natural_ratio)
             .with_reserved_gutter(self.store.reserved_gutter(key))
     }
 

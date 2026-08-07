@@ -182,10 +182,7 @@ impl Renderer for WgpuRenderer {
                 &mut self.shift_scratch,
                 shift,
             );
-            zgui_profile::latency::note(
-                "r.shift",
-                format!("by={:?} moved={moved}", shift.by),
-            );
+            zgui_profile::latency::note("r.shift", format!("by={:?} moved={moved}", shift.by));
         }
         zgui_profile::latency::mark("r.buffers");
         let uploaded = self.buffers.upload_frame(&self.gpu, &mut encoder, scene);
@@ -365,6 +362,15 @@ impl Renderer for WgpuRenderer {
         self.groups.release_unused() + scratch
     }
 
+    fn release_idle_resources(&mut self) -> u64 {
+        let mut freed = self.release_cached_targets();
+        freed += self.buffers.release_idle(&self.gpu);
+        if let Some(vectors) = self.vectors.as_mut() {
+            freed += vectors.release_idle_resources();
+        }
+        freed
+    }
+
     fn acquire_block(&self) -> std::time::Duration {
         self.acquire_block
     }
@@ -400,6 +406,9 @@ impl WgpuRenderer {
         full_repaint: bool,
     ) -> Option<zgui_render::VectorPlan> {
         let planned = scene.pass_plan();
+        if planned.is_empty() {
+            return None;
+        }
         // The pass count and the clip-layer count are **not** recorded here. Both are properties of
         // the display list — which passes there are and what absorbing their residuals costs are
         // decided before any device sees them — and the display list records them when it is
@@ -412,6 +421,11 @@ impl WgpuRenderer {
             tracing::debug!("{}", warning.message());
         }
 
+        if self.vectors.is_none()
+            && let Some(factory) = self.vector_factory
+        {
+            self.vectors = Some(factory(&self.gpu, self.target.size));
+        }
         let fatal = self.vector_shortfall_is_fatal;
         let raster = self.vectors.as_deref_mut()?;
         let mut plan = raster.plan(planned);

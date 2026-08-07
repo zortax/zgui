@@ -74,7 +74,10 @@ pub fn kind(format: GlyphFormat) -> TextureKind {
 pub fn handle(key: &GlyphKey) -> u64 {
     let mut hasher = FxHasher::default();
     key.hash(&mut hasher);
-    hasher.finish()
+    // The high byte is reserved for non-glyph monochrome rasters (small vector masks). Keeping
+    // the namespaces disjoint makes sharing one atlas exact rather than relying on a hash not to
+    // collide with an independently allocated mask handle.
+    hasher.finish() & 0x00FF_FFFF_FFFF_FFFF
 }
 
 /// The texels for one glyph, in its pool's format.

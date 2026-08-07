@@ -59,6 +59,18 @@ impl VectorInstances {
         self.buffer.capacity()
     }
 
+    /// The allocation epoch used by bind-group caches.
+    pub fn generation(&self) -> u64 {
+        self.buffer.generation()
+    }
+
+    /// Shrinks an oversized instance allocation and host staging vector.
+    pub fn shrink(&mut self, gpu: &Gpu) -> u64 {
+        self.staged.clear();
+        self.staged.shrink_to_fit();
+        self.buffer.shrink(gpu)
+    }
+
     /// How many instances this frame has staged.
     pub fn staged(&self) -> usize {
         self.staged.len()

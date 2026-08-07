@@ -8,7 +8,16 @@ use zgui_text::ParagraphKey;
 use crate::node::box_node::BoxNode;
 use crate::node::kind::{BoxKind, FormattingContext};
 
+use super::state::BoxLayout;
 use super::{BOX_ARENA, FRAGMENT_ARENA, LayoutStore, ResolvedLayout};
+
+#[test]
+fn hot_box_records_stay_within_the_memory_budget() {
+    let node = core::mem::size_of::<BoxNode>();
+    let layout = core::mem::size_of::<BoxLayout>();
+    assert!(node <= 112, "BoxNode grew to {node} bytes");
+    assert!(layout <= 480, "BoxLayout grew to {layout} bytes");
+}
 
 #[test]
 fn the_box_and_fragment_arenas_are_different_key_spaces() {
