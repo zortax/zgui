@@ -19,16 +19,16 @@ pub struct FrameStats {
 
 /// Why a frame did not reach the screen.
 ///
-/// Every variant but [`SkipReason::Unconfigured`] means the frame's work **was** submitted: the
-/// target it composes into holds this frame's pixels, and its damage is retired. Only an
-/// unconfigured surface skips before any work is recorded, so only that one retains damage for the
-/// next attempt.
+/// Most variants mean the frame's work **was** submitted: the target it composes into holds this
+/// frame's pixels, and its damage is retired. Two of them skip before anything is recorded —
+/// [`SkipReason::Unconfigured`] and [`SkipReason::DeviceUnavailable`] — so those two retain damage
+/// for the next attempt. [`FrameOutcome::retires_damage`] answers which a variant is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SkipReason {
     /// The surface has not been configured yet, so nothing was recorded and nothing was submitted.
     ///
-    /// The one arm that retains damage.
+    /// One of the two arms that retains damage.
     Unconfigured,
     /// Acquiring a surface to present into timed out. Ask for another frame.
     Timeout,

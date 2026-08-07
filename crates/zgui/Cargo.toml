@@ -51,8 +51,8 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # display server and no graphics device.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 # The stage marks a profiling run reads back. The counters have to be compiled in, or every budget
-# stays green while measuring nothing — which is why this names the feature rather than relying on
-# whatever another crate happened to turn on.
+# stays green while measuring nothing, so this names the feature rather than relying on whatever
+# another crate happened to turn on.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 
 [features]
@@ -63,8 +63,8 @@ instrument = ["zgui-view/instrument"]
 
 # Routes background work to a tokio runtime, and polls the frame's tasks inside it so a UI task
 # may await a tokio timer or a socket directly. Off by default: without it the framework still
-# runs background work, on a small pool of its own with no reactor, which is what most programs
-# want. Turning it on links tokio.
+# runs background work, on a small pool of its own with no reactor, which suits most programs.
+# Turning it on links tokio.
 tokio = ["dep:zgui-tokio"]
 
 # Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
