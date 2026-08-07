@@ -41,6 +41,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         // What the viewport's own coordinate system resolves to, which is what a fragment drawn
         // straight into the window carries.
         transform_hash: zgui_scene::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
+        custom: 0,
         decorations: 0,
         text_fill: 0,
         anim: 0,

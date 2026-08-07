@@ -74,6 +74,10 @@ pub struct Emission<'a> {
     pub replaced: &'a dyn ReplacedSource,
     /// Where the outlines an element draws come from.
     pub vectors: &'a dyn VectorSource,
+    /// Where a custom element's painting comes from.
+    pub custom: &'a dyn crate::content::custom::CustomPaintSource,
+    /// The custom-element reference the fragment's box captured, when it has one.
+    pub custom_reference: Option<(u32, u16, u16)>,
     /// How many device pixels one CSS pixel is, which is what a drawing with no space of its own is
     /// scaled by.
     pub scale: f32,
@@ -215,6 +219,28 @@ fn content(
                     transform: emission.box_placement.transform,
                 },
             )
+        }
+        // A custom element's primitives land here for the reason the vector arm's do: inside the
+        // box's own decorations, under its clip and transform, before its descendants — sorting,
+        // clipping and moving exactly like a background, whoever produced them.
+        FragmentKind::Custom => {
+            let Some((token, _, _)) = emission.custom_reference else {
+                return 0;
+            };
+            let mut painter = crate::content::custom::ScenePainter {
+                scene,
+                content_box: fragment.content_box,
+                clip: emission.box_placement.clip,
+                transform: emission.box_placement.transform,
+                alpha: emission.alpha,
+                scale: emission.scale,
+                shape_paint: style.shape,
+                vector_id: VectorId(fragment.key.index()),
+                shapes_pushed: 0,
+                pushed: 0,
+            };
+            emission.custom.paint(token, &mut painter);
+            painter.pushed
         }
         FragmentKind::Scrollbar { part, .. } => scrollbar::emit(
             scene,

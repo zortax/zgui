@@ -218,12 +218,18 @@ impl Builder<'_> {
         // `display: block` is a block-level replaced box, not a block container.
         let replaced = self.document.node(index).replaced_id();
         let intrinsic = replaced.and_then(|_| self.document.intrinsic_of(index));
-        let fc = if intrinsic.is_some() {
+        // Custom wins over replaced and over `display`: a registered implementation owns the
+        // box's sizing outright, and everything else about the element stays ordinary.
+        let custom = zgui_dom::side::custom::reference(self.document.store(), source);
+        let fc = if custom.is_some() {
+            FormattingContext::Custom
+        } else if intrinsic.is_some() {
             FormattingContext::Replaced
         } else {
             classification.fc
         };
         let mut node = BoxNode::new(style.clone(), BoxKind::Element, fc).from_element(source);
+        node.custom = custom;
         node.block_level = classification.participation == Participation::Block;
         node.replaced = intrinsic.is_some().then_some(replaced).flatten();
         node.draws_vector = zgui_dom::side::drawing::draws(

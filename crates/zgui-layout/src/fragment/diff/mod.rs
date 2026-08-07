@@ -640,12 +640,17 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// What each fragment of this box draws, in the order it draws them.
     fn kinds_of(&self, key: BoxKey) -> Vec<FragmentKind> {
         let node = self.store.node(key);
-        // A drawing before replaced content: an element carrying outlines is drawing them itself,
-        // and nothing outside the document has been asked for a picture of it.
-        let own = match (node.draws_vector, node.replaced) {
-            (true, _) => FragmentKind::Vector,
-            (false, Some(content)) => FragmentKind::Replaced { content },
-            (false, None) => FragmentKind::Box,
+        // A custom element before either: a registered implementation owns the box's painting
+        // outright. Then a drawing before replaced content: an element carrying outlines is
+        // drawing them itself, and nothing outside the document has been asked for a picture.
+        let own = if node.custom.is_some() {
+            FragmentKind::Custom
+        } else {
+            match (node.draws_vector, node.replaced) {
+                (true, _) => FragmentKind::Vector,
+                (false, Some(content)) => FragmentKind::Replaced { content },
+                (false, None) => FragmentKind::Box,
+            }
         };
         let mut kinds = vec![own];
         if let Some(resolution) = self.store.inline_resolution(key) {

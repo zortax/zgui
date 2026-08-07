@@ -18,6 +18,7 @@ license.workspace = true
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
+zgui-custom = { path = "../zgui-custom", version = "0.1.0" }
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-wgpu = { path = "../zgui-wgpu", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }

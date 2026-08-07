@@ -65,6 +65,8 @@ pub struct PaintInput<'a> {
     pub replaced: &'a dyn ReplacedSource,
     /// Where the outlines an element draws come from.
     pub vectors: &'a dyn VectorSource,
+    /// Where a custom element's painting comes from.
+    pub custom: &'a dyn crate::content::custom::CustomPaintSource,
     /// The cache a recorded range's rasters live in, which the record holds them in.
     ///
     /// Separate from [`PaintInput::glyphs`] and [`PaintInput::replaced`] even though one object
@@ -126,6 +128,7 @@ impl<'a> PaintInput<'a> {
             highlights: &NoHighlights,
             replaced: &NoReplaced,
             vectors: &NoVectors,
+            custom: &crate::content::custom::NoCustom,
             resources: &NoResources,
             anim: &NoAnim,
             capabilities: RenderCapabilities::MINIMAL,
@@ -428,6 +431,8 @@ impl Pass<'_, '_> {
             highlights: self.input.highlights,
             replaced: self.input.replaced,
             vectors: self.input.vectors,
+            custom: self.input.custom,
+            custom_reference: self.input.store.node(fragment.box_).custom,
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
         }
@@ -511,6 +516,15 @@ impl Pass<'_, '_> {
             clip,
             transform,
             transform_hash: fragment.transform_hash,
+            custom: match fragment.kind {
+                zgui_layout::FragmentKind::Custom => self
+                    .input
+                    .store
+                    .node(fragment.box_)
+                    .custom
+                    .map_or(0, |(token, _, _)| self.input.custom.revision(token)),
+                _ => 0,
+            },
             decorations: decorate::signature(&decorations),
             text_fill: fill::signature(text_fill.as_ref()),
             anim,

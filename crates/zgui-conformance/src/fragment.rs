@@ -151,6 +151,7 @@ fn label(kind: FragmentKind) -> &'static str {
         FragmentKind::TextRun { .. } => "run",
         FragmentKind::Replaced { .. } => "replaced",
         FragmentKind::Vector => "vector",
+        FragmentKind::Custom => "custom",
         FragmentKind::Scrollbar { .. } => "scrollbar",
     }
 }

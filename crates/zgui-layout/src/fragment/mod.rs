@@ -91,6 +91,10 @@ pub enum FragmentKind {
     /// the same size is the same rectangle drawn differently — so what a drawing draws is asked of
     /// the element at the moment it is painted, and this kind says only that there is one.
     Vector,
+    /// Content a registered custom element paints, for the same reason as [`FragmentKind::Vector`]
+    /// unnamed here: what it draws is asked of the element's implementation at painting time, and
+    /// this kind says only that there is one.
+    Custom,
     /// Part of a scrollbar.
     Scrollbar {
         /// Which axis it runs along.

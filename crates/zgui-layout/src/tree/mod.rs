@@ -53,6 +53,8 @@ pub struct LayoutTree<'a, C> {
     atomic: AtomicMemo,
     /// The text properties of each distinct style this pass has met.
     text: TextStyles,
+    /// Whoever lays custom elements out, when a window has any.
+    custom: &'a dyn crate::custom::CustomLayoutSource,
 }
 
 impl<'a, C: MeasureContent> LayoutTree<'a, C> {
@@ -65,6 +67,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             calc: RefCell::new(CalcArena::new(device.scale)),
             atomic: AtomicMemo::default(),
             text: TextStyles::default(),
+            custom: &crate::custom::NoCustomLayout,
         }
     }
 
@@ -138,7 +141,19 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     }
 }
 
-impl<C> LayoutTree<'_, C> {
+impl<'a, C> LayoutTree<'a, C> {
+    /// The same pass, laying custom elements out through `custom`.
+    #[must_use]
+    pub fn with_custom(mut self, custom: &'a dyn crate::custom::CustomLayoutSource) -> Self {
+        self.custom = custom;
+        self
+    }
+
+    /// Whoever lays custom elements out.
+    pub(crate) fn custom(&self) -> &'a dyn crate::custom::CustomLayoutSource {
+        self.custom
+    }
+
     /// The boxes and their results.
     pub fn store(&self) -> &LayoutStore {
         self.store

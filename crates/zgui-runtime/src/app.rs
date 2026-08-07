@@ -67,6 +67,20 @@ pub type ViewFactory = Box<dyn FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor>>;
 /// none and pays nothing.
 pub type EmbedFactory = Box<dyn FnMut() -> Box<dyn crate::embed::EmbedHost>>;
 
+/// Builds the two halves of one window's custom-element registry, given its document.
+///
+/// The document is the argument because both halves resolve elements through it: which node
+/// names which implementation is a property read, and a source built with no document would have
+/// nothing to read it from.
+pub type CustomFactory = Box<
+    dyn FnMut(
+        &Rc<RefCell<zgui_dom::Document>>,
+    ) -> (
+        Box<dyn zgui_layout::custom::CustomLayoutSource>,
+        Box<dyn zgui_paint::content::custom::CustomPaintSource>,
+    ),
+>;
+
 /// Where a runtime records why it stopped.
 ///
 /// Shared, so that the answer survives the runtime being handed to a platform backend.
@@ -127,6 +141,8 @@ pub struct App {
     raster: Option<RasterFactory>,
     /// What fills its `surface` elements.
     embed: Option<EmbedFactory>,
+    /// What answers its custom elements.
+    custom: Option<CustomFactory>,
 }
 
 impl Default for App {
@@ -146,6 +162,7 @@ impl App {
             metrics: None,
             raster: None,
             embed: None,
+            custom: None,
         }
     }
 
@@ -228,6 +245,12 @@ impl App {
         self
     }
 
+    /// Installs what answers each window's custom elements.
+    pub fn with_custom(mut self, factory: CustomFactory) -> Self {
+        self.custom = Some(factory);
+        self
+    }
+
     /// Installs what turns each window's glyphs into pixels.
     ///
     /// Without one a window lays its text out and draws no glyph at all, which is what an
@@ -292,6 +315,8 @@ pub struct Runtime {
     raster: RasterFactory,
     /// What builds an embed host, when the application brought one.
     embed: Option<EmbedFactory>,
+    /// What builds a custom-element registry, when the application brought one.
+    custom: Option<CustomFactory>,
     /// What builds the view.
     view: Option<ViewFactory>,
     /// The windows that are open.
@@ -334,6 +359,7 @@ impl Runtime {
                 .raster
                 .unwrap_or_else(|| Box::new(|| Arc::new(zgui_text::NoRaster))),
             embed: app.embed,
+            custom: app.custom,
             view: Some(view),
             windows: Vec::new(),
             gate: Arc::new(FrameGate::new()),
@@ -421,6 +447,10 @@ impl Runtime {
         window.set_scroll_settings(cx.scroll_settings());
         if let Some(embed) = self.embed.as_mut() {
             window.install_embed_host(embed());
+        }
+        if let Some(custom) = self.custom.as_mut() {
+            let (layout, paint) = custom(window.document());
+            window.install_custom_sources(layout, paint);
         }
         self.windows.push(window);
         // A window that has just been built has everything to draw, and nothing else will ask.

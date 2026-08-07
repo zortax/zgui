@@ -5519,6 +5519,7 @@ dependencies = [
  "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
+ "zgui-custom",
  "zgui-elements",
  "zgui-geom",
  "zgui-layout",
@@ -5669,6 +5670,28 @@ dependencies = [
  "zgui-color",
  "zgui-geom",
  "zgui-interned",
+]
+
+[[package]]
+name = "zgui-custom"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash 2.1.3",
+ "zgui-color",
+ "zgui-dom",
+ "zgui-elements",
+ "zgui-geom",
+ "zgui-interned",
+ "zgui-layout",
+ "zgui-paint",
+ "zgui-platform",
+ "zgui-platform-headless",
+ "zgui-reactive",
+ "zgui-render",
+ "zgui-runtime",
+ "zgui-testkit-scene",
+ "zgui-view",
+ "zgui-vocab",
 ]
 
 [[package]]

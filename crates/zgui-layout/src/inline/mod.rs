@@ -65,6 +65,18 @@ pub(crate) fn measure_leaf<C: MeasureContent>(
     block: Option<&mut BlockContext<'_>>,
 ) -> Measured {
     let key = from_node_id(node);
+    if tree.store().node(key).fc == FormattingContext::Custom {
+        // A custom element's measurement is the trait's, not the measurer's: the source was
+        // installed on the pass, and the shell arithmetic around this call applies to its answer
+        // exactly as it applies to a replaced box's.
+        return crate::custom::measure(
+            tree,
+            key,
+            known,
+            available,
+            run_mode == RunMode::PerformLayout,
+        );
+    }
     if tree.store().node(key).fc == FormattingContext::Inline {
         return measure::compute(
             tree,

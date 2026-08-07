@@ -89,6 +89,12 @@ pub struct Painted {
     /// a range is a set of instances that were encoded against a particular matrix. This is the
     /// part of the comparison that a movement moves.
     pub transform_hash: u64,
+    /// The revision of what a custom element paints, and zero for every other kind.
+    ///
+    /// The caret's pattern: nothing else in this record moves when a custom element redraws in
+    /// place, so this is the one field that turns "the implementation says it changed" into a
+    /// cache miss — and its absence into a replay.
+    pub custom: u64,
     /// A fingerprint of the text decorations in force over it.
     ///
     /// Those come from the boxes *above* the fragment rather than from its own style, so nothing

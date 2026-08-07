@@ -52,3 +52,7 @@ pub use zgui_elements::{CanvasHandle, DrawCx};
 /// Filling a `surface` element: the binding methods, the producer handle, and the on-demand
 /// renderer contract.
 pub use zgui_wgpu::{SurfaceElementExt, SurfaceHandle, SurfaceRenderer};
+
+/// Implementing an element rather than composing one: the trait, its contexts, and the handle
+/// that reaches a mounted one.
+pub use zgui_custom::{CustomElement, CustomHandle, CustomLayoutCx, CustomMeasured, ScenePainter};

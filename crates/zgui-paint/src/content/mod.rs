@@ -24,6 +24,7 @@
 //! drawing.
 
 pub mod cache;
+pub mod custom;
 pub mod glyphs;
 pub mod images;
 pub mod probe;

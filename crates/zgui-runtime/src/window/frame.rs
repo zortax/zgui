@@ -827,6 +827,9 @@ impl Window {
         let relaid_out = {
             let mut layout = self.layout.borrow_mut();
             let mut tree = LayoutTree::new(&mut layout, &mut self.text, device);
+            if let Some(custom) = self.custom_layout.as_deref() {
+                tree = tree.with_custom(custom);
+            }
             let outcome = tree.relayout_root(zgui_layout::tree::viewport_of(surface));
             if !outcome.had_a_root() {
                 return;
@@ -1025,6 +1028,10 @@ impl Window {
                 highlights: self.carets.plan(),
                 replaced: &content,
                 vectors: &vectors,
+                custom: self
+                    .custom_paint
+                    .as_deref()
+                    .unwrap_or(&zgui_paint::content::custom::NoCustom),
                 // The same object again, and deliberately: what it answers here is not "give me
                 // this" but "keep this". A range this frame records is replayed by later frames
                 // without any of them looking a glyph up, so the record is what tells the atlas

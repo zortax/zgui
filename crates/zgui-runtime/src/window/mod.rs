@@ -153,6 +153,10 @@ pub struct Window {
     /// Who fills this window's `surface` elements; [`NoEmbeds`](crate::embed::NoEmbeds) until an
     /// application installs a host.
     embed: Box<dyn crate::embed::EmbedHost>,
+    /// Who lays custom elements out, when an application brought a registry of them.
+    custom_layout: Option<Box<dyn zgui_layout::custom::CustomLayoutSource>>,
+    /// Who paints them; the two halves of one registry, installed together.
+    custom_paint: Option<Box<dyn zgui_paint::content::custom::CustomPaintSource>>,
     /// Whether the last embed sync wanted a frame per refresh; one input to the animation gate.
     embed_animating: bool,
     /// The wake route this window was opened with, retained so the embed sync can hand it to
@@ -526,6 +530,8 @@ impl Window {
             replaced_surfaces,
             images,
             embed: Box::new(crate::embed::NoEmbeds),
+            custom_layout: None,
+            custom_paint: None,
             embed_animating: false,
             waker: Arc::clone(&waker),
             vectors: zgui_paint::VectorCache::new(),
@@ -603,6 +609,21 @@ impl Window {
         self.embed.shutting_down();
         self.embed = host;
         // Whatever the new host will show, the old host's attachments are stale now.
+        self.damage = DamageSet::full();
+        self.request_frame();
+    }
+
+    /// Installs the two halves of the registry custom elements are answered from.
+    ///
+    /// Together, because they are one registry seen from two stages: a box measured by one
+    /// implementation and painted by another is the incoherence the pairing exists to prevent.
+    pub fn install_custom_sources(
+        &mut self,
+        layout: Box<dyn zgui_layout::custom::CustomLayoutSource>,
+        paint: Box<dyn zgui_paint::content::custom::CustomPaintSource>,
+    ) {
+        self.custom_layout = Some(layout);
+        self.custom_paint = Some(paint);
         self.damage = DamageSet::full();
         self.request_frame();
     }

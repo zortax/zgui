@@ -271,6 +271,9 @@ impl App {
             // Installed by default beside the default renderer: an application with no surface
             // elements pays one virtual call per frame, and one with them needs no wiring.
             .with_embed(Box::new(|| Box::new(zgui_wgpu::WgpuSurfaces::new())))
+            // The custom-element registry, for the same reason: an application that mounts none
+            // pays two never-taken branches per frame.
+            .with_custom(Box::new(|_document| zgui_custom::sources()))
             .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
                 Box::new(view().into_view().build(cx))
             })?;

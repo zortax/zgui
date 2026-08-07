@@ -47,7 +47,11 @@ fn push(store: &LayoutStore, key: BoxKey, out: &mut Vec<Piece>) {
     };
     match node.fc {
         FormattingContext::None => {}
-        FormattingContext::Atomic | FormattingContext::Replaced => out.push(Piece::Atomic(key)),
+        // A custom element in inline flow is an atom exactly as a replaced box is: the line asks
+        // how big it is, and never looks in.
+        FormattingContext::Atomic | FormattingContext::Replaced | FormattingContext::Custom => {
+            out.push(Piece::Atomic(key))
+        }
         FormattingContext::Inline if node.text.is_some() => out.push(Piece::Text(key)),
         FormattingContext::Inline => {
             out.push(Piece::Enter(key));

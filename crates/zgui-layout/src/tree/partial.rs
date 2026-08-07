@@ -174,10 +174,15 @@ fn dispatch<C: MeasureContent>(
                         _ => (taffy::compute_block_layout(tree, node, inputs, None), None),
                     }
                 }
-                FormattingContext::Inline | FormattingContext::Replaced => {
+                FormattingContext::Inline
+                | FormattingContext::Replaced
+                | FormattingContext::Custom => {
                     // The block context travels with it: an inline formatting context asks the
                     // floats around it how wide each of its lines may be, and a leaf that was
-                    // handed no context would lay its lines out straight through them.
+                    // handed no context would lay its lines out straight through them. A custom
+                    // element takes the same road because it *is* a leaf to CSS: the shell
+                    // arithmetic around the measurement — box-sizing, min and max, aspect ratio —
+                    // applies to it unchanged, and only the measurement itself is the trait's.
                     crate::inline::leaf_shell::compute(tree, node, inputs, block_ctx)
                 }
             }

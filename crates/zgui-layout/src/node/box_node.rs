@@ -83,6 +83,14 @@ pub struct BoxNode {
     /// not the source. Carried into every [`MeasureRequest`](crate::measure::MeasureRequest) for
     /// this box.
     pub natural: Option<zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css>>,
+    /// The registered custom element owning this box's sizing and painting, as the token and
+    /// the layout and paint revisions its reference carried when the box was built.
+    ///
+    /// The token is what layout and paint resolve the implementation by; the revisions are a
+    /// snapshot and *not* the live answer — a repaint-only bump moves the registry and the
+    /// property without rebuilding the box, which is exactly why the paint walk asks the
+    /// registry rather than this field.
+    pub custom: Option<(u32, u16, u16)>,
     /// The grid line and area names, if this box is a grid container that names any.
     pub grid: Option<Box<GridNames>>,
 }
@@ -106,6 +114,7 @@ impl BoxNode {
             draws_vector: false,
             natural_ratio: None,
             natural: None,
+            custom: None,
             grid: None,
         }
     }

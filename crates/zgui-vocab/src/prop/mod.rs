@@ -1,5 +1,6 @@
 //! Imperative properties: the values that are neither attributes nor selector-visible states.
 
+pub mod custom;
 pub mod drawing;
 pub mod surface;
 mod key;

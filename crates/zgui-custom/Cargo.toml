@@ -1,0 +1,33 @@
+[package]
+name = "zgui-custom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The bridge behind trait-based custom elements: the user-facing `CustomElement` trait, the
+# registry its implementations live in, and the adapters that answer the layout and paint seams
+# from it. Positioned like zgui-view-dom — it names both the view layer and the engines, so that
+# neither has to name the other. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
+zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
+zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
+
+rustc-hash.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }

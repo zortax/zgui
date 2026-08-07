@@ -43,6 +43,9 @@ pub const USER_AGENT_SHEET: &str = r#"
 }
 
 box, field, control, editor  { display: block; }
+/* Not one of the sixteen: the tag trait-based custom elements are built on. It carries no meaning
+   of its own — the implementation decides everything — so the sheet gives it only a layout. */
+custom                       { display: block; }
 row                          { display: flex; flex-direction: row; }
 column, stack                { display: flex; flex-direction: column; }
 text, label                  { display: inline; }

@@ -23,6 +23,13 @@ pub enum FormattingContext {
     /// An atomic inline — `inline-block`, `inline-flex`, `inline-grid` — which is a leaf to the
     /// context around it and a container to the one inside it.
     Atomic,
+    /// A custom element: sized by the application's own trait implementation, which measures its
+    /// content and places whatever children it has itself.
+    ///
+    /// A leaf on the outside, exactly as [`FormattingContext::Atomic`] is: what surrounds it asks
+    /// how big it is and never looks in. On the inside it is whatever its implementation says,
+    /// reached through the same nested-layout door an atomic inline uses.
+    Custom,
     /// Table layout.
     Table,
     /// Multi-column layout.
@@ -40,6 +47,7 @@ impl FormattingContext {
             Self::Inline => "inline",
             Self::Replaced => "replaced",
             Self::Atomic => "atomic",
+            Self::Custom => "custom",
             Self::Table => "table",
             Self::MultiColumn => "multicol",
         }
@@ -143,6 +151,7 @@ mod tests {
             FormattingContext::Inline,
             FormattingContext::Replaced,
             FormattingContext::Atomic,
+            FormattingContext::Custom,
         ] {
             assert!(!context.is_container(), "{context:?}");
         }
@@ -165,6 +174,7 @@ mod tests {
             FormattingContext::Inline,
             FormattingContext::Replaced,
             FormattingContext::Atomic,
+            FormattingContext::Custom,
             FormattingContext::Table,
             FormattingContext::MultiColumn,
         ]

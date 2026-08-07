@@ -14,6 +14,7 @@ pub mod a11y_key;
 pub mod anim;
 pub mod attrs;
 pub mod boxes;
+pub mod custom;
 pub mod custom_state;
 pub mod drawing;
 pub mod inline_style;

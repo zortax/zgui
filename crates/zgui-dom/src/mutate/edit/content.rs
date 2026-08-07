@@ -90,9 +90,11 @@ impl Edit<'_> {
         let store = self.store();
         let slot = store.key_of(node);
         let paints = zgui_vocab::prop::drawing::paints(key.as_str());
+        let custom = key.as_str() == zgui_vocab::prop::custom::ELEMENT;
         let drew = paints && crate::side::drawing::draws(store, slot);
         let properties = store.columns_mut().props.get_mut(slot);
-        let before = paints.then(|| properties.get(key).cloned()).flatten();
+        let watched = paints || custom;
+        let before = watched.then(|| properties.get(key).cloned()).flatten();
         match value {
             Some(value) => {
                 properties.set(key, value);
@@ -101,12 +103,27 @@ impl Edit<'_> {
                 properties.remove(key);
             }
         }
-        let after = paints.then(|| properties.get(key).cloned()).flatten();
+        let after = watched.then(|| properties.get(key).cloned()).flatten();
         let mut owed = Dirty::A11Y;
         if paints && before != after {
             owed |= Dirty::REPAINT;
             if drew != crate::side::drawing::draws(store, slot) {
                 owed |= Dirty::REBUILD_BOX | Dirty::RELAYOUT;
+            }
+        }
+        if custom && before != after {
+            // The reference packs which implementation owns the box and two revisions; which of
+            // the three moved decides what is owed. Ownership appearing or disappearing changes
+            // what kind of box the element generates; a moved layout revision re-measures it; any
+            // movement repaints it.
+            owed |= Dirty::REPAINT;
+            match (&before, &after) {
+                (Some(PropValue::Integer(before)), Some(PropValue::Integer(after))) => {
+                    if zgui_vocab::prop::custom::relayouts(*before, *after) {
+                        owed |= Dirty::RELAYOUT;
+                    }
+                }
+                _ => owed |= Dirty::REBUILD_BOX | Dirty::RELAYOUT,
             }
         }
         ancestors::mark(store, node, owed);

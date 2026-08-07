@@ -73,6 +73,7 @@
 pub mod axis;
 pub mod boxtree;
 pub mod container_query;
+pub mod custom;
 pub mod fragment;
 pub mod inline;
 pub mod intrinsic;
