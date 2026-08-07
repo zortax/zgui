@@ -87,8 +87,8 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-text",
             "zgui-text-parley",
             "zgui-dom",
-            // A surface publishes accessibility updates, so every backend of the platform
-            // contract names the same tree type the contract's own method takes.
+            // Every backend of the platform contract names the tree type the contract's own
+            // method takes, whatever it does with one.
             "zgui-platform-headless",
             "zgui-platform-winit",
         ],

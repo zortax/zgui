@@ -89,10 +89,12 @@ pub enum SurfaceEvent {
         /// When it happened.
         timestamp: Timestamp,
     },
-    /// The set of held modifiers changed without any key event being delivered.
+    /// The set of held modifiers changed.
     ///
-    /// This exists because a modifier can change while the surface is not focused, and a
-    /// modifier state recovered only from key events is then wrong until the next press.
+    /// Delivered every time the set moves, including beside the key event that moved it. It is its
+    /// own event because the set also changes with no key event at all: a modifier can move while
+    /// the surface does not have the keyboard, and a modifier state recovered from key events alone
+    /// is then wrong until the next press.
     ModifiersChanged(Modifiers),
     /// An input method did something to the text being composed.
     Ime(ImeEvent),

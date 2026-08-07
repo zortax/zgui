@@ -71,16 +71,24 @@ naga = "29.0.4"
 # build script and read by the program it was built for, so the two ends are always the same build.
 bincode = "1.3"
 
-# --- platform: named only by zgui-platform-winit -------------------------------------------
+# --- platform, clipboards and accessibility --------------------------------------------------
+# `winit`, `accesskit_winit`, `arboard`, `smithay-clipboard` and `zbus` are the windowing
+# backend's: `zgui-platform-winit` is the only crate that ships one of them, and `probe`, the
+# canary that compiles the pinned versions together, links winit and the winit adapter beside it.
 winit = "0.30.13"
+# The accessibility tree, which belongs to no one backend: nine crates may name it and eight do,
+# from the vocabulary a node is described in up to each backend of the platform contract.
 accesskit = "0.24.1"
 accesskit_winit = "0.33.2"
+# Reading a published tree back, named by `zgui-runtime` and `zgui-ui`.
 accesskit_consumer = "0.38.0"
 # `default-features = false` drops `wayland-data-control`, so the X11 arm is taken
 # unconditionally and the Wayland clipboard goes through smithay-clipboard instead.
 arboard = { version = "3.6", default-features = false }
 smithay-clipboard = "0.7"
 zbus = "5.18"
+# The native handles a surface hands a graphics API, named by the platform contract and by both
+# backends that implement it.
 raw-window-handle = "0.6.2"
 
 # --- reactivity: named only by zgui-reactive ------------------------------------------------
@@ -98,10 +106,10 @@ futures = { version = "0.3", features = ["thread-pool"] }
 
 # --- the tokio backend: named only by zgui-tokio ---------------------------------------------
 # `default-features = false` because this crate wants a runtime and its synchronisation, and none
-# of the process, signal or io-std machinery a default tokio brings. `rt-multi-thread` is what
-# makes background work actually concurrent; `time` and `net` are what an application installs this
-# for in the first place, and leaving them out would make `tokio::time::sleep` panic at runtime
-# inside a framework that had just promised it worked.
+# of the process, signal or io-std machinery a default tokio brings. `rt-multi-thread` makes
+# background work actually concurrent; `time` and `net` are why an application installs this in the
+# first place, and leaving them out would make `tokio::time::sleep` panic at runtime inside a
+# framework that had just promised it worked.
 tokio = { version = "1", default-features = false, features = [
     "rt",
     "rt-multi-thread",
@@ -114,18 +122,18 @@ tokio = { version = "1", default-features = false, features = [
 kurbo = "0.13.1"
 peniko = "0.6.1"
 # --- vector documents: named only by zgui-svg -------------------------------------------------
-# A parser, not a renderer: it resolves an SVG document into a tree of paths, paints and clips
-# and draws nothing itself, which is why it can sit under a rendering model of our own that two
-# different rasterisers implement. `default-features = false` drops the `text` feature, and with
-# it fontdb, rustybuzz and a second font stack alongside the one this framework already has.
+# A parser and nothing else: it resolves an SVG document into a tree of paths, paints and clips
+# and draws nothing itself, so it sits under a rendering model of our own that two different
+# rasterisers implement. `default-features = false` drops the `text` feature, and with it fontdb,
+# rustybuzz and a second font stack alongside the one this framework already has.
 usvg = { version = "0.46.0", default-features = false }
 etagere = "0.3"
 bytemuck = { version = "1.25", features = ["derive"] }
 
 # --- raster image codecs: named only by zgui-image --------------------------------------------
 # `default-features = false` because the default set links every codec the crate knows, rayon and
-# all; the four here are what `image(src=...)` promises to show. GIF decodes to its first frame —
-# animation is a scheduling question, not a decoding one, and it does not belong in this crate.
+# all; the four here cover what `image(src=...)` promises to show. GIF decodes to its first frame —
+# animation is a scheduling question, and it does not belong in this crate.
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
