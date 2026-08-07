@@ -24,3 +24,9 @@
 // This crate is on the unsafe ledger's allowlist for two reasons: every call into the kernel is an
 // ioctl, and a dumb buffer is reached through a mapping. Every unsafe block states why it is sound.
 #![allow(unsafe_code)]
+
+// Every module in this crate is the kernel's interface or something built directly on it, so on
+// any other platform the crate is empty. `cargo check --workspace` then passes on a machine this
+// code could never run on.
+#[cfg(target_os = "linux")]
+mod sys;
