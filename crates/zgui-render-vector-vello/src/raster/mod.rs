@@ -161,6 +161,10 @@ impl VelloRaster {
 }
 
 impl VectorRaster for VelloRaster {
+    fn backend(&self) -> zgui_render::VectorBackend {
+        zgui_render::VectorBackend::Vello
+    }
+
     fn plan(&mut self, passes: &ScenePassPlan) -> VectorPlan {
         // The one question worth asking before anything else: a frame with no surviving path runs no
         // rasterisation at all, because a deliberately empty pass over a whole surface is tens of

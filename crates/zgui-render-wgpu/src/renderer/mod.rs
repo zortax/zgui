@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use zgui_geom::{Device, Size};
-use zgui_render::{ExternalTexture, RenderTarget};
+use zgui_render::{ExternalTexture, RenderTarget, VectorBackend};
 use zgui_scene::ExternalTextureId;
 
 use crate::atlas_backend::sink::AtlasTextures;
@@ -89,6 +89,9 @@ pub struct WgpuRenderer {
     vectors: Option<Box<dyn VectorSource>>,
     /// How to initialize `vectors` on the first frame that actually contains complex paths.
     vector_factory: Option<VectorFactory>,
+    /// Which backend the lazy factory intends to build; replaced by the raster's own answer once
+    /// it has run, so a Vello construction failure reports the coverage fallback truthfully.
+    vector_backend: Option<VectorBackend>,
     /// Answers to give instead of asking the surface.
     faults: FaultInjector,
     /// Whether the next frame has to redraw the whole surface whatever its damage set says.
@@ -197,6 +200,7 @@ impl WgpuRenderer {
             sampler,
             vectors: None,
             vector_factory: None,
+            vector_backend: None,
             faults: FaultInjector::from_environment(),
             // Nothing has ever been composed, so the first frame cannot rely on what the target
             // holds however small its damage set is.
@@ -259,6 +263,7 @@ impl WgpuRenderer {
         let target = self.target;
         let subpixel_order = self.subpixel_order;
         let vector_factory = self.vector_factory;
+        let vector_backend = self.vector_backend;
         let rebuilt = builder.offscreen(target, format, mutable_texture_formats)?;
         // A rasteriser holds resources of the old device, so it does not survive either. It is
         // dropped rather than carried over, and whoever attached it attaches one again — carrying
@@ -267,6 +272,7 @@ impl WgpuRenderer {
         *self = rebuilt;
         self.subpixel_order = subpixel_order;
         self.vector_factory = vector_factory;
+        self.vector_backend = vector_backend;
         if had_raster {
             tracing::warn!(
                 "the device was rebuilt; the vector rasteriser it held did not survive it"
@@ -342,14 +348,23 @@ impl WgpuRenderer {
     /// compute shaders, or the simpler one that does not need them — is decided above the renderer,
     /// from what the device turned out to be able to do.
     pub fn set_vector_raster(&mut self, raster: Box<dyn VectorSource>) {
+        self.vector_backend = Some(raster.backend());
         self.vectors = Some(raster);
         self.vector_factory = None;
     }
 
     /// Installs a constructor that runs only when a frame has vector passes to rasterise.
     pub fn set_vector_factory(&mut self, factory: VectorFactory) {
+        self.set_vector_factory_for(factory, VectorBackend::Other);
+    }
+
+    /// Installs a lazy constructor and names the backend it is expected to build.
+    ///
+    /// The constructed rasteriser's own answer replaces `backend`, which makes a fallback visible.
+    pub fn set_vector_factory_for(&mut self, factory: VectorFactory, backend: VectorBackend) {
         self.vector_factory = Some(factory);
         self.vectors = None;
+        self.vector_backend = Some(backend);
     }
 
     /// Whether a vector rasteriser is attached.

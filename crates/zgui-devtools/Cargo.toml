@@ -20,6 +20,7 @@ zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 # The parity declarations, read straight from the crates that make them: the inspector reports
 # what this build supports, and a table copied from them would report what it used to support.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
+zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-style = { path = "../zgui-style", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 zgui-view-dom = { path = "../zgui-view-dom", version = "0.1.0" }

@@ -66,6 +66,72 @@ pub const STROKE: &str = "zgui-stroke";
 /// The custom property that says how wide that stroke is, as an absolute length.
 pub const STROKE_WIDTH: &str = "zgui-stroke-width";
 
+/// The raster path selected for one vector shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VectorRoute {
+    /// A CPU-rasterised monochrome mask stored in the ordinary atlas.
+    AtlasMask,
+    /// A general vector item, executed by the renderer's configured vector rasteriser.
+    GeneralRaster,
+}
+
+/// The raster paths used by all shapes belonging to one element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VectorRoutes(u8);
+
+impl VectorRoutes {
+    const ATLAS_MASK: u8 = 1;
+    const GENERAL_RASTER: u8 = 2;
+
+    /// No vector shape was emitted for the element.
+    pub const NONE: Self = Self(0);
+
+    /// Adds `route` to this set.
+    pub fn insert(&mut self, route: VectorRoute) {
+        self.0 |= match route {
+            VectorRoute::AtlasMask => Self::ATLAS_MASK,
+            VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
+        };
+    }
+
+    /// Adds every route in `other` to this set.
+    pub fn union_with(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    /// Whether at least one shape used `route`.
+    pub const fn contains(self, route: VectorRoute) -> bool {
+        let bit = match route {
+            VectorRoute::AtlasMask => Self::ATLAS_MASK,
+            VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
+        };
+        self.0 & bit != 0
+    }
+
+    /// Whether no vector route is represented.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// What emitting one shape did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShapeEmission {
+    /// How many primitives survived insertion into the scene.
+    pub(crate) pushed: usize,
+    /// Which raster path the shape selected, if it drew anything.
+    pub(crate) route: Option<VectorRoute>,
+}
+
+/// What emitting all shapes belonging to one element did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DrawingEmission {
+    /// How many primitives survived insertion into the scene.
+    pub(crate) pushed: usize,
+    /// Every raster path selected by the drawing's shapes.
+    pub(crate) routes: VectorRoutes,
+}
+
 /// Resolves how a shape carrying `style` is painted.
 ///
 /// The fill is [`FILL`] if the cascade produced one and the element's own `color` otherwise. There
@@ -188,9 +254,21 @@ pub fn draw_with_masks(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
-    let mut pushed = 0;
+    draw_with_masks_tracked(scene, base, shapes, paint, masks, placement).pushed
+}
+
+/// Emits a drawing and records all raster paths selected by its shapes.
+pub(crate) fn draw_with_masks_tracked(
+    scene: &mut Scene,
+    base: VectorId,
+    shapes: &[zgui_svg::Shape],
+    paint: ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> DrawingEmission {
+    let mut emitted = DrawingEmission::default();
     for (index, shape) in shapes.iter().enumerate() {
-        pushed += document::emit(
+        let shape = document::emit_tracked(
             scene,
             outline_id(base, index),
             shape,
@@ -198,8 +276,12 @@ pub fn draw_with_masks(
             masks,
             placement,
         );
+        emitted.pushed += shape.pushed;
+        if let Some(route) = shape.route {
+            emitted.routes.insert(route);
+        }
     }
-    pushed
+    emitted
 }
 
 /// The identity of one outline of a drawing whose first outline is `base`.

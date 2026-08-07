@@ -74,6 +74,8 @@ pub struct ScenePainter<'a> {
     pub(crate) vector_id: VectorId,
     /// How many shapes have been pushed, so each gets a distinct sub-identity.
     pub(crate) shapes_pushed: u32,
+    /// Every vector raster path selected by this custom element's shapes.
+    pub(crate) vector_routes: crate::emit::vector::VectorRoutes,
     /// How many primitives went in, reported to the walk.
     pub(crate) pushed: usize,
 }
@@ -143,7 +145,7 @@ impl ScenePainter<'_> {
         // frames for the same fragment, distinct within it, which is what the rasteriser's
         // encoding cache keys on.
         let id = VectorId((self.vector_id.0 << 16) | (self.shapes_pushed & 0xFFFF));
-        self.pushed += crate::emit::vector::document::emit(
+        let emitted = crate::emit::vector::document::emit_tracked(
             self.scene,
             id,
             &placed,
@@ -155,6 +157,10 @@ impl ScenePainter<'_> {
                 scale: self.scale,
             },
         );
+        self.pushed += emitted.pushed;
+        if let Some(route) = emitted.route {
+            self.vector_routes.insert(route);
+        }
     }
 
     /// A path convenience over [`ScenePainter::shape`]: fills `path` with one colour.

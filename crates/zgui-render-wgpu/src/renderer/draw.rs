@@ -36,6 +36,18 @@ impl Renderer for WgpuRenderer {
         Some(self.target)
     }
 
+    fn vector_status(&self) -> zgui_render::VectorStatus {
+        let backend = match self.vectors.as_deref() {
+            Some(raster) => Some(raster.backend()),
+            None if self.vector_factory.is_some() => self.vector_backend,
+            None => None,
+        };
+        zgui_render::VectorStatus {
+            backend,
+            initialized: self.vectors.is_some(),
+        }
+    }
+
     fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
         self.atlas()
     }
@@ -424,7 +436,9 @@ impl WgpuRenderer {
         if self.vectors.is_none()
             && let Some(factory) = self.vector_factory
         {
-            self.vectors = Some(factory(&self.gpu, self.target.size));
+            let raster = factory(&self.gpu, self.target.size);
+            self.vector_backend = Some(raster.backend());
+            self.vectors = Some(raster);
         }
         let fatal = self.vector_shortfall_is_fatal;
         let raster = self.vectors.as_deref_mut()?;

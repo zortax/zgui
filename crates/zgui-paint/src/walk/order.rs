@@ -88,10 +88,28 @@ pub struct Emission<'a> {
     pub scrollbars: ScrollbarPaint,
 }
 
+/// What one fragment emitted, including the path selected for vector content.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FragmentEmission {
+    /// How many primitives reached the scene.
+    pub(crate) pushed: usize,
+    /// Every vector path selected by the fragment's own content.
+    pub(crate) vector_routes: vector::VectorRoutes,
+}
+
 /// Emits one fragment's own primitives, and returns how many were pushed.
 pub fn fragment(scene: &mut Scene, fragment: &Fragment, emission: &Emission<'_>) -> usize {
+    fragment_tracked(scene, fragment, emission).pushed
+}
+
+/// Emits one fragment and records the vector raster paths selected by its own content.
+pub(crate) fn fragment_tracked(
+    scene: &mut Scene,
+    fragment: &Fragment,
+    emission: &Emission<'_>,
+) -> FragmentEmission {
     if vanished(emission.alpha) {
-        return 0;
+        return FragmentEmission::default();
     }
     let style = faded(emission.style, emission.alpha);
     let mut pushed = 0;
@@ -102,8 +120,12 @@ pub fn fragment(scene: &mut Scene, fragment: &Fragment, emission: &Emission<'_>)
         pushed += box_::background_and_border(scene, &style, emission.box_placement);
         pushed += box_::inset_shadows(scene, &style, emission.box_placement);
     }
-    pushed += content(scene, fragment, &style, emission);
-    pushed
+    let content = content_tracked(scene, fragment, &style, emission);
+    pushed += content.pushed;
+    FragmentEmission {
+        pushed,
+        vector_routes: content.vector_routes,
+    }
 }
 
 /// Emits a fragment's outline, which is drawn after its descendants.
@@ -133,17 +155,17 @@ fn vanished(alpha: f32) -> bool {
     alpha <= 0.0
 }
 
-/// Emits whatever a fragment draws inside its box decorations.
-fn content(
+fn content_tracked(
     scene: &mut Scene,
     fragment: &Fragment,
     style: &PaintStyle,
     emission: &Emission<'_>,
-) -> usize {
+) -> FragmentEmission {
     if !style.visible {
-        return 0;
+        return FragmentEmission::default();
     }
-    match fragment.kind {
+    let mut routes = vector::VectorRoutes::NONE;
+    let pushed = match fragment.kind {
         FragmentKind::Box => 0,
         FragmentKind::Line { paragraph, line } => {
             // The selection under the glyphs, the caret over them. Neither order is a preference:
@@ -201,7 +223,7 @@ fn content(
         // element that draws is otherwise an ordinary element with an ordinary box.
         FragmentKind::Vector => {
             let Some(node) = fragment.node else {
-                return 0;
+                return FragmentEmission::default();
             };
             let Some(drawing) = emission.vectors.drawing(
                 node,
@@ -210,9 +232,9 @@ fn content(
                     scale: emission.scale,
                 },
             ) else {
-                return 0;
+                return FragmentEmission::default();
             };
-            vector::draw_with_masks(
+            let emitted = vector::draw_with_masks_tracked(
                 scene,
                 VectorId(fragment.key.index()),
                 &drawing.shapes,
@@ -223,14 +245,16 @@ fn content(
                     transform: emission.box_placement.transform,
                     scale: emission.scale,
                 },
-            )
+            );
+            routes = emitted.routes;
+            emitted.pushed
         }
         // A custom element's primitives land here for the reason the vector arm's do: inside the
         // box's own decorations, under its clip and transform, before its descendants — sorting,
         // clipping and moving exactly like a background, whoever produced them.
         FragmentKind::Custom => {
             let Some((token, _, _)) = emission.custom_reference else {
-                return 0;
+                return FragmentEmission::default();
             };
             let mut painter = crate::content::custom::ScenePainter {
                 scene,
@@ -243,9 +267,11 @@ fn content(
                 vector_masks: emission.vector_masks,
                 vector_id: VectorId(fragment.key.index()),
                 shapes_pushed: 0,
+                vector_routes: vector::VectorRoutes::NONE,
                 pushed: 0,
             };
             emission.custom.paint(token, &mut painter);
+            routes = painter.vector_routes;
             painter.pushed
         }
         FragmentKind::Scrollbar { part, .. } => scrollbar::emit(
@@ -255,6 +281,10 @@ fn content(
             emission.scrollbars,
             emission.box_placement.clip,
         ),
+    };
+    FragmentEmission {
+        pushed,
+        vector_routes: routes,
     }
 }
 

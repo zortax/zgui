@@ -352,6 +352,10 @@ impl CoverageRaster {
 }
 
 impl VectorRaster for CoverageRaster {
+    fn backend(&self) -> zgui_render::VectorBackend {
+        zgui_render::VectorBackend::Coverage
+    }
+
     fn plan(&mut self, passes: &ScenePassPlan) -> VectorPlan {
         if passes.is_empty() {
             return VectorPlan::empty();

@@ -49,6 +49,6 @@ pub use crate::shift::ScrollShift;
 pub use crate::target::RenderTarget;
 pub use crate::texture::{ExternalTexture, TextureHandle};
 pub use crate::vector::{
-    Decay, Extent, Layering, VectorError, VectorFrame, VectorPass, VectorPlan, VectorRaster,
-    VectorTarget,
+    Decay, Extent, Layering, VectorBackend, VectorError, VectorFrame, VectorPass, VectorPlan,
+    VectorRaster, VectorStatus, VectorTarget,
 };

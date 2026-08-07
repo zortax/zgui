@@ -164,6 +164,12 @@ pub struct Window {
     waker: Arc<crate::wake::RuntimeWaker>,
     /// The outlines this window's drawings have already been placed into their boxes as.
     vectors: zgui_paint::VectorCache,
+    /// The actual raster paths selected by each element's most recently encoded vector content.
+    vector_routes: rustc_hash::FxHashMap<zgui_dom::NodeKey, zgui_paint::VectorRoutes>,
+    /// The document revision at which stale retained vector routes were last retired.
+    vector_routes_revision: u64,
+    /// The complex-vector elements present in the frame that first constructed Vello.
+    vello_initializers: Vec<zgui_dom::NodeKey>,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
     ///
     /// The caches themselves are the fields around this one; what is kept here is the bookkeeping
@@ -537,6 +543,9 @@ impl Window {
             embed_animating: false,
             waker: Arc::clone(&waker),
             vectors: zgui_paint::VectorCache::new(),
+            vector_routes: rustc_hash::FxHashMap::default(),
+            vector_routes_revision: 0,
+            vello_initializers: Vec::new(),
             budgets: crate::budget::Budgets::new(),
             raster,
             damage: DamageSet::full(),
@@ -872,6 +881,45 @@ impl Window {
     /// The renderer, for a caller that wants to ask it something directly.
     pub fn renderer(&self) -> &dyn Renderer {
         self.renderer.as_ref()
+    }
+
+    /// The raster paths most recently selected by `node`'s own vector content.
+    pub fn vector_routes(&self, node: zgui_dom::NodeKey) -> zgui_paint::VectorRoutes {
+        self.vector_routes
+            .get(&node)
+            .copied()
+            .unwrap_or(zgui_paint::VectorRoutes::NONE)
+    }
+
+    /// Every vector raster path selected by `node` or one of its descendants.
+    ///
+    /// This is what lets an inspector answer for a `span` wrapping an icon rather than reporting
+    /// only on the child generated for the drawing itself.
+    pub fn vector_routes_in_subtree(&self, node: zgui_dom::NodeKey) -> zgui_paint::VectorRoutes {
+        let document = self.document.borrow();
+        let Some(root) = document.store().index_of(node) else {
+            return zgui_paint::VectorRoutes::NONE;
+        };
+        let mut routes = zgui_paint::VectorRoutes::NONE;
+        let mut stack = vec![root];
+        while let Some(index) = stack.pop() {
+            routes.union_with(self.vector_routes(document.store().key_of(index)));
+            let mut child = document.store().core(index).first_child();
+            while let Some(index) = child {
+                stack.push(index);
+                child = document.store().core(index).next_sibling();
+            }
+        }
+        routes
+    }
+
+    /// The elements in the frame that caused Vello's lazy initialization.
+    ///
+    /// Keys are retained even if an element is later removed, so the inspector can distinguish a
+    /// vanished cause from no recorded cause. Generation checks prevent a replacement node from
+    /// being mistaken for the original.
+    pub fn vello_initializers(&self) -> &[zgui_dom::NodeKey] {
+        &self.vello_initializers
     }
 
     /// The boxes, their results and their fragments.

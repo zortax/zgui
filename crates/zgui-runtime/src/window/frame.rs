@@ -1020,6 +1020,7 @@ impl Window {
     /// which is not a blank glyph but whichever glyph occupied the rectangle before.
     fn paint_and_draw(&mut self) -> FrameOutcome {
         use zgui_profile::latency::mark;
+        let vector_before = self.renderer.vector_status();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
         self.content.begin_frame();
@@ -1029,6 +1030,7 @@ impl Window {
         // Decided inside the borrow below, performed after it: the copy belongs in the renderer's
         // own frame, and the renderer is not reachable while the layout store is borrowed.
         let shift: Option<zgui_render::ScrollShift>;
+        let vector_report;
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
@@ -1126,6 +1128,7 @@ impl Window {
             mark("p.emit");
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.scene);
+            vector_report = report.vector_routes;
             let after = glyph_counts();
             zgui_profile::latency::note_with("p.finish", || {
                 format!(
@@ -1136,6 +1139,51 @@ impl Window {
                     report.skipped_subtrees
                 )
             });
+        }
+        let mut touched = rustc_hash::FxHashMap::default();
+        for report in vector_report {
+            touched
+                .entry(report.node)
+                .or_insert(zgui_paint::VectorRoutes::NONE)
+                .union_with(report.routes);
+        }
+        let complex_this_frame: Vec<_> = touched
+            .iter()
+            .filter_map(|(node, routes)| {
+                routes
+                    .contains(zgui_paint::VectorRoute::GeneralRaster)
+                    .then_some(*node)
+            })
+            .collect();
+        for (node, routes) in touched {
+            if routes.is_empty() {
+                self.vector_routes.remove(&node);
+            } else {
+                self.vector_routes.insert(node, routes);
+            }
+        }
+        // A node can stop being vector content altogether. Such a fragment produces no route-less
+        // vector report — it is now an ordinary box — so retire retained diagnostics against the
+        // current fragment kinds when the document changes. The revision gate matters for an icon-
+        // heavy static or animating document: it keeps this from becoming a second per-frame walk
+        // over every vector node solely for an inspector that may not be open.
+        let vector_revision = self.dom.revision();
+        if self.vector_routes_revision != vector_revision {
+            let layout = self.layout.borrow();
+            self.vector_routes.retain(|node, _| {
+                layout.boxes_of(*node).iter().any(|box_| {
+                    layout.fragments_of_box(*box_).iter().any(|fragment| {
+                        layout.fragment(*fragment).is_some_and(|fragment| {
+                            matches!(
+                                fragment.kind,
+                                zgui_layout::FragmentKind::Vector
+                                    | zgui_layout::FragmentKind::Custom
+                            )
+                        })
+                    })
+                })
+            });
+            self.vector_routes_revision = vector_revision;
         }
         // A drawing placed for an element that has since gone would otherwise be held for the life
         // of the window, which for a list that scrolled through a thousand icons is a thousand
@@ -1190,7 +1238,15 @@ impl Window {
         if let Some(shift) = shift {
             self.renderer.shift_composed(shift);
         }
-        self.renderer.draw(&self.scene, &self.damage)
+        let outcome = self.renderer.draw(&self.scene, &self.damage);
+        let vector_after = self.renderer.vector_status();
+        if !vector_before.initialized
+            && vector_after.initialized
+            && vector_after.backend == Some(zgui_render::VectorBackend::Vello)
+        {
+            self.vello_initializers = complex_this_frame;
+        }
+        outcome
     }
 }
 

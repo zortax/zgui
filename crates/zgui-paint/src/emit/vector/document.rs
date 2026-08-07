@@ -27,6 +27,8 @@ use zgui_scene::{
 use crate::content::vectors::{VectorMaskRequest, VectorMaskSource, VectorMaskStyle};
 use crate::emit::vector::{ShapePaint, VectorPlacement, under};
 
+use super::{ShapeEmission, VectorRoute};
+
 /// Emits one shape, and returns how many primitives were pushed.
 pub fn emit(
     scene: &mut Scene,
@@ -36,8 +38,23 @@ pub fn emit(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
+    emit_tracked(scene, id, shape, paint, masks, placement).pushed
+}
+
+/// Emits one shape and reports which raster path it selected.
+pub(crate) fn emit_tracked(
+    scene: &mut Scene,
+    id: VectorId,
+    shape: &zgui_svg::Shape,
+    paint: &ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> ShapeEmission {
     if let Some(pushed) = emit_mask(scene, shape, paint, masks, placement) {
-        return pushed;
+        return ShapeEmission {
+            pushed,
+            route: Some(VectorRoute::AtlasMask),
+        };
     }
     let clips: Vec<VectorClip> = shape
         .clips
@@ -48,6 +65,7 @@ pub fn emit(
         })
         .collect();
     let stroke = stroke_of(scene, shape, paint);
+    let has_stroke = stroke.is_some();
     let local = ink_of(shape, stroke.as_ref());
     let ink = under(scene, placement.transform, local);
 
@@ -72,7 +90,10 @@ pub fn emit(
         item.transform = Some(placement.transform);
         pushed += usize::from(scene.push_vector(item).is_some());
     }
-    pushed
+    ShapeEmission {
+        pushed,
+        route: (shape.fill.is_some() || has_stroke).then_some(VectorRoute::GeneralRaster),
+    }
 }
 
 /// Emits a small solid translation-only shape as an atlas mask, or declines the fast path.

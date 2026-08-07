@@ -11,6 +11,7 @@ use crate::pool::TargetPoolReport;
 use crate::shift::ScrollShift;
 use crate::target::RenderTarget;
 use crate::texture::{ExternalTexture, TextureHandle};
+use crate::vector::VectorStatus;
 
 /// Something that can put a display list on a screen.
 ///
@@ -84,6 +85,14 @@ pub trait Renderer {
 
     /// What the renderer is currently holding, including anything its rasteriser holds.
     fn memory(&self) -> MemoryReport;
+
+    /// The configured general vector backend and whether its lazy initialization has happened.
+    ///
+    /// The empty default is exact for renderers that do not rasterise vector passes. Eligible
+    /// atlas-mask paths do not initialize this backend and are intentionally not represented here.
+    fn vector_status(&self) -> VectorStatus {
+        VectorStatus::default()
+    }
 
     /// The reusable targets isolated content is composed in.
     ///

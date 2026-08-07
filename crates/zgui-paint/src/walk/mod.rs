@@ -28,7 +28,7 @@ use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_layout::fragment::FragmentFlags;
 use zgui_layout::fragment::diff::pixels;
-use zgui_layout::{FragKey, Fragment, LayoutStore};
+use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
 use zgui_profile::{Counter, counter};
 use zgui_render::RenderCapabilities;
 use zgui_scene::{GroupBoundary, Scene};
@@ -39,6 +39,7 @@ use crate::emit::highlight::{HighlightSource, NoHighlights};
 use crate::emit::scrollbar::ScrollbarPaint;
 use crate::emit::text::{GlyphSource, TextPlacement};
 use crate::emit::{BoxPlacement, NoGlyphs};
+use zgui_dom::NodeKey;
 use zgui_dom::side::AnimOverride;
 
 use crate::lower::anim::{AnimOverrides, NoAnim};
@@ -159,6 +160,20 @@ pub struct PaintReport {
     /// Whether [`PaintInput::record_emitted`] was on, so [`PaintReport::emitted`] is the whole list
     /// rather than an empty one nobody filled.
     pub recorded: bool,
+    /// Vector routes freshly encoded for elements this frame.
+    ///
+    /// A route-less entry is meaningful: a vector or custom element was encoded and emitted no
+    /// vector shape, so a retained diagnostic for its previous content must be cleared.
+    pub vector_routes: Vec<VectorRouteReport>,
+}
+
+/// The vector raster paths selected for one freshly encoded element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VectorRouteReport {
+    /// The element whose own fragment selected the routes.
+    pub node: NodeKey,
+    /// All routes selected by its shapes.
+    pub routes: crate::emit::vector::VectorRoutes,
 }
 
 impl PaintReport {
@@ -568,8 +583,16 @@ impl Pass<'_, '_> {
                 // as long as this fragment lives.
                 self.named.clear();
                 self.input.resources.take_named(&mut self.named);
-                let pushed = order::fragment(self.scene, fragment, &emission);
-                self.report.primitives += pushed;
+                let emitted = order::fragment_tracked(self.scene, fragment, &emission);
+                self.report.primitives += emitted.pushed;
+                if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
+                    && let Some(node) = fragment.node
+                {
+                    self.report.vector_routes.push(VectorRouteReport {
+                        node,
+                        routes: emitted.vector_routes,
+                    });
+                }
                 let end = self.scene.ops().len() as u32;
                 let whole = self.scene.unreplayable() == unreplayable;
                 self.named.clear();

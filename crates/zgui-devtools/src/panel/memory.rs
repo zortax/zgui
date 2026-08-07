@@ -55,6 +55,20 @@ pub(crate) fn MemoryPanel(
     let frame = tools.frame;
     view! {
         column(class = "zgui-devtools__body") {
+            text(class = "zgui-devtools__head") {"general vector rasterizer"}
+            Line(name = "backend", value = move || vector_status(frame.get().vector))
+            Show(when = move || !frame.get().vello_causes.is_empty()) {
+                text(class = "zgui-devtools__note") {
+                    "Vello was initialized by complex vector content in these elements:"
+                }
+                for cause in move || frame.get().vello_causes,
+                    key = |cause: &crate::sample::frame::VelloCause| cause.node
+                {
+                    row(class = "zgui-devtools__row") {
+                        text(class = "zgui-devtools__value") {{cause.selector}}
+                    }
+                }
+            }
             text(class = "zgui-devtools__head") {"what the renderer holds"}
             // Only when there is something to draw: a stub renderer reports zero for all five, and
             // a bar of five zero-width segments reads as a bug rather than as an empty device.
@@ -117,6 +131,21 @@ pub(crate) fn MemoryPanel(
                  again, or something below it already bounds what it holds."
             }
         }
+    }
+}
+
+/// The lazy general-vector state, in the words the inspector shows.
+pub(crate) fn vector_status(status: zgui::render::VectorStatus) -> String {
+    let backend = match status.backend {
+        Some(zgui::render::VectorBackend::Vello) => "Vello",
+        Some(zgui::render::VectorBackend::Coverage) => "coverage fallback",
+        Some(zgui::render::VectorBackend::Other) => "other",
+        None => return "not configured".to_owned(),
+    };
+    if status.initialized {
+        format!("{backend} — initialized")
+    } else {
+        format!("{backend} — lazy, not initialized")
     }
 }
 
@@ -192,7 +221,23 @@ fn held(line: &Held) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::share;
+    use super::{share, vector_status};
+
+    #[test]
+    fn vector_status_says_whether_vello_has_paid_its_lazy_cost() {
+        let lazy = zgui::render::VectorStatus {
+            backend: Some(zgui::render::VectorBackend::Vello),
+            initialized: false,
+        };
+        assert_eq!(vector_status(lazy), "Vello — lazy, not initialized");
+        assert_eq!(
+            vector_status(zgui::render::VectorStatus {
+                initialized: true,
+                ..lazy
+            }),
+            "Vello — initialized"
+        );
+    }
 
     #[test]
     fn a_part_is_its_share_of_the_whole() {

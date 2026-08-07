@@ -32,6 +32,51 @@ pub(crate) fn ElementPanel(
                         {move || element.get().map_or(0, |it| it.fragments).to_string()}
                     }
                 }
+                Show(when = move || element.get().is_some_and(|it| it.vector.is_some())) {
+                    text(class = "zgui-devtools__head") {"vector rendering"}
+                    row(class = "zgui-devtools__row") {
+                        text(class = "zgui-devtools__key") {
+                            {move || element.get().and_then(|it| it.vector).map_or(
+                                "own shapes",
+                                |vector| if vector.direct.is_empty() {
+                                    "wrapped shapes"
+                                } else {
+                                    "own shapes"
+                                }
+                            )}
+                        }
+                        text(class = "zgui-devtools__value") {
+                            {move || element.get().and_then(|it| it.vector).map_or_else(
+                                String::new,
+                                |vector| routes(if vector.direct.is_empty() {
+                                    vector.subtree
+                                } else {
+                                    vector.direct
+                                }, vector.backend)
+                            )}
+                        }
+                    }
+                    Show(when = move || element.get().and_then(|it| it.vector).is_some_and(
+                        |vector| !vector.direct.is_empty() && vector.subtree != vector.direct
+                    )) {
+                        row(class = "zgui-devtools__row") {
+                            text(class = "zgui-devtools__key") {"subtree shapes"}
+                            text(class = "zgui-devtools__value") {
+                                {move || element.get().and_then(|it| it.vector).map_or_else(
+                                    String::new,
+                                    |vector| routes(vector.subtree, vector.backend)
+                                )}
+                            }
+                        }
+                    }
+                    Show(when = move || element.get().and_then(|it| it.vector).is_some_and(
+                        |vector| vector.initialized_vello
+                    )) {
+                        text(class = "zgui-devtools__note") {
+                            "This element was present in the frame that initialized Vello."
+                        }
+                    }
+                }
                 text(class = "zgui-devtools__head") {"box model, device pixels"}
                 column(class = "zgui-devtools__box zgui-devtools__box-border") {
                         text(class = "zgui-devtools__note zgui-devtools__note-border") {
@@ -90,6 +135,29 @@ pub(crate) fn ElementPanel(
     }
 }
 
+/// The routes selected by one element, using the concrete general backend where one was needed.
+fn routes(
+    routes: zgui_paint::VectorRoutes,
+    backend: Option<zgui::render::VectorBackend>,
+) -> String {
+    let atlas = routes.contains(zgui_paint::VectorRoute::AtlasMask);
+    let general = match backend {
+        Some(zgui::render::VectorBackend::Vello) => "Vello",
+        Some(zgui::render::VectorBackend::Coverage) => "coverage rasterizer",
+        Some(zgui::render::VectorBackend::Other) => "general vector rasterizer",
+        None => "general vector rasterizer (pending)",
+    };
+    match (
+        atlas,
+        routes.contains(zgui_paint::VectorRoute::GeneralRaster),
+    ) {
+        (true, true) => format!("atlas / CPU mask + {general}"),
+        (true, false) => "atlas / CPU-rasterized mask".to_owned(),
+        (false, true) => general.to_owned(),
+        (false, false) => "none".to_owned(),
+    }
+}
+
 /// The element written the way a selector would name it.
 fn selector(element: &crate::sample::Element) -> String {
     let mut out = element.name.clone();
@@ -110,4 +178,21 @@ fn extent(name: &str, rect: zgui::geom::Rect<zgui::geom::DevicePx, zgui::geom::D
         "{name} {:.1} x {:.1} at {:.1}, {:.1}",
         rect.size.width.0, rect.size.height.0, rect.origin.x.0, rect.origin.y.0
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::routes;
+
+    #[test]
+    fn route_labels_distinguish_the_atlas_from_vello() {
+        let mut both = zgui_paint::VectorRoutes::NONE;
+        both.insert(zgui_paint::VectorRoute::AtlasMask);
+        assert_eq!(routes(both, None), "atlas / CPU-rasterized mask");
+        both.insert(zgui_paint::VectorRoute::GeneralRaster);
+        assert_eq!(
+            routes(both, Some(zgui::render::VectorBackend::Vello)),
+            "atlas / CPU mask + Vello"
+        );
+    }
 }

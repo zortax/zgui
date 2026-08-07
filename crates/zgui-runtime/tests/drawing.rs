@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use zgui_bits::DamageSet;
 use zgui_color::Color;
-use zgui_elements::kurbo::{BezPath, Shape};
+use zgui_elements::kurbo::BezPath;
 use zgui_platform::Surface;
 use zgui_render::{
     ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
+    TextureHandle, VectorBackend, VectorStatus,
 };
 use zgui_runtime::{App, AppError};
 use zgui_scene::Scene;
@@ -25,12 +25,19 @@ use zgui_view::{Anchor, BuildCx, IntoView, View};
 /// One vector item of a frame, reduced to what these cases ask about.
 #[derive(Clone, Debug)]
 struct Drawn {
-    /// The geometry, as the display list carries it: already in the fragment's own space.
-    path: BezPath,
-    /// What fills it, when a solid colour does.
-    fill: Option<Color>,
     /// What strokes it and how wide, when anything does.
     stroke: Option<(Color, f32)>,
+}
+
+/// One eligible vector shape emitted through the monochrome atlas fast path.
+#[derive(Clone, Copy, Debug)]
+struct Masked {
+    /// Where the mask lands, as x, y, width and height.
+    bounds: [f32; 4],
+    /// The tint inherited from the element.
+    color: [f32; 4],
+    /// The atlas identity, which changes when the rasterised geometry changes.
+    tile: zgui_scene::SpriteTile,
 }
 
 /// One frame: what it drew, and what it was allowed to draw over.
@@ -42,6 +49,8 @@ struct Drawn {
 struct Frame {
     /// The vector content of the display list.
     shapes: Vec<Drawn>,
+    /// Eligible vector content emitted as CPU-rasterised atlas masks.
+    masks: Vec<Masked>,
     /// Whether the frame was drawn against the whole surface.
     full: bool,
     /// The rectangle the damage rectangles are bounded by, when the set is not full and not empty.
@@ -59,6 +68,8 @@ struct Recorder {
     target: Option<RenderTarget>,
     /// Tiles go into plain memory, so the upload path still runs.
     atlas: zgui_atlas::MemorySink,
+    /// Whether a frame containing a general vector pass has paid the fake backend's lazy cost.
+    initialized: bool,
 }
 
 impl Renderer for Recorder {
@@ -75,6 +86,9 @@ impl Renderer for Recorder {
     }
 
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+        if !scene.pass_plan().is_empty() {
+            self.initialized = true;
+        }
         let solid = |reference: zgui_scene::PaintRef| {
             reference.id().and_then(|id| match scene.paints.get(id) {
                 Some(zgui_scene::Paint::Solid(color)) => Some(*color),
@@ -87,11 +101,19 @@ impl Renderer for Recorder {
                 .vectors
                 .iter()
                 .map(|item| Drawn {
-                    path: (*item.path).clone(),
-                    fill: item.fill.and_then(solid),
                     stroke: item.stroke.as_ref().and_then(|stroke| {
                         solid(stroke.paint).map(|color| (color, stroke.width()))
                     }),
+                })
+                .collect(),
+            masks: scene
+                .primitives
+                .mono_sprites
+                .iter()
+                .map(|sprite| Masked {
+                    bounds: sprite.bounds,
+                    color: sprite.color,
+                    tile: sprite.tile,
                 })
                 .collect(),
             full: damage.is_full(),
@@ -116,6 +138,13 @@ impl Renderer for Recorder {
         MemoryReport::ZERO
     }
 
+    fn vector_status(&self) -> VectorStatus {
+        VectorStatus {
+            backend: Some(VectorBackend::Vello),
+            initialized: self.initialized,
+        }
+    }
+
     fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
         &mut self.atlas
     }
@@ -138,6 +167,7 @@ fn mount(
                     log: Rc::clone(&factory),
                     target: None,
                     atlas: zgui_atlas::MemorySink::default(),
+                    initialized: false,
                 };
                 renderer.configure(target);
                 Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
@@ -146,6 +176,64 @@ fn mount(
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)
+}
+
+/// Runtime diagnostics keep the emitter's real choice, aggregate it through an icon wrapper, and
+/// retain the element keys from the exact frame that constructed the lazy backend.
+#[test]
+fn vector_diagnostics_name_the_route_wrapper_and_vello_initializer() {
+    let log: Log = Rc::default();
+    let mut app = mount(CSS, &log, |cx| {
+        Box::new(
+            zgui_elements::r#box()
+                .class("wrapper")
+                .child(
+                    zgui_elements::vector()
+                        .class("icon")
+                        .class("thick")
+                        .view_box(0.0, 0.0, 24.0, 24.0)
+                        .paths([triangle()]),
+                )
+                .into_view()
+                .build(cx),
+        )
+    });
+    app.settle(4);
+    let window = &app.app().windows()[0];
+    let icon = {
+        let layout = window.layout().borrow();
+        layout
+            .keys()
+            .into_iter()
+            .flat_map(|box_| layout.fragments_of_box(box_).iter().copied())
+            .filter_map(|fragment| layout.fragment(fragment))
+            .find(|fragment| fragment.kind == zgui_layout::FragmentKind::Vector)
+            .and_then(|fragment| fragment.node)
+            .expect("the icon has a vector fragment")
+    };
+    let wrapper = {
+        let document = window.document().borrow();
+        let icon = document.store().index_of(icon).expect("the icon is live");
+        let parent = document
+            .store()
+            .core(icon)
+            .parent()
+            .expect("the icon is wrapped");
+        document.store().key_of(parent)
+    };
+
+    assert!(
+        window
+            .vector_routes(icon)
+            .contains(zgui_paint::VectorRoute::GeneralRaster)
+    );
+    assert!(window.vector_routes(wrapper).is_empty());
+    assert!(
+        window
+            .vector_routes_in_subtree(wrapper)
+            .contains(zgui_paint::VectorRoute::GeneralRaster)
+    );
+    assert_eq!(window.vello_initializers(), &[icon]);
 }
 
 /// Mounts a document styled by `css` and returns the frames it drew.
@@ -185,10 +273,19 @@ fn settled(frames: Vec<Frame>) -> Vec<Drawn> {
         .unwrap_or_default()
 }
 
+/// The settled frame's eligible vector masks.
+fn settled_masks(frames: Vec<Frame>) -> Vec<Masked> {
+    frames
+        .into_iter()
+        .next_back()
+        .map(|frame| frame.masks)
+        .unwrap_or_default()
+}
+
 /// The defect this whole change is about, asserted where an application would meet it.
 #[test]
 fn a_vector_element_mounted_in_a_window_reaches_the_renderer() {
-    let shapes = settled(frames(CSS, |cx| {
+    let masks = settled_masks(frames(CSS, |cx| {
         Box::new(
             zgui_elements::r#box()
                 .child(
@@ -202,15 +299,14 @@ fn a_vector_element_mounted_in_a_window_reaches_the_renderer() {
         )
     }));
 
-    assert_eq!(shapes.len(), 1, "one outline is one shape: {shapes:?}");
+    assert_eq!(masks.len(), 1, "one outline is one mask: {masks:?}");
     assert_eq!(
-        shapes[0].fill.map(Color::to_premultiplied_srgb),
-        Some([1.0, 0.0, 0.0, 1.0]),
+        masks[0].color,
+        [1.0, 0.0, 0.0, 1.0],
         "an icon takes the colour of the text around it, with nothing else said"
     );
-    let bounds = shapes[0].path.bounding_box();
     assert_eq!(
-        (bounds.width(), bounds.height()),
+        (masks[0].bounds[2], masks[0].bounds[3]),
         (32.0, 32.0),
         "the outline is drawn at the size CSS gave the element, not at the size it was written"
     );
@@ -312,9 +408,9 @@ fn swapping_the_outlines_redraws_the_icon_and_damages_no_more_than_it() {
     });
     app.settle(8);
 
-    let before = settled(log.borrow().clone());
+    let before = settled_masks(log.borrow().clone());
     assert_eq!(before.len(), 1, "{before:?}");
-    let triangle_area = before[0].path.area().abs();
+    let triangle_tile = before[0].tile;
 
     log.borrow_mut().clear();
     zgui_reactive::prelude::Set::set(&swapped, true);
@@ -322,19 +418,15 @@ fn swapping_the_outlines_redraws_the_icon_and_damages_no_more_than_it() {
 
     let after = log.borrow().clone();
     assert!(!after.is_empty(), "swapping the icon drew no frame at all");
-    let drawn: Vec<&Drawn> = after.iter().flat_map(|frame| &frame.shapes).collect();
+    let drawn: Vec<&Masked> = after.iter().flat_map(|frame| &frame.masks).collect();
     assert_eq!(
         drawn.len(),
         1,
         "the swap put the new outline in no display list: {after:?}"
     );
-    // A square of the same twenty-four unit side covers twice the triangle's area, so this compares
-    // the *shape* that was drawn rather than merely noting that something was.
-    assert!(
-        (drawn[0].path.area().abs() - triangle_area * 2.0).abs() < 0.5,
-        "the frame after the swap replayed the outline that was already there: {:?} against a \
-         triangle of {triangle_area}",
-        drawn[0].path.area().abs()
+    assert_ne!(
+        drawn[0].tile, triangle_tile,
+        "the frame after the swap reused the triangle's coverage tile"
     );
 
     // And it did so without repainting the window. Without the lower bound above this would be
@@ -363,7 +455,7 @@ fn two_elements_sharing_one_outline_are_each_fitted_to_their_own_box() {
     let css = "root { display: block; width: 400px; height: 300px }
                .small { display: block; width: 16px; height: 16px }
                .large { display: block; width: 64px; height: 64px }";
-    let shapes = settled(frames(css, |cx| {
+    let masks = settled_masks(frames(css, |cx| {
         Box::new(
             zgui_elements::r#box()
                 .child(
@@ -383,10 +475,7 @@ fn two_elements_sharing_one_outline_are_each_fitted_to_their_own_box() {
         )
     }));
 
-    let mut widths: Vec<f64> = shapes
-        .iter()
-        .map(|shape| shape.path.bounding_box().width())
-        .collect();
-    widths.sort_by(f64::total_cmp);
-    assert_eq!(widths, vec![16.0, 64.0], "{shapes:?}");
+    let mut widths: Vec<f32> = masks.iter().map(|mask| mask.bounds[2]).collect();
+    widths.sort_by(f32::total_cmp);
+    assert_eq!(widths, vec![16.0, 64.0], "{masks:?}");
 }

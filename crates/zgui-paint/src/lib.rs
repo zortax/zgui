@@ -69,8 +69,9 @@ pub use crate::emit::highlight::{
 pub use crate::emit::text::{
     GlyphRequest, GlyphRun, GlyphSource, NoGlyphs, PlacedGlyph, RunContent,
 };
+pub use crate::emit::vector::{VectorRoute, VectorRoutes};
 pub use crate::lower::anim::{AnimOverrides, NoAnim};
 pub use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 pub use crate::lower::key::LoweringKey;
 pub use crate::lower::{PaintStyle, lower};
-pub use crate::walk::{PaintInput, PaintReport, Painter};
+pub use crate::walk::{PaintInput, PaintReport, Painter, VectorRouteReport};

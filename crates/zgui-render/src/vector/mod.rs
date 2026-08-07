@@ -15,5 +15,5 @@ pub use crate::vector::frame::VectorFrame;
 pub use crate::vector::pack::Layering;
 pub use crate::vector::pass::VectorPass;
 pub use crate::vector::plan::VectorPlan;
-pub use crate::vector::raster::VectorRaster;
+pub use crate::vector::raster::{VectorBackend, VectorRaster, VectorStatus};
 pub use crate::vector::target::VectorTarget;

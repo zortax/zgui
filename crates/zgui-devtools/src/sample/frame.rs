@@ -12,6 +12,7 @@
 
 use zgui::geom::{Device, Rect};
 use zgui::render::MemoryReport;
+use zgui::render::VectorStatus;
 use zgui::runtime::Window;
 use zgui::runtime::budget::{CacheId, CacheUnit};
 
@@ -44,6 +45,10 @@ pub(crate) struct Frame {
     /// device memory is flat while its document keeps growing is a leak in the view layer, and
     /// without this number the memory tab would show that as "nothing is wrong".
     pub(crate) document: u64,
+    /// The configured general vector rasteriser and whether its lazy initialization has happened.
+    pub(crate) vector: VectorStatus,
+    /// Selectors for the complex-vector elements in the frame that first initialized Vello.
+    pub(crate) vello_causes: Vec<VelloCause>,
 }
 
 /// One cache's occupancy, as the panel shows it.
@@ -66,6 +71,15 @@ pub(crate) struct Held {
     pub(crate) limit: Option<u64>,
     /// What those figures are counted in.
     pub(crate) unit: CacheUnit,
+}
+
+/// One element present in the frame that caused Vello's lazy initialization.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VelloCause {
+    /// Its generation-checked identity, also a unique row key when selectors repeat.
+    pub(crate) node: zgui_dom::NodeKey,
+    /// Its readable selector, or a removal marker when it no longer exists.
+    pub(crate) selector: String,
 }
 
 impl Held {
@@ -92,6 +106,8 @@ impl Default for Frame {
             budget: Vec::new(),
             nodes: 0,
             document: 0,
+            vector: VectorStatus::default(),
+            vello_causes: Vec::new(),
         }
     }
 }
@@ -167,5 +183,33 @@ pub(crate) fn sample_frame(
             .collect(),
         nodes,
         document,
+        vector: window.renderer().vector_status(),
+        vello_causes: window
+            .vello_initializers()
+            .iter()
+            .map(|node| VelloCause {
+                node: *node,
+                selector: selector_of(window, *node),
+            })
+            .collect(),
     }
+}
+
+/// A retained node key written as a selector, or as a removed cause when it no longer resolves.
+fn selector_of(window: &Window, key: zgui_dom::NodeKey) -> String {
+    let document = window.document().borrow();
+    let Some(index) = document.store().index_of(key) else {
+        return "<removed element>".to_owned();
+    };
+    let record = document.node(index);
+    let mut selector = record.record().local_name().as_str().to_owned();
+    if let Some(id) = record.record().id_attr() {
+        selector.push('#');
+        selector.push_str(id.as_ref());
+    }
+    for class in document.store().classes_of(index) {
+        selector.push('.');
+        selector.push_str(class.0.as_ref());
+    }
+    selector
 }

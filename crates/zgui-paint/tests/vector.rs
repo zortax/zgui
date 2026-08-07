@@ -35,7 +35,7 @@ fn an_eligible_drawing_uses_one_tinted_mask_and_no_vector_item() {
     let mut harness = Harness::new(tree(), CSS);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    harness.paint_cached_vectors(
+    let report = harness.paint_cached_vectors(
         &vectors,
         &mut content,
         &zgui_testkit_scene::MonoRaster::new(),
@@ -44,6 +44,17 @@ fn an_eligible_drawing_uses_one_tinted_mask_and_no_vector_item() {
     assert!(harness.scene().primitives.vectors.is_empty());
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
     assert_eq!(content.report().tiles, 1);
+    assert_eq!(report.vector_routes.len(), 1);
+    assert!(
+        report.vector_routes[0]
+            .routes
+            .contains(zgui_paint::VectorRoute::AtlasMask)
+    );
+    assert!(
+        !report.vector_routes[0]
+            .routes
+            .contains(zgui_paint::VectorRoute::GeneralRaster)
+    );
 }
 
 #[test]
@@ -89,7 +100,7 @@ fn an_eligible_canvas_fill_uses_the_same_mask_route() {
     let mut harness = Harness::new(tree, CSS);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    harness.paint_cached_vectors(
+    let report = harness.paint_cached_vectors(
         &vectors,
         &mut content,
         &zgui_testkit_scene::MonoRaster::new(),
@@ -97,6 +108,11 @@ fn an_eligible_canvas_fill_uses_the_same_mask_route() {
 
     assert!(harness.scene().primitives.vectors.is_empty());
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
+    assert!(
+        report.vector_routes[0]
+            .routes
+            .contains(zgui_paint::VectorRoute::AtlasMask)
+    );
 }
 
 #[test]
@@ -175,6 +191,12 @@ fn an_element_carrying_outlines_reaches_a_rasteriser_through_the_emit_walk() {
     assert!(
         report.primitives > 0,
         "the walk emitted nothing at all for a document whose only content is a drawing"
+    );
+    assert_eq!(report.vector_routes.len(), 1);
+    assert!(
+        report.vector_routes[0]
+            .routes
+            .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
     let shapes = shapes(harness.scene());
     assert_eq!(shapes.len(), 1, "one outline is one shape: {shapes:?}");

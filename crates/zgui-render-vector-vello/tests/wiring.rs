@@ -10,7 +10,7 @@ mod support;
 
 use zgui_bits::DamageSet;
 use zgui_geom::{Scale, Size};
-use zgui_render::{RenderTarget, Renderer};
+use zgui_render::{RenderTarget, Renderer, VectorBackend, VectorStatus};
 use zgui_render_wgpu::{Builder, wgpu};
 use zgui_scene::ClipId;
 
@@ -80,6 +80,18 @@ fn a_renderer_draws_no_path_until_it_is_attached_and_draws_one_afterwards() {
 
     zgui_render_vector_vello::attach(&mut renderer, Size::new(SIDE, SIDE));
     assert!(renderer.has_vector_raster());
+    let expected = match zgui_render_vector_vello::chosen(renderer.gpu()) {
+        zgui_render_vector_vello::Choice::Compute => VectorBackend::Vello,
+        zgui_render_vector_vello::Choice::Coverage => VectorBackend::Coverage,
+    };
+    assert_eq!(
+        renderer.vector_status(),
+        VectorStatus {
+            backend: Some(expected),
+            initialized: false,
+        },
+        "the inspector can identify the lazy backend before constructing it"
+    );
     assert!(
         !renderer.vector_raster_initialized(),
         "attachment configures a lazy source; an icon-free frame pays no Vello fixed cost"
@@ -88,6 +100,7 @@ fn a_renderer_draws_no_path_until_it_is_attached_and_draws_one_afterwards() {
     let scene = square();
     renderer.draw(&scene, &DamageSet::full());
     assert!(renderer.vector_raster_initialized());
+    assert!(renderer.vector_status().initialized);
     let drawn = renderer
         .read_presented()
         .expect("a stand-in surface can be read back");

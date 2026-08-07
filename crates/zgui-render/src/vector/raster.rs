@@ -7,6 +7,29 @@ use crate::vector::error::VectorError;
 use crate::vector::frame::VectorFrame;
 use crate::vector::plan::VectorPlan;
 
+/// The implementation that executes general vector passes.
+///
+/// Small solid paths may bypass this entirely by becoming atlas masks in the paint stage. This
+/// names the backend only for paths that survive as vector items in the display list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VectorBackend {
+    /// The compute path rasteriser from Vello.
+    Vello,
+    /// zgui's portable coverage rasteriser.
+    Coverage,
+    /// A renderer-specific or test implementation.
+    Other,
+}
+
+/// Whether a renderer has a general vector rasteriser and whether its lazy cost has been paid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VectorStatus {
+    /// Which backend is configured, when one is configured.
+    pub backend: Option<VectorBackend>,
+    /// Whether the backend has been constructed rather than merely configured for lazy creation.
+    pub initialized: bool,
+}
+
 /// Rasterises vector items into scratch coverage for a compositing draw to read.
 ///
 /// An implementation produces **straight** — that is, un-premultiplied — colour, and the compositing
@@ -30,7 +53,7 @@ use crate::vector::plan::VectorPlan;
 /// to specify, because anything an implementation could not express was already turned into a pass
 /// boundary before the plan was made.
 ///
-/// # All four methods, and why
+/// # The frame methods, and why
 ///
 /// The frame calls every one of them, and a trait declaring fewer than its only caller uses is a
 /// seam with one implementation wearing a trait's clothes.
@@ -43,7 +66,18 @@ use crate::vector::plan::VectorPlan;
 /// * [`prepare`](VectorRaster::prepare) does the work, before the frame's own recording begins,
 ///   because an implementation may submit work of its own.
 /// * [`memory`](VectorRaster::memory) is what a budget is written against.
+///
+/// [`backend`](VectorRaster::backend) is diagnostic metadata rather than frame work: the inspector
+/// reads it without causing a rasterisation or initializing a lazy rasteriser.
 pub trait VectorRaster: 'static {
+    /// Which general vector backend this is.
+    ///
+    /// Defaulted for test and application-specific rasterisers; built-in implementations identify
+    /// themselves so diagnostics never need to downcast them.
+    fn backend(&self) -> VectorBackend {
+        VectorBackend::Other
+    }
+
     /// Turns the display list's plan into whatever this implementation needs to execute it.
     ///
     /// Returns an empty plan when nothing survived, and the caller is expected to do nothing at all

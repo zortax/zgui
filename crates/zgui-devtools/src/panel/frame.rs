@@ -23,6 +23,10 @@ pub(crate) fn FramePanel(
             Line(name = "batches", value = move || frame.get().batches.to_string())
             Line(name = "vector passes", value = move || frame.get().passes.to_string())
             Line(
+                name = "vector backend",
+                value = move || crate::panel::memory::vector_status(frame.get().vector)
+            )
+            Line(
                 name = "damage",
                 value = move || {
                     let it = frame.get();

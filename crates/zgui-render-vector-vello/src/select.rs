@@ -86,5 +86,9 @@ pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSour
 /// ```
 pub fn attach(renderer: &mut zgui_render_wgpu::WgpuRenderer, size: Size<i32, Device>) {
     let _ = size;
-    renderer.set_vector_factory(for_device);
+    let backend = match chosen(renderer.gpu()) {
+        Choice::Compute => zgui_render::VectorBackend::Vello,
+        Choice::Coverage => zgui_render::VectorBackend::Coverage,
+    };
+    renderer.set_vector_factory_for(for_device, backend);
 }

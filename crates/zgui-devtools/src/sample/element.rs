@@ -125,6 +125,21 @@ pub(crate) struct Element {
     pub(crate) fragments: usize,
     /// What the cascade computed, listed.
     pub(crate) style: Vec<Declaration>,
+    /// How this element's own and wrapped vector content is rasterised, when it has any.
+    pub(crate) vector: Option<VectorRendering>,
+}
+
+/// The actual raster paths used by a picked element's vector content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VectorRendering {
+    /// Routes selected by the element's own fragments.
+    pub(crate) direct: zgui_paint::VectorRoutes,
+    /// Routes selected by the element and all descendants, for wrappers such as icon spans.
+    pub(crate) subtree: zgui_paint::VectorRoutes,
+    /// The configured backend for any general-raster routes.
+    pub(crate) backend: Option<zgui::render::VectorBackend>,
+    /// Whether the element was present when Vello paid its lazy initialization cost.
+    pub(crate) initialized_vello: bool,
 }
 
 /// Reads `node` out of `window`, recomputing the style listing only when `restyle` says to.
@@ -167,6 +182,14 @@ pub(crate) fn sample_element(window: &Window, node: NodeId, restyle: bool) -> Op
     } else {
         Vec::new()
     };
+    let direct = window.vector_routes(key);
+    let subtree = window.vector_routes_in_subtree(key);
+    let vector = (!subtree.is_empty()).then(|| VectorRendering {
+        direct,
+        subtree,
+        backend: window.renderer().vector_status().backend,
+        initialized_vello: window.vello_initializers().contains(&key),
+    });
     Some(Element {
         node,
         name,
@@ -175,6 +198,7 @@ pub(crate) fn sample_element(window: &Window, node: NodeId, restyle: bool) -> Op
         boxes,
         fragments: fragments.len(),
         style,
+        vector,
     })
 }
 
