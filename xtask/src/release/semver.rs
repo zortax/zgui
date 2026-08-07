@@ -43,9 +43,10 @@ pub(crate) fn run(root: &Path) -> Result<()> {
                     "semver-checks",
                     "check-release",
                     // Named explicitly, because the checker resolves a package by scanning the
-                    // directory tree rather than by asking the workspace: the ledger's own
-                    // planted-violation fixtures carry manifests with real crate names, and
-                    // without this the scan finds several packages called `zgui-geom`.
+                    // directory tree rather than by asking the workspace, and the ledger's own
+                    // planted-violation fixtures carry manifests with real crate names. Those
+                    // manifests are no longer called `Cargo.toml`, so no scan finds them now,
+                    // but the release gate should not be resting on that.
                     "--manifest-path",
                     "Cargo.toml",
                     "--workspace",

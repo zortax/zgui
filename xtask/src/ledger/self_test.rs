@@ -3,6 +3,9 @@
 //! Every check owns two miniature workspaces under `xtask/fixtures/<check>/`: `clean/`, which
 //! it must accept, and `planted/`, which carries the exact violation the check exists to catch
 //! and which it must reject. A gate that has never been observed failing is decoration.
+//!
+//! Their manifests are named [`manifest::FIXTURE_NAME`] rather than `Cargo.toml`, for the reason
+//! given there.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::ledger::check::{self, Check};
 use crate::ledger::tree::Tree;
 use crate::ledger::tree::features::FeatureSource;
+use crate::ledger::tree::manifest;
 
 /// Runs the self-test, then the whole ledger against the workspace itself.
 pub(crate) fn run(root: &Path) -> Result<()> {
@@ -26,7 +30,7 @@ pub(crate) fn run_with(root: &Path, features: FeatureSource) -> Result<()> {
     for check in check::CHECKS {
         for expectation in [Expectation::Clean, Expectation::Planted] {
             let directory = fixture_dir(root, check, expectation);
-            if !directory.join("Cargo.toml").is_file() {
+            if !manifest::path_in(&directory).is_file() {
                 failures.push(format!(
                     "ledger {:<12} has no {} fixture at {}",
                     check.name,

@@ -41,7 +41,7 @@ pub(crate) struct Tree {
 impl Tree {
     /// Gathers the tree rooted at `root`.
     pub(crate) fn gather(root: &Path, features: FeatureSource) -> Result<Self> {
-        let manifest = Manifest::load(root, &root.join("Cargo.toml"))?;
+        let manifest = Manifest::load(root, &manifest::path_in(root))?;
         let members = member::discover(root, &manifest)?;
         let notice_path = root.join("NOTICE");
         let notice = if notice_path.is_file() {

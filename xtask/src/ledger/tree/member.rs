@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
-use crate::ledger::tree::manifest::Manifest;
+use crate::ledger::tree::manifest::{self, Manifest};
 use crate::ledger::tree::sources::{self, SourceFile};
 
 /// One workspace member.
@@ -22,7 +22,7 @@ pub(crate) struct Member {
 impl Member {
     /// Loads the member rooted at `dir`.
     fn load(root: &Path, dir: &Path) -> Result<Self> {
-        let manifest = Manifest::load(root, &dir.join("Cargo.toml"))?;
+        let manifest = Manifest::load(root, &manifest::path_in(dir))?;
         let name = manifest
             .package_name()
             .ok_or_else(|| {
@@ -71,7 +71,7 @@ pub(crate) fn discover(root: &Path, manifest: &Manifest) -> Result<Vec<Member>> 
         if exclude.iter().any(|excluded| rel.starts_with(excluded)) {
             continue;
         }
-        if !directory.join("Cargo.toml").is_file() {
+        if !manifest::path_in(&directory).is_file() {
             continue;
         }
         members.push(Member::load(root, &directory)?);

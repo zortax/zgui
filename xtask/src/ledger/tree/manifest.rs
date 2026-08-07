@@ -1,10 +1,35 @@
 //! Reading a `Cargo.toml` into the shape the ledger checks ask questions of.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use toml::{Table, Value};
 
 use crate::error::{Error, Result, read_to_string};
+
+/// What a manifest is called in the fixture trees under `xtask/fixtures/`.
+///
+/// The fixtures name their crates after real ones deliberately — the checks are keyed to those
+/// names, so `unsafe` reads a fixture `zgui-arena` and `pinned` a fixture `zgui-view` — which
+/// means their manifests cannot be called `Cargo.toml`. Cargo resolves a git dependency by
+/// scanning the whole checkout for packages rather than by reading the workspace, and neither
+/// `workspace.exclude` nor anything else suppresses that scan, so anyone depending on zgui by
+/// git is told cargo is skipping a dozen duplicate `zgui-geom`s. Cargo matches the name
+/// exactly, so a prefix hides the fixtures from it and from nothing else: the ledger finds its
+/// manifests through [`path_in`], and the name still ends in `.toml` for every editor.
+pub(crate) const FIXTURE_NAME: &str = "fixture.Cargo.toml";
+
+/// The manifest of the package rooted at `dir`, under whichever of the two names it carries.
+///
+/// Returns the `Cargo.toml` path when the directory holds neither, so that a caller reporting a
+/// missing manifest names the one a reader expects.
+pub(crate) fn path_in(dir: &Path) -> PathBuf {
+    let fixture = dir.join(FIXTURE_NAME);
+    if fixture.is_file() {
+        fixture
+    } else {
+        dir.join("Cargo.toml")
+    }
+}
 
 /// Which dependency table an entry came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
