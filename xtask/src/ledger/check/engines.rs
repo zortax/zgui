@@ -80,10 +80,6 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("calloop", &["zgui-platform-wayland"]),
     ("calloop-wayland-source", &["zgui-platform-wayland"]),
     ("accesskit_unix", &["zgui-platform-wayland"]),
-    // The system's monotonic clock, read in one place: the compositor stamps its presentation
-    // feedback against it, and a reported presentation is useless until it is on the same timeline
-    // the frame loop schedules against.
-    ("rustix", &["zgui-platform-wayland"]),
     ("reactive_graph", &["zgui-reactive"]),
     ("reactive_stores", &["zgui-reactive"]),
     ("any_spawner", &["zgui-reactive"]),
@@ -94,6 +90,16 @@ const LEDGER: &[(&str, &[&str])] = &[
     // dependency graph of every program that links the framework, to buy something `futures` and
     // `zgui-reactive`'s own executor already do.
     ("tokio", &["zgui-tokio"]),
+    // The kernel's display interface, reached with no libc. Confined to one crate for the same
+    // reason a windowing library is: what it costs to replace is what it costs to find, and a
+    // second crate issuing ioctls of its own is a second place a device can be left in a state
+    // nothing puts back.
+    //
+    // The Wayland backend is on this row for one call of its own: the monotonic clock the
+    // compositor stamps its presentation feedback against, which a reported presentation is
+    // useless without. A row is read by its first match, so the two uses share one.
+    ("rustix", &["zgui-drm", "zgui-platform-wayland"]),
+    ("bindgen", &["zgui-drm"]),
     (
         "accesskit",
         &[

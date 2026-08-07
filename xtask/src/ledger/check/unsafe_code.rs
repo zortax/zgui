@@ -38,6 +38,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "zgui-platform-wayland",
         "borrowing the compositor's display and surface pointers as window handles",
     ),
+    ("zgui-drm", "the ioctls, and the mapping of a dumb buffer"),
 ];
 
 /// Runs the check.

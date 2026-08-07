@@ -1,0 +1,19 @@
+[package]
+name = "zgui-drm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# The kernel's display interface, and nothing about this framework. It names no zgui crate, so it
+# is a library that happens to live here rather than a layer of the product: what depends on it is
+# `zgui-platform-drm`, one step along the same layer.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+bindgen.workspace = true
+
+[lints]
+workspace = true

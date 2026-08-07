@@ -115,9 +115,9 @@ calloop-wayland-source = "0.4.1"
 # The compositor's own extensions, for the layer shell and — under test — for the virtual input
 # device that gives a headless session something to move.
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
-# The monotonic clock the compositor stamps its presentation feedback in, so that a reported
-# presentation can be placed on the same timeline the frame loop schedules against.
-rustix = { version = "1.1", features = ["event", "time"] }
+# rustix is named here too, for the monotonic clock the compositor stamps its presentation feedback
+# in. One workspace entry serves both backends; it is below, with the kernel's interfaces.
+
 # The accessibility adapter for this desktop. `accesskit_winit` wraps the same one; this backend
 # has no winit to wrap it with.
 accesskit_unix = "0.22.1"
@@ -194,6 +194,29 @@ rustc-hash = "2.1"
 smallvec = "1.15"
 rayon = "1.12"
 toml = "1.1"
+
+# --- the kernel's display interface: named by zgui-drm and by zgui-platform-wayland ------------
+# `default-features = false` states the feature list in full. `std` is the only default and it is
+# back in the list below; `use-libc` stays off, so rustix takes its `linux_raw` backend on Linux
+# and a call reaches the kernel without passing through libc. `mm` is the dumb buffer's mapping,
+# `event` is polling the device for flip completion.
+#
+# `time` is the Wayland backend's: the monotonic clock the compositor stamps its presentation
+# feedback in, so that a reported presentation can be placed on the same timeline the frame loop
+# schedules against. A workspace entry is one entry, so the features are the union of what the two
+# backends ask for, and every member takes the whole list.
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "fs",
+    "mm",
+    "event",
+    "time",
+] }
+# Reads the vendored uapi headers at build time, for `zgui-drm` and `zgui-evdev`. The alternative
+# is transcribing every struct by hand, where one field of the wrong width silently changes an
+# ioctl request number — the number is computed from `size_of` — and the kernel then refuses the
+# call with an errno that points at nothing.
+bindgen = "0.72"
 
 # --- test and benchmark tooling ----------------------------------------------------------------
 proptest = "1.11"
