@@ -156,14 +156,22 @@ impl Timers {
             .min()
     }
 
-    /// Takes every entry due at or before `now`, in deadline order, re-arming the repeating ones.
+    /// Takes every entry of one window due at or before `now`, in deadline order, re-arming the
+    /// repeating ones.
     ///
     /// The callbacks come back rather than being run here, because running one re-enters the code
     /// that schedules them and a heap borrowed across that call is a heap borrowed across
     /// arbitrary work.
-    pub fn due(&mut self, now: Instant) -> Vec<Rc<dyn Fn()>> {
+    ///
+    /// Scoped to `document` because a callback runs inside the frame that took it, under that
+    /// window's reactive scope and against that window's document. One heap serves every window,
+    /// so a drain that ignored which window an entry belongs to would run one window's callbacks
+    /// inside whichever window happened to frame first. An entry belonging to another window is
+    /// left scheduled: its own deadline is what parks the loop, and its own frame is what runs it.
+    pub fn due(&mut self, document: DocumentId, now: Instant) -> Vec<Rc<dyn Fn()>> {
         let mut due = Vec::new();
         let mut rearm = Vec::new();
+        let mut others = Vec::new();
         while let Some(Reverse(entry)) = self.entries.peek() {
             if entry.deadline > now {
                 break;
@@ -172,6 +180,10 @@ impl Timers {
                 break;
             };
             if self.cancelled.remove(&entry.id) {
+                continue;
+            }
+            if entry.document != document {
+                others.push(Reverse(entry));
                 continue;
             }
             due.push(Rc::clone(&entry.callback));
@@ -183,6 +195,9 @@ impl Timers {
                     ..entry
                 });
             }
+        }
+        for entry in others {
+            self.entries.push(entry);
         }
         for entry in rearm {
             self.entries.push(Reverse(entry));
@@ -221,7 +236,7 @@ mod tests {
         let mut timers = Timers::new();
         assert!(timers.peek().is_none());
         assert!(timers.is_empty());
-        assert!(timers.due(Instant::now()).is_empty());
+        assert!(timers.due(DocumentId::FIRST, Instant::now()).is_empty());
     }
 
     #[test]
@@ -241,12 +256,12 @@ mod tests {
             timers.peek(),
             Some((now + Duration::from_millis(700), DocumentId::FIRST))
         );
-        for due in timers.due(now + Duration::from_millis(699)) {
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_millis(699)) {
             due();
         }
         assert_eq!(count.get(), 0);
 
-        for due in timers.due(now + Duration::from_millis(700)) {
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_millis(700)) {
             due();
         }
         assert_eq!(count.get(), 1);
@@ -255,7 +270,7 @@ mod tests {
             "a one-shot entry leaves no deadline behind"
         );
 
-        for due in timers.due(now + Duration::from_secs(10)) {
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_secs(10)) {
             due();
         }
         assert_eq!(count.get(), 1);
@@ -275,7 +290,7 @@ mod tests {
         );
 
         // The loop was blocked for a whole second. One run, not sixty.
-        for due in timers.due(now + Duration::from_secs(1)) {
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_secs(1)) {
             due();
         }
         assert_eq!(count.get(), 1);
@@ -300,7 +315,7 @@ mod tests {
         timers.cancel(id);
 
         assert!(timers.peek().is_none());
-        for due in timers.due(now + Duration::from_secs(1)) {
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_secs(1)) {
             due();
         }
         assert_eq!(count.get(), 0);
@@ -323,7 +338,7 @@ mod tests {
                 Rc::new(move || order.borrow_mut().push(name)),
             );
         }
-        for due in timers.due(now + Duration::from_millis(10)) {
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_millis(10)) {
             due();
         }
         assert_eq!(*order.borrow(), ["first", "second", "third"]);
@@ -351,6 +366,52 @@ mod tests {
         );
 
         timers.forget(second);
+        assert!(timers.peek().is_none());
+    }
+
+    #[test]
+    fn a_frame_runs_only_its_own_windows_callbacks() {
+        let mut timers = Timers::new();
+        let now = Instant::now();
+        let second = DocumentId::new(2).expect("in range");
+        let (first_callback, first_count) = counting();
+        let (second_callback, second_count) = counting();
+        timers.schedule(
+            DocumentId::FIRST,
+            now,
+            Duration::from_millis(10),
+            Repeat::Once,
+            first_callback,
+        );
+        timers.schedule(
+            second,
+            now,
+            Duration::from_millis(10),
+            Repeat::Once,
+            second_callback,
+        );
+
+        // One window's frame, with both entries long overdue.
+        for due in timers.due(DocumentId::FIRST, now + Duration::from_secs(1)) {
+            due();
+        }
+        assert_eq!(first_count.get(), 1);
+        assert_eq!(
+            second_count.get(),
+            0,
+            "another window's callback must not run inside this window's frame"
+        );
+        assert_eq!(
+            timers.peek_for(second, now),
+            Some(now + Duration::from_millis(10)),
+            "and it stays scheduled, so its own window still parks on it"
+        );
+
+        // The other window's frame, whenever it comes.
+        for due in timers.due(second, now + Duration::from_secs(1)) {
+            due();
+        }
+        assert_eq!(second_count.get(), 1);
         assert!(timers.peek().is_none());
     }
 }

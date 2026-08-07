@@ -6,7 +6,7 @@ use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::WindowId;
 use zgui_platform::{
-    Clipboard, ClipboardFormat, Clock, ColorScheme, DecorationSource, MonitorInfo,
+    Clipboard, ClipboardFormat, Clock, ColorScheme, DecorationSource, FullscreenMode, MonitorInfo,
     PlatformCapabilities, PlatformCx, PlatformError, ScrollSettings, Surface, SurfaceAttributes,
     SurfaceId, Waker,
 };
@@ -39,6 +39,8 @@ pub(crate) struct Shared {
     next: Cell<u64>,
     /// The desktop's light or dark preference, as last discovered.
     scheme: Cell<Option<ColorScheme>>,
+    /// Windows the application has closed, waiting to be dropped between turns of the loop.
+    retiring: RefCell<Vec<Arc<WinitSurface>>>,
 }
 
 impl Shared {
@@ -53,6 +55,7 @@ impl Shared {
             surfaces: RefCell::new(Vec::new()),
             next: Cell::new(1),
             scheme: Cell::new(None),
+            retiring: RefCell::new(Vec::new()),
         }
     }
 
@@ -87,6 +90,40 @@ impl Shared {
             .iter()
             .find(|surface| surface.window().id() == id)
             .map(Arc::clone)
+    }
+
+    /// Lets go of the surface `id` names, and reports the window that was behind it.
+    ///
+    /// Dropping the last reference is what destroys the window: the backend's own list is the
+    /// reference that outlives the application's, so a surface left in it is a window that stays on
+    /// the screen with nothing drawing into it.
+    pub(crate) fn release(&self, id: SurfaceId) {
+        let mut surfaces = self.surfaces.borrow_mut();
+        let Some(position) = surfaces.iter().position(|surface| surface.id() == id) else {
+            return;
+        };
+        let surface = surfaces.remove(position);
+        drop(surfaces);
+        // Held, not dropped. This runs inside the loop's callback for the very window being closed,
+        // and destroying a window's display-server objects while the loop is still dispatching an
+        // event for it is a use-after-free: the loop goes on to touch state that the destruction
+        // took away. `Shared::retire` is where it actually goes, between turns.
+        self.retiring.borrow_mut().push(surface);
+    }
+
+    /// Drops the windows that were closed, now that no callback for them is running.
+    ///
+    /// Answers the windows that went, so the loop can drop the input state it kept for each.
+    pub(crate) fn retire(&self) -> Vec<WindowId> {
+        let retiring = core::mem::take(&mut *self.retiring.borrow_mut());
+        retiring
+            .into_iter()
+            .map(|surface| {
+                let id = surface.window().id();
+                drop(surface);
+                id
+            })
+            .collect()
     }
 
     /// Forgets a window that has gone.
@@ -153,8 +190,18 @@ impl PlatformCx for WinitCx<'_> {
                 self.shared.proxy.clone(),
             ));
 
+        // A window asking to open in an exclusive mode opened borderless, because choosing a video
+        // mode needs the monitor the window turned out to be on. Now that it is on one, ask again.
+        if attributes.fullscreen == Some(FullscreenMode::Exclusive) {
+            surface.set_fullscreen(Some(FullscreenMode::Exclusive));
+        }
+
         self.shared.surfaces.borrow_mut().push(Arc::clone(&surface));
         Ok(surface as Arc<dyn Surface>)
+    }
+
+    fn destroy_surface(&self, id: SurfaceId) {
+        self.shared.release(id);
     }
 
     fn surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>> {

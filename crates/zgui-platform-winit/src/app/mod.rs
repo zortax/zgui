@@ -279,6 +279,19 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         zgui_profile::latency::mark("wait.in");
         self.flush_drags(event_loop);
+        // Between turns, with no callback for any of them running: this is where a window the
+        // application closed is actually destroyed, and where the input state kept for it goes.
+        //
+        // Never while the loop is stopping. A window closed on the way out is left to the ordinary
+        // teardown, because destroying one and then dropping the display connection in the same
+        // breath races the clipboard's own thread — which shares that connection and is still
+        // taking its objects down. The user sees no difference: the process is exiting, and every
+        // window goes with it either way.
+        if !event_loop.exiting() {
+            for window in self.shared.retire() {
+                self.windows.remove(&window);
+            }
+        }
 
         let cx = WinitCx::new(&self.shared, event_loop);
         let policy = self.handler.idle(&cx);

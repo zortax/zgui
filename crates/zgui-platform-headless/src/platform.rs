@@ -157,11 +157,19 @@ impl PlatformCx for Headless {
         let id = SurfaceId::new(self.next_surface.fetch_add(1, Ordering::Relaxed));
         let surface = Arc::new(OffscreenSurface::new(id, size));
         surface.set_title(attributes.title.as_str());
+        surface.set_requested_attributes(attributes);
         self.surfaces
             .lock()
             .expect("the surface list is not poisoned")
             .push(Arc::clone(&surface));
         Ok(surface as Arc<dyn Surface>)
+    }
+
+    fn destroy_surface(&self, id: SurfaceId) {
+        self.surfaces
+            .lock()
+            .expect("the surface list is not poisoned")
+            .retain(|surface| surface.id() != id);
     }
 
     fn surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>> {

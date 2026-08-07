@@ -11,8 +11,11 @@ pub mod builder;
 pub mod draw;
 pub mod frame;
 pub mod readback;
+pub mod shared;
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use zgui_geom::{Device, Size};
@@ -32,6 +35,7 @@ use crate::pipeline::Pipelines;
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
 use crate::renderer::readback::Pixels;
+use crate::renderer::shared::{DeviceState, SharedGraphics};
 use crate::target::acquire::Acquisition;
 use crate::target::group_pool::GroupPool;
 use crate::target::scene_texture::SceneTexture;
@@ -75,8 +79,19 @@ pub struct WgpuRenderer {
     composed: SceneTexture,
     /// The bind group the copy reads the composed target through.
     composed_binding: wgpu::BindGroup,
-    /// The pipelines.
-    pipelines: Pipelines,
+    /// The pipelines, shared with every other renderer on this device.
+    ///
+    /// Shared because compiling one costs the same whichever window asked for it, and because the
+    /// atlas bind groups were built against these layouts and no others. Keyed by format as well as
+    /// kind, so two windows whose displays negotiated different formats add entries here rather
+    /// than needing maps of their own.
+    pipelines: Rc<RefCell<Pipelines>>,
+    /// The graphics this renderer belongs to, when it was built from a shared device.
+    ///
+    /// `None` for a renderer built through [`Builder`](crate::Builder), which owns its device
+    /// alone. It is what lets every window converge on one replacement device after a loss instead
+    /// of opening one each.
+    shared: Option<SharedGraphics>,
     /// This frame's buffers.
     buffers: FrameBuffers,
     /// The atlas textures.
@@ -126,6 +141,13 @@ pub struct WgpuRenderer {
     pre_present: Option<PrePresent>,
     /// How long the last frame waited to be handed a surface to present into.
     acquire_block: std::time::Duration,
+    /// How many times *this* surface's acquisition has failed validation in a row.
+    ///
+    /// Per renderer rather than per device: a stuck swap chain is one window's health, and a device
+    /// shared by several would otherwise have one window's successful frames clear another window's
+    /// run of failures. The escalation it leads to is still device-wide, because that is what a
+    /// device that will not present again means.
+    consecutive_validation_failures: u32,
     /// How this renderer was built, so that it can be built again.
     origin: Origin,
     /// Which backends were enumerated, so recovery considers the same ones.
@@ -146,22 +168,27 @@ impl std::fmt::Debug for WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    /// Assembles a renderer over `gpu`, presenting to `presentation`.
+    /// Assembles a renderer over `device`, presenting to `presentation`.
     pub(crate) fn assemble(
-        gpu: Arc<Gpu>,
+        device: Rc<DeviceState>,
+        shared: Option<SharedGraphics>,
         presentation: Presentation,
         target: RenderTarget,
         pre_present: Option<PrePresent>,
         origin: Origin,
         backends: wgpu::Backends,
     ) -> Self {
+        let gpu = Arc::clone(&device.gpu);
+        let pipelines = Rc::clone(&device.pipelines);
         let formats = presentation.formats();
-        let mut pipelines = Pipelines::new(&gpu);
         let composed = SceneTexture::new(&gpu, target.size, formats.scene);
-        let composed_binding = bind_composed(&gpu, &pipelines, &composed);
+        let composed_binding = bind_composed(&gpu, &pipelines.borrow(), &composed);
         // The atlas builds a bind group per texture, and a bind group has to be built against the
         // same layout the pipeline was: one layout, cloned, rather than two that happen to agree.
-        let atlas = AtlasTextures::new(Arc::clone(&gpu), pipelines.layouts().sampled.clone());
+        let atlas = AtlasTextures::new(
+            Arc::clone(&gpu),
+            pipelines.borrow().layouts().sampled.clone(),
+        );
         let buffers = FrameBuffers::new(&gpu);
         let groups = GroupPool::new(target.size, GroupPool::BUDGET);
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
@@ -179,21 +206,27 @@ impl WgpuRenderer {
             ..Default::default()
         });
         // Building the pipelines now rather than at the first frame is what keeps a driver's first
-        // compilation out of a frame the user is waiting for.
-        for kind in PipelineKind::ALL {
-            let format = match kind {
-                PipelineKind::Blit | PipelineKind::BlitUndoSrgb => formats.present_attachment(),
-                _ => formats.scene,
-            };
-            let _ = pipelines.get(&gpu, kind, format);
+        // compilation out of a frame the user is waiting for. A second window on the same device
+        // finds them already built unless its format differs, in which case only the entries that
+        // format needs are compiled.
+        {
+            let mut built = pipelines.borrow_mut();
+            for kind in PipelineKind::ALL {
+                let format = match kind {
+                    PipelineKind::Blit | PipelineKind::BlitUndoSrgb => formats.present_attachment(),
+                    _ => formats.scene,
+                };
+                let _ = built.get(&gpu, kind, format);
+            }
+            built.persist();
         }
-        pipelines.persist();
         Self {
             gpu,
             presentation,
             composed,
             composed_binding,
             pipelines,
+            shared,
             buffers,
             atlas,
             groups,
@@ -215,6 +248,7 @@ impl WgpuRenderer {
             next_handle: 1,
             pre_present,
             acquire_block: std::time::Duration::ZERO,
+            consecutive_validation_failures: 0,
             origin,
             backends,
             // Loud where a developer will see it, survivable where a user is waiting. A frame
@@ -254,17 +288,42 @@ impl WgpuRenderer {
                 "a window's surface has to be created again by whatever owns the window",
             ));
         };
-        let mut builder = crate::Builder::with_backends(self.backends);
-        if let Some(notify) = self.pre_present.take() {
-            builder = builder.with_pre_present(notify);
-        }
         // The old device is dropped before the new one is asked for, so its memory is not held
         // twice across the changeover.
         let target = self.target;
         let subpixel_order = self.subpixel_order;
         let vector_factory = self.vector_factory;
         let vector_backend = self.vector_backend;
-        let rebuilt = builder.offscreen(target, format, mutable_texture_formats)?;
+        let rebuilt = match self.shared.clone() {
+            // Shared graphics: every window on the dead device converges on one replacement rather
+            // than opening one each, which is what keeps them sharing anything at all afterwards.
+            Some(shared) => {
+                let pre_present = self.pre_present.take();
+                let state = shared.replacement_for(&self.gpu)?;
+                let presentation = Presentation::Offscreen(crate::target::swapchain::Offscreen::new(
+                    &state.gpu,
+                    Size::new(target.size.width.max(1), target.size.height.max(1)),
+                    format,
+                    mutable_texture_formats,
+                ));
+                Self::assemble(
+                    state,
+                    Some(shared),
+                    presentation,
+                    target,
+                    pre_present,
+                    self.origin,
+                    self.backends,
+                )
+            }
+            None => {
+                let mut builder = crate::Builder::with_backends(self.backends);
+                if let Some(notify) = self.pre_present.take() {
+                    builder = builder.with_pre_present(notify);
+                }
+                builder.offscreen(target, format, mutable_texture_formats)?
+            }
+        };
         // A rasteriser holds resources of the old device, so it does not survive either. It is
         // dropped rather than carried over, and whoever attached it attaches one again — carrying
         // it would mean compositing from a scratch texture that no longer exists.
@@ -422,7 +481,8 @@ impl WgpuRenderer {
         self.presentation.resize(&self.gpu, size);
         self.groups.resize(size);
         if self.composed.resize(&self.gpu, size) {
-            self.composed_binding = bind_composed(&self.gpu, &self.pipelines, &self.composed);
+            self.composed_binding =
+                bind_composed(&self.gpu, &self.pipelines.borrow(), &self.composed);
             // A reallocated target holds nothing at all, so no rectangle outside this frame's
             // damage set still shows what the frame before it drew.
             self.full_damage_next = true;

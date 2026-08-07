@@ -25,6 +25,23 @@
 pub use crate::app::{Fonts, app};
 pub use crate::error::Error;
 
+/// The windows an application has: the one a component is running in, all of them, and how to open
+/// another. Every operation on a window that has closed does nothing, as does every operation this
+/// desktop cannot carry out — so none of this needs a branch per platform.
+pub use zgui_runtime::windows::{
+    CloseGuard, WindowHandle, WindowId, WindowOptions, Windows, on_close_request, try_use_window,
+    try_use_windows, use_window, use_windows,
+};
+
+/// What a window can be asked to be, what it answers, and when an application stops.
+///
+/// The desktop's own light-or-dark preference is deliberately absent: `ColorScheme` is already the
+/// name of the theme a view asks for, and a window's is a different question with the same answer
+/// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
+/// overrides one window's.
+pub use zgui_platform::{CursorStyle, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel};
+pub use zgui_runtime::{CloseResponse, ExitPolicy};
+
 /// Signals, memos, stores, contexts and ownership; the view layer's traits, bindings, events,
 /// control flow and geometry observation; and the accessibility vocabulary.
 pub use zgui_view::prelude::*;

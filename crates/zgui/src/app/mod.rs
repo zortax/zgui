@@ -98,8 +98,16 @@ impl Default for App {
     }
 }
 
+/// A size in CSS pixels, which is the space every window measurement is written in.
+fn css_size(width: f32, height: f32) -> zgui_geom::Size<zgui_geom::CssPx, zgui_geom::Css> {
+    zgui_geom::Size::new(zgui_geom::CssPx(width), zgui_geom::CssPx(height))
+}
+
 impl App {
-    /// An application with one window, the machine's own faces, and nothing in it yet.
+    /// An application with the window it launches with, the machine's own faces, and nothing in it.
+    ///
+    /// Every other window it opens is asked for while it runs, through
+    /// [`use_windows`](zgui_runtime::use_windows).
     pub fn new() -> Self {
         Self {
             inner: zgui_runtime::App::new(),
@@ -132,6 +140,120 @@ impl App {
     /// Sets the size the window starts at, in CSS pixels.
     pub fn with_size(mut self, width: f32, height: f32) -> Self {
         self.inner = self.inner.with_size(width, height);
+        self
+    }
+
+    /// The smallest size the user may drag the window to, in CSS pixels.
+    pub fn with_min_size(mut self, width: f32, height: f32) -> Self {
+        self.inner.attributes_mut().min_size = Some(css_size(width, height));
+        self
+    }
+
+    /// The largest size the user may drag the window to, in CSS pixels.
+    pub fn with_max_size(mut self, width: f32, height: f32) -> Self {
+        self.inner.attributes_mut().max_size = Some(css_size(width, height));
+        self
+    }
+
+    /// Whether the user may resize the window at all.
+    pub fn with_resizable(mut self, resizable: bool) -> Self {
+        self.inner.attributes_mut().resizable = resizable;
+        self
+    }
+
+    /// Whether the desktop draws the title bar and frame.
+    ///
+    /// An application that turns this off draws its own, and owes the user what the desktop's would
+    /// have given them: somewhere to drag the window by, edges to resize from, and a way to close
+    /// it. See [`WindowHandle::move_drag_handler`](zgui_runtime::WindowHandle::move_drag_handler).
+    pub fn with_decorations(mut self, decorated: bool) -> Self {
+        self.inner.attributes_mut().decorated = decorated;
+        self
+    }
+
+    /// Whether the window may be partly transparent.
+    ///
+    /// What a window that draws its own rounded corners needs, so the desktop shows through them.
+    pub fn with_transparent(mut self, transparent: bool) -> Self {
+        self.inner.attributes_mut().transparent = transparent;
+        self
+    }
+
+    /// Where the window should open, measured from the desktop's origin.
+    ///
+    /// Ignored where a desktop places windows itself, which is every Wayland compositor.
+    pub fn with_position(mut self, x: f32, y: f32) -> Self {
+        self.inner.attributes_mut().position =
+            Some(zgui_geom::Point::new(zgui_geom::CssPx(x), zgui_geom::CssPx(y)));
+        self
+    }
+
+    /// Whether the window should open maximised.
+    pub fn with_maximized(mut self, maximized: bool) -> Self {
+        self.inner.attributes_mut().maximized = maximized;
+        self
+    }
+
+    /// Whether the window should open full screen, and how.
+    pub fn with_fullscreen(mut self, mode: Option<zgui_platform::FullscreenMode>) -> Self {
+        self.inner.attributes_mut().fullscreen = mode;
+        self
+    }
+
+    /// Where the window should sit in the desktop's stacking order.
+    ///
+    /// Ignored where a desktop does not let an application place itself in the stack.
+    pub fn with_level(mut self, level: zgui_platform::WindowLevel) -> Self {
+        self.inner.attributes_mut().level = level;
+        self
+    }
+
+    /// The picture the desktop should show for the window.
+    ///
+    /// Ignored where the desktop takes it from elsewhere — from the desktop entry on Wayland, from
+    /// the bundle on macOS. Those read
+    /// [`App::with_application_id`](App::with_application_id) instead.
+    pub fn with_icon(mut self, icon: zgui_platform::WindowIcon) -> Self {
+        self.inner.attributes_mut().icon = Some(icon);
+        self
+    }
+
+    /// A light or dark preference for this application's window, rather than the desktop's.
+    pub fn with_theme(mut self, theme: zgui_platform::ColorScheme) -> Self {
+        self.inner.attributes_mut().theme = Some(theme);
+        self
+    }
+
+    /// Runs `setup` in the scope above every window, before the first one opens.
+    ///
+    /// Where state belonging to the *application* rather than to one window goes. A context
+    /// provided inside a window's view is that window's own and no other window resolves it; one
+    /// provided here is resolved by every window there will ever be.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// #[derive(Clone, Copy)]
+    /// struct Count(RwSignal<i32>);
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_context(|| provide_context(Count(RwSignal::new(0))))
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_context(mut self, setup: impl FnOnce() + 'static) -> Self {
+        self.inner = self.inner.with_context(setup);
+        self
+    }
+
+    /// Decides when the application stops.
+    ///
+    /// The default stops it when the last window closes. See
+    /// [`ExitPolicy`](zgui_runtime::ExitPolicy) for what else it can be, which matters as soon as
+    /// an application opens more than one window.
+    pub fn with_exit_policy(mut self, exit: zgui_runtime::ExitPolicy) -> Self {
+        self.inner = self.inner.with_exit_policy(exit);
         self
     }
 
@@ -256,7 +378,7 @@ impl App {
         let shaping = fonts.clone();
         let renderer = self
             .renderer
-            .unwrap_or_else(|| Box::new(graphics::renderer));
+            .unwrap_or_else(graphics::factory);
         let runtime = self
             .inner
             .with_renderer(renderer)

@@ -33,6 +33,18 @@ pub trait PlatformCx {
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<dyn Surface>, PlatformError>;
 
+    /// Destroys a surface, because the application has closed the window it was.
+    ///
+    /// The counterpart of [`PlatformCx::create_surface`], and required rather than defaulted
+    /// because forgetting it has one symptom and it is a bad one: the backend goes on holding the
+    /// window, so what the user sees is a window that is still on the screen and no longer draws,
+    /// responds or closes. Dropping the application's own half is not enough — whatever the backend
+    /// holds is what keeps the window alive.
+    ///
+    /// Destroying a surface that has already gone does nothing. A backend whose surfaces are not
+    /// windows has nothing to do here and says so with an empty body.
+    fn destroy_surface(&self, id: SurfaceId);
+
     /// The surface with this identifier, while it still exists.
     fn surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>>;
 

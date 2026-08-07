@@ -208,18 +208,23 @@ impl Renderer for WgpuRenderer {
                 format!("{upload_allocations} upload chunks allocated"),
             );
         }
-        let recorded = Recorder {
-            gpu: &self.gpu,
-            pipelines: &mut self.pipelines,
-            buffers: &self.buffers,
-            atlas: &self.atlas,
-            pool: &self.groups,
-            composed: &self.composed,
-            sampler: &self.sampler,
-            externals: &self.externals,
-            vectors: self.vectors.as_deref(),
-        }
-        .record(&mut encoder, &plan);
+        // One borrow for the whole recording, released before anything else on this device asks for
+        // the pipelines it shares with the other windows.
+        let recorded = {
+            let pipelines = &mut *self.pipelines.borrow_mut();
+            Recorder {
+                gpu: &self.gpu,
+                pipelines,
+                buffers: &self.buffers,
+                atlas: &self.atlas,
+                pool: &self.groups,
+                composed: &self.composed,
+                sampler: &self.sampler,
+                externals: &self.externals,
+                vectors: self.vectors.as_deref(),
+            }
+            .record(&mut encoder, &plan)
+        };
         self.groups.release_all();
         if plan.deferred > 0 {
             tracing::debug!(
@@ -315,14 +320,20 @@ impl Renderer for WgpuRenderer {
             // takes the rebuild path. Counting to the limit and then only logging would be a
             // threshold with nothing behind it, and a program retrying an unusable device for
             // ever.
-            if self.gpu.loss().note_validation_failure() {
+            // Counted for this surface alone: with several windows on one device, another window's
+            // successful frames would otherwise keep clearing this one's run of failures and the
+            // threshold would never be reached. The escalation stays device-wide, because a device
+            // that will not present again is not one window's problem.
+            self.consecutive_validation_failures += 1;
+            if self.consecutive_validation_failures >= crate::gpu::loss::DeviceLoss::VALIDATION_FAILURE_LIMIT
+            {
                 self.gpu.loss().report(
                     wgpu::DeviceLostReason::Unknown,
                     "acquisition failed validation repeatedly",
                 );
             }
         } else {
-            self.gpu.loss().note_acquisition_succeeded();
+            self.consecutive_validation_failures = 0;
         }
         presented.acquisition.outcome(stats)
     }
@@ -513,7 +524,8 @@ impl WgpuRenderer {
             PipelineKind::Blit
         };
         let format = self.presentation.formats().present_attachment();
-        let Some(pipeline) = self.pipelines.get(&self.gpu, kind, format) else {
+        let mut pipelines = self.pipelines.borrow_mut();
+        let Some(pipeline) = pipelines.get(&self.gpu, kind, format) else {
             return;
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

@@ -360,6 +360,22 @@ impl<A: AppHandler> Harness<A> {
         self.app.shutting_down(&self.platform);
     }
 
+    /// Takes every surface away, as a platform that suspends an application does.
+    ///
+    /// Not a close: what the application asked for is untouched, and [`Harness::resume`] is what
+    /// gives it surfaces again. The pair exists here because a test cannot make these calls itself
+    /// — the platform and the application are both held by the harness, and only it can hand one
+    /// to the other.
+    pub fn suspend(&mut self) {
+        self.app.surfaces_lost(&self.platform);
+    }
+
+    /// Gives the application surfaces again, as a platform that resumes one does.
+    pub fn resume(&mut self) {
+        self.app.surfaces_available(&self.platform);
+        self.park();
+    }
+
     /// Sets the loop's own counts back to zero, leaving the park itself alone.
     pub fn reset_counts(&mut self) {
         self.resumes = 0;

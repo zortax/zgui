@@ -100,6 +100,13 @@ impl PlatformCx for Headless {
         Ok(surface as Arc<dyn Surface>)
     }
 
+    fn destroy_surface(&self, id: SurfaceId) {
+        self.surfaces
+            .lock()
+            .expect("the surface list is not poisoned")
+            .retain(|surface| Surface::id(surface.as_ref()) != id);
+    }
+
     fn surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>> {
         self.offscreen(id)
             .map(|surface| surface as Arc<dyn Surface>)

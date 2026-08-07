@@ -1,7 +1,7 @@
 //! The window's own furniture: cursors, resize edges, full screen.
 
-use winit::window::{CursorIcon, Fullscreen, ResizeDirection, Window};
-use zgui_platform::{CursorStyle, FullscreenMode, ResizeEdge};
+use winit::window::{CursorIcon, Fullscreen, Icon, ResizeDirection, Window};
+use zgui_platform::{CursorStyle, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel};
 
 /// What the pointer should look like.
 ///
@@ -63,11 +63,29 @@ pub(crate) fn fullscreen(window: &Window, mode: FullscreenMode) -> Fullscreen {
     }
 }
 
+/// Where a window sits in the stacking order.
+pub(crate) const fn level(level: WindowLevel) -> winit::window::WindowLevel {
+    match level {
+        WindowLevel::AlwaysOnBottom => winit::window::WindowLevel::AlwaysOnBottom,
+        WindowLevel::AlwaysOnTop => winit::window::WindowLevel::AlwaysOnTop,
+        _ => winit::window::WindowLevel::Normal,
+    }
+}
+
+/// The picture a desktop should show for a window.
+///
+/// The pixels were already checked when the icon was made, so the only way this fails is a platform
+/// refusing the size. That answers `None`, which is the same as asking for no icon: a desktop that
+/// will not take this picture keeps whatever it was showing.
+pub(crate) fn icon(icon: &WindowIcon) -> Option<Icon> {
+    Icon::from_rgba(icon.rgba().to_vec(), icon.width(), icon.height()).ok()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cursor, resize};
+    use super::{cursor, level, resize};
     use winit::window::{CursorIcon, ResizeDirection};
-    use zgui_platform::{CursorStyle, ResizeEdge};
+    use zgui_platform::{CursorStyle, ResizeEdge, WindowLevel};
 
     #[test]
     fn hiding_the_pointer_is_not_a_cursor() {
@@ -118,5 +136,23 @@ mod tests {
         for (edge, direction) in pairs {
             assert_eq!(resize(edge), direction, "{edge:?} crossed wrongly");
         }
+    }
+
+    #[test]
+    fn every_level_crosses_to_its_own_level() {
+        // A palette that came out below the document it belongs to, or a widget that came out above
+        // everything, is the whole point of the attribute inverted.
+        assert_eq!(
+            level(WindowLevel::AlwaysOnTop),
+            winit::window::WindowLevel::AlwaysOnTop
+        );
+        assert_eq!(
+            level(WindowLevel::AlwaysOnBottom),
+            winit::window::WindowLevel::AlwaysOnBottom
+        );
+        assert_eq!(
+            level(WindowLevel::Normal),
+            winit::window::WindowLevel::Normal
+        );
     }
 }

@@ -66,6 +66,7 @@ pub use crate::gpu::formats::{Formats, SrgbTier};
 pub use crate::renderer::WgpuRenderer;
 pub use crate::renderer::builder::Builder;
 pub use crate::renderer::readback::Pixels;
+pub use crate::renderer::shared::SharedGraphics;
 pub use crate::target::acquire::{Acquisition, SurfaceAction};
 pub use crate::target::group_pool::GroupPool;
 pub use crate::target::scale::TargetScale;

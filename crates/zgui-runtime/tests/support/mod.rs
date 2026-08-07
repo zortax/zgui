@@ -113,7 +113,7 @@ pub fn first_line_box(
 }
 
 /// A renderer that records the display list instead of drawing it.
-fn capture(
+pub fn capture(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {

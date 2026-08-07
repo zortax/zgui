@@ -5,11 +5,15 @@ mod chrome;
 mod drag;
 mod event;
 mod gpu;
+mod icon;
 mod id;
 mod text_input;
 
 pub use crate::surface::attributes::SurfaceAttributes;
-pub use crate::surface::chrome::{CursorStyle, DecorationSource, FullscreenMode, ResizeEdge};
+pub use crate::surface::chrome::{
+    CursorStyle, DecorationSource, FullscreenMode, ResizeEdge, WindowLevel,
+};
+pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::drag::DragEvent;
 pub use crate::surface::event::SurfaceEvent;
 pub use crate::surface::gpu::GpuSurface;
@@ -17,9 +21,10 @@ pub use crate::surface::id::SurfaceId;
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 
 use crate::error::Unsupported;
+use crate::theme::ColorScheme;
 
 /// A thing that can be drawn into and interacted with.
 ///
@@ -104,6 +109,67 @@ pub trait Surface: Send + Sync + 'static {
 
     /// Puts the surface full screen, or takes it out again.
     fn set_fullscreen(&self, mode: Option<FullscreenMode>);
+
+    /// Asks for the surface to be placed at `position`, measured from the desktop's origin.
+    ///
+    /// The defaults from here down are the cross-platform contract, not laziness: a desktop that
+    /// will not let a window place itself, stack itself or carry its own icon answers by doing
+    /// nothing, so an application asks once and runs everywhere instead of branching per platform.
+    fn set_position(&self, position: Point<CssPx, Css>) {
+        let _ = position;
+    }
+
+    /// Where the surface is, measured from the desktop's origin.
+    ///
+    /// Absent where the desktop does not say, which is every Wayland compositor: a window there is
+    /// not told where it has been placed.
+    fn position(&self) -> Option<Point<CssPx, Css>> {
+        None
+    }
+
+    /// Whether the surface is maximised.
+    fn is_maximized(&self) -> bool {
+        false
+    }
+
+    /// Whether the surface is minimised, where the platform says.
+    fn is_minimized(&self) -> Option<bool> {
+        None
+    }
+
+    /// How the surface fills the screen, if it does.
+    fn fullscreen(&self) -> Option<FullscreenMode> {
+        None
+    }
+
+    /// Asks for the surface to sit at `level` in the stacking order.
+    fn set_window_level(&self, level: WindowLevel) {
+        let _ = level;
+    }
+
+    /// Sets the picture the desktop shows for this surface, where it takes one from the window.
+    fn set_icon(&self, icon: Option<&WindowIcon>) {
+        let _ = icon;
+    }
+
+    /// Overrides this surface's light or dark preference, or returns it to the desktop's.
+    fn set_theme(&self, theme: Option<ColorScheme>) {
+        let _ = theme;
+    }
+
+    /// Asks for keyboard focus.
+    ///
+    /// A desktop is free to refuse: stealing focus from what the user is typing into is the
+    /// behaviour focus-stealing prevention exists to stop.
+    fn focus(&self) {}
+
+    /// Asks the desktop to draw attention to this surface, or stops asking.
+    ///
+    /// What that looks like is the desktop's business — a bouncing icon, a flashing task-bar
+    /// entry, an urgency hint.
+    fn request_attention(&self, urgent: bool) {
+        let _ = urgent;
+    }
 
     /// Begins a platform-driven move of the surface.
     ///

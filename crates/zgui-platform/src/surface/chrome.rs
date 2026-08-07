@@ -79,6 +79,24 @@ pub enum FullscreenMode {
     Exclusive,
 }
 
+/// Where a surface sits in the desktop's stacking order.
+///
+/// A preference, not a guarantee. A desktop that does not let an application place itself in the
+/// stack keeps every window [`WindowLevel::Normal`], and asking for another level there changes
+/// nothing rather than failing — which is what lets a palette window ask to float without the
+/// application growing a branch per desktop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum WindowLevel {
+    /// Below ordinary windows, where a desktop widget sits.
+    AlwaysOnBottom,
+    /// With the other windows.
+    #[default]
+    Normal,
+    /// Above ordinary windows, where a palette or a picture-in-picture sits.
+    AlwaysOnTop,
+}
+
 /// Who draws the title bar and the frame.
 ///
 /// This is a capability rather than a preference: on a desktop that leaves it to the application,

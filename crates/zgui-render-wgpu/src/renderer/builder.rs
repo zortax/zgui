@@ -8,6 +8,7 @@ use zgui_render::{GpuUnavailable, RenderTarget};
 use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
 use crate::gpu::surface::ConfiguredSurface;
+use crate::renderer::shared::DeviceState;
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
 use crate::target::swapchain::{Offscreen, Presentation};
 
@@ -148,47 +149,70 @@ impl Builder {
         self,
         target: RenderTarget,
         origin: Origin,
-        mut present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
+        present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let mut rejections: Vec<(String, String)> = Vec::new();
-        let mut enumerated = 0usize;
-        for tier in adapter::tiers(self.backends) {
-            let candidates = adapter::candidates(&self.instance, tier);
-            enumerated += candidates.len();
-            for candidate in candidates {
-                let name = adapter::describe(&candidate.get_info());
-                let gpu = match Gpu::open(self.instance.clone(), candidate) {
-                    Ok(gpu) => Arc::new(gpu),
-                    Err(reason) => {
-                        rejections.push((name, reason));
-                        continue;
-                    }
-                };
-                let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
-                let presentation = present(&gpu);
-                let validation = futures::executor::block_on(scope.pop());
-                match (presentation, validation) {
-                    (Ok(presentation), None) => {
-                        tracing::info!(adapter = %gpu.describe(), "graphics device opened");
-                        return Ok(WgpuRenderer::assemble(
-                            gpu,
-                            presentation,
-                            target,
-                            self.pre_present,
-                            origin,
-                            self.backends,
-                        ));
-                    }
-                    (Ok(_), Some(error)) => rejections.push((name, error.to_string())),
-                    (Err(reason), _) => rejections.push((name, reason)),
+        let (gpu, presentation) = open_device(&self.instance, self.backends, present)?;
+        Ok(WgpuRenderer::assemble(
+            DeviceState::new(gpu),
+            None,
+            presentation,
+            target,
+            self.pre_present,
+            origin,
+            self.backends,
+        ))
+    }
+}
+
+/// Tries every candidate adapter in preference order, one backend tier at a time.
+///
+/// Each candidate is accepted only once a device has been created from it *and* `present` has
+/// produced something to present to without raising a validation error. When none survives, the
+/// failure names every adapter tried and why — silently rendering somewhere the user cannot see is
+/// worse than not starting, because a window that appears and never paints looks like a program
+/// that has hung.
+///
+/// A tier is enumerated only when every tier before it has failed, so the backends kept as a
+/// fallback cost a machine that never needs them nothing at all.
+///
+/// Separate from [`Builder`] because opening a device and assembling a renderer are two things:
+/// [`SharedGraphics`](crate::SharedGraphics) opens one device and assembles many renderers on it.
+pub(crate) fn open_device(
+    instance: &wgpu::Instance,
+    backends: wgpu::Backends,
+    mut present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
+) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
+    let mut rejections: Vec<(String, String)> = Vec::new();
+    let mut enumerated = 0usize;
+    for tier in adapter::tiers(backends) {
+        let candidates = adapter::candidates(instance, tier);
+        enumerated += candidates.len();
+        for candidate in candidates {
+            let name = adapter::describe(&candidate.get_info());
+            let gpu = match Gpu::open(instance.clone(), candidate) {
+                Ok(gpu) => Arc::new(gpu),
+                Err(reason) => {
+                    rejections.push((name, reason));
+                    continue;
                 }
+            };
+            let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
+            let presentation = present(&gpu);
+            let validation = futures::executor::block_on(scope.pop());
+            match (presentation, validation) {
+                (Ok(presentation), None) => {
+                    tracing::info!(adapter = %gpu.describe(), "graphics device opened");
+                    return Ok((gpu, presentation));
+                }
+                (Ok(_), Some(error)) => rejections.push((name, error.to_string())),
+                (Err(reason), _) => rejections.push((name, reason)),
             }
         }
-        if enumerated == 0 {
-            tracing::warn!(backends = ?self.backends, "no graphics adapter was found");
-        }
-        Err(adapter::unavailable(rejections))
     }
+    if enumerated == 0 {
+        tracing::warn!(backends = ?backends, "no graphics adapter was found");
+    }
+    Err(adapter::unavailable(rejections))
 }
 
 /// The extent a target asks for, never smaller than one pixel.

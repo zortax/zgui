@@ -10,11 +10,12 @@ pub(crate) use crate::surface::attributes::window as window_attributes;
 use std::sync::Arc;
 
 use accesskit::TreeUpdate;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::window::Window;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 use zgui_platform::{
-    CursorStyle, FullscreenMode, GpuSurface, ResizeEdge, Surface, SurfaceId, TextInput, Unsupported,
+    ColorScheme, CursorStyle, FullscreenMode, GpuSurface, ResizeEdge, Surface, SurfaceId, TextInput,
+    Unsupported, WindowIcon, WindowLevel,
 };
 
 use crate::surface::a11y::A11y;
@@ -154,6 +155,59 @@ impl Surface for WinitSurface {
     fn set_fullscreen(&self, mode: Option<FullscreenMode>) {
         self.window
             .set_fullscreen(mode.map(|mode| chrome::fullscreen(&self.window, mode)));
+    }
+
+    fn set_position(&self, position: Point<CssPx, Css>) {
+        // Winit answers a compositor that places windows itself by doing nothing here, which is the
+        // no-op this contract asks for; nothing extra is needed to make it silent.
+        self.window
+            .set_outer_position(LogicalPosition::new(position.x.0, position.y.0));
+    }
+
+    fn position(&self) -> Option<Point<CssPx, Css>> {
+        let scale = self.window.scale_factor();
+        self.window.outer_position().ok().map(|position| {
+            let position: LogicalPosition<f64> = position.to_logical(scale);
+            Point::new(CssPx(position.x as f32), CssPx(position.y as f32))
+        })
+    }
+
+    fn is_maximized(&self) -> bool {
+        self.window.is_maximized()
+    }
+
+    fn is_minimized(&self) -> Option<bool> {
+        self.window.is_minimized()
+    }
+
+    fn fullscreen(&self) -> Option<FullscreenMode> {
+        self.window.fullscreen().map(|mode| match mode {
+            winit::window::Fullscreen::Exclusive(_) => FullscreenMode::Exclusive,
+            winit::window::Fullscreen::Borderless(_) => FullscreenMode::Borderless,
+        })
+    }
+
+    fn set_window_level(&self, level: WindowLevel) {
+        self.window.set_window_level(chrome::level(level));
+    }
+
+    fn set_icon(&self, icon: Option<&WindowIcon>) {
+        self.window.set_window_icon(icon.and_then(chrome::icon));
+    }
+
+    fn set_theme(&self, theme: Option<ColorScheme>) {
+        self.window.set_theme(theme.map(crate::theme::theme));
+    }
+
+    fn focus(&self) {
+        self.window.focus_window();
+    }
+
+    fn request_attention(&self, urgent: bool) {
+        // Critical rather than informational, because the only caller is an application saying
+        // something needs the user now; a desktop that draws only one kind of attention draws that.
+        self.window
+            .request_user_attention(urgent.then_some(winit::window::UserAttentionType::Critical));
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

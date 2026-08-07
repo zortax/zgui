@@ -5,7 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
-use zgui_platform::{CursorStyle, FullscreenMode, Surface, SurfaceId, TextInput};
+use zgui_platform::{
+    CursorStyle, FullscreenMode, Surface, SurfaceAttributes, SurfaceId, TextInput,
+};
 
 /// A surface that is a buffer, with no window behind it.
 ///
@@ -57,6 +59,12 @@ pub struct OffscreenSurface {
     visible: AtomicBool,
     /// The last title it was given.
     title: Mutex<String>,
+    /// What the surface was asked to be when it was created.
+    ///
+    /// Kept because most of a request is answered by the desktop and never read back: what a test
+    /// can otherwise check about an application identifier, a window level or an icon is nothing at
+    /// all, and an attribute nothing reads is an attribute that silently stops being sent.
+    requested_attributes: Mutex<SurfaceAttributes>,
 }
 
 impl OffscreenSurface {
@@ -74,7 +82,24 @@ impl OffscreenSurface {
             text_input_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
             title: Mutex::new(String::new()),
+            requested_attributes: Mutex::new(SurfaceAttributes::default()),
         }
+    }
+
+    /// Records what the surface was asked to be.
+    pub fn set_requested_attributes(&self, attributes: &SurfaceAttributes) {
+        *self
+            .requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned") = attributes.clone();
+    }
+
+    /// What the surface was asked to be when it was created.
+    pub fn requested_attributes(&self) -> SurfaceAttributes {
+        self.requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .clone()
     }
 
     /// How many frames have been asked for since this surface was created.

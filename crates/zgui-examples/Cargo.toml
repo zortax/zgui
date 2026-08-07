@@ -60,5 +60,13 @@ path = "../../examples/custom.rs"
 name = "async"
 path = "../../examples/async.rs"
 
+[[example]]
+name = "windows"
+path = "../../examples/windows.rs"
+
+[[example]]
+name = "csd"
+path = "../../examples/csd.rs"
+
 [lints]
 workspace = true

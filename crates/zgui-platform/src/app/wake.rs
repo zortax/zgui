@@ -41,6 +41,14 @@ pub enum WakeReason {
         /// What was on the clipboard, or why it could not be read.
         result: Result<ClipboardData, ClipboardError>,
     },
+    /// The application queued work for its own runtime: a window to open, one to close, or a
+    /// request to quit.
+    ///
+    /// Global rather than surface-addressed, because the work it announces is the creation and
+    /// destruction of surfaces themselves. Code that asks for a window runs inside a frame, where
+    /// the runtime is already borrowed and no surface can be made; this wake is how that request
+    /// reaches a turn of the loop that can carry it out.
+    AppWork,
     /// The graphics device was lost and everything built on it has to be rebuilt.
     DeviceLost,
     /// The desktop's light or dark preference changed.
@@ -78,6 +86,8 @@ mod tests {
     fn a_global_reason_names_no_surface_at_all() {
         assert!(WakeReason::DeviceLost.surfaces().is_empty());
         assert!(WakeReason::ColorSchemeChanged.surfaces().is_empty());
+        // Opening a window names no surface because the surface does not exist yet.
+        assert!(WakeReason::AppWork.surfaces().is_empty());
     }
 
     #[test]

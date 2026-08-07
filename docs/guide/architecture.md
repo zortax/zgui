@@ -121,6 +121,33 @@ These are the seams a consumer is most likely to meet.
 Most of these seams have two in-tree implementations. `HostBinding` is the exception: zgui provides
 the no-op binding, and a downstream script engine provides the active binding.
 
+## Windows
+
+An application has as many windows as it opens. `use_windows().open(options, view)` opens one from
+anywhere the application runs — a listener, an effect, a callback — and answers with a
+`WindowHandle` before the window exists; `use_window()` resolves the window the calling code is
+running *in*, the same way `set_timeout` resolves the host it schedules against.
+
+Four things follow from where the state lives.
+
+**A window is a document.** Each one gets an identity of its own, and every node handle carries the
+identity of the document it was minted in — so a handle from one window cannot resolve inside
+another, and the assertion that says so is a type-level one rather than a runtime check.
+
+**A context belongs to whoever provided it.** A window's own scope is a child of the application's,
+so what a component provides is that window's and what the application provides above them is
+everyone's. Signals belong to neither: one written in any window is read in all of them, which is
+what makes shared state need no plumbing.
+
+**Every window draws on one graphics device.** `SharedGraphics` opens the device with the first
+window and hands the rest a renderer on the same one, sharing the compiled pipelines. What is
+per-window is what is sized to a window: the swap chain, the composed target, the frame's buffers.
+
+**Asking for something a desktop cannot do is not an error.** Every operation on a window that has
+closed does nothing, and so does every operation this desktop will not carry out — placing a window
+on Wayland, resizing from an edge on macOS. An application asks once and runs everywhere;
+`capabilities()` is there for one that would rather hide an affordance than offer a dead one.
+
 ## The three ideas the design turns on
 
 **Invalidation is a lattice, not a flag.** A node carries what it *owes* — restyle, relayout,

@@ -33,6 +33,15 @@ pub enum AppError {
     /// treated as fatal.
     #[error("the application stylesheet was rejected: {0}")]
     Stylesheet(String),
+
+    /// Every document identity has been handed out.
+    ///
+    /// One is minted per window opened and none is ever reused, because a node handle carries the
+    /// document it belongs to and a reused identity would let a stale handle resolve inside an
+    /// unrelated later window. Four thousand opens in one process is the ceiling that buys that,
+    /// and reaching it is reported rather than allowed to alias.
+    #[error("this process has opened every window it can name")]
+    DocumentsExhausted,
 }
 
 impl From<zgui_reactive::InstallError> for AppError {

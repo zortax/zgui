@@ -19,9 +19,10 @@ fn optional_features() -> wgpu::Features {
 
 /// A device, its queue, the adapter they came from and the instance behind all three.
 ///
-/// One of these per graphics device, shared by every surface drawn on it. Everything the renderer
-/// allocates hangs off it, and everything it holds dies with it — which is why device loss is a
-/// rebuild rather than a repair.
+/// One of these per graphics device, shared by every surface drawn on it — which is what
+/// [`SharedGraphics`](crate::SharedGraphics) is for, and how an application's windows come to draw
+/// on one device rather than one each. Everything the renderer allocates hangs off it, and
+/// everything it holds dies with it, which is why device loss is a rebuild rather than a repair.
 #[derive(Debug)]
 pub struct Gpu {
     /// The instance every surface is created from.

@@ -1,7 +1,11 @@
 //! What a surface is asked for before it exists.
 
-use zgui_geom::{Css, CssPx, Size};
+use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::SharedString;
+
+use crate::surface::chrome::{FullscreenMode, WindowLevel};
+use crate::surface::icon::WindowIcon;
+use crate::theme::ColorScheme;
 
 /// What a surface should be when it is created.
 ///
@@ -35,6 +39,20 @@ pub struct SurfaceAttributes {
     /// Getting this wrong is what makes an application show the wrong icon in a task bar, so it is
     /// a first-class attribute rather than a platform afterthought.
     pub application_id: Option<SharedString>,
+    /// Where the surface should open, measured from the desktop's origin.
+    ///
+    /// Ignored where a desktop places windows itself, which is every Wayland compositor.
+    pub position: Option<Point<CssPx, Css>>,
+    /// Whether it should open maximised.
+    pub maximized: bool,
+    /// Whether it should open full screen, and how.
+    pub fullscreen: Option<FullscreenMode>,
+    /// Where it should sit in the stacking order.
+    pub level: WindowLevel,
+    /// The picture the desktop should show for it, where the desktop takes one from the window.
+    pub icon: Option<WindowIcon>,
+    /// A light or dark preference for this surface alone; absent follows the desktop.
+    pub theme: Option<ColorScheme>,
 }
 
 impl SurfaceAttributes {
@@ -49,6 +67,12 @@ impl SurfaceAttributes {
             decorated: true,
             transparent: false,
             application_id: None,
+            position: None,
+            maximized: false,
+            fullscreen: None,
+            level: WindowLevel::Normal,
+            icon: None,
+            theme: None,
         }
     }
 

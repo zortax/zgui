@@ -67,6 +67,7 @@ pub mod app;
 pub mod binding;
 pub mod budget;
 pub mod caret;
+pub mod commands;
 pub mod dispatch;
 pub mod editing;
 pub mod embed;
@@ -81,9 +82,14 @@ pub mod text;
 pub mod timer;
 pub mod wake;
 pub mod window;
+pub mod windows;
 
 pub use crate::app::{
-    App, Failure, MetricsFactory, RasterFactory, RendererFactory, Runtime, TextFactory, ViewFactory,
+    App, ExitPolicy, Failure, MetricsFactory, RasterFactory, RendererFactory, Runtime, TextFactory,
+    ViewFactory,
+};
+pub use crate::commands::{
+    CloseCallbacks, CloseResponse, WindowCommands, WindowSpec, WindowStatus, WindowToken,
 };
 pub use crate::binding::{HostBinding, NoBinding};
 pub use crate::budget::{BudgetReport, Budgeted, CacheId, CacheReport};
@@ -102,4 +108,9 @@ pub use crate::wake::{FrameGate, RuntimeWaker};
 pub use crate::window::anim::cadence::AnimationCadence;
 pub use crate::window::present::PresentPace;
 pub use crate::window::resize::ResizePace;
-pub use crate::window::{Window, WindowOptions};
+pub use crate::window::{Window, WindowContent};
+pub use crate::windows::WindowOptions;
+pub use crate::windows::{
+    CloseGuard, WindowHandle, WindowId, Windows, on_close_request, try_use_window, try_use_windows,
+    use_window, use_windows,
+};

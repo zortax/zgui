@@ -25,7 +25,7 @@ mod sheets;
 mod surface_focus;
 mod value;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -67,9 +67,14 @@ pub const ATLAS_SOFT_BYTES: u64 = 64 * 1024 * 1024;
 /// What a window should be when it is opened.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
-pub struct WindowOptions {
+pub struct WindowContent {
     /// The application's own stylesheet, as text.
     pub stylesheet: Option<String>,
+    /// This window's own sheet, cascaded after the application's.
+    ///
+    /// For the window that is not the application: an inspector, a preferences panel, a palette.
+    /// Later in the cascade than the application's own sheet, so a rule of equal weight here wins.
+    pub window_stylesheet: Option<String>,
     /// What to tell about each frame after it has been produced, if anything.
     ///
     /// An option and not a list: one seam, one occupant. A window with several probes would have
@@ -77,6 +82,25 @@ pub struct WindowOptions {
     /// a tool that wants to feed two consumers can do that on its own side without the loop
     /// growing an opinion about it.
     pub probe: Option<Rc<dyn crate::probe::FrameProbe>>,
+}
+
+impl WindowContent {
+    /// The application's options with one window's own laid over them.
+    ///
+    /// The application's stylesheet stays the application's and the window's becomes the second
+    /// sheet, so a window sheet extends the application's rather than replacing it. A window that
+    /// brought its own probe is watched by that one; one that brought none is watched by whatever
+    /// watches the application.
+    pub(crate) fn layered_with(&self, window: &Self) -> Self {
+        Self {
+            stylesheet: self.stylesheet.clone(),
+            window_stylesheet: window
+                .window_stylesheet
+                .clone()
+                .or_else(|| window.stylesheet.clone()),
+            probe: window.probe.clone().or_else(|| self.probe.clone()),
+        }
+    }
 }
 
 /// One window, and everything that draws into it.
@@ -407,6 +431,15 @@ pub struct Window {
     /// at all still owes one — and without remembering what was published, nothing can tell that
     /// frame from one where focus did not move.
     published_focus: Option<zgui_dom::NodeKey>,
+    /// The handle the application holds this window by, and reads its state through.
+    handle: crate::windows::WindowHandle,
+    /// The document revision the last completed frame serviced.
+    ///
+    /// The reactive flush is thread-wide, so a frame in *another* window runs effects that write
+    /// this one's document, and the wake that would have asked this window to draw was serviced
+    /// over there. Comparing what the document has taken against what a frame here has serviced is
+    /// what notices that, whichever way the write arrived.
+    serviced_revision: Cell<u64>,
 }
 
 impl Window {
@@ -420,6 +453,7 @@ impl Window {
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         surface: Arc<dyn Surface>,
+        document: zgui_dom::DocumentId,
         renderer: Box<dyn Renderer>,
         text: Box<dyn TextEngine>,
         raster: Arc<dyn zgui_text::GlyphRaster>,
@@ -427,10 +461,14 @@ impl Window {
         clock: Arc<dyn zgui_platform::Clock>,
         timers: Rc<RefCell<Timers>>,
         waker: Arc<crate::wake::RuntimeWaker>,
-        options: &WindowOptions,
+        options: &WindowContent,
+        handle: crate::windows::WindowHandle,
+        close: Rc<RefCell<crate::commands::CloseCallbacks>>,
         view: impl FnOnce(&mut zgui_view::BuildCx<'_>) -> Box<dyn Anchor>,
     ) -> Self {
-        let document = Rc::new(RefCell::new(Document::new()));
+        // The identity the runtime minted for this window. Every node handle carries it, which is
+        // what stops one window's handle resolving inside another window's tree.
+        let document = Rc::new(RefCell::new(Document::with_id(document)));
         let replaced_images = crate::replaced::IntrinsicTable::new();
         let replaced_surfaces = crate::replaced::IntrinsicTable::new();
         document.borrow_mut().install_replaced_content(Arc::new(
@@ -469,7 +507,15 @@ impl Window {
             StyleEngine::new(&borrowed, metrics, viewport)
         };
         let mut sheets = Vec::new();
-        if let Some(css) = options.stylesheet.as_deref() {
+        // The application's sheet first and this window's own second, so a rule of equal weight in
+        // a window's sheet wins over the application's.
+        for css in [
+            options.stylesheet.as_deref(),
+            options.window_stylesheet.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
             let borrowed = document.borrow();
             let (handle, diagnostics) =
                 engine.add_sheet(&borrowed, SheetOrigin::Author, SheetSource::Text(css));
@@ -507,6 +553,11 @@ impl Window {
             // functions and find the host that way. Without this a component that schedules
             // anything panics with nothing to point at.
             zgui_view::provide_host(host_handle.clone());
+            // This window, so that `use_window` resolves the one a component is running in the way
+            // `set_timeout` resolves the host it schedules against — and so that a component in one
+            // window never reaches another's by accident.
+            zgui_reactive::provide_local_context(handle.clone());
+            zgui_reactive::provide_local_context(Rc::clone(&close));
             // The window is the last owner a task can fall back to, so a spawn outside any
             // component still dies with the window rather than outliving it.
             zgui_reactive::provide_task_set();
@@ -604,7 +655,27 @@ impl Window {
             a11y_moves: Vec::new(),
             moved_spaces: Vec::new(),
             published_focus: None,
+            serviced_revision: Cell::new(0),
+            handle,
         }
+    }
+
+    /// The handle the application holds this window by.
+    pub fn handle(&self) -> &crate::windows::WindowHandle {
+        &self.handle
+    }
+
+    /// Whether the document has been written since this window's last frame.
+    ///
+    /// True when another window's frame flushed an effect that wrote here: that flush serviced the
+    /// wake, so nothing else will ever ask this window for the frame that shows it.
+    pub(crate) fn owes_frame_for_document(&self) -> bool {
+        self.dom.revision() != self.serviced_revision.get()
+    }
+
+    /// Records that a frame has serviced everything the document holds.
+    pub(crate) fn serviced_document(&self) {
+        self.serviced_revision.set(self.dom.revision());
     }
 
     /// Installs a downstream script engine on this window.

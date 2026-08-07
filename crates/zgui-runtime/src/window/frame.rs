@@ -104,6 +104,7 @@ impl Window {
                     self.reconfigure = true;
                 }
                 self.occluded = *occluded;
+                self.handle.set_occluded(*occluded);
                 moved
             }
             // A **colour scheme** is a level too, and the one that decides which rules match: it is
@@ -121,6 +122,7 @@ impl Window {
             zgui_platform::SurfaceEvent::Focused(focused) => {
                 let moved = self.surface_focused != *focused;
                 self.surface_focused = *focused;
+                self.handle.set_focused(*focused);
                 moved
             }
             _ => true,
@@ -172,6 +174,8 @@ impl Window {
         // What the drain settled between its own events can leave work behind, exactly as the
         // flush below it can, and a frame that forgot it would park with that work undone.
         let drained = self.drain_input(timestamp);
+        // After the drain, so that a press that started a drag is the press this ends.
+        self.end_press_after_drag();
         // Timers before the reactive work, so what a callback writes settles in this same frame.
         mark("f.timers");
         let timers_fired = self.fire_timers(now);
@@ -343,6 +347,10 @@ impl Window {
         // occupancy counter — a name given back late can never be confused with one since reissued.
         self.layout.borrow_mut().recycle();
         let changed_during = self.document.borrow().end_frame();
+        // After every stage that can write the document and before the frame's own park decision:
+        // what this records is what another window's sweep compares against to find out whether
+        // this window still owes a frame for something written from over there.
+        self.serviced_document();
         let owed = self.gate.end_frame();
         let needs_another_frame = owed || changed_during || flush.needs_another_frame || drained;
 
@@ -589,9 +597,21 @@ impl Window {
         (dirty.own() | dirty.subtree()).contains(Dirty::ANIMATING)
     }
 
+    /// Ends the press the router is tracking when the desktop took over a drag.
+    ///
+    /// A move or resize the compositor drives swallows the pointer: no release ever arrives, so a
+    /// button left `:active` stays `:active` and a capture is never given back. Wayland delivers a
+    /// focus loss that already does this, and X11 and Windows keep focus throughout — which is why
+    /// the drag records that it began rather than relying on an event.
+    fn end_press_after_drag(&mut self) {
+        if self.handle.take_drag_started() {
+            self.cancel_press();
+        }
+    }
+
     /// Fires every callback whose deadline has passed, in deadline order.
     fn fire_timers(&mut self, now: Instant) -> usize {
-        let due = self.timers.borrow_mut().due(now);
+        let due = self.timers.borrow_mut().due(self.dom.document_id(), now);
         if due.is_empty() {
             return 0;
         }
@@ -673,6 +693,11 @@ impl Window {
         if !self.resize(size, scale) {
             return false;
         }
+        // What the handle reports, from the size that was actually taken. Maximising and leaving
+        // full screen both resize the window, so this is where those move too — no desktop reports
+        // them as events of their own.
+        self.handle.set_geometry(size, scale);
+        self.handle.refresh_window_state();
         let admitted = self.pace.admit(self.clock.now(), self.refresh_interval());
         if !admitted {
             // Nothing is latched here. What refuses the frames the backend produces on its own

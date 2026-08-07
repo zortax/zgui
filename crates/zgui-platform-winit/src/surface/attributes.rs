@@ -1,11 +1,12 @@
 //! What a window is asked for before it exists.
 
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::platform::x11::WindowAttributesExtX11;
-use winit::window::WindowAttributes;
-use zgui_platform::{ColorScheme, SurfaceAttributes};
+use winit::window::{Fullscreen, WindowAttributes};
+use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes};
 
+use crate::surface::chrome;
 use crate::theme;
 
 /// The window attributes a surface request stands for.
@@ -23,12 +24,17 @@ pub(crate) fn window(
     attributes: &SurfaceAttributes,
     scheme: Option<ColorScheme>,
 ) -> WindowAttributes {
+    // The window's own preference wins over the desktop's, because a window that asked to be dark
+    // asked for itself and not for a default to fall back on.
+    let theme = attributes.theme.or(scheme).map(theme::theme);
     let mut window = WindowAttributes::default()
         .with_title(attributes.title.as_str())
         .with_resizable(attributes.resizable)
         .with_decorations(attributes.decorated)
         .with_transparent(attributes.transparent)
-        .with_theme(scheme.map(theme::theme))
+        .with_maximized(attributes.maximized)
+        .with_window_level(chrome::level(attributes.level))
+        .with_theme(theme)
         .with_visible(false);
     if let Some(size) = attributes.size {
         window = window.with_inner_size(LogicalSize::new(size.width.0, size.height.0));
@@ -39,10 +45,30 @@ pub(crate) fn window(
     if let Some(size) = attributes.max_size {
         window = window.with_max_inner_size(LogicalSize::new(size.width.0, size.height.0));
     }
+    if let Some(position) = attributes.position {
+        window = window.with_position(LogicalPosition::new(position.x.0, position.y.0));
+    }
+    if let Some(mode) = attributes.fullscreen {
+        window = window.with_fullscreen(Some(opening_fullscreen(mode)));
+    }
+    if let Some(icon) = &attributes.icon {
+        window = window.with_window_icon(chrome::icon(icon));
+    }
     if let Some(id) = &attributes.application_id {
         window = application_name(window, id.as_str());
     }
     window
+}
+
+/// How a window that opens full screen should take the screen.
+///
+/// Taking it exclusively needs a video mode to take it in, and a mode belongs to the monitor the
+/// window is on — which nothing knows before the window exists. A window asking for an exclusive
+/// mode therefore opens borderless and is put into its exclusive mode once it has a monitor to name
+/// one from, which the surface does through [`Surface::set_fullscreen`](zgui_platform::Surface::set_fullscreen).
+fn opening_fullscreen(mode: FullscreenMode) -> Fullscreen {
+    let _ = mode;
+    Fullscreen::Borderless(None)
 }
 
 /// Names the application to whichever display server the window ends up on.
@@ -73,8 +99,8 @@ fn application_name(window: WindowAttributes, id: &str) -> WindowAttributes {
 #[cfg(test)]
 mod tests {
     use super::window;
-    use zgui_geom::{CssPx, Size};
-    use zgui_platform::SurfaceAttributes;
+    use zgui_geom::{CssPx, Point, Size};
+    use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes, WindowLevel};
 
     #[test]
     fn a_window_is_always_asked_for_hidden_however_it_was_requested() {
@@ -135,5 +161,53 @@ mod tests {
         let attributes = window(&SurfaceAttributes::new("zgui"), None);
         assert!(attributes.min_inner_size.is_none());
         assert!(attributes.max_inner_size.is_none());
+    }
+
+    #[test]
+    fn where_and_how_a_window_opens_reaches_the_platform() {
+        let mut requested = SurfaceAttributes::new("palette");
+        requested.position = Some(Point::new(CssPx(120.0), CssPx(48.0)));
+        requested.maximized = true;
+        requested.level = WindowLevel::AlwaysOnTop;
+        requested.fullscreen = Some(FullscreenMode::Borderless);
+
+        let attributes = window(&requested, None);
+        assert!(attributes.position.is_some());
+        assert!(attributes.maximized);
+        assert_eq!(
+            attributes.window_level,
+            winit::window::WindowLevel::AlwaysOnTop
+        );
+        assert!(attributes.fullscreen.is_some());
+    }
+
+    #[test]
+    fn a_window_that_states_a_preference_is_not_given_the_desktops() {
+        // A window asking to be dark asked for itself. Letting the desktop's preference win would
+        // make the attribute unusable for the one thing it exists for.
+        let mut requested = SurfaceAttributes::new("zgui");
+        requested.theme = Some(ColorScheme::Dark);
+        let attributes = window(&requested, Some(ColorScheme::Light));
+        assert_eq!(attributes.preferred_theme, Some(winit::window::Theme::Dark));
+
+        // With no preference of its own it follows the desktop, which is what it did before.
+        let following = window(&SurfaceAttributes::new("zgui"), Some(ColorScheme::Light));
+        assert_eq!(
+            following.preferred_theme,
+            Some(winit::window::Theme::Light)
+        );
+    }
+
+    #[test]
+    fn an_exclusive_mode_opens_borderless_because_no_monitor_is_known_yet() {
+        // A video mode belongs to the monitor the window turned out to be on, and nothing knows
+        // which that is before it exists. The surface asks again once it does.
+        let mut requested = SurfaceAttributes::new("player");
+        requested.fullscreen = Some(FullscreenMode::Exclusive);
+        let attributes = window(&requested, None);
+        assert!(matches!(
+            attributes.fullscreen,
+            Some(winit::window::Fullscreen::Borderless(None))
+        ));
     }
 }
