@@ -20,6 +20,12 @@ publish = false
 zgui = { path = "../zgui", version = "0.1.0" }
 zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
 
+[features]
+# What the console example needs. An application that runs on a bare Linux console asks the
+# framework for that backend, and this is the same request passed through: an example is an
+# application, and an application turns the feature on itself.
+drm = ["zgui/drm"]
+
 [[example]]
 name = "counter"
 path = "../../examples/counter.rs"
@@ -71,6 +77,14 @@ path = "../../examples/csd.rs"
 [[example]]
 name = "images"
 path = "../../examples/images.rs"
+
+# The console example, which runs on the kernel's display interface rather than on a desktop. It
+# names `run_drm`, so it does not compile without the backend that defines it. `required-features`
+# leaves it out of `cargo build --examples` on a machine that never asked for the feature.
+[[example]]
+name = "tty"
+path = "../../examples/tty.rs"
+required-features = ["drm"]
 
 [lints]
 workspace = true

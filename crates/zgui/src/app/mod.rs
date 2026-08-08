@@ -403,6 +403,44 @@ impl App {
         self.run_on(desktop(), view)
     }
 
+    /// The same, on a Linux console with no display server under it.
+    ///
+    /// Lights every display that is plugged in, builds `view` into the first, and runs until the
+    /// application stops. The picture goes to the screen through the kernel and through nothing
+    /// else: a mode on the display, two buffers, and a page flip per frame.
+    ///
+    /// The console backend and the renderer that draws through it are installed together, because
+    /// they are correct together and useless apart. The loop holds a display's buffers and says
+    /// which display a surface is; the renderer reads a composed frame back and puts it in one. An
+    /// application that installed one of them alone would draw frames that reach no screen.
+    ///
+    /// **This needs the device.** It takes DRM master and holds it for as long as it runs, so it
+    /// needs a free virtual terminal or root, and it fails to start while a compositor holds the
+    /// device. There is no input yet either: an application here draws and animates, and a person
+    /// cannot touch it.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app().run_drm(|| view! { column() })
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`App::run`], and additionally whatever the console refused with: no device to open, a
+    /// device this process cannot become master of, or a display that refused a buffer or a mode.
+    #[cfg(all(feature = "drm", target_os = "linux"))]
+    pub fn run_drm<F, V>(self, view: F) -> Result<(), AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        self.with_renderer(zgui_platform_drm::factory())
+            .run_on(zgui_platform_drm::run, view)
+    }
+
     /// The same, over a platform backend of the caller's choosing.
     ///
     /// The one thing an application cannot decide for itself is where it is running: a test drives

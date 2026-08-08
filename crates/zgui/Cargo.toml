@@ -46,6 +46,12 @@ zgui-view = { path = "../zgui-view", version = "0.1.0" }
 zgui-view-macro = { path = "../zgui-view-macro", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# The console backend, off unless an application asks for it. Target-gated as well as optional: the
+# kernel's display interface exists on Linux and nowhere else, so a macOS build of an application
+# that names the feature still resolves rather than failing on a dependency it cannot have.
+[target.'cfg(target_os = "linux")'.dependencies]
+zgui-platform-drm = { path = "../zgui-platform-drm", version = "0.1.0", optional = true }
+
 [dev-dependencies]
 # Driving the same application over buffers, which is how the wiring above is asserted on with no
 # display server and no graphics device.
@@ -66,6 +72,14 @@ instrument = ["zgui-view/instrument"]
 # runs background work, on a small pool of its own with no reactor, which suits most programs.
 # Turning it on links tokio.
 tokio = ["dep:zgui-tokio"]
+
+# Runs an application on a Linux console with no display server: the kernel's display interface,
+# a mode on every display that is plugged in, and a page flip per frame. Off by default, because it
+# links a second platform backend and every program that wants a window wants the other one.
+#
+# It adds `App::run_drm`, and that is the only entry point: the loop and the renderer factory it
+# needs are correct together and useless apart.
+drm = ["dep:zgui-platform-drm"]
 
 # Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
 # cannot execute a budget and report an unoptimised number as a regression; the gate switches it on

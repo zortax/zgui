@@ -5613,6 +5613,7 @@ dependencies = [
  "zgui-geom",
  "zgui-layout",
  "zgui-platform",
+ "zgui-platform-drm",
  "zgui-platform-headless",
  "zgui-platform-wayland",
  "zgui-platform-winit",
