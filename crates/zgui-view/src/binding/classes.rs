@@ -14,7 +14,7 @@ use zgui_interned::ClassName;
 /// use zgui_view::Classes;
 ///
 /// let base = Classes::from("button primary");
-/// let merged = base.merged(&Classes::from("primary w-full"));
+/// let merged = base.merged("primary w-full");
 ///
 /// assert_eq!(
 ///     merged.names(),
@@ -67,12 +67,24 @@ impl Classes {
     }
 
     /// This list with `other`'s names appended, skipping any that are already present.
-    pub fn merged(&self, other: &Self) -> Self {
+    ///
+    /// `other` is anything a class list can be made from, and the conversion happens here. A
+    /// [`view!`](zgui_view_macro::view) expansion merges whatever a caller wrote — a literal from
+    /// the component, a list from the caller — and only the caller's own types say which side needs
+    /// converting. Converting in the expansion instead would make every caller who already held a
+    /// list pay for a conversion the macro could not know was unnecessary.
+    pub fn merged(&self, other: impl Into<Self>) -> Self {
         let mut merged = self.clone();
-        for name in &other.0 {
+        for name in &other.into().0 {
             merged.push(*name);
         }
         merged
+    }
+}
+
+impl From<&Classes> for Classes {
+    fn from(classes: &Self) -> Self {
+        classes.clone()
     }
 }
 
@@ -122,7 +134,7 @@ mod tests {
 
     #[test]
     fn merging_keeps_the_first_position_of_a_repeated_name() {
-        let merged = Classes::from("a b").merged(&Classes::from("c a"));
+        let merged = Classes::from("a b").merged("c a");
         assert_eq!(
             merged.names(),
             [

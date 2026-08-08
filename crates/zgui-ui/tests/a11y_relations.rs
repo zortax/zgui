@@ -28,8 +28,17 @@ use crate::desktop::stage::Stage;
 )]
 mod app;
 #[path = "../examples/gallery/section/mod.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the gallery's sections are one module; these assertions mount the ones that relate"
+)]
 mod section;
 #[path = "../examples/gallery/shell.rs"]
+#[allow(
+    dead_code,
+    reason = "the shell is one module; these assertions use the panels it lays out"
+)]
 mod shell;
 
 use crate::app::GalleryProps;

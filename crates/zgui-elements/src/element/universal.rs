@@ -23,7 +23,7 @@ impl<T: Tag> Element<T> {
     /// a component's own classes and a caller's classes end up in one list with the caller's last.
     #[must_use]
     pub fn class(mut self, classes: impl Into<Classes>) -> Self {
-        self.classes = self.classes.merged(&classes.into());
+        self.classes = self.classes.merged(classes);
         self
     }
 

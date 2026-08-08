@@ -7,10 +7,23 @@
 //! about opening and closing a surface may move the page or change how big it claims to be.
 
 #[path = "../examples/gallery/app.rs"]
+#[allow(
+    dead_code,
+    reason = "the gallery names the window size it ships at; this fixture takes the stage's"
+)]
 mod app;
 #[path = "../examples/gallery/section/mod.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the gallery's sections are one module; this one opens a modal from a single panel"
+)]
 mod section;
 #[path = "../examples/gallery/shell.rs"]
+#[allow(
+    dead_code,
+    reason = "the shell is one module; this uses the page a modal is opened over"
+)]
 mod shell;
 
 mod desktop;
@@ -18,7 +31,6 @@ mod desktop;
 use zgui::view;
 use zgui::vocab::NamedKey;
 
-use crate::app::GalleryProps;
 use crate::desktop::stage::Stage;
 
 /// Which gallery section makes the page wider than its window: each is mounted alone and the

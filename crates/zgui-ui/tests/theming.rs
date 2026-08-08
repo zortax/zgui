@@ -10,10 +10,23 @@
 //! The gallery is mounted from its own source, so what is driven is what is shipped.
 
 #[path = "../examples/gallery/app.rs"]
+#[allow(
+    dead_code,
+    reason = "the gallery names the window size it ships at; this fixture takes the stage's"
+)]
 mod app;
 #[path = "../examples/gallery/section/mod.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the gallery's sections are one module; this one exercises the chooser alone"
+)]
 mod section;
 #[path = "../examples/gallery/shell.rs"]
+#[allow(
+    dead_code,
+    reason = "the shell is one module; this uses the chooser it carries"
+)]
 mod shell;
 
 mod desktop;

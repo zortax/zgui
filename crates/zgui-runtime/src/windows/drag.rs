@@ -16,6 +16,12 @@ use zgui_vocab::{PointerButton, Timestamp};
 
 use crate::windows::WindowHandle;
 
+/// When and where the last press landed, or nothing before the first one.
+///
+/// Shared with the handler that outlives the call which made it, which is why it is behind a
+/// pointer rather than held on the stack.
+type LastPress = Rc<Cell<Option<(Timestamp, Point<CssPx, Css>)>>>;
+
 /// How long after a press a second press is the same gesture.
 ///
 /// The desktop convention rather than a preference read from one, because no platform exposes it
@@ -52,7 +58,7 @@ impl WindowHandle {
     /// ```
     pub fn move_drag_handler(&self) -> impl Fn(&mut EventCx<'_, events::PointerDown>) + 'static {
         let window = self.clone();
-        let last: Rc<Cell<Option<(Timestamp, Point<CssPx, Css>)>>> = Rc::new(Cell::new(None));
+        let last: LastPress = Rc::new(Cell::new(None));
         handler(
             events::POINTER_DOWN,
             move |ev: &mut EventCx<'_, events::PointerDown>| {

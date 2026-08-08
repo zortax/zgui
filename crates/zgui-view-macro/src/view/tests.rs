@@ -187,10 +187,13 @@ fn a_component_s_class_props_are_merged_rather_than_replacing_each_other() {
     // its own class before the caller's.
     let lowered = expand("Input(class = \"zui-input-group__field\", class = class)");
     assert_eq!(lowered.matches(".class(").count(), 1, "{lowered}");
+    // Neither side is converted here. `merged` takes anything a list can be made from, so a caller
+    // who already holds one is not charged for a conversion this expansion cannot know is
+    // unnecessary — and is not reported for writing one.
     assert!(
         lowered.contains(
-            ".class(::zgui::expansion::view::Classes::from(\"zui-input-group__field\")\
-             .merged(&::zgui::expansion::view::Classes::from(class)))"
+            ".class(::zgui::expansion::view::Classes::new()\
+             .merged(\"zui-input-group__field\").merged(class))"
         ),
         "{lowered}"
     );

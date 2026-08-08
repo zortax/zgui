@@ -12,8 +12,17 @@
 //! line is about a line tall, and one that has broken is about two.
 
 #[path = "../examples/gallery/section/mod.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the gallery's sections are one module; these panels are the ones a scale broke"
+)]
 mod section;
 #[path = "../examples/gallery/shell.rs"]
+#[allow(
+    dead_code,
+    reason = "the shell is one module; this uses its sheet and nothing else"
+)]
 mod shell;
 
 mod desktop;

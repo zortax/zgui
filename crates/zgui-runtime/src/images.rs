@@ -93,6 +93,22 @@ impl Entry {
     }
 }
 
+/// The `src` writes the attribute hook heard, waiting for the settle that applies them.
+///
+/// Shared rather than owned because the hook that fills it and the loader that drains it are
+/// installed at different moments and neither outlives the other.
+type SourceQueue = Rc<RefCell<Vec<(NodeKey, Option<String>)>>>;
+
+/// The decodes that finished, waiting for the same settle.
+type DecodeQueue = Rc<
+    RefCell<
+        Vec<(
+            SourceKey,
+            Result<zgui_image::Decoded, zgui_image::DecodeError>,
+        )>,
+    >,
+>;
+
 /// The loader: every source an `image` element of one window has named, and what became of it.
 pub(crate) struct ImageLoader {
     /// Everything by source.
@@ -102,16 +118,9 @@ pub(crate) struct ImageLoader {
     /// The images slot of the window's replaced-content mux.
     intrinsics: Arc<IntrinsicTable>,
     /// What the attribute hook heard since the last settle.
-    pending: Rc<RefCell<Vec<(NodeKey, Option<String>)>>>,
+    pending: SourceQueue,
     /// What the decode tasks produced since the last settle.
-    completed: Rc<
-        RefCell<
-            Vec<(
-                SourceKey,
-                Result<zgui_image::Decoded, zgui_image::DecodeError>,
-            )>,
-        >,
-    >,
+    completed: DecodeQueue,
     /// The bound every decode is held to, from the atlas's own limit.
     limits: zgui_image::Limits,
     /// The next atlas handle, allocated per source and never reused.
@@ -144,7 +153,7 @@ impl ImageLoader {
     }
 
     /// The queue the attribute hook pushes `src` changes into.
-    pub(crate) fn source_queue(&self) -> Rc<RefCell<Vec<(NodeKey, Option<String>)>>> {
+    pub(crate) fn source_queue(&self) -> SourceQueue {
         Rc::clone(&self.pending)
     }
 
@@ -488,18 +497,7 @@ fn intrinsic_of(decoded: &zgui_image::Decoded) -> Intrinsic {
 /// The task is spawned on the UI thread and owns nothing but the queue; the decode itself runs on
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
-fn kick(
-    key: SourceKey,
-    completed: Rc<
-        RefCell<
-            Vec<(
-                SourceKey,
-                Result<zgui_image::Decoded, zgui_image::DecodeError>,
-            )>,
-        >,
-    >,
-    limits: zgui_image::Limits,
-) {
+fn kick(key: SourceKey, completed: DecodeQueue, limits: zgui_image::Limits) {
     let work = match &key {
         SourceKey::Path(path) => {
             let path = PathBuf::from(path);

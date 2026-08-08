@@ -148,9 +148,10 @@ fn what_the_application_provides_is_shared_and_what_a_window_provides_is_its_own
     /// A value the application provides above every window.
     #[derive(Clone)]
     struct Shared(&'static str);
+    /// What each window saw of the two, in the order the windows were built.
+    type Seen = Rc<RefCell<Vec<(Option<String>, Option<String>)>>>;
 
-    let seen: Rc<RefCell<Vec<(Option<String>, Option<String>)>>> =
-        Rc::new(RefCell::new(Vec::new()));
+    let seen: Seen = Rc::new(RefCell::new(Vec::new()));
 
     let recorded = Rc::clone(&seen);
     let mut harness = app(SHEET, move |cx: &mut BuildCx<'_>| {

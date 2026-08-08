@@ -231,6 +231,9 @@ mod tests {
     use zgui_view::Dom;
     use zgui_vocab::UiState;
 
+    /// The attribute writes a hook heard, as name and new value.
+    type Heard = Rc<RefCell<Vec<(String, Option<String>)>>>;
+
     use crate::dom::DocumentDom;
 
     /// A backend over a fresh document, holding a handle whose node has already been dropped.
@@ -278,7 +281,7 @@ mod tests {
         let document = Rc::new(RefCell::new(Document::new()));
         let dom = DocumentDom::new(Rc::clone(&document));
 
-        let heard: Rc<RefCell<Vec<(String, Option<String>)>>> = Rc::new(RefCell::new(Vec::new()));
+        let heard: Heard = Rc::new(RefCell::new(Vec::new()));
         let sink = Rc::clone(&heard);
         dom.set_attribute_hook(Rc::new(move |_node, name, value| {
             sink.borrow_mut()

@@ -127,8 +127,7 @@ fn emit_mask(
         None => paint
             .stroke
             .filter(|color| color.alpha() != 0.0)
-            .zip(inherited_stroke.as_ref())
-            .map(|(color, stroke)| (color, stroke)),
+            .zip(inherited_stroke.as_ref()),
     };
     // One mask has one tint and one coverage operation. A fill plus a stroke may use different
     // paints and their overlapping antialiasing does not equal either operation alone, so it stays

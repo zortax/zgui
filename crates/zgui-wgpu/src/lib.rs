@@ -797,27 +797,26 @@ impl WgpuSurfaces {
                         },
                     );
                     binding.attached = Some(texture);
-                } else if visible && !binding.content_attached {
-                    if let Some(texture) = binding.attached.as_ref() {
-                        let extent = Size::<i32, Device>::new(
-                            texture.width() as i32,
-                            texture.height() as i32,
-                        );
-                        attach(
-                            cx,
-                            AttachAsk {
-                                id: binding.external,
-                                node,
-                                extent,
-                                premultiplied,
-                                texture,
-                                described: &mut binding.described,
-                                registered: &mut binding.registered,
-                                content_attached: &mut binding.content_attached,
-                                content_box,
-                            },
-                        );
-                    }
+                } else if visible
+                    && !binding.content_attached
+                    && let Some(texture) = binding.attached.as_ref()
+                {
+                    let extent =
+                        Size::<i32, Device>::new(texture.width() as i32, texture.height() as i32);
+                    attach(
+                        cx,
+                        AttachAsk {
+                            id: binding.external,
+                            node,
+                            extent,
+                            premultiplied,
+                            texture,
+                            described: &mut binding.described,
+                            registered: &mut binding.registered,
+                            content_attached: &mut binding.content_attached,
+                            content_box,
+                        },
+                    );
                 }
                 false
             }

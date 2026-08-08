@@ -43,6 +43,12 @@ pub fn clips_children(style: &ComputedStyle) -> bool {
 /// the field is drawn. The link carries the name and whoever applies it resolves the matrix, so a
 /// box moved by writing its coordinate system — which never re-interns this chain — still clips
 /// where it is, not where it was.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each one is a separate measurement of the box, and the three the doc above explains \
+              are explained one at a time; a struct holding them would be a bag with one caller \
+              shape and would take the argument for `shift` and `space` out of the signature"
+)]
 pub fn chain_for_children(
     clips: &mut ClipTable,
     parent: ClipId,

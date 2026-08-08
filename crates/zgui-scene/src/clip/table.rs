@@ -126,10 +126,7 @@ impl ClipTable {
         // commute; rounded tests are shifted down so the two outermost survive; and the first mask
         // seen is the innermost one, which is the one the former outer-to-inner overwrite kept.
         let mut cursor = id;
-        loop {
-            let Some(node) = self.get(cursor) else {
-                break;
-            };
+        while let Some(node) = self.get(cursor) {
             let ClipNode::Link { link, parent, .. } = node else {
                 break;
             };

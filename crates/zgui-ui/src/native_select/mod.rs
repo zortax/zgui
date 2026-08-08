@@ -187,10 +187,7 @@ pub fn NativeSelect(
     let children = StoredValue::new_local(children);
 
     let hint = placeholder.unwrap_or_default();
-    let empty = {
-        let listbox = listbox;
-        move || listbox.chosen_text().is_none() && first.shown().is_none()
-    };
+    let empty = move || listbox.chosen_text().is_none() && first.shown().is_none();
     let shown = {
         let hint = hint.clone();
         move || {
@@ -249,7 +246,7 @@ pub fn NativeSelect(
     let value_attrs = Attrs::new()
         .class_toggle(
             zgui::view::ClassName::new("zui-native-select__placeholder"),
-            empty.clone(),
+            empty,
         )
         .state(UiState::PLACEHOLDER_SHOWN, empty);
 

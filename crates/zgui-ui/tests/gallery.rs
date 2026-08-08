@@ -22,12 +22,25 @@
 //! than by a coordinate.
 
 #[path = "../examples/gallery/app.rs"]
+#[allow(
+    dead_code,
+    reason = "the gallery names the window size it ships at; this fixture takes the device's"
+)]
 mod app;
 mod desktop;
 mod device;
 #[path = "../examples/gallery/section/mod.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the gallery's sections are one module; these assertions measure the drawn ones"
+)]
 mod section;
 #[path = "../examples/gallery/shell.rs"]
+#[allow(
+    dead_code,
+    reason = "the shell is one module; these assertions measure the panels it lays out"
+)]
 mod shell;
 
 use std::sync::{Arc, Mutex};

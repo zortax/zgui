@@ -136,7 +136,6 @@ impl Element<Canvas> {
     ///     );
     /// });
     /// ```
-    #[must_use]
     pub fn draw<F: Fn(&mut DrawCx<'_>) + 'static>(self, draw: F) -> DrawnCanvas<F> {
         DrawnCanvas {
             element: self,

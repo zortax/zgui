@@ -200,8 +200,9 @@ fn a_popover_field_paints_its_words() {
     assert_inked(&stage, "Name");
 }
 
-/// The smallest surface that loses the field: a bare [`ModalSurface`] wearing exactly what
-/// `DialogStyle` declares — centred by `position: fixed` at 50 %, pulled back onto centre by the
+/// The smallest surface that loses the field: a bare
+/// [`ModalSurface`](zgui_ui::overlay::ModalSurface) wearing exactly what `DialogStyle` declares —
+/// centred by `position: fixed` at 50 %, pulled back onto centre by the
 /// `--zui-surface-place` transform the enter animation's fill mode holds, and padded.
 ///
 /// Every piece short of this combination painted throughout the hunt: a portal, a popover, the
@@ -212,7 +213,7 @@ fn a_popover_field_paints_its_words() {
 #[test]
 fn a_dialog_look_alike_modal_surface_field_paints() {
     use zgui::vocab::Role;
-    use zgui_ui::overlay::{ModalSurface, ModalSurfaceProps, OverlayState};
+    use zgui_ui::overlay::{ModalSurfaceProps, OverlayState};
 
     let mut stage = staged!(move || {
         let state = OverlayState::uncontrolled(false, None).provide();

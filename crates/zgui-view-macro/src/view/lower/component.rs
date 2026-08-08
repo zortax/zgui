@@ -55,11 +55,15 @@ pub(crate) fn lower(node: &Tagged) -> syn::Result<TokenStream> {
         if rest.is_empty() {
             setters.extend(quote_spanned!(*first_span=> .class(#first)));
         } else {
-            let merged = rest.iter().map(|(value, span)| {
-                quote_spanned!(*span=> .merged(&::zgui::expansion::view::Classes::from(#value)))
-            });
+            // Merged into an empty list rather than converting the first and merging the rest into
+            // it. `Classes::merged` takes anything a list can be made from, so nothing here states a
+            // conversion — which matters because whether one is needed depends on the caller's own
+            // types, and a conversion written here is reported against the caller who wrote none.
+            let merged = rest
+                .iter()
+                .map(|(value, span)| quote_spanned!(*span=> .merged(#value)));
             setters.extend(quote_spanned!(*first_span=>
-                .class(::zgui::expansion::view::Classes::from(#first) #(#merged)*)
+                .class(::zgui::expansion::view::Classes::new().merged(#first) #(#merged)*)
             ));
         }
     }

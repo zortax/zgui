@@ -220,10 +220,9 @@ impl GlyphCache {
                 placement: image.placement,
                 size: image.size,
             },
-        ) {
-            if let Some(previous) = previous.tile {
-                self.by_tile.remove(&previous);
-            }
+        ) && let Some(previous) = previous.tile
+        {
+            self.by_tile.remove(&previous);
         }
         self.by_tile.insert(prepared.key, *key);
         self.forget_eviction(key);

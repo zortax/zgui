@@ -7,10 +7,23 @@
 //! matters. A control the consumer cannot name is a control nobody can be told about.
 
 #[path = "../examples/gallery/app.rs"]
+#[allow(
+    dead_code,
+    reason = "the gallery names the window size it ships at; this fixture takes the harness's"
+)]
 mod app;
 #[path = "../examples/gallery/section/mod.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "the gallery's sections are one module; this reads the tree the mounted ones publish"
+)]
 mod section;
 #[path = "../examples/gallery/shell.rs"]
+#[allow(
+    dead_code,
+    reason = "the shell is one module; this reads the tree its panels publish"
+)]
 mod shell;
 
 use std::sync::{Arc, Mutex};
