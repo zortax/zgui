@@ -3,6 +3,7 @@
 mod support;
 
 use zgui_drm::device::Interface;
+use zgui_drm::format::Format;
 use zgui_drm::property::ObjectKind;
 
 /// What the kernel numbers `DRM_CAP_DUMB_BUFFER`.
@@ -212,6 +213,46 @@ fn an_atomic_device_names_the_properties_a_commit_is_built_from() {
         "connector {connector} names its CRTC_ID property, and has {:?}",
         properties.names().collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn a_dumb_buffer_is_allocated_mapped_written_and_released() {
+    let Some(device) = support::device(
+        "a_dumb_buffer_is_allocated_mapped_written_and_released",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !device.supports_dumb_buffers() {
+        eprintln!("this device has no dumb buffers, so nothing was asserted");
+        return;
+    }
+
+    let mut buffer = device
+        .create_dumb_buffer(64, 32, Format::XRGB8888)
+        .expect("the driver allocates a dumb buffer");
+    assert_eq!(buffer.width(), 64);
+    assert_eq!(buffer.height(), 32);
+    // A driver rounds the row up for its own reasons, so the stride is at least the width in
+    // bytes and stepping rows by anything else writes a diagonal.
+    assert!(
+        buffer.stride() >= 64 * 4,
+        "a row holds at least its pixels: {}",
+        buffer.stride()
+    );
+
+    let stride = buffer.stride() as usize;
+    let bytes = buffer.bytes(&device).expect("a dumb buffer maps");
+    assert!(bytes.len() >= stride * 32, "the mapping covers every row");
+    // Written and read back through the mapping, so the slice addresses memory that takes a write
+    // and keeps it. The mapping is shared, at the offset the driver answered for this handle, so
+    // that memory is the driver's.
+    bytes[..4].copy_from_slice(&0x00ff_0000_u32.to_ne_bytes());
+    assert_eq!(bytes[..4], 0x00ff_0000_u32.to_ne_bytes());
+
+    device
+        .destroy_dumb_buffer(buffer)
+        .expect("a dumb buffer is released");
 }
 
 #[test]
