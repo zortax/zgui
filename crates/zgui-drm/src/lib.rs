@@ -31,6 +31,8 @@
 #[cfg(target_os = "linux")]
 pub mod buffer;
 #[cfg(target_os = "linux")]
+pub mod commit;
+#[cfg(target_os = "linux")]
 pub mod device;
 #[cfg(target_os = "linux")]
 pub mod error;
@@ -47,6 +49,8 @@ pub mod resources;
 #[cfg(target_os = "linux")]
 mod sys;
 
+#[cfg(target_os = "linux")]
+pub use crate::commit::Commit;
 #[cfg(target_os = "linux")]
 pub use crate::device::Device;
 #[cfg(target_os = "linux")]

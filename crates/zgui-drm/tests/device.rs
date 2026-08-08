@@ -354,3 +354,32 @@ fn an_absent_device_is_refused_rather_than_panicking() {
         "the refusal names the path rather than the ioctl: {error}"
     );
 }
+
+#[test]
+fn the_commit_interface_is_the_one_the_device_was_opened_for() {
+    let Some(atomic) = support::device(
+        "the_commit_interface_is_the_one_the_device_was_opened_for",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !atomic.is_atomic() {
+        eprintln!("this device is not atomic, so there is only one interface to choose");
+        return;
+    }
+    assert!(
+        zgui_drm::commit::for_device(&atomic).can_test(),
+        "an atomic device gets the interface that can validate a configuration first"
+    );
+
+    let legacy = zgui_drm::Device::open_with(atomic.path(), Interface::Legacy)
+        .expect("the same device opens for the legacy interface");
+    assert!(
+        !legacy.is_atomic(),
+        "asking for the legacy interface has to produce a legacy device"
+    );
+    assert!(
+        !zgui_drm::commit::for_device(&legacy).can_test(),
+        "the legacy interface cannot validate a configuration first"
+    );
+}
