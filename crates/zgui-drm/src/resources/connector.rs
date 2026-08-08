@@ -1,10 +1,9 @@
 //! A connector: where a display is plugged in, and what modes it can be driven at.
 
-use std::fmt;
-
 use crate::device::Device;
 use crate::error::Result;
 use crate::ioctl;
+use crate::resources::mode::Mode;
 use crate::resources::stabilise;
 use crate::sys;
 
@@ -49,62 +48,6 @@ impl ConnectorKind {
             sys::DRM_MODE_CONNECTOR_WRITEBACK => Self::Writeback,
             other => Self::Other(other),
         }
-    }
-}
-
-/// One way a display can be driven: an extent, a rate, and the timings that produce them.
-///
-/// The kernel's own structure is kept whole rather than unpacked, because it is what
-/// `MODE_SETCRTC` and the atomic mode blob both take back. Unpacking it and building it again
-/// would be a chance to get a timing wrong for no gain.
-#[derive(Clone, Copy)]
-pub struct Mode {
-    /// The kernel's structure, passed back untouched when a mode is set.
-    pub(crate) raw: sys::drm_mode_modeinfo,
-}
-
-impl Mode {
-    /// How wide, in pixels.
-    pub fn width(&self) -> u32 {
-        u32::from(self.raw.hdisplay)
-    }
-
-    /// How tall, in pixels.
-    pub fn height(&self) -> u32 {
-        u32::from(self.raw.vdisplay)
-    }
-
-    /// How many times a second this mode refreshes, in millihertz.
-    ///
-    /// Computed from the timings rather than read from `vrefresh`, because that field is rounded
-    /// to whole hertz and a frame loop pacing against 60 where the display runs at 59.94 drifts by
-    /// a frame every seventeen seconds.
-    pub fn refresh_rate_millihertz(&self) -> u32 {
-        let total = u64::from(self.raw.htotal) * u64::from(self.raw.vtotal);
-        if total == 0 {
-            return 0;
-        }
-        // `clock` is in kilohertz. A thousand for that, and a thousand for millihertz.
-        u32::try_from(u64::from(self.raw.clock) * 1_000_000 / total).unwrap_or(0)
-    }
-
-    /// Whether this is the mode the display prefers.
-    pub fn is_preferred(&self) -> bool {
-        self.raw.type_ & sys::DRM_MODE_TYPE_PREFERRED != 0
-    }
-}
-
-/// Written by hand, because the derived form prints the whole kernel structure: the skew, the
-/// scan, an undecoded flag word and the name as bytes. What names a mode to a reader is its
-/// extent, its rate, and whether the display asked for it.
-impl fmt::Debug for Mode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Mode")
-            .field("width", &self.width())
-            .field("height", &self.height())
-            .field("refresh_rate_millihertz", &self.refresh_rate_millihertz())
-            .field("preferred", &self.is_preferred())
-            .finish()
     }
 }
 
@@ -248,37 +191,5 @@ impl Device {
                 }))
             },
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A mode with these timings, and nothing else filled in.
-    fn mode(clock: u32, htotal: u16, vtotal: u16) -> Mode {
-        Mode {
-            raw: sys::drm_mode_modeinfo {
-                clock,
-                htotal,
-                vtotal,
-                ..Default::default()
-            },
-        }
-    }
-
-    #[test]
-    fn a_modes_rate_comes_from_its_timings_and_keeps_the_fraction() {
-        // 1920x1080 at 60 Hz: 148.5 MHz over 2200 x 1125 pixels.
-        assert_eq!(mode(148_500, 2200, 1125).refresh_rate_millihertz(), 60_000);
-        // The same mode at 59.94, which is what the field rounded to whole hertz would call 60.
-        // Pacing a frame loop against 60 on a display running this drifts a frame every
-        // seventeen seconds, which is the reason this is computed rather than read.
-        assert_eq!(mode(148_352, 2200, 1125).refresh_rate_millihertz(), 59_940);
-    }
-
-    #[test]
-    fn a_mode_with_no_timings_reports_no_rate_rather_than_dividing_by_zero() {
-        assert_eq!(mode(148_500, 0, 0).refresh_rate_millihertz(), 0);
     }
 }
