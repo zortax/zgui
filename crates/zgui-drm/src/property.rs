@@ -28,8 +28,10 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
-    /// The number the kernel knows this kind by.
-    fn as_raw(self) -> u32 {
+    /// Returns the number the kernel knows this kind by.
+    ///
+    /// A cache of properties keys on this number as well, because the id spaces are shared.
+    pub(crate) fn as_raw(self) -> u32 {
         match self {
             Self::Crtc => sys::DRM_MODE_OBJECT_CRTC,
             Self::Connector => sys::DRM_MODE_OBJECT_CONNECTOR,
