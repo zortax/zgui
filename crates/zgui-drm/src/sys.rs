@@ -58,6 +58,7 @@ mod tests {
         assert_eq!(size_of::<drm_mode_crtc_page_flip>(), 24);
         assert_eq!(size_of::<drm_prime_handle>(), 12);
         assert_eq!(size_of::<drm_mode_create_blob>(), 16);
+        assert_eq!(size_of::<drm_mode_destroy_blob>(), 4);
         assert_eq!(size_of::<drm_event>(), 8);
         assert_eq!(size_of::<drm_event_vblank>(), 32);
         assert_eq!(size_of::<drm_mode_modeinfo>(), 68);

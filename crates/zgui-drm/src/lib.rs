@@ -37,6 +37,8 @@ pub mod device;
 #[cfg(target_os = "linux")]
 pub mod error;
 #[cfg(target_os = "linux")]
+pub mod event;
+#[cfg(target_os = "linux")]
 pub mod format;
 #[cfg(target_os = "linux")]
 pub mod framebuffer;

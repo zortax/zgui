@@ -383,3 +383,24 @@ fn the_commit_interface_is_the_one_the_device_was_opened_for() {
         "the legacy interface cannot validate a configuration first"
     );
 }
+
+#[test]
+fn an_idle_device_reports_no_events_rather_than_blocking() {
+    let Some(device) = support::device(
+        "an_idle_device_reports_no_events_rather_than_blocking",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+
+    // Nothing has been flipped on this descriptor, so the queue is empty and the kernel answers
+    // `EAGAIN`. That the call returns at all is the assertion: a descriptor opened blocking would
+    // stop here until something else drove the display.
+    let events = device
+        .poll_events()
+        .expect("an empty queue is not a failure");
+    assert!(
+        events.is_empty(),
+        "a device nothing was asked of has nothing to report: {events:?}"
+    );
+}
