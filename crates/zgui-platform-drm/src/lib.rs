@@ -20,3 +20,11 @@
 // This backend issues no ioctl of its own — `zgui-drm` owns every one of them — and the pixels it
 // moves are slices. Forbidding unsafe is the claim that this stays true.
 #![forbid(unsafe_code)]
+
+// The kernel's display interface exists on Linux and nowhere else, so on any other platform this
+// crate is empty rather than broken.
+#[cfg(target_os = "linux")]
+pub mod output;
+
+#[cfg(target_os = "linux")]
+pub use crate::output::Output;
