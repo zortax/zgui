@@ -178,6 +178,15 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         self.shaper.strut(style)
     }
 
+    fn visit_clusters(
+        &self,
+        paragraph: ParagraphKey,
+        line: u16,
+        visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+        zgui_text::ShapedClusters::visit_clusters(self, paragraph, line, visit);
+    }
+
     fn paint_slot(&mut self, paint: &TextPaint) -> Brush {
         let address = paint.key.addr() as u64;
         let colour = paint.color;

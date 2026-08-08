@@ -30,8 +30,8 @@ use zgui_layout::fragment::ParagraphId;
 use zgui_scene::kurbo::{Affine, BezPath, Shape};
 use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
 use zgui_scene::{
-    ClipId, ColorSprite, Decoration, MonoSprite, Paint, PaintRef, PaintSlot, Resource, Scene,
-    SpatialId, SubpixelSprite, VectorId, VectorItem,
+    ClipId, ClipLink, ColorSprite, Decoration, MonoSprite, Paint, PaintRef, PaintSlot, Resource,
+    Scene, SpatialId, SubpixelSprite, VectorId, VectorItem,
 };
 use zgui_text::{GlyphFormat, RunSurface};
 
@@ -279,6 +279,24 @@ pub struct TextPlacement {
     pub upright: bool,
     /// How many device pixels one CSS pixel is, for a brush whose ramp is measured in lengths.
     pub scale: f32,
+    /// Where this line was cut off, when it reaches past its box and the box marks the cut.
+    pub ellipsis: Option<EllipsisPaint>,
+}
+
+/// Where a line was cut off, and what marks the cut.
+///
+/// Decided while the line was laid out, because a cut falls on a *cluster* boundary and glyph runs
+/// carry no text offsets — nothing here could work out where one is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EllipsisPaint {
+    /// The paragraph the mark's glyphs are a paragraph of.
+    pub paragraph: ParagraphId,
+    /// The device x-coordinate the line is cut at.
+    pub cutoff: f32,
+    /// How wide the mark is.
+    pub width: f32,
+    /// Whether the cut is at the line's start, so the mark is drawn to the left of it.
+    pub at_start: bool,
 }
 
 impl TextPlacement {
@@ -388,6 +406,12 @@ pub fn emit(
     let surface = placement.surface(scene, &brush);
     let mut pushed = 0;
     let mut pass = 0;
+    // The mark goes on under the line's own clip; the line's glyphs go on under a tighter one that
+    // stops where the content was cut. Both are decided before the first pass, so a shadow and the
+    // text it shadows are cut at the same place.
+    let mark = placement.ellipsis;
+    let original = placement;
+    let placement = cut_to_ellipsis(scene, placement);
     for shadow in &style.text_shadows {
         if shadow.is_invisible() {
             continue;
@@ -434,7 +458,76 @@ pub fn emit(
     for decoration in decorations {
         pushed += lines(scene, decoration, placement);
     }
+    if let Some(mark) = mark {
+        pushed += runs(
+            scene,
+            glyphs,
+            Where {
+                paragraph: mark.paragraph,
+                line: 0,
+                pass: 0,
+            },
+            // Drawn through the line's *untightened* clip, at the boundary the cut fell on. Its own
+            // box still clips it, which is what keeps a mark wider than the box from spilling out.
+            TextPlacement {
+                line: mark.rect(placement.line),
+                ellipsis: None,
+                ..original
+            },
+            surface,
+            Painting {
+                tint: style.color,
+                brush: RunBrush::Solid,
+                offset: Size::new(DevicePx(0.0), DevicePx(0.0)),
+                force_mono: false,
+            },
+        );
+    }
     pushed
+}
+
+impl EllipsisPaint {
+    /// The rectangle the mark's own glyphs are placed in, given the line it marks.
+    ///
+    /// The same line box moved to the cut: a mark is one line of one paragraph, drawn on the
+    /// baseline the line it marks sits on.
+    fn rect(&self, line: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
+        let x = if self.at_start {
+            self.cutoff - self.width
+        } else {
+            self.cutoff
+        };
+        Rect::new(
+            Point::new(DevicePx(x), line.origin.y),
+            Size::new(DevicePx(self.width), line.size.height),
+        )
+    }
+}
+
+/// The placement a cut line's own glyphs are drawn through.
+///
+/// The same placement under a tighter clip, so everything past the cut goes undrawn. A clip, and
+/// never a filter over the glyphs: a glyph's ink may reach past its own advance, so dropping glyphs
+/// by position cuts the ink of a cluster that survived or keeps the ink of a hidden one, and the
+/// specification speaks of characters.
+fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement {
+    let Some(mark) = placement.ellipsis else {
+        return placement;
+    };
+    let line = placement.line;
+    let (left, right) = if mark.at_start {
+        (mark.cutoff, line.origin.x.0 + line.size.width.0)
+    } else {
+        (line.origin.x.0, mark.cutoff)
+    };
+    let window = Rect::new(
+        Point::new(DevicePx(left), line.origin.y),
+        Size::new(DevicePx((right - left).max(0.0)), line.size.height),
+    );
+    TextPlacement {
+        clip: scene.clips.push(placement.clip, ClipLink::rect(window)),
+        ..placement
+    }
 }
 
 /// Which line is being drawn, and which of its passes this is.
@@ -786,6 +879,7 @@ mod tests {
             subpixel_capable: true,
             upright: true,
             scale: 1.0,
+            ellipsis: None,
         }
     }
 

@@ -14,6 +14,13 @@ zgui-css = { path = "../zgui-css", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-style = { path = "../zgui-style", version = "0.1.0" }
+# What a computed style paints. A property read only by the paint stage is invisible in a fragment
+# tree, so the harness lowers one as well and compares that too.
+zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
+# The two properties that describe a window rather than a document — the cursor over it and the
+# colour of the caret in it. Named here so that the census can see their rows at all; neither is
+# probeable, and both say so in the escape list.
+zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 # Geometry, names, and the identifier tables a fragment pass writes into.
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }

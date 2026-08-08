@@ -21,6 +21,8 @@ fn no_unclaimed_row_is_also_declared_beside_a_reader() {
         zgui_style::parity::REGISTERED.to_vec(),
         zgui_text_style::parity::REGISTERED.to_vec(),
         zgui_layout::parity::registered(),
+        zgui_paint::parity::registered(),
+        zgui_runtime::parity::REGISTERED.to_vec(),
         zgui_css::parity::gap::inherited_svg::REGISTERED.to_vec(),
     ]
     .concat()

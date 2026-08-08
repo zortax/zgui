@@ -54,6 +54,92 @@ pub fn full(store: &LayoutStore) -> String {
     out
 }
 
+/// What every inline formatting context resolved to that its geometry does not describe.
+///
+/// The string it handed its shaper, and where each of its lines was cut short. Those are the answer
+/// to *which characters are drawn at all*, which is what `text-transform`, `white-space-collapse`,
+/// `tab-size` and `text-overflow` decide and what nothing else here can show: the deterministic
+/// shaper answers one width for every cluster, so a case transform moves no edge, and an ellipsis
+/// moves none by design. A harness comparing only geometry would report the whole of that group as
+/// read by nobody.
+///
+/// The string, in preference to the paragraph's cache key. The key hashes every property in the
+/// shaping and breaking keys, several of which are in a key *only* so that a change to them
+/// invalidates text laid out under the old value. Reading the key would report every one of those
+/// as having an effect, which is the exact over-claim this instrument exists to catch.
+pub fn inline_text(store: &LayoutStore) -> String {
+    let mut out = String::new();
+    if let Some(root) = store.root() {
+        write_inline(store, root, &mut out);
+    }
+    out
+}
+
+/// One box's inline resolution, then its children's.
+fn write_inline(store: &LayoutStore, key: BoxKey, out: &mut String) {
+    if let Some(text) = store.generated_text(key) {
+        let _ = writeln!(out, "shaped {text:?}");
+    }
+    if let Some(resolution) = store.inline_resolution(key) {
+        for (index, line) in resolution.lines.iter().enumerate() {
+            if let Some(cut) = line.ellipsis {
+                let _ = writeln!(
+                    out,
+                    "  line {index} cut at {} {} marked {:?}",
+                    number::float(cut.cutoff),
+                    if cut.at_start { "start" } else { "end" },
+                    resolution
+                        .ellipsis
+                        .mark(cut.at_start)
+                        .map(|mark| mark.width),
+                );
+            }
+        }
+    }
+    let Some(node) = store.get(key) else {
+        return;
+    };
+    for &child in &node.children {
+        write_inline(store, child, out);
+    }
+}
+
+/// Every clip chain the fragment pass recorded, resolved to the shapes it cuts to.
+///
+/// A fragment carries the *identifier* of its clip chain, and two documents that clip to different
+/// shapes reach the same identifier whenever they record the same number of chains in the same
+/// order. So the identifier alone says nothing about the geometry — which is where a corner radius
+/// lives, a radius being resolved against each box rather than lowered with the style. Reading the
+/// links back is what makes a radius observable at all.
+pub fn clip_chains(laid: &crate::zdoc::build::Laid) -> String {
+    let mut out = String::new();
+    let mut seen = Vec::new();
+    if let Some(root) = laid.store.root() {
+        collect_clips(&laid.store, root, &mut seen);
+    }
+    seen.sort_by_key(|id: &zgui_scene::ClipId| id.0);
+    seen.dedup();
+    for id in seen {
+        let _ = writeln!(out, "clip {} = {:?}", id.0, laid.tables.clips.links(id));
+    }
+    out
+}
+
+/// Every clip chain named by a box's fragments or by anything below it.
+fn collect_clips(store: &LayoutStore, key: BoxKey, out: &mut Vec<zgui_scene::ClipId>) {
+    let Some(node) = store.get(key) else {
+        return;
+    };
+    for fragment in store.fragments_of_box(key) {
+        if let Some(fragment) = store.fragment(*fragment) {
+            out.push(fragment.clip);
+        }
+    }
+    for &child in &node.children {
+        collect_clips(store, child, out);
+    }
+}
+
 /// What hit testing answers over a grid of sample points.
 ///
 /// The fragment tree says where everything is; it does not say what is *under a point*, which is a

@@ -141,6 +141,7 @@ fn with_an_animation_running_the_content_waits_for_it_to_end() {
             name: zgui::view::Ident::new("exit"),
             elapsed: Duration::from_millis(180),
             phase: AnimationPhase::Ended,
+            pseudo: None,
         }),
     );
     harness.window.frame();
@@ -168,6 +169,7 @@ fn a_second_animation_still_running_keeps_the_content_mounted() {
             name: zgui::view::Ident::new("fade"),
             elapsed: Duration::from_millis(180),
             phase: AnimationPhase::Ended,
+            pseudo: None,
         }),
     );
     harness.window.frame();
@@ -181,6 +183,7 @@ fn a_second_animation_still_running_keeps_the_content_mounted() {
             name: zgui::view::Ident::new("slide"),
             elapsed: Duration::from_millis(180),
             phase: AnimationPhase::Ended,
+            pseudo: None,
         }),
     );
     harness.window.frame();
@@ -208,6 +211,7 @@ fn a_cancelled_animation_still_lets_the_content_go() {
             name: zgui::view::Ident::new("exit"),
             elapsed: Duration::from_millis(20),
             phase: AnimationPhase::Cancelled,
+            pseudo: None,
         }),
     );
     harness.window.frame();
@@ -282,6 +286,7 @@ fn reopening_before_the_exit_finishes_keeps_the_content_where_it_is() {
             name: zgui::view::Ident::new("exit"),
             elapsed: Duration::from_millis(90),
             phase: AnimationPhase::Ended,
+            pseudo: None,
         }),
     );
     harness.window.frame();

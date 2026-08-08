@@ -27,6 +27,26 @@ pub fn selector_is_accepted(selector: &str) -> bool {
     complaints(&format!("{selector} {{ color: rgb(1, 2, 3) }}")).is_empty()
 }
 
+/// Whether a media query written with `feature` survives parsing in this build.
+///
+/// An unknown media *feature* is not a query that fails to match: the engine reports it as an
+/// expected-feature-name error and drops the whole `@media` rule, taking every rule inside it with
+/// it. So a sheet written against one applies nothing at all, which is indistinguishable from a
+/// preference that happens to be off.
+///
+/// ```
+/// use zgui_css::parity::media_feature_is_accepted;
+///
+/// zgui_css::enable_css_features();
+/// assert!(media_feature_is_accepted("prefers-color-scheme: dark"));
+/// ```
+pub fn media_feature_is_accepted(feature: &str) -> bool {
+    complaints(&format!(
+        "@media ({feature}) {{ box {{ color: rgb(1, 2, 3) }} }}"
+    ))
+    .is_empty()
+}
+
 /// Everything the parser dropped while reading `css`, one message per drop.
 ///
 /// Order is the order the parser reported them, and each message carries the line and column of

@@ -7,6 +7,7 @@ use zgui_geom::CssPx;
 
 use crate::style::paragraph::{TextAlign, TextAlignLast, TextIndent, TextJustify};
 use crate::style::spacing::LengthPercent;
+use crate::style::transform::{CaseTransform, TextTransform};
 use crate::style::wrap::{LineBreak, OverflowWrap, WhiteSpaceCollapse, WordBreak, WrapMode};
 
 /// Splits a cascaded length-or-percentage into its absolute and fractional parts.
@@ -83,6 +84,30 @@ pub fn white_space(group: &style_structs::InheritedText) -> WhiteSpaceCollapse {
         text::WhiteSpaceCollapse::Preserve => WhiteSpaceCollapse::Preserve,
         text::WhiteSpaceCollapse::PreserveBreaks => WhiteSpaceCollapse::PreserveBreaks,
         text::WhiteSpaceCollapse::BreakSpaces => WhiteSpaceCollapse::BreakSpaces,
+    }
+}
+
+/// `text-transform`.
+///
+/// The case keywords are exclusive by the grammar, so the flags are read in the order the parser
+/// could have set them and the first one found wins; `full-width` and `full-size-kana` combine with
+/// whichever it was. `math-auto` is generated for another engine and never reaches a computed value
+/// in this build, so there is no flag here for it to be dropped from.
+pub fn transform(group: &style_structs::InheritedText) -> TextTransform {
+    let flags = group.text_transform;
+    let case = if flags.contains(text::TextTransform::UPPERCASE) {
+        CaseTransform::Upper
+    } else if flags.contains(text::TextTransform::LOWERCASE) {
+        CaseTransform::Lower
+    } else if flags.contains(text::TextTransform::CAPITALIZE) {
+        CaseTransform::Capitalize
+    } else {
+        CaseTransform::None
+    };
+    TextTransform {
+        case,
+        full_width: flags.contains(text::TextTransform::FULL_WIDTH),
+        full_size_kana: flags.contains(text::TextTransform::FULL_SIZE_KANA),
     }
 }
 

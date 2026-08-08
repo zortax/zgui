@@ -14,12 +14,22 @@ use crate::zdoc::Zdoc;
 /// The probed elements are deliberately positioned (so an inset has something to move), sized
 /// explicitly in one place and left automatic in another (so both a definite and an intrinsic
 /// size are exercised), and one of them is a list item (so a marker exists to be styled).
+///
+/// Three of the containers exist for one property each, because a property that only decides what
+/// happens to a *leftover* has nothing to decide in a container that has none: `.flexwrap` is taller
+/// than its lines so that `align-content` has free space to distribute, `.squeeze` is narrower than
+/// its items so that `flex-shrink` has an overflow to take back, and `.gridcols` flows along the
+/// inline axis over one explicit row, so that its second and third items land in implicit columns —
+/// two of them, because the width of the last track moves nothing and only the width of the one
+/// before it can be seen.
 const SHEET: &str = "\
 root { display: block; width: 400px; height: 300px }
 .flexbox { display: flex; width: 300px; height: 120px }
 .gridbox { display: grid; grid-template-columns: 80px 80px; grid-template-rows: 40px; width: 300px }
 .blockbox { display: block; width: 300px }
-.flexwrap { display: flex; flex-wrap: wrap; align-content: flex-start; width: 100px; height: 90px }
+.flexwrap { display: flex; flex-wrap: wrap; align-content: flex-start; width: 100px; height: 150px }
+.squeeze { display: flex; width: 60px; height: 40px }
+.gridcols { display: grid; grid-auto-flow: column; grid-template-columns: 40px; grid-template-rows: 40px; width: 300px }
 .cell { width: 60px; height: 30px; position: relative; padding: 3px; outline: 1px solid }
 .auto { display: block }
 .item { display: list-item }
@@ -35,10 +45,15 @@ root { display: block; width: 400px; height: 300px }
 /// The probe class sits on the containers as well as on their children, because roughly half the
 /// layout vocabulary is a property a *container* reads about its children — a fixture that probed
 /// only the children would report `flex-direction` and `grid-template-columns` as having no effect.
+///
+/// The text holds a run of two spaces and a tab, neither of which a document would ordinarily
+/// bother with. They are what `white-space-collapse` and `tab-size` act on: text with one space
+/// between each word collapses to itself, so a fixture written that way reports both properties as
+/// having no effect however faithfully they are honoured.
 const TREE: &str = "\
 root
   div.flexbox.probe
-    div.cell.probe \"ab cd ef\"
+    div.cell.probe \"ab  cd\tef\"
       span \"x\"
       div.inner
       img [40x30]
@@ -47,12 +62,19 @@ root
     div.cell.probe
     div.cell
     div.cell
+  div.squeeze.probe
+    div.cell.probe
+    div.cell
   div.gridbox.probe
     div.cell.probe
     div.cell
     div.cell
+  div.gridcols.probe
+    div.cell.probe
+    div.cell
+    div.cell
   div.blockbox.probe
-    div.cell.probe \"ab cd ef\"
+    div.cell.probe \"ab  cd\tef\"
     div.auto.probe \"gh ij kl mn op qr\"
       img [40x30]
     div.item.probe \"st\"

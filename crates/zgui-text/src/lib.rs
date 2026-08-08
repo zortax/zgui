@@ -70,6 +70,7 @@ pub mod glyph;
 pub mod map;
 pub mod metrics;
 pub mod paragraph;
+pub mod transform;
 
 /// Path geometry, re-exported because a glyph's outline is part of this crate's vocabulary.
 ///
@@ -95,6 +96,7 @@ pub use crate::paragraph::{
     LineBands, MaxAdvance, ParagraphCache, ParagraphContent, ParagraphKey, ParagraphShaper, Plan,
     ShapedParagraph, StyledRun, breaking_key, lay_out,
 };
+pub use crate::transform::{Language, Transformer};
 /// Which way the clusters of a run advance on the screen.
 ///
 /// The accessibility vocabulary's own enumeration, re-exported because it is what

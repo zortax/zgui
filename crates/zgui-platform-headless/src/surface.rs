@@ -55,6 +55,13 @@ pub struct OffscreenSurface {
     /// was said cannot tell a window that reports the caret from one that reports nothing and
     /// leaves every Japanese keyboard unable to type into it.
     text_input_log: Mutex<Vec<Option<TextInput>>>,
+    /// Every cursor the surface was told to show, in order.
+    ///
+    /// Which cursor is over a window is a state the surface is *told*, exactly as text input is:
+    /// nothing in the document, the fragment tree or the display list records it, so a test that
+    /// cannot read what was said cannot tell a window that honours `cursor` from one that ignores
+    /// it.
+    cursor_log: Mutex<Vec<CursorStyle>>,
     /// Whether the surface has been shown.
     visible: AtomicBool,
     /// The last title it was given.
@@ -80,6 +87,7 @@ impl OffscreenSurface {
             a11y_updates: AtomicU64::new(0),
             a11y_log: Mutex::new(Vec::new()),
             text_input_log: Mutex::new(Vec::new()),
+            cursor_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
@@ -163,6 +171,23 @@ impl OffscreenSurface {
             .expect("the log is not poisoned")
             .last()
             .cloned()
+    }
+
+    /// Every cursor the surface was told to show, in the order it was told.
+    pub fn cursor_log(&self) -> Vec<CursorStyle> {
+        self.cursor_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
+    /// The cursor the surface was last told to show, if it has been told at all.
+    pub fn last_cursor(&self) -> Option<CursorStyle> {
+        self.cursor_log
+            .lock()
+            .expect("the log is not poisoned")
+            .last()
+            .copied()
     }
 
     /// Whether the surface has been shown.
@@ -257,7 +282,12 @@ impl Surface for OffscreenSurface {
 
     fn set_fullscreen(&self, _mode: Option<FullscreenMode>) {}
 
-    fn set_cursor(&self, _cursor: CursorStyle) {}
+    fn set_cursor(&self, cursor: CursorStyle) {
+        self.cursor_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(cursor);
+    }
 
     fn set_text_input(&self, state: Option<TextInput>) {
         self.text_input_log

@@ -242,6 +242,7 @@ fn a_dialog_leaving_waits_for_its_own_animation_rather_than_for_a_number() {
             name: zgui::view::Ident::new("exit"),
             elapsed: Duration::from_millis(180),
             phase: AnimationPhase::Ended,
+            pseudo: None,
         }),
     );
     harness.window.frame();

@@ -17,29 +17,40 @@ impl LayoutStore {
         if self.layout.get(key).and_then(Option::as_ref).is_none() {
             return;
         }
-        let previous = self
+        // The marks `text-overflow` cuts the lines with are paragraphs of their own, and they are
+        // retained beside the context's: a mark whose shaping is evicted while a line still names it
+        // is a line drawn with no ellipsis and no way to notice.
+        let held = self
             .layout
             .get(key)
             .and_then(Option::as_ref)
-            .and_then(|state| state.inline.as_ref())
-            .map(|held| held.paragraph);
-        let next = resolution.paragraph;
-        if previous != Some(next) {
-            if let Some(previous) = previous {
-                self.release_paragraph(previous);
+            .and_then(|state| state.inline.as_ref());
+        let previous: Vec<_> = held
+            .map(|held| held.paragraphs().collect())
+            .unwrap_or_default();
+        let next: Vec<_> = resolution.paragraphs().collect();
+        for id in &next {
+            if !previous.contains(id) {
+                self.retain_paragraph(*id);
             }
-            self.retain_paragraph(next);
+        }
+        for id in &previous {
+            if !next.contains(id) {
+                self.release_paragraph(*id);
+            }
         }
         if let Some(state) = self.layout.get_mut(key).as_mut() {
             state.inline = Some(Box::new(resolution));
         }
     }
 
-    /// Removes one inline resolution and releases the paragraph identifier it held.
+    /// Removes one inline resolution and releases the paragraph identifiers it held.
     pub(crate) fn take_inline_resolution(&mut self, key: BoxKey) -> Option<Box<InlineResolution>> {
         let resolution = self.layout.get_mut(key).as_mut()?.inline.take();
         if let Some(held) = &resolution {
-            self.release_paragraph(held.paragraph);
+            for id in held.paragraphs().collect::<Vec<_>>() {
+                self.release_paragraph(id);
+            }
         }
         resolution
     }
@@ -58,6 +69,17 @@ impl LayoutStore {
     /// The flattened form one inline formatting context is holding, if it is holding one.
     pub(crate) fn flattened(&self, key: BoxKey) -> Option<&Flattened> {
         self.layout.get(key)?.as_ref()?.flattened.as_deref()
+    }
+
+    /// The string a shaper was handed for one inline formatting context.
+    ///
+    /// The document's own text is not it: white space has been collapsed, tabs expanded and
+    /// `text-transform` applied, and every offset the lines, the clusters and the hit answers are
+    /// expressed in is an offset into *this*. Exposed because it is the only place the result of
+    /// those three is visible — a case transform moves no edge, so an inspector or a parity harness
+    /// that reads the fragment tree alone cannot see that it happened at all.
+    pub fn generated_text(&self, key: BoxKey) -> Option<&str> {
+        self.flattened(key).map(|flattened| flattened.text())
     }
 
     /// Holds one inline formatting context's flattened form, replacing whatever it held.

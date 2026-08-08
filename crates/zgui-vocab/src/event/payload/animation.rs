@@ -6,6 +6,31 @@ use zgui_interned::Ident;
 
 use crate::event::kind::EventKind;
 
+/// Which generated-content pseudo-element a lifecycle event happened on.
+///
+/// A pseudo-element has no node of its own, so its events are dispatched at the element it was
+/// generated from. Without this marker a listener on an element that animates both its own box and
+/// its `::before` receives two indistinguishable events, and the one thing it has to decide — which
+/// of them means "the exit animation is over, the content may go" — cannot be decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Pseudo {
+    /// The box generated before the element's own content.
+    Before,
+    /// The box generated after it.
+    After,
+}
+
+impl Pseudo {
+    /// The selector this is written as, without the colons.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Before => "before",
+            Self::After => "after",
+        }
+    }
+}
+
 /// A stage in a named animation's life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -48,6 +73,7 @@ impl AnimationPhase {
 ///     name: Ident::new("fade-out"),
 ///     elapsed: Duration::from_millis(150),
 ///     phase: AnimationPhase::Ended,
+///     pseudo: None,
 /// };
 /// assert!(event.is_final());
 /// ```
@@ -56,9 +82,15 @@ pub struct AnimationEvent {
     /// The name the animation was declared under.
     pub name: Ident,
     /// How long the animation had been running, excluding any delay.
+    ///
+    /// A negative `animation-delay` starts the animation part-way through, and this reports where
+    /// it started from rather than zero, which is what makes the number comparable with the
+    /// stylesheet's own.
     pub elapsed: Duration,
     /// Which stage of its life this reports.
     pub phase: AnimationPhase,
+    /// The pseudo-element the animation runs on, when it is not the element's own box.
+    pub pseudo: Option<Pseudo>,
 }
 
 impl AnimationEvent {
@@ -106,9 +138,14 @@ pub struct TransitionEvent {
     /// The property whose value is moving.
     pub property: Ident,
     /// How long the transition had been running, excluding its delay.
+    ///
+    /// A negative `transition-delay` starts the transition part-way through, and this reports where
+    /// it started from rather than zero.
     pub elapsed: Duration,
     /// Which stage of its life this reports.
     pub phase: TransitionPhase,
+    /// The pseudo-element the transition runs on, when it is not the element's own box.
+    pub pseudo: Option<Pseudo>,
 }
 
 impl TransitionEvent {
@@ -165,6 +202,7 @@ mod tests {
             name: Ident::new("fade"),
             elapsed: Duration::ZERO,
             phase,
+            pseudo: None,
         };
         assert!(animation(AnimationPhase::Ended).is_final());
         assert!(animation(AnimationPhase::Cancelled).is_final());
@@ -174,6 +212,7 @@ mod tests {
             property: Ident::new("opacity"),
             elapsed: Duration::ZERO,
             phase,
+            pseudo: None,
         };
         assert!(transition(TransitionPhase::Ended).is_final());
         assert!(!transition(TransitionPhase::Running).is_final());

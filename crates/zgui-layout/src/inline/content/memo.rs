@@ -46,4 +46,9 @@ impl Flattened {
     pub(crate) fn reuse(&self, scale: f32, pieces: &[Piece]) -> Option<Arc<Generated>> {
         (self.scale == scale && self.pieces == pieces).then(|| Arc::clone(&self.content))
     }
+
+    /// The string a shaper was handed.
+    pub(crate) fn text(&self) -> &str {
+        &self.content.text
+    }
 }

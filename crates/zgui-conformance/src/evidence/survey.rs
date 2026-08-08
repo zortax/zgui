@@ -7,7 +7,7 @@ use zgui_css::parity::Support;
 
 use crate::census::Census;
 use crate::evidence::probe::Verdict;
-use crate::evidence::{probes, unproven};
+use crate::evidence::{probes, timed, unproven};
 
 /// What every probe showed, taken once per process.
 ///
@@ -25,12 +25,20 @@ impl Survey {
         SURVEY.get_or_init(|| {
             zgui_css::enable_css_features();
             let baseline = crate::evidence::probe::Baseline::take();
-            Self {
-                verdicts: probes::all()
-                    .iter()
-                    .map(|probe| (probe.css_name(), probe.run_against(&baseline)))
-                    .collect(),
+            let mut verdicts: BTreeMap<String, Verdict> = probes::all()
+                .iter()
+                .map(|probe| (probe.css_name(), probe.run_against(&baseline)))
+                .collect();
+            // A property that describes change over time is asked twice, and the stronger answer is
+            // the true one. The static instrument lays a document out at a single moment, which is
+            // an animation at time zero — so it can only ever report the whole motion vocabulary as
+            // having no effect, and its silence is the instrument's rather than the framework's.
+            for (css_name, verdict) in timed::survey() {
+                if verdict != Verdict::Unchanged {
+                    verdicts.insert(css_name, verdict);
+                }
             }
+            Self { verdicts }
         })
     }
 

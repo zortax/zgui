@@ -131,14 +131,34 @@ impl Probe {
 
 /// Everything about a laid-out document that a stage after layout reads.
 ///
-/// The fragment tree and the hit answers together, because they are two different outputs of the
-/// same pass and a property that moves only the second one has still had an effect.
+/// Five outputs of the same document, because a property that moves any one of them has had an
+/// effect: the fragment tree, the hit answers, the clip chains, what was shaped, and what each
+/// element's style lowers to for painting. The last three are what make a corner radius, a case
+/// transform and a colour answerable at all — none of them moves an edge or a hit answer, so a
+/// harness that compared only the first two would report the whole painting vocabulary, and every
+/// property that changes which characters are shaped, as consumed by nobody.
 fn rendering(laid: &crate::zdoc::build::Laid) -> String {
     format!(
-        "{}{}",
+        "{}{}{}{}{}",
         fragment::full(&laid.store),
-        fragment::hit_answers(laid)
+        fragment::hit_answers(laid),
+        fragment::clip_chains(laid),
+        fragment::inline_text(&laid.store),
+        painting(&laid.styles()),
     )
+}
+
+/// What every element's computed style lowers to for painting, as stable text.
+///
+/// The lowering is the paint stage's whole reading of a computed style: everything that stage takes
+/// from the cascade passes through it, and nothing that does not reach it can be drawn. Comparing it
+/// is therefore the same question the fragment tree answers for layout, asked of the other consumer.
+fn painting(styles: &[zgui_css::ComputedStyle]) -> String {
+    let mut out = String::new();
+    for style in styles {
+        out.push_str(&format!("{:?}\n", zgui_paint::lower(style, 1.0)));
+    }
+    out
 }
 
 /// One property's computed value on every element of a laid-out document.
@@ -185,24 +205,20 @@ mod tests {
     ///
     /// This is the control for [`Probe::in_context`], and it is the assertion that keeps ten
     /// *proven* rows from being vacuous. `border-bottom-style: solid` moves every edge below it by
-    /// three pixels all on its own: if the context leaked into the probed document only, the
-    /// colour probe below would read `Changed` while nothing anywhere reads a border colour, and
-    /// so would every border-width probe whatever became of the width.
+    /// three pixels all on its own: if the context leaked into the probed document only, every
+    /// probe carrying one would read `Changed` whatever became of the property it names. The row
+    /// asserted against here is one nothing reads, so `Changed` could only have come from the
+    /// context.
     #[test]
     fn a_context_is_present_on_both_sides_of_the_comparison() {
         let context = "border-bottom-style: solid";
         assert_eq!(
-            Probe::in_context(
-                "border_bottom_color",
-                context,
-                "border-bottom-color: rgb(3, 5, 7)"
-            )
-            .run(),
+            Probe::in_context("border_image_outset", context, "border-image-outset: 3px").run(),
             Verdict::Unchanged,
             "the context moved the tree by itself, so no probe using one proves anything",
         );
         assert_eq!(
-            Probe::new("border_bottom_color", "border-bottom-color: rgb(3, 5, 7)").run(),
+            Probe::new("border_image_outset", "border-image-outset: 3px").run(),
             Verdict::Unchanged,
             "the same property without a context, so the two answers are comparable",
         );

@@ -441,6 +441,7 @@ impl Pass<'_, '_> {
                 // what per-channel coverage does not survive.
                 upright: fragment.transform.is_none(),
                 scale: self.input.scale,
+                ellipsis: self.ellipsis(fragment),
             },
             alpha: self.alpha(),
             decorations,
@@ -455,6 +456,32 @@ impl Pass<'_, '_> {
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
         }
+    }
+
+    /// Where a line fragment was cut off by `text-overflow`, if it was.
+    ///
+    /// The cut is a coordinate in the context's own content box, decided while the line was laid
+    /// out; what is needed here is the same coordinate on the device, which is the content box's own
+    /// origin plus it. Nothing but a line can be cut, so everything else answers nothing.
+    fn ellipsis(&self, fragment: &Fragment) -> Option<crate::emit::text::EllipsisPaint> {
+        let zgui_layout::FragmentKind::Line { line, .. } = fragment.kind else {
+            return None;
+        };
+        let resolution = self.input.store.inline_resolution(fragment.box_)?;
+        let cut = resolution.lines.get(line as usize)?.ellipsis?;
+        let mark = resolution.ellipsis.mark(cut.at_start)?;
+        // The line fragment's own rectangle is the line box, and the cut was measured from the
+        // context's content box start — which is where the line box's own start edge is, less
+        // whatever the line was indented or aligned by. Both were composed into the fragment, so
+        // the content box's origin is recovered from the box rather than from the line.
+        let content = self.input.store.fragments_of_box(fragment.box_).first()?;
+        let origin = self.input.store.fragment(*content)?.content_box.origin.x.0;
+        Some(crate::emit::text::EllipsisPaint {
+            paragraph: mark.paragraph,
+            cutoff: origin + cut.cutoff,
+            width: mark.width,
+            at_start: cut.at_start,
+        })
     }
 
     /// The fingerprint of what is drawn with a line fragment besides its glyphs, and zero for

@@ -23,12 +23,22 @@ pub use style::values::computed::TextAlign;
 pub use style::values::computed::TextAlignLast;
 /// `text-indent`, the inset of a paragraph's first line.
 pub use style::values::computed::TextIndent;
+/// `text-overflow`, what a line that does not fit its box is cut off with.
+pub use style::values::computed::TextOverflow;
+/// `text-transform`, the case, width and kana changes applied before a run is shaped.
+///
+/// A set of flags rather than one keyword, because the grammar combines a case transform with
+/// `full-width` and `full-size-kana`. `math-auto` is generated for another engine only, so this
+/// build's parser does not accept it and no computed value can carry it.
+pub use style::values::computed::TextTransform;
 /// `word-break`, which decides where a break is permitted at all.
 pub use style::values::computed::WordBreak;
 /// `word-spacing`, extra advance on space clusters.
 pub use style::values::computed::WordSpacing;
 /// The `text-align` values with no dependence on the parent's value.
 pub use style::values::specified::text::TextAlignKeyword;
+/// Which side of a line `text-overflow` names, once the logical spelling is resolved.
+pub use style::values::specified::text::TextOverflowSide;
 
 /// Builds a `letter-spacing` from a length.
 ///

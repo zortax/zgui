@@ -34,6 +34,12 @@ pub struct LineBox {
     pub width: f32,
     /// How far in from the context's start edge the content begins.
     pub offset: f32,
+    /// Where the line is cut off, when it reaches past its box and the box marks the cut.
+    ///
+    /// Absent for every line that fits, which is nearly all of them, and absent for a box whose
+    /// `text-overflow` is `clip` — the overflow is already not painted and nothing is written where
+    /// it was cut. Painting reads this; layout never does, because an ellipsis changes no geometry.
+    pub ellipsis: Option<crate::inline::ellipsis::LineEllipsis>,
 }
 
 impl LineBox {
@@ -84,6 +90,7 @@ pub fn compute(
             extents,
             width: line.width.0,
             offset: line.offset.0,
+            ellipsis: None,
         });
         top += extents.height();
     }

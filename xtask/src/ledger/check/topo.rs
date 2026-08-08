@@ -27,7 +27,7 @@ const UNSCHEDULED: [&str; 2] = ["probe", "xtask"];
 ///
 /// This is not a general escape hatch. Every entry is one edge, from one named crate to one named
 /// crate, and each is an edge the architecture states outright.
-const DRIVEN: [(&str, &str); 6] = [
+const DRIVEN: [(&str, &str); 8] = [
     ("zgui-runtime", "zgui-scroll"),
     ("zgui-runtime", "zgui-anim"),
     ("zgui-runtime", "zgui-edit"),
@@ -41,6 +41,17 @@ const DRIVEN: [(&str, &str); 6] = [
     // than a harness — which is what it is for — so the alternative to this edge is a tool nothing
     // in the tree opens.
     ("zgui-examples", "zgui-devtools"),
+    // The parity harness measures whether a property has an effect, and a property read only by
+    // the paint stage has none the fragment tree can show. Built before that stage existed, it
+    // reported the whole painting vocabulary as consumed by nobody — twenty-eight longhands — for
+    // as long as it could not lower a style itself. The alternative to this edge is a measurement
+    // that is wrong in one direction by construction.
+    ("zgui-conformance", "zgui-paint"),
+    // And the same again for the two properties that describe a window rather than a document: the
+    // cursor over it and the colour of the caret in it. Neither has a reader anywhere a laid-out
+    // document is all there is, so leaving the edge out would leave both rows classified by nobody
+    // — which the census reports as unclassified rather than as read.
+    ("zgui-conformance", "zgui-runtime"),
 ];
 
 /// Runs the check.

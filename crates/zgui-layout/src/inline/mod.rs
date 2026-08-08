@@ -15,6 +15,7 @@
 //! |---|---|
 //! | [`strut`] | how tall each run makes the line it is on |
 //! | [`lines`] | the CSS line boxes, and where they stack |
+//! | [`ellipsis`] | where a line that does not fit is cut off, and what marks the cut |
 //! | [`vertical_align`] | how far each box moves off the baseline |
 //! | [`floats`] | how wide each line is allowed to be |
 //! | [`baseline`] | which line a parent aligns the whole context by |
@@ -29,6 +30,7 @@ pub mod atomic;
 pub mod baseline;
 pub(crate) mod boxes;
 pub(crate) mod content;
+pub mod ellipsis;
 pub mod floats;
 pub(crate) mod insets;
 pub mod leaf_shell;

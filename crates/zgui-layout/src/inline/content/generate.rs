@@ -18,7 +18,7 @@ use core::ops::Range;
 use zgui_css::ComputedStyle;
 use zgui_css::values::text::TabSize;
 use zgui_dom::side::BoxKey;
-use zgui_text::{Brush, StyledRun, TextMap};
+use zgui_text::{Brush, StyledRun, TextMap, Transformer};
 use zgui_text_style::{LengthPercent, ParagraphStyle, TextPaint};
 
 use crate::inline::content::collect::Piece;
@@ -39,6 +39,7 @@ pub(crate) fn build(
     scale: f32,
 ) -> Generated {
     let root_style = styles.get(&store.node(root).style);
+    let root_brush = styles.brush(&store.node(root).style, &root_style.paint, &mut *claim);
     let mut builder = Builder::default();
 
     for piece in pieces {
@@ -68,6 +69,7 @@ pub(crate) fn build(
         items: builder.items,
         paragraph: scaled_paragraph(root_style.paragraph, scale),
         root: root_style.text,
+        root_brush,
     }
 }
 
@@ -115,6 +117,14 @@ struct Builder {
     at_start: bool,
     /// The next inline box identifier.
     next_id: u64,
+    /// The `text-transform` state, carried across runs.
+    ///
+    /// Across runs, because an inline box boundary leaves a word running: a word split by a
+    /// `<span>` is one word, so `capitalize` capitalises it once, and a Greek sigma at the end of
+    /// one run is decided by the letter the next run starts with. Each run reconfigures the
+    /// transformer to its own property and the state carries through, which is what makes both of
+    /// those come out right.
+    transform: Option<Transformer>,
 }
 
 /// One run under construction.
@@ -140,6 +150,7 @@ impl Builder {
             brush,
             end: self.text.len(),
         });
+        self.reconfigure_transform(style);
 
         let collapse = style.text.white_space.collapses_spaces();
         let newlines = style.text.white_space.preserves_newlines();
@@ -149,12 +160,17 @@ impl Builder {
                 '\n' if newlines => {
                     self.pending = None;
                     self.emit(index, offset..offset + width, "\n");
+                    self.interrupt_transform();
                     self.at_start = true;
                 }
                 '\t' if !collapse => {
                     self.flush();
+                    // The spaces stand for one tab, so they are kept away from the transform:
+                    // `full-width` maps `U+0020` alone, and turning the expansion into ideographic
+                    // spaces would change how far the tab advances.
                     let spaces = " ".repeat(tab);
                     self.emit(index, offset..offset + width, &spaces);
+                    self.interrupt_transform();
                     self.at_start = false;
                 }
                 _ if collapse && is_collapsible(character) => {
@@ -163,15 +179,41 @@ impl Builder {
                 '\r' => {}
                 _ => {
                     self.flush();
-                    let mut buffer = [0_u8; 4];
-                    self.emit(
-                        index,
-                        offset..offset + width,
-                        character.encode_utf8(&mut buffer),
-                    );
+                    self.emit_char(index, offset..offset + width, character, !collapse);
                     self.at_start = false;
                 }
             }
+        }
+    }
+
+    /// Puts this run's `text-transform` in force, keeping the state the previous runs built up.
+    ///
+    /// The state is what an inline box boundary must not disturb: a word split by a `<span>` is one
+    /// word, so `capitalize` capitalises it once, and a Greek sigma at the end of one run is decided
+    /// by the letter the next run begins with. Both cross the boundary, so the transformer does.
+    ///
+    /// Nothing is created until the first run that actually asks for a transform, which is nearly
+    /// every document's whole answer: a paragraph with no `text-transform` anywhere never builds one
+    /// and every character takes the path it took before. The first that does resumes from the last
+    /// character already generated, so the word it may be in the middle of is not restarted.
+    fn reconfigure_transform(&mut self, style: &RunStyle) {
+        let transform = style.text.transform;
+        let language = style.text.language.as_ref().map(|tag| tag.as_str());
+        match self.transform.as_mut() {
+            Some(transformer) => transformer.reconfigure(transform, language),
+            None if !transform.is_none() => {
+                let mut transformer = Transformer::new(transform, language);
+                transformer.resume_after(self.text.chars().next_back());
+                self.transform = Some(transformer);
+            }
+            None => {}
+        }
+    }
+
+    /// Tells the transform that something which is not a letter came between two characters.
+    fn interrupt_transform(&mut self) {
+        if let Some(transformer) = self.transform.as_mut() {
+            transformer.interrupt();
         }
     }
 
@@ -180,6 +222,10 @@ impl Builder {
         // White space either side of something opaque survives as one space each side, exactly as
         // it does either side of a word.
         self.flush();
+        if role.is_atomic() {
+            // An image is not a letter, so the word ends at it and the sigma before it is final.
+            self.interrupt_transform();
+        }
         let id = self.next_id;
         self.next_id += 1;
         self.items.push(Item {
@@ -205,7 +251,10 @@ impl Builder {
         if self.at_start {
             return;
         }
-        self.emit(run, offset..offset + 1, " ");
+        // The one space a collapsed run becomes is not white space the style preserved, so
+        // `full-width` leaves it as a space; it still passes through the transform, because it is
+        // what ends the word before it.
+        self.emit_char(run, offset..offset + 1, ' ', false);
         self.at_start = false;
     }
 
@@ -213,12 +262,45 @@ impl Builder {
     fn emit(&mut self, run: usize, source: Range<usize>, generated: &str) {
         let start = self.text.len();
         self.text.push_str(generated);
-        if generated.len() == source.len() {
+        self.record(run, source, start, true);
+    }
+
+    /// Appends one character, through the `text-transform` in force if there is one.
+    ///
+    /// `preserved` says whether the character is white space the style keeps, which is the one
+    /// thing `full-width` distinguishes.
+    fn emit_char(&mut self, run: usize, source: Range<usize>, character: char, preserved: bool) {
+        let start = self.text.len();
+        let verbatim = match self.transform.as_mut() {
+            Some(transformer) => {
+                transformer.push(character, preserved, &mut self.text);
+                let mut buffer = [0_u8; 4];
+                self.text[start..] == *character.encode_utf8(&mut buffer)
+            }
+            None => {
+                self.text.push(character);
+                true
+            }
+        };
+        self.record(run, source, start, verbatim);
+    }
+
+    /// Records what was appended from `start` onwards as coming from `run`'s bytes at `source`.
+    ///
+    /// `verbatim` says whether those bytes are the source bytes themselves. Length alone leaves it
+    /// open, and the difference is a real defect: `ß` upper-cases to `SS`, two bytes standing in for
+    /// two bytes, so treating equal lengths as a copy would put a caret between the two `S`s and
+    /// report it as standing inside the `ß`.
+    fn record(&mut self, run: usize, source: Range<usize>, start: usize, verbatim: bool) {
+        let generated = self.text.len() - start;
+        if verbatim && generated == source.len() {
             self.map.push(start..self.text.len(), run, source.start);
         } else {
-            // A tab that stood for several spaces: every generated byte belongs to the one source
-            // byte, so each is its own stretch rather than a stretch that claims to be a copy.
-            for offset in 0..generated.len() {
+            // A tab that stood for several spaces, or a letter the transform replaced. Every
+            // generated byte belongs to the one source position, so each is a stretch of its own. A
+            // caret therefore lands either side of the `SS` and never inside it, which is right: the
+            // source has one character there.
+            for offset in 0..generated {
                 self.map
                     .push(start + offset..start + offset + 1, run, source.start);
             }
@@ -266,6 +348,7 @@ impl Default for Builder {
             // rather than one it collapses to a space.
             at_start: true,
             next_id: 0,
+            transform: None,
         }
     }
 }

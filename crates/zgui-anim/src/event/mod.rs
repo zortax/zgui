@@ -48,16 +48,21 @@ pub fn lower(edge: &AnimationEdge) -> Payload {
             name: Ident::new(&edge.name),
             elapsed: edge.elapsed,
             phase: match edge.lifecycle {
-                Lifecycle::Started => AnimationPhase::Started,
+                // An animation has no separate creation event, so the engine never reports one for
+                // an animation; the arm exists because the two lifecycles share one enum, and it
+                // answers with the nearest thing rather than inventing a phase.
+                Lifecycle::Created | Lifecycle::Started => AnimationPhase::Started,
                 Lifecycle::Iterated => AnimationPhase::Iterated,
                 Lifecycle::Ended => AnimationPhase::Ended,
                 Lifecycle::Cancelled => AnimationPhase::Cancelled,
             },
+            pseudo: edge.pseudo,
         }),
         TimedKind::Transition => Payload::Transition(TransitionEvent {
             property: Ident::new(&edge.name),
             elapsed: edge.elapsed,
             phase: match edge.lifecycle {
+                Lifecycle::Created => TransitionPhase::Running,
                 // A transition has no iteration, so the engine never reports one; the arm exists
                 // because the two lifecycles share one enum and a silent fallthrough here would
                 // turn an unreported edge into a spurious `transitionstart`.
@@ -65,6 +70,7 @@ pub fn lower(edge: &AnimationEdge) -> Payload {
                 Lifecycle::Ended => TransitionPhase::Ended,
                 Lifecycle::Cancelled => TransitionPhase::Cancelled,
             },
+            pseudo: edge.pseudo,
         }),
     }
 }
@@ -97,6 +103,7 @@ mod tests {
             node: a_node(),
             kind: TimedKind::Animation,
             name: "fade-out".into(),
+            pseudo: None,
             lifecycle: Lifecycle::Ended,
             elapsed: Duration::from_millis(150),
         });
@@ -113,6 +120,7 @@ mod tests {
             node: a_node(),
             kind: TimedKind::Transition,
             name: "background-color".into(),
+            pseudo: None,
             lifecycle: Lifecycle::Cancelled,
             elapsed: Duration::ZERO,
         });

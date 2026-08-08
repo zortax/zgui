@@ -87,6 +87,13 @@ pub(crate) struct Generated {
     pub(crate) paragraph: ParagraphStyle,
     /// The style the strut is measured from, which is the establishing block's own.
     pub(crate) root: Arc<TextStyle>,
+    /// The brush the establishing block's own text is drawn with.
+    ///
+    /// Claimed for the block rather than for any run in it, and used by anything the *box* draws
+    /// rather than the text inside it — which today is the mark `text-overflow` writes where a line
+    /// was cut. A run inside the block may be another colour, and the mark saying the box cut its
+    /// content is not part of that run.
+    pub(crate) root_brush: zgui_text::Brush,
 }
 
 impl Generated {

@@ -258,6 +258,14 @@ pub struct Fragment {
     pub scroll: Option<ScrollFrameId>,
     /// What it draws.
     pub kind: FragmentKind,
+    /// A fingerprint of what this fragment draws that its rectangles do not describe.
+    ///
+    /// Zero for nearly every fragment: what a box paints is decided from its style, and a style
+    /// change damages the box directly. A *line* is the exception, because what it draws is decided
+    /// by the inline formatting context around it — `text-overflow` cuts a line short and marks the
+    /// cut, and both the cut and the mark can move while the line box stays exactly where it was.
+    /// A comparison over rectangles alone would call that identical and never redraw it.
+    pub content_hash: u64,
     /// What painting, damage and hit testing branch on.
     pub flags: FragmentFlags,
     /// Whether this fragment's subtree is pairwise non-overlapping.
@@ -304,6 +312,7 @@ impl Fragment {
             stacking: None,
             scroll: None,
             kind,
+            content_hash: 0,
             flags: FragmentFlags::EMPTY,
             subtree_disjoint: true,
             subtree_rigid: true,

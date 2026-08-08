@@ -66,6 +66,12 @@ impl Window {
             self.selecting = None;
             return false;
         };
+        // `user-select: none` on the field, or on anything above it that the field has not
+        // overridden, means a press here is a press and not the start of a drag.
+        if !self.selectable_at(node) {
+            self.selecting = None;
+            return false;
+        }
         let Some((offset, affinity)) = self.offset_at(node, self.device_point(pointer)) else {
             return false;
         };
@@ -127,7 +133,7 @@ impl Window {
     /// At or above, because a press lands on the text node's box or on an inline span inside the
     /// field rather than on the field itself, and a caret placed only when the field was hit
     /// exactly is a caret that never moves for a click on a letter.
-    fn editable_at(&self, node: Option<NodeKey>) -> Option<NodeKey> {
+    pub(crate) fn editable_at(&self, node: Option<NodeKey>) -> Option<NodeKey> {
         let document = self.document.borrow();
         let mut index = document.store().index_of(node?)?;
         loop {

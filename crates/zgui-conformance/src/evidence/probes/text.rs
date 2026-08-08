@@ -42,7 +42,9 @@ pub static PROBES: &[Probe] = &[
     Probe::new("line_height", "line-height: 3"),
     Probe::new("overflow_wrap", "overflow-wrap: anywhere"),
     Probe::new("pointer_events", "pointer-events: none"),
-    Probe::new("tab_size", "tab-size: 9"),
+    // Only a *preserved* tab stands for a jump to a tab stop; a collapsed one is a space like any
+    // other, so the width it stands for is not a question the fixture asks without the context.
+    Probe::in_context("tab_size", "white-space-collapse: preserve", "tab-size: 9"),
     Probe::new("text_align", "text-align: right"),
     Probe::new("text_align_last", "text-align-last: right"),
     Probe::new(
@@ -53,7 +55,13 @@ pub static PROBES: &[Probe] = &[
     Probe::new("text_decoration_style", "text-decoration-style: wavy"),
     Probe::new("text_indent", "text-indent: 13px"),
     Probe::new("text_justify", "text-justify: inter-word"),
-    Probe::new("text_overflow", "text-overflow: ellipsis"),
+    // A mark is written where content was *cut*, so the fixture has to cut some: a box that lets
+    // its lines spill out was never cut and has nothing to mark.
+    Probe::in_context(
+        "text_overflow",
+        "overflow: hidden",
+        "text-overflow: ellipsis",
+    ),
     Probe::new("text_rendering", "text-rendering: optimizeSpeed"),
     Probe::new("text_shadow", "text-shadow: 0 0 9px rgb(1, 2, 3)"),
     Probe::new("text_transform", "text-transform: uppercase"),

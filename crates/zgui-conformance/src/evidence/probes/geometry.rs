@@ -45,7 +45,9 @@ pub static PROBES: &[Probe] = &[
     Probe::new("grid_column_start", "grid-column-start: 2"),
     Probe::new("grid_row_end", "grid-row-end: 3"),
     Probe::new("grid_row_start", "grid-row-start: 2"),
-    Probe::new("grid_template_areas", r#"grid-template-areas: "a b""#),
+    // Three columns named where the fixture's grid declares two, so the template widens the
+    // explicit grid rather than restating it.
+    Probe::new("grid_template_areas", r#"grid-template-areas: "a a a""#),
     Probe::new("grid_template_columns", "grid-template-columns: 30px 70px"),
     Probe::new("grid_template_rows", "grid-template-rows: 30px 70px"),
     Probe::new("height", "height: 44px"),

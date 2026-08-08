@@ -25,7 +25,7 @@ use crate::inline::content::Role;
 use crate::inline::lines::LineBox;
 use crate::inline::resolved::{InlineResolution, Placement};
 use crate::inline::vertical_align::scale_strut;
-use crate::inline::{boxes, floats, lines, strut};
+use crate::inline::{boxes, ellipsis, floats, lines, strut};
 use crate::measure::{MeasureContent, Measured};
 use crate::tree::LayoutTree;
 
@@ -245,6 +245,22 @@ pub(crate) fn compute<C: MeasureContent>(
         &broken,
         ask.final_pass,
     );
+    // Only the kept pass, and only against a definite width. A probe is answered from the recalled
+    // break rather than from the engine's laid-out form, so its clusters are not the ones this
+    // context is currently holding — and an intrinsic probe has no box edge to overflow in the
+    // first place.
+    let ellipsis = match (ask.final_pass, ask.constraint()) {
+        (true, Constraint::Definite(width)) => mark_overflowing_lines(
+            tree,
+            key,
+            &generated,
+            summary.key,
+            &mut computed,
+            broken.geometry.is_rtl,
+            width,
+        ),
+        _ => Default::default(),
+    };
     let paragraph = tree.store_mut().intern_paragraph(summary.key);
     let resolution = InlineResolution {
         paragraph,
@@ -254,6 +270,7 @@ pub(crate) fn compute<C: MeasureContent>(
         is_rtl: broken.geometry.is_rtl,
         map: generated.map.clone(),
         sources: generated.sources.clone(),
+        ellipsis,
     };
     let measured = Measured {
         size: Size {
@@ -265,6 +282,100 @@ pub(crate) fn compute<C: MeasureContent>(
     };
     tree.store_mut().set_inline_resolution(key, resolution);
     measured
+}
+
+/// Marks every line of a context that reaches past its box, and shapes what marks them.
+///
+/// The whole of `text-overflow`'s cost falls here, and nearly all of it is skipped: a box that does
+/// not clip its inline axis returns at the first test, and one whose lines all fit returns at the
+/// second. Only a context that is genuinely cut off shapes a mark or walks a cluster.
+fn mark_overflowing_lines<C: MeasureContent>(
+    tree: &mut LayoutTree<'_, C>,
+    key: BoxKey,
+    generated: &crate::inline::content::Generated,
+    paragraph: zgui_text::ParagraphKey,
+    lines: &mut [LineBox],
+    is_rtl: bool,
+    available: f32,
+) -> ellipsis::EllipsisSource {
+    let empty = ellipsis::EllipsisSource::default();
+    let Some(governing) = ellipsis::governing(tree.store(), key) else {
+        return empty;
+    };
+    let style = tree.store().node(governing).style.clone();
+    if !ellipsis::clips_inline_axis(&style) {
+        return empty;
+    }
+    let overflowing = ellipsis::any_overflows(lines, available, BREAK_TOLERANCE);
+    if overflowing.is_none() {
+        return empty;
+    }
+    let sides = ellipsis::sides_of(&style, is_rtl);
+    let mut source = ellipsis::EllipsisSource::default();
+    if overflowing.start {
+        source.start = shape_mark(tree, generated, sides.start.text());
+    }
+    if overflowing.end {
+        source.end = shape_mark(tree, generated, sides.end.text());
+    }
+    if source.is_empty() {
+        return empty;
+    }
+    ellipsis::annotate(
+        tree.content(),
+        paragraph,
+        lines,
+        &source,
+        available,
+        BREAK_TOLERANCE,
+    );
+    source
+}
+
+/// Shapes one mark in the context's own root style, and interns the paragraph it became.
+///
+/// The root style rather than a run's, because the mark says the *box* cut its content: a run
+/// inside it may be bold or another size, and the ellipsis is not part of that run. Shaping is
+/// keyed on the content exactly as every other paragraph is, so a hundred labels sharing one style
+/// share one shaped ellipsis between them.
+fn shape_mark<C: MeasureContent>(
+    tree: &mut LayoutTree<'_, C>,
+    generated: &crate::inline::content::Generated,
+    text: Option<&str>,
+) -> Option<ellipsis::EllipsisMark> {
+    let text = text?;
+    if text.is_empty() {
+        return None;
+    }
+    let runs = ellipsis::runs(text, generated.root.clone(), generated.root_brush);
+    let map = zgui_text::TextMap::new();
+    let content = ParagraphContent {
+        text,
+        map: &map,
+        runs: &runs,
+        boxes: &[],
+        paragraph: &generated.paragraph,
+        scale: tree.device().scale,
+    };
+    let summary = tree.content().shape(&content);
+    // Broken once and kept, so the engine's laid-out form holds the mark's single line — which is
+    // what the painter pulls glyphs from. Every frame after this one recalls it and pays nothing.
+    let request = BreakRequest {
+        runs: &runs,
+        boxes: &[],
+        paragraph: &generated.paragraph,
+        max_advance: None,
+        indent_basis: None,
+        bands: LineBands::NONE,
+        probe: false,
+    };
+    tree.content().break_lines(summary.key, &request);
+    let paragraph = tree.store_mut().intern_paragraph(summary.key);
+    Some(ellipsis::EllipsisMark {
+        paragraph,
+        key: summary.key,
+        width: summary.widths.max.0,
+    })
 }
 
 /// The answer to an inline-axis intrinsic probe: one width, and whatever height the context

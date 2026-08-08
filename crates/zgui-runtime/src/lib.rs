@@ -75,6 +75,7 @@ pub mod error;
 pub mod host;
 mod images;
 mod order;
+pub mod parity;
 pub mod probe;
 pub mod replaced;
 pub mod selection;

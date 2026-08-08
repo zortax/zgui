@@ -54,6 +54,7 @@ pub fn text_style(style: &ComputedStyle) -> TextStyle {
         line_height: font::line_height(font_group),
         word_break: inherited_text::word_break(text_group),
         white_space: inherited_text::white_space(text_group),
+        transform: inherited_text::transform(text_group),
         overflow_wrap: inherited_text::overflow_wrap(text_group),
         wrap_mode: inherited_text::wrap_mode(text_group),
         line_break: inherited_text::line_break(text_group),

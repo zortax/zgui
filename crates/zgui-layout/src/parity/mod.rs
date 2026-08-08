@@ -12,6 +12,10 @@
 //! | [`grid`] | the grid vocabulary |
 //! | [`fragment`] | what the fragment pass turns into geometry, clips, transforms and ink |
 //!
+//! One row lives outside all four, beside the code that reads it: `text-overflow`, in
+//! [`inline::ellipsis`](crate::inline::ellipsis). It is not a group of properties and putting it in
+//! a group of one would be filing rather than declaring.
+//!
 //! ```
 //! use zgui_css::parity::Registry;
 //!
@@ -36,6 +40,7 @@ pub fn registered() -> Vec<Registration> {
         flex::REGISTERED,
         grid::REGISTERED,
         fragment::REGISTERED,
+        crate::inline::ellipsis::REGISTERED,
     ]
     .concat()
 }

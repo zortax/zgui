@@ -37,7 +37,9 @@ pub mod fixture;
 pub mod probe;
 pub mod probes;
 pub mod survey;
+pub mod timed;
 pub mod unproven;
 
 pub use crate::evidence::probe::{Baseline, Probe, Verdict};
 pub use crate::evidence::survey::{Finding, Survey, contradictions};
+pub use crate::evidence::timed::TimedProbe;

@@ -73,9 +73,9 @@ pub use crate::lower::cache::{TextStyleCache, TextStyleKey};
 pub use crate::lower::set::TextStyleSet;
 pub use crate::style::variant;
 pub use crate::style::{
-    DEFAULT_OBLIQUE_DEGREES, Direction, FamilyName, FontFamilyList, FontFeature, FontSlant,
-    FontVariant, FontVariation, GenericFamily, LengthPercent, LineBreak, LineHeight,
+    CaseTransform, DEFAULT_OBLIQUE_DEGREES, Direction, FamilyName, FontFamilyList, FontFeature,
+    FontSlant, FontVariant, FontVariation, GenericFamily, LengthPercent, LineBreak, LineHeight,
     OPTICAL_SIZE_AXIS, OpticalSizing, OverflowWrap, ParagraphStyle, SynthesisWeight, TextAlign,
-    TextAlignLast, TextIndent, TextJustify, TextPaint, TextPaintKey, TextStyle, WhiteSpaceCollapse,
-    WordBreak, WrapMode, WritingMode, tag,
+    TextAlignLast, TextIndent, TextJustify, TextPaint, TextPaintKey, TextStyle, TextTransform,
+    WhiteSpaceCollapse, WordBreak, WrapMode, WritingMode, tag,
 };

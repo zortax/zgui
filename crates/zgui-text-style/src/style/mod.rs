@@ -10,6 +10,7 @@ pub mod paragraph;
 pub mod spacing;
 pub mod synthesis;
 pub mod text;
+pub mod transform;
 pub mod variant;
 pub mod wrap;
 pub mod writing;
@@ -25,6 +26,7 @@ pub use crate::style::paragraph::{
 pub use crate::style::spacing::LengthPercent;
 pub use crate::style::synthesis::SynthesisWeight;
 pub use crate::style::text::TextStyle;
+pub use crate::style::transform::{CaseTransform, TextTransform};
 pub use crate::style::variant::FontVariant;
 pub use crate::style::wrap::{LineBreak, OverflowWrap, WhiteSpaceCollapse, WordBreak, WrapMode};
 pub use crate::style::writing::WritingMode;

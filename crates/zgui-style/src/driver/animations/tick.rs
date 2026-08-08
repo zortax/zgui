@@ -15,11 +15,14 @@
 
 use std::time::Duration;
 
-use style::animation::{Animation, AnimationState, ElementAnimationSet, KeyframesIterationState};
+use style::animation::{
+    Animation, AnimationSetKey, AnimationState, ElementAnimationSet, KeyframesIterationState,
+};
 use style::context::SharedStyleContext;
 use style::properties::longhands::animation_fill_mode::computed_value::single_value::T as FillMode;
 use zgui_dom::side::{AnimOverride, AnimPlacement};
 use zgui_dom::{Document, NodeIndex, NodeKey};
+use zgui_vocab::Pseudo;
 
 use crate::driver::animations::sample::{self, AnimatedProperties};
 use crate::driver::animations::set::{self, Animations};
@@ -36,6 +39,13 @@ pub enum TimedKind {
 /// A moment in a running animation's life.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Lifecycle {
+    /// The transition was created and has not begun moving yet.
+    ///
+    /// Reported for a transition and never for a keyframe animation, because the two vocabularies
+    /// differ here: `transitionrun` fires when the transition is created and `transitionstart` when
+    /// its delay is over, whereas an animation has only the second of those. A transition with no
+    /// delay crosses both edges in one tick, in this order.
+    Created,
     /// The delay is over and the value has begun moving.
     Started,
     /// One iteration finished and another began.
@@ -55,9 +65,19 @@ pub struct AnimationEdge {
     pub kind: TimedKind,
     /// The `@keyframes` name, or the property a transition moves.
     pub name: String,
+    /// The generated-content pseudo-element it runs on, when it is not the element's own box.
+    ///
+    /// A pseudo-element has no node, so its edges are reported against the element it was generated
+    /// from. Two animations on one element — its own and its `::before`'s — otherwise arrive as two
+    /// events a listener cannot tell apart.
+    pub pseudo: Option<Pseudo>,
     /// Which edge was crossed.
     pub lifecycle: Lifecycle,
     /// How long the animation had been running, excluding its delay.
+    ///
+    /// A negative delay starts an animation part-way through, and a start edge reports where it
+    /// started from rather than zero — which is what makes the number comparable with the
+    /// stylesheet's.
     pub elapsed: Duration,
 }
 
@@ -151,9 +171,10 @@ pub(crate) fn advance(
             return false;
         }
         let node = document.store().key_of(index);
-        collect_cancelled(set, node, &mut report);
+        let pseudo = pseudo_of(key);
+        collect_cancelled(set, node, pseudo, &mut report);
         set.clear_canceled_animations();
-        let crossed = step(set, node, now, &mut report);
+        let crossed = step(set, node, pseudo, now, &mut report);
         let alive = !set.is_empty();
 
         let advancing = alive && set.running_animation_and_transition_count() > 0;
@@ -301,14 +322,34 @@ fn fold(
     &mut folded[position]
 }
 
+/// Which pseudo-element one animation set belongs to, in the vocabulary a listener receives.
+///
+/// `::selection` and anything else the engine can key a set under is reported as the element's own,
+/// because a listener has no word for it and inventing one would be a vocabulary this framework
+/// does not otherwise have.
+fn pseudo_of(key: &AnimationSetKey) -> Option<Pseudo> {
+    use style::selector_parser::PseudoElement;
+    match key.pseudo_element {
+        Some(PseudoElement::Before) => Some(Pseudo::Before),
+        Some(PseudoElement::After) => Some(Pseudo::After),
+        _ => None,
+    }
+}
+
 /// Records the edges for everything the cascade cancelled since the last tick.
-fn collect_cancelled(set: &ElementAnimationSet, node: NodeKey, report: &mut AnimationReport) {
+fn collect_cancelled(
+    set: &ElementAnimationSet,
+    node: NodeKey,
+    pseudo: Option<Pseudo>,
+    report: &mut AnimationReport,
+) {
     for animation in &set.animations {
         if animation.state == AnimationState::Canceled {
             report.edges.push(AnimationEdge {
                 node,
                 kind: TimedKind::Animation,
                 name: animation.name.to_string(),
+                pseudo,
                 lifecycle: Lifecycle::Cancelled,
                 elapsed: Duration::ZERO,
             });
@@ -320,6 +361,7 @@ fn collect_cancelled(set: &ElementAnimationSet, node: NodeKey, report: &mut Anim
                 node,
                 kind: TimedKind::Transition,
                 name: property_name(transition),
+                pseudo,
                 lifecycle: Lifecycle::Cancelled,
                 elapsed: Duration::ZERO,
             });
@@ -334,6 +376,7 @@ fn collect_cancelled(set: &ElementAnimationSet, node: NodeKey, report: &mut Anim
 fn step(
     set: &mut ElementAnimationSet,
     node: NodeKey,
+    pseudo: Option<Pseudo>,
     now: f64,
     report: &mut AnimationReport,
 ) -> bool {
@@ -349,14 +392,19 @@ fn step(
     let before = report.edges.len();
     for animation in &mut set.animations {
         let name = animation.name.to_string();
+        // The engine marks an animation it has just created and never clears the mark; clearing it
+        // here is what makes "this tick is the first to see it" answerable at all. An animation has
+        // no event at creation — only a transition does — so the mark is spent rather than reported.
+        animation.is_new = false;
         if animation.state == AnimationState::Pending && now >= animation.started_at {
             animation.state = AnimationState::Running;
             report.edges.push(AnimationEdge {
                 node,
                 kind: TimedKind::Animation,
                 name: name.clone(),
+                pseudo,
                 lifecycle: Lifecycle::Started,
-                elapsed: Duration::ZERO,
+                elapsed: begun_at(animation.delay, animation.duration),
             });
         }
         if animation.iterate_if_necessary(now) {
@@ -364,6 +412,7 @@ fn step(
                 node,
                 kind: TimedKind::Animation,
                 name: name.clone(),
+                pseudo,
                 lifecycle: Lifecycle::Iterated,
                 elapsed: active_duration(animation, iterations_done(animation)),
             });
@@ -374,6 +423,7 @@ fn step(
                 node,
                 kind: TimedKind::Animation,
                 name,
+                pseudo,
                 lifecycle: Lifecycle::Ended,
                 elapsed: active_duration(animation, iterations_done(animation) + 1.0),
             });
@@ -381,14 +431,30 @@ fn step(
     }
     for transition in &mut set.transitions {
         let name = property_name(transition);
+        // A transition is *created* by the cascade and *starts* when its delay is over, and the two
+        // are separate events. The engine's own "not yet reported" mark is what separates them: the
+        // creating cascade ran between the last tick and this one, so a transition still carrying
+        // the mark is one this tick is the first to see.
+        if transition.is_new {
+            transition.is_new = false;
+            report.edges.push(AnimationEdge {
+                node,
+                kind: TimedKind::Transition,
+                name: name.clone(),
+                pseudo,
+                lifecycle: Lifecycle::Created,
+                elapsed: Duration::ZERO,
+            });
+        }
         if transition.state == AnimationState::Pending && now >= transition.start_time {
             transition.state = AnimationState::Running;
             report.edges.push(AnimationEdge {
                 node,
                 kind: TimedKind::Transition,
                 name: name.clone(),
+                pseudo,
                 lifecycle: Lifecycle::Started,
-                elapsed: Duration::ZERO,
+                elapsed: begun_at(transition.delay, transition.property_animation.duration),
             });
         }
         if transition.state == AnimationState::Running && transition.has_ended(now) {
@@ -397,6 +463,7 @@ fn step(
                 node,
                 kind: TimedKind::Transition,
                 name,
+                pseudo,
                 // The transition's own duration, not the wall time since it started. A frame
                 // arrives when it arrives, so the two differ by up to a frame, and a listener that
                 // compares the number against the one in the stylesheet compares it against that.
@@ -436,6 +503,17 @@ fn active_duration(animation: &Animation, iterations: f64) -> Duration {
 /// A duration in seconds, floored at zero so a negative never panics.
 fn seconds(value: f64) -> Duration {
     Duration::from_secs_f64(value.max(0.0))
+}
+
+/// How far in an animation with `delay` had already run by the moment it started.
+///
+/// Zero for the ordinary case. A *negative* delay means the animation is created part-way through
+/// itself — `animation-delay: -1s` on a two-second animation begins at the halfway keyframe — and
+/// reporting zero there tells a listener the animation started at its beginning, which is the one
+/// thing that is not true. The distance is capped at one iteration, because an animation whose
+/// negative delay exceeds its own duration has not run for longer than it lasts.
+fn begun_at(delay: f64, duration: f64) -> Duration {
+    seconds((-delay).clamp(0.0, duration.max(0.0)))
 }
 
 /// The property a transition moves, spelled the way a stylesheet spells it.

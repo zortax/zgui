@@ -21,6 +21,10 @@ use zgui_scene::prim::quad::BorderStyle;
 register_properties! {
     border_top_color           => Support::Implemented("zgui-paint::lower::border"),
     border_right_color         => Support::Implemented("zgui-paint::lower::border"),
+    border_block_start_color   => Support::Implemented("zgui-paint::lower::border"),
+    border_block_end_color     => Support::Implemented("zgui-paint::lower::border"),
+    border_inline_start_color  => Support::Implemented("zgui-paint::lower::border"),
+    border_inline_end_color    => Support::Implemented("zgui-paint::lower::border"),
     border_bottom_color        => Support::Implemented("zgui-paint::lower::border"),
     border_left_color          => Support::Implemented("zgui-paint::lower::border"),
     border_top_style           => Support::Implemented("zgui-paint::lower::border"),

@@ -697,6 +697,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 stacking: placed.stacking,
                 scroll: placed.scroll,
                 reads_outside: placed.reads_outside,
+                content_hash: 0,
             };
         }
         // A bar sits in the gutter, which is inside the box's padding box and outside its content
@@ -721,18 +722,21 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 stacking: placed.stacking,
                 scroll: placed.scroll,
                 reads_outside: false,
+                content_hash: 0,
             };
         }
         let line = match kind {
             FragmentKind::Line { line, .. } => line as usize,
             _ => 0,
         };
-        let rect = self
+        let resolved = self
             .store
             .inline_resolution(key)
-            .and_then(|resolution| resolution.lines.get(line))
+            .and_then(|resolution| resolution.lines.get(line));
+        let rect = resolved
             .map(|line| build::line_rect(placed.content_box, line))
             .unwrap_or(Rect::ZERO);
+        let content_hash = resolved.map_or(0, crate::inline::ellipsis::line_hash);
         Geometry {
             border_box: rect,
             padding_box: rect,
@@ -752,6 +756,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             stacking: placed.stacking,
             scroll: placed.scroll,
             reads_outside: false,
+            content_hash,
         }
     }
 

@@ -11,6 +11,7 @@ use crate::style::line_height::LineHeight;
 use crate::style::optical::{OPTICAL_SIZE_AXIS, OpticalSizing};
 use crate::style::spacing::LengthPercent;
 use crate::style::synthesis::SynthesisWeight;
+use crate::style::transform::TextTransform;
 use crate::style::variant::FontVariant;
 use crate::style::wrap::{LineBreak, OverflowWrap, WhiteSpaceCollapse, WordBreak, WrapMode};
 
@@ -75,6 +76,14 @@ pub struct TextStyle {
     pub word_break: WordBreak,
     /// `white-space-collapse`, which decides what text is shaped at all.
     pub white_space: WhiteSpaceCollapse,
+    /// `text-transform`, which decides which characters are shaped at all.
+    ///
+    /// Applied where the string a shaper is handed is generated, before this style ever reaches a
+    /// shaper — so nothing below reads it. It is carried here for one reason, and the reason is the
+    /// only thing keeping the feature correct: the shaping key is hashed from these fields, and a
+    /// transform absent from the key is a transform whose change never invalidates the generated
+    /// string, the shaped paragraph or the box that holds them.
+    pub transform: TextTransform,
     /// `overflow-wrap` — the first of the three breaking-side properties.
     pub overflow_wrap: OverflowWrap,
     /// `text-wrap-mode`.
@@ -104,6 +113,7 @@ impl TextStyle {
             line_height: LineHeight::Normal,
             word_break: WordBreak::Normal,
             white_space: WhiteSpaceCollapse::Collapse,
+            transform: TextTransform::none(),
             overflow_wrap: OverflowWrap::Normal,
             wrap_mode: WrapMode::Wrap,
             line_break: LineBreak::Auto,
@@ -204,6 +214,7 @@ impl TextStyle {
         self.line_height.hash_into(digest);
         digest.push(self.word_break);
         digest.push(self.white_space);
+        self.transform.hash_into(digest);
     }
 
     /// Mixes the breaking half into a digest.

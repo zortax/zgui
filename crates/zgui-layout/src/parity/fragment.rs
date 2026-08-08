@@ -11,6 +11,9 @@ const READER: &str = "zgui-layout::fragment";
 
 zgui_css::register_properties! {
     backdrop_filter => Support::Implemented(READER),
+    border_end_end_radius => Support::Implemented(READER),
+    border_end_start_radius => Support::Implemented(READER),
+    border_start_end_radius => Support::Implemented(READER),
     border_start_start_radius => Support::Implemented(READER),
     border_top_left_radius => Support::Implemented(READER),
     box_shadow => Support::Implemented(READER),

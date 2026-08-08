@@ -123,7 +123,7 @@ impl ShapedClusters for Box<dyn TextEngine> {
         line: u16,
         visit: &mut dyn FnMut(ClusterRun<'_>),
     ) {
-        (**self).visit_clusters(paragraph, line, visit);
+        ShapedClusters::visit_clusters(&**self, paragraph, line, visit);
     }
 }
 

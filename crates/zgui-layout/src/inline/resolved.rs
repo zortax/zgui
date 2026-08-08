@@ -10,6 +10,7 @@ use zgui_dom::side::BoxKey;
 use zgui_text::{ParagraphKey, TextMap};
 
 use crate::fragment::ParagraphId;
+use crate::inline::ellipsis::EllipsisSource;
 use crate::inline::lines::LineBox;
 
 /// Where one atomic inline ended up inside its context.
@@ -45,9 +46,25 @@ pub struct InlineResolution {
     pub map: TextMap,
     /// The box each text run of that string came from, indexed by the run number the map reports.
     pub sources: Vec<BoxKey>,
+    /// What the lines that did not fit are cut off with.
+    ///
+    /// Empty unless some line overflowed *and* the box asked for a mark, so a context whose text
+    /// fits carries nothing and shapes nothing. The marks are shaped paragraphs of their own, which
+    /// is why they are held here: their glyphs have to stay alive for exactly as long as the lines
+    /// that name them.
+    pub ellipsis: EllipsisSource,
 }
 
 impl InlineResolution {
+    /// Every paragraph this resolution names: the lines' own, and the marks that cut them.
+    ///
+    /// What the store retains and releases. A mark is a shaped paragraph like any other and is
+    /// evicted like any other, so a resolution that named one without holding it would be a line
+    /// drawn with an ellipsis that had been thrown away.
+    pub fn paragraphs(&self) -> impl Iterator<Item = ParagraphId> + '_ {
+        core::iter::once(self.paragraph).chain(self.ellipsis.paragraphs())
+    }
+
     /// The baseline a parent aligns this context's first line against.
     pub fn first_baseline(&self) -> Option<f32> {
         self.lines.first().map(LineBox::baseline)

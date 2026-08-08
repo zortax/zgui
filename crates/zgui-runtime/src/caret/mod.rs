@@ -105,6 +105,19 @@ impl Plan {
         self.marks.len()
     }
 
+    /// The colour the caret itself is drawn in, if one is planned.
+    ///
+    /// The caret itself, which the selection band sits under in another colour on another layer.
+    /// Exposed for the same reason [`Window::caret_rect`](crate::Window::caret_rect) is: a caret is
+    /// drawn from a plan, so what colour it came out is absent from the document, the fragment tree
+    /// and the display list alike.
+    pub fn caret_color(&self) -> Option<Color> {
+        self.marks
+            .iter()
+            .find(|mark| mark.layer == HighlightLayer::InFront)
+            .map(|mark| mark.color)
+    }
+
     /// The fingerprint the paint record is keyed on.
     pub fn fingerprint(&self) -> u64 {
         self.fingerprint

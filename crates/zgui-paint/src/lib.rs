@@ -54,6 +54,7 @@ pub mod content;
 pub mod damage;
 pub mod emit;
 pub mod lower;
+pub mod parity;
 pub mod shiftable;
 pub mod walk;
 

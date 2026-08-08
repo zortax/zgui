@@ -241,6 +241,11 @@ impl Window {
         // What is running is published where the cascade has just decided it, so a view asking
         // "is anything still animating on this node" is answered about this frame.
         self.publish_running_animations();
+        // After the cascade, because `cursor` is a computed value and a `:hover` rule is what most
+        // documents write it in — asking before the restyle would answer with the style the
+        // element had before the pointer arrived on it, which is one frame stale for the whole
+        // time the pointer is there.
+        self.update_cursor();
         mark("f.brushes");
         self.update_text_brushes();
         zgui_profile::latency::note_with("d.boxes", || {

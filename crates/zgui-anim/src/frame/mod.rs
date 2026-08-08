@@ -61,7 +61,14 @@ pub struct Animator {
     /// skeletons puts five hundred elements in here and asks about five hundred, and the scan is a
     /// quarter of a million comparisons per frame on a screen that is *waiting*.
     overridden: Vec<NodeIndex>,
-    /// The elements the last tick reported on, whichever path they took.
+    /// The elements the last tick reported as still *advancing*, whichever path they took.
+    ///
+    /// The two words differ for exactly the element this list exists to keep out of trouble. A
+    /// paused animation, and one holding its last keyframe, are reported with nothing to advance,
+    /// and the cascade that runs after the tick is what unpauses one. An element in this list is
+    /// skipped when the animations the cascade started are marked, so recording a paused one here
+    /// would leave the frame it resumed on unmarked and the loop parked for good over an animation
+    /// that is running.
     ///
     /// Kept so that [`Animator::note_started`] can tell an animation the cascade has just created
     /// from one the tick already handled. Without the distinction it would mark the animating bit
@@ -228,6 +235,7 @@ impl Animator {
         self.reported = report
             .elements
             .iter()
+            .filter(|element| element.advancing)
             .map(|element| element.index)
             .collect();
         self.reported.sort_unstable();

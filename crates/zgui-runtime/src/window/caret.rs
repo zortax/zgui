@@ -14,6 +14,20 @@ use zgui_layout::fragment::ParagraphId;
 use crate::caret::{Located, Plan, plan_for};
 use crate::window::Window;
 
+/// The colour one element's caret is drawn in.
+///
+/// `caret-color: auto` is the initial value and means *the text's own colour*, which is what makes
+/// a caret visible in a field whose text a theme has recoloured without anybody writing a second
+/// declaration. Anything else is the colour that was written.
+fn caret_color(style: &zgui_css::ComputedStyle) -> zgui_color::Color {
+    use zgui_css::values::ui::ColorOrAuto;
+    let current = zgui_css::values::color::current(style);
+    match &style.get_inherited_ui().caret_color.0 {
+        ColorOrAuto::Auto => zgui_css::values::color::to_color(current),
+        ColorOrAuto::Color(color) => zgui_css::values::color::resolve(color, current),
+    }
+}
+
 impl Window {
     /// Computes this frame's caret and selection, and damages whatever that moved.
     pub(crate) fn plan_caret(&mut self, now: Instant) {
@@ -55,13 +69,11 @@ impl Window {
         let Some(box_) = crate::caret::place::text_box(&layout, node) else {
             return (Plan::empty(), Vec::new());
         };
-        // The *element's* own colour, not the anonymous box that holds the lines: an anonymous box
-        // inherits it anyway, and reading the element's is what makes a caret that a stylesheet can
-        // move by setting `color` on the field.
+        // The *element's* own style, not the anonymous box that holds the lines: an anonymous box
+        // inherits everything read here anyway, and reading the element's is what makes a caret
+        // that a stylesheet can move by writing on the field.
         let element = layout.boxes_of(node).first().copied().unwrap_or(box_);
-        let color = zgui_css::values::color::to_color(zgui_css::values::color::current(
-            &layout.node(element).style,
-        ));
+        let color = caret_color(&layout.node(element).style);
         let plan = plan_for(
             &located,
             selection,
@@ -112,6 +124,15 @@ impl Window {
             );
         }
         out
+    }
+
+    /// The colour this frame's caret is being drawn in, if one is planned.
+    ///
+    /// Public for the same reason [`Window::caret_rect`] is: a caret is drawn from a plan rather
+    /// than from a fragment, so what colour it came out is not in the document, the fragment tree
+    /// or the display list.
+    pub fn caret_color(&self) -> Option<zgui_color::Color> {
+        self.carets.plan().caret_color()
     }
 
     /// Where the caret is on the screen right now, for the surface's own sake.

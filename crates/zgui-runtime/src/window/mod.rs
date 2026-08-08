@@ -11,6 +11,7 @@ mod brushes;
 mod budget;
 pub mod caret;
 mod crossing;
+mod cursor;
 pub mod frame;
 pub mod input;
 pub mod observe;
@@ -21,6 +22,7 @@ pub mod resize;
 pub mod scale;
 pub mod scheme;
 pub mod scroll;
+mod select;
 mod sheets;
 mod surface_focus;
 mod value;
@@ -433,6 +435,12 @@ pub struct Window {
     published_focus: Option<zgui_dom::NodeKey>,
     /// The handle the application holds this window by, and reads its state through.
     handle: crate::windows::WindowHandle,
+    /// The cursor the window was last told to show.
+    ///
+    /// Held so that a frame asking for the cursor it is already showing asks the windowing system
+    /// for nothing. The pointer sits still over one element for most of a session, so the answer is
+    /// the same on nearly every frame.
+    cursor: zgui_platform::CursorStyle,
     /// The document revision the last completed frame serviced.
     ///
     /// The reactive flush is thread-wide, so a frame in *another* window runs effects that write
@@ -657,6 +665,7 @@ impl Window {
             published_focus: None,
             serviced_revision: Cell::new(0),
             handle,
+            cursor: zgui_platform::CursorStyle::Default,
         }
     }
 

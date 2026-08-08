@@ -37,6 +37,8 @@ pub(super) struct Geometry {
     pub(super) scroll: Option<zgui_scene::ScrollFrameId>,
     /// Whether it reads pixels outside every rectangle it writes.
     pub(super) reads_outside: bool,
+    /// A fingerprint of what it draws that its rectangles do not describe.
+    pub(super) content_hash: u64,
 }
 
 /// What changed between a fragment and the geometry that replaces it.
@@ -56,6 +58,10 @@ pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
         && previous.transform_hash == next.transform_hash
         && previous.stacking == next.stacking
         && previous.scroll == next.scroll
+        // Where a line was cut short and what marks the cut. Both move without moving the line box:
+        // narrowing the box a `white-space: nowrap` label sits in changes neither the line's width
+        // nor its position, and changes exactly which of its clusters are painted.
+        && previous.content_hash == next.content_hash
         && previous
             .flags
             .without(FragmentFlags::HAS_BLENDING_DESCENDANT)
@@ -106,6 +112,7 @@ mod tests {
             stacking: fragment.stacking,
             scroll: fragment.scroll,
             reads_outside: false,
+            content_hash: fragment.content_hash,
         }
     }
 

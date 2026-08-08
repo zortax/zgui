@@ -20,7 +20,7 @@
 //!
 //! let mut registry = Registry::new();
 //! registry.extend(zgui_text_style::parity::REGISTERED).expect("no row declared twice");
-//! assert_eq!(registry.counts().implemented, 24);
+//! assert_eq!(registry.counts().implemented, 27);
 //! assert!(registry.check().is_empty(), "every row still matches what the engine says");
 //! ```
 
@@ -28,6 +28,10 @@ use zgui_css::parity::{AbsentReason, Support};
 
 /// Where the shaper is handed what the lowering produced.
 const SHAPER: &str = "zgui-text-parley::shape::style";
+
+/// Where the string a shaper is handed is built, which is where a property that changes *which*
+/// characters are shaped has to be applied.
+const GENERATOR: &str = "zgui-layout::inline::content::generate";
 
 zgui_css::register_properties! {
     // The face: family, size and the axes it is selected and instanced along.
@@ -62,6 +66,14 @@ zgui_css::register_properties! {
     overflow_wrap => Support::Implemented(SHAPER),
     text_wrap_mode => Support::Implemented(SHAPER),
 
+    // The two properties that decide which characters exist before anything is shaped. Both are
+    // applied where the string a shaper is handed is generated, and both are in the shaping key —
+    // which is what makes a change to either invalidate the string, the shaped paragraph and the
+    // box that holds them.
+    white_space_collapse => Support::Implemented(GENERATOR),
+    text_transform => Support::Implemented(GENERATOR),
+    tab_size => Support::Implemented(GENERATOR),
+
     // The paragraph.
     text_align => Support::Implemented(SHAPER),
     text_indent => Support::Implemented(SHAPER),
@@ -81,9 +93,6 @@ zgui_css::register_properties! {
     ),
     font_language_override => Support::Ignored(
         "in the shaping key as an OpenType language-system tag; nothing hands that tag to a shaper",
-    ),
-    white_space_collapse => Support::Ignored(
-        "in the shaping key; no pass collapses white space, so the generated string is the source",
     ),
     line_break => Support::Ignored(
         "in the breaking key; the line breaker has no strictness control to hand it to",
@@ -138,7 +147,6 @@ mod tests {
                 "line-break",
                 "text-align-last",
                 "text-justify",
-                "white-space-collapse",
                 "writing-mode",
             ]
             .map(str::to_owned)
@@ -157,11 +165,11 @@ mod tests {
             "`-x-lang` is the one row an author cannot reach: {counts:?}",
         );
         assert_eq!(
-            counts.implemented, 24,
+            counts.implemented, 27,
             "a row promoted to `Implemented` must be a deliberate edit to this number, because \
              the promotion is the claim a parity report repeats: {counts:?}",
         );
-        assert_eq!(counts.ignored, 7, "{counts:?}");
+        assert_eq!(counts.ignored, 6, "{counts:?}");
         assert_eq!(counts.total(), super::REGISTERED.len());
     }
 }

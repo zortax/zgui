@@ -126,10 +126,10 @@ mod tests {
     #[test]
     fn it_fires_on_a_property_nothing_reads() {
         let mut lint = IgnoredLint::new();
-        assert!(lint.watching() > 100, "{}", lint.watching());
-        let fired = lint.inspect(&styles("background-color: rgb(1, 2, 3)"));
-        assert_eq!(fired, ["background-color"]);
-        assert!(lint.note("background-color").is_some());
+        assert!(lint.watching() > 60, "{}", lint.watching());
+        let fired = lint.inspect(&styles("table-layout: fixed"));
+        assert_eq!(fired, ["table-layout"]);
+        assert!(lint.note("table-layout").is_some());
     }
 
     /// And is silent on a document that sets only properties something reads.
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn it_reports_each_property_once() {
         let mut lint = IgnoredLint::new();
-        let written = styles("background-color: rgb(1, 2, 3); cursor: pointer");
+        let written = styles("table-layout: fixed; mask-mode: luminance");
         let first = lint.inspect(&written);
         assert_eq!(first.len(), 2, "{first:?}");
         assert_eq!(lint.inspect(&written), Vec::<String>::new());

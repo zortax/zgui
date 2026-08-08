@@ -144,6 +144,20 @@ pub trait MeasureContent {
     /// against the colour, because the slot has to survive a theme change that rewrites what is in
     /// it — and two runs that merely computed to the same colour must not be re-coloured together.
     fn paint_slot(&mut self, paint: &TextPaint) -> Brush;
+
+    /// Where each selectable unit of one broken line sits.
+    ///
+    /// Asked for by `text-overflow`, which needs the boundary a line may be cut on: a cluster is
+    /// where a character begins, and the specification hides a character that would only partly
+    /// overflow rather than cutting through it. Nothing else in layout asks — geometry is decided
+    /// from the line boxes — so a measurer with no shaper behind it answers nothing and is right to.
+    fn visit_clusters(
+        &self,
+        _paragraph: ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+    }
 }
 
 /// A measurer that reports every box as empty and every paragraph as having no lines.

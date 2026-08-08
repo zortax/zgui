@@ -58,7 +58,8 @@ fn preamble(out: &mut String) {
          \n\
          A property counts as **implemented** when some module declares that it reads the value,\n\
          and that declaration is only believed when setting the property on a fixture visibly\n\
-         changes the fragment tree or the answer hit testing gives. A declaration with no such\n\
+         changes one of four things: the fragment tree, the answer hit testing gives, the shapes\n\
+         boxes are clipped to, or what a style lowers to for painting. A declaration with no such\n\
          consequence fails the build unless it is listed, with a reason, under *claimed without\n\
          observable consequence* below.\n\
          \n\
@@ -97,7 +98,7 @@ fn totals(out: &mut String, census: &Census, survey: &Survey, definitions: &Defi
          | Implemented | {} |\n\
          | Parsed and cascaded, not yet implemented | {} |\n\
          | Classified as unavailable from the engine | {} |\n\
-         | Shown by probe to change what layout produces | {proven} |\n\
+         | Shown by probe to change what a frame produces | {proven} |\n\
          | Out of reach: defined by the engine for another target only | {} |\n\
          | Out of reach: register rows | {out_of_reach} |\n\
          | Not yet implemented: register rows | {} |\n",
@@ -225,7 +226,7 @@ fn properties(out: &mut String, census: &Census, survey: &Survey) {
             continue;
         };
         let evidence = match survey.verdict(css_name) {
-            Some(Verdict::Changed) => "changes what layout produces",
+            Some(Verdict::Changed) => "changes what a frame produces",
             Some(Verdict::Unchanged) => "no observable change",
             Some(Verdict::Inert) => "the probe reached no computed style",
             None => "not probed",

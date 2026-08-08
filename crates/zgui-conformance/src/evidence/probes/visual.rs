@@ -22,8 +22,9 @@ pub static PROBES: &[Probe] = &[
     Probe::new("background_position_y", "background-position-y: 9px"),
     Probe::new("background_repeat", "background-repeat: no-repeat"),
     Probe::new("background_size", "background-size: 11px 13px"),
-    Probe::new(
+    Probe::in_context(
         "border_block_end_color",
+        "border-block-end-style: solid",
         "border-block-end-color: rgb(3, 5, 7)",
     ),
     Probe::new("border_block_end_style", "border-block-end-style: dashed"),
@@ -32,8 +33,9 @@ pub static PROBES: &[Probe] = &[
         "border-block-end-style: solid",
         "border-block-end-width: 7px",
     ),
-    Probe::new(
+    Probe::in_context(
         "border_block_start_color",
+        "border-block-start-style: solid",
         "border-block-start-color: rgb(3, 5, 7)",
     ),
     Probe::new(
@@ -45,7 +47,11 @@ pub static PROBES: &[Probe] = &[
         "border-block-start-style: solid",
         "border-block-start-width: 7px",
     ),
-    Probe::new("border_bottom_color", "border-bottom-color: rgb(3, 5, 7)"),
+    Probe::in_context(
+        "border_bottom_color",
+        "border-bottom-style: solid",
+        "border-bottom-color: rgb(3, 5, 7)",
+    ),
     Probe::new(
         "border_bottom_left_radius",
         "border-bottom-left-radius: 9px",
@@ -70,8 +76,9 @@ pub static PROBES: &[Probe] = &[
         "border-image-source: linear-gradient(red, blue)",
     ),
     Probe::new("border_image_width", "border-image-width: 7px"),
-    Probe::new(
+    Probe::in_context(
         "border_inline_end_color",
+        "border-inline-end-style: solid",
         "border-inline-end-color: rgb(3, 5, 7)",
     ),
     Probe::new("border_inline_end_style", "border-inline-end-style: dashed"),
@@ -80,8 +87,9 @@ pub static PROBES: &[Probe] = &[
         "border-inline-end-style: solid",
         "border-inline-end-width: 7px",
     ),
-    Probe::new(
+    Probe::in_context(
         "border_inline_start_color",
+        "border-inline-start-style: solid",
         "border-inline-start-color: rgb(3, 5, 7)",
     ),
     Probe::new(
@@ -93,14 +101,22 @@ pub static PROBES: &[Probe] = &[
         "border-inline-start-style: solid",
         "border-inline-start-width: 7px",
     ),
-    Probe::new("border_left_color", "border-left-color: rgb(3, 5, 7)"),
+    Probe::in_context(
+        "border_left_color",
+        "border-left-style: solid",
+        "border-left-color: rgb(3, 5, 7)",
+    ),
     Probe::new("border_left_style", "border-left-style: dashed"),
     Probe::in_context(
         "border_left_width",
         "border-left-style: solid",
         "border-left-width: 7px",
     ),
-    Probe::new("border_right_color", "border-right-color: rgb(3, 5, 7)"),
+    Probe::in_context(
+        "border_right_color",
+        "border-right-style: solid",
+        "border-right-color: rgb(3, 5, 7)",
+    ),
     Probe::new("border_right_style", "border-right-style: dashed"),
     Probe::in_context(
         "border_right_width",
@@ -112,7 +128,11 @@ pub static PROBES: &[Probe] = &[
         "border_start_start_radius",
         "border-start-start-radius: 9px",
     ),
-    Probe::new("border_top_color", "border-top-color: rgb(3, 5, 7)"),
+    Probe::in_context(
+        "border_top_color",
+        "border-top-style: solid",
+        "border-top-color: rgb(3, 5, 7)",
+    ),
     Probe::new("border_top_left_radius", "border-top-left-radius: 9px"),
     Probe::new("border_top_right_radius", "border-top-right-radius: 9px"),
     Probe::new("border_top_style", "border-top-style: dashed"),
@@ -163,7 +183,11 @@ pub static PROBES: &[Probe] = &[
     Probe::new("mask_type", "mask-type: alpha"),
     Probe::new("mix_blend_mode", "mix-blend-mode: multiply"),
     Probe::new("opacity", "opacity: 0.5"),
-    Probe::new("outline_color", "outline-color: rgb(3, 5, 7)"),
+    Probe::in_context(
+        "outline_color",
+        "outline-style: solid",
+        "outline-color: rgb(3, 5, 7)",
+    ),
     Probe::in_context(
         "outline_offset",
         "outline-style: solid",

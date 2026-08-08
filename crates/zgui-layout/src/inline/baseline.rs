@@ -41,6 +41,7 @@ mod tests {
                 },
                 width: 40.0,
                 offset: 0.0,
+                ellipsis: None,
             },
             LineBox {
                 text: 4..9,
@@ -51,6 +52,7 @@ mod tests {
                 },
                 width: 30.0,
                 offset: 0.0,
+                ellipsis: None,
             },
         ]
     }

@@ -69,7 +69,7 @@ pub use crate::a11y::{
 pub use crate::event::payload::{
     AnimationEvent, AnimationPhase, DropEvent, FocusCause, FocusEvent, ImeEvent, Key, KeyCode,
     KeyEvent, KeyLocation, KeyState, NamedKey, PhysicalKey, PointerAction, PointerButton,
-    PointerEvent, PointerId, PointerKind, ScrollDelta, ScrollEvent, ScrollPhase, TextEvent,
+    PointerEvent, PointerId, PointerKind, Pseudo, ScrollDelta, ScrollEvent, ScrollPhase, TextEvent,
     TransitionEvent, TransitionPhase, UnknownKeyCode, UnknownNamedKey, ValueChange, ValueEvent,
     WheelEvent,
 };

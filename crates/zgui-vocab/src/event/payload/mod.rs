@@ -15,7 +15,7 @@ mod wheel;
 use crate::event::kind::EventKind;
 
 pub use crate::event::payload::animation::{
-    AnimationEvent, AnimationPhase, TransitionEvent, TransitionPhase,
+    AnimationEvent, AnimationPhase, Pseudo, TransitionEvent, TransitionPhase,
 };
 pub use crate::event::payload::drop::DropEvent;
 pub use crate::event::payload::focus::{FocusCause, FocusEvent};

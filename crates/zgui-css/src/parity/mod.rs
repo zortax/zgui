@@ -57,7 +57,7 @@ pub mod support;
 pub use crate::parity::catalog::Longhand;
 pub use crate::parity::engine::{EngineStatus, status_of};
 pub use crate::parity::gap::{GAPS, Gap, GapProbe, GapStatus};
-pub use crate::parity::probe::{complaints, selector_is_accepted};
+pub use crate::parity::probe::{complaints, media_feature_is_accepted, selector_is_accepted};
 pub use crate::parity::record::{ParityError, Registration};
 pub use crate::parity::registry::{Conflict, Counts, Disagreement, Registry};
 pub use crate::parity::support::{AbsentReason, Expectation, Support};

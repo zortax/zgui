@@ -11,9 +11,7 @@ use crate::parity::support::Support;
 const NOTE: &str = "no probe has shown it moving an edge, and no module reads it";
 
 crate::register_properties! {
-    align_content => Support::Ignored(NOTE),
     alignment_baseline => Support::Ignored(NOTE),
-    backface_visibility => Support::Ignored(NOTE),
     baseline_shift => Support::Ignored(NOTE),
     baseline_source => Support::Ignored(NOTE),
     border_collapse => Support::Ignored(NOTE),
@@ -26,18 +24,12 @@ crate::register_properties! {
     container_name => Support::Ignored(NOTE),
     container_type => Support::Ignored(NOTE),
     empty_cells => Support::Ignored(NOTE),
-    flex_shrink => Support::Ignored(NOTE),
-    grid_auto_columns => Support::Ignored(NOTE),
-    grid_template_areas => Support::Ignored(NOTE),
     object_fit => Support::Ignored(NOTE),
     object_position => Support::Ignored(NOTE),
     offset_path => Support::Ignored(NOTE),
     overflow_clip_margin => Support::Ignored(NOTE),
-    perspective => Support::Ignored(NOTE),
-    perspective_origin => Support::Ignored(NOTE),
     position_area => Support::Ignored(NOTE),
     position_try_fallbacks => Support::Ignored(NOTE),
     table_layout => Support::Ignored(NOTE),
-    transform_style => Support::Ignored(NOTE),
     will_change => Support::Ignored(NOTE),
 }

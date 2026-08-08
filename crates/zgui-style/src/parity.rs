@@ -26,7 +26,26 @@
 
 use zgui_css::parity::Support;
 
+/// Where the animation and transition vocabulary is read.
+///
+/// The engine's own driver, reached through this crate: the values are consumed by the cascade that
+/// creates an animation and by the tick that advances it, and both of those run here.
+const MOTION: &str = "zgui-style::driver::animations";
+
 zgui_css::register_properties! {
+    animation_delay => Support::Implemented(MOTION),
+    animation_direction => Support::Implemented(MOTION),
+    animation_duration => Support::Implemented(MOTION),
+    animation_fill_mode => Support::Implemented(MOTION),
+    animation_iteration_count => Support::Implemented(MOTION),
+    animation_name => Support::Implemented(MOTION),
+    animation_play_state => Support::Implemented(MOTION),
+    animation_timing_function => Support::Implemented(MOTION),
+    transition_behavior => Support::Implemented(MOTION),
+    transition_delay => Support::Implemented(MOTION),
+    transition_duration => Support::Implemented(MOTION),
+    transition_property => Support::Implemented(MOTION),
+    transition_timing_function => Support::Implemented(MOTION),
     font_family => Support::Implemented("zgui-style::device::metrics"),
     font_size => Support::Implemented("zgui-style::device::metrics"),
     font_weight => Support::Implemented("zgui-style::device::metrics"),
