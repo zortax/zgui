@@ -176,6 +176,8 @@ impl Device {
     }
 
     /// Returns the descriptor, for the modules that issue ioctls against it.
+    ///
+    /// The same descriptor [`AsFd`] hands out, reached without the trait in scope.
     pub(crate) fn fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()
     }
@@ -234,5 +236,23 @@ impl Device {
     /// Returns [`Error::Ioctl`] when the kernel refuses.
     pub fn drop_master(&self) -> Result<()> {
         ioctl::issue(self.fd(), ioctl::DROP_MASTER, &mut ())
+    }
+}
+
+/// The open descriptor, for a caller that needs the device as a file.
+///
+/// A graphics API is the caller this exists for: `raw-window-handle`'s `DrmDisplayHandle` carries
+/// the device as a raw `i32`, and `as_fd().as_raw_fd()` is how one is taken out. Every other
+/// consumer of a descriptor — `rustix`, `poll`, anything that borrows a file — composes with this
+/// spelling directly.
+///
+/// # The borrow
+///
+/// The descriptor is owned by the [`Device`] and is closed when the device is dropped. So a caller
+/// that keeps the number instead of the borrow must keep the device alive for at least as long. A
+/// number kept past the drop names whatever the process opened next.
+impl AsFd for Device {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
     }
 }
