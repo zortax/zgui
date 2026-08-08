@@ -5994,6 +5994,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-platform-drm"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "zgui-drm",
+ "zgui-geom",
+ "zgui-platform",
+]
+
+[[package]]
 name = "zgui-platform-headless"
 version = "0.1.0"
 dependencies = [
