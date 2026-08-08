@@ -98,6 +98,45 @@ fn a_device_enumerates_its_crtcs_and_connectors() {
 }
 
 #[test]
+fn every_connector_names_encoders_that_reach_a_crtc_in_the_list() {
+    let Some(device) = support::device(
+        "every_connector_names_encoders_that_reach_a_crtc_in_the_list",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let resources = device.resources().expect("the device enumerates");
+    assert!(
+        resources.crtcs.len() < 32,
+        "the possible-CRTC mask is a u32"
+    );
+
+    for id in &resources.connectors {
+        let connector = device
+            .connector(*id)
+            .expect("a listed connector is readable");
+        for encoder in &connector.encoders {
+            let encoder = device
+                .encoder(*encoder)
+                .expect("a named encoder is readable");
+            assert!(
+                encoder.possible_crtcs < (1_u32 << resources.crtcs.len()),
+                "encoder {} indexes the CRTC list",
+                encoder.id
+            );
+            // A connected connector has to be drivable, or nothing could ever show a picture on
+            // it. Output discovery rests on this assertion.
+            if connector.is_connected() {
+                assert_ne!(
+                    encoder.possible_crtcs, 0,
+                    "an encoder reaching a connected connector drives at least one CRTC"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn a_device_enumerates_planes_that_name_the_crtcs_they_can_drive() {
     let Some(device) = support::device(
         "a_device_enumerates_planes_that_name_the_crtcs_they_can_drive",

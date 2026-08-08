@@ -94,6 +94,7 @@ no_payload!(SET_MASTER, 0x1e);
 no_payload!(DROP_MASTER, 0x1f);
 read_write!(MODE_GETRESOURCES, 0xa0, sys::drm_mode_card_res);
 read_write!(MODE_SETCRTC, 0xa2, sys::drm_mode_crtc);
+read_write!(MODE_GETENCODER, 0xa6, sys::drm_mode_get_encoder);
 read_write!(MODE_GETCONNECTOR, 0xa7, sys::drm_mode_get_connector);
 read_write!(MODE_GETPROPERTY, 0xaa, sys::drm_mode_get_property);
 read_write!(MODE_RMFB, 0xaf, u32);
@@ -188,6 +189,7 @@ mod tests {
         assert_eq!(DROP_MASTER.opcode(), 0x0000_641f);
         assert_eq!(MODE_GETRESOURCES.opcode(), 0xc040_64a0);
         assert_eq!(MODE_SETCRTC.opcode(), 0xc068_64a2);
+        assert_eq!(MODE_GETENCODER.opcode(), 0xc014_64a6);
         assert_eq!(MODE_GETCONNECTOR.opcode(), 0xc050_64a7);
         assert_eq!(MODE_GETPROPERTY.opcode(), 0xc040_64aa);
         assert_eq!(MODE_RMFB.opcode(), 0xc004_64af);
