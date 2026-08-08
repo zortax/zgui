@@ -215,6 +215,20 @@ impl Park {
     pub(crate) const fn cancel(&mut self) {
         self.installed = None;
     }
+
+    /// Hands the turn back without waiting, and forgets whatever the moment was.
+    ///
+    /// For the turn that already owes a frame: the loop reads its descriptors and goes round again
+    /// instead of sleeping. The moment goes with it. A wait of no length is no wait for that
+    /// moment, and a moment left installed over one would be reported reached the instant the poll
+    /// came back — an arrival the loop never had.
+    ///
+    /// Forgetting it loses nothing. The application is asked again on the next turn, against a
+    /// clock that has moved, and names the moment again if it still wants it.
+    pub(crate) const fn handed_back(&mut self) -> Parked {
+        self.installed = None;
+        Parked::Never
+    }
 }
 
 /// Returns how long `poll` waits for `parked`, or nothing if it waits until something happens.
@@ -455,6 +469,30 @@ mod tests {
             1,
             "and a wait that carried no deadline counts nothing"
         );
+    }
+
+    #[test]
+    fn a_turn_that_is_handed_back_reports_no_arrival_when_it_comes_round() {
+        // A turn that already owes a frame reads its descriptors and goes round again. The wait
+        // has no length, so it always runs to its end — and a moment left installed over it would
+        // be reported reached the moment the poll came back, every turn, while the moment itself
+        // was still ahead.
+        let mut park = Park::new();
+        let now = Instant::now();
+        let soon = now + Duration::from_secs(1);
+        let mut delivered = 0;
+
+        waits(&mut park, IdlePolicy::BlockUntil(soon), now, &mut delivered);
+        let parked = park.handed_back();
+
+        assert_eq!(parked, Parked::Never);
+        let left = timeout(parked, now).expect("a handed-back turn is a wait of no length");
+        assert_eq!((left.tv_sec, left.tv_nsec), (0, 0));
+        assert!(
+            !park.resumed(),
+            "the wait ran to its end, and it was waiting for nothing"
+        );
+        assert_eq!(park.resumes(), 0, "so no arrival is counted either");
     }
 
     #[test]
