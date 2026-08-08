@@ -20,7 +20,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfontconfig1-dev
       # rust-toolchain.toml pins the toolchain; rustup honours it on first use.
       - name: show toolchain
         run: rustc --version --verbose
@@ -43,7 +44,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfontconfig1-dev
       - uses: Swatinem/rust-cache@v2
       # The wall-clock budgets are deliberately not here. They live behind a feature this does not
       # turn on, and `cargo xtask ci` runs them in release as one of its steps, so a local gate run
@@ -63,7 +65,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfontconfig1-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps
 
@@ -136,7 +139,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfontconfig1-dev
       - uses: Swatinem/rust-cache@v2
         with:
           # The sanitised objects live in a target directory of their own, so the ordinary cache
@@ -200,6 +204,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfontconfig1-dev \
             mesa-vulkan-drivers vulkan-tools libvulkan1
       - name: show the adapter
         run: vulkaninfo --summary || true
