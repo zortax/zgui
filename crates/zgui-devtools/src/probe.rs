@@ -195,13 +195,11 @@ impl FrameProbe for Sampler {
             let moved = self.revision.replace(revision) != revision;
             let switched = self.mode.replace(mode) != mode;
             if moved || switched || due {
-                let ours: Vec<NodeId> = [
-                    state.panel.get_untracked(),
-                    state.overlay.get_untracked(),
-                ]
-                .into_iter()
-                .flatten()
-                .collect();
+                let ours: Vec<NodeId> =
+                    [state.panel.get_untracked(), state.overlay.get_untracked()]
+                        .into_iter()
+                        .flatten()
+                        .collect();
                 let tree =
                     crate::sample::sample_tree(window, mode, &ours, state.app.get_untracked());
                 if state.tree.get_untracked().as_deref() != Some(tree.as_ref()) {

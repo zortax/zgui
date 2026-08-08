@@ -55,12 +55,10 @@ fn a_block_item_in_a_flex_row_is_as_wide_as_its_text() {
 #[test]
 fn a_flex_container_is_as_wide_as_what_it_holds() {
     let fixture = Fixture::new(
-        Element::new("root").children(vec![
-            Element::new("tab").classes(&["tab"]).children(vec![
-                Element::new("mark").classes(&["mark"]),
-                Element::new("item").classes(&["label"]).text("Elements"),
-            ]),
-        ]),
+        Element::new("root").children(vec![Element::new("tab").classes(&["tab"]).children(vec![
+            Element::new("mark").classes(&["mark"]),
+            Element::new("item").classes(&["label"]).text("Elements"),
+        ])]),
         "root { display: flex; flex-direction: row; width: 400px; align-items: flex-start }
          tab { display: flex; flex-direction: row; flex-grow: 0; flex-shrink: 0 }
          mark { display: block; width: 13px; height: 13px }
@@ -90,12 +88,10 @@ fn a_flex_container_is_as_wide_as_what_it_holds() {
 #[test]
 fn a_wrapping_flex_row_still_sizes_its_items_by_their_content() {
     let fixture = Fixture::new(
-        Element::new("root").children(vec![
-            Element::new("tab").classes(&["tab"]).children(vec![
-                Element::new("mark").classes(&["mark"]),
-                Element::new("item").classes(&["label"]).text("Elements"),
-            ]),
-        ]),
+        Element::new("root").children(vec![Element::new("tab").classes(&["tab"]).children(vec![
+            Element::new("mark").classes(&["mark"]),
+            Element::new("item").classes(&["label"]).text("Elements"),
+        ])]),
         "root { display: flex; flex-direction: row; flex-wrap: wrap; width: 400px;
                 align-items: flex-start }
          tab { display: flex; flex-direction: row; flex-grow: 0; flex-shrink: 0 }

@@ -141,7 +141,13 @@ fn Child(
     let this = use_window();
     let focus_state = {
         let this = this.clone();
-        move || if this.focused().get() { "focused" } else { "not focused" }
+        move || {
+            if this.focused().get() {
+                "focused"
+            } else {
+                "not focused"
+            }
+        }
     };
     // Refuses the first close and relents on the second, as an unsaved document would.
     let asked = RwSignal::new(false);

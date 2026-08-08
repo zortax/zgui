@@ -49,7 +49,10 @@ impl CustomElement for Meter {
             cx.access.layout_child(
                 0,
                 (Some(10.0), Some(6.0)),
-                (zgui_custom::Space::Definite(10.0), zgui_custom::Space::Definite(6.0)),
+                (
+                    zgui_custom::Space::Definite(10.0),
+                    zgui_custom::Space::Definite(6.0),
+                ),
             );
             cx.access.place_child(0, 5.0, 7.0);
         }
@@ -134,7 +137,11 @@ fn a_custom_element_is_measured_by_its_trait_and_places_its_child() {
         (5.0, 7.0),
         "the child sits exactly where the element placed it, relative to the element's box"
     );
-    assert_eq!((item.2, item.3), (10.0, 6.0), "at the size the element laid it out at");
+    assert_eq!(
+        (item.2, item.3),
+        (10.0, 6.0),
+        "at the size the element laid it out at"
+    );
 }
 
 /// The custom child's tag, for the fixture: any name will do, the element places by index.

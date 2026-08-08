@@ -215,14 +215,8 @@ mod tests {
         // What makes the tree a tree rather than a list of names: two rows of the same component
         // are two boundaries, and a walker matching an open to a close by name alone would nest
         // the second inside the first.
-        let first = (
-            node(3),
-            node(4),
-        );
-        let second = (
-            node(5),
-            node(6),
-        );
+        let first = (node(3), node(4));
+        let second = (node(5), node(6));
         let one = register(first.0, first.1, &META, &zgui_reactive::Owner::new());
         let two = register(second.0, second.1, &META, &zgui_reactive::Owner::new());
 

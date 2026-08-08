@@ -1,9 +1,7 @@
 //! What a window is asked for before it exists.
 
 use zgui_geom::{CssPx, Point, Size};
-use zgui_platform::{
-    ColorScheme, FullscreenMode, SurfaceAttributes, WindowIcon, WindowLevel,
-};
+use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes, WindowIcon, WindowLevel};
 use zgui_vocab::SharedString;
 
 use crate::commands::CloseResponse;
@@ -132,10 +130,7 @@ impl WindowOptions {
     /// Answering [`CloseResponse::Veto`] keeps the window: what a document with unsaved work does
     /// while it asks. Whatever refuses owes the user another way out, because a window that always
     /// refuses cannot be closed at all.
-    pub fn on_close_request(
-        mut self,
-        callback: impl FnMut() -> CloseResponse + 'static,
-    ) -> Self {
+    pub fn on_close_request(mut self, callback: impl FnMut() -> CloseResponse + 'static) -> Self {
         self.on_close_request = Some(Box::new(callback));
         self
     }

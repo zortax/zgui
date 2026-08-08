@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use zgui_platform::{PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId};
 use zgui_platform_headless::Harness;
+use zgui_reactive::prelude::{Get, Set};
 use zgui_runtime::{
     CloseCallbacks, CloseResponse, ExitPolicy, Runtime, WindowSpec, WindowStatus, WindowToken,
 };
-use zgui_reactive::prelude::{Get, Set};
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 use support::app;
@@ -31,10 +31,10 @@ where
     let mut options = zgui_runtime::WindowContent::default();
     options.window_stylesheet = Some(SHEET.to_owned());
     let token = harness.app().window_commands().open(WindowSpec::new(
-            SurfaceAttributes::new("second"),
-            options,
-            Box::new(view),
-        ));
+        SurfaceAttributes::new("second"),
+        options,
+        Box::new(view),
+    ));
     harness.settle(8);
     token
 }
@@ -57,7 +57,11 @@ fn a_second_window_opens_and_is_a_second_document() {
 
     let token = open_second(&mut harness, empty);
 
-    assert_eq!(harness.app().windows().len(), 2, "the second window is open");
+    assert_eq!(
+        harness.app().windows().len(),
+        2,
+        "the second window is open"
+    );
     assert!(matches!(
         harness.app().window_commands().status(token),
         WindowStatus::Open(_)
@@ -298,12 +302,10 @@ fn a_close_the_user_asked_for_can_be_refused() {
     harness.settle(4);
     let mut options = zgui_runtime::WindowContent::default();
     options.window_stylesheet = Some(SHEET.to_owned());
-    harness.app().window_commands().open(WindowSpec::new(
-            SurfaceAttributes::new("second"),
-            options,
-            Box::new(empty),
-        )
-        .with_close_callbacks(Rc::clone(&close)));
+    harness.app().window_commands().open(
+        WindowSpec::new(SurfaceAttributes::new("second"), options, Box::new(empty))
+            .with_close_callbacks(Rc::clone(&close)),
+    );
     harness.settle(8);
     let ids = surfaces(&harness);
 
@@ -319,7 +321,11 @@ fn a_close_the_user_asked_for_can_be_refused() {
 
     harness.deliver(ids[1], SurfaceEvent::CloseRequested);
     harness.settle(4);
-    assert_eq!(harness.app().windows().len(), 1, "the window never relented");
+    assert_eq!(
+        harness.app().windows().len(),
+        1,
+        "the window never relented"
+    );
 }
 
 #[test]

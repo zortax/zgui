@@ -6,8 +6,8 @@ use std::sync::{Arc, Weak};
 
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, FullscreenMode, PlatformCapabilities, ResizeEdge, Surface, WindowIcon,
-    WindowLevel,
+    ColorScheme, CursorStyle, FullscreenMode, PlatformCapabilities, ResizeEdge, Surface,
+    WindowIcon, WindowLevel,
 };
 use zgui_reactive::prelude::*;
 use zgui_reactive::{RwSignal, Signal};
@@ -135,7 +135,11 @@ impl WindowHandle {
     }
 
     /// Records the size and density the window actually turned out to have.
-    pub(crate) fn set_geometry(&self, size: zgui_geom::Size<zgui_geom::DevicePx, zgui_geom::Device>, scale: f32) {
+    pub(crate) fn set_geometry(
+        &self,
+        size: zgui_geom::Size<zgui_geom::DevicePx, zgui_geom::Device>,
+        scale: f32,
+    ) {
         self.shared.scale.set(scale);
         self.shared.size.set(Size::new(
             CssPx(size.width.0 / scale),

@@ -293,8 +293,7 @@ mod tests {
     use zgui_reactive::Mounted;
     use zgui_view::stub::{StubDom, StubHost};
     use zgui_view::{
-        Anchor, BuildCxOwned, DocumentId, Dom, DomHandle, HostHandle, ObservedValue, PropKey,
-        View,
+        Anchor, BuildCxOwned, DocumentId, Dom, DomHandle, HostHandle, ObservedValue, PropKey, View,
     };
     use zgui_vocab::prop::drawing;
 
@@ -338,7 +337,9 @@ mod tests {
 
         let node = built.first_node().expect("the element is a node");
         let key = PropKey::new(drawing::CANVAS);
-        let before = backend.property(node, key).expect("the reference is written");
+        let before = backend
+            .property(node, key)
+            .expect("the reference is written");
 
         handle.draw(|scene| scene.push(shape()));
         zgui_reactive::flush();

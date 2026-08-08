@@ -84,7 +84,9 @@ pub fn canvas(store: &DocumentStore, node: NodeKey) -> Option<(u32, u32)> {
 /// box built from one answer and painted from the other would be a piece of geometry nothing
 /// draws into.
 pub fn draws(store: &DocumentStore, node: NodeKey) -> bool {
-    path_data(store, node).is_some() || document(store, node).is_some() || canvas(store, node).is_some()
+    path_data(store, node).is_some()
+        || document(store, node).is_some()
+        || canvas(store, node).is_some()
 }
 
 #[cfg(test)]

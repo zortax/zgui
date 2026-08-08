@@ -218,7 +218,9 @@ impl VectorSource for Vectors<'_> {
         let store = self.document.store();
         if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
             let view_box = zgui_dom::side::drawing::view_box(store, node);
-            return self.cache.canvas(node, token, revision, view_box, placement);
+            return self
+                .cache
+                .canvas(node, token, revision, view_box, placement);
         }
         if let Some(source) = zgui_dom::side::drawing::document(store, node) {
             return self.cache.documented(node, source, placement);

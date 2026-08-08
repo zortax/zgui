@@ -13,11 +13,11 @@
 //! * every shape carries its own paint — solid, gradient, or the element's `color` through
 //!   `Brush::Inherited` — so one canvas mixes brushes without a stylesheet in sight.
 
-use zgui::prelude::*;
-use zgui::canvas::{Brush, ShapeBuilder};
 use zgui::canvas::zgui_color::Color;
+use zgui::canvas::{Brush, ShapeBuilder};
 use zgui::elements::kurbo;
 use zgui::elements::kurbo::Shape as _;
+use zgui::prelude::*;
 
 /// The bars the chart shows, as one signal the draw closure reads.
 fn bars() -> RwSignal<Vec<f64>> {

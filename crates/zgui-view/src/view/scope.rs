@@ -332,7 +332,9 @@ mod tests {
         let mut state = Scoped::named(&META, || "body").build(&mut fixture.cx());
         state.mount(&fixture.dom, fixture.root, None);
 
-        let open = state.first_node().expect("the open marker is the first node");
+        let open = state
+            .first_node()
+            .expect("the open marker is the first node");
         let Some(MarkerRole::Open(tag)) = at(open) else {
             panic!("the scope's first node is not a registered component boundary");
         };

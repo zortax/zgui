@@ -26,13 +26,13 @@ use zgui::{component, view};
 )]
 use crate::panel::frame::{FramePanel, FramePanelProps};
 #[allow(unused_imports, reason = "as above")]
+use crate::panel::highlight::{HighlightOverlay, HighlightOverlayProps};
+#[allow(unused_imports, reason = "as above")]
 use crate::panel::memory::{MemoryPanel, MemoryPanelProps};
 #[allow(unused_imports, reason = "as above")]
 use crate::panel::parity::{ParityPanel, ParityPanelProps};
 #[allow(unused_imports, reason = "as above")]
 use crate::panel::reactive::{ReactivePanel, ReactivePanelProps};
-#[allow(unused_imports, reason = "as above")]
-use crate::panel::highlight::{HighlightOverlay, HighlightOverlayProps};
 #[allow(unused_imports, reason = "as above")]
 use crate::panel::timeline::{TimelinePanel, TimelinePanelProps};
 #[allow(unused_imports, reason = "as above")]

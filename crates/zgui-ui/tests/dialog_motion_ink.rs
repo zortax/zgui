@@ -200,7 +200,10 @@ fn the_triangle_survives_the_dialog_settling() {
     stage.wait_quietly(SETTLED);
     stage.capture("alert-settled");
     let after = ink(&stage, icon_rect(&stage));
-    assert!(after > 0.01, "settled: the triangle left no pixels: {after}");
+    assert!(
+        after > 0.01,
+        "settled: the triangle left no pixels: {after}"
+    );
 
     // And a complete picture agrees: the settled frame carries the drawing.
     stage.repaint();

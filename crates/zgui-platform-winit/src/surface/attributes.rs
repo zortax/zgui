@@ -229,10 +229,7 @@ mod tests {
 
         // With no preference of its own it follows the desktop, which is what it did before.
         let following = window(&SurfaceAttributes::new("zgui"), Some(ColorScheme::Light));
-        assert_eq!(
-            following.preferred_theme,
-            Some(winit::window::Theme::Light)
-        );
+        assert_eq!(following.preferred_theme, Some(winit::window::Theme::Light));
     }
 
     #[test]

@@ -207,8 +207,7 @@ fn the_real_host_degrades_to_bookkeeping_with_no_device() {
             )
         },
     );
-    app.app_mut().windows_mut()[0]
-        .install_embed_host(Box::new(zgui_wgpu::WgpuSurfaces::new()));
+    app.app_mut().windows_mut()[0].install_embed_host(Box::new(zgui_wgpu::WgpuSurfaces::new()));
     app.settle(16);
 
     assert_eq!(

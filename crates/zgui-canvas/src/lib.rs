@@ -222,11 +222,7 @@ impl Brush {
 }
 
 /// A document gradient from a brush's stops.
-fn gradient(
-    kind: GradientKind,
-    stops: Vec<(f32, zgui_color::Color)>,
-    repeating: bool,
-) -> Gradient {
+fn gradient(kind: GradientKind, stops: Vec<(f32, zgui_color::Color)>, repeating: bool) -> Gradient {
     let stops: smallvec::SmallVec<[Stop; 4]> = stops
         .into_iter()
         .map(|(offset, color)| Stop {
@@ -395,7 +391,11 @@ mod tests {
             scene.clear();
             scene.push(ShapeBuilder::new(triangle()).build());
         });
-        assert_eq!(handle.revision(), 2, "one edit is one revision, however much it did");
+        assert_eq!(
+            handle.revision(),
+            2,
+            "one edit is one revision, however much it did"
+        );
     }
 
     #[test]
@@ -429,7 +429,10 @@ mod tests {
                 repeating: false,
             })
             .build();
-        assert!(matches!(ramp.fill.as_ref().unwrap().paint, Paint::Gradient(_)));
+        assert!(matches!(
+            ramp.fill.as_ref().unwrap().paint,
+            Paint::Gradient(_)
+        ));
     }
 
     #[test]

@@ -183,8 +183,10 @@ impl App {
     ///
     /// Ignored where a desktop places windows itself, which is every Wayland compositor.
     pub fn with_position(mut self, x: f32, y: f32) -> Self {
-        self.inner.attributes_mut().position =
-            Some(zgui_geom::Point::new(zgui_geom::CssPx(x), zgui_geom::CssPx(y)));
+        self.inner.attributes_mut().position = Some(zgui_geom::Point::new(
+            zgui_geom::CssPx(x),
+            zgui_geom::CssPx(y),
+        ));
         self
     }
 
@@ -376,9 +378,7 @@ impl App {
         // opening the window and the graphics device rather than in front of them.
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
-        let renderer = self
-            .renderer
-            .unwrap_or_else(graphics::factory);
+        let renderer = self.renderer.unwrap_or_else(graphics::factory);
         let runtime = self
             .inner
             .with_renderer(renderer)

@@ -32,10 +32,10 @@ where
     let mut options = zgui_runtime::WindowContent::default();
     options.window_stylesheet = Some(SHEET.to_owned());
     harness.app().window_commands().open(WindowSpec::new(
-            SurfaceAttributes::new("second"),
-            options,
-            Box::new(view),
-        ));
+        SurfaceAttributes::new("second"),
+        options,
+        Box::new(view),
+    ));
     harness.settle(8);
 }
 

@@ -148,14 +148,12 @@ pub use zgui_elements::expansion;
 
 /// Where a glyph tile or a decoded image is kept, and how it reaches a device.
 pub use zgui_atlas as atlas;
+/// The damage a frame has to redraw.
+pub use zgui_bits as bits;
 /// What a `canvas` element is drawn with: scenes, shapes and brushes.
 pub use zgui_canvas as canvas;
 /// Trait-based custom elements: retained widgets on the engine's own pipelines.
 pub use zgui_custom as custom;
-/// What a `surface` element is filled through: handles, renderers, and the shared device.
-pub use zgui_wgpu as surface;
-/// The damage a frame has to redraw.
-pub use zgui_bits as bits;
 /// The element vocabulary, as builders.
 pub use zgui_elements as elements;
 /// The pixel spaces and the geometry every stage agrees in.
@@ -184,3 +182,5 @@ pub use zgui_tokio as tokio;
 pub use zgui_view as view;
 /// What every layer says the same things in: events, keys, roles, states and shared strings.
 pub use zgui_vocab as vocab;
+/// What a `surface` element is filled through: handles, renderers, and the shared device.
+pub use zgui_wgpu as surface;

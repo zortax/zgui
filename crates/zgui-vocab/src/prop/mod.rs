@@ -2,8 +2,8 @@
 
 pub mod custom;
 pub mod drawing;
-pub mod surface;
 mod key;
+pub mod surface;
 mod value;
 
 pub use crate::prop::key::PropKey;

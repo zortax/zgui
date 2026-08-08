@@ -40,12 +40,7 @@ impl SurfaceRenderer for Breathing {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r,
-                        g,
-                        b,
-                        a: 1.0,
-                    }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -139,12 +134,7 @@ fn gradient_frame(width: u32, height: u32, frame: u64) -> Vec<u8> {
         for x in 0..width {
             let across = ((x + shift) % width.max(1)) as f32 / width.max(1) as f32;
             let down = y as f32 / height.max(1) as f32;
-            texels.extend([
-                (across * 255.0) as u8,
-                (down * 160.0) as u8,
-                180,
-                255,
-            ]);
+            texels.extend([(across * 255.0) as u8, (down * 160.0) as u8, 180, 255]);
         }
     }
     texels

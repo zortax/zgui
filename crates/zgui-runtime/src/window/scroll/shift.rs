@@ -90,7 +90,8 @@ impl Window {
 
         let port = {
             let layout = self.layout.borrow();
-            shiftable::port_may_be_shifted(&layout, scrolled.container).map_err(Refused::Document)?
+            shiftable::port_may_be_shifted(&layout, scrolled.container)
+                .map_err(Refused::Document)?
         };
         let surface = Rect::new(zgui_geom::Point::new(0, 0), viewport);
         let Some(port) = zgui_layout::fragment::diff::pixels(port).intersection(surface) else {

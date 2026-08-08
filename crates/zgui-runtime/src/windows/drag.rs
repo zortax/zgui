@@ -11,8 +11,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use zgui_geom::{Css, CssPx, Point};
-use zgui_vocab::{PointerButton, Timestamp};
 use zgui_view::event::{EventCx, events, handler};
+use zgui_vocab::{PointerButton, Timestamp};
 
 use crate::windows::WindowHandle;
 
@@ -98,8 +98,9 @@ impl WindowHandle {
     /// # let _ = window.no_drag_handler();
     /// # }
     /// ```
-    pub fn no_drag_handler(&self) -> impl Fn(&mut EventCx<'_, events::PointerDown>) + Copy + 'static
-    {
+    pub fn no_drag_handler(
+        &self,
+    ) -> impl Fn(&mut EventCx<'_, events::PointerDown>) + Copy + 'static {
         handler(
             events::POINTER_DOWN,
             move |ev: &mut EventCx<'_, events::PointerDown>| ev.stop_propagation(),

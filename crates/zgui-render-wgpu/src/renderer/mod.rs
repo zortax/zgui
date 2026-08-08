@@ -300,12 +300,13 @@ impl WgpuRenderer {
             Some(shared) => {
                 let pre_present = self.pre_present.take();
                 let state = shared.replacement_for(&self.gpu)?;
-                let presentation = Presentation::Offscreen(crate::target::swapchain::Offscreen::new(
-                    &state.gpu,
-                    Size::new(target.size.width.max(1), target.size.height.max(1)),
-                    format,
-                    mutable_texture_formats,
-                ));
+                let presentation =
+                    Presentation::Offscreen(crate::target::swapchain::Offscreen::new(
+                        &state.gpu,
+                        Size::new(target.size.width.max(1), target.size.height.max(1)),
+                        format,
+                        mutable_texture_formats,
+                    ));
                 Self::assemble(
                     state,
                     Some(shared),

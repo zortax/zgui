@@ -34,15 +34,16 @@ impl CustomElement for Gauge {
         if cx.final_pass && cx.access.child_count() > 0 {
             // The label sizes itself — it is ordinary text — and the gauge decides where it
             // goes: centred over the needle, clamped inside the box.
-            let measured = cx.access.measure_child(
-                0,
-                (None, None),
-                (Space::MaxContent, Space::MaxContent),
-            );
+            let measured =
+                cx.access
+                    .measure_child(0, (None, None), (Space::MaxContent, Space::MaxContent));
             cx.access.layout_child(
                 0,
                 (Some(measured.width), Some(measured.height)),
-                (Space::Definite(measured.width), Space::Definite(measured.height)),
+                (
+                    Space::Definite(measured.width),
+                    Space::Definite(measured.height),
+                ),
             );
             let needle = width * self.value;
             let x = (needle - measured.width / 2.0).clamp(0.0, width - measured.width);
@@ -68,7 +69,11 @@ impl CustomElement for Gauge {
         };
 
         // The track and its fill: two quads, the cheap path, exactly what a background costs.
-        painter.fill(track(0.0, width), 5.0 * scale, Color::srgb(0.16, 0.18, 0.24, 1.0));
+        painter.fill(
+            track(0.0, width),
+            5.0 * scale,
+            Color::srgb(0.16, 0.18, 0.24, 1.0),
+        );
         let needle = width * self.value;
         painter.fill(track(0.0, needle), 5.0 * scale, painter.current_color());
 
@@ -78,7 +83,10 @@ impl CustomElement for Gauge {
             let lit = x <= needle;
             painter.fill(
                 Rect::new(
-                    Point::new(DevicePx(x - scale / 2.0), DevicePx(track_top + 14.0 * scale)),
+                    Point::new(
+                        DevicePx(x - scale / 2.0),
+                        DevicePx(track_top + 14.0 * scale),
+                    ),
                     Size::new(DevicePx(scale), DevicePx(6.0 * scale)),
                 ),
                 0.0,

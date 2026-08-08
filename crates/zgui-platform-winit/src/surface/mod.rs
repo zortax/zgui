@@ -14,8 +14,8 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::window::Window;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, FullscreenMode, GpuSurface, ResizeEdge, Surface, SurfaceId, TextInput,
-    Unsupported, WindowIcon, WindowLevel,
+    ColorScheme, CursorStyle, FullscreenMode, GpuSurface, ResizeEdge, Surface, SurfaceId,
+    TextInput, Unsupported, WindowIcon, WindowLevel,
 };
 
 /// A window, seen as something to draw into and interact with.

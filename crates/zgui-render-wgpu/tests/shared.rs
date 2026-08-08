@@ -207,5 +207,8 @@ fn with_every_backend_masked_out_no_window_gets_a_device() {
         "nothing was enumerated, so nothing can have been rejected: {:?}",
         failure.candidates
     );
-    assert!(graphics.gpu().is_none(), "a failed open left a device behind");
+    assert!(
+        graphics.gpu().is_none(),
+        "a failed open left a device behind"
+    );
 }

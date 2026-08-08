@@ -235,10 +235,7 @@ pub fn custom<T: CustomElement>(element: T) -> (Element<Custom>, CustomHandle<T>
 ///
 /// The umbrella crate wires this for every window; an application driving the runtime by hand
 /// passes it to `App::with_custom`.
-pub fn sources() -> (
-    Box<dyn CustomLayoutSource>,
-    Box<dyn CustomPaintSource>,
-) {
+pub fn sources() -> (Box<dyn CustomLayoutSource>, Box<dyn CustomPaintSource>) {
     (Box::new(LayoutHalf), Box::new(PaintHalf))
 }
 
@@ -303,7 +300,11 @@ mod tests {
         handle.repaint();
         assert_eq!(read(), (0, 1), "a repaint moves paint alone");
         handle.relayout();
-        assert_eq!(read(), (1, 2), "a relayout moves both, because remeasured is repainted");
+        assert_eq!(
+            read(),
+            (1, 2),
+            "a relayout moves both, because remeasured is repainted"
+        );
     }
 
     #[test]

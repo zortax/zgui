@@ -27,7 +27,13 @@ fn Frame() -> impl IntoView {
     let window = use_window();
     let maximise_label = {
         let window = window.clone();
-        move || if window.maximized().get() { "❐" } else { "▢" }
+        move || {
+            if window.maximized().get() {
+                "❐"
+            } else {
+                "▢"
+            }
+        }
     };
     let extent = {
         let window = window.clone();

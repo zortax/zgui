@@ -127,7 +127,10 @@ mod tests {
         damage.absorb(row);
         let panel = Rect::new(Point::new(0, 96), Size::new(128, 20));
 
-        assert_eq!(rects_covering_backdrops(&damage, used(), &[panel]), vec![row]);
+        assert_eq!(
+            rects_covering_backdrops(&damage, used(), &[panel]),
+            vec![row]
+        );
     }
 
     #[test]

@@ -155,7 +155,13 @@ impl SharedGraphics {
         if let Some(state) = self.usable_primary() {
             match self.present_on(&state, surface, extent, opaque) {
                 Ok(presentation) => {
-                    return Ok(self.assemble(state, presentation, target, pre_present, Origin::Surface));
+                    return Ok(self.assemble(
+                        state,
+                        presentation,
+                        target,
+                        pre_present,
+                        Origin::Surface,
+                    ));
                 }
                 Err(Rejected::Incompatible(surface)) => {
                     return self.on_another_device(target, surface, pre_present);

@@ -30,9 +30,7 @@ use zgui_platform::{
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
 
-use crate::commands::{
-    CloseResponse, WindowCommand, WindowCommands, WindowSpec, WindowToken,
-};
+use crate::commands::{CloseResponse, WindowCommand, WindowCommands, WindowSpec, WindowToken};
 use crate::error::AppError;
 use crate::text::{NoText, TextEngine};
 use crate::timer::Timers;
@@ -541,7 +539,8 @@ impl Runtime {
     /// it. Four thousand window-opens in one process is the honest limit that buys that, and
     /// reaching it fails loudly rather than aliasing.
     fn allocate_document(&mut self) -> Result<zgui_dom::DocumentId, AppError> {
-        let id = zgui_dom::DocumentId::new(self.next_document).ok_or(AppError::DocumentsExhausted)?;
+        let id =
+            zgui_dom::DocumentId::new(self.next_document).ok_or(AppError::DocumentsExhausted)?;
         self.next_document += 1;
         Ok(id)
     }
@@ -610,7 +609,9 @@ impl Runtime {
             .clock
             .clone()
             .expect("the clock is installed before any window is opened");
-        let options = self.app_options.layered_with(&self.live[index].spec.options);
+        let options = self
+            .app_options
+            .layered_with(&self.live[index].spec.options);
         let text = (self.text)();
         let raster = (self.raster)();
         let metrics = (self.metrics)();

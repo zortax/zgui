@@ -20,7 +20,12 @@ use support::{boxes, frames_over, opened, run, text};
 const SETTLE: usize = 120;
 
 /// An open inspector showing the tree tab in `mode`.
-fn showing(mode: TreeMode) -> (DevTools, zgui_platform_headless::Harness<zgui::runtime::Runtime>) {
+fn showing(
+    mode: TreeMode,
+) -> (
+    DevTools,
+    zgui_platform_headless::Harness<zgui::runtime::Runtime>,
+) {
     let tools = DevTools::new();
     let mut harness = opened(tools);
     tools.set_open(true);
@@ -267,7 +272,10 @@ fn dragging_the_rule_resizes_the_detail_pane() {
         .height
         .0;
     let scale = harness.app().windows()[0].scale().get();
-    let rule = support::centre(support::box_of(&harness, "zgui-devtools__split-rule"), scale);
+    let rule = support::centre(
+        support::box_of(&harness, "zgui-devtools__split-rule"),
+        scale,
+    );
 
     // Upwards is taller: the detail is below the rule.
     harness.deliver_to_first(support::pressed(rule));

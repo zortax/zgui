@@ -325,7 +325,8 @@ impl Renderer for WgpuRenderer {
             // threshold would never be reached. The escalation stays device-wide, because a device
             // that will not present again is not one window's problem.
             self.consecutive_validation_failures += 1;
-            if self.consecutive_validation_failures >= crate::gpu::loss::DeviceLoss::VALIDATION_FAILURE_LIMIT
+            if self.consecutive_validation_failures
+                >= crate::gpu::loss::DeviceLoss::VALIDATION_FAILURE_LIMIT
             {
                 self.gpu.loss().report(
                     wgpu::DeviceLostReason::Unknown,

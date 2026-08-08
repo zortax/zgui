@@ -96,7 +96,10 @@ fn button(stage: &mut Stage<'_>) -> Option<Point<DevicePx, Device>> {
     // panel was found through names where it stood before the scroll, and a button aimed through
     // it is pressed where the panel used to be.
     let census = stage.census();
-    let panel = census.panel("Toast").and_then(|node| node.rect).unwrap_or(panel);
+    let panel = census
+        .panel("Toast")
+        .and_then(|node| node.rect)
+        .unwrap_or(panel);
     let at = find::at_in(&census, panel, ANNOUNCE)?;
     BUTTON.with(|button| *button.borrow_mut() = Some(at));
     Some(at)
@@ -131,7 +134,8 @@ fn stack(stage: &Stage<'_>) -> Vec<(NodeId, Rect<DevicePx, Device>)> {
             other != id
                 && inner.origin.x.0 >= rect.origin.x.0 - 0.5
                 && inner.origin.y.0 >= rect.origin.y.0 - 0.5
-                && inner.origin.x.0 + inner.size.width.0 <= rect.origin.x.0 + rect.size.width.0 + 0.5
+                && inner.origin.x.0 + inner.size.width.0
+                    <= rect.origin.x.0 + rect.size.width.0 + 0.5
                 && inner.origin.y.0 + inner.size.height.0
                     <= rect.origin.y.0 + rect.size.height.0 + 0.5
                 && (inner.size.width.0 < rect.size.width.0

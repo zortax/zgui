@@ -76,7 +76,11 @@ impl Content {
         texels: std::sync::Arc<Vec<u8>>,
     ) -> Result<Self, ImageError> {
         const SHARED: u64 = 1 << 63;
-        Self::under_key(AtlasKey::new(SHARED | handle, TextureKind::Color), size, texels)
+        Self::under_key(
+            AtlasKey::new(SHARED | handle, TextureKind::Color),
+            size,
+            texels,
+        )
     }
 
     /// The entry both constructors build, once the bytes are checked against the extent.

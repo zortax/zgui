@@ -50,11 +50,11 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod shiftable;
 pub mod content;
 pub mod damage;
 pub mod emit;
 pub mod lower;
+pub mod shiftable;
 pub mod walk;
 
 pub use crate::content::glyphs::OutlineGlyph;
