@@ -96,9 +96,12 @@ fn parse(bytes: &[u8]) -> Vec<Event> {
             events.push(Event::FlipComplete {
                 crtc: vblank.crtc_id,
                 // The kernel splits one monotonic instant into whole seconds and the microseconds
-                // under them, so `tv_usec` is at most 999_999 and a thousand times that is well
-                // inside a `u32`.
-                at: Duration::new(u64::from(vblank.tv_sec), vblank.tv_usec * 1_000),
+                // under them, so `tv_usec` is at most 999_999. The two parts are added instead of
+                // multiplied out because this function has to survive a stream it does not
+                // recognise, and a multiplication is the one operation in it that a debug build
+                // could panic on. The two spellings agree for every value the kernel produces.
+                at: Duration::from_secs(u64::from(vblank.tv_sec))
+                    + Duration::from_micros(u64::from(vblank.tv_usec)),
                 user_data: vblank.user_data,
             });
         }
