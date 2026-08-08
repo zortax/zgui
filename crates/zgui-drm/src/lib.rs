@@ -29,4 +29,11 @@
 // any other platform the crate is empty. `cargo check --workspace` then passes on a machine this
 // code could never run on.
 #[cfg(target_os = "linux")]
+pub mod error;
+#[cfg(target_os = "linux")]
+mod ioctl;
+#[cfg(target_os = "linux")]
 mod sys;
+
+#[cfg(target_os = "linux")]
+pub use crate::error::{Error, Result};
