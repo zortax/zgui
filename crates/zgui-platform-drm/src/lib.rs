@@ -32,6 +32,8 @@ pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod clock;
 #[cfg(target_os = "linux")]
+pub mod cx;
+#[cfg(target_os = "linux")]
 pub mod output;
 #[cfg(target_os = "linux")]
 pub mod surface;
@@ -42,6 +44,8 @@ pub mod waker;
 pub use crate::clipboard::ConsoleClipboard;
 #[cfg(target_os = "linux")]
 pub use crate::clock::SystemClock;
+#[cfg(target_os = "linux")]
+pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]
