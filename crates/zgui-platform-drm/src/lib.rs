@@ -9,16 +9,20 @@
 //! * **No input.** Reading the evdev devices is a sub-project of its own, and it is not started.
 //!   An application on this backend draws and animates, and a person cannot touch it: no keyboard,
 //!   no pointer, no touch.
-//! * **No session or virtual terminal management.** The frame loop will take DRM master and hold
-//!   it for as long as the program runs. Nothing will hand the device back on a terminal switch,
-//!   and nothing asks a session daemon for it. So a program here will need a free virtual
-//!   terminal, or root, and will fail to start while a compositor holds the master.
+//! * **No session or virtual terminal management.** Nothing here takes DRM master, hands the
+//!   device back on a terminal switch, or asks a session daemon for it. `Output::discover` reads
+//!   the device and takes no master; `Scanout` expects the caller to hold master already. So a
+//!   caller needs a free virtual terminal, or root, and is refused while a compositor holds the
+//!   master.
 //!
-//! Both are visible in what the crate names: no input crate, and no session library.
+//! The crate's dependencies say the same: no input crate, and no session library.
 //!
-//! Read that second one as a description of the loop this crate is growing rather than of the code
-//! in it today. `Output::discover` exists now, and it reads the device without taking master at
-//! all.
+//! # How a frame reaches the screen
+//!
+//! `Scanout` owns two buffers per display and flips between them. A frame the renderer read back
+//! is copied into whichever is off screen, the flip is asked for, and the completion event says
+//! the frame arrived and the other buffer is free again. The copy chooses its fourcc from the
+//! channel order of the readback, so a frame is copied rather than swizzled pixel by pixel.
 //!
 //! # The handles a surface reports
 //!
@@ -28,8 +32,8 @@
 //! through the platform contract and needs no fork of the backend.
 //!
 //! No graphics API in this workspace's dependency set reads those two variants yet. wgpu answers a
-//! DRM handle with "not a Vulkan-compatible handle", which is a true report of where the gap is.
-//! `App::run_drm` replaces the renderer factory with one that draws through this backend.
+//! DRM handle with "not a Vulkan-compatible handle", which is a true report of where the gap is. A
+//! renderer that draws through this backend reaches an application through `App::with_renderer`.
 
 // Every item this doc names is Linux-only and the doc itself is not, so the names above are in
 // backticks rather than intra-doc links. A link to a `cfg`-gated item is broken on every other
@@ -53,6 +57,8 @@ pub mod cx;
 #[cfg(target_os = "linux")]
 pub mod output;
 #[cfg(target_os = "linux")]
+pub mod scanout;
+#[cfg(target_os = "linux")]
 pub mod surface;
 #[cfg(target_os = "linux")]
 pub mod waker;
@@ -65,6 +71,8 @@ pub use crate::clock::SystemClock;
 pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
+#[cfg(target_os = "linux")]
+pub use crate::scanout::Scanout;
 #[cfg(target_os = "linux")]
 pub use crate::surface::DrmSurface;
 #[cfg(target_os = "linux")]

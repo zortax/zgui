@@ -33,6 +33,11 @@ tracing.workspace = true
 zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+# A scanout takes a frame the renderer read back and copies it into a buffer the display scans out
+# of, so this backend names the type that readback answers with: `Pixels`, which carries the bytes
+# and says which channel order they are in. Nothing else in this crate's own code reaches for the
+# renderer.
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The stand-in display a context test hands out. This backend's own surface holds a device open,
@@ -40,6 +45,14 @@ zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 # the headless backend's surface instead. `zgui-platform-winit` names the same crate for the same
 # reason.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# The scanout test draws one solid rectangle through the real renderer and puts it on a real
+# display. The renderer contract, the scene it draws, the colour and the damage set are what a
+# caller builds and states. All four are already under this crate through `zgui-render-wgpu`; the
+# test names them to state the frame.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 
 [lints]
 workspace = true

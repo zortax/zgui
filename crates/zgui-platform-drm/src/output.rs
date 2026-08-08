@@ -183,7 +183,7 @@ fn take_plane(
 }
 
 /// Carries a device error across the platform boundary in the kernel's own words.
-fn backend(error: Error) -> PlatformError {
+pub(crate) fn backend(error: Error) -> PlatformError {
     PlatformError::Backend(error.to_string())
 }
 
