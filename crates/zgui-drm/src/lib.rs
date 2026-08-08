@@ -35,6 +35,8 @@ pub mod error;
 #[cfg(target_os = "linux")]
 mod ioctl;
 #[cfg(target_os = "linux")]
+pub mod resources;
+#[cfg(target_os = "linux")]
 mod sys;
 
 #[cfg(target_os = "linux")]

@@ -34,6 +34,49 @@ fn a_device_opens_and_answers_what_it_can_do() {
 }
 
 #[test]
+fn a_device_enumerates_its_crtcs_and_connectors() {
+    let Some(device) = support::device(
+        "a_device_enumerates_its_crtcs_and_connectors",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let resources = device.resources().expect("the device enumerates");
+
+    // A device that can set a mode has at least one CRTC and at least one connector. A render
+    // node would have neither, and `open_first` does not open one — it opens `card*`.
+    assert!(
+        !resources.crtcs.is_empty(),
+        "a modesetting device has at least one CRTC"
+    );
+    assert!(
+        !resources.connectors.is_empty(),
+        "a modesetting device has at least one connector"
+    );
+
+    for id in &resources.connectors {
+        let connector = device
+            .connector(*id)
+            .expect("a listed connector is readable");
+        println!(
+            "connector {} {:?} connected={} modes={}",
+            connector.id,
+            connector.kind,
+            connector.is_connected(),
+            connector.modes.len()
+        );
+        // A connected connector reports the modes it can be driven at. A disconnected one
+        // reports none, and that is the difference this crate models.
+        if connector.is_connected() {
+            assert!(
+                !connector.modes.is_empty(),
+                "a connected connector offers at least one mode"
+            );
+        }
+    }
+}
+
+#[test]
 fn an_absent_device_is_refused_rather_than_panicking() {
     let error = zgui_drm::Device::open("/dev/dri/card-that-is-not-there")
         .expect_err("a device that is not there cannot be opened");
