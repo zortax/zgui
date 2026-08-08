@@ -82,7 +82,10 @@ const LEDGER: &[(&str, &[&str])] = &[
     // reason a windowing library is: what it costs to replace is what it costs to find, and a
     // second crate issuing ioctls of its own is a second place a device can be left in a state
     // nothing puts back.
-    ("rustix", &["zgui-drm"]),
+    // `zgui-platform-drm` is here for one descriptor and nothing else: the wake channel the frame
+    // loop parks on beside the device is an eventfd, and there is no other safe way to hold one.
+    // It issues no ioctl — every one of those stays in `zgui-drm`.
+    ("rustix", &["zgui-drm", "zgui-platform-drm"]),
     ("bindgen", &["zgui-drm"]),
     (
         "accesskit",
