@@ -26,7 +26,7 @@ use zgui_platform::{
 /// application ever draws.
 ///
 /// That is also why the accessibility adapter is not in here. It cannot leave the thread that made
-/// it, so it stays on that thread and this names it by number — see [`a11y`].
+/// it, so it stays on that thread and this names it by the surface's own number.
 ///
 /// # Two spaces, and they are not interchangeable
 ///

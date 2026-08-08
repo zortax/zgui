@@ -63,7 +63,7 @@ pub fn view_box(store: &DocumentStore, node: NodeKey) -> Option<[f32; 4]> {
 /// The retained canvas scene `node` shows, as its token and revision.
 ///
 /// The pair is a *name* into the paint-side registry, not the shapes; see
-/// [`drawing::CANVAS`](zgui_vocab::prop::drawing::CANVAS) for the packing and what the revision
+/// [`drawing::CANVAS`] for the packing and what the revision
 /// buys. Nothing for an element carrying no canvas.
 pub fn canvas(store: &DocumentStore, node: NodeKey) -> Option<(u32, u32)> {
     match store

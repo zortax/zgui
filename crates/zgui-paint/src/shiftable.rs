@@ -16,8 +16,8 @@
 //!
 //! That the movement was rigid. A subtree containing a sticky box, a viewport-anchored box or a
 //! transform has `subtree_rigid` false, so the fragment pass composes it instead of offsetting it
-//! and no move is reported at all — see
-//! [`can_translate`](crate::fragment::diff). By the time anything asks this question, the only
+//! and no move is reported at all — the layout tree's fragment diff decides that in
+//! `can_translate`. By the time anything asks this question, the only
 //! subtrees that moved are ones every piece of which moved by the same vector.
 
 use zgui_css::ComputedStyle;

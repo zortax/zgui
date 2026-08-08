@@ -8,8 +8,8 @@
 /// is still moving and stops dead under a wheel that has clicked once more, and both are what the
 /// person expects from the thing they are holding.
 ///
-/// This is deliberately narrower than the desktop's own preference, which is
-/// [`Elastic`](zgui_platform::scroll::Elastic) and says which *inputs* may stretch. By the time a
+/// This is deliberately narrower than the desktop's own preference, which is the platform layer's
+/// `Elastic` and says which *inputs* may stretch. By the time a
 /// scroll reaches a container the input is known, so the question has already been answered and
 /// what travels here is the answer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

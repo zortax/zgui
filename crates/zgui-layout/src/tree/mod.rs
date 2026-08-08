@@ -36,10 +36,10 @@ use crate::tree::store::LayoutStore;
 /// probe that takes them: [`prepass`](crate::intrinsic::prepass) asks with no known dimensions, no
 /// parent size and an available space pinned to min-content or max-content, so no containing block
 /// enters the answer and there is nothing about it for a new pass to invalidate. They now live on
-/// the box, beside the two cache storeys they are emptied with — see
-/// [`BoxLayout::intrinsic`](crate::tree::store::state::BoxLayout::intrinsic), which carries the
-/// argument in full. Moving them is what stops a `width: fit-content` button re-measuring its whole
-/// subtree on every frame that lays anything out.
+/// the box, beside the two cache storeys they are emptied with, and the store's
+/// `BoxLayout::intrinsic` carries the argument in full. Moving them is what stops a
+/// `width: fit-content` button re-measuring its whole subtree on every frame that lays anything
+/// out.
 pub struct LayoutTree<'a, C> {
     /// The boxes and their results.
     store: &'a mut LayoutStore,

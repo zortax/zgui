@@ -1,9 +1,9 @@
 //! Measuring the boxes whose sizes are written as content keywords, before laying anything out.
 //!
-//! The pass visits only the boxes that need it, and finds them by asking the roster of
-//! content-keyword boxes rather than by walking the document — see
-//! [`roster`](crate::tree::store::roster). In a document that writes no content keyword, which is
-//! the overwhelming majority, that is one test against an empty list and nothing else at all.
+//! The pass visits only the boxes that need it, and finds them by asking the store's roster of
+//! content-keyword boxes rather than by walking the document. In a document that writes no content
+//! keyword, which is the overwhelming majority, that is one test against an empty list and nothing
+//! else at all.
 //!
 //! # Deepest first
 //!
@@ -21,16 +21,14 @@
 //!
 //! An answer already held is not taken again. That is the whole saving: an intrinsic measurement is
 //! a full nested layout of the box's subtree, taken twice per axis, and a `width: fit-content`
-//! button whose contents did not change wants the same answer this frame as last.
-//! [`BoxLayout::intrinsic`](crate::tree::store::state::BoxLayout::intrinsic) states why holding it
-//! is sound and what empties it.
+//! button whose contents did not change wants the same answer this frame as last. The store's
+//! `BoxLayout::intrinsic` states why holding it is sound and what empties it.
 //!
 //! Taking an answer does invalidate the two *cached-size* storeys of the box it belongs to. The
 //! probes that produced it ran while the keyword still read as `auto`, and an entry cached under
 //! that reading would otherwise be handed back during the real layout, when the keyword means a
 //! length. The answer just computed is deliberately kept, which is why this alone among the
-//! invalidators calls
-//! [`forget_cached_sizes`](crate::tree::store::state::BoxLayout::forget_cached_sizes).
+//! invalidators calls `BoxLayout::forget_cached_sizes`.
 
 use rustc_hash::FxHashMap;
 use taffy::{

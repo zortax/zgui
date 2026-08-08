@@ -1,0 +1,8 @@
+# The vendored copy is formatted the way upstream formats it, and it is diffed against upstream
+# every time the patch set is refreshed. Reformatting it would put a change on every line of a
+# tree whose whole value is that its differences from upstream are the ones written down in
+# `vendor/README.md`.
+#
+# `cargo fmt --all` reaches it because it walks path dependencies, not because it is a member —
+# `vendor` is excluded from the workspace and always has been.
+ignore = ["vendor"]

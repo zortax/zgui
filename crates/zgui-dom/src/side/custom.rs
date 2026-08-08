@@ -27,7 +27,7 @@ pub fn reference(store: &DocumentStore, node: NodeKey) -> Option<(u32, u16, u16)
 
 /// Whether a registered custom element owns `node`'s box.
 ///
-/// This is what classifies the box, so it is deliberately the presence half of [`reference`]: a
+/// This is what classifies the box, so it is deliberately the presence half of [`reference()`]: a
 /// box built from one answer and painted from the other would be a custom fragment nothing
 /// answers for.
 pub fn is_custom(store: &DocumentStore, node: NodeKey) -> bool {

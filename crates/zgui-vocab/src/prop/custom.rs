@@ -2,7 +2,7 @@
 
 /// The property naming which registered implementation owns an element's box.
 ///
-/// The value is an integer packing a registry token and two revisions, written by [`reference`]
+/// The value is an integer packing a registry token and two revisions, written by [`reference()`]
 /// and read back by [`parts`]. It is a *name*, exactly as a canvas's property is: the trait
 /// object lives in a registry beside the frame loop, because an implementation can no more cross
 /// the document than a shape list can.
@@ -17,7 +17,7 @@ pub fn reference(token: u32, layout_revision: u16, paint_revision: u16) -> i64 {
     ((token as i64) << 32) | ((layout_revision as i64) << 16) | paint_revision as i64
 }
 
-/// Reads back what [`reference`] packed: the token, the layout revision, the paint revision.
+/// Reads back what [`reference()`] packed: the token, the layout revision, the paint revision.
 pub fn parts(value: i64) -> (u32, u16, u16) {
     ((value >> 32) as u32, (value >> 16) as u16, value as u16)
 }

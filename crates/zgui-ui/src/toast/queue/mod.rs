@@ -221,7 +221,8 @@ impl ToastQueue {
     /// pixels.
     ///
     /// What the region sizes its own box to, so that the pointer is held by one element covering
-    /// toasts and gaps alike — see [`place::extent`].
+    /// toasts and gaps alike. A collapsed stack measures the front toast and one step for each
+    /// toast behind it; an expanded one measures every toast's reported height.
     pub fn extent(self) -> f32 {
         place::extent(&self.items.get(), self.held.get() > 0)
     }

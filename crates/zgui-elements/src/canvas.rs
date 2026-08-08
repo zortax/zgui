@@ -1,6 +1,6 @@
 //! The canvas element: shapes an application builds and mutates, drawn by the vector pipeline.
 //!
-//! A canvas is the imperative sibling of [`vector`](crate::vector): where a vector element is
+//! A canvas is the imperative sibling of [`vector`](crate::vector()): where a vector element is
 //! *given* its outlines — as notation or as a document — a canvas is *drawn into*, either through
 //! a retained [`CanvasHandle`] the application keeps, or through a closure that re-runs when the
 //! signals it reads change. Both feed the same pipeline as every other drawing: the shapes are
@@ -94,7 +94,7 @@ impl Element<Canvas> {
 
     /// The square of user space the shapes are written in, and the size they are drawn at.
     ///
-    /// Exactly [`vector`](crate::vector)'s view box: with one, the shapes are scaled uniformly to
+    /// Exactly [`vector`](crate::vector())'s view box: with one, the shapes are scaled uniformly to
     /// fit the content box; without one, they are already in CSS pixels from the content box's
     /// top left corner — which is what a canvas that reads its own size from
     /// [`DrawCx::size`] wants.

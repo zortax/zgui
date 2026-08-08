@@ -29,10 +29,9 @@ pub const MAX_PASSES: u32 = 2;
 /// # Only the boxes that can change an answer
 ///
 /// The undecided boxes are the ones written `overflow: auto`, and every other box in the document
-/// is one this would look at and immediately skip. So it walks the roster of them rather than the
-/// tree — see [`roster`](crate::tree::store::roster) — which makes this cost what the document
-/// *scrolls* rather than what it contains. A document with no `auto` anywhere, which is most of
-/// them, does not run at all.
+/// is one this would look at and immediately skip. So it walks the store's roster of them rather
+/// than the tree, which makes this cost what the document *scrolls* rather than what it contains.
+/// A document with no `auto` anywhere, which is most of them, does not run at all.
 ///
 /// The entries are compacted as they are read. A box whose overflow was restyled away is dropped
 /// here rather than at the restyle, and so is one that is no longer live: the roster holds every
