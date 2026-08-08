@@ -16,6 +16,10 @@ use crate::sys;
 /// stops short of a livelock: a device whose counts change three times in a row is one nothing can
 /// enumerate.
 ///
+/// The retry is the kernel's own protocol. The header for `drm_mode_get_connector` states that
+/// performing the ioctl twice may be racy, and that user space is expected to repeat the last call
+/// until the number of elements stabilises.
+///
 /// [`Device::resources`] and [`Device::connector`] both make that two-pass read, and this is the
 /// bound both give up at.
 pub(crate) const ATTEMPTS: usize = 3;

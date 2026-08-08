@@ -59,11 +59,12 @@ fn a_device_enumerates_its_crtcs_and_connectors() {
             .connector(*id)
             .expect("a listed connector is readable");
         println!(
-            "connector {} {:?} connected={} modes={}",
+            "connector {} {:?} connected={} modes={} preferred={:?}",
             connector.id,
             connector.kind,
             connector.is_connected(),
-            connector.modes.len()
+            connector.modes.len(),
+            connector.preferred_mode()
         );
         // A connected connector reports the modes it can be driven at. A disconnected one
         // reports none, and that is the difference this crate models.
@@ -71,6 +72,24 @@ fn a_device_enumerates_its_crtcs_and_connectors() {
             assert!(
                 !connector.modes.is_empty(),
                 "a connected connector offers at least one mode"
+            );
+            // A mode a display can actually be driven at has an extent and a rate. Reading them
+            // off the hardware checks that the timings were unpacked from the right fields: a
+            // mode read out of the wrong offsets produces a zero here.
+            let mode = connector
+                .preferred_mode()
+                .expect("a connector with modes has one to prefer");
+            assert!(
+                mode.width() != 0,
+                "a mode of a connected display has a width"
+            );
+            assert!(
+                mode.height() != 0,
+                "a mode of a connected display has a height"
+            );
+            assert!(
+                mode.refresh_rate_millihertz() != 0,
+                "a mode of a connected display has a refresh rate"
             );
         }
     }
