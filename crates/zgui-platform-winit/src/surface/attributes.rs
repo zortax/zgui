@@ -2,7 +2,7 @@
 
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::window::{Fullscreen, WindowAttributes};
-use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes};
+use zgui_platform::{ColorScheme, Decorations, FullscreenMode, SurfaceAttributes};
 
 use crate::surface::chrome;
 use crate::theme;
@@ -28,7 +28,7 @@ pub(crate) fn window(
     let mut window = WindowAttributes::default()
         .with_title(attributes.title.as_str())
         .with_resizable(attributes.resizable)
-        .with_decorations(attributes.decorated)
+        .with_decorations(chrome::decorated(attributes.decorations))
         .with_transparent(attributes.transparent)
         .with_maximized(attributes.maximized)
         .with_window_level(chrome::level(attributes.level))
@@ -55,6 +55,35 @@ pub(crate) fn window(
     if let Some(id) = &attributes.application_id {
         window = application_name(window, id.as_str());
     }
+    title_bar(window, attributes.decorations)
+}
+
+/// Applies a frame that carries no title bar.
+///
+/// macOS draws the title bar over the content once the content view is given the full window, so
+/// the bar is made transparent and its title hidden. The window buttons stay, and they sit over
+/// the top left of the content: the application leaves room for them.
+#[cfg(target_os = "macos")]
+fn title_bar(window: WindowAttributes, decorations: Decorations) -> WindowAttributes {
+    use winit::platform::macos::WindowAttributesExtMacOS;
+
+    match decorations {
+        Decorations::NoTitleBar => window
+            .with_fullsize_content_view(true)
+            .with_titlebar_transparent(true)
+            .with_title_hidden(true),
+        _ => window,
+    }
+}
+
+/// The same, on a platform whose frame comes whole.
+///
+/// Wayland negotiates the frame through `xdg-decoration`, which offers the whole frame or none of
+/// it, and Windows draws a title bar for every framed window. [`chrome::decorated`] has already
+/// read the request as [`Decorations::None`] for both.
+#[cfg(not(target_os = "macos"))]
+fn title_bar(window: WindowAttributes, decorations: Decorations) -> WindowAttributes {
+    let _ = decorations;
     window
 }
 
@@ -127,7 +156,7 @@ fn application_name(window: WindowAttributes, id: &str) -> WindowAttributes {
 mod tests {
     use super::window;
     use zgui_geom::{CssPx, Point, Size};
-    use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes, WindowLevel};
+    use zgui_platform::{ColorScheme, Decorations, FullscreenMode, SurfaceAttributes, WindowLevel};
 
     #[test]
     fn a_window_is_always_asked_for_hidden_however_it_was_requested() {
@@ -141,7 +170,7 @@ mod tests {
     fn what_was_asked_for_is_what_is_asked_of_the_platform() {
         let mut requested =
             SurfaceAttributes::new("counter").with_size(Size::new(CssPx(480.0), CssPx(320.0)));
-        requested.decorated = false;
+        requested.decorations = Decorations::None;
         requested.resizable = false;
         requested.transparent = true;
 
@@ -151,6 +180,25 @@ mod tests {
         assert!(!attributes.resizable);
         assert!(attributes.transparent);
         assert!(attributes.inner_size.is_some());
+    }
+
+    /// A frame with no title bar keeps the desktop's frame where the desktop can do it.
+    ///
+    /// macOS hides the title bar inside a frame it still draws. Wayland and Windows take the frame
+    /// whole, so the window draws its own and the request reaches winit undecorated.
+    #[test]
+    fn a_frame_without_a_title_bar_reaches_the_platform_as_the_platform_can_take_it() {
+        let mut requested = SurfaceAttributes::new("player");
+        requested.decorations = Decorations::NoTitleBar;
+
+        let attributes = window(&requested, None);
+        assert_eq!(attributes.decorations, cfg!(target_os = "macos"));
+    }
+
+    #[test]
+    fn a_full_frame_is_asked_for_everywhere() {
+        let attributes = window(&SurfaceAttributes::new("zgui"), None);
+        assert!(attributes.decorations);
     }
 
     /// The application identifier reaches the window request, on both display servers.

@@ -256,7 +256,7 @@ fn main() -> Result<(), zgui::Error> {
         .with_size(560.0, 380.0)
         .with_min_size(320.0, 200.0)
         // The two that make the window the application's to draw.
-        .with_decorations(false)
+        .with_decorations(Decorations::None)
         .with_transparent(true)
         .with_stylesheet(SHEET)
         .run(|| view! { Frame() })

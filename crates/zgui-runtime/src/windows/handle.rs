@@ -6,8 +6,8 @@ use std::sync::{Arc, Weak};
 
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, FullscreenMode, PlatformCapabilities, ResizeEdge, Surface,
-    WindowIcon, WindowLevel,
+    ColorScheme, CursorStyle, Decorations, FullscreenMode, PlatformCapabilities, ResizeEdge,
+    Surface, WindowIcon, WindowLevel,
 };
 use zgui_reactive::prelude::*;
 use zgui_reactive::{RwSignal, Signal};
@@ -292,9 +292,13 @@ impl WindowHandle {
         self.act(|surface| surface.set_resizable(resizable));
     }
 
-    /// Asks the desktop to draw a frame and title bar, or not to.
-    pub fn set_decorated(&self, decorated: bool) {
-        self.act(|surface| surface.set_decorated(decorated));
+    /// Asks the desktop for a frame.
+    ///
+    /// macOS settles whether a frame carries a title bar when the window is created, so
+    /// [`Decorations::NoTitleBar`] reaches a window that is already open as
+    /// [`Decorations::Full`]. Ask for it in [`WindowOptions`](crate::windows::WindowOptions).
+    pub fn set_decorations(&self, decorations: Decorations) {
+        self.act(|surface| surface.set_decorations(decorations));
     }
 
     /// Maximises or restores the window.

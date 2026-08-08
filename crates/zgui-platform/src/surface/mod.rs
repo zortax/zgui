@@ -11,7 +11,7 @@ mod text_input;
 
 pub use crate::surface::attributes::SurfaceAttributes;
 pub use crate::surface::chrome::{
-    CursorStyle, DecorationSource, FullscreenMode, ResizeEdge, WindowLevel,
+    CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
 pub use crate::surface::drag::DragEvent;
 pub use crate::surface::event::SurfaceEvent;
@@ -95,8 +95,11 @@ pub trait Surface: Send + Sync + 'static {
     /// unpainted surface is what produces a flash of empty window at launch.
     fn set_visible(&self, visible: bool);
 
-    /// Asks the platform to draw a frame and title bar, or not to.
-    fn set_decorated(&self, decorated: bool);
+    /// Asks the platform for a frame.
+    ///
+    /// macOS settles whether a frame carries a title bar when the surface is created, so
+    /// [`Decorations::NoTitleBar`] reaches a live surface there as [`Decorations::Full`].
+    fn set_decorations(&self, decorations: Decorations);
 
     /// Allows or forbids the user resizing the surface.
     fn set_resizable(&self, resizable: bool);

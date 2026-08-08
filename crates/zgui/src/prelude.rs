@@ -39,7 +39,9 @@ pub use zgui_runtime::windows::{
 /// name of the theme a view asks for, and a window's is a different question with the same answer
 /// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
 /// overrides one window's.
-pub use zgui_platform::{CursorStyle, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel};
+pub use zgui_platform::{
+    CursorStyle, Decorations, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel,
+};
 pub use zgui_runtime::{CloseResponse, ExitPolicy};
 
 /// Signals, memos, stores, contexts and ownership; the view layer's traits, bindings, events,

@@ -8,7 +8,9 @@ use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 
 use crate::backends::headless::surface::OffscreenSurface;
-use crate::surface::{CursorStyle, FullscreenMode, GpuSurface, Surface, SurfaceId, TextInput};
+use crate::surface::{
+    CursorStyle, Decorations, FullscreenMode, GpuSurface, Surface, SurfaceId, TextInput,
+};
 
 /// A surface that carries native handles, as a windowing backend's does.
 ///
@@ -76,8 +78,8 @@ impl Surface for NativeSurface {
         self.inner.set_visible(visible);
     }
 
-    fn set_decorated(&self, decorated: bool) {
-        self.inner.set_decorated(decorated);
+    fn set_decorations(&self, decorations: Decorations) {
+        self.inner.set_decorations(decorations);
     }
 
     fn set_resizable(&self, resizable: bool) {

@@ -1,7 +1,9 @@
 //! The window's own furniture: cursors, resize edges, full screen.
 
 use winit::window::{CursorIcon, Fullscreen, Icon, ResizeDirection, Window};
-use zgui_platform::{CursorStyle, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel};
+use zgui_platform::{
+    CursorStyle, Decorations, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel,
+};
 
 /// What the pointer should look like.
 ///
@@ -79,6 +81,22 @@ pub(crate) const fn level(level: WindowLevel) -> winit::window::WindowLevel {
 /// will not take this picture keeps whatever it was showing.
 pub(crate) fn icon(icon: &WindowIcon) -> Option<Icon> {
     Icon::from_rgba(icon.rgba().to_vec(), icon.width(), icon.height()).ok()
+}
+
+/// Whether winit should draw a frame for this request.
+///
+/// macOS keeps the frame for [`Decorations::NoTitleBar`] and hides the title bar inside it. The
+/// other platforms offer the whole frame or none of it, so they read that request as
+/// [`Decorations::None`].
+#[cfg(target_os = "macos")]
+pub(crate) const fn decorated(decorations: Decorations) -> bool {
+    decorations.is_platform_drawn()
+}
+
+/// The same, where a frame comes whole.
+#[cfg(not(target_os = "macos"))]
+pub(crate) const fn decorated(decorations: Decorations) -> bool {
+    matches!(decorations, Decorations::Full)
 }
 
 #[cfg(test)]

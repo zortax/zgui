@@ -90,9 +90,9 @@ pub use crate::error::{PlatformError, Unsupported};
 pub use crate::monitor::{MonitorInfo, refresh_interval};
 pub use crate::scroll::ScrollSettings;
 pub use crate::surface::{
-    BadIcon, CursorStyle, DecorationSource, DragEvent, FullscreenMode, GpuSurface, ResizeEdge,
-    Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, TextInput, TextInputPurpose, WindowIcon,
-    WindowLevel,
+    BadIcon, CursorStyle, DecorationSource, Decorations, DragEvent, FullscreenMode, GpuSurface,
+    ResizeEdge, Surface, SurfaceAttributes, SurfaceEvent, SurfaceId, TextInput, TextInputPurpose,
+    WindowIcon, WindowLevel,
 };
 pub use crate::theme::ColorScheme;
 pub use crate::waker::Waker;

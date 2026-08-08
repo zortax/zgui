@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
-    CursorStyle, FullscreenMode, Surface, SurfaceAttributes, SurfaceId, TextInput,
+    CursorStyle, Decorations, FullscreenMode, Surface, SurfaceAttributes, SurfaceId, TextInput,
 };
 
 /// A surface that is a buffer, with no window behind it.
@@ -247,7 +247,7 @@ impl Surface for OffscreenSurface {
         self.visible.store(visible, Ordering::Relaxed);
     }
 
-    fn set_decorated(&self, _decorated: bool) {}
+    fn set_decorations(&self, _decorations: Decorations) {}
 
     fn set_resizable(&self, _resizable: bool) {}
 

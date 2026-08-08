@@ -3,7 +3,7 @@
 pub mod fonts;
 mod graphics;
 
-use zgui_platform::{AppHandler, PlatformError};
+use zgui_platform::{AppHandler, Decorations, PlatformError};
 use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
@@ -161,13 +161,14 @@ impl App {
         self
     }
 
-    /// Whether the desktop draws the title bar and frame.
+    /// What frame the desktop draws.
     ///
-    /// An application that turns this off draws its own, and owes the user what the desktop's would
-    /// have given them: somewhere to drag the window by, edges to resize from, and a way to close
-    /// it. See [`WindowHandle::move_drag_handler`](zgui_runtime::WindowHandle::move_drag_handler).
-    pub fn with_decorations(mut self, decorated: bool) -> Self {
-        self.inner.attributes_mut().decorated = decorated;
+    /// An application that drops the title bar draws its own, and owes the user what the desktop's
+    /// would have given them: somewhere to drag the window by, edges to resize from, and a way to
+    /// close it. See
+    /// [`WindowHandle::move_drag_handler`](zgui_runtime::WindowHandle::move_drag_handler).
+    pub fn with_decorations(mut self, decorations: Decorations) -> Self {
+        self.inner.attributes_mut().decorations = decorations;
         self
     }
 

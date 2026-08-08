@@ -97,6 +97,41 @@ pub enum WindowLevel {
     AlwaysOnTop,
 }
 
+/// What frame a surface asks the platform for.
+///
+/// A platform carries out as much of the request as it can. [`Decorations::NoTitleBar`] reaches
+/// macOS in full, where the frame stays and the title bar goes. The other platforms draw the whole
+/// frame or none of it, and they read that request as [`Decorations::None`].
+///
+/// The application owes the user the affordances it turned off: something to drag the window by,
+/// edges to resize from, and a way to close it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Decorations {
+    /// The platform draws the title bar and the frame.
+    #[default]
+    Full,
+    /// The platform draws nothing, and the application draws its own frame.
+    None,
+    /// The platform draws the frame, and leaves the title bar out.
+    ///
+    /// The window keeps its corners, its shadow and its resize edges. macOS also keeps the window
+    /// buttons, which sit over the top left of the content.
+    NoTitleBar,
+}
+
+impl Decorations {
+    /// Whether the platform draws a frame.
+    pub const fn is_platform_drawn(self) -> bool {
+        matches!(self, Self::Full | Self::NoTitleBar)
+    }
+
+    /// Whether the application draws its own title bar.
+    pub const fn needs_own_title_bar(self) -> bool {
+        matches!(self, Self::None | Self::NoTitleBar)
+    }
+}
+
 /// Who draws the title bar and the frame.
 ///
 /// This is a capability rather than a preference: on a desktop that leaves it to the application,
@@ -120,7 +155,7 @@ impl DecorationSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{CursorStyle, DecorationSource};
+    use super::{CursorStyle, DecorationSource, Decorations};
 
     #[test]
     fn the_ordinary_arrow_is_the_default_cursor() {
@@ -131,5 +166,25 @@ mod tests {
     fn decorations_default_to_the_platform_drawing_them() {
         assert!(!DecorationSource::default().is_application());
         assert!(DecorationSource::Application.is_application());
+    }
+
+    #[test]
+    fn a_surface_asks_for_a_full_frame_by_default() {
+        assert_eq!(Decorations::default(), Decorations::Full);
+        assert!(Decorations::default().is_platform_drawn());
+    }
+
+    #[test]
+    fn a_frame_without_a_title_bar_is_still_the_platforms() {
+        // The corners, the shadow and the resize edges all come with it.
+        assert!(Decorations::NoTitleBar.is_platform_drawn());
+        assert!(!Decorations::None.is_platform_drawn());
+    }
+
+    #[test]
+    fn both_frames_that_drop_the_title_bar_need_one_drawn() {
+        assert!(Decorations::None.needs_own_title_bar());
+        assert!(Decorations::NoTitleBar.needs_own_title_bar());
+        assert!(!Decorations::Full.needs_own_title_bar());
     }
 }

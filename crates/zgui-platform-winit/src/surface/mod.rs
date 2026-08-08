@@ -14,8 +14,8 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::window::Window;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, FullscreenMode, GpuSurface, ResizeEdge, Surface, SurfaceId,
-    TextInput, Unsupported, WindowIcon, WindowLevel,
+    ColorScheme, CursorStyle, Decorations, FullscreenMode, GpuSurface, ResizeEdge, Surface,
+    SurfaceId, TextInput, Unsupported, WindowIcon, WindowLevel,
 };
 
 /// A window, seen as something to draw into and interact with.
@@ -127,8 +127,8 @@ impl Surface for WinitSurface {
         self.window.set_visible(visible);
     }
 
-    fn set_decorated(&self, decorated: bool) {
-        self.window.set_decorations(decorated);
+    fn set_decorations(&self, decorations: Decorations) {
+        self.window.set_decorations(chrome::decorated(decorations));
     }
 
     fn set_resizable(&self, resizable: bool) {

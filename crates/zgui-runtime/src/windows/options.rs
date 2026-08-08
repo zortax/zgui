@@ -1,7 +1,9 @@
 //! What a window is asked for before it exists.
 
 use zgui_geom::{CssPx, Point, Size};
-use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes, WindowIcon, WindowLevel};
+use zgui_platform::{
+    ColorScheme, Decorations, FullscreenMode, SurfaceAttributes, WindowIcon, WindowLevel,
+};
 use zgui_vocab::SharedString;
 
 use crate::commands::CloseResponse;
@@ -62,14 +64,14 @@ impl WindowOptions {
         self
     }
 
-    /// Whether the desktop should draw a title bar and a frame.
+    /// What frame the desktop should draw.
     ///
-    /// A window that turns this off draws its own, and owes the user the affordances the desktop
-    /// would have given them: something to drag it by
+    /// A window that drops the title bar draws its own, and owes the user the affordances the
+    /// desktop would have given them: something to drag it by
     /// ([`WindowHandle::move_drag_handler`](crate::windows::WindowHandle::move_drag_handler)),
     /// edges to resize from, and a way to close it.
-    pub fn with_decorations(mut self, decorated: bool) -> Self {
-        self.attributes.decorated = decorated;
+    pub fn with_decorations(mut self, decorations: Decorations) -> Self {
+        self.attributes.decorations = decorations;
         self
     }
 
@@ -152,7 +154,7 @@ impl core::fmt::Debug for WindowOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowOptions;
+    use super::{Decorations, WindowOptions};
     use zgui_geom::CssPx;
 
     #[test]
@@ -164,16 +166,25 @@ mod tests {
             Some(CssPx(480.0))
         );
         assert!(options.attributes().resizable, "the default is resizable");
-        assert!(options.attributes().decorated);
+        assert_eq!(options.attributes().decorations, Decorations::Full);
         assert_eq!(options.attributes().position, None);
     }
 
     #[test]
     fn a_window_that_draws_its_own_frame_says_so_in_one_place() {
         let options = WindowOptions::new("csd")
-            .with_decorations(false)
+            .with_decorations(Decorations::None)
             .with_transparent(true);
-        assert!(!options.attributes().decorated);
+        assert_eq!(options.attributes().decorations, Decorations::None);
         assert!(options.attributes().transparent);
+    }
+
+    #[test]
+    fn a_window_may_keep_the_frame_and_drop_the_title_bar() {
+        // The desktop keeps the corners, the shadow and the resize edges. The window draws the
+        // strip across the top itself.
+        let options = WindowOptions::new("player").with_decorations(Decorations::NoTitleBar);
+        assert_eq!(options.attributes().decorations, Decorations::NoTitleBar);
+        assert!(options.attributes().decorations.needs_own_title_bar());
     }
 }

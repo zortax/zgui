@@ -3,7 +3,7 @@
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::SharedString;
 
-use crate::surface::chrome::{FullscreenMode, WindowLevel};
+use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
 use crate::theme::ColorScheme;
 
@@ -30,8 +30,8 @@ pub struct SurfaceAttributes {
     pub max_size: Option<Size<CssPx, Css>>,
     /// Whether the user may resize it at all.
     pub resizable: bool,
-    /// Whether the platform should draw a title bar and a frame.
-    pub decorated: bool,
+    /// What frame the platform should draw.
+    pub decorations: Decorations,
     /// Whether the surface may be partly transparent.
     pub transparent: bool,
     /// The identifier the desktop groups this application's windows under.
@@ -64,7 +64,7 @@ impl SurfaceAttributes {
             min_size: None,
             max_size: None,
             resizable: true,
-            decorated: true,
+            decorations: Decorations::Full,
             transparent: false,
             application_id: None,
             position: None,
@@ -91,14 +91,14 @@ impl SurfaceAttributes {
 
 #[cfg(test)]
 mod tests {
-    use super::SurfaceAttributes;
+    use super::{Decorations, SurfaceAttributes};
     use zgui_geom::{CssPx, Size};
 
     #[test]
     fn a_new_surface_is_resizable_and_decorated() {
         let attributes = SurfaceAttributes::new("zgui");
         assert!(attributes.resizable);
-        assert!(attributes.decorated);
+        assert_eq!(attributes.decorations, Decorations::Full);
         assert!(!attributes.transparent);
         assert_eq!(attributes.title.as_str(), "zgui");
     }
