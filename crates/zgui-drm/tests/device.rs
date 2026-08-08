@@ -3,6 +3,7 @@
 mod support;
 
 use zgui_drm::device::Interface;
+use zgui_drm::property::ObjectKind;
 
 /// What the kernel numbers `DRM_CAP_DUMB_BUFFER`.
 ///
@@ -142,6 +143,75 @@ fn a_device_enumerates_planes_that_name_the_crtcs_they_can_drive() {
             plane.formats.len()
         );
     }
+}
+
+#[test]
+fn an_atomic_device_names_the_properties_a_commit_is_built_from() {
+    let Some(device) = support::device(
+        "an_atomic_device_names_the_properties_a_commit_is_built_from",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !device.is_atomic() {
+        eprintln!("this device is not atomic, so it has no properties to name");
+        return;
+    }
+
+    let resources = device.resources().expect("the device enumerates");
+
+    // A plane commit sets these. A device missing one cannot be driven by the plane commit this
+    // crate builds, and the property list is where that shows.
+    let planes = device.planes().expect("the device enumerates its planes");
+    let plane = *planes.first().expect("an atomic device has a plane");
+    let properties = device
+        .properties(plane, ObjectKind::Plane)
+        .expect("a plane's properties are readable");
+    for name in [
+        "FB_ID", "CRTC_ID", "CRTC_X", "CRTC_Y", "CRTC_W", "CRTC_H", "SRC_X", "SRC_Y", "SRC_W",
+        "SRC_H",
+    ] {
+        assert!(
+            properties.id(name).is_some(),
+            "plane {plane} names its {name} property, and has {:?}",
+            properties.names().collect::<Vec<_>>()
+        );
+    }
+    // `type` is an enumeration, and it is how a primary plane is told from a cursor.
+    assert!(
+        properties.value("type").is_some(),
+        "a plane states what kind of plane it is"
+    );
+
+    // A CRTC commit sets the mode and turns the CRTC on.
+    let crtc = *resources
+        .crtcs
+        .first()
+        .expect("a modesetting device has a CRTC");
+    let properties = device
+        .properties(crtc, ObjectKind::Crtc)
+        .expect("a CRTC's properties are readable");
+    for name in ["MODE_ID", "ACTIVE"] {
+        assert!(
+            properties.id(name).is_some(),
+            "CRTC {crtc} names its {name} property, and has {:?}",
+            properties.names().collect::<Vec<_>>()
+        );
+    }
+
+    // A connector commit says which CRTC drives it, and nothing else.
+    let connector = *resources
+        .connectors
+        .first()
+        .expect("a modesetting device has a connector");
+    let properties = device
+        .properties(connector, ObjectKind::Connector)
+        .expect("a connector's properties are readable");
+    assert!(
+        properties.id("CRTC_ID").is_some(),
+        "connector {connector} names its CRTC_ID property, and has {:?}",
+        properties.names().collect::<Vec<_>>()
+    );
 }
 
 #[test]

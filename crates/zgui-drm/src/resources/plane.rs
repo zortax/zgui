@@ -1,9 +1,9 @@
 //! A plane: the thing a framebuffer is actually scanned out from.
 
 use crate::device::Device;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::ioctl;
-use crate::resources::ATTEMPTS;
+use crate::resources::stabilise;
 use crate::sys;
 
 // What a plane is *for* — primary, overlay or cursor — is the value of its `type` property, and
@@ -33,68 +33,66 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`] when the kernel refuses, and [`Error::Unusable`] when the count
-    /// kept moving.
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses, and
+    /// [`Error::Unusable`](crate::Error::Unusable) when the count kept moving.
     pub fn planes(&self) -> Result<Vec<u32>> {
-        for _ in 0..ATTEMPTS {
-            let mut counts = sys::drm_mode_get_plane_res::default();
-            ioctl::issue(self.fd(), ioctl::MODE_GETPLANERESOURCES, &mut counts)?;
+        stabilise(
+            || "the device's plane count changed on every attempt to read it".to_owned(),
+            || {
+                let mut counts = sys::drm_mode_get_plane_res::default();
+                ioctl::issue(self.fd(), ioctl::MODE_GETPLANERESOURCES, &mut counts)?;
 
-            let mut ids = vec![0_u32; counts.count_planes as usize];
-            let mut filled = sys::drm_mode_get_plane_res {
-                plane_id_ptr: ids.as_mut_ptr() as u64,
-                count_planes: counts.count_planes,
-            };
-            ioctl::issue(self.fd(), ioctl::MODE_GETPLANERESOURCES, &mut filled)?;
+                let mut ids = vec![0_u32; counts.count_planes as usize];
+                let mut filled = sys::drm_mode_get_plane_res {
+                    plane_id_ptr: ids.as_mut_ptr() as u64,
+                    count_planes: counts.count_planes,
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETPLANERESOURCES, &mut filled)?;
 
-            if filled.count_planes != counts.count_planes {
-                continue;
-            }
-            return Ok(ids);
-        }
-
-        Err(Error::Unusable(
-            "the device's plane count changed on every attempt to read it".to_owned(),
-        ))
+                if filled.count_planes != counts.count_planes {
+                    return Ok(None);
+                }
+                Ok(Some(ids))
+            },
+        )
     }
 
     /// Reads the plane with this id.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`] when the kernel refuses, and [`Error::Unusable`] when the count
-    /// kept moving.
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses, and
+    /// [`Error::Unusable`](crate::Error::Unusable) when the count kept moving.
     pub fn plane(&self, id: u32) -> Result<Plane> {
-        for _ in 0..ATTEMPTS {
-            let mut counts = sys::drm_mode_get_plane {
-                plane_id: id,
-                ..Default::default()
-            };
-            ioctl::issue(self.fd(), ioctl::MODE_GETPLANE, &mut counts)?;
+        stabilise(
+            || format!("plane {id} changed under every attempt to read it"),
+            || {
+                let mut counts = sys::drm_mode_get_plane {
+                    plane_id: id,
+                    ..Default::default()
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETPLANE, &mut counts)?;
 
-            let mut formats = vec![0_u32; counts.count_format_types as usize];
-            let mut filled = sys::drm_mode_get_plane {
-                plane_id: id,
-                format_type_ptr: formats.as_mut_ptr() as u64,
-                count_format_types: counts.count_format_types,
-                ..Default::default()
-            };
-            ioctl::issue(self.fd(), ioctl::MODE_GETPLANE, &mut filled)?;
+                let mut formats = vec![0_u32; counts.count_format_types as usize];
+                let mut filled = sys::drm_mode_get_plane {
+                    plane_id: id,
+                    format_type_ptr: formats.as_mut_ptr() as u64,
+                    count_format_types: counts.count_format_types,
+                    ..Default::default()
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETPLANE, &mut filled)?;
 
-            if filled.count_format_types != counts.count_format_types {
-                continue;
-            }
+                if filled.count_format_types != counts.count_format_types {
+                    return Ok(None);
+                }
 
-            return Ok(Plane {
-                id,
-                possible_crtcs: filled.possible_crtcs,
-                crtc: (filled.crtc_id != 0).then_some(filled.crtc_id),
-                formats,
-            });
-        }
-
-        Err(Error::Unusable(format!(
-            "plane {id} changed under every attempt to read it"
-        )))
+                Ok(Some(Plane {
+                    id,
+                    possible_crtcs: filled.possible_crtcs,
+                    crtc: (filled.crtc_id != 0).then_some(filled.crtc_id),
+                    formats,
+                }))
+            },
+        )
     }
 }

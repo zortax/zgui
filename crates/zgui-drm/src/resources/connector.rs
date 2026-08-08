@@ -3,9 +3,9 @@
 use std::fmt;
 
 use crate::device::Device;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::ioctl;
-use crate::resources::ATTEMPTS;
+use crate::resources::stabilise;
 use crate::sys;
 
 /// What kind of socket a connector is.
@@ -175,75 +175,79 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`] when the kernel refuses, and [`Error::Unusable`] when the counts
-    /// kept moving.
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses, and
+    /// [`Error::Unusable`](crate::Error::Unusable) when the counts kept moving.
     pub fn connector(&self, id: u32) -> Result<Connector> {
-        for _ in 0..ATTEMPTS {
-            // The header's own instruction for a size query: one mode of capacity, pointed at a
-            // throwaway. A zero here means something else entirely — the kernel force-probes the
-            // connector, which is slow, blocks, and can make the display flicker. It is what a
-            // client does once at startup and after a hot-plug event, and never per read.
-            let mut probe = sys::drm_mode_modeinfo::default();
-            let mut counts = sys::drm_mode_get_connector {
-                connector_id: id,
-                modes_ptr: std::ptr::from_mut(&mut probe) as u64,
-                count_modes: 1,
-                ..Default::default()
-            };
-            ioctl::issue(self.fd(), ioctl::MODE_GETCONNECTOR, &mut counts)?;
+        stabilise(
+            || format!("connector {id} changed under every attempt to read it"),
+            || {
+                // The header's own instruction for a size query: one mode of capacity, pointed at
+                // a throwaway. A `count_modes` of zero means something else. For a client that is
+                // the current DRM master the kernel then force-probes the connector, which is
+                // slow, blocks, and can make the display flicker. The header allows that in three
+                // cases — at start-up, after a hot-plug event, and when the user asks for it
+                // explicitly — and rules it out for an ordinary read.
+                let mut probe = sys::drm_mode_modeinfo::default();
+                let mut counts = sys::drm_mode_get_connector {
+                    connector_id: id,
+                    modes_ptr: std::ptr::from_mut(&mut probe) as u64,
+                    count_modes: 1,
+                    ..Default::default()
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETCONNECTOR, &mut counts)?;
 
-            let mut encoders = vec![0_u32; counts.count_encoders as usize];
-            let mut modes = vec![sys::drm_mode_modeinfo::default(); counts.count_modes as usize];
-            // The properties are read here and dropped: a connector's properties are asked for
-            // through `property`, which reads them for any object. Passing null for these two
-            // would make the kernel report the counts again instead of filling the rest.
-            let mut property_ids = vec![0_u32; counts.count_props as usize];
-            let mut property_values = vec![0_u64; counts.count_props as usize];
+                let mut encoders = vec![0_u32; counts.count_encoders as usize];
+                let mut modes =
+                    vec![sys::drm_mode_modeinfo::default(); counts.count_modes as usize];
+                // The properties are read here and dropped: a connector's properties are asked for
+                // through `Device::properties`, which reads them for any object. Passing null for
+                // these two would make the kernel report the counts again instead of filling the
+                // rest.
+                let mut property_ids = vec![0_u32; counts.count_props as usize];
+                let mut property_values = vec![0_u64; counts.count_props as usize];
 
-            // A connector with nothing plugged in reports no modes, and a zero count force-probes
-            // on this pass exactly as it does on the one above. So a connector with none keeps the
-            // throwaway and its one element of capacity. The kernel declines to fill an array whose
-            // length is not the count it reports, and reports the true count either way, so a
-            // monitor plugged in since the first pass still shows up as a count that moved.
-            let (modes_ptr, count_modes) = if modes.is_empty() {
-                (std::ptr::from_mut(&mut probe) as u64, 1)
-            } else {
-                (modes.as_mut_ptr() as u64, counts.count_modes)
-            };
+                // A connector with nothing plugged in reports no modes, and a zero count
+                // force-probes on this pass exactly as it does on the one above. So a connector
+                // with none keeps the throwaway and its one element of capacity. The kernel
+                // declines to fill an array whose length is not the count it reports, and reports
+                // the true count either way, so a monitor plugged in since the first pass still
+                // shows up as a count that moved.
+                let (modes_ptr, count_modes) = if modes.is_empty() {
+                    (std::ptr::from_mut(&mut probe) as u64, 1)
+                } else {
+                    (modes.as_mut_ptr() as u64, counts.count_modes)
+                };
 
-            let mut filled = sys::drm_mode_get_connector {
-                connector_id: id,
-                encoders_ptr: encoders.as_mut_ptr() as u64,
-                modes_ptr,
-                props_ptr: property_ids.as_mut_ptr() as u64,
-                prop_values_ptr: property_values.as_mut_ptr() as u64,
-                count_encoders: counts.count_encoders,
-                count_modes,
-                count_props: counts.count_props,
-                ..Default::default()
-            };
-            ioctl::issue(self.fd(), ioctl::MODE_GETCONNECTOR, &mut filled)?;
+                let mut filled = sys::drm_mode_get_connector {
+                    connector_id: id,
+                    encoders_ptr: encoders.as_mut_ptr() as u64,
+                    modes_ptr,
+                    props_ptr: property_ids.as_mut_ptr() as u64,
+                    prop_values_ptr: property_values.as_mut_ptr() as u64,
+                    count_encoders: counts.count_encoders,
+                    count_modes,
+                    count_props: counts.count_props,
+                    ..Default::default()
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETCONNECTOR, &mut filled)?;
 
-            if filled.count_encoders != counts.count_encoders
-                || filled.count_modes != counts.count_modes
-                || filled.count_props != counts.count_props
-            {
-                continue;
-            }
+                if filled.count_encoders != counts.count_encoders
+                    || filled.count_modes != counts.count_modes
+                    || filled.count_props != counts.count_props
+                {
+                    return Ok(None);
+                }
 
-            return Ok(Connector {
-                id,
-                kind: ConnectorKind::from_raw(filled.connector_type),
-                encoders,
-                modes: modes.into_iter().map(|raw| Mode { raw }).collect(),
-                encoder: (filled.encoder_id != 0).then_some(filled.encoder_id),
-                connection: filled.connection,
-            });
-        }
-
-        Err(Error::Unusable(format!(
-            "connector {id} changed under every attempt to read it"
-        )))
+                Ok(Some(Connector {
+                    id,
+                    kind: ConnectorKind::from_raw(filled.connector_type),
+                    encoders,
+                    modes: modes.into_iter().map(|raw| Mode { raw }).collect(),
+                    encoder: (filled.encoder_id != 0).then_some(filled.encoder_id),
+                    connection: filled.connection,
+                }))
+            },
+        )
     }
 }
 
