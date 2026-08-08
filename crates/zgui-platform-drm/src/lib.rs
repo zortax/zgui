@@ -9,13 +9,12 @@
 //! * **No input.** Reading the evdev devices is a sub-project of its own, and it is not started.
 //!   An application on this backend draws and animates, and a person cannot touch it: no keyboard,
 //!   no pointer, no touch.
-//! * **No session or virtual terminal management.** Nothing here takes DRM master, hands the
-//!   device back on a terminal switch, or asks a session daemon for it. `Output::discover` reads
-//!   the device and takes no master; `Scanout` expects the caller to hold master already. So a
-//!   caller needs a free virtual terminal, or root, and is refused while a compositor holds the
-//!   master.
+//! * **No session or virtual terminal management.** The frame loop takes DRM master and holds it
+//!   for as long as the program runs. Nothing hands the device back on a terminal switch, and
+//!   nothing asks a session daemon for it. So a program here needs a free virtual terminal, or
+//!   root, and fails to start while a compositor holds the master.
 //!
-//! The crate's dependencies say the same: no input crate, and no session library.
+//! Both are visible in what the crate names: no input crate, and no session library.
 //!
 //! # How a frame reaches the screen
 //!
@@ -23,6 +22,13 @@
 //! is copied into whichever is off screen, the flip is asked for, and the completion event says
 //! the frame arrived and the other buffer is free again. The copy chooses its fourcc from the
 //! channel order of the readback, so a frame is copied rather than swizzled pixel by pixel.
+//!
+//! # The loop
+//!
+//! `run` is the driver. It opens the device, takes master, lights every display it finds, and then
+//! turns: read the completions, draw the frames that were asked for, ask the application how to
+//! wait, and wait on the device and the wake channel together. `park` decides the waiting, and it
+//! is the same state machine the windowing backend parks with.
 //!
 //! # The handles a surface reports
 //!
@@ -32,8 +38,8 @@
 //! through the platform contract and needs no fork of the backend.
 //!
 //! No graphics API in this workspace's dependency set reads those two variants yet. wgpu answers a
-//! DRM handle with "not a Vulkan-compatible handle", which is a true report of where the gap is. A
-//! renderer that draws through this backend reaches an application through `App::with_renderer`.
+//! DRM handle with "not a Vulkan-compatible handle", which is a true report of where the gap is.
+//! `App::run_drm` replaces the renderer factory with one that draws through this backend.
 
 // Every item this doc names is Linux-only and the doc itself is not, so the names above are in
 // backticks rather than intra-doc links. A link to a `cfg`-gated item is broken on every other
@@ -49,6 +55,8 @@
 // The kernel's display interface exists on Linux and nowhere else, so on any other platform this
 // crate is empty rather than broken.
 #[cfg(target_os = "linux")]
+pub mod app;
+#[cfg(target_os = "linux")]
 pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod clock;
@@ -56,6 +64,10 @@ pub mod clock;
 pub mod cx;
 #[cfg(target_os = "linux")]
 pub mod output;
+// How the loop waits. Private because nothing outside this crate parks this loop, and the model it
+// follows is stated in full in `zgui-platform-winit`'s own `park` module.
+#[cfg(target_os = "linux")]
+mod park;
 #[cfg(target_os = "linux")]
 pub mod scanout;
 #[cfg(target_os = "linux")]
@@ -63,6 +75,8 @@ pub mod surface;
 #[cfg(target_os = "linux")]
 pub mod waker;
 
+#[cfg(target_os = "linux")]
+pub use crate::app::run;
 #[cfg(target_os = "linux")]
 pub use crate::clipboard::ConsoleClipboard;
 #[cfg(target_os = "linux")]

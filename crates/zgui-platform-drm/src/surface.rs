@@ -81,6 +81,17 @@ impl DrmSurface {
     pub fn take_redraw(&self) -> bool {
         self.redraw.swap(false, Ordering::Relaxed)
     }
+
+    /// Returns `true` if a frame has been asked for and not yet taken, leaving the request where it
+    /// is.
+    ///
+    /// The frame loop reads this after it has asked the application how to wait. A request on a
+    /// console moves no descriptor — it is this flag and nothing else — so a loop that parked
+    /// without looking would sleep through a frame somebody is waiting for. The ordinary case is a
+    /// deadline the application turns into a redraw from inside the callback that reports it.
+    pub fn wants_redraw(&self) -> bool {
+        self.redraw.load(Ordering::Relaxed)
+    }
 }
 
 impl Surface for DrmSurface {
