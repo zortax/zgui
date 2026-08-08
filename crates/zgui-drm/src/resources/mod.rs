@@ -2,10 +2,12 @@
 
 pub mod connector;
 pub mod encoder;
+pub mod mode;
 pub mod plane;
 
-pub use crate::resources::connector::{Connector, ConnectorKind, Mode};
+pub use crate::resources::connector::{Connector, ConnectorKind};
 pub use crate::resources::encoder::Encoder;
+pub use crate::resources::mode::{Axis, Mode, ModeBuilder, ModeFlags};
 pub use crate::resources::plane::Plane;
 
 use crate::device::Device;

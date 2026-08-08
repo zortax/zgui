@@ -237,8 +237,41 @@ fn describe_mode(width: u32, height: u32, millihertz: u32) -> MonitorInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::{choose, crtc_mask, describe, describe_mode};
+    use super::{Output, choose, crtc_mask, describe, describe_mode};
+    use zgui_drm::commit::Pipe;
+    use zgui_drm::resources::{Axis, Mode};
     use zgui_geom::{DevicePx, Point, Size};
+
+    /// An output on `crtc`, driven at `width` x `height` at 60 Hz.
+    ///
+    /// The timings are those of a real 1920x1080 at 60 Hz scaled to the extent asked for. The
+    /// blanking carries the rate, so a mode built with a plausible one is described with a
+    /// plausible rate.
+    fn output(crtc: u32, width: u16, height: u16) -> Output {
+        let horizontal = Axis {
+            visible: width,
+            sync_start: width + 88,
+            sync_end: width + 132,
+            total: width + 280,
+        };
+        let vertical = Axis {
+            visible: height,
+            sync_start: height + 4,
+            sync_end: height + 9,
+            total: height + 45,
+        };
+        // A pixel clock of one kilohertz per whole scan gives exactly 1000 Hz over that scan, so
+        // sixty of those is 60 Hz whatever the extent.
+        let clock = 60 * u32::from(horizontal.total) * u32::from(vertical.total) / 1_000;
+        Output {
+            pipe: Pipe {
+                connector: crtc + 1,
+                crtc,
+                plane: crtc + 2,
+            },
+            mode: Mode::builder(clock, horizontal, vertical).build(),
+        }
+    }
 
     #[test]
     fn the_lowest_free_crtc_is_taken() {
@@ -303,5 +336,37 @@ mod tests {
     #[test]
     fn a_device_with_no_display_is_described_by_nothing() {
         assert!(describe(&[]).is_empty());
+    }
+
+    #[test]
+    fn every_display_is_described_from_its_own_mode_in_the_order_it_was_found() {
+        // Two displays of different extents, so a description built from the wrong output's mode
+        // shows up as an extent that belongs to the other one.
+        let outputs = [output(62, 1920, 1080), output(81, 1280, 720)];
+        let monitors = describe(&outputs);
+
+        assert_eq!(monitors.len(), 2, "every display is described once");
+        assert_eq!(
+            monitors[0].size,
+            Size::new(DevicePx(1920.0), DevicePx(1080.0)),
+            "the first display is the extent of the first mode"
+        );
+        assert_eq!(
+            monitors[1].size,
+            Size::new(DevicePx(1280.0), DevicePx(720.0)),
+            "and the second of the second"
+        );
+        for monitor in &monitors {
+            assert_eq!(
+                monitor.refresh_rate_millihertz,
+                Some(60_000),
+                "both modes were built at 60 Hz"
+            );
+            assert_eq!(
+                monitor.position,
+                Point::new(DevicePx(0.0), DevicePx(0.0)),
+                "a console arranges nothing, so every display is at the origin"
+            );
+        }
     }
 }
