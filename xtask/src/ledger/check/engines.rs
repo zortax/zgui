@@ -100,6 +100,7 @@ const LEDGER: &[(&str, &[&str])] = &[
             // method takes, whatever it does with one.
             "zgui-platform-headless",
             "zgui-platform-winit",
+            "zgui-platform-drm",
         ],
     ),
     // `zgui-elements` is on the kurbo row because `<vector>`'s outlines are Béziers and there is

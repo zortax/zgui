@@ -13,12 +13,17 @@ license.workspace = true
 # Everything is gated on Linux. The kernel interface exists nowhere else, so a macOS build of the
 # workspace compiles this crate as an empty one rather than failing on a header it cannot have.
 [target.'cfg(target_os = "linux")'.dependencies]
+# `TreeUpdate`, which the platform contract's `push_a11y_update` takes. This backend implements
+# that method as a no-op: no assistive technology is connected to a console, so the closure is
+# never run and no tree is built. The name is here for the signature.
+accesskit.workspace = true
 # The wake channel is an eventfd, and the loop parks on it beside the device. It is the one system
 # call this crate makes for itself, and it makes it through a safe API, so the crate holds a
 # descriptor of its own under `#![forbid(unsafe_code)]`.
 rustix.workspace = true
 tracing.workspace = true
 zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 
 [lints]

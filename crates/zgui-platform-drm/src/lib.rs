@@ -34,6 +34,8 @@ pub mod clock;
 #[cfg(target_os = "linux")]
 pub mod output;
 #[cfg(target_os = "linux")]
+pub mod surface;
+#[cfg(target_os = "linux")]
 pub mod waker;
 
 #[cfg(target_os = "linux")]
@@ -42,5 +44,7 @@ pub use crate::clipboard::ConsoleClipboard;
 pub use crate::clock::SystemClock;
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
+#[cfg(target_os = "linux")]
+pub use crate::surface::DrmSurface;
 #[cfg(target_os = "linux")]
 pub use crate::waker::EventfdWaker;
