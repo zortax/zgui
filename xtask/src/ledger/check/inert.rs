@@ -415,6 +415,15 @@ fn consumes(line: &str, start: usize, end: usize) -> bool {
     if line.contains("matches!(") || after.contains("=>") {
         return true;
     }
+    // An occurrence to the right of the arrow is the arm's body, so it is a construction even where
+    // the pattern it belongs to wrapped onto this line. rustfmt breaks an or-pattern that does not
+    // fit — `A | B | C => Variant,` over three lines — and the line carrying the body then opens
+    // with the `|` of the pattern above it. Read as a pattern, the variant is reported inert while
+    // the line examined builds it, and no spelling of the arm satisfies both this check and
+    // `cargo fmt`.
+    if before.contains("=>") {
+        return false;
+    }
     let trimmed = before.trim_start();
     if trimmed.starts_with('|') || trimmed.is_empty() && after.trim_end().ends_with('|') {
         return true;
@@ -451,6 +460,21 @@ mod tests {
         assert!(is_pattern(
             "    if matches!(fragment.kind, Kind::Thumb { .. }) {",
             "Kind::Thumb"
+        ));
+    }
+
+    #[test]
+    fn the_body_of_a_wrapped_or_pattern_is_still_a_construction() {
+        // The shape rustfmt produces from an or-pattern that does not fit: the arm's body sits on
+        // a line that opens with the `|` of the pattern above it.
+        assert!(!is_pattern(
+            "            | Raw::Third => Kind::Thumb,",
+            "Kind::Thumb"
+        ));
+        // The pattern on the same line is still a pattern.
+        assert!(is_pattern(
+            "            | Raw::Third => Kind::Thumb,",
+            "Raw::Third"
         ));
     }
 
