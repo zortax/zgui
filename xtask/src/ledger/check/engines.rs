@@ -118,6 +118,7 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-platform-headless",
             "zgui-platform-winit",
             "zgui-platform-wayland",
+            "zgui-platform-drm",
         ],
     ),
     // `zgui-elements` is on the kurbo row because `<vector>`'s outlines are Béziers and there is
