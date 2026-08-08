@@ -63,6 +63,10 @@ pub mod clock;
 #[cfg(target_os = "linux")]
 pub mod cx;
 #[cfg(target_os = "linux")]
+pub mod display;
+#[cfg(target_os = "linux")]
+pub mod graphics;
+#[cfg(target_os = "linux")]
 pub mod output;
 // How the loop waits. Private because nothing outside this crate parks this loop, and the model it
 // follows is stated in full in `zgui-platform-winit`'s own `park` module.
@@ -83,6 +87,10 @@ pub use crate::clipboard::ConsoleClipboard;
 pub use crate::clock::SystemClock;
 #[cfg(target_os = "linux")]
 pub use crate::cx::DrmCx;
+#[cfg(target_os = "linux")]
+pub use crate::display::DrmDisplay;
+#[cfg(target_os = "linux")]
+pub use crate::graphics::{DrmRenderer, factory};
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]
