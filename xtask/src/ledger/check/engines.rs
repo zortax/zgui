@@ -61,6 +61,10 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-render-vector-vello",
             "zgui-render-vector-coverage",
             "zgui-platform-winit",
+            // A frame reaches a display here through the renderer: a copied frame arrives as
+            // `zgui-render-wgpu`'s readback type, and a drawn one is composed into the `wgpu`
+            // textures the display hands out. A wgpu release that breaks either reaches this crate.
+            "zgui-platform-drm",
         ],
     ),
     ("winit", &["zgui-platform-winit"]),

@@ -5983,10 +5983,15 @@ dependencies = [
  "raw-window-handle",
  "rustix 1.1.4",
  "tracing",
+ "zgui-bits",
+ "zgui-color",
  "zgui-drm",
  "zgui-geom",
  "zgui-platform",
  "zgui-platform-headless",
+ "zgui-render",
+ "zgui-render-wgpu",
+ "zgui-scene",
 ]
 
 [[package]]
