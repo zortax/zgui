@@ -3,7 +3,7 @@
 mod support;
 
 use zgui_drm::device::Interface;
-use zgui_drm::format::Format;
+use zgui_drm::format::{Format, Modifier};
 use zgui_drm::property::ObjectKind;
 
 /// What the kernel numbers `DRM_CAP_DUMB_BUFFER`.
@@ -250,6 +250,96 @@ fn a_dumb_buffer_is_allocated_mapped_written_and_released() {
     bytes[..4].copy_from_slice(&0x00ff_0000_u32.to_ne_bytes());
     assert_eq!(bytes[..4], 0x00ff_0000_u32.to_ne_bytes());
 
+    device
+        .destroy_dumb_buffer(buffer)
+        .expect("a dumb buffer is released");
+}
+
+#[test]
+fn a_dumb_buffer_is_accepted_for_scanout_and_released() {
+    let Some(device) = support::device(
+        "a_dumb_buffer_is_accepted_for_scanout_and_released",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !device.supports_dumb_buffers() {
+        eprintln!("this device has no dumb buffers, so nothing was asserted");
+        return;
+    }
+
+    let buffer = device
+        .create_dumb_buffer(64, 32, Format::XRGB8888)
+        .expect("the driver allocates a dumb buffer");
+    let framebuffer = device
+        .add_framebuffer(&buffer, Format::XRGB8888)
+        .expect("the driver accepts a dumb buffer for scanout");
+    // Zero is not an object id: the kernel's allocator starts at one, so zero means "no
+    // framebuffer" in every commit this crate builds.
+    assert_ne!(framebuffer.id(), 0, "an accepted framebuffer has an id");
+
+    device
+        .remove_framebuffer(framebuffer)
+        .expect("a framebuffer is released");
+    device
+        .destroy_dumb_buffer(buffer)
+        .expect("a dumb buffer is released");
+}
+
+#[test]
+fn a_framebuffer_states_a_modifier_only_when_it_is_given_one() {
+    let Some(device) = support::device(
+        "a_framebuffer_states_a_modifier_only_when_it_is_given_one",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !device.supports_dumb_buffers() || !device.supports_format_modifiers() {
+        eprintln!("this device does not take modifiers, so nothing was asserted");
+        return;
+    }
+
+    let buffer = device
+        .create_dumb_buffer(64, 32, Format::XRGB8888)
+        .expect("the driver allocates a dumb buffer");
+
+    // A dumb buffer is row-major, so naming that layout explicitly has to be accepted beside
+    // saying nothing about it. `DRM_FORMAT_MOD_LINEAR` is zero, so this is also what proves the
+    // flag that turns the modifier array on is raised for it.
+    let stated = device
+        .add_framebuffer_from_handles(
+            buffer.width(),
+            buffer.height(),
+            Format::XRGB8888,
+            [buffer.handle(), 0, 0, 0],
+            [buffer.stride(), 0, 0, 0],
+            [0; 4],
+            Some(Modifier::LINEAR),
+        )
+        .expect("the driver accepts a linear framebuffer");
+    assert_ne!(stated.id(), 0);
+
+    // `Modifier::INVALID` is what a graphics interface reports for a layout it cannot name, and
+    // the driver refuses it as a modifier. It has to reach the kernel as no modifier at all.
+    let unstated = device
+        .add_framebuffer_from_handles(
+            buffer.width(),
+            buffer.height(),
+            Format::XRGB8888,
+            [buffer.handle(), 0, 0, 0],
+            [buffer.stride(), 0, 0, 0],
+            [0; 4],
+            Some(Modifier::INVALID),
+        )
+        .expect("an unnamed layout is accepted as no modifier");
+    assert_ne!(unstated.id(), 0);
+
+    device
+        .remove_framebuffer(stated)
+        .expect("a framebuffer is released");
+    device
+        .remove_framebuffer(unstated)
+        .expect("a framebuffer is released");
     device
         .destroy_dumb_buffer(buffer)
         .expect("a dumb buffer is released");
