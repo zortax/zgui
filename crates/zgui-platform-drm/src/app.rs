@@ -26,6 +26,8 @@
 //! and nothing asks a session daemon for it, so this run needs root or a free virtual terminal and
 //! fails to start while a compositor holds the device.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -39,18 +41,13 @@ use zgui_platform::{AppHandler, Clock, PlatformCx, PlatformError, Surface, Surfa
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
 use crate::cx::DrmCx;
+use crate::display::{Driving, DrmDisplay};
+use crate::graphics::BGRA;
 use crate::output::{self, Output, backend};
 use crate::park::{Park, Parked, timeout};
 use crate::scanout::Scanout;
 use crate::surface;
 use crate::waker::EventfdWaker;
-
-/// Whether a frame reaches this backend with its channels blue first.
-///
-/// Fixed rather than discovered: this backend chooses the format its renderer composes into, and a
-/// scanout picks its fourcc from this once, when the mode is set. The texture format that answers
-/// it is `graphics::FORMAT`, and the two are one decision written in two vocabularies.
-pub(crate) const BGRA: bool = true;
 
 /// Runs `handler` on the displays this machine's first usable device drives.
 ///
@@ -84,15 +81,17 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
 
     // One commit for the device, and one only. An atomic commit caches every object's properties
     // and the mode blob of every CRTC it has set: a second one would read the properties again, and
-    // would leak the blob of every mode it set when it went.
-    let mut commit = commit::for_device(device);
-    let mut scanouts = Vec::with_capacity(outputs.len());
+    // would leak the blob of every mode it set when it went. The renderers share it, because a flip
+    // is what they ask for.
+    let commit = Rc::new(RefCell::new(commit::for_device(device)));
+    let mut scanouts: Vec<Rc<RefCell<Scanout>>> = Vec::with_capacity(outputs.len());
     for output in &outputs {
-        match Scanout::new(device, output, &mut *commit, BGRA) {
-            Ok(scanout) => scanouts.push(scanout),
+        let made = Scanout::new(device, output, &mut **commit.borrow_mut(), BGRA);
+        match made {
+            Ok(scanout) => scanouts.push(Rc::new(RefCell::new(scanout))),
             Err(error) => {
                 for scanout in scanouts {
-                    scanout.release(device);
+                    release(scanout, device);
                 }
                 return Err(error);
             }
@@ -113,6 +112,22 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
         ConsoleClipboard::new(Arc::clone(&waker) as Arc<dyn Waker>),
     );
 
+    // Published before the first surface is asked for, because that is when the renderer factory is
+    // called: a factory is handed a surface and nothing else, so this is what says which display
+    // that surface is.
+    let driving = Driving::over(
+        surfaces
+            .iter()
+            .zip(&scanouts)
+            .map(|(drawn, scanout)| {
+                (
+                    drawn.id(),
+                    DrmDisplay::new(Arc::clone(device), Rc::clone(&commit), Rc::clone(scanout)),
+                )
+            })
+            .collect(),
+    );
+
     handler.surfaces_available(&cx);
 
     let outcome: Result<(), PlatformError> = 'running: {
@@ -124,8 +139,8 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
                 Ok(events) => events,
                 Err(error) => break 'running Err(backend(error)),
             };
-            for scanout in &mut scanouts {
-                scanout.drain(&events);
+            for scanout in &scanouts {
+                scanout.borrow_mut().drain(&events);
             }
 
             // Only the displays the application claimed. A display nothing asked for is left out of
@@ -181,12 +196,31 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
     };
 
     handler.shutting_down(&cx);
-    // Before the device is handed back, and before the buffers go: removing a framebuffer an
-    // enabled plane is scanning out disables that plane, which is a display going dark on shutdown.
+    // The application holds the renderers, and a renderer holds the display it draws to. A scanout
+    // is released by value, so what draws goes first and what it was published in goes next.
+    drop(handler);
+    drop(driving);
+    // Before the device is handed back: removing a framebuffer an enabled plane is scanning out
+    // disables that plane, which is a display going dark on shutdown.
     for scanout in scanouts {
-        scanout.release(device);
+        release(scanout, device);
     }
     outcome
+}
+
+/// Gives one display's buffers back, if nothing that draws still holds them.
+///
+/// A scanout is released by value, because everything it names is dead afterwards. Whatever still
+/// holds it was built to draw and was not dropped, and that is reported: the kernel releases the
+/// buffers when the device closes, which is moments later.
+fn release(scanout: Rc<RefCell<Scanout>>, device: &Device) {
+    match Rc::try_unwrap(scanout) {
+        Ok(held) => held.into_inner().release(device),
+        Err(_) => warn!(
+            "a display is still held by something that draws, so its buffers stay allocated until \
+             the device closes"
+        ),
+    }
 }
 
 /// Waits on the device and the wake channel, reporting whether the wait ran to its end.
