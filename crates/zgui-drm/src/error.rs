@@ -39,6 +39,11 @@ pub enum Error {
         /// Why it failed.
         source: std::io::Error,
     },
+    /// The kernel answered, and the answer cannot be used.
+    ///
+    /// A count that grew between the two passes of an enumeration, a blob of the wrong length, a
+    /// property of a type this crate does not model.
+    Unusable(String),
 }
 
 impl fmt::Display for Error {
@@ -46,6 +51,7 @@ impl fmt::Display for Error {
         match self {
             Self::Open { path, source } => write!(f, "cannot open {}: {source}", path.display()),
             Self::Ioctl { request, source } => write!(f, "{request} failed: {source}"),
+            Self::Unusable(what) => write!(f, "{what}"),
         }
     }
 }
@@ -54,6 +60,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Open { source, .. } | Self::Ioctl { source, .. } => Some(source),
+            Self::Unusable(_) => None,
         }
     }
 }
