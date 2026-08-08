@@ -37,6 +37,8 @@ pub mod error;
 #[cfg(target_os = "linux")]
 pub mod format;
 #[cfg(target_os = "linux")]
+pub mod framebuffer;
+#[cfg(target_os = "linux")]
 mod ioctl;
 #[cfg(target_os = "linux")]
 pub mod property;

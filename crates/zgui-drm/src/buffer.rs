@@ -54,12 +54,12 @@ impl DumbBuffer {
         self.stride
     }
 
-    /// The GEM handle, for building a framebuffer from it.
-    // The framebuffer that reads this arrives with a later task, and until then nothing calls the
-    // accessor. `ioctl` allows the same for the same reason: the request table is the kernel's
-    // interface rather than a list of this crate's call sites.
-    #[allow(dead_code)]
-    pub(crate) fn handle(&self) -> u32 {
+    /// Returns the GEM handle, for building a framebuffer from it.
+    ///
+    /// The handle is scoped to the device that allocated the buffer, and to this open descriptor.
+    /// [`Device::add_framebuffer_from_handles`] names a plane by it, so a caller that wants a
+    /// layout modifier or a multi-plane framebuffer goes through here.
+    pub fn handle(&self) -> u32 {
         self.handle
     }
 
@@ -111,6 +111,23 @@ impl DumbBuffer {
 
 impl Device {
     /// Allocates a buffer the CPU can write into.
+    ///
+    /// ```no_run
+    /// use zgui_drm::{Device, format::Format};
+    ///
+    /// let device = Device::open_first()?;
+    /// let mut buffer = device.create_dumb_buffer(64, 64, Format::XRGB8888)?;
+    ///
+    /// assert_eq!((buffer.width(), buffer.height()), (64, 64));
+    ///
+    /// // Rows step by the stride the driver chose, which it may round past the width.
+    /// buffer.bytes(&device)?.fill(0xff);
+    ///
+    /// let framebuffer = device.add_framebuffer(&buffer, Format::XRGB8888)?;
+    /// device.remove_framebuffer(framebuffer)?;
+    /// device.destroy_dumb_buffer(buffer)?;
+    /// # Ok::<(), zgui_drm::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
