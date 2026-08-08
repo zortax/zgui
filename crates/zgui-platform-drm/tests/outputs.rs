@@ -7,8 +7,9 @@ use std::sync::Arc;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use zgui_drm::Device;
 use zgui_drm::device::Interface;
+use zgui_geom::{DevicePx, Size};
 use zgui_platform::{Surface, SurfaceId};
-use zgui_platform_drm::{DrmSurface, Output};
+use zgui_platform_drm::{Output, output, surface};
 
 /// Returns a device to test against, or nothing.
 ///
@@ -53,9 +54,16 @@ fn every_display_that_is_plugged_in_gets_a_crtc_and_a_plane() {
         "every display that is plugged in is driven, on a device with a CRTC to spare for each"
     );
 
+    let monitors = output::describe(&outputs);
+    assert_eq!(
+        monitors.len(),
+        outputs.len(),
+        "every display that is driven is described"
+    );
+
     let mut crtcs = HashSet::new();
     let mut planes = HashSet::new();
-    for output in &outputs {
+    for (output, monitor) in outputs.iter().zip(&monitors) {
         println!(
             "connector {} crtc {} plane {} {}x{} @ {}mHz",
             output.pipe.connector,
@@ -76,6 +84,23 @@ fn every_display_that_is_plugged_in_gets_a_crtc_and_a_plane() {
         // division by zero somewhere downstream.
         assert!(output.mode.width() != 0, "the mode has a width");
         assert!(output.mode.height() != 0, "the mode has a height");
+
+        // The description is read out of the mode and nothing else, so a mode paired with the
+        // wrong display shows up here as an extent that belongs to the other one.
+        assert_eq!(
+            monitor.size,
+            Size::new(
+                DevicePx(output.mode.width() as f32),
+                DevicePx(output.mode.height() as f32)
+            ),
+            "a display is described as the extent of its mode"
+        );
+        // Zero is a mode whose timings give no rate at all, which is reported as absent.
+        assert_eq!(
+            monitor.refresh_rate_millihertz,
+            Some(output.mode.refresh_rate_millihertz()).filter(|rate| *rate > 0),
+            "and as the rate its timings give"
+        );
 
         if device.is_atomic() {
             assert!(
@@ -100,21 +125,24 @@ fn a_surface_reports_the_device_and_the_plane_it_draws_through() {
     // Read before the device is shared, so what the surface reports is compared against the
     // descriptor this test opened rather than against itself.
     let opened = device.as_fd().as_raw_fd();
-    let device = Arc::new(device);
+    let planes: Vec<u32> = outputs.iter().map(|output| output.pipe.plane).collect();
+    // The conversion the frame loop calls, rather than a copy of it written here: a numbering or a
+    // pairing that only this test performs proves nothing about the one the loop will use.
+    let surfaces = surface::one_per_output(outputs, Arc::new(device));
+    assert_eq!(surfaces.len(), planes.len(), "every display gets a surface");
 
-    for (number, output) in (1..).zip(&outputs) {
-        let plane = output.pipe.plane;
-        let surface = Arc::new(DrmSurface::new(
+    for ((number, surface), plane) in (1..).zip(&surfaces).zip(planes) {
+        assert_eq!(
+            surface.id(),
             SurfaceId::new(number),
-            output.clone(),
-            Arc::clone(&device),
-        ));
+            "the displays are numbered from one, in the order they were found"
+        );
 
         assert!(
             surface.gpu().is_some(),
             "a display has native handles, so the surface over it reports some"
         );
-        let handles = Arc::clone(&surface)
+        let handles = Arc::clone(surface)
             .gpu_shared()
             .expect("a surface that answers `gpu` answers `gpu_shared`");
 

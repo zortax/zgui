@@ -209,3 +209,51 @@ impl HasWindowHandle for DrmSurface {
         Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Drm(handle)) })
     }
 }
+
+/// Returns one surface for each display `device` drives, in the order the displays were found.
+///
+/// The conversion lives here because it is a statement about a [`DrmSurface`]: how a surface is
+/// numbered, and which device it holds open.
+///
+/// The numbers start at one and are never reused. A display is never destroyed, so nothing frees a
+/// number for a second surface to take.
+///
+/// `outputs` must be the ones this `device` enumerated. The handles a surface reports pair the
+/// device's descriptor with the output's plane, and a plane from a different device names either
+/// nothing or the wrong object.
+///
+/// The frame loop calls this. It discovers the outputs, builds the surfaces here, describes them
+/// with [`output::describe`](crate::output::describe), and hands both to
+/// [`DrmCx::new`](crate::cx::DrmCx::new).
+///
+/// ```no_run
+/// use std::sync::Arc;
+/// use zgui_drm::Device;
+/// use zgui_platform::{Surface, SurfaceId};
+/// use zgui_platform_drm::Output;
+/// use zgui_platform_drm::surface::one_per_output;
+///
+/// let device = Arc::new(Device::open_first().expect("a card on this machine"));
+/// let outputs = Output::discover(&device).expect("the device describes itself");
+/// let surfaces = one_per_output(outputs, device);
+///
+/// for (place, surface) in surfaces.iter().enumerate() {
+///     assert_eq!(
+///         surface.id(),
+///         SurfaceId::new(place as u64 + 1),
+///         "the numbers start at one and follow the order the displays were found"
+///     );
+/// }
+/// ```
+pub fn one_per_output(outputs: Vec<Output>, device: Arc<DrmDevice>) -> Vec<Arc<DrmSurface>> {
+    (1..)
+        .zip(outputs)
+        .map(|(id, output)| {
+            Arc::new(DrmSurface::new(
+                SurfaceId::new(id),
+                output,
+                Arc::clone(&device),
+            ))
+        })
+        .collect()
+}

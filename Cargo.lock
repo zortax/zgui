@@ -5986,6 +5986,7 @@ dependencies = [
  "zgui-drm",
  "zgui-geom",
  "zgui-platform",
+ "zgui-platform-headless",
 ]
 
 [[package]]

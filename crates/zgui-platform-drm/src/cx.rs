@@ -3,41 +3,60 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
-use zgui_drm::Device as DrmDevice;
-use zgui_geom::{DevicePx, Point, Size};
 use zgui_platform::{
     Clipboard, Clock, ColorScheme, DecorationSource, MonitorInfo, PlatformCapabilities, PlatformCx,
     PlatformError, Surface, SurfaceAttributes, SurfaceId, Waker,
 };
 
 use crate::clipboard::ConsoleClipboard;
-use crate::clock::SystemClock;
-use crate::output::Output;
-use crate::surface::DrmSurface;
-use crate::waker::EventfdWaker;
 
 /// Everything the platform offers on a console: the displays, the clock and the wake channel.
 ///
-/// The difference from a desktop backend is that the surfaces exist first. A display is found when
-/// the device is opened, it has a mode, and it goes on existing whether or not the application asks
-/// for it — so [`PlatformCx::create_surface`] hands out a display that is already there, and refuses
-/// once they are all taken.
+/// On a console the surfaces exist first. A display is found when the device is opened, it has a
+/// mode, and it goes on existing whether or not the application asks for it. So
+/// [`PlatformCx::create_surface`] hands out a display that is already there, and refuses once they
+/// are all taken.
 ///
-/// It is held by the frame loop and lent to a callback, the same way every other backend lends its
-/// context. The three things that outlive a callback — a surface, the clock and the wake channel —
-/// are shared handles and say so in their own types.
-#[derive(Debug)]
+/// The frame loop holds one of these and lends it to a callback, the way every other backend lends
+/// its context. The three things that outlive a callback — a surface, the clock and the wake
+/// channel — are shared handles and say so in their own types.
+///
+/// Everything here is a value something else built. The device stays with the frame loop, so this
+/// context can be asserted on a machine with no `/dev/dri` at all.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use zgui_platform::{Clock, PlatformCx, SurfaceAttributes, Waker};
+/// use zgui_platform_drm::{ConsoleClipboard, DrmCx, EventfdWaker, SystemClock};
+///
+/// let waker = Arc::new(EventfdWaker::new()?);
+/// let cx = DrmCx::new(
+///     Vec::new(),
+///     Vec::new(),
+///     Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+///     Arc::clone(&waker) as Arc<dyn Waker>,
+///     ConsoleClipboard::new(waker as Arc<dyn Waker>),
+/// );
+///
+/// assert_eq!(cx.claimed(), 0);
+/// assert!(
+///     cx.create_surface(&SurfaceAttributes::new("drm")).is_err(),
+///     "a console with no display has none to hand out, and no window manager to open one"
+/// );
+/// # Ok::<(), zgui_platform::PlatformError>(())
+/// ```
 pub struct DrmCx {
     /// The clock every phase reads.
-    clock: Arc<SystemClock>,
+    clock: Arc<dyn Clock>,
     /// How another thread reaches this loop.
-    waker: Arc<EventfdWaker>,
+    waker: Arc<dyn Waker>,
     /// The clipboard, which holds nothing.
     clipboard: ConsoleClipboard,
     /// What this platform declares it can do.
     capabilities: PlatformCapabilities,
     /// One surface per display, in the order the displays were found.
-    surfaces: Vec<Arc<DrmSurface>>,
+    surfaces: Vec<Arc<dyn Surface>>,
     /// How many of them the application has asked for.
     ///
     /// They are handed out in order, so this is both the count and the index of the next one.
@@ -49,69 +68,56 @@ pub struct DrmCx {
 }
 
 impl DrmCx {
-    /// A context over the `outputs` `device` drives, with a surface ready for each of them.
+    /// Returns a context that serves `surfaces` over the displays `monitors` describes.
     ///
-    /// The device is shared with every surface it lights, because a surface reports it as a native
-    /// handle and must therefore hold it open. The caller keeps its own count, which is what the
-    /// frame loop commits through.
+    /// The two lists are in the same order, one entry per display. `clock`, `waker` and `clipboard`
+    /// are the console's own, and the clipboard answers a read through the same wake channel.
     ///
-    /// # Errors
-    ///
-    /// Returns [`PlatformError::Backend`] when the wake channel cannot be opened, which is a
-    /// process that has run out of descriptors.
-    pub fn new(device: Arc<DrmDevice>, outputs: Vec<Output>) -> Result<Self, PlatformError> {
-        let waker = Arc::new(EventfdWaker::new()?);
-        let monitors = outputs
-            .iter()
-            .map(|output| {
-                describe(
-                    output.mode.width(),
-                    output.mode.height(),
-                    output.mode.refresh_rate_millihertz(),
-                )
-            })
-            .collect();
-
-        // Numbered from one, in the order the displays were found, and never reused: a display is
-        // never destroyed, so nothing frees a number for a second surface to take.
-        let surfaces = (1..)
-            .zip(outputs)
-            .map(|(id, output)| {
-                Arc::new(DrmSurface::new(
-                    SurfaceId::new(id),
-                    output,
-                    Arc::clone(&device),
-                ))
-            })
-            .collect();
-
-        Ok(Self {
-            clock: Arc::new(SystemClock::new()),
-            clipboard: ConsoleClipboard::new(Arc::clone(&waker) as Arc<dyn Waker>),
+    /// The frame loop calls this. It opens the device, discovers the outputs, and turns them into
+    /// the two lists with [`surface::one_per_output`](crate::surface::one_per_output) and
+    /// [`output::describe`](crate::output::describe). Building them out there keeps the device out
+    /// of this type: a context holds values, and it needs no device to hold them.
+    pub fn new(
+        surfaces: Vec<Arc<dyn Surface>>,
+        monitors: Vec<MonitorInfo>,
+        clock: Arc<dyn Clock>,
+        waker: Arc<dyn Waker>,
+        clipboard: ConsoleClipboard,
+    ) -> Self {
+        Self {
+            clock,
             waker,
+            clipboard,
             capabilities: capabilities(),
             surfaces,
             claimed: Cell::new(0),
             monitors,
             exiting: Cell::new(false),
-        })
+        }
     }
 
-    /// The wake channel, as itself.
+    /// Returns how many displays the application has claimed.
     ///
-    /// The frame loop parks on its descriptor beside the device, and drains it after every wake.
-    pub fn wake_channel(&self) -> &EventfdWaker {
-        &self.waker
+    /// Displays are handed out in order, so this is the length of the prefix that anything draws
+    /// into. The frame loop cuts its own surface list down to it: a display nothing asked for is
+    /// left out of a frame, because a flip of an empty framebuffer would blank a screen the
+    /// application never claimed.
+    pub fn claimed(&self) -> usize {
+        self.claimed.get()
     }
+}
 
-    /// The surfaces that have been handed out, as themselves.
-    ///
-    /// The same set [`PlatformCx::surfaces`] answers, seen as this backend's own type: the frame
-    /// loop needs the pipe to commit to and the redraw flag to take, and the contract offers
-    /// neither. A display nothing asked for is left out here as well, because nothing draws into
-    /// it and a flip of an empty framebuffer would blank a screen the application never claimed.
-    pub fn drm_surfaces(&self) -> &[Arc<DrmSurface>] {
-        &self.surfaces[..self.claimed.get()]
+/// Written by hand, because the contract makes none of a surface, a clock or a wake channel
+/// printable. It prints how many displays this context has and how many are taken.
+impl core::fmt::Debug for DrmCx {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("DrmCx")
+            .field("surfaces", &self.surfaces.len())
+            .field("claimed", &self.claimed.get())
+            .field("monitors", &self.monitors.len())
+            .field("exiting", &self.exiting.get())
+            .finish()
     }
 }
 
@@ -135,7 +141,7 @@ impl PlatformCx for DrmCx {
             )));
         };
         self.claimed.set(claimed + 1);
-        Ok(Arc::clone(surface) as Arc<dyn Surface>)
+        Ok(Arc::clone(surface))
     }
 
     /// Does nothing: a display is not a window and does not go away.
@@ -147,8 +153,8 @@ impl PlatformCx for DrmCx {
     fn surface(&self, id: SurfaceId) -> Option<Arc<dyn Surface>> {
         self.surfaces[..self.claimed.get()]
             .iter()
-            .find(|surface| Surface::id(surface.as_ref()) == id)
-            .map(|surface| Arc::clone(surface) as Arc<dyn Surface>)
+            .find(|surface| surface.id() == id)
+            .map(Arc::clone)
     }
 
     /// Returns the surfaces that have been handed out.
@@ -156,10 +162,7 @@ impl PlatformCx for DrmCx {
     /// A display nothing asked for draws nothing, so it is left out of the set the application
     /// iterates.
     fn surfaces(&self) -> Vec<Arc<dyn Surface>> {
-        self.surfaces[..self.claimed.get()]
-            .iter()
-            .map(|surface| Arc::clone(surface) as Arc<dyn Surface>)
-            .collect()
+        self.surfaces[..self.claimed.get()].to_vec()
     }
 
     /// Returns every display the device drives, claimed or not.
@@ -190,11 +193,11 @@ impl PlatformCx for DrmCx {
     }
 
     fn clock(&self) -> Arc<dyn Clock> {
-        Arc::clone(&self.clock) as Arc<dyn Clock>
+        Arc::clone(&self.clock)
     }
 
     fn waker(&self) -> Arc<dyn Waker> {
-        Arc::clone(&self.waker) as Arc<dyn Waker>
+        Arc::clone(&self.waker)
     }
 
     fn request_exit(&self) {
@@ -203,33 +206,6 @@ impl PlatformCx for DrmCx {
 
     fn is_exiting(&self) -> bool {
         self.exiting.get()
-    }
-}
-
-/// What is known about one display, from the mode it is driven at.
-///
-/// The position is the origin for every display. A console has no desktop coordinate space: each
-/// display is driven from its own framebuffer and nothing arranges them, so a layout here would be
-/// this backend's invention rather than the machine's arrangement.
-///
-/// The scale factor is one, for the same reason a surface reports one: nothing states a scale, and
-/// an invented one would size every application differently on every machine.
-///
-/// The name is left absent. The kernel calls a display after the kind of socket it is plugged into,
-/// and an [`Output`] carries the connector's number rather than its kind, so there is nothing here
-/// to name it with.
-fn describe(width: u32, height: u32, millihertz: u32) -> MonitorInfo {
-    let monitor = MonitorInfo::new(
-        Point::new(DevicePx(0.0), DevicePx(0.0)),
-        Size::new(DevicePx(width as f32), DevicePx(height as f32)),
-        1.0,
-    );
-    // A rate of zero is a mode whose timings give none, and inventing sixty here would hide that
-    // from the fallback the contract states once and applies everywhere.
-    if millihertz > 0 {
-        monitor.with_refresh_rate_millihertz(millihertz)
-    } else {
-        monitor
     }
 }
 
@@ -253,42 +229,60 @@ fn capabilities() -> PlatformCapabilities {
 mod tests {
     use std::sync::Arc;
 
-    use super::{DrmCx, describe};
-    use zgui_drm::Device as DrmDevice;
-    use zgui_drm::device::Interface;
+    use super::DrmCx;
+    use crate::clipboard::ConsoleClipboard;
+    use crate::clock::SystemClock;
+    use crate::waker::EventfdWaker;
     use zgui_geom::{DevicePx, Point, Size};
-    use zgui_platform::{ClipboardFormat, PlatformCx, PlatformError, SurfaceAttributes};
+    use zgui_platform::{
+        ClipboardFormat, Clock, MonitorInfo, PlatformCx, PlatformError, Surface, SurfaceAttributes,
+        SurfaceId, Waker,
+    };
+    use zgui_platform_headless::OffscreenSurface;
 
-    /// A context over a device with no display plugged in, or nothing.
+    /// Returns a context over `surfaces` and the `monitors` that describe them.
     ///
-    /// A context is built over a device because a surface reports that device as a native handle
-    /// and has to hold it open. So a real one is opened here, even though a context with no
-    /// display builds no surface and touches it for nothing.
+    /// Nothing here opens a device. A context holds values something else built, so every answer it
+    /// gives can be asserted on a machine with no `/dev/dri` at all.
     ///
-    /// `cargo xtask ledger ignored` forbids switching a test off, and states the alternative: a
-    /// test that needs a device looks for one, reports on standard error that it did not find one,
-    /// and returns.
-    fn console(test: &str) -> Option<DrmCx> {
-        match DrmDevice::open_first_with(Interface::Preferred) {
-            Ok(device) => Some(
-                DrmCx::new(Arc::new(device), Vec::new())
-                    .expect("a context with no display is still buildable"),
-            ),
-            Err(error) => {
-                eprintln!(
-                    "{test}: no DRM device on this machine, so nothing was asserted: {error}\n\
-                     load the virtual driver with `sudo modprobe vkms` to run it"
-                );
-                None
-            }
-        }
+    /// The clock, the wake channel and the clipboard are the console's own, so the backend's own
+    /// state is what is exercised.
+    fn console(surfaces: Vec<Arc<dyn Surface>>, monitors: Vec<MonitorInfo>) -> DrmCx {
+        let waker = Arc::new(EventfdWaker::new().expect("a wake channel is openable"));
+        let clipboard = ConsoleClipboard::new(Arc::clone(&waker) as Arc<dyn Waker>);
+        DrmCx::new(
+            surfaces,
+            monitors,
+            Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+            waker as Arc<dyn Waker>,
+            clipboard,
+        )
+    }
+
+    /// Returns a stand-in for a display, numbered `id`.
+    ///
+    /// This backend's own surface holds a device open, which is the one thing a test on a machine
+    /// with no device cannot have. The headless backend's surface implements the same contract and
+    /// needs nothing, so it stands in wherever the assertion is about the context.
+    fn display(id: u64) -> Arc<dyn Surface> {
+        Arc::new(OffscreenSurface::new(
+            SurfaceId::new(id),
+            Size::new(DevicePx(1920.0), DevicePx(1080.0)),
+        ))
+    }
+
+    /// Returns what the contract knows about a display of `width` by `height`.
+    fn monitor(width: f32, height: f32) -> MonitorInfo {
+        MonitorInfo::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(width), DevicePx(height)),
+            1.0,
+        )
     }
 
     #[test]
     fn a_request_for_a_display_that_is_not_there_is_refused() {
-        let Some(cx) = console("a_request_for_a_display_that_is_not_there_is_refused") else {
-            return;
-        };
+        let cx = console(Vec::new(), Vec::new());
         let Err(refusal) = cx.create_surface(&SurfaceAttributes::new("drm")) else {
             panic!("a console with no display has no surface to hand out");
         };
@@ -303,51 +297,114 @@ mod tests {
     }
 
     #[test]
-    fn the_set_holds_what_was_handed_out() {
-        let Some(cx) = console("the_set_holds_what_was_handed_out") else {
-            return;
+    fn a_request_past_the_last_display_is_refused_with_the_count() {
+        let cx = console(vec![display(1)], Vec::new());
+        cx.create_surface(&SurfaceAttributes::new("drm"))
+            .expect("the one display this device drives is handed out");
+
+        let Err(refusal) = cx.create_surface(&SurfaceAttributes::new("drm")) else {
+            panic!("there is no second display to hand out");
         };
+        assert!(
+            refusal.to_string().contains("1 display"),
+            "the refusal says how many displays there were: {refusal}"
+        );
+    }
+
+    #[test]
+    fn the_set_holds_what_was_handed_out() {
+        let cx = console(vec![display(1), display(2)], Vec::new());
         assert!(
             cx.surfaces().is_empty(),
             "a display nothing asked for is not in the set"
         );
-        let _ = cx.create_surface(&SurfaceAttributes::new("drm"));
-        assert!(cx.surfaces().is_empty(), "and a refused request adds none");
-    }
+        assert_eq!(cx.claimed(), 0);
 
-    #[test]
-    fn a_display_is_described_from_the_mode_it_runs_at() {
-        let monitor = describe(1920, 1080, 60_000);
+        let first = cx
+            .create_surface(&SurfaceAttributes::new("drm"))
+            .expect("the first display is handed out");
         assert_eq!(
-            monitor.size,
-            Size::new(DevicePx(1920.0), DevicePx(1080.0)),
-            "a display is the extent of its mode"
+            cx.surfaces().len(),
+            1,
+            "the display that was asked for is in the set, and the other one is not"
         );
-        assert_eq!(monitor.refresh_rate_millihertz, Some(60_000));
-        assert_eq!(monitor.scale_factor, 1.0);
-        assert_eq!(monitor.position, Point::new(DevicePx(0.0), DevicePx(0.0)));
-        assert_eq!(monitor.name, None);
+        assert_eq!(cx.claimed(), 1);
+        assert_eq!(first.id(), SurfaceId::new(1));
+
+        let second = cx
+            .create_surface(&SurfaceAttributes::new("drm"))
+            .expect("the second display is handed out");
+        assert_eq!(
+            second.id(),
+            SurfaceId::new(2),
+            "displays are handed out in order"
+        );
+        assert_eq!(cx.surfaces().len(), 2);
+        assert!(
+            cx.create_surface(&SurfaceAttributes::new("drm")).is_err(),
+            "and a refused request adds none"
+        );
+        assert_eq!(cx.surfaces().len(), 2);
+        assert_eq!(cx.claimed(), 2);
     }
 
     #[test]
-    fn a_mode_whose_timings_give_no_rate_reports_none() {
-        assert_eq!(describe(1920, 1080, 0).refresh_rate_millihertz, None);
+    fn a_display_is_found_by_the_number_it_was_handed_out_under() {
+        let cx = console(vec![display(1), display(2)], Vec::new());
+        let _ = cx.create_surface(&SurfaceAttributes::new("drm"));
+
+        assert!(cx.surface(SurfaceId::new(1)).is_some());
+        assert!(
+            cx.surface(SurfaceId::new(2)).is_none(),
+            "a display nothing asked for is not reachable by its number either"
+        );
     }
 
     #[test]
-    fn a_device_with_no_display_reports_no_monitor() {
-        let Some(cx) = console("a_device_with_no_display_reports_no_monitor") else {
-            return;
-        };
+    fn a_display_that_was_let_go_is_not_handed_out_again() {
+        let cx = console(vec![display(1)], Vec::new());
+        let _ = cx.create_surface(&SurfaceAttributes::new("drm"));
+        cx.destroy_surface(SurfaceId::new(1));
+
+        assert_eq!(
+            cx.surfaces().len(),
+            1,
+            "a display is not a window and stays"
+        );
+        assert!(
+            cx.create_surface(&SurfaceAttributes::new("drm")).is_err(),
+            "and it is never handed to a second caller"
+        );
+    }
+
+    #[test]
+    fn a_console_with_no_display_reports_no_monitor() {
+        let cx = console(Vec::new(), Vec::new());
         assert!(cx.monitors().is_empty());
         assert!(cx.primary_monitor().is_none());
     }
 
     #[test]
+    fn the_first_display_that_was_found_is_the_primary_one() {
+        let cx = console(
+            Vec::new(),
+            vec![monitor(1920.0, 1080.0), monitor(800.0, 600.0)],
+        );
+        assert_eq!(
+            cx.monitors().len(),
+            2,
+            "an unclaimed display is still reported"
+        );
+        assert_eq!(
+            cx.primary_monitor().expect("a display was found").size,
+            Size::new(DevicePx(1920.0), DevicePx(1080.0)),
+            "the kernel names no primary display, so the first one found is it"
+        );
+    }
+
+    #[test]
     fn asking_the_loop_to_finish_is_observable() {
-        let Some(cx) = console("asking_the_loop_to_finish_is_observable") else {
-            return;
-        };
+        let cx = console(Vec::new(), Vec::new());
         assert!(!cx.is_exiting());
         cx.request_exit();
         assert!(cx.is_exiting());
@@ -355,10 +412,7 @@ mod tests {
 
     #[test]
     fn a_console_claims_no_clipboard_and_draws_its_own_decorations() {
-        let Some(cx) = console("a_console_claims_no_clipboard_and_draws_its_own_decorations")
-        else {
-            return;
-        };
+        let cx = console(Vec::new(), Vec::new());
         let capabilities = cx.capabilities();
         assert!(
             !capabilities.supports_clipboard_format(ClipboardFormat::Text),

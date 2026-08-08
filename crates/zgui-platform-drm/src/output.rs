@@ -4,13 +4,17 @@
 //! picture out to it, and the plane that CRTC reads pixels from. The kernel offers the three
 //! separately and says which combinations are legal. This module picks one legal combination for
 //! every display it finds, which is all a commit needs.
+//!
+//! It also says what the contract knows about each of those displays, because a [`MonitorInfo`] is
+//! read out of an output's mode and nothing else.
 
 use tracing::warn;
 use zgui_drm::commit::Pipe;
 use zgui_drm::property::ObjectKind;
 use zgui_drm::resources::Mode;
 use zgui_drm::{Device, Error};
-use zgui_platform::PlatformError;
+use zgui_geom::{DevicePx, Point, Size};
+use zgui_platform::{MonitorInfo, PlatformError};
 
 /// The plane property that says what a plane is for.
 const PLANE_TYPE: &str = "type";
@@ -183,9 +187,58 @@ fn backend(error: Error) -> PlatformError {
     PlatformError::Backend(error.to_string())
 }
 
+/// Returns what the contract knows about each display, in the order the displays were found.
+///
+/// The conversion lives here because it is a statement about an [`Output`]: everything in a
+/// [`MonitorInfo`] is read out of the mode the display is driven at.
+///
+/// The frame loop calls this. It discovers the outputs, describes them here, builds the surfaces
+/// with [`surface::one_per_output`](crate::surface::one_per_output), and hands both to
+/// [`DrmCx::new`](crate::cx::DrmCx::new).
+pub fn describe(outputs: &[Output]) -> Vec<MonitorInfo> {
+    outputs
+        .iter()
+        .map(|output| {
+            describe_mode(
+                output.mode.width(),
+                output.mode.height(),
+                output.mode.refresh_rate_millihertz(),
+            )
+        })
+        .collect()
+}
+
+/// Returns what is known about one display, from the mode it is driven at.
+///
+/// The position is the origin for every display. A console has no desktop coordinate space: each
+/// display is driven from its own framebuffer and nothing arranges them, so a layout here would be
+/// this backend's invention rather than the machine's arrangement.
+///
+/// The scale factor is one, for the same reason a surface reports one: nothing states a scale, and
+/// an invented one would size every application differently on every machine.
+///
+/// The name is left absent. The kernel calls a display after the kind of socket it is plugged into,
+/// and an [`Output`] carries the connector's number rather than its kind, so there is nothing here
+/// to name it with.
+fn describe_mode(width: u32, height: u32, millihertz: u32) -> MonitorInfo {
+    let monitor = MonitorInfo::new(
+        Point::new(DevicePx(0.0), DevicePx(0.0)),
+        Size::new(DevicePx(width as f32), DevicePx(height as f32)),
+        1.0,
+    );
+    // A rate of zero is a mode whose timings give none, and inventing sixty here would hide that
+    // from the fallback the contract states once and applies everywhere.
+    if millihertz > 0 {
+        monitor.with_refresh_rate_millihertz(millihertz)
+    } else {
+        monitor
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{choose, crtc_mask};
+    use super::{choose, crtc_mask, describe, describe_mode};
+    use zgui_geom::{DevicePx, Point, Size};
 
     #[test]
     fn the_lowest_free_crtc_is_taken() {
@@ -226,5 +279,29 @@ mod tests {
         assert_eq!(crtc_mask(31), u32::MAX >> 1);
         assert_eq!(crtc_mask(32), u32::MAX);
         assert_eq!(crtc_mask(64), u32::MAX, "a mask holds no more than 32 bits");
+    }
+
+    #[test]
+    fn a_display_is_described_from_the_mode_it_runs_at() {
+        let monitor = describe_mode(1920, 1080, 60_000);
+        assert_eq!(
+            monitor.size,
+            Size::new(DevicePx(1920.0), DevicePx(1080.0)),
+            "a display is the extent of its mode"
+        );
+        assert_eq!(monitor.refresh_rate_millihertz, Some(60_000));
+        assert_eq!(monitor.scale_factor, 1.0);
+        assert_eq!(monitor.position, Point::new(DevicePx(0.0), DevicePx(0.0)));
+        assert_eq!(monitor.name, None);
+    }
+
+    #[test]
+    fn a_mode_whose_timings_give_no_rate_reports_none() {
+        assert_eq!(describe_mode(1920, 1080, 0).refresh_rate_millihertz, None);
+    }
+
+    #[test]
+    fn a_device_with_no_display_is_described_by_nothing() {
+        assert!(describe(&[]).is_empty());
     }
 }
