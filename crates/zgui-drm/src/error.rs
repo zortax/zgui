@@ -25,6 +25,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
+    /// The device could not be opened.
+    Open {
+        /// The path that was tried.
+        path: std::path::PathBuf,
+        /// Why it failed.
+        source: std::io::Error,
+    },
     /// An ioctl failed.
     Ioctl {
         /// The name of the request, so that a reader can act on the message.
@@ -37,6 +44,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Open { path, source } => write!(f, "cannot open {}: {source}", path.display()),
             Self::Ioctl { request, source } => write!(f, "{request} failed: {source}"),
         }
     }
@@ -45,7 +53,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Ioctl { source, .. } => Some(source),
+            Self::Open { source, .. } | Self::Ioctl { source, .. } => Some(source),
         }
     }
 }
