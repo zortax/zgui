@@ -17,12 +17,12 @@
 //! Both are visible in what the crate names: no input crate, and no session library.
 //!
 //! Read that second one as a description of the loop this crate is growing rather than of the code
-//! in it today. [`Output::discover`](crate::output::Output::discover) exists now, and it reads
-//! the device without taking master at all.
+//! in it today. `Output::discover` exists now, and it reads the device without taking master at
+//! all.
 //!
 //! # The handles a surface reports
 //!
-//! A [`DrmSurface`] carries the native handles a KMS display has: the device descriptor as
+//! A `DrmSurface` carries the native handles a KMS display has: the device descriptor as
 //! `DrmDisplayHandle`, and the primary plane as `DrmWindowHandle`. They are the only route to this
 //! backend's native state, so a DRM-aware renderer written outside this workspace reaches it
 //! through the platform contract and needs no fork of the backend.
@@ -30,6 +30,10 @@
 //! No graphics API in this workspace's dependency set reads those two variants yet. wgpu answers a
 //! DRM handle with "not a Vulkan-compatible handle", which is a true report of where the gap is.
 //! `App::run_drm` replaces the renderer factory with one that draws through this backend.
+
+// Every item this doc names is Linux-only and the doc itself is not, so the names above are in
+// backticks rather than intra-doc links. A link to a `cfg`-gated item is broken on every other
+// platform, and this workspace denies a broken one.
 
 #![deny(missing_docs)]
 // This crate is on the unsafe ledger's allowlist for exactly one reason: a surface hands out its

@@ -34,5 +34,12 @@ zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The stand-in display a context test hands out. This backend's own surface holds a device open,
+# and a machine with no `/dev/dri` has none to open, so a test whose subject is the context takes
+# the headless backend's surface instead. `zgui-platform-winit` names the same crate for the same
+# reason.
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+
 [lints]
 workspace = true
