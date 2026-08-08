@@ -21,10 +21,10 @@
     unreachable_pub,
     unused_imports
 )]
-// bindgen writes `unsafe { zeroed() }` for the `Default` of every struct that holds a union or an
-// array. The rule that an unsafe block states what makes it sound applies to the blocks this
-// crate writes. Sound here is bindgen's claim: it derives `Default` only where all-zero is a
-// value of the type.
+// Where a struct holds a union, an array or a raw pointer, bindgen writes the `Default` by hand
+// as `MaybeUninit::uninit()`, `ptr::write_bytes(…, 0, 1)` and `assume_init()`. The rule that an
+// unsafe block states what makes it sound applies to the blocks this crate writes. Sound here is
+// bindgen's claim: it writes that `Default` only where all-zero is a value of the type.
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 include!(concat!(env!("OUT_DIR"), "/uapi.rs"));
@@ -33,19 +33,8 @@ include!(concat!(env!("OUT_DIR"), "/uapi.rs"));
 mod tests {
     //! What the generated interface has to agree with the headers about.
     //!
-    //! A request number is `_IOWR(type, nr, sizeof(struct))`. A struct that came out the wrong
-    //! size therefore produces a *different request number*, which the kernel refuses with
-    //! `EINVAL` and no further explanation. These are the sizes read out of the headers on a
-    //! 64-bit build, and they are the same on 32-bit, because DRM declares its user pointers
-    //! `__u64` rather than as pointers for exactly that reason.
-    //!
-    //! A constant that came out wrong fails more quietly. The call is accepted and the kernel
-    //! does something else: a capability nobody asked for, a flag that means another flag. So the
-    //! values are asserted here beside the sizes: the capabilities
-    //! `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, `DRM_CLIENT_CAP_ATOMIC`, `DRM_CAP_DUMB_BUFFER` and
-    //! `DRM_CAP_ADDFB2_MODIFIERS`, the flags `DRM_MODE_ATOMIC_TEST_ONLY`,
-    //! `DRM_MODE_ATOMIC_NONBLOCK`, `DRM_MODE_ATOMIC_ALLOW_MODESET`, `DRM_MODE_PAGE_FLIP_EVENT`
-    //! and `DRM_MODE_FB_MODIFIERS`, and the event type `DRM_EVENT_FLIP_COMPLETE`.
+    //! The headers are the source of truth. A failure here means the vendored header and the
+    //! assertion disagree — read the header, and do not edit the assertion to match the code.
 
     use super::*;
 
