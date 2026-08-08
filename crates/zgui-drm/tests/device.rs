@@ -96,6 +96,55 @@ fn a_device_enumerates_its_crtcs_and_connectors() {
 }
 
 #[test]
+fn a_device_enumerates_planes_that_name_the_crtcs_they_can_drive() {
+    let Some(device) = support::device(
+        "a_device_enumerates_planes_that_name_the_crtcs_they_can_drive",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !device.is_atomic() {
+        eprintln!("this device has no universal planes, so nothing was asserted");
+        return;
+    }
+
+    let planes = device.planes().expect("the device enumerates its planes");
+    assert!(
+        !planes.is_empty(),
+        "an atomic device has at least one plane"
+    );
+
+    let resources = device.resources().expect("the device enumerates");
+    // A device with 32 or more CRTCs would overflow the mask below, and none exists: the mask is
+    // one `u32`, so the kernel cannot describe more than 32 either.
+    assert!(
+        resources.crtcs.len() < 32,
+        "the possible-CRTC mask is a u32, so a device has fewer than 32 CRTCs"
+    );
+
+    for plane in &planes {
+        let plane = device.plane(*plane).expect("a listed plane is readable");
+        assert!(
+            !plane.formats.is_empty(),
+            "a plane states the formats it can scan out"
+        );
+        // The mask indexes the CRTC list, so a bit set past its end would mean this crate and
+        // the kernel disagree about what the list is.
+        assert!(
+            plane.possible_crtcs < (1_u32 << resources.crtcs.len()),
+            "the possible-CRTC mask indexes the CRTC list"
+        );
+        println!(
+            "plane {} crtcs={:#b} driving={:?} formats={}",
+            plane.id,
+            plane.possible_crtcs,
+            plane.crtc,
+            plane.formats.len()
+        );
+    }
+}
+
+#[test]
 fn an_absent_device_is_refused_rather_than_panicking() {
     let error = zgui_drm::Device::open("/dev/dri/card-that-is-not-there")
         .expect_err("a device that is not there cannot be opened");
