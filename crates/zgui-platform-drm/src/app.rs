@@ -41,30 +41,33 @@ use zgui_platform::{AppHandler, Clock, PlatformCx, PlatformError, Surface, Surfa
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
 use crate::cx::DrmCx;
-use crate::display::{Driving, DrmDisplay};
-use crate::graphics::BGRA;
+use crate::display::{Displays, DrmDisplay};
 use crate::output::{self, Output, backend};
 use crate::park::{Park, Parked, timeout};
-use crate::scanout::Scanout;
+use crate::scanout::{BGRA, Scanout};
 use crate::surface;
 use crate::waker::EventfdWaker;
 
 /// Runs `handler` on the displays this machine's first usable device drives.
 ///
 /// Blocks until the application asks to finish. This is the driver `App::run_drm` hands to the
-/// framework, and the two belong together: a frame reaches a display only through the renderer
-/// factory that draws into this loop's scanouts.
+/// framework, and the two belong together: a frame reaches a display only through a renderer that
+/// draws into this loop's scanouts.
+///
+/// `displays` is how that renderer finds them. The loop writes each display in under the surface it
+/// is seen as, for as long as it turns, so the caller makes the map, gives it to the renderer it
+/// installs, and gives the same one to this. A map nothing reads costs one allocation.
 ///
 /// # Errors
 ///
 /// Returns [`PlatformError::Backend`] when there is no device to open, when this process cannot
 /// become DRM master — which is what a compositor holding the device looks like — when a display
 /// refuses a buffer or a mode, and when the device stops answering while the loop runs.
-pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
+pub fn run(handler: Box<dyn AppHandler>, displays: &Displays) -> Result<(), PlatformError> {
     let device = Arc::new(Device::open_first().map_err(backend)?);
     device.become_master().map_err(backend)?;
 
-    let outcome = drive(&device, handler);
+    let outcome = drive(&device, handler, displays);
 
     // The device goes back whatever happened above. A process that kept master would leave the
     // console with no way to draw for anybody else until it exits.
@@ -75,7 +78,11 @@ pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
 }
 
 /// Runs everything between taking the device and giving it back.
-fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
+fn drive(
+    device: &Arc<Device>,
+    mut handler: Box<dyn AppHandler>,
+    displays: &Displays,
+) -> Result<(), PlatformError> {
     let outputs = Output::discover(device)?;
     let monitors = output::describe(&outputs);
 
@@ -112,10 +119,10 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
         ConsoleClipboard::new(Arc::clone(&waker) as Arc<dyn Waker>),
     );
 
-    // Published before the first surface is asked for, because that is when the renderer factory is
-    // called: a factory is handed a surface and nothing else, so this is what says which display
-    // that surface is.
-    let driving = Driving::over(
+    // Written in before the first surface is asked for, because that is when the renderer is built.
+    // The renderer is handed a surface and nothing else, so this map says which display that
+    // surface is.
+    let driving = displays.drive(
         surfaces
             .iter()
             .zip(&scanouts)
@@ -201,7 +208,7 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
 
     handler.shutting_down(&cx);
     // The application holds the renderers, and a renderer holds the display it draws to. A scanout
-    // is released by value, so what draws goes first and what it was published in goes next.
+    // is released by value, so what draws goes first and the map it was written into goes next.
     drop(handler);
     drop(driving);
     // Before the device is handed back: removing a framebuffer an enabled plane is scanning out

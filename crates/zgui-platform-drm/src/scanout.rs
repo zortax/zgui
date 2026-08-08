@@ -8,6 +8,10 @@
 //! The copy into the back buffer is all the CPU cost here. It is a copy rather than a swizzle
 //! because the fourcc is chosen to match the order the renderer read the frame back in, which
 //! [`Pixels::is_bgra`] answers.
+//!
+//! [`FORMAT`] is the other half of that agreement, and it is stated here because this is where it
+//! is read: a renderer drawing for this backend composes into it, and the fourcc the buffers are
+//! allocated with comes from it.
 
 use tracing::warn;
 use zgui_drm::buffer::DumbBuffer;
@@ -16,7 +20,7 @@ use zgui_drm::format::Format;
 use zgui_drm::framebuffer::Framebuffer;
 use zgui_drm::{Device, Event};
 use zgui_platform::PlatformError;
-use zgui_render_wgpu::Pixels;
+use zgui_render_wgpu::{Pixels, wgpu};
 
 use crate::output::{Output, backend};
 
@@ -31,6 +35,34 @@ const BUFFERS: usize = 2;
 ///
 /// [`Pixels`] states four, and every fourcc [`fourcc`] answers is a 32-bit format.
 const BYTES_PER_PIXEL: usize = 4;
+
+/// The texture a frame this backend puts on a display is composed into.
+///
+/// Eight bits a channel and blue first. Unsigned normalised rather than sRGB, because a scanout
+/// hands the bytes to the display as they are and a second encoding would lighten every frame.
+///
+/// A renderer drawing for this backend asks its graphics device for this format. The two ends have
+/// to agree, and they agree through this one name: the buffers a display scans out of are allocated
+/// with the fourcc this format's channel order picks, once, when the mode is set.
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
+
+/// Whether [`FORMAT`] stores its channels blue first.
+///
+/// [`Scanout::new`] is given this when the frame loop sets the mode. It is derived from the format
+/// rather than stated a second time: a frame read back in the other order reaches the screen with
+/// its red and blue exchanged, and nothing at all reports it.
+pub(crate) const BGRA: bool = matches!(
+    FORMAT,
+    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+);
+
+// Checked where the decision is made rather than in a test, because it is the sort of mistake that
+// compiles: a `FORMAT` changed to a red-first texture leaves every frame on the screen with its red
+// and blue exchanged, and nothing at all reports it.
+const _: () = assert!(
+    BGRA,
+    "a scanout copies a frame rather than swizzling it, so the texture has to be blue first"
+);
 
 /// The buffers one display is driven from, and the flip that swaps them.
 #[derive(Debug)]

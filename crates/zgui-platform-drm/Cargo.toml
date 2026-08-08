@@ -33,33 +33,12 @@ tracing.workspace = true
 zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
-
-# --- putting a frame on a display -------------------------------------------------------------
-#
-# A window system presents for a caller; a console does not. So this backend owns the last step
-# itself: a renderer decorator draws with the graphics device, reads the composed texture back, and
-# copies it into the buffer the display is about to scan out of. That decorator is a `Renderer`, it
-# is built by a `RendererFactory`, and it takes the display list and the damage set the contract
-# names — which is why a backend at this level reaches this far up the tree. `App::run_drm` is what
-# installs it, and it is the only thing that does.
-#
-# The renderer contract the decorator implements, and the outcome a frame reports.
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-# `Pixels`, which the readback answers with: it carries the bytes and says which channel order they
-# are in, and a scanout picks its fourcc from that. `SharedGraphics` opens the device the decorator
-# draws with, and the decorator wraps a `WgpuRenderer`.
+# `Gpu`, the device and queue every path here draws through, and `Pixels`, which a readback answers
+# with: it carries the bytes and says which channel order they are in, and a scanout picks its
+# fourcc from that. `FORMAT` is the other end of the same agreement — the texture a frame is
+# composed into — and it is a wgpu format because the readback is. A backend at this layer may name
+# this one, and what draws through it lives in `zgui`.
 zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-# Without a vector rasteriser attached, a display list's vector passes are planned, counted and then
-# drawn from nothing, so every drawing on the display is empty space. Which rasteriser this picks
-# comes from what the device can run.
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
-# `RendererFactory` and the error it refuses with. The factory is what pairs a display with the
-# renderer that draws to it, and it is a runtime type because the runtime is what calls it.
-zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
-# The three types `Renderer`'s own methods take: the texture sink, the damage set and the scene.
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
-zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The stand-in display a context test hands out. This backend's own surface holds a device open,
@@ -68,9 +47,13 @@ zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # reason.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 # The scanout test draws one solid rectangle through the real renderer and puts it on a real
-# display, so it states a colour the way any caller does. The scene, the damage set and the renderer
-# contract it also names are dependencies of the crate itself.
+# display. The renderer contract, the scene it draws, the colour and the damage set are all things
+# a caller builds and states, and every one of them is at this layer or below, so the test reaches
+# across no seam the crate itself may not.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 
 [lints]
 workspace = true

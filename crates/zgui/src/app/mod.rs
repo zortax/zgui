@@ -1,6 +1,10 @@
 //! An application: a window, what is in it, and what draws it.
 
 pub mod fonts;
+// What a display is drawn through on a console. Beside `graphics` because it answers the same
+// question for the other backend, and compiled only where that backend is.
+#[cfg(all(feature = "drm", target_os = "linux"))]
+mod console;
 mod graphics;
 
 use zgui_platform::{AppHandler, Decorations, PlatformError};
@@ -412,7 +416,8 @@ impl App {
     /// The console backend and the renderer that draws through it are installed together, because
     /// they are correct together and useless apart. The loop holds a display's buffers and says
     /// which display a surface is; the renderer reads a composed frame back and puts it in one. An
-    /// application that installed one of them alone would draw frames that reach no screen.
+    /// application that installed one of them alone would draw frames that reach no screen. The map
+    /// between them is made here and given to both.
     ///
     /// **This needs the device.** It takes DRM master and holds it for as long as it runs, so it
     /// needs a free virtual terminal or root, and it fails to start while a compositor holds the
@@ -437,8 +442,12 @@ impl App {
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
-        self.with_renderer(zgui_platform_drm::factory())
-            .run_on(zgui_platform_drm::run, view)
+        let displays = zgui_platform_drm::Displays::new();
+        self.with_renderer(console::factory(displays.clone()))
+            .run_on(
+                move |handler| zgui_platform_drm::run(handler, &displays),
+                view,
+            )
     }
 
     /// The same, over a platform backend of the caller's choosing.

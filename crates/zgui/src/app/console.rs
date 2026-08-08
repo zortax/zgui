@@ -1,31 +1,36 @@
-//! What a display is drawn through.
+//! What a display is drawn through on a console.
 //!
-//! [`Renderer::draw`] is the frame boundary and the only one: nothing above it is told when a frame
-//! begins or ends, and nothing below it is asked to present. So putting a frame on a display is a
-//! decorator over the renderer that drew it — [`DrmRenderer`] owns a `WgpuRenderer` and the display
-//! it draws to, forwards every method, and in [`Renderer::draw`] draws, reads the target back, and
-//! flips to it.
+//! A window system presents for a caller; a console does not, so the last step belongs to whatever
+//! draws. [`Renderer::draw`] is the frame boundary and the only one: nothing above it is told when
+//! a frame begins or ends, and nothing below it is asked to present. [`DrmRenderer`] is that step.
+//! It owns a `WgpuRenderer` and the display it draws to, forwards every method, and in
+//! [`Renderer::draw`] draws, reads the target back, and flips to it.
 //!
-//! # What a frame costs here
+//! It lives here rather than in the backend because a renderer is built by a [`RendererFactory`],
+//! which the runtime owns, and the console backend sits far below the runtime. The backend offers
+//! the three things this needs: the texture format a display can scan out, the map from a surface
+//! to the display behind it, and the flip.
+//!
+//! # What a frame costs
 //!
 //! One readback of the whole target and one copy of it into a buffer the display scans out of. The
-//! copy is what a console with no graphics-aware display protocol costs: the kernel scans out of a
-//! dumb buffer, and a texture on the graphics device is not one. Nothing between the two is
-//! avoidable until this backend imports the renderer's own memory as a framebuffer.
+//! copy is the price of a console with no graphics-aware display protocol: the kernel scans out of
+//! a dumb buffer, and a texture on the graphics device is not one. Nothing between the two is
+//! avoidable until the backend imports the renderer's own memory as a framebuffer.
 //!
 //! # The two methods that are not a plain forward
 //!
-//! [`Renderer::as_any_mut`] answers with the *inner* renderer. It is the door `zgui-wgpu` reaches
-//! the concrete backend through to fill `surface` elements, and a decorator answering with itself
-//! would leave every one of those elements empty while nothing reported a fault.
+//! [`Renderer::as_any_mut`] answers with the *inner* renderer. `zgui-wgpu` reaches the concrete
+//! backend through it to fill `surface` elements, and a decorator answering with itself would leave
+//! every one of those elements empty while nothing reported a fault.
 //!
 //! [`Renderer::draw`] is where the presentation happens, and it reports what happened in the
 //! contract's own vocabulary. A frame the display declined because a flip is still on its way is
 //! [`SkipReason::Timeout`]: the work was submitted, the target holds it, and asking again after one
-//! refresh interval is exactly when the buffer is free. A readback or a flip that *failed* is
-//! [`SkipReason::Validation`], which is the nearest true statement the contract has — the frame was
-//! submitted and something below the renderer refused to present it. No variant names a kernel
-//! that refused a page flip.
+//! refresh interval is when the buffer is free. A readback or a flip that *failed* is
+//! [`SkipReason::Validation`], the nearest true statement the contract has: the frame was submitted
+//! and something below the renderer refused to present it. No variant names a kernel that refused a
+//! page flip.
 
 use std::sync::Arc;
 
@@ -33,46 +38,21 @@ use tracing::warn;
 use zgui_atlas::TextureSink;
 use zgui_bits::DamageSet;
 use zgui_platform::{PlatformError, Surface};
+use zgui_platform_drm::{Displays, DrmDisplay};
 use zgui_render::{
     ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
     ScrollShift, SkipReason, TargetPoolReport, TextureHandle, VectorStatus,
 };
-use zgui_render_wgpu::{SharedGraphics, WgpuRenderer, wgpu};
+use zgui_render_wgpu::{SharedGraphics, WgpuRenderer};
 use zgui_runtime::{AppError, RendererFactory};
 use zgui_scene::Scene;
-
-use crate::display::{DrmDisplay, driven};
-
-/// The texture a frame is composed into.
-///
-/// Eight bits a channel and blue first. Unsigned normalised rather than sRGB, because a scanout
-/// hands the bytes to the display as they are and a second encoding would lighten every frame.
-pub(crate) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
-
-/// Whether [`FORMAT`] stores its channels blue first.
-///
-/// This is what a scanout picks its fourcc from, once, when the mode is set. It is derived from the
-/// format rather than stated a second time: a frame read back in the other order reaches the screen
-/// with its red and blue exchanged, and nothing at all reports it.
-pub(crate) const BGRA: bool = matches!(
-    FORMAT,
-    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
-);
-
-// Checked where the decision is made rather than in a test, because it is the sort of mistake that
-// compiles: a `FORMAT` changed to a red-first texture leaves every frame on the screen with its red
-// and blue exchanged, and nothing at all reports it.
-const _: () = assert!(
-    BGRA,
-    "a scanout copies a frame rather than swizzling it, so the texture has to be blue first"
-);
 
 /// A renderer that draws into a texture and puts what it drew on a display.
 ///
 /// Everything about drawing belongs to the renderer this wraps. What this adds is the last step a
 /// console needs and a window system does not: the composed frame is read back and copied into the
 /// buffer the display is about to scan out of.
-pub struct DrmRenderer {
+struct DrmRenderer {
     /// What draws.
     inner: WgpuRenderer,
     /// Where the frame it drew goes.
@@ -85,7 +65,7 @@ impl DrmRenderer {
     /// `inner` must compose into a texture rather than into a window surface: what is presented
     /// here is what [`WgpuRenderer::read_presented`] answers, and a window's surface answers
     /// nothing. [`factory`] is what pairs the two correctly.
-    pub fn new(inner: WgpuRenderer, display: DrmDisplay) -> Self {
+    fn new(inner: WgpuRenderer, display: DrmDisplay) -> Self {
         Self { inner, display }
     }
 
@@ -205,39 +185,84 @@ impl Renderer for DrmRenderer {
 /// window handle with "not a Vulkan-compatible handle", which is a true report of where the gap is,
 /// so the frame goes to the display through a readback and a copy instead.
 ///
-/// This and `zgui_platform_drm::run` are one decision: the loop is what says which display a
-/// surface is, and it says so only while it runs. `App::run_drm` installs both.
+/// `displays` is where a display is found: the frame loop writes each one in under the surface it
+/// is seen as, and it is the same map [`zgui_platform_drm::run`] was given. The two are one
+/// decision, and [`App::run_drm`](crate::App::run_drm) is what takes it.
 ///
 /// # Errors
 ///
 /// The factory returns [`AppError::GpuUnavailable`] when no adapter on this machine could compose a
 /// frame, naming every one that was tried, and [`AppError::Platform`] when the surface it is handed
 /// belongs to no running frame loop — which is what installing this factory on its own looks like.
-pub fn factory() -> RendererFactory {
+pub(crate) fn factory(displays: Displays) -> RendererFactory {
     let graphics = SharedGraphics::new();
-    Box::new(move |surface, target| renderer(&graphics, surface, target))
+    Box::new(move |surface, target| renderer(&graphics, &displays, surface, target))
 }
 
 /// Opens a renderer for `surface` on the shared graphics.
 fn renderer(
     graphics: &SharedGraphics,
+    displays: &Displays,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
     let id = surface.id();
-    let Some(display) = driven(id) else {
+    let Some(display) = displays.for_surface(id) else {
         return Err(AppError::Platform(PlatformError::Backend(format!(
-            "surface {id:?} is not a display any frame loop on this thread is driving, so a \
-             frame drawn for it would reach no screen"
+            "surface {id:?} is not a display any frame loop is driving, so a frame drawn for it \
+             would reach no screen"
         ))));
     };
 
-    // Mutable texture formats are not asked for: nothing here views the target under a second
-    // format, and asking would cost the sRGB fast path on adapters that offer one.
-    let mut inner = graphics.renderer_offscreen(target, FORMAT, false)?;
+    // The format is the backend's, because the buffers a display scans out of were allocated with
+    // the fourcc its channel order picks. Mutable texture formats are not asked for: nothing here
+    // views the target under a second format, and asking would cost the sRGB fast path on adapters
+    // that offer one.
+    let mut inner = graphics.renderer_offscreen(target, zgui_platform_drm::FORMAT, false)?;
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing on the display — every icon — is empty space. Which rasteriser this is comes
     // from what the device turned out to be able to run, and the fallback needs no compute shaders.
     zgui_render_vector_vello::attach(&mut inner, target.size);
     Ok(Box::new(DrmRenderer::new(inner, display)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use zgui_geom::{Device, DevicePx, Scale, Size};
+    use zgui_platform::SurfaceId;
+    use zgui_platform_headless::OffscreenSurface;
+
+    #[test]
+    fn the_factory_is_built_without_touching_a_graphics_device() {
+        // Making the factory must not enumerate adapters: it is built while the application is
+        // still being described, and the device is opened by the first display instead.
+        let _factory = factory(Displays::new());
+    }
+
+    #[test]
+    fn a_surface_no_loop_is_driving_is_refused_rather_than_drawn_nowhere() {
+        // The map is empty until a loop writes into it, so this is the answer a factory installed
+        // without the loop gets. The refusal comes before any adapter is asked for, which is why a
+        // machine with no graphics device runs this test.
+        let mut factory = factory(Displays::new());
+        let surface: Arc<dyn Surface> = Arc::new(OffscreenSurface::new(
+            SurfaceId::new(1),
+            Size::<DevicePx, Device>::new(DevicePx(64.0), DevicePx(64.0)),
+        ));
+        let target = RenderTarget::new(Size::new(64, 64), Scale::new(1.0));
+
+        match factory(&surface, target) {
+            Err(AppError::Platform(PlatformError::Backend(reason))) => assert!(
+                reason.contains("would reach no screen"),
+                "the refusal has to say where the frame would have gone, and it said: {reason}"
+            ),
+            Err(other) => panic!("a surface no loop is driving was refused with: {other}"),
+            Ok(_) => panic!(
+                "a surface no loop is driving has no display to reach, so a renderer for it would \
+                 compose frames and put them nowhere"
+            ),
+        }
+    }
 }
