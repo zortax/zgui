@@ -65,6 +65,12 @@ fn the_fixed_footprint_is_reported_in_mebibytes() {
         memory.fixed as f64 / (1024.0 * 1024.0),
         memory.scratch as f64 / (1024.0 * 1024.0),
     );
+    // The footprint is read from the device's allocator report, which wgpu publishes on Vulkan
+    // and DX12 only. Without a report the figure reads zero.
+    if harness.gpu().device().generate_allocator_report().is_none() {
+        eprintln!("skipped: this backend publishes no allocator report to measure from");
+        return;
+    }
     assert!(memory.fixed > 0, "nothing measured the fixed footprint");
 }
 

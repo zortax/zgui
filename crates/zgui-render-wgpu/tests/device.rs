@@ -45,12 +45,16 @@ fn a_rejected_adapter_is_named_with_the_reason_it_was_rejected() {
     assert!(failure.to_string().contains('1'));
 }
 
+// wgpu reaches GL through EGL, which Apple platforms do not ship: `Backends::GL` enumerates
+// nothing there, so the Err arm's non-empty candidate list is unmeetable.
+#[cfg(not(target_vendor = "apple"))]
 #[test]
 fn the_gl_backend_is_enumerated_and_its_outcome_is_reported_rather_than_assumed() {
-    // The plan enumerates Vulkan and GL. Nothing in this workspace had ever opened a GL device;
-    // this is the case that says what actually happens, on whatever machine runs it. Either a
-    // device opens and the pattern draws, or the failure names the adapter and the reason — the
-    // outcome being avoided is enumerating a backend that silently cannot be opened.
+    // The plan enumerates the native backends and falls back to GL. Nothing in this workspace had
+    // ever opened a GL device; this is the case that says what actually happens, on whatever
+    // machine runs it. Either a device opens and the pattern draws, or the failure names the
+    // adapter and the reason — the outcome being avoided is enumerating a backend that silently
+    // cannot be opened.
     let _device = device_lock();
     let result = Builder::with_backends(wgpu::Backends::GL).offscreen(
         target(),
@@ -414,10 +418,13 @@ fn two_hundred_frames_of_nested_groups_and_backdrops_hold_the_same_device_memory
     for step in 5..200 {
         renderer.draw(&scene(step), &DamageSet::full());
     }
-    assert_eq!(
-        renderer.memory().total(),
-        settled,
-        "a hundred and ninety-five more frames allocated nothing"
+    // The bound is one-sided because a leak shows as growth. Memory can also shrink: the upload
+    // belt sheds a transient high-water staging chunk after a quiet period, and whether the early
+    // frames raised that mark depends on the driver's completion timing.
+    assert!(
+        renderer.memory().total() <= settled,
+        "a hundred and ninety-five more frames allocated nothing: {} <= {settled}",
+        renderer.memory().total()
     );
     assert_eq!(renderer.groups().lent(), 0, "and every lease came back");
 }

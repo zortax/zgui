@@ -205,31 +205,47 @@ fn rotation_matrix([x, y, z, w]: [f32; 4]) -> Matrix4 {
 }
 
 /// The unit quaternion of an orthonormal basis held as three column vectors.
+///
+/// Only the largest component is taken from the matrix diagonal; the other three come from
+/// off-diagonal sums and differences. Taking every component from the diagonal loses a small one
+/// to cancellation — a rotation of 1e-4 radians has `1 - cos` below f32's resolution at one, and
+/// a quaternion built that way drops the rotation entirely.
 fn quaternion_of(basis: &[[f32; 3]; 3]) -> [f32; 4] {
-    let mut quaternion = [
-        0.5 * (1.0 + basis[0][0] - basis[1][1] - basis[2][2])
-            .max(0.0)
-            .sqrt(),
-        0.5 * (1.0 - basis[0][0] + basis[1][1] - basis[2][2])
-            .max(0.0)
-            .sqrt(),
-        0.5 * (1.0 - basis[0][0] - basis[1][1] + basis[2][2])
-            .max(0.0)
-            .sqrt(),
-        0.5 * (1.0 + basis[0][0] + basis[1][1] + basis[2][2])
-            .max(0.0)
-            .sqrt(),
-    ];
-    if basis[2][1] > basis[1][2] {
-        quaternion[0] = -quaternion[0];
+    let trace = basis[0][0] + basis[1][1] + basis[2][2];
+    if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        return [
+            (basis[1][2] - basis[2][1]) / s,
+            (basis[2][0] - basis[0][2]) / s,
+            (basis[0][1] - basis[1][0]) / s,
+            0.25 * s,
+        ];
     }
-    if basis[0][2] > basis[2][0] {
-        quaternion[1] = -quaternion[1];
+    if basis[0][0] > basis[1][1] && basis[0][0] > basis[2][2] {
+        let s = (1.0 + basis[0][0] - basis[1][1] - basis[2][2]).sqrt() * 2.0;
+        return [
+            0.25 * s,
+            (basis[1][0] + basis[0][1]) / s,
+            (basis[2][0] + basis[0][2]) / s,
+            (basis[1][2] - basis[2][1]) / s,
+        ];
     }
-    if basis[1][0] > basis[0][1] {
-        quaternion[2] = -quaternion[2];
+    if basis[1][1] > basis[2][2] {
+        let s = (1.0 + basis[1][1] - basis[0][0] - basis[2][2]).sqrt() * 2.0;
+        return [
+            (basis[1][0] + basis[0][1]) / s,
+            0.25 * s,
+            (basis[2][1] + basis[1][2]) / s,
+            (basis[2][0] - basis[0][2]) / s,
+        ];
     }
-    quaternion
+    let s = (1.0 + basis[2][2] - basis[0][0] - basis[1][1]).sqrt() * 2.0;
+    [
+        (basis[2][0] + basis[0][2]) / s,
+        (basis[2][1] + basis[1][2]) / s,
+        0.25 * s,
+        (basis[0][1] - basis[1][0]) / s,
+    ]
 }
 
 /// The Euclidean length of a vector.

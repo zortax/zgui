@@ -101,14 +101,26 @@ fn the_fixed_footprint_and_the_scratch_are_two_numbers_and_not_one() {
     let outcome = zgui_render::Renderer::draw(&mut *harness, &scene, &DamageSet::full());
     let memory: MemoryReport = outcome.stats().expect("presented").memory;
 
+    // The fixed footprint is read from the device's allocator report, which wgpu publishes on
+    // Vulkan and DX12 only. Without one the figure reads zero, so only the assertions that
+    // compare against it are skipped.
+    if harness.gpu().device().generate_allocator_report().is_some() {
+        assert!(
+            memory.fixed > 64 * 1024 * 1024,
+            "the path renderer's fixed buffers are hundreds of megabytes, and this reported {}",
+            memory.fixed
+        );
+        assert!(
+            memory.scratch < memory.fixed,
+            "the scratch is a separate and much smaller budget, and this reported {}",
+            memory.scratch
+        );
+    } else {
+        eprintln!("no allocator report on this backend; the fixed footprint reads zero");
+    }
     assert!(
-        memory.fixed > 64 * 1024 * 1024,
-        "the path renderer's fixed buffers are hundreds of megabytes, and this reported {}",
-        memory.fixed
-    );
-    assert!(
-        memory.scratch > 0 && memory.scratch < memory.fixed,
-        "the scratch is a separate and much smaller budget, and this reported {}",
+        memory.scratch > 0,
+        "the scratch is a separate budget of its own, and this reported {}",
         memory.scratch
     );
     assert!(

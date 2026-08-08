@@ -14,19 +14,30 @@ pub const DEVICE_ID_VARIABLE: &str = "ZGUI_DEVICE_ID";
 
 /// The environment variable restricting which backends are enumerated at all.
 ///
-/// Accepts `vulkan`, `gl`, a comma-separated pair of them, or `none`. `none` is what makes the
-/// no-device path reachable on a machine that has one: without it, the only way to see what a
-/// user with no driver sees is to uninstall the driver.
+/// Accepts `vulkan`, `metal`, `dx12`, `gl`, a comma-separated list of them, or `none`. `none` is
+/// what makes the no-device path reachable on a machine that has one: without it, the only way to
+/// see what a user with no driver sees is to uninstall the driver.
 pub const BACKENDS_VARIABLE: &str = "ZGUI_BACKENDS";
 
 /// The backends enumerated when nothing restricts them.
 ///
-/// Vulkan is the target; GL is available because a machine that has only GL is a machine we would
-/// otherwise show a black window to. Neither is silently substituted for the other: a candidate is
-/// accepted only once a device has actually been created from it, and GL is not *enumerated* until
-/// Vulkan has failed — see [`tiers`].
+/// Each platform has one primary — Metal on Apple, DX12 on Windows, Vulkan elsewhere — and GL
+/// rides along as the fallback for a machine whose primary has no working driver. wgpu reaches
+/// GL through EGL, which Apple platforms do not ship, so the Apple set is Metal alone. GL is
+/// enumerated only after the primary has failed — see [`tiers`].
 pub fn default_backends() -> wgpu::Backends {
-    wgpu::Backends::VULKAN | wgpu::Backends::GL
+    #[cfg(target_vendor = "apple")]
+    {
+        wgpu::Backends::METAL
+    }
+    #[cfg(target_os = "windows")]
+    {
+        wgpu::Backends::DX12 | wgpu::Backends::GL
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
+    {
+        wgpu::Backends::VULKAN | wgpu::Backends::GL
+    }
 }
 
 /// How many times a backend set containing GL has been enumerated in this process.
@@ -46,16 +57,16 @@ pub fn gl_enumerations() -> u64 {
 ///
 /// A fallback constructed before the primary has been tried is not a fallback, it is a tax: the
 /// adapters of every requested backend used to be enumerated up front, so a machine that opens a
-/// Vulkan device every time still paid for its GL cores to be brought up and then dropped unused.
-/// So the request is cut into tiers — Vulkan, then everything else — and a tier is enumerated only
-/// once every tier before it has failed to produce a working device.
+/// native device every time still paid for its GL cores to be brought up and then dropped unused.
+/// So the request is cut into tiers — the native backends, then GL — and a tier is enumerated
+/// only once every tier before it has failed to produce a working device.
 ///
 /// A request naming one backend yields one tier, which is what makes [`BACKENDS_VARIABLE`] mean
 /// exactly what it says. The empty request yields no tiers at all.
 pub fn tiers(backends: wgpu::Backends) -> Vec<wgpu::Backends> {
-    let primary = backends & wgpu::Backends::VULKAN;
-    let rest = backends - wgpu::Backends::VULKAN;
-    [primary, rest]
+    let primary = backends - wgpu::Backends::GL;
+    let fallback = backends & wgpu::Backends::GL;
+    [primary, fallback]
         .into_iter()
         .filter(|tier| !tier.is_empty())
         .collect()
@@ -79,6 +90,8 @@ pub fn parse_backends(value: &str) -> wgpu::Backends {
     for word in value.split(',') {
         match word.trim().to_ascii_lowercase().as_str() {
             "vulkan" => backends |= wgpu::Backends::VULKAN,
+            "metal" => backends |= wgpu::Backends::METAL,
+            "dx12" | "d3d12" => backends |= wgpu::Backends::DX12,
             "gl" | "gles" | "opengl" => backends |= wgpu::Backends::GL,
             "all" => backends |= default_backends(),
             _ => {}
@@ -104,9 +117,9 @@ pub fn preferred_device_id() -> Option<u32> {
 /// How good a candidate an adapter looks, before anything has been created from it.
 ///
 /// Lower sorts first. The order is: the device id the environment asked for, then discrete before
-/// integrated before virtual before software, then Vulkan before GL. It is only a *sort*: every
-/// candidate is still tried in turn, because the capabilities an adapter reports are not always
-/// the capabilities a device created from it has.
+/// integrated before virtual before software, then a native backend before GL. It is only a
+/// *sort*: every candidate is still tried in turn, because the capabilities an adapter reports are
+/// not always the capabilities a device created from it has.
 pub fn sort_key(info: &wgpu::AdapterInfo, preferred: Option<u32>) -> (u8, u8, u8) {
     let named = u8::from(Some(info.device) != preferred);
     let device_type = match info.device_type {
@@ -117,7 +130,7 @@ pub fn sort_key(info: &wgpu::AdapterInfo, preferred: Option<u32>) -> (u8, u8, u8
         wgpu::DeviceType::Other => 4,
     };
     let backend = match info.backend {
-        wgpu::Backend::Vulkan => 0,
+        wgpu::Backend::Vulkan | wgpu::Backend::Metal | wgpu::Backend::Dx12 => 0,
         wgpu::Backend::Gl => 1,
         _ => 2,
     };
@@ -163,11 +176,16 @@ mod tests {
     use super::{describe, parse_backends, sort_key, tiers, unavailable};
 
     #[test]
-    fn gl_is_a_tier_of_its_own_behind_vulkan() {
+    fn gl_is_a_tier_of_its_own_behind_the_native_backends() {
         assert_eq!(
-            tiers(super::default_backends()),
+            tiers(wgpu::Backends::VULKAN | wgpu::Backends::GL),
             vec![wgpu::Backends::VULKAN, wgpu::Backends::GL],
             "the fallback is a second tier, not part of the first"
+        );
+        assert_eq!(
+            tiers(wgpu::Backends::METAL | wgpu::Backends::GL),
+            vec![wgpu::Backends::METAL, wgpu::Backends::GL],
+            "every native backend outranks the fallback, whatever the platform"
         );
     }
 
@@ -224,7 +242,12 @@ mod tests {
     #[test]
     fn an_unrecognised_backend_list_asks_for_nothing() {
         assert_eq!(parse_backends("vulkan"), wgpu::Backends::VULKAN);
-        assert_eq!(parse_backends("gl, vulkan"), super::default_backends());
+        assert_eq!(parse_backends("metal"), wgpu::Backends::METAL);
+        assert_eq!(parse_backends("dx12"), wgpu::Backends::DX12);
+        assert_eq!(
+            parse_backends("gl, vulkan"),
+            wgpu::Backends::VULKAN | wgpu::Backends::GL
+        );
         assert!(parse_backends("none").is_empty());
         assert!(parse_backends("nonsense").is_empty());
     }

@@ -46,7 +46,8 @@ const COMPOSITE_MATRIX: u32 = 2u;
 
 struct CompositeVarying {
     @builtin(position) position: vec4<f32>,
-    @location(0) device: vec2<f32>,
+    // `device` is a reserved word in Metal, and member names reach the MSL output verbatim.
+    @location(0) device_point: vec2<f32>,
 }
 
 @vertex
@@ -55,18 +56,18 @@ fn vs_composite(@builtin(vertex_index) vertex: u32) -> CompositeVarying {
     let device = composite.bounds.xy + corner * composite.bounds.zw;
     var out: CompositeVarying;
     out.position = to_clip_position(device, 0u);
-    out.device = device;
+    out.device_point = device;
     return out;
 }
 
 @fragment
 fn fs_composite(in: CompositeVarying) -> @location(0) vec4<f32> {
-    let coverage = clip_coverage(in.device, u32(composite.control.x));
+    let coverage = clip_coverage(in.device_point, u32(composite.control.x));
     if coverage <= 0.0 {
         return vec4<f32>(0.0);
     }
     let flags = u32(composite.control.y);
-    let sampled = sample_isolated(in.device - composite.control.zw);
+    let sampled = sample_isolated(in.device_point - composite.control.zw);
 
     var color = sampled;
     if (flags & COMPOSITE_TINT) != 0u {

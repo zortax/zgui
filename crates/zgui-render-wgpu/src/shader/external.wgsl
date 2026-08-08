@@ -19,7 +19,8 @@ struct ExternalParams {
 
 struct ExternalVarying {
     @builtin(position) position: vec4<f32>,
-    @location(0) device: vec2<f32>,
+    // `device` is a reserved word in Metal, and member names reach the MSL output verbatim.
+    @location(0) device_point: vec2<f32>,
     @location(1) uv: vec2<f32>,
 }
 
@@ -29,14 +30,14 @@ fn vs_external(@builtin(vertex_index) vertex: u32) -> ExternalVarying {
     let device = foreign.bounds.xy + corner * foreign.bounds.zw;
     var out: ExternalVarying;
     out.position = to_clip_position(device, u32(foreign.control.y));
-    out.device = device;
+    out.device_point = device;
     out.uv = corner;
     return out;
 }
 
 @fragment
 fn fs_external(in: ExternalVarying) -> @location(0) vec4<f32> {
-    let coverage = clip_coverage(in.device, u32(foreign.control.x));
+    let coverage = clip_coverage(in.device_point, u32(foreign.control.x));
     if coverage <= 0.0 {
         return vec4<f32>(0.0);
     }

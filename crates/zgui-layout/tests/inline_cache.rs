@@ -94,37 +94,54 @@ fn changing_vertical_align_moves_the_box_without_reshaping() {
     // The obvious version of this test resizes instead of re-styling, and passes while the
     // mechanism does nothing.
     let natural = (60.0, 40.0);
-    let build = |align: &str| {
-        // The line is taller than the image, so where the image sits inside it is a real position
-        // rather than the line's own top edge: a test whose box is the tallest thing on the line
-        // measures nothing, because raising it only makes the line taller.
-        let css = format!(
-            "root {{ display: block; width: 400px }}
-             para {{ display: block; line-height: 120px }}
-             picture {{ display: inline; vertical-align: {align} }}"
-        );
-        Fixture::with_natural_size(
-            Element::new("root").children(vec![Element::new("para").children(vec![
-                Element::new("lead").text("one "),
-                Element::new("picture").image(natural.0, natural.1),
-            ])]),
-            &css,
-            natural,
-        )
-    };
+    // The line is taller than the image, so where the image sits inside it is a real position
+    // rather than the line's own top edge: a test whose box is the tallest thing on the line
+    // measures nothing, because raising it only makes the line taller.
+    let mut fixture = Fixture::with_natural_size(
+        Element::new("root").children(vec![Element::new("para").children(vec![
+            Element::new("lead").text("one "),
+            Element::new("picture").image(natural.0, natural.1),
+        ])]),
+        "root { display: block; width: 400px }
+         para { display: block; line-height: 120px }
+         picture { display: inline; vertical-align: baseline }
+         .raised { vertical-align: super }",
+        natural,
+    );
 
     let mut content = support::measurer_with_images(natural.0, natural.1);
 
-    let baseline_fixture = build("baseline");
-    let mut store = baseline_fixture.box_tree();
+    let mut store = fixture.box_tree();
     lay_out(&mut store, &mut content, 400.0, 600.0);
     let key = *inline_roots(&store).first().expect("a context");
     let before = store.inline_resolution(key).expect("laid out").placements[0].origin;
     let shapes_before = content.shaper().shapes;
 
-    // The same content, re-styled. The glyphs are identical, so the cache is warm.
-    let raised_fixture = build("super");
-    let mut raised_store = raised_fixture.box_tree();
+    // The same document, re-styled through the mutation protocol: a real re-style keeps every
+    // unchanged style group's allocation, and the caches key on those pointers — a fresh fixture
+    // shares them only by allocator accident. The glyphs are identical, so the cache is warm.
+    let paragraph = fixture
+        .document
+        .store()
+        .core(fixture.root)
+        .first_child()
+        .expect("the paragraph");
+    let lead = fixture
+        .document
+        .store()
+        .core(paragraph)
+        .first_child()
+        .expect("the lead text");
+    let picture = fixture
+        .document
+        .store()
+        .core(lead)
+        .next_sibling()
+        .expect("the picture");
+    fixture.edit_and_restyle(|edit| {
+        edit.add_class(picture, zgui_interned::ClassName::new("raised"));
+    });
+    let mut raised_store = fixture.box_tree();
     lay_out(&mut raised_store, &mut content, 400.0, 600.0);
     let key = *inline_roots(&raised_store).first().expect("a context");
     let after = raised_store

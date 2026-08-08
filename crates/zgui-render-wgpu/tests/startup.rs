@@ -16,7 +16,7 @@ fn target() -> RenderTarget {
 }
 
 #[test]
-fn no_gl_adapter_is_enumerated_when_a_vulkan_device_opens() {
+fn no_gl_adapter_is_enumerated_when_a_native_device_opens() {
     assert_eq!(
         adapter::gl_enumerations(),
         0,
@@ -28,29 +28,38 @@ fn no_gl_adapter_is_enumerated_when_a_vulkan_device_opens() {
     match built {
         Ok(renderer) => {
             let backend = renderer.gpu().adapter().get_info().backend;
-            if backend == wgpu::Backend::Vulkan {
+            if backend != wgpu::Backend::Gl {
                 assert_eq!(
                     adapter::gl_enumerations(),
                     0,
-                    "a Vulkan device opened, so GL's adapters were never asked for"
+                    "a native device opened, so GL's adapters were never asked for"
                 );
             } else {
                 // The complement, on a machine whose primary backend produced nothing: the
                 // fallback tier was enumerated and it is what opened the device.
                 assert!(
                     adapter::gl_enumerations() > 0,
-                    "a device that is not Vulkan can only have come from an enumerated fallback"
+                    "a GL device can only have come from an enumerated fallback"
                 );
-                eprintln!("no Vulkan device here; the fallback opened {backend:?}");
+                eprintln!("no native device here; the fallback opened {backend:?}");
             }
         }
         Err(failure) => {
             // No device at all: every tier was tried, which is the only case in which the
-            // fallback is enumerated without a device coming out of it.
-            assert!(
-                adapter::gl_enumerations() > 0,
-                "the fallback is enumerated before the attempt is given up"
-            );
+            // fallback is enumerated without a device coming out of it. A platform whose
+            // default set carries no GL has no fallback to enumerate.
+            if adapter::default_backends().intersects(wgpu::Backends::GL) {
+                assert!(
+                    adapter::gl_enumerations() > 0,
+                    "the fallback is enumerated before the attempt is given up"
+                );
+            } else {
+                assert_eq!(
+                    adapter::gl_enumerations(),
+                    0,
+                    "this platform's default set has no GL to enumerate"
+                );
+            }
             eprintln!("skipped: no usable graphics device ({failure})");
         }
     }

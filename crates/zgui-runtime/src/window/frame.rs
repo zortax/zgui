@@ -403,6 +403,17 @@ impl Window {
             // what produces a flash of empty window at launch.
             self.surface.set_visible(true);
             self.first_frame = false;
+        } else if self.first_frame && matches!(outcome, FrameOutcome::Skipped(SkipReason::Occluded))
+        {
+            // The converse deadlock, real on macOS: a hidden window's layer hands out no
+            // drawable, so the present that would show the window can never happen behind it.
+            // The composed target already holds the frame's pixels, so the window is shown now
+            // and recorded as occluded. The platform's visibility report then forces the redraw
+            // that presents; the direct request covers a surface that was ready immediately.
+            self.surface.set_visible(true);
+            self.first_frame = false;
+            self.occluded = true;
+            self.request_frame();
         }
 
         // Last, with everything this frame produced still standing: the scene it emitted, the

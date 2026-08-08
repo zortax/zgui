@@ -100,8 +100,15 @@ fn main() {
          has to keep being answered, or nothing will ever ask for the frame it wants",
         probe.arrivals
     );
+    // On macOS, AppKit coalesces a redraw request that lands while one is already queued, so a
+    // small fraction of arrivals buy no frame of their own. The spin this guards against buys
+    // none at all, so one percent of slack cannot hide it.
+    #[cfg(target_os = "macos")]
+    let slack = 1 + probe.arrivals / 100;
+    #[cfg(not(target_os = "macos"))]
+    let slack = 1;
     assert!(
-        probe.arrivals.abs_diff(probe.skipped_after_arrival) <= 1,
+        probe.arrivals.abs_diff(probe.skipped_after_arrival) <= slack,
         "{} arrivals bought {} frames; an arrival that buys no frame is the spin, and only the \
          last one, whose frame has not run yet, may be outstanding",
         probe.arrivals,

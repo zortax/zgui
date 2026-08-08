@@ -157,8 +157,13 @@ fn a_blurred_shadow_falls_off_outwards_and_stops_where_it_says_it_does() {
     scene.finish(&DamageSet::full());
     let pixels = present(&mut renderer, &scene);
 
+    // An outer shadow is never painted within the box that casts it: a box with no fill of its
+    // own is a hole in the page, and must not wear its own shadow as a wash over its interior.
     let middle = pixels.rgba(64, 64)[3];
-    assert!(middle > 250, "the middle of the shadow is opaque: {middle}");
+    assert!(
+        middle == 0,
+        "the casting box's interior is unpainted: {middle}"
+    );
 
     // Outwards from the right edge: strictly decreasing, and gone by three standard deviations.
     let profile: Vec<u8> = (0..24).map(|step| pixels.rgba(88 + step, 64)[3]).collect();
