@@ -168,8 +168,12 @@ fn drive(device: &Arc<Device>, mut handler: Box<dyn AppHandler>) -> Result<(), P
             // a surface and no descriptor moves. So a frame asked for while the application was
             // being asked how to wait — a deadline that turned into a redraw is the ordinary
             // case — hands the turn back rather than being slept through.
+            //
+            // The moment goes with the turn. The wait below then has no length and always runs to
+            // its end, and a moment left installed over one would be reported reached as soon as
+            // the poll came back, while the moment itself was still ahead.
             let owed = answered || surfaces[..claimed].iter().any(|drawn| drawn.wants_redraw());
-            let parked = if owed { Parked::Never } else { parked };
+            let parked = if owed { park.handed_back() } else { parked };
 
             match wait(device, &waker, parked, clock.now()) {
                 // The wait ran to its end. Where it carried a deadline, that is the deadline
