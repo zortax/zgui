@@ -155,4 +155,19 @@ impl Device {
         ioctl::issue(self.fd(), ioctl::MODE_CREATEPROPBLOB, &mut request)?;
         Ok(request.blob_id)
     }
+
+    /// Destroys the blob property `id` names.
+    ///
+    /// The header states that a blob may be released "as soon as the commit has been issued,
+    /// without waiting for it to complete", so a mode blob is safe to destroy while the mode it
+    /// describes is on screen. The kernel keeps its own reference for as long as it needs one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when the kernel refuses, which is how an id it does not know is
+    /// answered.
+    pub fn destroy_blob(&self, id: u32) -> Result<()> {
+        let mut request = sys::drm_mode_destroy_blob { blob_id: id };
+        ioctl::issue(self.fd(), ioctl::MODE_DESTROYPROPBLOB, &mut request)
+    }
 }

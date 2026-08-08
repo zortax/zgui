@@ -100,6 +100,12 @@ pub struct AtomicCommit {
     /// The kind is part of the key because the id spaces are shared: the same number can name a
     /// connector and a plane.
     cache: HashMap<(u32, u32), Properties>,
+    /// The mode blob each CRTC is currently set from, by CRTC id.
+    ///
+    /// A modeset makes a new blob and leaves the one it replaced to be destroyed. Without this,
+    /// every mode change would leave a blob in the kernel until the device is closed. The blob of
+    /// the mode still on screen stays here, and closing the device releases it.
+    modes: HashMap<u32, u32>,
 }
 
 impl AtomicCommit {
@@ -168,9 +174,8 @@ impl Commit for AtomicCommit {
         mode: &Mode,
         framebuffer: Framebuffer,
     ) -> Result<()> {
-        // The timings travel as a blob, and `MODE_ID` names the blob. The blob lives until the
-        // device is closed, because this crate has no request that destroys one. A modeset is
-        // rare and a blob is 68 bytes, so what that costs is one blob per mode change.
+        // The timings travel as a blob, and `MODE_ID` names the blob. The one this replaces is
+        // destroyed further down, once the commit succeeded.
         let blob = device.create_blob(raw_bytes(&mode.raw))?;
         let width = u64::from(mode.width());
         let height = u64::from(mode.height());
@@ -212,16 +217,42 @@ impl Commit for AtomicCommit {
         request.add(pipe.connector, &connector);
         request.add(pipe.plane, &plane);
 
-        // The dry run first. It is the capability the legacy path lacks, and it is why a modeset
-        // that the hardware cannot do leaves the display as it was. `ALLOW_MODESET` is set on it
-        // too, so the two calls ask the same question.
-        request.issue(
-            device,
-            sys::DRM_MODE_ATOMIC_TEST_ONLY | sys::DRM_MODE_ATOMIC_ALLOW_MODESET,
-        )?;
-        // A test-only commit must not ask for an event, so neither call carries one. What tells a
-        // caller the modeset finished is the call returning.
-        request.issue(device, sys::DRM_MODE_ATOMIC_ALLOW_MODESET)
+        // The dry run first. A modeset the hardware cannot do is refused here and leaves the
+        // display as it was, which is the capability the legacy path lacks. `ALLOW_MODESET` is set
+        // on both calls, so the two ask the same question: `drm_atomic_check_only` refuses a
+        // commit that needs a full modeset while the flag is off.
+        //
+        // `drm_mode_atomic_ioctl` answers `EINVAL` for a test-only commit that asks for an event,
+        // so neither call carries one. A caller learns the modeset finished when the second call
+        // returns.
+        let applied = request
+            .issue(
+                device,
+                sys::DRM_MODE_ATOMIC_TEST_ONLY | sys::DRM_MODE_ATOMIC_ALLOW_MODESET,
+            )
+            .and_then(|()| request.issue(device, sys::DRM_MODE_ATOMIC_ALLOW_MODESET));
+
+        // A release can fail only where this crate lost track of a blob it made, and it changes
+        // nothing about what the display is doing. So both of the releases below report the
+        // outcome of the commit and drop their own: a caller told that a modeset failed would undo
+        // one that worked.
+        if let Err(error) = applied {
+            // The new mode never reached the screen, so its blob describes nothing.
+            drop(device.destroy_blob(blob));
+            return Err(error);
+        }
+
+        // The old blob is released only here, after the apply. A commit that failed leaves the
+        // previous mode on screen, and the previous blob describes it, so a release before the
+        // apply would throw away the description of what the display still shows. The header
+        // allows the release now: a blob may go "as soon as the commit has been issued, without
+        // waiting for it to complete". The kernel took its own reference on the blob when the
+        // commit set `MODE_ID`, and it holds that for as long as the mode is live.
+        if let Some(spent) = self.modes.insert(pipe.crtc, blob) {
+            drop(device.destroy_blob(spent));
+        }
+
+        Ok(())
     }
 
     fn flip(&mut self, device: &Device, pipe: Pipe, framebuffer: Framebuffer) -> Result<()> {
