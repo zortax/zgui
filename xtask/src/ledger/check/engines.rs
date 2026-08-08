@@ -95,10 +95,14 @@ const LEDGER: &[(&str, &[&str])] = &[
     // second crate issuing ioctls of its own is a second place a device can be left in a state
     // nothing puts back.
     //
+    // `zgui-platform-drm` is here for one descriptor and nothing else: the wake channel the frame
+    // loop parks on beside the device is an eventfd, and there is no other safe way to hold one.
+    // It issues no ioctl — every one of those stays in `zgui-drm`.
+    //
     // The Wayland backend is on this row for one call of its own: the monotonic clock the
     // compositor stamps its presentation feedback against, which a reported presentation is
-    // useless without. A row is read by its first match, so the two uses share one.
-    ("rustix", &["zgui-drm", "zgui-platform-wayland"]),
+    // useless without. A row is read by its first match, so the uses share one.
+    ("rustix", &["zgui-drm", "zgui-platform-drm", "zgui-platform-wayland"]),
     ("bindgen", &["zgui-drm"]),
     (
         "accesskit",

@@ -28,7 +28,19 @@
 // The kernel's display interface exists on Linux and nowhere else, so on any other platform this
 // crate is empty rather than broken.
 #[cfg(target_os = "linux")]
+pub mod clipboard;
+#[cfg(target_os = "linux")]
+pub mod clock;
+#[cfg(target_os = "linux")]
 pub mod output;
+#[cfg(target_os = "linux")]
+pub mod waker;
 
 #[cfg(target_os = "linux")]
+pub use crate::clipboard::ConsoleClipboard;
+#[cfg(target_os = "linux")]
+pub use crate::clock::SystemClock;
+#[cfg(target_os = "linux")]
 pub use crate::output::Output;
+#[cfg(target_os = "linux")]
+pub use crate::waker::EventfdWaker;
