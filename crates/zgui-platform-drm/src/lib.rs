@@ -9,12 +9,16 @@
 //! * **No input.** Reading the evdev devices is a sub-project of its own, and it is not started.
 //!   An application on this backend draws and animates, and a person cannot touch it: no keyboard,
 //!   no pointer, no touch.
-//! * **No session or virtual terminal management.** This backend will take DRM master and hold it
-//!   for as long as the program runs. Nothing will hand the device back on a terminal switch, and
-//!   nothing asks a session daemon for the device. So a program here will need a free virtual
+//! * **No session or virtual terminal management.** The frame loop will take DRM master and hold
+//!   it for as long as the program runs. Nothing will hand the device back on a terminal switch,
+//!   and nothing asks a session daemon for it. So a program here will need a free virtual
 //!   terminal, or root, and will fail to start while a compositor holds the master.
 //!
-//! The crate's dependencies say the same: no input crate, and no session library.
+//! Both are visible in what the crate names: no input crate, and no session library.
+//!
+//! Read that second one as a description of the loop this crate is growing rather than of the code
+//! in it today. [`Output::discover`](crate::output::Output::discover) exists now, and it reads
+//! the device without taking master at all.
 
 #![deny(missing_docs)]
 // This backend issues no ioctl of its own — `zgui-drm` owns every one of them — and the pixels it
