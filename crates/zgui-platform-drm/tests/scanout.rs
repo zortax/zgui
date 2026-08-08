@@ -149,9 +149,11 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
         if pixels.is_bgra() { "BGRA" } else { "RGBA" },
     );
 
-    let mut scanout =
-        Scanout::new(&device, output, pixels.is_bgra()).expect("the mode is set on this display");
+    // One commit for the device, the way the frame loop holds one: the modeset and every flip
+    // after it go through the same object, so the mode blob it replaces is the one it destroys.
     let mut commit = commit::for_device(&device);
+    let mut scanout = Scanout::new(&device, output, &mut *commit, pixels.is_bgra())
+        .expect("the mode is set on this display");
 
     assert!(
         scanout

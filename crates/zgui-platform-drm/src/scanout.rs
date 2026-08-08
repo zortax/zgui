@@ -58,6 +58,11 @@ impl Scanout {
     /// are blue first, `XBGR8888` for bytes that are red first. Choosing the format is what makes
     /// a frame a copy rather than a swizzle of two million pixels.
     ///
+    /// `commit` is the frame loop's own, and it is the same one every later flip goes through. An
+    /// atomic commit holds the mode blob of every CRTC it has set and destroys the one it replaces;
+    /// a commit made here and dropped here would leave the blob of this modeset behind, so a
+    /// display re-created while the program runs would leak 68 bytes of kernel memory each time.
+    ///
     /// The caller holds DRM master. A modeset from a process that is not the master is refused
     /// with `EPERM`, and taking master belongs to the frame loop: it owns the device for as long
     /// as the program runs, and this owns two buffers on it.
@@ -67,7 +72,12 @@ impl Scanout {
     /// Returns [`PlatformError::Backend`] when the driver refuses a buffer, a framebuffer or the
     /// modeset. Whatever was allocated before the refusal is released, so a failure here leaves
     /// the device as it was found.
-    pub fn new(device: &Device, output: &Output, bgra: bool) -> Result<Self, PlatformError> {
+    pub fn new(
+        device: &Device,
+        output: &Output,
+        commit: &mut dyn Commit,
+        bgra: bool,
+    ) -> Result<Self, PlatformError> {
         let format = fourcc(bgra);
         let width = output.mode.width();
         let height = output.mode.height();
@@ -92,12 +102,6 @@ impl Scanout {
             flipping: false,
         };
 
-        // A commit interface of its own, so that building a scanout needs nothing from the caller
-        // but the device. It costs one read of the CRTC, connector and plane properties that the
-        // loop's own commit reads again on its first flip — once, at startup. What it leaves
-        // behind is the mode blob, which the kernel holds for as long as the mode is on the
-        // screen and releases when the device closes.
-        let mut commit = zgui_drm::commit::for_device(device);
         if let Err(error) = commit.modeset(device, output.pipe, &output.mode, front_id) {
             scanout.release(device);
             return Err(backend(error));
