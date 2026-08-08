@@ -23,12 +23,23 @@
 //! the frame arrived and the other buffer is free again. The copy chooses its fourcc from the
 //! channel order of the readback, so a frame is copied rather than swizzled pixel by pixel.
 //!
+//! A window system presents for a caller; a console does not. So the last step belongs to whatever
+//! draws, and this crate offers the three things that step needs: `FORMAT`, the texture a frame is
+//! composed into; `DrmDisplay::present`, which copies a composed frame into the buffer a display is
+//! about to scan out of and asks for the flip; and `Displays`, which says which display a surface
+//! is. The renderer that uses them lives in `zgui`, because a renderer is built by the runtime and
+//! a backend at this layer cannot name the runtime.
+//!
 //! # The loop
 //!
 //! `run` is the driver. It opens the device, takes master, lights every display it finds, and then
 //! turns: read the completions, draw the frames that were asked for, ask the application how to
 //! wait, and wait on the device and the wake channel together. `park` decides the waiting, and it
 //! is the same state machine the windowing backend parks with.
+//!
+//! It also writes the displays it lit into the `Displays` it was given, for as long as it turns.
+//! That map and the renderer are one decision, so `App::run_drm` makes one map and hands it to
+//! both.
 //!
 //! # The handles a surface reports
 //!
@@ -65,8 +76,6 @@ pub mod cx;
 #[cfg(target_os = "linux")]
 pub mod display;
 #[cfg(target_os = "linux")]
-pub mod graphics;
-#[cfg(target_os = "linux")]
 pub mod output;
 // How the loop waits. Private because nothing outside this crate parks this loop, and the model it
 // follows is stated in full in `zgui-platform-winit`'s own `park` module.
@@ -88,13 +97,11 @@ pub use crate::clock::SystemClock;
 #[cfg(target_os = "linux")]
 pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
-pub use crate::display::DrmDisplay;
-#[cfg(target_os = "linux")]
-pub use crate::graphics::{DrmRenderer, factory};
+pub use crate::display::{Displays, DrmDisplay};
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]
-pub use crate::scanout::Scanout;
+pub use crate::scanout::{FORMAT, Scanout};
 #[cfg(target_os = "linux")]
 pub use crate::surface::DrmSurface;
 #[cfg(target_os = "linux")]

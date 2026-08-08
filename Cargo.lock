@@ -5588,6 +5588,7 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
+ "tracing",
  "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
@@ -5984,7 +5985,6 @@ dependencies = [
  "raw-window-handle",
  "rustix 1.1.4",
  "tracing",
- "zgui-atlas",
  "zgui-bits",
  "zgui-color",
  "zgui-drm",
@@ -5992,9 +5992,7 @@ dependencies = [
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-render",
- "zgui-render-vector-vello",
  "zgui-render-wgpu",
- "zgui-runtime",
  "zgui-scene",
 ]
 

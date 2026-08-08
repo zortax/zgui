@@ -2,12 +2,12 @@
 //!
 //! A renderer factory is handed a surface and a target and nothing else, and a surface says nothing
 //! about the CRTC behind it. The frame loop holds the buffers, the mode and the flip, and it knows
-//! which display each surface is. So the loop publishes that map here, on the thread it runs on,
-//! and the factory reads it.
+//! which display each surface is. So the map goes in a [`Displays`]: the caller makes one, hands it
+//! to [`run`](crate::run) and to the renderer it installs, and the loop writes the map into it
+//! while it drives.
 //!
 //! The loop and the renderer are coupled through that map and through nothing else. Neither half
-//! draws anything without the other, so `App::run_drm` installs both together and offers no way to
-//! install one.
+//! draws anything without the other, so `App::run_drm` makes one [`Displays`] and gives it to both.
 //!
 //! # The state the two halves share
 //!
@@ -31,12 +31,48 @@ use zgui_render_wgpu::Pixels;
 
 use crate::scanout::Scanout;
 
-thread_local! {
-    /// The displays the frame loop on this thread is driving, by the surface each is seen as.
+/// The displays a frame loop is driving, by the surface each is seen as.
+///
+/// The seam between the loop and what draws through it. A renderer holds one of these and asks it
+/// which display a surface is; the loop writes the answers in when it lights the displays, and
+/// takes them back when it stops. Empty before the first display is lit and after the last frame,
+/// so a renderer with no loop behind it fails where it is called.
+///
+/// Cloning costs one reference count, and every clone reads the same map. Both ends run on the
+/// thread the loop turns on, one at a time, so the map is held through [`Rc`] and [`RefCell`]
+/// rather than through a lock.
+#[derive(Clone, Default)]
+pub struct Displays {
+    /// What the loop wrote in, by surface.
+    driven: Rc<RefCell<Vec<(SurfaceId, DrmDisplay)>>>,
+}
+
+impl Displays {
+    /// Creates a map no loop has written to yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the display the surface numbered `id` draws to, when a loop is driving one.
     ///
-    /// Empty whenever no loop is running, which is what makes a factory installed without one fail
-    /// where it is called rather than draw into nothing.
-    static DRIVEN: RefCell<Vec<(SurfaceId, DrmDisplay)>> = const { RefCell::new(Vec::new()) };
+    /// `None` says the surface belongs to no loop holding this map. A renderer installed without
+    /// [`run`](crate::run) gets that answer, and it is reported rather than worked around: a
+    /// renderer that composed a frame and put it nowhere is a program that appears to run and shows
+    /// nothing.
+    #[must_use]
+    pub fn for_surface(&self, id: SurfaceId) -> Option<DrmDisplay> {
+        find(&self.driven.borrow(), id)
+    }
+
+    /// Writes `displays` in, and takes them back when the returned value is dropped.
+    ///
+    /// Replaces whatever was there before. One loop drives one map, so anything already in it
+    /// belongs to a loop that has already finished.
+    pub(crate) fn drive(&self, displays: Vec<(SurfaceId, DrmDisplay)>) -> Driving {
+        *self.driven.borrow_mut() = displays;
+        Driving(self.clone())
+    }
 }
 
 /// One display, as the thing a frame is put on.
@@ -56,8 +92,8 @@ pub struct DrmDisplay {
 impl DrmDisplay {
     /// Creates the display `scanout` drives, flipped through `commit` on `device`.
     ///
-    /// The frame loop calls this. It owns all three, and it publishes the result with
-    /// `Driving::over` so that the renderer factory can find it.
+    /// The frame loop calls this. It owns all three, and it puts the result in a [`Displays`] so
+    /// that the renderer can find it.
     pub fn new(
         device: Arc<Device>,
         commit: Rc<RefCell<Box<dyn Commit>>>,
@@ -88,41 +124,22 @@ impl DrmDisplay {
     }
 }
 
-/// The displays a loop published, taken back when this is dropped.
+/// The displays a loop wrote in, taken back when this is dropped.
 ///
-/// Held by the frame loop for exactly as long as it runs. Nothing is published before the first
-/// surface exists and nothing stays published after the last frame, so a renderer built outside a
-/// running loop finds no display rather than a stale one.
-#[must_use = "the displays are published only for as long as this is held"]
-pub(crate) struct Driving;
-
-impl Driving {
-    /// Publishes `displays` on this thread.
-    ///
-    /// Replaces whatever was published before. One frame loop runs per thread, so the previous
-    /// contents belong to a loop that has already finished.
-    pub(crate) fn over(displays: Vec<(SurfaceId, DrmDisplay)>) -> Self {
-        DRIVEN.with_borrow_mut(|driven| *driven = displays);
-        Self
-    }
-}
+/// Held by the frame loop for exactly as long as it runs. Nothing is written before the first
+/// surface exists and nothing stays after the last frame, so a renderer outliving its loop finds no
+/// display rather than a stale one. That is also what releases the loop's hold on the buffers: a
+/// scanout is given back by value, so the displays naming it go first.
+#[must_use = "the displays are readable only for as long as this is held"]
+pub(crate) struct Driving(Displays);
 
 impl Drop for Driving {
     fn drop(&mut self) {
-        DRIVEN.with_borrow_mut(Vec::clear);
+        self.0.driven.borrow_mut().clear();
     }
 }
 
-/// The display the surface numbered `id` draws to, when a frame loop is driving one.
-///
-/// `None` says the surface belongs to no loop on this thread, which is what a renderer factory
-/// installed without `run` looks like. It is reported rather than worked around: a renderer that
-/// composed a frame and put it nowhere is a program that appears to run and shows nothing.
-pub fn driven(id: SurfaceId) -> Option<DrmDisplay> {
-    DRIVEN.with_borrow(|driven| find(driven, id))
-}
-
-/// Returns the entry `id` names, out of the ones a loop published.
+/// Returns the entry `id` names, out of the ones a loop wrote in.
 ///
 /// Written over any value so that what it answers can be asserted with no device open: a display
 /// holds two buffers a driver allocated, and the lookup holds nothing at all.
@@ -137,7 +154,7 @@ fn find<T: Clone>(driven: &[(SurfaceId, T)], id: SurfaceId) -> Option<T> {
 mod tests {
     //! Which display a surface reaches, which is the one decision here that can be got wrong.
 
-    use super::{driven, find};
+    use super::{Displays, find};
     use zgui_platform::SurfaceId;
 
     #[test]
@@ -161,9 +178,9 @@ mod tests {
     }
 
     #[test]
-    fn a_surface_reaches_nothing_while_no_loop_is_running() {
-        // What a renderer factory installed without `run` sees. It is an error there rather than a
-        // renderer that composes a frame and puts it nowhere.
-        assert!(driven(SurfaceId::new(1)).is_none());
+    fn a_surface_reaches_nothing_while_no_loop_is_driving() {
+        // What a renderer installed without `run` sees. It fails where it is called rather than
+        // composing a frame and putting it nowhere.
+        assert!(Displays::new().for_surface(SurfaceId::new(1)).is_none());
     }
 }
