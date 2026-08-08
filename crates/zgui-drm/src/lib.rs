@@ -57,3 +57,5 @@ pub use crate::commit::Commit;
 pub use crate::device::Device;
 #[cfg(target_os = "linux")]
 pub use crate::error::{Error, Result};
+#[cfg(target_os = "linux")]
+pub use crate::event::Event;
