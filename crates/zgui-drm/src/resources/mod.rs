@@ -1,9 +1,11 @@
 //! What the device has: CRTCs, connectors, encoders and the modes they run at.
 
 pub mod connector;
+pub mod encoder;
 pub mod plane;
 
 pub use crate::resources::connector::{Connector, ConnectorKind, Mode};
+pub use crate::resources::encoder::Encoder;
 pub use crate::resources::plane::Plane;
 
 use crate::device::Device;
