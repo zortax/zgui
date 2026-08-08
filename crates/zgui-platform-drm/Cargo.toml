@@ -17,9 +17,17 @@ license.workspace = true
 # that method as a no-op: no assistive technology is connected to a console, so the closure is
 # never run and no tree is built. The name is here for the signature.
 accesskit.workspace = true
-# The wake channel is an eventfd, and the loop parks on it beside the device. It is the one system
-# call this crate makes for itself, and it makes it through a safe API, so the crate holds a
-# descriptor of its own under `#![forbid(unsafe_code)]`.
+# A surface reports the native handles a KMS display has: the device descriptor and the primary
+# plane. This is the same name the platform contract itself carries. The two `borrow_raw` calls in
+# `surface.rs` that build the handles are one of the two reasons outside its tests that this crate
+# is on the unsafe ledger's allowlist; `import/`, which calls a Vulkan driver, is the other. The
+# tests hold a third: an `ioctl` declared and called in `input/seat.rs`.
+raw-window-handle.workspace = true
+# The eventfd the wake channel is, the `poll` the frame loop parks in beside the device, and the
+# monotonic clock an input report is stamped against. Every one of them goes through a safe API.
+# The tests add `fstat`, to read back what an exported dma-buf descriptor is, and
+# `rustix::ioctl::opcode`, which builds the `EVIOCREVOKE` request number a revoked device is
+# asserted against. This crate issues no ioctl of its own outside those tests.
 rustix.workspace = true
 tracing.workspace = true
 zgui-drm = { path = "../zgui-drm", version = "0.1.0" }

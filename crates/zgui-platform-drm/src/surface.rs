@@ -1,8 +1,15 @@
 //! One output, seen as a thing the framework draws into.
 
+use std::os::fd::{AsFd, AsRawFd};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::TreeUpdate;
+use raw_window_handle::{
+    DisplayHandle, DrmDisplayHandle, DrmWindowHandle, HandleError, HasDisplayHandle,
+    HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
+};
+use zgui_drm::Device as DrmDevice;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
     CursorStyle, Decorations, FullscreenMode, GpuSurface, Surface, SurfaceId, TextInput,
@@ -17,28 +24,44 @@ use crate::output::Output;
 /// nothing, and each of those answers says which absence it comes from — a missing window manager,
 /// a missing compositor, or a part of this backend that is not written yet.
 ///
-/// # No window handle
+/// # The handles it reports
 ///
-/// [`Surface::gpu`] answers nothing. A KMS surface is a plane and a framebuffer rather than a
-/// window, so there is no handle for a graphics API to build a swap chain from, and the renderer
-/// is supplied by the application through `App::with_renderer` instead. So this whole backend
-/// leaves the platform contract unchanged.
+/// A KMS display has native handles and this reports them: the device descriptor as
+/// `DrmDisplayHandle`, and the primary plane as `DrmWindowHandle`. [`Surface::gpu`] and
+/// [`Surface::gpu_shared`] are the only route to them — a consumer holds `Arc<dyn Surface>` and
+/// the contract offers nothing else — so a DRM-aware renderer reaches this backend's native state
+/// only because both answer.
+///
+/// The device is held through an [`Arc`]. That is what a handed-out handle rests on: the descriptor
+/// stays open, and the plane keeps naming a live object, for as long as anything holds the surface.
 #[derive(Debug)]
 pub struct DrmSurface {
     /// Which surface this is, in the contract's numbering.
     id: SurfaceId,
     /// The display this draws to: the pipe a commit names, and the mode it runs at.
     output: Output,
+    /// The device the display hangs off, kept open for as long as this surface lives.
+    ///
+    /// Shared rather than owned: the frame loop drives the same device — [`Output::discover`],
+    /// a commit and a poll all take `&Device` — and one device serves every display it lights, so
+    /// the surfaces and the loop each hold a count on it. [`zgui_drm::Device`] is not [`Clone`],
+    /// and it must not become so: a second owner would be a second close of the same descriptor.
+    device: Arc<DrmDevice>,
     /// Whether a frame has been asked for and not yet taken.
     redraw: AtomicBool,
 }
 
 impl DrmSurface {
-    /// A surface over `output`, numbered `id`, with no frame asked for yet.
-    pub fn new(id: SurfaceId, output: Output) -> Self {
+    /// Creates a surface over `output` on `device`, numbered `id`, with no frame asked for yet.
+    ///
+    /// `output` must be one this `device` enumerated. The handles this surface reports pair the
+    /// device's descriptor with the output's plane, and a plane from a different device names
+    /// either nothing or the wrong object.
+    pub fn new(id: SurfaceId, output: Output, device: Arc<DrmDevice>) -> Self {
         Self {
             id,
             output,
+            device,
             redraw: AtomicBool::new(false),
         }
     }
@@ -140,12 +163,49 @@ impl Surface for DrmSurface {
     /// tree is built. This becomes a publication when there is a channel to push it to.
     fn push_a11y_update(&self, _build: &mut dyn FnMut() -> TreeUpdate) {}
 
-    /// Returns nothing: there is no window handle to give.
+    /// Returns this surface, with the DRM handles it carries.
     ///
-    /// A KMS surface is a plane, a framebuffer and a page flip, so a graphics API cannot build a
-    /// swap chain from it, and the application supplies its renderer through `App::with_renderer`
-    /// instead. So this whole backend leaves the platform contract unchanged.
+    /// A consumer holds `Arc<dyn Surface>` and the contract offers no other way down to a backend's
+    /// native state, so this answer decides whether the handles are reachable at all. They are
+    /// real, so it answers with them.
+    ///
+    /// No graphics API in this workspace's dependency set reads the two DRM variants yet. wgpu
+    /// refuses a DRM window handle as "not a Vulkan-compatible handle", which is a true report of
+    /// where the gap is. `App::run_drm` replaces the renderer factory with one that draws through
+    /// this backend.
     fn gpu(&self) -> Option<&dyn GpuSurface> {
-        None
+        Some(self)
+    }
+
+    fn gpu_shared(self: Arc<Self>) -> Option<Arc<dyn GpuSurface>> {
+        Some(self)
+    }
+}
+
+/// The device this display is driven through.
+///
+/// `DrmDisplayHandle` carries the descriptor as a raw number, so what keeps it valid is the
+/// [`Arc`] the surface holds: a graphics API given a shared handle to the surface holds the device
+/// open for as long as it draws.
+impl HasDisplayHandle for DrmSurface {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        let handle = DrmDisplayHandle::new(self.device.as_fd().as_raw_fd());
+        // SAFETY: the surface owns a count on the device, so the descriptor stays open for at
+        // least as long as this borrow of the surface, which is the lifetime the handle carries.
+        Ok(unsafe { DisplayHandle::borrow_raw(RawDisplayHandle::Drm(handle)) })
+    }
+}
+
+/// The primary plane this display scans out from.
+///
+/// It is the plane [`Output::discover`] chose for this output, which is the plane
+/// `DrmWindowHandle::plane` is defined to name.
+impl HasWindowHandle for DrmSurface {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        let handle = DrmWindowHandle::new(self.output.pipe.plane);
+        // SAFETY: the plane id came from this same device's own enumeration, and the surface owns
+        // a count on that device, so the id names a live object for at least as long as this
+        // borrow of the surface, which is the lifetime the handle carries.
+        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Drm(handle)) })
     }
 }

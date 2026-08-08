@@ -35,6 +35,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "the Wayland clipboard's unsafe constructor",
     ),
     ("zgui-drm", "the ioctls, and the mapping of a dumb buffer"),
+    (
+        "zgui-platform-drm",
+        "the two `borrow_raw` calls that report a surface's DRM handles",
+    ),
 ];
 
 /// Runs the check.
