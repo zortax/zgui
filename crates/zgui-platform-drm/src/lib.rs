@@ -19,11 +19,24 @@
 //! Read that second one as a description of the loop this crate is growing rather than of the code
 //! in it today. [`Output::discover`](crate::output::Output::discover) exists now, and it reads
 //! the device without taking master at all.
+//!
+//! # The handles a surface reports
+//!
+//! A [`DrmSurface`] carries the native handles a KMS display has: the device descriptor as
+//! `DrmDisplayHandle`, and the primary plane as `DrmWindowHandle`. They are the only route to this
+//! backend's native state, so a DRM-aware renderer written outside this workspace reaches it
+//! through the platform contract and needs no fork of the backend.
+//!
+//! No graphics API in this workspace's dependency set reads those two variants yet. wgpu answers a
+//! DRM handle with "not a Vulkan-compatible handle", which is a true report of where the gap is.
+//! `App::run_drm` replaces the renderer factory with one that draws through this backend.
 
 #![deny(missing_docs)]
-// This backend issues no ioctl of its own — `zgui-drm` owns every one of them — and the pixels it
-// moves are slices. Forbidding unsafe is the claim that this stays true.
-#![forbid(unsafe_code)]
+// This crate is on the unsafe ledger's allowlist for exactly one reason: a surface hands out its
+// native handles, and `raw-window-handle`'s `borrow_raw` constructors are unsafe. Every unsafe
+// block states what makes it sound. This backend still issues no ioctl of its own — `zgui-drm`
+// owns every one of them.
+#![allow(unsafe_code)]
 
 // The kernel's display interface exists on Linux and nowhere else, so on any other platform this
 // crate is empty rather than broken.

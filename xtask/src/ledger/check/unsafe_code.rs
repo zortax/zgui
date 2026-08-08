@@ -39,6 +39,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "borrowing the compositor's display and surface pointers as window handles",
     ),
     ("zgui-drm", "the ioctls, and the mapping of a dumb buffer"),
+    (
+        "zgui-platform-drm",
+        "the two `borrow_raw` calls that report a surface's DRM handles",
+    ),
 ];
 
 /// Runs the check.

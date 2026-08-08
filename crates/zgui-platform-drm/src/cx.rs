@@ -3,6 +3,7 @@
 use std::cell::Cell;
 use std::sync::Arc;
 
+use zgui_drm::Device as DrmDevice;
 use zgui_geom::{DevicePx, Point, Size};
 use zgui_platform::{
     Clipboard, Clock, ColorScheme, DecorationSource, MonitorInfo, PlatformCapabilities, PlatformCx,
@@ -48,13 +49,17 @@ pub struct DrmCx {
 }
 
 impl DrmCx {
-    /// A context over `outputs`, with a surface ready for each of them.
+    /// A context over the `outputs` `device` drives, with a surface ready for each of them.
+    ///
+    /// The device is shared with every surface it lights, because a surface reports it as a native
+    /// handle and must therefore hold it open. The caller keeps its own count, which is what the
+    /// frame loop commits through.
     ///
     /// # Errors
     ///
     /// Returns [`PlatformError::Backend`] when the wake channel cannot be opened, which is a
     /// process that has run out of descriptors.
-    pub fn new(outputs: Vec<Output>) -> Result<Self, PlatformError> {
+    pub fn new(device: Arc<DrmDevice>, outputs: Vec<Output>) -> Result<Self, PlatformError> {
         let waker = Arc::new(EventfdWaker::new()?);
         let monitors = outputs
             .iter()
@@ -71,7 +76,13 @@ impl DrmCx {
         // never destroyed, so nothing frees a number for a second surface to take.
         let surfaces = (1..)
             .zip(outputs)
-            .map(|(id, output)| Arc::new(DrmSurface::new(SurfaceId::new(id), output)))
+            .map(|(id, output)| {
+                Arc::new(DrmSurface::new(
+                    SurfaceId::new(id),
+                    output,
+                    Arc::clone(&device),
+                ))
+            })
             .collect();
 
         Ok(Self {
@@ -240,18 +251,44 @@ fn capabilities() -> PlatformCapabilities {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{DrmCx, describe};
+    use zgui_drm::Device as DrmDevice;
+    use zgui_drm::device::Interface;
     use zgui_geom::{DevicePx, Point, Size};
     use zgui_platform::{ClipboardFormat, PlatformCx, PlatformError, SurfaceAttributes};
 
-    /// A context over a device with no display plugged in.
-    fn console() -> DrmCx {
-        DrmCx::new(Vec::new()).expect("a context with no display is still buildable")
+    /// A context over a device with no display plugged in, or nothing.
+    ///
+    /// A context is built over a device because a surface reports that device as a native handle
+    /// and has to hold it open. So a real one is opened here, even though a context with no
+    /// display builds no surface and touches it for nothing.
+    ///
+    /// `cargo xtask ledger ignored` forbids switching a test off, and states the alternative: a
+    /// test that needs a device looks for one, reports on standard error that it did not find one,
+    /// and returns.
+    fn console(test: &str) -> Option<DrmCx> {
+        match DrmDevice::open_first_with(Interface::Preferred) {
+            Ok(device) => Some(
+                DrmCx::new(Arc::new(device), Vec::new())
+                    .expect("a context with no display is still buildable"),
+            ),
+            Err(error) => {
+                eprintln!(
+                    "{test}: no DRM device on this machine, so nothing was asserted: {error}\n\
+                     load the virtual driver with `sudo modprobe vkms` to run it"
+                );
+                None
+            }
+        }
     }
 
     #[test]
     fn a_request_for_a_display_that_is_not_there_is_refused() {
-        let cx = console();
+        let Some(cx) = console("a_request_for_a_display_that_is_not_there_is_refused") else {
+            return;
+        };
         let Err(refusal) = cx.create_surface(&SurfaceAttributes::new("drm")) else {
             panic!("a console with no display has no surface to hand out");
         };
@@ -267,7 +304,9 @@ mod tests {
 
     #[test]
     fn the_set_holds_what_was_handed_out() {
-        let cx = console();
+        let Some(cx) = console("the_set_holds_what_was_handed_out") else {
+            return;
+        };
         assert!(
             cx.surfaces().is_empty(),
             "a display nothing asked for is not in the set"
@@ -297,14 +336,18 @@ mod tests {
 
     #[test]
     fn a_device_with_no_display_reports_no_monitor() {
-        let cx = console();
+        let Some(cx) = console("a_device_with_no_display_reports_no_monitor") else {
+            return;
+        };
         assert!(cx.monitors().is_empty());
         assert!(cx.primary_monitor().is_none());
     }
 
     #[test]
     fn asking_the_loop_to_finish_is_observable() {
-        let cx = console();
+        let Some(cx) = console("asking_the_loop_to_finish_is_observable") else {
+            return;
+        };
         assert!(!cx.is_exiting());
         cx.request_exit();
         assert!(cx.is_exiting());
@@ -312,7 +355,10 @@ mod tests {
 
     #[test]
     fn a_console_claims_no_clipboard_and_draws_its_own_decorations() {
-        let cx = console();
+        let Some(cx) = console("a_console_claims_no_clipboard_and_draws_its_own_decorations")
+        else {
+            return;
+        };
         let capabilities = cx.capabilities();
         assert!(
             !capabilities.supports_clipboard_format(ClipboardFormat::Text),

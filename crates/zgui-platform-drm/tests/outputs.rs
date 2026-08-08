@@ -1,10 +1,14 @@
-//! Discovering the displays on a real device.
+//! Discovering the displays on a real device, and the handles their surfaces report.
 
 use std::collections::HashSet;
+use std::os::fd::{AsFd, AsRawFd};
+use std::sync::Arc;
 
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use zgui_drm::Device;
 use zgui_drm::device::Interface;
-use zgui_platform_drm::Output;
+use zgui_platform::{Surface, SurfaceId};
+use zgui_platform_drm::{DrmSurface, Output};
 
 /// Returns a device to test against, or nothing.
 ///
@@ -84,5 +88,64 @@ fn every_display_that_is_plugged_in_gets_a_crtc_and_a_plane() {
                 "a legacy device has no plane object to name"
             );
         }
+    }
+}
+
+#[test]
+fn a_surface_reports_the_device_and_the_plane_it_draws_through() {
+    let Some(device) = device("a_surface_reports_the_device_and_the_plane_it_draws_through") else {
+        return;
+    };
+    let outputs = Output::discover(&device).expect("the device is readable");
+    // Read before the device is shared, so what the surface reports is compared against the
+    // descriptor this test opened rather than against itself.
+    let opened = device.as_fd().as_raw_fd();
+    let device = Arc::new(device);
+
+    for (number, output) in (1..).zip(&outputs) {
+        let plane = output.pipe.plane;
+        let surface = Arc::new(DrmSurface::new(
+            SurfaceId::new(number),
+            output.clone(),
+            Arc::clone(&device),
+        ));
+
+        assert!(
+            surface.gpu().is_some(),
+            "a display has native handles, so the surface over it reports some"
+        );
+        let handles = Arc::clone(&surface)
+            .gpu_shared()
+            .expect("a surface that answers `gpu` answers `gpu_shared`");
+
+        // The variant is asserted as well as the value: a handle of some other kind would satisfy
+        // an equality on a number it never carried.
+        let reported_fd = match handles
+            .display_handle()
+            .expect("the display handle is built")
+            .as_raw()
+        {
+            RawDisplayHandle::Drm(handle) => handle.fd,
+            other => panic!("a KMS display reports a DRM display handle, and this is {other:?}"),
+        };
+        assert_eq!(
+            reported_fd, opened,
+            "the display handle carries the descriptor of the device the surface holds"
+        );
+
+        let reported_plane = match handles
+            .window_handle()
+            .expect("the window handle is built")
+            .as_raw()
+        {
+            RawWindowHandle::Drm(handle) => handle.plane,
+            other => panic!("a KMS display reports a DRM window handle, and this is {other:?}"),
+        };
+        assert_eq!(
+            reported_plane, plane,
+            "the window handle carries the plane this output scans out from"
+        );
+
+        println!("surface {number} reports fd {reported_fd} and plane {reported_plane}");
     }
 }
