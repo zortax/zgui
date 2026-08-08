@@ -22,35 +22,35 @@ note: required because it appears within the type `Box<[ObservationSlots; 1024]>
    |
    | pub struct Box<
    |            ^^^
-note: required because it appears within the type `paged_vec::page::Page<ObservationSlots>`
+note: required because it appears within the type `paged_vec::page::Page<ObservationSlots, 1024>`
   --> $WORKSPACE/crates/zgui-arena/src/paged_vec/page.rs
    |
-   | pub(crate) struct Page<V>(Box<[V; PAGE_LEN]>);
+   | pub(crate) struct Page<V, const N: usize>(Box<[V; N]>);
    |                   ^^^^
-note: required because it appears within the type `Option<paged_vec::page::Page<ObservationSlots>>`
+note: required because it appears within the type `Option<paged_vec::page::Page<ObservationSlots, 1024>>`
   --> $RUST/core/src/option.rs
    |
    | pub enum Option<T> {
    |          ^^^^^^
-note: required because it appears within the type `PhantomData<Option<paged_vec::page::Page<ObservationSlots>>>`
+note: required because it appears within the type `PhantomData<Option<paged_vec::page::Page<ObservationSlots, 1024>>>`
   --> $RUST/core/src/marker.rs
    |
    | pub struct PhantomData<T: PointeeSized>;
    |            ^^^^^^^^^^^
-note: required because it appears within the type `alloc::raw_vec::RawVec<Option<paged_vec::page::Page<ObservationSlots>>>`
+note: required because it appears within the type `alloc::raw_vec::RawVec<Option<paged_vec::page::Page<ObservationSlots, 1024>>>`
   --> $RUST/alloc/src/raw_vec/mod.rs
    |
    | pub(crate) struct RawVec<T, A: Allocator = Global> {
    |                   ^^^^^^
-note: required because it appears within the type `Vec<Option<paged_vec::page::Page<ObservationSlots>>>`
+note: required because it appears within the type `Vec<Option<paged_vec::page::Page<ObservationSlots, 1024>>>`
   --> $RUST/alloc/src/vec/mod.rs
    |
    | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
    |            ^^^
-note: required because it appears within the type `PagedVec<Key<NodeInner>, ObservationSlots>`
+note: required because it appears within the type `PagedVec<Key<NodeInner>, ObservationSlots, 1024>`
   --> $WORKSPACE/crates/zgui-arena/src/paged_vec/mod.rs
    |
-   | pub struct PagedVec<K: ArenaKey, V> {
+   | pub struct PagedVec<K: ArenaKey, V, const N: usize = PAGE_LEN> {
    |            ^^^^^^^^
 note: required because it appears within the type `DocumentStore`
   --> tests/ui/observed_with_sink.rs:20:8

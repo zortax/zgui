@@ -317,8 +317,14 @@ mod tests {
         (document, root)
     }
 
+    /// A state-only record still carries the attributes, and the copy is the price of not crashing.
+    ///
+    /// This record used to hold state alone, so that a hover cost no class list. It cannot: the
+    /// engine reads an existing record's classes straight out of the list, without asking whether
+    /// the list is there, so a record taken while a pointer rested on something and read when a
+    /// sheet was installed ended that call in a panic.
     #[test]
-    fn a_state_record_carries_no_attributes_at_all() {
+    fn a_state_record_carries_the_elements_attributes() {
         let (document, root) = one_element();
         document.store().core(root).set_state(ElementState::HOVER);
         let mut snapshots = SnapshotStore::new();
@@ -329,8 +335,13 @@ mod tests {
             .expect("a record was taken");
         assert_eq!(record.state(), Some(ElementState::HOVER));
         assert!(
-            !record.has_attrs(),
-            "copying a class list on every hover is the cost this record exists to avoid"
+            record.has_attrs(),
+            "a record the engine may read classes from has to carry them"
+        );
+        assert_eq!(
+            record.id_attr().map(ToString::to_string),
+            Some("save".to_owned()),
+            "the attributes carried are the element's own"
         );
     }
 

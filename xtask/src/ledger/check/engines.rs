@@ -47,7 +47,12 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("harfrust", &["zgui-text-parley"]),
     ("skrifa", &["zgui-text-parley"]),
     ("swash", &["zgui-text-parley"]),
-    ("zeno", &["zgui-text-parley"]),
+    // Coverage, not colour: it turns an outline into an alpha mask and knows nothing about what is
+    // drawn with it. Two crates rasterise through it and both put the result in the same monochrome
+    // atlas — the text stack for glyph outlines, the paint stack for the small solid shapes an icon
+    // is made of. Sharing the atlas is what makes recolouring an icon cost a sprite instance rather
+    // than a second rasterisation, and it only works while both name the one rasteriser.
+    ("zeno", &["zgui-text-parley", "zgui-paint"]),
     ("vello", &["zgui-render-vector-vello"]),
     (
         "wgpu",
