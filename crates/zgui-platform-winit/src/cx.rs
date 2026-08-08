@@ -14,7 +14,7 @@ use zgui_platform::{
 use crate::clipboard::DesktopClipboard;
 use crate::clock::SystemClock;
 use crate::monitor;
-use crate::surface::{WinitSurface, window_attributes};
+use crate::surface::{WinitSurface, a11y, window_attributes};
 use crate::theme;
 use crate::waker::{ProxyWaker, UserEvent};
 
@@ -120,6 +120,11 @@ impl Shared {
             .into_iter()
             .map(|surface| {
                 let id = surface.window().id();
+                // The adapter goes with the window it speaks for, on this thread and at this
+                // moment. Leaving it behind would keep a channel open to a window that no longer
+                // exists, and letting it go anywhere else would release a window handle from a
+                // thread that has no business touching one.
+                a11y::release(surface.id());
                 drop(surface);
                 id
             })
@@ -128,14 +133,21 @@ impl Shared {
 
     /// Forgets a window that has gone.
     pub(crate) fn forget(&self, id: WindowId) {
-        self.surfaces
-            .borrow_mut()
-            .retain(|surface| surface.window().id() != id);
+        let mut surfaces = self.surfaces.borrow_mut();
+        surfaces.retain(|surface| {
+            let kept = surface.window().id() != id;
+            if !kept {
+                a11y::release(surface.id());
+            }
+            kept
+        });
     }
 
     /// Forgets every window, for the platform lifecycle that takes them all away at once.
     pub(crate) fn forget_all(&self) {
-        self.surfaces.borrow_mut().clear();
+        for surface in self.surfaces.borrow_mut().drain(..) {
+            a11y::release(surface.id());
+        }
     }
 
     /// Records the desktop's light or dark preference.
@@ -182,13 +194,14 @@ impl PlatformCx for WinitCx<'_> {
         // Attached here and nowhere else. The adapter refuses a window that has already been shown,
         // and a surface is created hidden precisely so that this can happen before the first frame
         // makes it visible — there is no second chance at it later.
-        surface
-            .a11y()
-            .attach(accesskit_winit::Adapter::with_event_loop_proxy(
+        a11y::attach(
+            id,
+            accesskit_winit::Adapter::with_event_loop_proxy(
                 self.event_loop,
                 &window,
                 self.shared.proxy.clone(),
-            ));
+            ),
+        );
 
         // A window asking to open in an exclusive mode opened borderless, because choosing a video
         // mode needs the monitor the window turned out to be on. Now that it is on one, ask again.

@@ -35,7 +35,7 @@ mod wayland;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+use raw_window_handle::HasDisplayHandle;
 use zgui_platform::{
     Clipboard, ClipboardData, ClipboardError, ClipboardFormat, ClipboardKind, ClipboardSerial,
     ClipboardSerials, ClipboardWriteOptions, WakeReason, Waker,
@@ -110,6 +110,8 @@ impl DesktopClipboard {
         target_os = "openbsd"
     ))]
     fn choose(&self, display: &dyn HasDisplayHandle) {
+        use raw_window_handle::RawDisplayHandle;
+
         let Ok(handle) = display.display_handle() else {
             return;
         };

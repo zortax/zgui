@@ -14,7 +14,6 @@ accesskit.workspace = true
 accesskit_winit.workspace = true
 arboard.workspace = true
 raw-window-handle.workspace = true
-smithay-clipboard.workspace = true
 tracing.workspace = true
 winit.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
@@ -61,6 +60,12 @@ harness = false
 name = "wake_occluded"
 path = "tests/wake_occluded.rs"
 harness = false
+
+# The compositor's own data device, which exists only where there is a compositor. Everywhere else
+# the desktop-wide library is the whole of the clipboard, and this crate's Wayland stack does not
+# compile at all: it reaches for `std::os::unix` on Windows and for a pipe flag Apple does not have.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+smithay-clipboard.workspace = true
 
 [lints]
 workspace = true

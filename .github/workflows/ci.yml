@@ -166,6 +166,22 @@ jobs:
       - run: cargo clippy -p zgui-profile --all-targets --features counters -- -D warnings
       - run: cargo test -p zgui-profile --release --features counters
 
+  cross:
+    # Compiles and does not link or run. What it catches is a Linux-only import, a dependency
+    # nothing gated, and a bound only one platform satisfies — the three ways this tree has broken
+    # on a desktop nobody develops on. Whether a window opens on either of them is a question for a
+    # machine that has one, and this job does not answer it.
+    #
+    # No system libraries: neither target reaches the Linux windowing headers.
+    name: cross — windows and macos, compile only
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --target x86_64-pc-windows-msvc
+      - run: cargo check --workspace --target aarch64-apple-darwin
+
   llvmpipe:
     # Software rasterisation, so the GPU work has a deterministic machine to run on.
     # Wired now; the renderer spikes and the pixel goldens are what will use it.

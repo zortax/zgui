@@ -53,7 +53,7 @@
 //! |---|---|
 //! | [`app`] | the event loop adapter, and [`run`] |
 //! | [`park`] | the park state machine, and the obligation an install can hand back |
-//! | [`surface`] | one window: its handles, its chrome, its accessibility adapter |
+//! | [`surface`] | one window: its handles and its chrome, and the loop's accessibility adapters |
 //! | [`input`] | the translation of keyboard, pointer, wheel, input method and drag |
 //! | [`clipboard`] | the desktop's clipboards, chosen at run time |
 //! | [`clock`] | the monotonic clock every phase reads |

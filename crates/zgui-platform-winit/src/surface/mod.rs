@@ -1,6 +1,6 @@
 //! One window: what is drawn into it, what it looks like, and who is listening to it.
 
-mod a11y;
+pub(crate) mod a11y;
 mod attributes;
 mod chrome;
 mod handles;
@@ -18,14 +18,15 @@ use zgui_platform::{
     Unsupported, WindowIcon, WindowLevel,
 };
 
-use crate::surface::a11y::A11y;
-
 /// A window, seen as something to draw into and interact with.
 ///
 /// It is shared and thread-safe because the one operation that has to work from anywhere is asking
 /// for a frame: work finishing on a worker thread is one of the four things that can want one, and
 /// making it hop to the main thread first would put a scheduling delay in front of every frame the
 /// application ever draws.
+///
+/// That is also why the accessibility adapter is not in here. It cannot leave the thread that made
+/// it, so it stays on that thread and this names it by number — see [`a11y`].
 ///
 /// # Two spaces, and they are not interchangeable
 ///
@@ -39,28 +40,17 @@ pub struct WinitSurface {
     id: SurfaceId,
     /// The window itself.
     window: Arc<Window>,
-    /// The accessibility channel, once one has been attached.
-    a11y: A11y,
 }
 
 impl WinitSurface {
     /// A surface over `window`, numbered `id`, with nothing listening to it yet.
-    pub(crate) fn new(id: SurfaceId, window: Arc<Window>) -> Self {
-        Self {
-            id,
-            window,
-            a11y: A11y::default(),
-        }
+    pub(crate) const fn new(id: SurfaceId, window: Arc<Window>) -> Self {
+        Self { id, window }
     }
 
     /// The window underneath, for the parts of the loop that have to name it.
     pub(crate) fn window(&self) -> &Arc<Window> {
         &self.window
-    }
-
-    /// The accessibility channel.
-    pub(crate) fn a11y(&self) -> &A11y {
-        &self.a11y
     }
 
     /// The scale this window is presented at, never zero.
@@ -79,6 +69,7 @@ impl core::fmt::Debug for WinitSurface {
         formatter
             .debug_struct("WinitSurface")
             .field("id", &self.id)
+            .field("a11y", &a11y::is_attached(self.id))
             .finish_non_exhaustive()
     }
 }
@@ -255,8 +246,14 @@ impl Surface for WinitSurface {
         self.window.reset_dead_keys();
     }
 
+    /// Publishes through the adapter this window's loop holds for it.
+    ///
+    /// Nothing is published, and nothing is built, from any other thread: the adapters belong to
+    /// the thread the loop runs on, and a caller elsewhere finds none. That is the same answer a
+    /// machine with no assistive technology gives, and the frame's publishing phase — the only
+    /// caller — runs on the loop's thread anyway.
     fn push_a11y_update(&self, build: &mut dyn FnMut() -> TreeUpdate) {
-        self.a11y.publish(build);
+        a11y::publish(self.id, build);
     }
 
     fn gpu(&self) -> Option<&dyn GpuSurface> {

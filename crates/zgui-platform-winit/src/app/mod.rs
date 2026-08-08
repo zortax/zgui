@@ -46,6 +46,7 @@ use zgui_platform::{AppHandler, PlatformError, Surface, SurfaceEvent, WakeReason
 use crate::app::window::WindowState;
 use crate::cx::{Shared, WinitCx};
 use crate::park::{Park, Parked};
+use crate::surface::a11y;
 use crate::waker::UserEvent;
 
 /// Opens an event loop this backend can drive.
@@ -253,7 +254,7 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         // Shown to the accessibility adapter before anything else touches it: the adapter learns
         // where the window is and whether it has focus only from the events it is shown, and one
         // withheld leaves a screen reader's highlight in the place the window used to be.
-        surface.a11y().observe(surface.window(), &event);
+        a11y::observe(Surface::id(surface.as_ref()), surface.window(), &event);
 
         let destroyed = matches!(event, winit::event::WindowEvent::Destroyed);
         let timestamp = self.shared.clock().timestamp();

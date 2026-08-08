@@ -1,8 +1,6 @@
 //! What a window is asked for before it exists.
 
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::platform::wayland::WindowAttributesExtWayland;
-use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{Fullscreen, WindowAttributes};
 use zgui_platform::{ColorScheme, FullscreenMode, SurfaceAttributes};
 
@@ -88,12 +86,41 @@ fn opening_fullscreen(mode: FullscreenMode) -> Fullscreen {
 /// path: the instance distinguishes two windows of one program from each other, this backend opens
 /// windows that are not distinguished that way, and a name taken from `argv[0]` would change
 /// depending on how the program was invoked.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 fn application_name(window: WindowAttributes, id: &str) -> WindowAttributes {
+    use winit::platform::wayland::WindowAttributesExtWayland;
+    use winit::platform::x11::WindowAttributesExtX11;
+
     WindowAttributesExtX11::with_name(
         WindowAttributesExtWayland::with_name(window, id, id),
         id,
         id,
     )
+}
+
+/// The same, on a desktop that takes the application's identity from elsewhere.
+///
+/// Windows and macOS have no field a window carries its application's identity in. The taskbar
+/// entry comes from the executable's Application User Model ID, and the Dock entry from the bundle
+/// identifier in `Info.plist` — both settled before the process starts, by how the program was
+/// installed rather than by what it asks for at run time. So the identifier is dropped here, and
+/// dropping it costs a window nothing it could have had.
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+fn application_name(window: WindowAttributes, id: &str) -> WindowAttributes {
+    let _ = id;
+    window
 }
 
 #[cfg(test)]
@@ -133,7 +160,17 @@ mod tests {
     /// or not this function ever called it — which is exactly how the identifier came to be an
     /// attribute nothing consumed. The negative control is the other half: the same request without
     /// an identifier must not carry one, or the assertion below would hold for a constant.
+    ///
+    /// Asserted only where there is a field to carry it. Windows and macOS take the application's
+    /// identity from how the program was installed, so there is nothing in the request to read back.
     #[test]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
     fn an_application_identifier_reaches_the_window_request() {
         let named = window(
             &SurfaceAttributes::new("counter").with_application_id("dev.zgui.Counter"),
