@@ -1,0 +1,44 @@
+//! Opening a real device.
+
+mod support;
+
+use zgui_drm::device::Interface;
+
+/// What the kernel numbers `DRM_CAP_DUMB_BUFFER`.
+///
+/// Named here because `sys` is private: a test reaches this crate the way any other caller does.
+const DUMB_BUFFER: u64 = 1;
+
+#[test]
+fn a_device_opens_and_answers_what_it_can_do() {
+    let Some(device) = support::device(
+        "a_device_opens_and_answers_what_it_can_do",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+
+    // Asserting that the query *answers* rather than what it answers is the point: the value is a
+    // fact about the hardware, and the call working is a fact about this crate.
+    assert!(
+        device.capability(DUMB_BUFFER).is_ok(),
+        "the dumb-buffer capability query is answered"
+    );
+    println!(
+        "{}: atomic={} dumb={} modifiers={}",
+        device.path().display(),
+        device.is_atomic(),
+        device.supports_dumb_buffers(),
+        device.supports_format_modifiers(),
+    );
+}
+
+#[test]
+fn an_absent_device_is_refused_rather_than_panicking() {
+    let error = zgui_drm::Device::open("/dev/dri/card-that-is-not-there")
+        .expect_err("a device that is not there cannot be opened");
+    assert!(
+        matches!(error, zgui_drm::Error::Open { .. }),
+        "the refusal names the path rather than the ioctl: {error}"
+    );
+}
