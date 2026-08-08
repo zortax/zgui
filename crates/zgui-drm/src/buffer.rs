@@ -1,4 +1,8 @@
 //! Buffers the CPU can write.
+//!
+//! The descriptors that carry a buffer between drivers belong here too, and arrive with the
+//! caller that needs them: the platform backend imports a graphics API's image for scanout, and
+//! this crate gains `PRIME_FD_TO_HANDLE` when that backend is written.
 
 use std::ptr::NonNull;
 
