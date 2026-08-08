@@ -19,6 +19,10 @@ use crate::sys;
 /// This is the slow path, and every driver has it. It puts a first frame on a screen before any
 /// graphics interoperation exists, and it stays as the fallback for a device where that
 /// interoperation cannot be built.
+///
+/// A buffer released with [`Device::destroy_dumb_buffer`] gives back its mapping and its handle.
+/// One that is dropped keeps both: the mapping until the process ends, and the handle until the
+/// device is closed. Dropping therefore leaks, and the leak ends with the process.
 #[derive(Debug)]
 pub struct DumbBuffer {
     /// The GEM handle the driver knows it by.
@@ -64,6 +68,10 @@ impl DumbBuffer {
     }
 
     /// Returns the buffer's bytes, for writing pixels into.
+    ///
+    /// `device` has to be the one that allocated this buffer. A GEM handle is a number in one
+    /// open descriptor's own namespace, so the same number on another device names another
+    /// object, and this would map that one. Nothing here can tell the two apart.
     ///
     /// # Errors
     ///
@@ -167,21 +175,30 @@ impl Device {
     /// Releases a dumb buffer.
     ///
     /// Taken by value, because the handle is dead afterwards and a second release of it is an
-    /// error the type system can prevent.
+    /// error the type system can prevent. `device` has to be the one that allocated the buffer,
+    /// for the reason [`DumbBuffer::bytes`] gives.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`] when the driver refuses.
+    /// Returns [`Error::Ioctl`] when the driver refuses. The mapping is given back either way,
+    /// because it belongs to this process rather than to the driver. The handle is not: a refused
+    /// release leaves it allocated until the device is closed, and the buffer has been consumed,
+    /// so nothing can ask again. That happens when `device` is the wrong one.
     pub fn destroy_dumb_buffer(&self, mut buffer: DumbBuffer) -> Result<()> {
+        // The driver is asked first, so that a refusal is reported against a buffer this process
+        // still holds whole. The mapping goes afterwards either way.
+        let mut request = sys::drm_mode_destroy_dumb {
+            handle: buffer.handle,
+        };
+        let released = ioctl::issue(self.fd(), ioctl::MODE_DESTROY_DUMB, &mut request);
+
         if let Some(pointer) = buffer.mapping.take() {
             // SAFETY: the pointer and the length are the ones the mapping was made with, and
             // nothing holds a slice over it: `bytes` borrows the buffer mutably and this consumes
             // it.
             let _ = unsafe { rustix::mm::munmap(pointer.as_ptr().cast(), buffer.length) };
         }
-        let mut request = sys::drm_mode_destroy_dumb {
-            handle: buffer.handle,
-        };
-        ioctl::issue(self.fd(), ioctl::MODE_DESTROY_DUMB, &mut request)
+
+        released
     }
 }
