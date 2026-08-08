@@ -1,0 +1,22 @@
+[package]
+name = "zgui-platform-drm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# The platform contract over the kernel's display interface: a program that runs on a Linux console
+# with no display server under it. It drives `zgui-drm` for the display and `zgui-evdev` for input,
+# and reaches libseat, libinput and libxkbcommon through the three crates that open them.
+#
+# Everything is gated on Linux. The kernel interface exists nowhere else, so a macOS build of the
+# workspace compiles this crate as an empty one rather than failing on a header it cannot have.
+[target.'cfg(target_os = "linux")'.dependencies]
+tracing.workspace = true
+zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+
+[lints]
+workspace = true
