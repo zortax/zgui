@@ -119,6 +119,16 @@ impl DrmDisplay {
         }
     }
 
+    /// Returns `true` if this display's own frames carry the pointer.
+    ///
+    /// True where the device offered no cursor plane. A renderer reads it to decide what to do
+    /// with a frame that damaged nothing: on a display with a plane such a frame is worth nothing,
+    /// and on this one it is the only thing that moves the pointer, because the pointer is drawn
+    /// into the frame.
+    pub fn carries_the_pointer(&self) -> bool {
+        !self.cursor.borrow().on_a_plane()
+    }
+
     /// Copies `pixels` into the back buffer, draws the pointer over it, and flips to it.
     ///
     /// Answers `false` while a flip is still on its way, which is [`Scanout::present`]'s own

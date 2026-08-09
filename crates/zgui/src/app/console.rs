@@ -108,13 +108,19 @@ impl Renderer for DrmRenderer {
 
     /// Draws the frame, then puts it on the display.
     ///
-    /// Only a frame that reached the texture is presented. Every other outcome either drew nothing
-    /// — an unconfigured surface, a device that could not be rebuilt — or drew nothing new, and
-    /// putting the texture on the display again would spend a flip showing the picture that is
-    /// already there.
+    /// A frame that reached the texture is presented. So is one that damaged nothing, on a display
+    /// whose frames are what carry the pointer: the picture is unchanged and the pointer drawn
+    /// over it is not, so putting the same texture on the display again is the only thing that
+    /// moves the cursor. A display with a cursor plane skips it, because the display engine has
+    /// already moved the pointer and the picture underneath really is the one on the screen.
+    ///
+    /// Every other outcome drew nothing at all — an unconfigured surface, a device that could not
+    /// be rebuilt — and there is nothing to put anywhere.
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
         let drawn = self.inner.draw(scene, damage);
-        if matches!(drawn, FrameOutcome::Presented(_)) {
+        let carries_the_pointer = matches!(drawn, FrameOutcome::Skipped(SkipReason::Undamaged))
+            && self.display.carries_the_pointer();
+        if matches!(drawn, FrameOutcome::Presented(_)) || carries_the_pointer {
             self.present(drawn)
         } else {
             drawn
