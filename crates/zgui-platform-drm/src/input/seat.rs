@@ -1,8 +1,15 @@
 //! The open devices, the grab, and turning batches into surface events.
 //!
-//! A seat is the keyboards one person is typing on. It opens every device somebody could type on,
-//! takes each one away from everything else, pushes the keys that were already down into the
-//! layout, and turns what the kernel reports into what a surface is told.
+//! A seat is the devices one person is working with. It opens every one somebody could type on or
+//! point with, takes each away from everything else, pushes the keys that were already down into
+//! the layout, and turns what the kernel reports into what a surface is told.
+//!
+//! # One device with two jobs
+//!
+//! A device is opened once and read once, and what it is read *as* is two independent questions.
+//! A wireless receiver presents one node carrying a full key map, two relative axes and a wheel, so
+//! that node is a keyboard and a pointer at the same time. Two sets of state hang off one device,
+//! because a second open would be a second grab of a descriptor only one client may hold.
 //!
 //! # The grab
 //!
@@ -30,19 +37,24 @@
 //! its neighbours, and so is the power button. [`types_on`] asks the narrower question, and it asks
 //! for a *letter*: taking a device somebody does not type on removes a function from the session
 //! with no way to get it back while the program runs.
+//!
+//! [`points_with`](crate::input::pointer::points_with) is the same question for the pointer, and
+//! its own module says which two directions the broad answer is wrong in.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use rustix::fd::{AsFd, BorrowedFd};
 use tracing::{info, warn};
-use zgui_evdev::{Batch, Capabilities, Device, EventType, Key, Synchronisation};
+use zgui_evdev::{Absolute, Batch, Capabilities, Device, EventType, Key, Synchronisation};
 use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
-use zgui_vocab::{KeyState, Modifiers, Timestamp};
+use zgui_vocab::{KeyState, Modifiers, PointerAction, Timestamp};
 
 use crate::input::keyboard;
 use crate::input::keyboard::layout::{Layout, Reading};
 use crate::input::keyboard::{code, layout};
+use crate::input::pointer::{self, Axes, Pointer, Screen, Span};
+use crate::input::wheel::{self, HighResolution};
 
 /// The twenty-six letter positions of a keyboard.
 ///
@@ -129,15 +141,69 @@ fn typed(key: Key) -> bool {
     key.is_key()
 }
 
-/// Which surface a key press reaches.
+/// Returns the surface a key press reaches, where there is one.
 ///
-/// A console has no window manager, so focus is a decision this backend makes, and this is it:
-/// **the first surface the application claimed**. It is a placeholder. When the pointer arrives it
-/// becomes "the display the pointer is over", and this function is the whole of what changes.
+/// A console has no window manager, so focus is a decision this backend makes: **the display the
+/// pointer is over**, and the first surface the application claimed while the pointer is over none
+/// of them. A pointer that has not been moved yet starts in the middle of the first claimed
+/// display, so the two answers agree until somebody moves it.
+///
+/// `over` is believed only where the application claimed that display. A display it has not asked
+/// for draws nothing and is told nothing, so a pointer standing on one leaves the keys where they
+/// were.
 ///
 /// A program that claimed no display is told about no key. There is nowhere for one to go.
-pub fn focused(claimed: &[SurfaceId]) -> Option<SurfaceId> {
-    claimed.first().copied()
+///
+/// ```
+/// use zgui_platform::SurfaceId;
+/// use zgui_platform_drm::input::seat::focused;
+///
+/// let claimed = [SurfaceId::new(1), SurfaceId::new(2)];
+///
+/// assert_eq!(focused(&claimed, Some(SurfaceId::new(2))), Some(SurfaceId::new(2)));
+/// assert_eq!(focused(&claimed, None), Some(SurfaceId::new(1)));
+/// assert_eq!(
+///     focused(&claimed, Some(SurfaceId::new(7))),
+///     Some(SurfaceId::new(1)),
+///     "a display the application never claimed leaves the keys where they were"
+/// );
+/// assert_eq!(focused(&[], Some(SurfaceId::new(1))), None);
+/// ```
+pub fn focused(claimed: &[SurfaceId], over: Option<SurfaceId>) -> Option<SurfaceId> {
+    over.filter(|id| claimed.contains(id))
+        .or_else(|| claimed.first().copied())
+}
+
+/// One thing a person did, and the surface it belongs to.
+///
+/// A key belongs to whatever holds the keyboard, which is the loop's decision and changes between
+/// turns. A pointer event belongs to the display the pointer was on when it happened, which only
+/// the pointer knows and which can change inside one turn — a pointer that crosses between two
+/// displays in one batch tells one surface it left and the other that it arrived.
+#[derive(Debug)]
+pub struct Report {
+    /// The display it happened on, where it happened on one.
+    pub surface: Option<SurfaceId>,
+    /// What happened.
+    pub event: SurfaceEvent,
+}
+
+impl Report {
+    /// Creates an event for whichever surface holds the keyboard.
+    const fn focused(event: SurfaceEvent) -> Self {
+        Self {
+            surface: None,
+            event,
+        }
+    }
+
+    /// Creates an event for the display it happened on.
+    const fn on(surface: SurfaceId, event: SurfaceEvent) -> Self {
+        Self {
+            surface: Some(surface),
+            event,
+        }
+    }
 }
 
 /// Which way a key moved, as the value the kernel wrote says.
@@ -457,20 +523,42 @@ impl Keys {
     }
 }
 
-/// One keyboard this seat took.
-struct Keyboard {
+/// What a device somebody points with needs remembered between updates.
+struct Pointing {
+    /// How it says where the pointer is.
+    axes: Axes,
+    /// Which of its wheels count in hundred-and-twentieths of a detent.
+    ///
+    /// A wheel that reports the high-resolution axis reports the coarse one for the same movement,
+    /// so a reader that took both would scroll twice as far as the wheel was turned.
+    /// [`wheel::delta`] reads one of the two, and this says which.
+    wheel: HighResolution,
+    /// Which of its buttons this seat believes are down.
+    ///
+    /// The device's own rather than the seat's, for the reason [`Keys`] gives about keys: a button
+    /// held on one device is that device's, and a set shared between two would let letting go of
+    /// one release the other's press.
+    down: BTreeSet<u16>,
+}
+
+/// One device this seat took.
+struct Taken {
     /// The device, grabbed for as long as this lives.
     device: Device,
     /// Which of its keys this seat believes are down.
     down: BTreeSet<u16>,
     /// How its moments are read.
     stamps: Stamps,
+    /// Whether a person types on it.
+    types: bool,
+    /// How a person points with it, where they do.
+    points: Option<Pointing>,
 }
 
-/// Every keyboard on this machine, taken.
+/// Every device on this machine a person works with, taken.
 pub struct Seat {
     /// The devices, each grabbed for as long as this lives.
-    keyboards: Vec<Keyboard>,
+    devices: Vec<Taken>,
     /// The layout and the translation over it.
     keys: Keys,
     /// What this seat has to say before it has read anything.
@@ -483,7 +571,7 @@ pub struct Seat {
 }
 
 impl Seat {
-    /// Opens every keyboard this process may read, takes each one, and finds a layout.
+    /// Opens every device this process may read and work with, takes each one, and finds a layout.
     ///
     /// **Call this after DRM master has been taken.** See the module documentation for why that
     /// ordering is the safety interlock rather than a preference.
@@ -511,7 +599,7 @@ impl Seat {
 
         let anchored = Stamps::anchored(clock);
         let mut keys = Keys::new(found.layout);
-        let mut keyboards = Vec::new();
+        let mut devices = Vec::new();
         let mut pending = Vec::new();
         match zgui_evdev::discover() {
             Ok(discovery) => {
@@ -533,31 +621,40 @@ impl Seat {
                     } else {
                         warn!(
                             target: "zgui::platform",
-                            "{} refused the monotonic clock, so its keys are stamped when the loop \
-                             reads them rather than when they moved",
+                            "{} refused the monotonic clock, so what it reports is stamped when \
+                             the loop reads it rather than when it happened",
                             device.path().display()
                         );
                         Stamps::Read(clock.timestamp())
                     };
-                    let mut keyboard = Keyboard {
+                    let mut taken = Taken {
+                        types: types_on(device.capabilities()),
+                        points: pointing(&device),
                         device,
                         down: BTreeSet::new(),
                         stamps,
                     };
                     // After the grab, so that nothing else can change what is held between the two.
-                    match keyboard.device.pressed_keys() {
+                    match taken.device.pressed_keys() {
                         Ok(held) => {
-                            let held = held.iter().map(Key::raw).collect();
-                            pending.extend(keys.resynchronise(&mut keyboard.down, &held));
+                            let held: BTreeSet<u16> = held.iter().map(Key::raw).collect();
+                            if let Some(points) = taken.points.as_mut() {
+                                // Buttons alone, and no event: what changed is what this process
+                                // knows. A button held now is recorded so that its release is the
+                                // one thing that is delivered.
+                                points.down =
+                                    held.iter().copied().filter(pressed_on_a_pointer).collect();
+                            }
+                            pending.extend(keys.resynchronise(&mut taken.down, &held));
                         }
                         Err(error) => warn!(
                             target: "zgui::platform",
-                            "{} will not say which keys are held, so a modifier held now stays \
-                             invisible until it is pressed again: {error}",
-                            keyboard.device.path().display()
+                            "{} will not say what is held on it, so a modifier or a button held \
+                             now stays invisible until it is pressed again: {error}",
+                            taken.device.path().display()
                         ),
                     }
-                    keyboards.push(keyboard);
+                    devices.push(taken);
                 }
             }
             Err(error) => warn!(
@@ -565,15 +662,21 @@ impl Seat {
                 "no input device can be found on this machine: {error}"
             ),
         }
-        if keyboards.is_empty() {
+        if !devices.iter().any(|taken| taken.types) {
             warn!(
                 target: "zgui::platform",
                 "no keyboard on this machine could be taken, so nothing can be typed into this \
                  program"
             );
         }
+        if !devices.iter().any(|taken| taken.points.is_some()) {
+            warn!(
+                target: "zgui::platform",
+                "no pointing device on this machine could be taken, so the cursor cannot be moved"
+            );
+        }
         Self {
-            keyboards,
+            devices,
             keys,
             pending,
         }
@@ -581,36 +684,43 @@ impl Seat {
 
     /// Returns the descriptors the frame loop waits on beside the device and the wake channel.
     pub fn descriptors(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
-        self.keyboards
-            .iter()
-            .map(|keyboard| keyboard.device.as_fd())
+        self.devices.iter().map(|taken| taken.device.as_fd())
     }
 
-    /// Reads every keyboard and reports what a person did.
+    /// Reads every device and reports what a person did, moving `pointer` as they moved it.
     ///
-    /// A device that answers a read with a failure is dropped and its keys are released. Any errno
-    /// is treated that way, because the one that matters cannot be told from the others by anything
-    /// this loop could do differently: `ENODEV` is what an unplugged device and a descriptor
-    /// `logind` revoked both answer, and both then answer every later read the same way while
-    /// `poll` reports the descriptor permanently ready — so a loop that kept one would spin at the
-    /// speed of the processor for as long as it ran. A device dropped over a passing failure costs
-    /// a keyboard that has to be plugged in again; a device kept costs the whole program.
-    pub fn read(&mut self) -> Vec<SurfaceEvent> {
+    /// `screens` is the ground the pointer moves over, so it decides which surface each pointer
+    /// event belongs to and how far the pointer can go. It is passed in rather than kept because
+    /// it changes with what the application has claimed, and a seat holding a stale copy would
+    /// clamp a pointer to a display that is no longer being drawn.
+    ///
+    /// A device that answers a read with a failure is dropped, and its keys and its buttons are
+    /// let go. Any errno is treated that way, because the one that matters cannot be told from the
+    /// others by anything this loop could do differently: `ENODEV` is what an unplugged device and
+    /// a descriptor `logind` revoked both answer, and both then answer every later read the same
+    /// way while `poll` reports the descriptor permanently ready — so a loop that kept one would
+    /// spin at the speed of the processor for as long as it ran. A device dropped over a passing
+    /// failure costs a keyboard or a mouse that has to be plugged in again; a device kept costs the
+    /// whole program.
+    pub fn read(&mut self, pointer: &mut Pointer, screens: &[Screen]) -> Vec<Report> {
         let Self {
-            keyboards,
+            devices,
             keys,
             pending,
         } = self;
-        let mut events = std::mem::take(pending);
+        let mut reports: Vec<Report> = std::mem::take(pending)
+            .into_iter()
+            .map(Report::focused)
+            .collect();
         let mut lost = Vec::new();
-        for (index, keyboard) in keyboards.iter_mut().enumerate() {
-            let batches = match keyboard.device.read() {
+        for (index, taken) in devices.iter_mut().enumerate() {
+            let batches = match taken.device.read() {
                 Ok(batches) => batches,
                 Err(error) => {
                     warn!(
                         target: "zgui::platform",
                         "{} stopped answering and is no longer watched: {error}",
-                        keyboard.device.path().display()
+                        taken.device.path().display()
                     );
                     lost.push(index);
                     continue;
@@ -619,50 +729,262 @@ impl Seat {
             let mut resynchronise = false;
             for batch in &batches {
                 resynchronise |= dropped(batch);
-                events.append(&mut keys.batch(&mut keyboard.down, batch, keyboard.stamps));
+                if taken.types {
+                    reports.extend(
+                        keys.batch(&mut taken.down, batch, taken.stamps)
+                            .into_iter()
+                            .map(Report::focused),
+                    );
+                }
+                // The same rule the keyboard follows: a batch the kernel dropped part of is the
+                // tail of an update whose beginning no longer exists, so a button in it was
+                // pressed by nobody and a motion in it went nowhere anybody can name.
+                if let Some(points) = taken.points.as_mut()
+                    && !dropped(batch)
+                {
+                    reports.extend(pointed(
+                        points,
+                        batch,
+                        taken.stamps,
+                        keys.modifiers(),
+                        pointer,
+                        screens,
+                    ));
+                }
             }
             if resynchronise {
-                match keyboard.device.pressed_keys() {
+                match taken.device.pressed_keys() {
                     Ok(held) => {
-                        let held = held.iter().map(Key::raw).collect();
-                        events.extend(keys.resynchronise(&mut keyboard.down, &held));
+                        let held: BTreeSet<u16> = held.iter().map(Key::raw).collect();
+                        if let Some(points) = taken.points.as_mut() {
+                            reports.extend(cancelled(
+                                points,
+                                &held,
+                                keys.modifiers(),
+                                pointer,
+                                screens,
+                            ));
+                        }
+                        reports.extend(
+                            keys.resynchronise(&mut taken.down, &held)
+                                .map(Report::focused),
+                        );
                     }
                     // What is believed is left alone. Repairing against nothing would release every
                     // key the person is holding, which is worse than carrying a stale belief until
                     // the next answer.
                     Err(error) => warn!(
                         target: "zgui::platform",
-                        "{} will not say which keys are held, so what this loop believes is down \
+                        "{} will not say what is held on it, so what this loop believes is down \
                          stays as it was: {error}",
-                        keyboard.device.path().display()
+                        taken.device.path().display()
                     ),
                 }
             }
         }
         for index in lost.into_iter().rev() {
-            let mut gone = keyboards.remove(index);
+            let mut gone = devices.remove(index);
             // A device that is gone holds nothing. The releases the kernel queued for it are never
-            // read, so this is the only thing that takes its keys back off the layout.
-            events.extend(keys.resynchronise(&mut gone.down, &BTreeSet::new()));
+            // read, so this is the only thing that takes its keys back off the layout and ends the
+            // interactions its buttons were holding open.
+            if let Some(points) = gone.points.as_mut() {
+                reports.extend(cancelled(
+                    points,
+                    &BTreeSet::new(),
+                    keys.modifiers(),
+                    pointer,
+                    screens,
+                ));
+            }
+            reports.extend(
+                keys.resynchronise(&mut gone.down, &BTreeSet::new())
+                    .map(Report::focused),
+            );
         }
-        events
+        reports
     }
 }
 
-/// Opens the grab on a device somebody types on, or answers with nothing.
+/// Returns `true` if this code is a button a pointer has.
+fn pressed_on_a_pointer(code: &u16) -> bool {
+    pointer::button(Key::new(*code)).is_some()
+}
+
+/// Translates one batch from one pointing device, and moves the pointer with it.
 ///
-/// A device nobody types on is left alone. So is one the kernel refuses to hand over: a grab is
-/// exclusive, so another client already holding it is the ordinary reason, and either way the
-/// device stays with whatever has it.
+/// The order is the one a browser reports and the one a hover state depends on: the display that
+/// was left hears first, the display that was reached hears next, and everything else happens
+/// where the pointer now is. A press delivered at the place the pointer used to be is a click on
+/// whatever was under the old position.
+fn pointed(
+    points: &mut Pointing,
+    batch: &Batch,
+    stamps: Stamps,
+    modifiers: Modifiers,
+    pointer: &mut Pointer,
+    screens: &[Screen],
+) -> Vec<Report> {
+    let motion = pointer::batch(points.axes, &mut points.down, batch);
+    let turned = wheel::delta(batch, points.wheel);
+    if motion.is_empty() && turned.is_none() {
+        return Vec::new();
+    }
+
+    let before = pointer.position(screens);
+    if let Some((dx, dy)) = motion.by {
+        pointer.moved_by(dx, dy, screens);
+    }
+    if let Some((x, y)) = motion.to {
+        pointer.moved_to(x, y, screens);
+    }
+    let Some((surface, at)) = pointer.position(screens) else {
+        // The application claimed no display, so there is nowhere for any of this to go.
+        return Vec::new();
+    };
+
+    let timestamp = stamps.at(batch.at);
+    let mut reports = Vec::new();
+    let moved = |action, button, surface, at| {
+        Report::on(
+            surface,
+            SurfaceEvent::Pointer {
+                action,
+                event: pointer::event(at, button),
+                modifiers,
+                timestamp,
+            },
+        )
+    };
+    match before {
+        Some((left, was)) if left != surface => {
+            reports.push(moved(PointerAction::Left, None, left, was));
+            reports.push(moved(PointerAction::Entered, None, surface, at));
+        }
+        Some((_, was)) if was != at => reports.push(moved(PointerAction::Moved, None, surface, at)),
+        // The pointer stayed where it was. A button or a wheel turn in this batch is still
+        // reported below, at the place the pointer is.
+        _ => {}
+    }
+    for (button, action) in motion.buttons {
+        reports.push(moved(action, Some(button), surface, at));
+    }
+    if let Some(delta) = turned {
+        reports.push(Report::on(
+            surface,
+            SurfaceEvent::Wheel {
+                event: wheel::event(delta, at),
+                modifiers,
+                timestamp,
+            },
+        ));
+    }
+    reports
+}
+
+/// Ends every interaction this device was holding open that the kernel no longer reports.
+///
+/// A button held while its device is unplugged is never released: the kernel queues the release
+/// and then answers `ENODEV` the moment the device is gone, so a control that listens for one
+/// stays pressed for the rest of the program. The same is true of a button that went up inside a
+/// queue overflow.
+///
+/// [`PointerAction::Cancelled`] rather than a release, because nobody let go. A control told about
+/// a release fires; a control told about a cancel gives up, which is what actually happened.
+fn cancelled(
+    points: &mut Pointing,
+    held: &BTreeSet<u16>,
+    modifiers: Modifiers,
+    pointer: &Pointer,
+    screens: &[Screen],
+) -> Vec<Report> {
+    let ended: Vec<u16> = points.down.difference(held).copied().collect();
+    points.down.retain(|code| held.contains(code));
+    let Some((surface, at)) = pointer.position(screens) else {
+        return Vec::new();
+    };
+    ended
+        .into_iter()
+        .filter_map(|code| pointer::button(Key::new(code)))
+        .map(|button| {
+            Report::on(
+                surface,
+                SurfaceEvent::Pointer {
+                    action: PointerAction::Cancelled,
+                    event: pointer::event(at, Some(button)),
+                    modifiers,
+                    // The moment this was noticed. What the kernel would have stamped the release
+                    // with is in a queue nothing will ever read.
+                    timestamp: Timestamp::ORIGIN,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Returns how a person points with this device, where they do.
+///
+/// The absolute ranges are read here, once, because `EVIOCGABS` answers with the axis's own units
+/// and nothing above knows what one of them is. A driver that refuses the query leaves this device
+/// as a pointer with no way to read where it is, so it is left alone rather than read against a
+/// range this backend invented.
+fn pointing(device: &Device) -> Option<Pointing> {
+    let capabilities = device.capabilities();
+    if !pointer::points_with(capabilities) {
+        return None;
+    }
+    // Relative first. A device that reports both is a tablet whose mouse mode also works, and the
+    // relative axes are the ones a person expects to move a pointer with.
+    let axes = if pointer::relative(capabilities) {
+        Axes::Relative
+    } else {
+        match (device.axis(Absolute::ABS_X), device.axis(Absolute::ABS_Y)) {
+            (Ok(x), Ok(y)) => Axes::Absolute {
+                x: Span::of(x),
+                y: Span::of(y),
+            },
+            _ => {
+                warn!(
+                    target: "zgui::platform",
+                    "{} will not say what range its axes read in, so where it is pointing cannot \
+                     be worked out and it is left alone",
+                    device.path().display()
+                );
+                return None;
+            }
+        }
+    };
+    Some(Pointing {
+        axes,
+        wheel: HighResolution::of(capabilities),
+        down: BTreeSet::new(),
+    })
+}
+
+/// Opens the grab on a device somebody works with, or answers with nothing.
+///
+/// The grab keeps a keystroke away from the console behind the application, and it also stops
+/// `Ctrl+C` reaching the terminal's line discipline. The module documentation states what that
+/// costs.
+///
+/// A device nobody types on and nobody points with is left alone. So is one the kernel refuses to
+/// hand over: a grab is exclusive, so another client already holding it is the ordinary reason, and
+/// either way the device stays with whatever has it.
 fn take(mut device: Device) -> Option<Device> {
-    if !types_on(device.capabilities()) {
+    let types = types_on(device.capabilities());
+    let points = pointer::points_with(device.capabilities());
+    if !types && !points {
         return None;
     }
     match device.grab() {
         Ok(()) => {
+            let doing = match (types, points) {
+                (true, true) => "typing and pointing",
+                (true, false) => "typing",
+                _ => "pointing",
+            };
             info!(
                 target: "zgui::platform",
-                "typing on {} ({})", device.name(), device.path().display()
+                "{doing} on {} ({})", device.name(), device.path().display()
             );
             Some(device)
         }
@@ -688,12 +1010,16 @@ mod tests {
 
     use std::collections::BTreeSet;
 
-    use super::{Keys, Stamps, Transition, focused, types_on};
+    use super::{
+        Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Stamps, Transition,
+        cancelled, focused, pointed, types_on,
+    };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
     use std::time::Duration;
     use zgui_evdev::{
         Absolute, Bitmap, Capabilities, EventType, Key, Reader, Relative, Synchronisation,
     };
+    use zgui_geom::{CssPx, Point};
     use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
     use zgui_vocab::{EventKind, KeyCode, KeyState, Modifiers, NamedKey, PhysicalKey, Timestamp};
 
@@ -1584,17 +1910,418 @@ mod tests {
     }
 
     #[test]
-    fn the_first_surface_the_application_claimed_is_the_focused_one() {
-        // A placeholder, and named as one where it is written. A console has no window manager, so
-        // this is a decision rather than an answer.
+    fn the_display_the_pointer_is_over_is_the_focused_one() {
+        // A console has no window manager, so this is a decision rather than an answer. The pointer
+        // makes it, the way a desktop with focus-follows-mouse does, and it is the only rule a
+        // machine with no window manager can apply.
+        let claimed = [SurfaceId::new(1), SurfaceId::new(2)];
+
         assert_eq!(
-            focused(&[SurfaceId::new(1), SurfaceId::new(2)]),
-            Some(SurfaceId::new(1))
+            focused(&claimed, Some(SurfaceId::new(2))),
+            Some(SurfaceId::new(2))
         );
+    }
+
+    #[test]
+    fn the_first_claimed_display_holds_the_keys_until_the_pointer_says_otherwise() {
+        // The answer the keyboard milestone gave, kept for the moment before there is a pointer
+        // anywhere. It is also what the pointer itself says on the first turn, because a pointer
+        // starts in the middle of the first claimed display.
+        let claimed = [SurfaceId::new(1), SurfaceId::new(2)];
+
+        assert_eq!(focused(&claimed, None), Some(SurfaceId::new(1)));
         assert_eq!(
-            focused(&[]),
+            focused(&[], Some(SurfaceId::new(1))),
             None,
             "a program that claimed no display is told about no key"
         );
+    }
+
+    #[test]
+    fn a_pointer_over_a_display_nothing_claimed_leaves_the_keys_where_they_were() {
+        // A display the application never asked for draws nothing and is told nothing, so a
+        // pointer standing on one would take the keyboard away from every surface at once.
+        let claimed = [SurfaceId::new(1)];
+
+        assert_eq!(
+            focused(&claimed, Some(SurfaceId::new(2))),
+            Some(SurfaceId::new(1))
+        );
+    }
+
+    /// Two displays side by side, both claimed.
+    fn screens() -> Vec<Screen> {
+        vec![
+            Screen {
+                id: SurfaceId::new(1),
+                left: 0.0,
+                width: 800.0,
+                height: 600.0,
+                scale: 1.0,
+            },
+            Screen {
+                id: SurfaceId::new(2),
+                left: 800.0,
+                width: 800.0,
+                height: 600.0,
+                scale: 1.0,
+            },
+        ]
+    }
+
+    /// A device that reports how far it moved, with a notched wheel and three buttons.
+    fn mouse() -> Pointing {
+        Pointing {
+            axes: Axes::Relative,
+            wheel: HighResolution::default(),
+            down: BTreeSet::new(),
+        }
+    }
+
+    /// What one update of these records amounts to, over `points` and `pointer`.
+    fn point(
+        points: &mut Pointing,
+        pointer: &mut Pointer,
+        screens: &[Screen],
+        records: &[Vec<u8>],
+    ) -> Vec<Report> {
+        let mut bytes: Vec<u8> = records.concat();
+        bytes.extend(record(
+            SINCE,
+            EventType::EV_SYN,
+            Synchronisation::SYN_REPORT.raw(),
+            0,
+        ));
+        let mut reader = Reader::new();
+        let batches = reader.feed(&bytes);
+        let [read] = &batches[..] else {
+            panic!("one report is one batch: {batches:?}");
+        };
+        pointed(
+            points,
+            read,
+            Stamps::from_origin(SINCE),
+            Modifiers::NONE,
+            pointer,
+            screens,
+        )
+    }
+
+    /// What each report was, as the fields a test asserts on.
+    fn did(reports: &[Report]) -> Vec<(Option<SurfaceId>, String)> {
+        reports
+            .iter()
+            .map(|report| {
+                let what = match &report.event {
+                    SurfaceEvent::Pointer { action, event, .. } => format!(
+                        "{action:?} {:?} at ({}, {})",
+                        event.button, event.position.x.0, event.position.y.0
+                    ),
+                    SurfaceEvent::Wheel { event, .. } => format!("Wheel {:?}", event.delta),
+                    other => format!("{other:?}"),
+                };
+                (report.surface, what)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pointer_event_goes_to_the_display_the_pointer_is_on() {
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(SINCE, EventType::EV_REL, Relative::REL_X.raw(), 10)],
+        );
+
+        assert_eq!(
+            did(&reports),
+            [(
+                Some(SurfaceId::new(1)),
+                "Moved None at (410, 300)".to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_pointer_that_crosses_tells_one_display_it_left_and_the_other_it_arrived() {
+        // The two edges, in the order a hover state depends on. A display never told the pointer
+        // left keeps whatever was under it highlighted for the rest of the program.
+        let screens = screens();
+        let mut pointer = Pointer::at(790.0, 100.0, &screens);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(SINCE, EventType::EV_REL, Relative::REL_X.raw(), 20)],
+        );
+
+        assert_eq!(
+            did(&reports),
+            [
+                (
+                    Some(SurfaceId::new(1)),
+                    "Left None at (790, 100)".to_owned()
+                ),
+                (
+                    Some(SurfaceId::new(2)),
+                    "Entered None at (10, 100)".to_owned()
+                ),
+            ],
+            "and the place each carries is measured on its own display"
+        );
+    }
+
+    #[test]
+    fn a_press_is_delivered_where_the_pointer_ended_up() {
+        // A batch can move and press at once, and a press delivered at the old place clicks
+        // whatever used to be under the pointer.
+        let screens = screens();
+        let mut pointer = Pointer::at(100.0, 100.0, &screens);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[
+                record(SINCE, EventType::EV_REL, Relative::REL_X.raw(), 50),
+                record(SINCE, EventType::EV_KEY, Key::BTN_LEFT.raw(), 1),
+            ],
+        );
+
+        assert_eq!(
+            did(&reports),
+            [
+                (
+                    Some(SurfaceId::new(1)),
+                    "Moved None at (150, 100)".to_owned()
+                ),
+                (
+                    Some(SurfaceId::new(1)),
+                    "Pressed Some(Primary) at (150, 100)".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_wheel_turn_is_reported_where_the_pointer_is() {
+        // A wheel carries no position of its own on any device, so without the pointer's there is
+        // nothing to route a turn to.
+        let screens = screens();
+        let mut pointer = Pointer::at(100.0, 100.0, &screens);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(
+                SINCE,
+                EventType::EV_REL,
+                Relative::REL_WHEEL.raw(),
+                1,
+            )],
+        );
+
+        assert_eq!(
+            did(&reports),
+            [(
+                Some(SurfaceId::new(1)),
+                "Wheel Lines { x: 0.0, y: -1.0 }".to_owned()
+            )],
+            "and the wheel moved the pointer nowhere"
+        );
+        let SurfaceEvent::Wheel { event, .. } = &reports[0].event else {
+            panic!("a turn arrived: {reports:?}");
+        };
+        assert_eq!(event.position, Point::new(CssPx(100.0), CssPx(100.0)));
+    }
+
+    #[test]
+    fn what_a_pointer_produces_is_what_a_document_is_dispatched() {
+        // The last hop this crate can assert on its own, the way the keyboard asserts it: an event
+        // that answers both halves of the contract's own bridge is one that reaches a document.
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+        let mut reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[
+                record(SINCE, EventType::EV_REL, Relative::REL_X.raw(), 5),
+                record(SINCE, EventType::EV_KEY, Key::BTN_LEFT.raw(), 1),
+            ],
+        );
+        reports.extend(point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[
+                record(SINCE, EventType::EV_KEY, Key::BTN_LEFT.raw(), 0),
+                record(SINCE, EventType::EV_REL, Relative::REL_WHEEL.raw(), -1),
+            ],
+        ));
+
+        let dispatched: Vec<_> = reports
+            .iter()
+            .map(|report| {
+                assert!(report.event.is_input(), "{report:?} is what a person did");
+                let (kind, payload) = report
+                    .event
+                    .to_dispatch()
+                    .unwrap_or_else(|| panic!("{report:?} reaches a document"));
+                assert!(
+                    payload.matches(kind),
+                    "{report:?} carries the wrong payload"
+                );
+                assert!(report.event.modifiers().is_some(), "and says what was held");
+                assert!(report.event.timestamp().is_some(), "and when");
+                kind
+            })
+            .collect();
+        assert_eq!(
+            dispatched,
+            [
+                EventKind::PointerMove,
+                EventKind::PointerDown,
+                EventKind::PointerUp,
+                EventKind::Wheel,
+            ]
+        );
+    }
+
+    #[test]
+    fn the_moment_a_pointer_event_carries_is_the_moment_the_kernel_stamped_it() {
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(
+                SINCE + Duration::from_millis(250),
+                EventType::EV_REL,
+                Relative::REL_X.raw(),
+                1,
+            )],
+        );
+
+        // The batch's own moment is the one its terminating report carried, and `pointed` stamps
+        // with that — so this asserts the report's moment rather than the record's.
+        assert_eq!(
+            reports[0].event.timestamp().map(Timestamp::since_origin),
+            Some(Duration::ZERO),
+            "the report that ended this update was stamped at the anchor"
+        );
+    }
+
+    #[test]
+    fn a_button_held_when_its_device_goes_ends_the_interaction_rather_than_firing_it() {
+        // The kernel queues the release and then answers `ENODEV`, so that release is never read.
+        // A control told about a release fires; a control told about a cancel gives up, and giving
+        // up is what happened.
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+        point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(SINCE, EventType::EV_KEY, Key::BTN_LEFT.raw(), 1)],
+        );
+
+        let ended = cancelled(
+            &mut points,
+            &BTreeSet::new(),
+            Modifiers::NONE,
+            &pointer,
+            &screens,
+        );
+
+        assert_eq!(
+            did(&ended),
+            [(
+                Some(SurfaceId::new(1)),
+                "Cancelled Some(Primary) at (400, 300)".to_owned()
+            )]
+        );
+        assert!(
+            cancelled(
+                &mut points,
+                &BTreeSet::new(),
+                Modifiers::NONE,
+                &pointer,
+                &screens
+            )
+            .is_empty(),
+            "and it is ended once"
+        );
+    }
+
+    #[test]
+    fn a_button_the_kernel_still_reports_is_left_held() {
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+        point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(SINCE, EventType::EV_KEY, Key::BTN_LEFT.raw(), 1)],
+        );
+
+        let ended = cancelled(
+            &mut points,
+            &BTreeSet::from([Key::BTN_LEFT.raw()]),
+            Modifiers::NONE,
+            &pointer,
+            &screens,
+        );
+
+        assert!(ended.is_empty(), "{ended:?}");
+    }
+
+    #[test]
+    fn an_update_that_moved_nothing_and_pressed_nothing_says_nothing() {
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(SINCE, EventType::EV_MSC, 4, 0x0007_0004)],
+        );
+
+        assert!(reports.is_empty(), "{reports:?}");
+    }
+
+    #[test]
+    fn a_pointer_event_with_no_claimed_display_goes_nowhere() {
+        // A program that has claimed no display has nowhere for a pointer to be, so nothing is
+        // reported rather than an event addressed to a surface that does not exist.
+        let mut pointer = Pointer::centred(&[]);
+        let mut points = mouse();
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &[],
+            &[record(SINCE, EventType::EV_REL, Relative::REL_X.raw(), 10)],
+        );
+
+        assert!(reports.is_empty(), "{reports:?}");
     }
 }

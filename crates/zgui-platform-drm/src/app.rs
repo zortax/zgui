@@ -55,6 +55,7 @@ use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
+use crate::input::pointer::{Pointer, Screen};
 use crate::input::seat::{self, Seat};
 use crate::output::{self, Output, backend};
 use crate::park::{Park, Parked, timeout};
@@ -157,6 +158,11 @@ fn drive(
     let mut seat = Seat::open(&*clock);
     // Which surface the keys reach, and whether it has been told it has them.
     let mut focused: Option<SurfaceId> = None;
+    // Where the pointer is. It starts in the middle of the first display the application claimed,
+    // which is nowhere at all until it has claimed one — so the arrangement is rebuilt each turn
+    // and the pointer is placed the first time there is somewhere to place it.
+    let mut screens: Vec<Screen> = Vec::new();
+    let mut pointer = Pointer::centred(&screens);
 
     let outcome: Result<(), PlatformError> = 'running: {
         let mut park = Park::new();
@@ -187,7 +193,28 @@ fn drive(
             // surface never told it lost them holds both open for ever.
             let claimed_ids: Vec<SurfaceId> =
                 surfaces[..claimed].iter().map(|drawn| drawn.id()).collect();
-            let holds_keys = seat::focused(&claimed_ids);
+            // Rebuilt per turn for the same reason the watch set is: a display the application has
+            // only just claimed is one more place the pointer may go.
+            let arranged = Screen::row(
+                surfaces[..claimed]
+                    .iter()
+                    .map(|drawn| &**drawn as &dyn Surface),
+            );
+            if arranged != screens {
+                let first = screens.is_empty();
+                screens = arranged;
+                pointer = if first {
+                    // The first display the application claimed is where the pointer starts. Until
+                    // there was one there was nowhere to start.
+                    Pointer::centred(&screens)
+                } else {
+                    // The ground moved under it, so it is put back inside whatever is left.
+                    let (x, y) = pointer.union();
+                    Pointer::at(x, y, &screens)
+                };
+            }
+            let holds_keys =
+                seat::focused(&claimed_ids, pointer.on(&screens).map(|screen| screen.id));
             if holds_keys != focused {
                 if let Some(left) = focused {
                     handler.surface_event(&cx, left, SurfaceEvent::Focused(false));
@@ -197,11 +224,14 @@ fn drive(
                 }
                 focused = holds_keys;
             }
-            for event in seat.read() {
-                let Some(id) = focused else {
+            for report in seat.read(&mut pointer, &screens) {
+                // A pointer event names the display it happened on; everything else goes to
+                // whatever holds the keyboard. The pointer can cross displays inside one turn, so
+                // its own answer is the one that is used rather than the focus computed above.
+                let Some(id) = report.surface.or(focused) else {
                     continue;
                 };
-                handler.surface_event(&cx, id, event);
+                handler.surface_event(&cx, id, report.event);
             }
             if cx.is_exiting() {
                 break;
