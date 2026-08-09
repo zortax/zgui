@@ -31,8 +31,19 @@ raw-window-handle.workspace = true
 rustix.workspace = true
 tracing.workspace = true
 zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
+# The kernel's input interface: which devices exist, what each one can report, the grab that keeps
+# a keystroke away from the shell behind the console, and the keymap the console driver holds. It
+# is one step along the same layer, and this crate is the only one that names it.
+zgui-evdev = { path = "../zgui-evdev", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+# The event vocabulary a key press is narrowed into: the three readings of one press, where the
+# key sits, and which modifiers were held. `zgui-platform-winit` names it from this layer for the
+# same reason — a backend translates into it and nothing above has to know which backend ran.
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+# What a key *means*: libxkbcommon, opened at run time. A machine without it reports its absence
+# as a value, and this crate answers by reading the console's own keymap instead.
+zgui-xkb = { path = "../zgui-xkb", version = "0.1.0" }
 # `Gpu`, the device and queue every path here draws through, and `Pixels`, which a readback answers
 # with: it carries the bytes and says which channel order they are in, and a scanout picks its
 # fourcc from that. `FORMAT` is the other end of the same agreement — the texture a frame is

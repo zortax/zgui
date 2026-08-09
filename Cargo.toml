@@ -195,16 +195,20 @@ smallvec = "1.15"
 rayon = "1.12"
 toml = "1.1"
 
-# --- the kernel's display interface: named by zgui-drm and by zgui-platform-wayland ------------
+# --- the kernel's interfaces: named by zgui-drm, zgui-evdev, zgui-platform-drm -----------------
 # `default-features = false` states the feature list in full. `std` is the only default and it is
-# back in the list below; `use-libc` stays off, so rustix takes its `linux_raw` backend on Linux
-# and a call reaches the kernel without passing through libc. `mm` is the dumb buffer's mapping,
-# `event` is polling the device for flip completion.
+# back in the list below; what stays off is `use-libc`, so rustix takes its `linux_raw` backend on
+# Linux and a call reaches the kernel without passing through libc.
 #
-# `time` is the Wayland backend's: the monotonic clock the compositor stamps its presentation
-# feedback in, so that a reported presentation can be placed on the same timeline the frame loop
-# schedules against. A workspace entry is one entry, so the features are the union of what the two
-# backends ask for, and every member takes the whole list.
+# `fs` opens a device node, reads back the flags it was opened with, and watches `/dev/input`
+# through inotify for a node that arrives later. `mm` maps a dumb buffer. `event` covers the
+# eventfd a wake channel is and the `poll` a frame loop parks in. `time` reads `CLOCK_MONOTONIC`,
+# to anchor the clock an input report is stamped against to the frame loop's own origin; without
+# it the two share no zero.
+#
+# `zgui-platform-wayland` reads that same clock, for the timeline its presentation feedback is
+# stamped in. A workspace entry is one entry, so this list is the union and every member takes all
+# of it.
 rustix = { version = "1.1", default-features = false, features = [
     "std",
     "fs",
