@@ -1,0 +1,133 @@
+//! The generated interface to the kernel's input headers.
+//!
+//! `uapi/input.h`, `uapi/input-event-codes.h` and `uapi/uinput.h` are copied unchanged from the
+//! Linux kernel's `include/uapi/linux/`. This module is the generated Rust form of them, produced
+//! by `build.rs`.
+//!
+//! # Licence
+//!
+//! The input headers are `GPL-2.0 WITH Linux-syscall-note`, and the vendored copies keep their own
+//! SPDX identifier and notice. The syscall-note exception states that a user program reaching
+//! kernel services through the interface these headers describe makes normal use of the kernel and
+//! stays outside the reach of the kernel's own licence, so an ioctl wrapper such as this one can
+//! exist at all.
+//!
+//! `cargo xtask ledger attribution` reads its marker as a claim that a file adapts Apache-2.0 or
+//! MIT material and has a row in the derived-files table. Neither identifier describes these
+//! headers, so this module states the origin here instead, and `NOTICE` records the vendored
+//! headers in a section of their own.
+//!
+//! Nothing here is documented or named the way the rest of this crate is. The module is private,
+//! and the safe interface over it is written by hand.
+
+// The module is private, so every `pub` bindgen writes is unreachable, and the headers declare
+// types this crate never names. Both are the generator's business.
+#![allow(
+    missing_docs,
+    non_camel_case_types,
+    non_snake_case,
+    non_upper_case_globals,
+    dead_code,
+    unreachable_pub,
+    unused_imports
+)]
+// Where a struct holds a union, an array or a raw pointer, bindgen writes the `Default` by hand
+// as `MaybeUninit::uninit()`, `ptr::write_bytes(…, 0, 1)` and `assume_init()`. The rule that an
+// unsafe block states why it is sound applies to the blocks this crate writes. Soundness here is
+// bindgen's claim: it writes that `Default` only where all-zero is a value of the type.
+#![allow(clippy::undocumented_unsafe_blocks)]
+
+include!(concat!(env!("OUT_DIR"), "/uapi.rs"));
+
+#[cfg(test)]
+mod tests {
+    //! What the generated interface has to agree with the headers about.
+    //!
+    //! A request number is `_IOC(direction, 'E', number, size)`. A struct that came out the wrong
+    //! size therefore produces a *different request number*, which the kernel refuses with
+    //! `EINVAL` and no further explanation.
+    //!
+    //! `input_event` is the one to watch. It embeds `struct timeval`, which the C library owns
+    //! rather than the kernel, and the header picks between that and a pair of `__kernel_ulong_t`
+    //! on a condition that reads `__USE_TIME_BITS64`. Twenty-four bytes is the shape a 64-bit
+    //! build has to produce: sixteen bytes of `timeval`, two `__u16` and one `__s32`. A record of
+    //! any other size makes every read of an event stream slide by a few bytes per record.
+    //!
+    //! A constant that came out wrong fails worse. The call is accepted and the kernel does
+    //! something else: a code that means another code, an axis that means another axis. Nothing
+    //! reports it, which is why the values are asserted here beside the sizes.
+    //!
+    //! The headers are the source of truth. A failure here means the vendored header and the
+    //! assertion disagree — read the header, and do not edit the assertion to match the code.
+
+    use super::*;
+
+    #[test]
+    fn the_generated_structs_are_the_size_the_headers_say() {
+        assert_eq!(size_of::<input_event>(), 24);
+        assert_eq!(size_of::<input_id>(), 8);
+        assert_eq!(size_of::<input_absinfo>(), 24);
+        assert_eq!(size_of::<input_mask>(), 16);
+        assert_eq!(size_of::<input_keymap_entry>(), 40);
+        assert_eq!(size_of::<ff_effect>(), 48);
+        assert_eq!(size_of::<uinput_setup>(), 92);
+        assert_eq!(size_of::<uinput_abs_setup>(), 28);
+        assert_eq!(size_of::<uinput_user_dev>(), 1116);
+    }
+
+    #[test]
+    fn an_event_record_is_laid_out_the_way_a_read_walks_it() {
+        // The offsets are what turn one read into a list of events. `time` first, then the type,
+        // the code and the value packed behind it.
+        assert_eq!(std::mem::offset_of!(input_event, time), 0);
+        assert_eq!(std::mem::offset_of!(input_event, type_), 16);
+        assert_eq!(std::mem::offset_of!(input_event, code), 18);
+        assert_eq!(std::mem::offset_of!(input_event, value), 20);
+    }
+
+    #[test]
+    fn the_event_types_are_the_ones_the_headers_name() {
+        assert_eq!(EV_SYN, 0x00);
+        assert_eq!(EV_KEY, 0x01);
+        assert_eq!(EV_REL, 0x02);
+        assert_eq!(EV_ABS, 0x03);
+        assert_eq!(EV_MSC, 0x04);
+        assert_eq!(EV_SW, 0x05);
+        assert_eq!(EV_LED, 0x11);
+        assert_eq!(EV_SND, 0x12);
+        assert_eq!(EV_REP, 0x14);
+        assert_eq!(EV_FF, 0x15);
+    }
+
+    #[test]
+    fn the_counts_that_size_a_capability_bitmap_are_the_ones_the_headers_name() {
+        // A bitmap is asked for by the byte, so a count that came out wrong asks the kernel for
+        // the wrong number of bytes and drops whatever did not fit.
+        assert_eq!(EV_MAX, 31);
+        assert_eq!(EV_CNT, 32);
+        assert_eq!(KEY_MAX, 767);
+        assert_eq!(KEY_CNT, 768);
+        assert_eq!(REL_MAX, 15);
+        assert_eq!(REL_CNT, 16);
+        assert_eq!(ABS_MAX, 63);
+        assert_eq!(ABS_CNT, 64);
+    }
+
+    #[test]
+    fn the_codes_the_interface_reads_meaning_into_are_the_ones_the_headers_name() {
+        assert_eq!(SYN_REPORT, 0);
+        assert_eq!(SYN_DROPPED, 3);
+        // The boundary between a key and a button, which tells a keyboard from a mouse.
+        assert_eq!(BTN_MISC, 0x100);
+        assert_eq!(BTN_LEFT, 0x110);
+        assert_eq!(KEY_ESC, 1);
+        assert_eq!(KEY_A, 30);
+        assert_eq!(REL_X, 0x00);
+        assert_eq!(REL_Y, 0x01);
+        assert_eq!(ABS_X, 0x00);
+        assert_eq!(ABS_Y, 0x01);
+        assert_eq!(ABS_MT_POSITION_X, 0x35);
+        assert_eq!(ABS_MT_POSITION_Y, 0x36);
+        assert_eq!(UINPUT_MAX_NAME_SIZE, 80);
+    }
+}

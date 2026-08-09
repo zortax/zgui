@@ -82,15 +82,20 @@ const LEDGER: &[(&str, &[&str])] = &[
     // dependency graph of every program that links the framework, to buy something `futures` and
     // `zgui-reactive`'s own executor already do.
     ("tokio", &["zgui-tokio"]),
-    // The kernel's display interface, reached with no libc. Confined to one crate for the same
-    // reason a windowing library is: what it costs to replace is what it costs to find, and a
-    // second crate issuing ioctls of its own is a second place a device can be left in a state
-    // nothing puts back.
-    // `zgui-platform-drm` is here for one descriptor and nothing else: the wake channel the frame
-    // loop parks on beside the device is an eventfd, and there is no other safe way to hold one.
-    // It issues no ioctl — every one of those stays in `zgui-drm`.
-    ("rustix", &["zgui-drm", "zgui-platform-drm"]),
-    ("bindgen", &["zgui-drm"]),
+    // The kernel's own interfaces, reached with no libc. Confined for the same reason a windowing
+    // library is: what it costs to replace is what it costs to find, and a second crate issuing
+    // ioctls of its own is a second place a device can be left in a state nothing puts back.
+    // `zgui-drm` issues every DRM ioctl. `zgui-evdev` issues every input one, including the
+    // `EVIOCGRAB` that keeps a keystroke away from the shell behind the console — a second crate
+    // issuing that is a second place a keyboard can be left grabbed with nothing to release it.
+    // `zgui-platform-drm` issues no ioctl of its own outside its tests. It is on the row for the
+    // eventfd its wake channel is, the `poll` its frame loop parks in, the monotonic clock an
+    // input report is stamped against, and the `fstat` its tests read an exported descriptor with.
+    ("rustix", &["zgui-drm", "zgui-platform-drm", "zgui-evdev"]),
+    // Both uapi crates read vendored kernel headers at build time. An ioctl request number is
+    // computed from `size_of`, so a struct transcribed at the wrong width changes a number rather
+    // than failing to compile, and no test would find it.
+    ("bindgen", &["zgui-drm", "zgui-evdev"]),
     (
         "accesskit",
         &[

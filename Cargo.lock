@@ -5857,6 +5857,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-evdev"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+ "rustix 1.1.4",
+]
+
+[[package]]
 name = "zgui-examples"
 version = "0.1.0"
 dependencies = [
