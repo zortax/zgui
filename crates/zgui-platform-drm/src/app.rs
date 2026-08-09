@@ -177,13 +177,15 @@ fn drive(
             let claimed = cx.claimed();
 
             // Before the frames, so that a key pressed since the last turn is dispatched into the
-            // document that the frame below then draws. The keyboards are read whether or not
-            // anything can be told about them: a descriptor left unread stays ready, and every
-            // later wait would return at once.
+            // document the frame below then draws. The keyboards are read whether or not anything
+            // can be told about them: a descriptor left unread stays ready, and every later wait
+            // would return at once.
+            //
+            // Which surface holds the keys is worked out every turn rather than once, because the
+            // answer moves as soon as there is a pointer to move it.
             let claimed_ids: Vec<SurfaceId> =
                 surfaces[..claimed].iter().map(|drawn| drawn.id()).collect();
-            let holds_keys = seat::focused(&claimed_ids);
-            if let Some(id) = holds_keys
+            if let Some(id) = seat::focused(&claimed_ids)
                 && focused != Some(id)
             {
                 focused = Some(id);
