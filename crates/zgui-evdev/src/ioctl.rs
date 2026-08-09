@@ -13,10 +13,13 @@
 //! and `EVIOCGABS` put the event type and the axis into the request number itself.
 //!
 //! Loosening [`Request<T>`] to carry a length would give up the pairing it exists for, so it is
-//! left alone and the byte-buffer case gets its own constructor, [`Request::bytes`], typed for a
-//! slice. A slice request is issued through [`issue_bytes`], which is handed the buffer the length
-//! was computed from. The two calls cannot be swapped: [`issue`] takes `&mut T`, and there is no
-//! `T` a `Request<[u8]>` names.
+//! left alone and the byte-buffer case is a separate type, [`ByteRequest`], which carries no length
+//! at all. [`issue_bytes`] computes the number from the buffer it is handed, so there is nowhere
+//! for a second length to be written down and nothing for the two to disagree about.
+//!
+//! [`Request<T>`] and [`ByteRequest`] therefore name different call shapes, and neither can be
+//! handed to the other's call: [`issue`] takes a `Request<T>` and a `&mut T`, and [`issue_bytes`]
+//! takes a [`ByteRequest`] and the buffer that decides the number.
 
 // The table below is the kernel's interface. Every entry is a constant the headers define, every
 // entry is checked against the value those headers expand to by the test at the foot of this file,
@@ -67,7 +70,7 @@ pub(crate) struct Value(pub(crate) c_int);
 /// The type parameter ties the request number to the payload it was computed from. The kernel
 /// writes back the number of bytes the request number encodes, so a request paired with a smaller
 /// payload writes past it — and [`issue`] is a safe function, so the compiler holds the pairing.
-pub(crate) struct Request<T: ?Sized> {
+pub(crate) struct Request<T> {
     /// The computed request number.
     opcode: Opcode,
     /// What this is, for the error message.
@@ -76,22 +79,20 @@ pub(crate) struct Request<T: ?Sized> {
     payload: PhantomData<fn(&mut T)>,
 }
 
-impl<T: ?Sized> Clone for Request<T> {
+impl<T> Clone for Request<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T: ?Sized> Copy for Request<T> {}
+impl<T> Copy for Request<T> {}
 
-impl<T: ?Sized> Request<T> {
+impl<T> Request<T> {
     /// Returns the request number, for the tests that check it against the header.
     pub(crate) const fn opcode(self) -> Opcode {
         self.opcode
     }
-}
 
-impl<T> Request<T> {
     /// Builds a request that reads `T` back, with a number chosen at run time.
     ///
     /// `EVIOCGABS(axis)` is the reason this exists: the axis is added to the request number, so the
@@ -106,36 +107,49 @@ impl<T> Request<T> {
     }
 }
 
-impl Request<[u8]> {
-    /// A request whose payload is a byte buffer of a length the caller chose.
-    ///
-    /// `EVIOCGNAME(len)` and `EVIOCGBIT(type, len)` are the two families this is for. The kernel
-    /// writes at most `len` bytes and reports how many it wrote, so the length in the number and
-    /// the length of the buffer have to be the same value — which is why the buffer is handed to
-    /// [`issue_bytes`] and never to a call that could be given a different one.
+/// A request whose payload is a byte buffer, and which does not know how long that buffer is.
+///
+/// `EVIOCGNAME(len)` and its neighbours put the length into the request number, and the kernel
+/// writes what the device has, clamped to that length. A number built for ninety-six bytes and a
+/// buffer of four is ninety-two bytes written past the end of the buffer, from a safe function,
+/// with no `unsafe` token anywhere near the call.
+///
+/// So the length is never written down twice. It lives in the buffer, [`issue_bytes`] derives the
+/// number from that buffer, and there is no way to spell a second one.
+///
+/// Every request in this family reads, so there is no direction to choose either. A direction
+/// parameter here could only express a mistake.
+#[derive(Clone, Copy)]
+pub(crate) struct ByteRequest {
+    /// What this is, for the error message.
+    name: &'static str,
+    /// The character the number is grouped under.
+    group: u8,
+    /// The number, which for `EVIOCGBIT` already carries the event type.
+    number: u8,
+}
+
+impl ByteRequest {
+    /// Returns the request number for a buffer of `len` bytes.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Unusable`] when `len` does not fit the fourteen bits a request number has
-    /// for it.
-    pub(crate) fn bytes(
-        name: &'static str,
-        direction: Direction,
-        group: u8,
-        number: u8,
-        len: usize,
-    ) -> Result<Self> {
+    /// for it. `rustix` masks an oversized length into those bits rather than refusing, so sixteen
+    /// kilobytes would quietly become a request for none.
+    fn opcode(self, len: usize) -> Result<Opcode> {
         if len > MAX_PAYLOAD {
             return Err(Error::Unusable(format!(
-                "{name} was asked for {len} bytes, and a request number carries at most \
-                 {MAX_PAYLOAD}"
+                "{} was given {len} bytes, and a request number carries at most {MAX_PAYLOAD}",
+                self.name
             )));
         }
-        Ok(Self {
-            opcode: opcode::from_components(direction, group, number, len),
-            name,
-            payload: PhantomData,
-        })
+        Ok(opcode::from_components(
+            Direction::Read,
+            self.group,
+            self.number,
+            len,
+        ))
     }
 }
 
@@ -184,34 +198,34 @@ write_only!(UINPUT_SET_KEY_BIT, UINPUT, 101, Value);
 write_only!(UINPUT_SET_RELATIVE_BIT, UINPUT, 102, Value);
 write_only!(UINPUT_SET_ABSOLUTE_BIT, UINPUT, 103, Value);
 
-/// `EVIOCGNAME(len)`: the device's name, into a buffer of `len` bytes.
-///
-/// # Errors
-///
-/// Returns [`Error::Unusable`] when `len` does not fit a request number.
-pub(crate) fn name(len: usize) -> Result<Request<[u8]>> {
-    Request::bytes("EVIOCGNAME", Direction::Read, GROUP, 0x06, len)
+/// Returns `EVIOCGNAME`, which answers the device's name into whatever buffer it is issued with.
+pub(crate) const fn name() -> ByteRequest {
+    ByteRequest {
+        name: "EVIOCGNAME",
+        group: GROUP,
+        number: 0x06,
+    }
 }
 
-/// `EVIOCGKEY(len)`: which keys are held down right now, as a bitmap of `len` bytes.
-///
-/// # Errors
-///
-/// Returns [`Error::Unusable`] when `len` does not fit a request number.
-pub(crate) fn key_state(len: usize) -> Result<Request<[u8]>> {
-    Request::bytes("EVIOCGKEY", Direction::Read, GROUP, 0x18, len)
+/// Returns `EVIOCGKEY`, which answers which keys are held down right now, as a bitmap.
+pub(crate) const fn key_state() -> ByteRequest {
+    ByteRequest {
+        name: "EVIOCGKEY",
+        group: GROUP,
+        number: 0x18,
+    }
 }
 
-/// `EVIOCGBIT(kind, len)`: which codes of `kind` the device emits, as a bitmap of `len` bytes.
+/// Returns `EVIOCGBIT(kind)`, which answers which codes of `kind` the device emits, as a bitmap.
 ///
-/// A `kind` of zero asks which event types the device has at all, which is how the kernel packs
-/// two questions into one request.
+/// A `kind` of zero asks which event types the device has at all: the kernel packs two questions
+/// into one request.
 ///
 /// # Errors
 ///
-/// Returns [`Error::Unusable`] when `kind` is past `EV_MAX`, or when `len` does not fit a request
-/// number.
-pub(crate) fn bits(kind: u16, len: usize) -> Result<Request<[u8]>> {
+/// Returns [`Error::Unusable`] when `kind` is past `EV_MAX`, where the number would run into
+/// `EVIOCGABS`'s range and the kernel would answer a different question.
+pub(crate) fn bits(kind: u16) -> Result<ByteRequest> {
     let number = u8::try_from(kind)
         .ok()
         .filter(|kind| u32::from(*kind) <= sys::EV_MAX)
@@ -222,7 +236,11 @@ pub(crate) fn bits(kind: u16, len: usize) -> Result<Request<[u8]>> {
                 sys::EV_MAX
             ))
         })?;
-    Request::bytes("EVIOCGBIT", Direction::Read, GROUP, number, len)
+    Ok(ByteRequest {
+        name: "EVIOCGBIT",
+        group: GROUP,
+        number,
+    })
 }
 
 /// Returns `EVIOCGABS(axis)`, which answers the range and the current value of one absolute axis.
@@ -245,7 +263,7 @@ pub(crate) fn absolute(axis: u16) -> Result<Request<sys::input_absinfo>> {
 }
 
 /// One ioctl, with its payload borrowed for the duration of the call.
-struct Call<'a, T: ?Sized> {
+struct Call<'a, T> {
     /// The request number.
     opcode: Opcode,
     /// What the kernel reads and writes.
@@ -276,11 +294,21 @@ unsafe impl<T> Ioctl for Call<'_, T> {
     }
 }
 
-// SAFETY: the same claims as the sized call above, with one difference: `as_ptr` hands back the
-// start of a slice whose length is the length the request number was built from, because
-// `issue_bytes` is the only caller and it builds the number from the slice it passes. The output
-// is the number of bytes the kernel wrote, which is what `ioctl` returns for these requests.
-unsafe impl Ioctl for Call<'_, [u8]> {
+/// One ioctl whose payload is a byte buffer.
+struct BytesCall<'a> {
+    /// The request number, computed from `buffer`.
+    opcode: Opcode,
+    /// What the kernel writes into.
+    buffer: &'a mut [u8],
+}
+
+// SAFETY: `as_ptr` hands back the start of `buffer`, which is a live `&mut [u8]` for the whole
+// call, so it is valid, aligned and uniquely borrowed. The length the kernel reads out of the
+// request number is `buffer.len()`, because `issue_bytes` is the only place a `BytesCall` is
+// built and it computes the number from the same slice it stores here — there is no second
+// length for the two to disagree about. The output is the number of bytes the kernel wrote, and
+// `ioctl` returns that number for these requests.
+unsafe impl Ioctl for BytesCall<'_> {
     type Output = usize;
 
     const IS_MUTATING: bool = true;
@@ -290,7 +318,7 @@ unsafe impl Ioctl for Call<'_, [u8]> {
     }
 
     fn as_ptr(&mut self) -> *mut c_void {
-        self.payload.as_mut_ptr().cast()
+        self.buffer.as_mut_ptr().cast()
     }
 
     unsafe fn output_from_ptr(written: IoctlOutput, _: *mut c_void) -> rustix::io::Result<usize> {
@@ -352,21 +380,27 @@ pub(crate) fn issue<T>(fd: BorrowedFd<'_>, request: Request<T>, payload: &mut T)
 
 /// Issues `request` against `fd`, filling `buffer`, and reports how many bytes the kernel wrote.
 ///
-/// `buffer` has to be the buffer whose length `request` was built from. Passing a shorter one is
-/// what the request number cannot see, and the kernel would write past its end.
+/// The request number is built here, from `buffer`. That is the only length there is, so the
+/// number and the buffer cannot disagree about how much the kernel may write.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] when `buffer` is longer than a request number can carry, and
+/// [`Error::Ioctl`] when the kernel refuses.
 pub(crate) fn issue_bytes(
     fd: BorrowedFd<'_>,
-    request: Request<[u8]>,
+    request: ByteRequest,
     buffer: &mut [u8],
 ) -> Result<usize> {
+    let opcode = request.opcode(buffer.len())?;
     retry(request.name, || {
         // SAFETY: the claims are stated on the `Ioctl` implementation above.
         unsafe {
             rustix::ioctl::ioctl(
                 fd,
-                Call {
-                    opcode: request.opcode(),
-                    payload: &mut *buffer,
+                BytesCall {
+                    opcode,
+                    buffer: &mut *buffer,
                 },
             )
         }
@@ -421,21 +455,28 @@ mod tests {
     }
 
     #[test]
-    fn a_length_chosen_at_run_time_lands_in_the_request_number() {
-        // `EVIOCGNAME(256)` and `EVIOCGKEY(96)`. The length is the middle fourteen bits, so a
-        // buffer of a different length is a different request.
-        assert_eq!(name(256).expect("256 fits").opcode(), 0x8100_4506);
-        assert_eq!(name(1).expect("1 fits").opcode(), 0x8001_4506);
-        assert_eq!(key_state(96).expect("96 fits").opcode(), 0x8060_4518);
+    fn the_length_of_the_buffer_lands_in_the_request_number() {
+        // `EVIOCGNAME(256)`, `EVIOCGNAME(1)` and `EVIOCGKEY(96)`. The length is the middle
+        // fourteen bits, so a buffer of a different length is a different request — which is why
+        // the number is computed from the buffer and nowhere else.
+        assert_eq!(name().opcode(256).expect("256 fits"), 0x8100_4506);
+        assert_eq!(name().opcode(1).expect("1 fits"), 0x8001_4506);
+        assert_eq!(key_state().opcode(96).expect("96 fits"), 0x8060_4518);
     }
 
     #[test]
     fn an_event_type_and_an_axis_land_in_the_request_number() {
         // `EVIOCGBIT(0, 4)` asks which event types there are; the rest ask for the codes of one.
-        assert_eq!(bits(0, 4).expect("EV_SYN is a type").opcode(), 0x8004_4520);
-        assert_eq!(bits(1, 96).expect("EV_KEY is a type").opcode(), 0x8060_4521);
-        assert_eq!(bits(2, 2).expect("EV_REL is a type").opcode(), 0x8002_4522);
-        assert_eq!(bits(3, 8).expect("EV_ABS is a type").opcode(), 0x8008_4523);
+        let opcode = |kind, len| {
+            bits(kind)
+                .expect("the type is one the kernel has")
+                .opcode(len)
+                .expect("the length fits")
+        };
+        assert_eq!(opcode(0, 4), 0x8004_4520);
+        assert_eq!(opcode(1, 96), 0x8060_4521);
+        assert_eq!(opcode(2, 2), 0x8002_4522);
+        assert_eq!(opcode(3, 8), 0x8008_4523);
         assert_eq!(absolute(0).expect("ABS_X is an axis").opcode(), 0x8018_4540);
         assert_eq!(absolute(1).expect("ABS_Y is an axis").opcode(), 0x8018_4541);
     }
@@ -458,12 +499,12 @@ mod tests {
         // silently become a request for zero. The kernel would then answer a question nobody
         // asked, with the buffer left as it was.
         assert_eq!(
-            (name(MAX_PAYLOAD).expect("the limit fits").opcode() >> 16) & 0x3fff,
+            (name().opcode(MAX_PAYLOAD).expect("the limit fits") >> 16) & 0x3fff,
             0x3fff,
             "the whole of the size field is used"
         );
         assert!(
-            name(MAX_PAYLOAD + 1).is_err(),
+            name().opcode(MAX_PAYLOAD + 1).is_err(),
             "one byte past the limit is refused rather than wrapped"
         );
     }
@@ -472,7 +513,7 @@ mod tests {
     fn a_type_or_an_axis_the_kernel_does_not_have_is_refused() {
         // Past `EV_MAX` the number runs into `EVIOCGABS`'s range, so the kernel would answer a
         // different question. The same holds for an axis past `ABS_MAX`.
-        assert!(bits(32, 4).is_err(), "`EV_MAX` is 31");
+        assert!(bits(32).is_err(), "`EV_MAX` is 31");
         assert!(absolute(64).is_err(), "`ABS_MAX` is 63");
     }
 

@@ -401,7 +401,7 @@ impl Device {
     /// Returns [`Error::Ioctl`] when the kernel refuses the query.
     pub fn pressed_keys(&self) -> Result<Bitmap> {
         let mut bits = [0_u8; KEY_BITMAP];
-        let written = ioctl::issue_bytes(self.fd(), ioctl::key_state(KEY_BITMAP)?, &mut bits)?;
+        let written = ioctl::issue_bytes(self.fd(), ioctl::key_state(), &mut bits)?;
         Ok(Bitmap::from_bytes(&bits[..written.min(KEY_BITMAP)]))
     }
 
@@ -492,7 +492,7 @@ impl AsFd for Device {
 /// Asks the device what it calls itself.
 fn read_name(fd: BorrowedFd<'_>) -> Result<String> {
     let mut bytes = [0_u8; NAME_LIMIT];
-    let written = ioctl::issue_bytes(fd, ioctl::name(NAME_LIMIT)?, &mut bytes)?;
+    let written = ioctl::issue_bytes(fd, ioctl::name(), &mut bytes)?;
     let written = written.min(NAME_LIMIT);
     // The kernel counts the terminator in what it wrote, and a driver may write a shorter string
     // than it claims, so the name ends at the first zero either way.
@@ -541,7 +541,7 @@ fn read_capabilities(fd: BorrowedFd<'_>) -> Result<Capabilities> {
 /// Reads one `EVIOCGBIT` map of `len` bytes.
 fn read_bits(fd: BorrowedFd<'_>, kind: u16, len: usize) -> Result<Bitmap> {
     let mut bits = vec![0_u8; len];
-    let written = ioctl::issue_bytes(fd, ioctl::bits(kind, len)?, &mut bits)?;
+    let written = ioctl::issue_bytes(fd, ioctl::bits(kind)?, &mut bits)?;
     bits.truncate(written.min(len));
     Ok(Bitmap::from_bytes(&bits))
 }
