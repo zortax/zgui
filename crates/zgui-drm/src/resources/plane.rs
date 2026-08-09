@@ -1,10 +1,15 @@
 //! A plane: the thing a framebuffer is actually scanned out from.
 
 use crate::device::Device;
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::format::FormatModifiers;
 use crate::ioctl;
+use crate::property::ObjectKind;
 use crate::resources::stabilise;
 use crate::sys;
+
+/// The property a plane publishes its scanout layouts under.
+const IN_FORMATS: &str = "IN_FORMATS";
 
 // What a plane is *for* — primary, overlay or cursor — is the value of its `type` property, and
 // `property` already reads any property of any object. An enumeration here would be a second
@@ -111,6 +116,43 @@ impl Device {
                 }))
             },
         )
+    }
+
+    /// Returns which formats and layouts the plane `id` can scan out.
+    ///
+    /// [`Plane::formats`] says which formats the hardware takes and says nothing about how their
+    /// pixels are arranged. `IN_FORMATS` is the property that pairs the two, and this reads it
+    /// back. Zero-copy scanout starts here: a graphics API renders into an image whose layout this
+    /// answer names, and the image is then handed over as it stands.
+    ///
+    /// Answers `None` where the driver publishes no `IN_FORMATS` property. The property is
+    /// optional, and a driver that omits it states only its format list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses a read,
+    /// [`Error::Unusable`](crate::Error::Unusable) when a count kept moving under one, and the
+    /// same when the property is there and the blob behind it is one this crate cannot read.
+    pub fn plane_formats(&self, id: u32) -> Result<Option<FormatModifiers>> {
+        let properties = self.properties(id, ObjectKind::Plane)?;
+        // Zero is not an object id: `__drm_mode_object_add` allocates from one upward, so zero is
+        // how "no blob" reaches a caller here.
+        let Some(value) = properties.value(IN_FORMATS).filter(|value| *value != 0) else {
+            return Ok(None);
+        };
+        let blob = u32::try_from(value).map_err(|_| {
+            Error::Unusable(format!(
+                "plane {id} names {value} as its {IN_FORMATS} blob, which is not a blob id"
+            ))
+        })?;
+
+        let bytes = self.blob(blob)?;
+        FormatModifiers::parse(&bytes).map(Some).ok_or_else(|| {
+            Error::Unusable(format!(
+                "plane {id} publishes an {IN_FORMATS} blob of {} bytes that cannot be read",
+                bytes.len()
+            ))
+        })
     }
 }
 
