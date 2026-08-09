@@ -170,8 +170,10 @@ impl Surface for DrmSurface {
 
     /// Does nothing: there is no input method on this backend to steer.
     ///
-    /// A layout's own dead keys compose a character here, and those are the layout's business
-    /// rather than a surface's.
+    /// Dead keys and compose sequences do work — they are libxkbcommon's own, applied where a key
+    /// is read rather than where a surface is told about one. What is absent is an input method
+    /// with a candidate window, so a Japanese or a Chinese keyboard types no more here than its
+    /// Latin keys.
     fn set_text_input(&self, _state: Option<TextInput>) {}
 
     /// Does nothing: no assistive technology is connected, so the closure is never run and no
