@@ -78,14 +78,23 @@ pub trait Commit {
     /// position is a signed field on one and a signed range property on the other.
     ///
     /// [`CursorImage`] carries a framebuffer id and a GEM handle because the two interfaces name
-    /// the buffer differently. This decides which of the two is read.
+    /// the buffer differently. This decides which of the two is read, and which layouts are
+    /// allowed: the legacy interface reads a buffer with a format and a stride of its own, and
+    /// refuses an image that disagrees. [`CursorImage`] states both rules.
+    ///
+    /// The atomic interface tests this configuration before it applies it, the way
+    /// [`Commit::modeset`] does. This is the commit that turns the cursor plane on, so it is the
+    /// one a driver is most likely to refuse, and a refusal leaves the display as it was.
+    ///
+    /// This blocks for as long as [`Commit::move_cursor`] does.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the image, which is
-    /// how a buffer of a size the driver will not take is reported. The atomic interface returns
-    /// [`Error::Unusable`](crate::Error::Unusable) when [`CursorPlane::id`] is zero, because a
-    /// plane id is the only way it can name a cursor.
+    /// how a buffer of a size the driver will not take is reported.
+    /// [`Error::Unusable`](crate::Error::Unusable) covers what the interfaces refuse for
+    /// themselves: the atomic one when [`CursorPlane::id`] or [`CursorImage::framebuffer`] is
+    /// `None`, and the legacy one when the image's format or stride is not what it would read.
     fn set_cursor(
         &mut self,
         device: &Device,
@@ -99,9 +108,42 @@ pub trait Commit {
     ///
     /// A pointer costs this per motion event: no buffer is touched and no frame is drawn.
     ///
+    /// A [`Commit::set_cursor`] has to have put an image on `plane` first. Neither interface
+    /// reports a caller that skipped it: the atomic one commits two properties of a plane linked
+    /// to no CRTC, which reaches no CRTC and is accepted having done nothing, and the legacy one
+    /// moves a cursor the CRTC does not have. Nothing in this crate or in the kernel checks the
+    /// rule, so a caller keeps it by reading this.
+    ///
+    /// # Blocking, and what it costs a frame loop
+    ///
+    /// Both interfaces issue a blocking commit, because the kernel refuses a non-blocking one with
+    /// `EBUSY` while another is outstanding on the same CRTC, and a pointer moved per input event
+    /// would meet the frame loop's own flips constantly.
+    ///
+    /// The atomic path therefore waits twice: once for the outstanding flip to reach its vertical
+    /// blank, and once for its own. That is up to two refreshes, about 33 ms at 60 Hz. A frame loop
+    /// that reads flip completions, deadlines and input on one thread does none of the three for
+    /// that time, so a caller that owns such a loop moves the cursor once a frame, however many
+    /// motion events the frame collected.
+    ///
+    /// # What the legacy request would cost
+    ///
+    /// The kernel gives the legacy request a shortcut the atomic ioctl does not get.
+    /// `drm_atomic_helper_update_plane` marks an update of a CRTC's own cursor plane as a legacy
+    /// cursor update, and `drm_atomic_helper_wait_for_vblanks` returns at once for one. The atomic
+    /// ioctl sets no such flag, so it waits where `DRM_IOCTL_MODE_CURSOR2` does not. On a device
+    /// that serves both — which is every atomic device, as
+    /// [`legacy`](crate::commit::LegacyCommit) states — the legacy request is therefore likely to
+    /// be the cheaper one per motion, which would invert the choice made here.
+    ///
+    /// Nothing in this crate has measured it, because every test that touches a cursor needs DRM
+    /// master. A machine that has master can: the legacy path already runs on atomic drivers, so
+    /// the experiment costs one [`Interface::Legacy`](crate::device::Interface::Legacy) device
+    /// rather than a rewrite.
+    ///
     /// # Errors
     ///
-    /// The ones [`Commit::set_cursor`] returns.
+    /// The ones [`Commit::set_cursor`] returns, other than the ones about the image.
     fn move_cursor(&mut self, device: &Device, plane: CursorPlane, x: i32, y: i32) -> Result<()>;
 
     /// Takes the cursor off `plane`.

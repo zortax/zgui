@@ -16,7 +16,7 @@
 use crate::commit::{Commit, Pipe};
 use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::framebuffer::Framebuffer;
 use crate::ioctl;
 use crate::resources::Mode;
@@ -102,15 +102,20 @@ impl Commit for LegacyCommit {
         x: i32,
         y: i32,
     ) -> Result<()> {
+        // The kernel reads this buffer with a format and a stride of its own choosing, so it
+        // accepts an image laid out any other way and reinterprets it. This is where that becomes
+        // an error a caller can read.
+        layout(image)?;
+
         // The buffer and the position in one request. The two flags are separate so that a move
         // costs no buffer change, and both are set here so the image appears where the caller
-        // asked: without `CURSOR_MOVE` the kernel reads `crtc->cursor_x` and `crtc->cursor_y`,
-        // which hold where the last cursor on this CRTC was.
+        // asked: `drm_mode_cursor_universal` reads `crtc->cursor_x` and `crtc->cursor_y` for a
+        // request that carries no `CURSOR_MOVE`, and those hold where the last cursor on this CRTC
+        // was.
         //
         // `handle` is the GEM handle the driver allocated the buffer as, which the header calls a
-        // driver specific handle, and the extent beside it is all the request states about the
-        // buffer. `CursorPlane::id` is read by the atomic interface alone, and this request names
-        // the CRTC.
+        // driver specific handle. `CursorPlane::id` is read by the atomic interface alone, and
+        // this request names the CRTC.
         cursor(
             device,
             sys::drm_mode_cursor2 {
@@ -160,6 +165,40 @@ impl Commit for LegacyCommit {
     }
 }
 
+/// Refuses an image this interface would read as something else.
+///
+/// `drm_mode_cursor2` carries no format and no stride, and the kernel substitutes its own for
+/// both. So an image that disagrees with them reaches the display reinterpreted while every return
+/// value stays `Ok`, which is the one failure nothing downstream can see. The two rules are stated
+/// on [`CursorImage::LEGACY_FORMAT`] and [`CursorImage::legacy_stride`], and neither is in a
+/// vendored header — both are read out of the kernel and held here by hand.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming which of the two the image breaks.
+fn layout(image: CursorImage) -> Result<()> {
+    if image.format != CursorImage::LEGACY_FORMAT {
+        return Err(Error::Unusable(format!(
+            "a cursor on the legacy interface is read as {:?}, so {:?} reaches the display \
+             reinterpreted: an unused byte becomes the alpha channel, and a zero there is a \
+             cursor nobody can see",
+            CursorImage::LEGACY_FORMAT,
+            image.format,
+        )));
+    }
+
+    let rows = CursorImage::legacy_stride(image.width);
+    if u64::from(image.stride) != rows {
+        return Err(Error::Unusable(format!(
+            "a cursor {} pixels wide is read a row every {rows} bytes on the legacy interface, \
+             and this buffer has a stride of {}, so the kernel would read it sheared",
+            image.width, image.stride,
+        )));
+    }
+
+    Ok(())
+}
+
 /// Issues one cursor request.
 ///
 /// # Errors
@@ -167,4 +206,89 @@ impl Commit for LegacyCommit {
 /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses.
 fn cursor(device: &Device, mut request: sys::drm_mode_cursor2) -> Result<()> {
     ioctl::issue(device.fd(), ioctl::MODE_CURSOR2, &mut request)
+}
+
+#[cfg(test)]
+mod tests {
+    //! The layouts this interface can carry, which is the check no device is needed for.
+
+    use super::*;
+
+    use crate::format::Format;
+
+    /// Returns an image the legacy interface reads the way it was written.
+    fn image() -> CursorImage {
+        CursorImage {
+            framebuffer: None,
+            handle: 7,
+            width: 64,
+            height: 64,
+            stride: 256,
+            format: Format::ARGB8888,
+            hotspot_x: 0,
+            hotspot_y: 0,
+        }
+    }
+
+    #[test]
+    fn a_row_of_a_legacy_cursor_is_four_bytes_a_pixel_with_no_rounding() {
+        assert_eq!(CursorImage::legacy_stride(0), 0);
+        assert_eq!(CursorImage::legacy_stride(64), 256);
+        assert_eq!(CursorImage::legacy_stride(256), 1024);
+        // Answering a `u64` leaves room for a width no buffer could have, so it is compared at
+        // its true size.
+        assert_eq!(CursorImage::legacy_stride(u32::MAX), 17_179_869_180);
+    }
+
+    #[test]
+    fn an_image_laid_out_the_way_this_interface_reads_it_is_taken() {
+        assert!(layout(image()).is_ok());
+    }
+
+    #[test]
+    fn an_image_in_another_format_is_refused_rather_than_shown_transparent() {
+        // `XRGB8888` is what everything else in this crate scans out, so this is the mistake a
+        // caller actually makes. Read as `ARGB8888`, its unused byte is the alpha channel and the
+        // cursor is invisible with every call reporting success.
+        let error = layout(CursorImage {
+            format: Format::XRGB8888,
+            ..image()
+        })
+        .expect_err("a format this interface would reinterpret is refused");
+        assert!(
+            matches!(&error, Error::Unusable(what) if what.contains("reinterpreted")),
+            "the refusal says what the kernel would do with it: {error}"
+        );
+    }
+
+    #[test]
+    fn an_image_whose_rows_the_driver_rounded_up_is_refused_rather_than_shown_sheared() {
+        // A driver rounds a dumb buffer's stride up for its own reasons, and this interface reads
+        // four bytes a pixel whatever it is told.
+        let error = layout(CursorImage {
+            stride: 512,
+            ..image()
+        })
+        .expect_err("a stride this interface would read past is refused");
+        assert!(
+            matches!(&error, Error::Unusable(what) if what.contains("sheared")),
+            "the refusal says what the kernel would do with it: {error}"
+        );
+    }
+
+    #[test]
+    fn an_image_smaller_than_the_buffer_it_sits_in_is_refused() {
+        // A 32x32 arrow allocated inside a 256x256 cursor buffer keeps the buffer's stride, and
+        // the two disagree by a factor of eight. The stride rule catches it.
+        assert!(
+            layout(CursorImage {
+                width: 32,
+                height: 32,
+                stride: 1024,
+                ..image()
+            })
+            .is_err(),
+            "an image narrower than its buffer is caught by the stride it kept"
+        );
+    }
 }
