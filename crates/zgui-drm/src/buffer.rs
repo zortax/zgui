@@ -26,7 +26,13 @@ use crate::sys;
 ///
 /// A buffer released with [`Device::destroy_dumb_buffer`] gives back its mapping and its handle.
 /// One that is dropped keeps both: the mapping until the process ends, and the handle until the
-/// device is closed. Dropping therefore leaks, and the leak ends with the process.
+/// device is closed. Dropping therefore leaks, bounded by the life of the descriptor the buffer
+/// came from.
+///
+/// A buffer exported with [`Device::export_buffer`] and imported again shares its handle with the
+/// [`ImportedBuffer`] that came back, because the kernel counts no references for a GEM handle.
+/// One of the two then releases it and the other is dropped. [`Device::import_buffer`] states the
+/// rule.
 #[derive(Debug)]
 pub struct DumbBuffer {
     /// The GEM handle the driver knows it by.
@@ -203,9 +209,14 @@ impl Device {
 
     /// Releases a dumb buffer.
     ///
-    /// Taken by value, because the handle is dead afterwards and a second release of it is an
-    /// error the type system can prevent. `device` has to be the one that allocated the buffer,
-    /// for the reason [`DumbBuffer::bytes`] gives.
+    /// Taken by value, so releasing this buffer twice is an error the type system can prevent. One
+    /// case sits outside what the types see: a buffer exported and imported again shares its handle
+    /// with the [`ImportedBuffer`] that came back, and releasing both of them closes a handle the
+    /// driver has since given to something else. [`Device::import_buffer`] states the rule that
+    /// decides which of the two owns it.
+    ///
+    /// `device` has to be the one that allocated the buffer, for the reason [`DumbBuffer::bytes`]
+    /// gives.
     ///
     /// # Errors
     ///
@@ -237,11 +248,20 @@ impl Device {
     /// Whatever imports the descriptor reaches the same pixels, so something other than the CPU
     /// can draw into a buffer this device scans out.
     ///
-    /// The descriptor carries `DRM_CLOEXEC` and `DRM_RDWR`. `DRM_CLOEXEC` keeps it out of any
-    /// process this one execs, so an exported buffer stays inside the program that exported it.
-    /// `DRM_RDWR` makes the memory writable through the descriptor, and the importer of a scanout
-    /// buffer writes a frame into it. A descriptor exported read-only stays read-only for its
-    /// whole life, so the choice belongs here.
+    /// The descriptor carries `DRM_CLOEXEC` and `DRM_RDWR`. The two flags apply to different
+    /// things, so both are asked for here.
+    ///
+    /// `DRM_CLOEXEC` belongs to this descriptor. The kernel applies it where the descriptor number
+    /// is allocated, so every export chooses it again, and it keeps an exported buffer inside the
+    /// program that exported it.
+    ///
+    /// `DRM_RDWR` belongs to the buffer. The first export of an object builds the `dma_buf` file
+    /// the driver then caches on it, and the access mode of that one file is what every later
+    /// export of the same object hands out: a second export that asks for `DRM_RDWR` still answers
+    /// with a read-only descriptor, and a `PROT_WRITE` mapping of it is refused with `EACCES`. So
+    /// whoever exports an object first settles whether it can ever be written through a
+    /// descriptor, and a scanout buffer has to be writable, because the API that imports it draws
+    /// the frame.
     ///
     /// # Errors
     ///
@@ -255,9 +275,9 @@ impl Device {
         let mut request = sys::drm_prime_handle {
             handle: buffer.handle(),
             flags: (OFlags::CLOEXEC | OFlags::RDWR).bits(),
-            // A number no descriptor has, so a driver that reports success and writes nothing
-            // here is caught by the check below. Zero is standard input, and owning that number
-            // would close standard input at the end of this export's life.
+            // A number no descriptor has, so a driver that reports success and writes nothing here
+            // is caught by the check below. Zero is a descriptor like any other, and it is usually
+            // standard input, so a zero left here would be owned and later closed.
             fd: -1,
         };
         ioctl::issue(self.fd(), ioctl::PRIME_HANDLE_TO_FD, &mut request)?;
@@ -295,8 +315,8 @@ impl Device {
     /// # Errors
     ///
     /// Returns [`Error::Ioctl`] when the driver refuses the descriptor. Memory it has no path to
-    /// is refused that way: an image on a second GPU, or a buffer in a form this driver cannot
-    /// address.
+    /// is what that looks like: an image on a second GPU, or a buffer in a form this driver cannot
+    /// address. Returns [`Error::Unusable`] when it reports success and names no handle.
     pub fn import_buffer(&self, dmabuf: BorrowedFd<'_>) -> Result<ImportedBuffer> {
         let mut request = sys::drm_prime_handle {
             handle: 0,
@@ -307,6 +327,15 @@ impl Device {
         };
         ioctl::issue(self.fd(), ioctl::PRIME_FD_TO_HANDLE, &mut request)?;
 
+        // A GEM handle is allocated from one, so zero is what a driver that reported success
+        // without writing the field leaves behind. Every later use of such a handle is refused
+        // with `EINVAL`, and this is where the reason for it is still readable.
+        if request.handle == 0 {
+            return Err(Error::Unusable(
+                "the driver imported the descriptor and named no handle".to_owned(),
+            ));
+        }
+
         Ok(ImportedBuffer {
             handle: request.handle,
         })
@@ -314,10 +343,12 @@ impl Device {
 
     /// Gives an imported buffer's handle back.
     ///
-    /// Taken by value, because the handle is dead afterwards and a second release of it is an
-    /// error the type system can prevent. The handle may be one that several imports of the same
-    /// memory all answered with, so a second release reaches a buffer another part of the program
-    /// still holds.
+    /// Taken by value, so releasing this [`ImportedBuffer`] twice is an error the type system can
+    /// prevent. The types see one value at a time, and one handle can be reached through several:
+    /// repeated imports of the same memory answer with the same handle, and a [`DumbBuffer`] this
+    /// device allocated and exported shares its handle with the import that came back. All of them
+    /// release the same handle, so the caller picks the one value that owns it and drops the rest.
+    /// [`Device::import_buffer`] states the rule.
     ///
     /// `self` has to be the device the buffer was imported through, for the reason
     /// [`DumbBuffer::bytes`] gives.

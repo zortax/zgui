@@ -13,6 +13,8 @@ mod support;
 
 use std::os::fd::AsFd;
 
+use rustix::fs::OFlags;
+use rustix::io::FdFlags;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
 
@@ -129,6 +131,13 @@ fn one_descriptor_imported_twice_names_one_handle() {
         second.handle(),
         "two imports of one descriptor name one handle"
     );
+    // Pinned to the buffer that was allocated, so that an import answering with a constant — zero
+    // included — fails here rather than agreeing with itself.
+    assert_eq!(
+        first.handle(),
+        buffer.handle(),
+        "the handle both imports name is the one the buffer was allocated under"
+    );
 
     drop(descriptor);
     // One handle, one release. The second import named the handle the first one holds, and the
@@ -138,19 +147,87 @@ fn one_descriptor_imported_twice_names_one_handle() {
         .expect("an imported handle is released");
 }
 
+#[test]
+fn an_exported_descriptor_is_closed_on_exec_and_writable() {
+    let test = "an_exported_descriptor_is_closed_on_exec_and_writable";
+    let Some(device) = support::device(test, Interface::Preferred) else {
+        return;
+    };
+    if !can_share(test, &device) {
+        return;
+    }
+
+    let buffer = device
+        .create_dumb_buffer(WIDTH, HEIGHT, Format::XRGB8888)
+        .expect("the driver allocates a dumb buffer");
+    let descriptor = device
+        .export_buffer(&buffer)
+        .expect("the driver exports a dumb buffer as a descriptor");
+
+    // `DRM_CLOEXEC` belongs to this descriptor, and it is what keeps an exported buffer out of a
+    // process the program execs. The export is the only place it can be asked for, and an
+    // `OwnedFd` says nothing about it, so this is where its absence would otherwise go unseen.
+    let flags = rustix::io::fcntl_getfd(&descriptor).expect("a descriptor reports its flags");
+    assert!(
+        flags.contains(FdFlags::CLOEXEC),
+        "an exported descriptor is closed on exec: {flags:?}"
+    );
+
+    // `DRM_RDWR` belongs to the buffer, and the first export of an object settles it for every
+    // later one. An API that draws a frame into a scanout buffer needs it, and no second export
+    // can add it, so a read-only answer here loses the zero-copy path.
+    let mode = rustix::fs::fcntl_getfl(&descriptor).expect("a descriptor reports its access mode");
+    assert_eq!(
+        mode & OFlags::ACCMODE,
+        OFlags::RDWR,
+        "an exported descriptor is writable: {mode:?}"
+    );
+
+    drop(descriptor);
+    // Nothing imported this buffer, so its handle is named by one value and released through it.
+    device
+        .destroy_dumb_buffer(buffer)
+        .expect("a dumb buffer is released");
+}
+
 /// Returns `true` if `device` can carry a buffer over a descriptor, and reports on standard error
 /// where it cannot.
 fn can_share(test: &str, device: &zgui_drm::Device) -> bool {
     if !device.supports_dumb_buffers() {
         eprintln!(
             "{test}: this device has no dumb buffers, so nothing was asserted\n\
-             add a device that has them with `sudo modprobe vkms` and name it with {}=/dev/dri/cardN",
+             add a device that has them with `sudo modprobe vkms` and name it with \
+             {}=/dev/dri/cardN",
             support::DEVICE
         );
         return false;
     }
 
-    let prime = device.capability(PRIME).unwrap_or(0);
+    // Every framebuffer below states `Modifier::LINEAR`, which raises `DRM_MODE_FB_MODIFIERS`, and
+    // a driver that reports no modifier support answers that flag with `EINVAL`. So the modifier
+    // has to be gated the same way `tests/device.rs` gates it, or the skip contract here would end
+    // in a panic on the drivers it was written for.
+    if !device.supports_format_modifiers() {
+        eprintln!(
+            "{test}: this device does not take framebuffer modifiers, so nothing was asserted\n\
+             name a device that does with {}=/dev/dri/cardN",
+            support::DEVICE
+        );
+        return false;
+    }
+
+    let prime = match device.capability(PRIME) {
+        Ok(prime) => prime,
+        Err(error) => {
+            eprintln!(
+                "{test}: this device does not answer what it can share, so nothing was \
+                 asserted: {error}\n\
+                 name a device whose driver answers `DRM_CAP_PRIME` with {}=/dev/dri/cardN",
+                support::DEVICE
+            );
+            return false;
+        }
+    };
     if prime & BOTH_DIRECTIONS != BOTH_DIRECTIONS {
         eprintln!(
             "{test}: this driver shares buffers in {prime:#x} of the two directions, so nothing \

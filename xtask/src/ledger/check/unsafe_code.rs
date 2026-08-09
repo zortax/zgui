@@ -34,7 +34,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "zgui-platform-winit",
         "the Wayland clipboard's unsafe constructor",
     ),
-    ("zgui-drm", "the ioctls, and the mapping of a dumb buffer"),
+    (
+        "zgui-drm",
+        "the ioctls, the mapping of a dumb buffer, and taking ownership of the descriptor a \
+         dma-buf export hands back",
+    ),
     (
         "zgui-evdev",
         "the ioctls, and reading an event record out of a byte buffer",
