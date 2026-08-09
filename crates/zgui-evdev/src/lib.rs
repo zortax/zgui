@@ -15,6 +15,12 @@
 //! The kernel groups everything that happened at one moment, and a reader that took a group apart
 //! would move a pointer twice for one movement.
 //!
+//! # The re-exports
+//!
+//! Every type a public method returns or takes is re-exported here, so a caller writes
+//! `zgui_evdev::Bitmap` and reaches into a module only to read about it. The modules stay public
+//! because they group what a reader is looking for.
+//!
 //! # Platform
 //!
 //! Every module is the kernel's interface or something built directly on it. On any other platform
@@ -44,11 +50,11 @@ mod ioctl;
 mod sys;
 
 #[cfg(target_os = "linux")]
-pub use crate::code::{Absolute, EventType, Key, Relative, Synchronisation};
+pub use crate::code::{Absolute, Code, EventType, Key, Relative, Synchronisation};
 #[cfg(target_os = "linux")]
-pub use crate::device::{Capabilities, Device, Role, Roles};
+pub use crate::device::{AxisRange, Bitmap, Capabilities, Device, Identity, Role, Roles};
 #[cfg(target_os = "linux")]
-pub use crate::discover::{Discovery, discover};
+pub use crate::discover::{Discovery, Skipped, discover, discover_in};
 #[cfg(target_os = "linux")]
 pub use crate::error::{Error, Result};
 #[cfg(target_os = "linux")]

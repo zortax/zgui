@@ -190,7 +190,24 @@ impl Reader {
     }
 
     /// Adds one read's worth of bytes and reports the batches they completed.
-    fn feed(&mut self, bytes: &[u8]) -> Vec<Batch> {
+    ///
+    /// [`Reader::read`] is this with a descriptor in front of it. This is the half to use when the
+    /// bytes came from somewhere else — a recorded stream, a fixture, a test of a consumer's own
+    /// event handling — because the batching does not care where the records were read.
+    ///
+    /// `bytes` need not be a whole number of records, and the batches need not be whole: what is
+    /// left over is held for the next call.
+    ///
+    /// ```
+    /// use zgui_evdev::Reader;
+    ///
+    /// let mut reader = Reader::new();
+    ///
+    /// // Half of a twenty-four byte record completes nothing, and the bytes wait for the call
+    /// // that carries the rest of it.
+    /// assert!(reader.feed(&[0; 12]).is_empty());
+    /// ```
+    pub fn feed(&mut self, bytes: &[u8]) -> Vec<Batch> {
         self.partial.extend_from_slice(bytes);
 
         let mut batches = Vec::new();

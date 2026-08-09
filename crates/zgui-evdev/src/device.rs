@@ -41,10 +41,19 @@ pub const BITMAP_LIMIT: usize = (u16::MAX as usize + 1) / 8;
 /// map is as long as the caller asked for, so a code past its end is a code the kernel had no room
 /// to report and reads as absent.
 ///
-/// `C` is what the bits mean. Bit one is `KEY_ESC` in a `Bitmap<Key>` and `REL_Y` in a
-/// `Bitmap<Relative>`, and the two are different types, so a map cannot be read against a
-/// vocabulary it was not filled from and [`Capabilities::new`] cannot be given its four maps in
-/// the wrong order.
+/// `C` says what the bits mean. Bit one is `KEY_ESC` in a `Bitmap<Key>` and `REL_Y` in a
+/// `Bitmap<Relative>`. The two are different types, so a map cannot be read against a vocabulary it
+/// was not filled from, and [`Capabilities::new`] cannot be given its four maps in the wrong order.
+///
+/// ```
+/// use zgui_evdev::{Bitmap, Key};
+///
+/// let keys = Bitmap::from_codes([Key::KEY_A, Key::BTN_LEFT]);
+///
+/// assert!(keys.contains(Key::KEY_A));
+/// assert!(!keys.contains(Key::KEY_B));
+/// assert_eq!(keys.iter().collect::<Vec<_>>(), [Key::KEY_A, Key::BTN_LEFT]);
+/// ```
 pub struct Bitmap<C> {
     /// The bits, least significant first, as the kernel wrote them.
     bits: Vec<u8>,
@@ -298,10 +307,10 @@ impl Capabilities {
         self.types.contains(kind)
     }
 
-    /// The jobs these capabilities amount to.
+    /// Returns the jobs these capabilities amount to.
     ///
-    /// Each answer is a question about the codes rather than about the types, because the types
-    /// alone put every mouse in the keyboard bucket — a mouse has `EV_KEY` for its buttons.
+    /// Each answer is a question about the codes. The types alone put every mouse among the
+    /// keyboards, because a mouse has `EV_KEY` for its buttons.
     ///
     /// - A keyboard has a code that is a key rather than a button, in any of the blocks the kernel
     ///   puts keys in. This is udev's `ID_INPUT_KEY` rule. See [`Key::is_key`].
@@ -309,6 +318,20 @@ impl Capabilities {
     ///   with a wheel on it, and there are several.
     /// - A touch device has both `ABS_X` and `ABS_Y`, or the multi-touch pair. A volume dial
     ///   reports an absolute axis too, and it is not a touchscreen.
+    ///
+    /// ```
+    /// use zgui_evdev::{Bitmap, Capabilities, EventType, Key, Relative, Role};
+    ///
+    /// let mouse = Capabilities::new(
+    ///     Bitmap::from_codes([EventType::EV_SYN, EventType::EV_KEY, EventType::EV_REL]),
+    ///     Bitmap::from_codes([Key::BTN_LEFT, Key::BTN_RIGHT]),
+    ///     Bitmap::from_codes([Relative::REL_X, Relative::REL_Y]),
+    ///     Bitmap::default(),
+    /// );
+    ///
+    /// assert_eq!(mouse.roles().iter().collect::<Vec<_>>(), [Role::Pointer]);
+    /// assert!(!mouse.roles().contains(Role::Keyboard));
+    /// ```
     pub fn roles(&self) -> Roles {
         Roles {
             keyboard: self.has(EventType::EV_KEY) && self.keys.iter().any(Key::is_key),
