@@ -14,7 +14,8 @@ use std::cell::{Cell, RefCell};
 
 use zgui_view::prelude::*;
 use zgui_view::{
-    AttrEntry, AttrName, Attrs, ClassName, ListenerOptions, PropKey, PropValue, Role, UiState,
+    AttrEntry, AttrName, Attrs, ClassName, CustomPropertyName, ListenerOptions, PropKey, PropValue,
+    Role, UiState,
 };
 use zgui_view_macro::{component, view};
 
@@ -39,6 +40,13 @@ fn Root(
         .classes_from(Classes::from("root"))
         .class_toggle(ClassName::new("busy"), false)
         .style_property("gap", Some("1rem".to_owned()))
+        // Named as the table stores it, without the `--` its declaration is written with. The
+        // caller writes the declaration and the two have to meet here, so the transcript below is
+        // what says they do.
+        .custom_property(
+            CustomPropertyName::new("brand"),
+            Some("component".to_owned()),
+        )
         .attribute(AttrName::new("data-part"), Some("root".to_owned()))
         .property(PropKey::new("value"), PropValue::Text("own".into()))
         .listener(events::CLICK, ListenerOptions::DEFAULT, |_| {})
@@ -136,9 +144,15 @@ fn the_merge_rules_match_their_golden() {
     transcript.push_str("\n# listeners accumulate, the component's first\n");
     transcript.push_str(&transcript_of(view! { Root(on:click:capture = |_| {}) }));
 
-    transcript.push_str("\n# attributes and properties are last-write-wins, caller last\n");
+    transcript.push_str(
+        "\n# attributes, custom properties and properties are last-write-wins, caller last\n",
+    );
     transcript.push_str(&transcript_of(view! {
-        Root(attr:data-part = "caller", prop:value = PropValue::Text("caller".into()))
+        Root(
+            attr:data-part = "caller",
+            var:--brand = "caller",
+            prop:value = PropValue::Text("caller".into())
+        )
     }));
 
     transcript.push_str("\n# a state a view may assert, and one it defines itself\n");

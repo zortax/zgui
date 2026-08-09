@@ -2,6 +2,7 @@
 class list: root w-full
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
@@ -11,6 +12,7 @@ a11y role=Button label=Some("component")
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
@@ -22,6 +24,7 @@ a11y role=Button label=Some("component")
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
@@ -31,6 +34,7 @@ a11y role=Link label=Some("caller")
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
@@ -40,20 +44,23 @@ a11y role=Button label=Some("caller")
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
 listener click capture=true
 a11y role=Button label=Some("component")
 
-# attributes and properties are last-write-wins, caller last
+# attributes, custom properties and properties are last-write-wins, caller last
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
 attribute data-part = Some("caller")
+custom-property brand = Some("caller")
 property value = Text("caller")
 a11y role=Button label=Some("component")
 
@@ -61,6 +68,7 @@ a11y role=Button label=Some("component")
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false
@@ -72,6 +80,7 @@ a11y role=Button label=Some("component")
 class list: root
 class-toggle busy = false
 style gap = Some("1rem")
+custom-property brand = Some("component")
 attribute data-part = Some("root")
 property value = Text("own")
 listener click capture=false

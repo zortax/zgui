@@ -361,12 +361,23 @@ fn the_spelling_this_grammar_replaced_is_not_read() {
 
 /// The element vocabulary is not a dependency of this crate, so the messages the element lowering
 /// raises have no fixture to be checked in beside; this one is asserted here in its stead.
+///
+/// Both nodes are checked because the two lowerings are separate and only one of them writes the
+/// property itself: a component call packs it into the bundle it forwards. A bundle that carried
+/// the dashes would hold an entry named `--brand`, which is stored, replayed and never found —
+/// `var(--brand)` asks for `brand`.
 #[test]
 fn a_custom_property_is_named_with_the_dashes_it_is_declared_with() {
-    let message = error("row(var:brand = \"red\")");
-    assert!(message.contains("starts with `--`"), "{message}");
-    assert!(message.contains("`var:--brand=…`"), "{message}");
-    assert!(expand("row(var:--brand = \"red\")").contains("CustomPropertyName::new(\"brand\")"));
+    for node in ["row", "Button"] {
+        let message = error(&format!("{node}(var:brand = \"red\")"));
+        assert!(message.contains("starts with `--`"), "{message}");
+        assert!(message.contains("`var:--brand=…`"), "{message}");
+        assert!(
+            expand(&format!("{node}(var:--brand = \"red\")"))
+                .contains("CustomPropertyName::new(\"brand\")"),
+            "{node}"
+        );
+    }
 }
 
 /// A keyword is sugar and nothing else, so each shape is lowered beside the call it stands for and

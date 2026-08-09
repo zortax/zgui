@@ -40,7 +40,7 @@ impl Bundle {
                 quote_spanned!(span=> .style_property(#property, #value))
             }
             Attr::CustomProperty { name, value } => {
-                let property = &name.text;
+                let property = name.custom_property()?;
                 quote_spanned!(span=>
                     .custom_property(::zgui::expansion::view::CustomPropertyName::new(#property), #value)
                 )

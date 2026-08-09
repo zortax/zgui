@@ -51,7 +51,9 @@ pub enum AttrEntry {
 /// * accessibility properties from the caller **win**, because the caller knows the context;
 /// * listeners **accumulate**: a caller's `on:click` does not replace the component's, and both
 ///   run in registration order, the component's first;
-/// * attributes and imperative properties are last-write-wins, caller-last.
+/// * attributes, custom properties and imperative properties are last-write-wins, caller-last —
+///   which is what lets a caller size or colour a component the component's own sheet reads from,
+///   `var:--zui-table-columns` on the call standing in for a declaration it has nowhere to write.
 ///
 /// ```
 /// use zgui_interned::ClassName;

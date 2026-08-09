@@ -68,4 +68,31 @@ impl Name {
             Err(_) => syn::Ident::new_raw(&self.text, self.span),
         })
     }
+
+    /// The name of a custom property, in the form the name table stores.
+    ///
+    /// An author writes the declaration — `var:--brand=…` — and the table keys on the name without
+    /// its `--`, so the prefix is dropped here. Carrying it through would intern `--brand` under
+    /// the name `--brand`, whose declaration is `----brand`, and a sheet saying `var(--brand)`
+    /// would never find what the view had written.
+    ///
+    /// This lives beside [`Name::ident`] rather than in either lowering because an element and a
+    /// component call both reach it: an element writes the property itself, a component call packs
+    /// it into the bundle it forwards, and the two have to agree on the stored spelling for a
+    /// forwarded property to name the same thing as a written one.
+    pub(crate) fn custom_property(&self) -> syn::Result<&str> {
+        self.text
+            .strip_prefix("--")
+            .filter(|rest| !rest.is_empty())
+            .ok_or_else(|| {
+                syn::Error::new(
+                    self.span,
+                    format!(
+                        "a custom property's name starts with `--`\n\n\
+                         help: write `var:--{}=…`",
+                        self.text
+                    ),
+                )
+            })
+    }
 }

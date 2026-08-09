@@ -620,6 +620,47 @@ fn a_virtualised_table_states_the_shape_its_elements_do_not_have() {
     );
 }
 
+/// The height is written on the `Table` call rather than on an element, and the sheet that reads it
+/// is the data table's own — so nothing inside the library can tell whether the two ever met. This
+/// asks the grid, under the name `max-height: var(--zui-data-table-height)` resolves.
+#[test]
+fn a_body_height_reaches_the_grid_whose_sheet_caps_it() {
+    let harness = Harness::open();
+    let source = harness.window.scope.with(|| RwSignal::new_local(rows(3)));
+    harness.mount(move || {
+        view! {
+            DataTable(
+                rows = source,
+                columns = columns(),
+                row_id = |row: &Row| row.id.to_string(),
+                label = "Rows",
+                body_height = 320.0
+            )
+        }
+    });
+
+    let grid = harness.find("zui-data-table__grid");
+    assert_eq!(
+        harness
+            .window
+            .dom
+            .tree()
+            .custom_property(grid, CustomPropertyName::new("zui-data-table-height")),
+        Some(String::from("320px")),
+    );
+    // The attribute beside it in the same call, so a failure above says the custom property was
+    // dropped rather than that the whole bundle was.
+    assert_eq!(
+        harness
+            .window
+            .dom
+            .tree()
+            .attribute(grid, zgui::view::AttrName::new("data-virtualized"))
+            .as_deref(),
+        Some("false"),
+    );
+}
+
 #[test]
 fn a_columns_width_is_changed_from_the_keyboard_and_reaches_the_track_list() {
     let harness = Harness::open();

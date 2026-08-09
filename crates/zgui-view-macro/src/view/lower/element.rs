@@ -31,7 +31,7 @@ pub(crate) fn lower(node: &Tagged) -> syn::Result<TokenStream> {
                 quote_spanned!(span=> .style_property(#property, #value))
             }
             Attr::CustomProperty { name, value } => {
-                let property = custom_property_name(name)?;
+                let property = name.custom_property()?;
                 quote_spanned!(span=>
                     .custom_property(::zgui::expansion::view::CustomPropertyName::new(#property), #value)
                 )
@@ -124,24 +124,4 @@ fn intrinsic_ident(name: &str, span: proc_macro2::Span) -> syn::Ident {
         Ok(_) => syn::Ident::new(name, span),
         Err(_) => syn::Ident::new_raw(name, span),
     }
-}
-
-/// The name of a custom property, in the form the name table stores.
-///
-/// An author writes the declaration — `var:--brand=…` — and the table keys on the name without its
-/// `--`, so the prefix is dropped here. Carrying it through would intern `--brand` under the name
-/// `--brand`, whose declaration is `----brand`, and a sheet saying `var(--brand)` would never find
-/// what the view had written.
-fn custom_property_name(name: &crate::view::attr::name::Name) -> syn::Result<String> {
-    let Some(stored) = name.text.strip_prefix("--").filter(|rest| !rest.is_empty()) else {
-        return Err(syn::Error::new(
-            name.span,
-            format!(
-                "a custom property's name starts with `--`\n\n\
-                 help: write `var:--{}=…`",
-                name.text
-            ),
-        ));
-    };
-    Ok(stored.to_owned())
 }
