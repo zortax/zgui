@@ -150,8 +150,9 @@ impl Reader {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Unusable`] when the read fails for a reason other than there being nothing
-    /// to read.
+    /// Returns [`Error::Read`] when the read fails for a reason other than there being nothing to
+    /// read, carrying the errno. A loop branches on that errno rather than on the message: see the
+    /// variant for the case that decides whether this device is worth polling again.
     pub fn read(&mut self, from: BorrowedFd<'_>) -> Result<Vec<Batch>> {
         let mut bytes = [0_u8; RECORDS * RECORD];
         let mut batches = Vec::new();
@@ -162,10 +163,13 @@ impl Reader {
                 // non-blocking descriptor. `EINTR` is a signal that arrived first. Either way
                 // nothing more is there now, and the caller asks again when it next wakes.
                 Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => break,
+                // The errno is carried rather than described. `ENODEV` — an unplugged device, or
+                // one `logind` revoked on a terminal switch — is what tells a loop to drop this
+                // device instead of polling a descriptor that is ready for ever.
                 Err(errno) => {
-                    return Err(Error::Unusable(format!(
-                        "cannot read the event stream: {errno}"
-                    )));
+                    return Err(Error::Read {
+                        source: errno.into(),
+                    });
                 }
             };
             if read == 0 {
@@ -421,6 +425,31 @@ mod tests {
         assert_eq!(batches.len(), 2, "both updates arrive in one call");
         assert_eq!(batches[0].events.len(), 2);
         assert_eq!(batches[1].events.len(), 2);
+    }
+
+    #[test]
+    fn a_failed_read_hands_back_the_errno_rather_than_a_sentence() {
+        // A loop has to tell a device that is gone from one that had a passing failure, and the
+        // only thing that says which is the errno. Reading the writing end of a pipe is a failure
+        // that needs no device: the descriptor is open for writing, so the kernel answers `EBADF`.
+        let (_reader_end, writer_end) = std::io::pipe().expect("a pipe is made");
+
+        let failure = Reader::new()
+            .read(writer_end.as_fd())
+            .expect_err("a descriptor open for writing cannot be read");
+
+        let Error::Read { source } = &failure else {
+            panic!("a read that failed is reported as one: {failure:?}");
+        };
+        assert_eq!(
+            source.raw_os_error(),
+            Some(rustix::io::Errno::BADF.raw_os_error()),
+            "the errno survives, which is what `ENODEV` has to do on a revoked device"
+        );
+        assert!(
+            std::error::Error::source(&failure).is_some(),
+            "and it is reachable through `source`, like every other failure here"
+        );
     }
 
     #[test]

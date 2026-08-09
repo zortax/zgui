@@ -442,16 +442,10 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Unusable`] when the read fails for a reason other than there being nothing
-    /// to read.
+    /// Returns [`Error::Read`] when the read fails for a reason other than there being nothing to
+    /// read. Its errno says whether this device is worth polling again: see the variant.
     pub fn read(&mut self) -> Result<Vec<Batch>> {
-        let path = &self.path;
-        self.reader
-            .read(self.fd.as_fd())
-            .map_err(|error| match error {
-                Error::Unusable(what) => Error::Unusable(format!("{}: {what}", path.display())),
-                other => other,
-            })
+        self.reader.read(self.fd.as_fd())
     }
 
     /// Returns the descriptor, for the modules that issue ioctls against it.

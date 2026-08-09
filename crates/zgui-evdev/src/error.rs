@@ -47,11 +47,23 @@ pub enum Error {
         /// Why it failed.
         source: std::io::Error,
     },
+    /// Reading a device's event stream failed.
+    ///
+    /// A loop branches on the errno, so the system's own error is carried whole. `ENODEV` is the
+    /// one that decides something: a device that was unplugged answers with it, and so does one
+    /// whose descriptor `logind` revoked on a virtual-terminal switch. Both answer every later read
+    /// the same way while `poll` reports the descriptor permanently ready, so a loop that takes it
+    /// for a passing failure spins at full rate for as long as it runs. Drop such a device and stop
+    /// polling it.
+    Read {
+        /// Why it failed. `raw_os_error` is how the case above is recognised.
+        source: std::io::Error,
+    },
     /// The request could not be built, so nothing was asked.
     ///
     /// The crate refuses here: an event type past `EV_MAX` or an axis past `ABS_MAX`, whose request
-    /// number would run into another request's range, and a length past the fourteen bits a request
-    /// number has for it.
+    /// number would run into another request's range, and a buffer longer than the fourteen bits a
+    /// request number has for its length.
     Unusable(String),
 }
 
@@ -60,6 +72,7 @@ impl fmt::Display for Error {
         match self {
             Self::Open { path, source } => write!(f, "cannot open {}: {source}", path.display()),
             Self::Ioctl { request, source } => write!(f, "{request} failed: {source}"),
+            Self::Read { source } => write!(f, "cannot read the event stream: {source}"),
             Self::Unusable(what) => write!(f, "{what}"),
         }
     }
@@ -68,7 +81,9 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Open { source, .. } | Self::Ioctl { source, .. } => Some(source),
+            Self::Open { source, .. } | Self::Ioctl { source, .. } | Self::Read { source } => {
+                Some(source)
+            }
             Self::Unusable(_) => None,
         }
     }
