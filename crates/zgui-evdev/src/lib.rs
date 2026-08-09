@@ -1,11 +1,24 @@
-//! The kernel's input interface, read through the uapi headers.
+//! The kernel's input interface: devices, capabilities and event batches.
 //!
-//! This is what libevdev is, written in Rust. It links no C. Every call into the kernel is an
-//! ioctl on a file descriptor, issued through `rustix`'s `linux_raw` backend.
+//! This is what libevdev is, written in Rust against the uapi headers. It links no C. Every call
+//! is an ioctl or a read on a file descriptor, issued through `rustix`'s `linux_raw` backend.
 //!
-//! Nothing here knows what zgui is. The crate is usable on its own, and it is tested on its own:
-//! the request numbers and the sizes they are computed from are asserted against what the kernel's
-//! own headers hold, with no device present.
+//! Nothing here knows what zgui is. The crate is usable on its own, and most of it is tested on
+//! its own: a capability bitmap and a stream of event records are data, so the classification and
+//! the batching run with no device present.
+//!
+//! # Devices
+//!
+//! `discover` opens every node under `/dev/input` that it may, and reports the rest with the
+//! reason each gave. A `Device` says what it is, what it can report, and what it just reported. It
+//! hands out its descriptor through `AsFd` so a loop can park on it, and a read answers batches.
+//! The kernel groups everything that happened at one moment, and a reader that took a group apart
+//! would move a pointer twice for one movement.
+//!
+//! # Platform
+//!
+//! Every module is the kernel's interface or something built directly on it. On any other platform
+//! this crate holds nothing at all.
 
 #![deny(missing_docs)]
 // This crate is on the unsafe ledger's allowlist for one reason: every call into the kernel is an
@@ -13,15 +26,30 @@
 // sound.
 #![allow(unsafe_code)]
 
-// Every module in this crate is the kernel's interface or something built directly on it, so on
-// any other platform the crate holds nothing at all. Each module is gated and the crate itself is
-// not, so `cargo check --workspace` passes on a machine this code could never run on.
+// Each module is gated and the crate itself is not, so `cargo check --workspace` passes on a
+// machine this code could never run on.
+#[cfg(target_os = "linux")]
+pub mod code;
+#[cfg(target_os = "linux")]
+pub mod device;
+#[cfg(target_os = "linux")]
+pub mod discover;
 #[cfg(target_os = "linux")]
 pub mod error;
+#[cfg(target_os = "linux")]
+pub mod event;
 #[cfg(target_os = "linux")]
 mod ioctl;
 #[cfg(target_os = "linux")]
 mod sys;
 
 #[cfg(target_os = "linux")]
+pub use crate::code::{Absolute, EventType, Key, Relative, Synchronisation};
+#[cfg(target_os = "linux")]
+pub use crate::device::{Capabilities, Device, Role, Roles};
+#[cfg(target_os = "linux")]
+pub use crate::discover::{Discovery, discover};
+#[cfg(target_os = "linux")]
 pub use crate::error::{Error, Result};
+#[cfg(target_os = "linux")]
+pub use crate::event::{Batch, Event, Reader};
