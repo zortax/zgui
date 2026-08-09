@@ -12,6 +12,7 @@
 
 use crate::device::Device;
 use crate::error::Result;
+use crate::format::Format;
 use crate::framebuffer::Framebuffer;
 use crate::property::ObjectKind;
 use crate::sys;
@@ -48,9 +49,9 @@ impl CursorSize {
     ///
     /// DRM core answers these two capabilities on the driver's behalf, and it substitutes 64 where
     /// a driver states no cursor extent. So the reachable `None` is a node that serves no
-    /// modesetting at all and refuses the query. Zero, and a value past a `u32`, are answers this
-    /// crate has never seen: each would otherwise become a buffer extent of zero or a truncated
-    /// one, so each takes the default too.
+    /// modesetting at all and refuses the query, and the two branches below it — zero, and a value
+    /// past a `u32` — guard answers this crate has never seen. They stay because each would
+    /// otherwise become a buffer extent of zero or a truncated one, and both are silent.
     fn from_capabilities(width: Option<u64>, height: Option<u64>) -> Self {
         fn extent(reported: Option<u64>, default: u32) -> u32 {
             reported
@@ -70,26 +71,57 @@ impl CursorSize {
 ///
 /// The two interfaces name the same buffer differently, and neither name can be derived from the
 /// other here. An atomic commit sets the cursor plane's `FB_ID`, which is a framebuffer id.
-/// `DRM_IOCTL_MODE_CURSOR2` names the GEM handle the driver allocated the buffer as, and states
-/// its extent beside it. So both travel, and the interface decides which one is read. A caller
-/// holding a dumb buffer has both already: [`DumbBuffer::handle`] and the [`Framebuffer`] that
-/// [`Device::add_framebuffer`] made from it.
+/// `DRM_IOCTL_MODE_CURSOR2` names the GEM handle the driver allocated the buffer as. So both
+/// travel, and the interface decides which one is read. A caller holding a dumb buffer has both
+/// already: [`DumbBuffer::handle`] and the [`Framebuffer`] that [`Device::add_framebuffer`] made
+/// from it.
+///
+/// # What the legacy interface substitutes
+///
+/// `drm_mode_cursor2` carries an extent and a handle. It carries no format and no stride, and the
+/// kernel fills both in for itself: it reads the buffer as [`CursorImage::LEGACY_FORMAT`], with
+/// rows of [`CursorImage::legacy_stride`] bytes. A buffer laid out any other way is *reinterpreted*
+/// rather than refused, and every call still reports success:
+///
+/// - An `XRGB8888` image — the format everything else in this crate scans out — has its unused
+///   byte read as alpha. That byte is zero, so the cursor is completely transparent, on the legacy
+///   interface only.
+/// - A driver rounds a dumb buffer's rows up for its own reasons, which [`DumbBuffer::stride`]
+///   states. Rows longer than four bytes a pixel are read sheared.
+///
+/// Neither substitution is in a vendored header; both are the kernel's `drm_mode_cursor_universal`
+/// transcribed here. So [`format`](CursorImage::format) and [`stride`](CursorImage::stride) travel
+/// with the image, and the legacy path refuses one it would misread rather than showing the
+/// result. The atomic path reads them from the framebuffer instead and takes any layout the plane
+/// advertises.
 ///
 /// [`DumbBuffer::handle`]: crate::buffer::DumbBuffer::handle
+/// [`DumbBuffer::stride`]: crate::buffer::DumbBuffer::stride
 #[derive(Debug, Clone, Copy)]
 pub struct CursorImage {
     /// The framebuffer the atomic interface scans the image out of.
-    pub framebuffer: Framebuffer,
+    ///
+    /// `None` where the caller registered none. The atomic interface refuses that, because
+    /// `FB_ID` is the only way it can name an image. A caller that drives a legacy device alone
+    /// pays for no framebuffer: `DRM_IOCTL_MODE_CURSOR2` never reads one, and registering it costs
+    /// a kernel object per image and an `ADDFB2` that fails where no plane advertises the format.
+    pub framebuffer: Option<Framebuffer>,
     /// The GEM handle the legacy interface names the same buffer by.
     pub handle: u32,
     /// How wide the image is, in pixels.
-    ///
-    /// The legacy request carries the extent and the handle and nothing else — no stride and no
-    /// format — so the buffer has to hold exactly this. Allocating at [`Device::cursor_size`] is
-    /// what keeps that true.
     pub width: u32,
     /// How tall the image is, in pixels.
     pub height: u32,
+    /// How many bytes one row of the buffer takes.
+    ///
+    /// The legacy interface reads this many bytes a row whatever it is told, so it is checked
+    /// against [`CursorImage::legacy_stride`] there rather than sent.
+    pub stride: u32,
+    /// What the buffer holds.
+    ///
+    /// The legacy interface reads [`CursorImage::LEGACY_FORMAT`] whatever it is told, so this is
+    /// checked against that there rather than sent.
+    pub format: Format,
     /// Where in the image the pointer points, in pixels right of its left edge.
     ///
     /// A position is the image's top left corner on both interfaces, so a caller puts the image at
@@ -110,6 +142,34 @@ pub struct CursorImage {
     pub hotspot_y: i32,
 }
 
+impl CursorImage {
+    /// What the legacy interface reads a cursor buffer as.
+    ///
+    /// `drm_mode_cursor2` carries no format, and this is the one the kernel puts in its place.
+    /// [`Commit::set_cursor`](crate::Commit::set_cursor) on the legacy interface refuses an image
+    /// in any other, because the result of sending one is a cursor that is wrong on the screen and
+    /// right in every return value.
+    pub const LEGACY_FORMAT: Format = Format::ARGB8888;
+
+    /// Returns how many bytes a row of a cursor `width` pixels wide takes on the legacy interface.
+    ///
+    /// Four bytes a pixel with no rounding, which is the stride the kernel puts in place of the
+    /// one `drm_mode_cursor2` does not carry. Answered as a `u64`, so that the product of a width
+    /// no buffer could have still fits.
+    ///
+    /// ```
+    /// use zgui_drm::cursor::CursorImage;
+    ///
+    /// // A driver that rounded a 60-pixel row up to 256 bytes describes a buffer the legacy
+    /// // interface reads sheared, because it reads 240 bytes a row whatever it is told.
+    /// assert_eq!(CursorImage::legacy_stride(60), 240);
+    /// assert_ne!(CursorImage::legacy_stride(60), 256);
+    /// ```
+    pub const fn legacy_stride(width: u32) -> u64 {
+        width as u64 * 4
+    }
+}
+
 /// Where a cursor goes: the CRTC that shows it, and the plane the atomic interface puts it on.
 #[derive(Debug, Clone, Copy)]
 pub struct CursorPlane {
@@ -117,11 +177,12 @@ pub struct CursorPlane {
     ///
     /// The legacy interface names this and reads nothing else about the target.
     pub crtc: u32,
-    /// The plane id, from [`Device::cursor_plane`].
+    /// The plane id, as [`Device::cursor_plane`] answered it.
     ///
-    /// Zero where the device offers no cursor plane. The atomic interface refuses that, because a
-    /// plane id is the only way it can name a cursor at all.
-    pub id: u32,
+    /// `None` where the device offers no cursor plane for this CRTC. The atomic interface refuses
+    /// that, because a plane id is the only way it can name a cursor at all. The legacy interface
+    /// names the CRTC and never reads this.
+    pub id: Option<u32>,
 }
 
 impl Device {
@@ -139,29 +200,48 @@ impl Device {
         )
     }
 
-    /// The cursor plane that can drive the CRTC at `crtc_index`, where this device has one.
+    /// Returns a cursor plane that can drive the CRTC at `crtc_index` and is not in `taken`.
     ///
-    /// `crtc_index` is a place in [`Resources::crtcs`](crate::resources::Resources::crtcs) rather
-    /// than a CRTC id, because that is what
-    /// [`Plane::possible_crtcs`](crate::resources::Plane::possible_crtcs) indexes. A device
-    /// usually carries one cursor plane per CRTC, so the mask is what tells them apart.
+    /// `crtc_index` is a place in [`Resources::crtcs`](crate::resources::Resources::crtcs),
+    /// because a place is what
+    /// [`Plane::possible_crtcs`](crate::resources::Plane::possible_crtcs) indexes.
     ///
-    /// What makes a plane a cursor plane is the value of its `type` property, which is read here
-    /// the way any other property is read.
+    /// A plane is a cursor plane when its `type` property holds the kernel's cursor value, read
+    /// here the way any other property is read.
     ///
-    /// Answers `None` where the device offers no cursor plane for that CRTC, and a caller that
-    /// gets `None` draws the pointer into the frame itself. A device opened for the legacy
-    /// interface always answers `None`: the kernel hides primary and cursor planes from a client
-    /// that did not ask for universal planes, and the legacy cursor request names the CRTC and
-    /// needs no plane.
+    /// # The planes a caller already took
+    ///
+    /// A plane's mask may name several CRTCs, and a plane drives one of them at a time: putting a
+    /// cursor on it sets its `CRTC_ID`, and the display it was on loses its cursor with nothing
+    /// reported. So a caller driving several displays hands in the ids it already assigned, and
+    /// the second display is answered `None` rather than being given a plane that would take the
+    /// first one's cursor away. A caller driving one display passes an empty slice.
+    ///
+    /// # What `None` means
+    ///
+    /// The device offers no cursor plane this CRTC can have. On the atomic interface the caller
+    /// then draws the pointer into the frame itself. Three things produce it:
+    ///
+    /// - The hardware has no cursor plane for that CRTC.
+    /// - The device was opened for the legacy interface. The kernel hides primary and cursor
+    ///   planes from a client that did not ask for universal planes, and the legacy cursor request
+    ///   names the CRTC and needs no plane.
+    /// - The driver is para-virtualised — vmwgfx, qxl, virtio, virtualbox — and this device is on
+    ///   the atomic interface. Such a driver hides its cursor plane from an atomic client that has
+    ///   not set `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`. This crate leaves that capability alone,
+    ///   because it has no way to send the hotspot those drivers then require. So an atomic client
+    ///   on a virtual machine has no hardware cursor, and this call reports that before a commit
+    ///   can fail on it.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses a read, and
     /// [`Error::Unusable`](crate::Error::Unusable) when a count kept moving under one.
-    pub fn cursor_plane(&self, crtc_index: usize) -> Result<Option<u32>> {
+    pub fn cursor_plane(&self, crtc_index: usize, taken: &[u32]) -> Result<Option<u32>> {
         for id in self.planes()? {
-            if !self.plane(id)?.drives(crtc_index) {
+            // Cheapest first: a claimed plane costs no ioctl, the mask costs two, and the
+            // properties cost one for every property the plane has.
+            if taken.contains(&id) || !self.plane(id)?.drives(crtc_index) {
                 continue;
             }
             if self.properties(id, ObjectKind::Plane)?.value("type") == Some(CURSOR_PLANE_TYPE) {
@@ -268,6 +348,26 @@ mod tests {
             Some(CURSOR_PLANE_TYPE),
             "the kernel's own name for the plane type this file transcribes, out of {named:?}"
         );
+
+        // And every plane the lookup answers with reports that value. The check is anchored to the
+        // name the kernel put beside the number, so it needs no second copy of the number itself.
+        let Ok(resources) = device.resources() else {
+            eprintln!("this device does not enumerate, so the lookup was not checked");
+            return;
+        };
+        for index in 0..resources.crtcs.len() {
+            let Ok(Some(id)) = device.cursor_plane(index, &[]) else {
+                continue;
+            };
+            assert_eq!(
+                device
+                    .properties(id, ObjectKind::Plane)
+                    .ok()
+                    .and_then(|properties| properties.value("type")),
+                cursor,
+                "plane {id} was picked as the cursor plane for the CRTC at place {index}"
+            );
+        }
     }
 
     /// Returns the `(name, value)` pairs of an enumerated property.

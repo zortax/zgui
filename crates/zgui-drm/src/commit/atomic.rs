@@ -68,6 +68,17 @@ impl Request {
         }
     }
 
+    /// Empties the commit, keeping the space its four arrays already hold.
+    ///
+    /// One request is reused this way. A cursor moves once per input event, and that path would
+    /// otherwise allocate four fresh vectors for two property values every time.
+    fn clear(&mut self) {
+        self.objects.clear();
+        self.counts.clear();
+        self.properties.clear();
+        self.values.clear();
+    }
+
     /// Hands the commit to the kernel with `flags`.
     ///
     /// # Errors
@@ -107,6 +118,17 @@ pub struct AtomicCommit {
     /// every mode change would leave a blob in the kernel until the device is closed. The blob of
     /// the mode still on screen stays here, and closing the device releases it.
     modes: HashMap<u32, u32>,
+    /// Each cursor plane's `CRTC_X` and `CRTC_Y` property ids, by plane id.
+    ///
+    /// [`AtomicCommit::move_cursor`] runs once per pointer motion. Resolving two names against a
+    /// `HashMap<String, _>` and collecting the answers into a vector every time is the only cost
+    /// that path has, and this removes it.
+    positions: HashMap<u32, (u32, u32)>,
+    /// The arrays a cursor commit is built in, kept between commits.
+    ///
+    /// A cursor commit names one object and at most ten properties, and it is issued as often as a
+    /// pointer moves. Reusing the four vectors makes a move allocate nothing.
+    scratch: Request,
 }
 
 impl AtomicCommit {
@@ -132,12 +154,33 @@ impl AtomicCommit {
         }
     }
 
+    /// Returns the id of one named property of `object`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unusable`] naming the object and the property it does not have, which is
+    /// how a device that cannot be driven atomically reports what it lacks.
+    fn property(
+        &mut self,
+        device: &Device,
+        object: u32,
+        kind: ObjectKind,
+        name: &str,
+    ) -> Result<u32> {
+        self.properties(device, object, kind)?
+            .id(name)
+            .ok_or_else(|| {
+                Error::Unusable(format!(
+                    "{kind:?} {object} has no {name} property, which an atomic commit needs"
+                ))
+            })
+    }
+
     /// Turns each named property of `object` into its id, keeping the value beside it.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Unusable`] naming the object and the first property it does not have,
-    /// which is how a device that cannot be driven atomically reports what it lacks.
+    /// Returns whatever [`AtomicCommit::property`] failed with for the first name that is absent.
     fn resolve(
         &mut self,
         device: &Device,
@@ -147,18 +190,7 @@ impl AtomicCommit {
     ) -> Result<Vec<(u32, u64)>> {
         wanted
             .iter()
-            .map(|(name, value)| {
-                let id = self
-                    .properties(device, object, kind)?
-                    .id(name)
-                    .ok_or_else(|| {
-                        Error::Unusable(format!(
-                            "{kind:?} {object} has no {name} property, which an atomic commit \
-                             needs"
-                        ))
-                    })?;
-                Ok((id, *value))
-            })
+            .map(|(name, value)| Ok((self.property(device, object, kind, name)?, *value)))
             .collect()
     }
 
@@ -169,32 +201,53 @@ impl AtomicCommit {
     /// Returns [`Error::Unusable`] when `plane` names no plane. The legacy interface addresses the
     /// CRTC and needs none; this one has no other way to name a cursor at all.
     fn cursor(plane: CursorPlane) -> Result<u32> {
-        if plane.id == 0 {
-            return Err(Error::Unusable(format!(
+        plane.id.ok_or_else(|| {
+            Error::Unusable(format!(
                 "CRTC {} has no cursor plane, so an atomic commit cannot name a cursor on it",
                 plane.crtc
-            )));
-        }
-        Ok(plane.id)
+            ))
+        })
     }
 
-    /// Commits `properties` on the cursor plane `id`.
-    ///
-    /// The commit blocks and asks for no event. A cursor update on a live CRTC is a flip, and the
-    /// kernel refuses a non-blocking commit with `EBUSY` while another one is outstanding on that
-    /// CRTC — which a pointer moved per input event would meet against the frame loop's own flips.
-    /// A blocking commit waits for that one instead, so it costs at most one refresh. Nothing
-    /// waits on a cursor, so no event is asked for.
+    /// Returns the `CRTC_X` and `CRTC_Y` property ids of a cursor plane, reading them once and
+    /// keeping them.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`] when the kernel refuses.
-    fn commit_cursor(device: &Device, id: u32, properties: &[(u32, u64)]) -> Result<()> {
-        let mut request = Request::default();
-        request.add(id, properties);
-        request.issue(device, 0)
+    /// Returns whatever [`AtomicCommit::property`] failed with.
+    fn position(&mut self, device: &Device, plane: u32) -> Result<(u32, u32)> {
+        if let Some(ids) = self.positions.get(&plane) {
+            return Ok(*ids);
+        }
+        let ids = (
+            self.property(device, plane, ObjectKind::Plane, "CRTC_X")?,
+            self.property(device, plane, ObjectKind::Plane, "CRTC_Y")?,
+        );
+        self.positions.insert(plane, ids);
+        Ok(ids)
+    }
+
+    /// Puts `properties` in the scratch commit as the properties of the plane `id`.
+    ///
+    /// The caller issues it, so that the flags a cursor commit carries stay visible where the
+    /// commit is written.
+    fn stage(&mut self, id: u32, properties: &[(u32, u64)]) {
+        self.scratch.clear();
+        self.scratch.add(id, properties);
     }
 }
+
+/// The flags every cursor commit carries: it blocks, and it asks for no event.
+///
+/// A cursor update on a live CRTC is a flip. The kernel refuses a non-blocking commit with `EBUSY`
+/// while another one is outstanding on that CRTC, and a pointer moved per input event would meet
+/// the frame loop's own flips constantly. A blocking commit waits for the outstanding one instead.
+/// Nothing waits on a cursor, so no event is asked for.
+///
+/// The waiting costs two vertical blanks: the commit waits for the outstanding flip to reach its
+/// blank, then its own `commit_tail` waits for the next. About 33 ms at 60 Hz.
+/// [`Commit::move_cursor`] states what that means for the thread that issues it.
+const CURSOR_COMMIT: u32 = 0;
 
 impl Commit for AtomicCommit {
     fn can_test(&self) -> bool {
@@ -315,6 +368,14 @@ impl Commit for AtomicCommit {
         y: i32,
     ) -> Result<()> {
         let id = Self::cursor(plane)?;
+        let framebuffer = image.framebuffer.ok_or_else(|| {
+            Error::Unusable(
+                "a cursor image for an atomic commit needs a framebuffer, because FB_ID is the \
+                 only way a plane names one"
+                    .to_owned(),
+            )
+        })?;
+
         // The hotspot is dropped here. Only `DRM_IOCTL_MODE_CURSOR2` has a field for it, and the
         // property set has no standard equivalent, so what reaches the kernel is the position
         // alone. `CursorImage::hotspot_x` states what a caller does about that.
@@ -323,7 +384,7 @@ impl Commit for AtomicCommit {
             id,
             ObjectKind::Plane,
             &[
-                ("FB_ID", u64::from(image.framebuffer.id())),
+                ("FB_ID", u64::from(framebuffer.id())),
                 ("CRTC_ID", u64::from(plane.crtc)),
                 // The destination rectangle is in whole pixels, and its position is signed.
                 ("CRTC_X", signed(x)),
@@ -338,21 +399,35 @@ impl Commit for AtomicCommit {
                 ("SRC_H", fixed_16_16(image.height)),
             ],
         )?;
-        Self::commit_cursor(device, id, &properties)
+
+        self.stage(id, &properties);
+        // The dry run this interface has and the legacy one lacks. This commit is the one that
+        // turns the cursor plane on, which is the configuration a driver is most likely to refuse
+        // — a format the plane will not take, an extent past what its hardware allows — and a
+        // refusal here leaves the display exactly as it was. A move skips the test, because it
+        // would double what every pointer motion costs.
+        //
+        // `ALLOW_MODESET` stays off. A cursor on a CRTC that is already running needs no modeset,
+        // and `drm_atomic_check_only` answers `EINVAL` for a commit that needs one while the flag
+        // is off. So a driver that wants a full modeset here refuses the update, and the caller
+        // reads the error instead of the display going down inside a pointer update.
+        self.scratch.issue(device, sys::DRM_MODE_ATOMIC_TEST_ONLY)?;
+        self.scratch.issue(device, CURSOR_COMMIT)
     }
 
     fn move_cursor(&mut self, device: &Device, plane: CursorPlane, x: i32, y: i32) -> Result<()> {
         let id = Self::cursor(plane)?;
         // Only the position. The plane keeps the framebuffer and the rectangles `set_cursor` gave
         // it, and the CRTC is in the commit because `CRTC_ID` still links the plane to it — the
-        // same rule the head of this module states for a flip.
-        let properties = self.resolve(
-            device,
-            id,
-            ObjectKind::Plane,
-            &[("CRTC_X", signed(x)), ("CRTC_Y", signed(y))],
-        )?;
-        Self::commit_cursor(device, id, &properties)
+        // same rule the head of this module states for a flip. This commit asks for no event, so
+        // the header's "at least one CRTC" rule does not apply to it: a plane that no `set_cursor`
+        // linked has no `CRTC_ID`, and the kernel accepts the commit having done nothing.
+        // `Commit::move_cursor` states that precondition.
+        //
+        // The two ids are cached and the request is reused, so this allocates nothing.
+        let (crtc_x, crtc_y) = self.position(device, id)?;
+        self.stage(id, &[(crtc_x, signed(x)), (crtc_y, signed(y))]);
+        self.scratch.issue(device, CURSOR_COMMIT)
     }
 
     fn hide_cursor(&mut self, device: &Device, plane: CursorPlane) -> Result<()> {
@@ -365,7 +440,8 @@ impl Commit for AtomicCommit {
             ObjectKind::Plane,
             &[("FB_ID", 0), ("CRTC_ID", 0)],
         )?;
-        Self::commit_cursor(device, id, &properties)
+        self.stage(id, &properties);
+        self.scratch.issue(device, CURSOR_COMMIT)
     }
 }
 

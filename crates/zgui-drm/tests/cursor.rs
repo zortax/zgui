@@ -9,13 +9,6 @@ mod support;
 use zgui_drm::device::Interface;
 use zgui_drm::property::ObjectKind;
 
-/// What the kernel numbers `DRM_PLANE_TYPE_CURSOR`.
-///
-/// Named here because `sys` is private, and because no vendored header declares it: the values of
-/// the `type` property are the kernel's `enum drm_plane_type`. A unit test inside the crate checks
-/// this number against the name the kernel puts beside it.
-const CURSOR: u64 = 2;
-
 #[test]
 fn a_device_states_a_cursor_size_a_caller_can_allocate() {
     let Some(device) = support::device(
@@ -57,7 +50,7 @@ fn a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for
     let mut found = 0;
     for (index, crtc) in resources.crtcs.iter().enumerate() {
         let Some(id) = device
-            .cursor_plane(index)
+            .cursor_plane(index, &[])
             .expect("the device answers what cursor plane it has")
         else {
             println!("CRTC {crtc} has no cursor plane");
@@ -72,13 +65,13 @@ fn a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for
              list: {:#b}",
             plane.possible_crtcs
         );
-        assert_eq!(
-            device
-                .properties(id, ObjectKind::Plane)
-                .expect("a plane's properties are readable")
-                .value("type"),
-            Some(CURSOR),
-            "the plane picked for CRTC {crtc} states that it is a cursor plane"
+        // A selection that ignored `type` would answer the primary plane, so the answer here has
+        // to be a different one. Which value means cursor is checked inside the crate, against the
+        // name the kernel puts beside it, so it is not transcribed a second time here.
+        assert_ne!(
+            Some(id),
+            support::primary_plane(&device, index),
+            "the plane picked for CRTC {crtc} is a cursor plane rather than its primary one"
         );
         println!("CRTC {crtc} has cursor plane {id}");
     }
@@ -109,7 +102,7 @@ fn a_cursor_plane_drives_only_the_crtcs_its_mask_names() {
     // are not 0, 1, 2. They never are.
     for (index, crtc) in resources.crtcs.iter().enumerate() {
         let Some(id) = device
-            .cursor_plane(index)
+            .cursor_plane(index, &[])
             .expect("the device answers what cursor plane it has")
         else {
             continue;
@@ -122,6 +115,58 @@ fn a_cursor_plane_drives_only_the_crtcs_its_mask_names() {
             mask & (1 << index),
             0,
             "cursor plane {id} for CRTC {crtc} names place {index} in the CRTC list"
+        );
+    }
+}
+
+#[test]
+fn a_cursor_plane_already_taken_is_never_handed_out_a_second_time() {
+    let Some(device) = support::device(
+        "a_cursor_plane_already_taken_is_never_handed_out_a_second_time",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    if !device.is_atomic() {
+        eprintln!("this device has no universal planes, so it lists no cursor plane");
+        return;
+    }
+
+    let resources = device.resources().expect("the device enumerates");
+    // What a caller driving several displays does: assign in order, and hand in what is gone. A
+    // plane whose mask names two CRTCs drives one of them at a time, so handing it out twice would
+    // take the first display's cursor away when the second one set its own.
+    let mut taken: Vec<u32> = Vec::new();
+    for index in 0..resources.crtcs.len() {
+        let Some(id) = device
+            .cursor_plane(index, &taken)
+            .expect("the device answers what cursor plane it has")
+        else {
+            continue;
+        };
+        assert!(
+            !taken.contains(&id),
+            "cursor plane {id} was handed out twice, and one plane shows one cursor"
+        );
+        taken.push(id);
+    }
+    println!("cursor planes assigned in order: {taken:?}");
+
+    // And the same plane asked for twice for the same CRTC answers once.
+    if let Some(first) = taken.first() {
+        let index = (0..resources.crtcs.len())
+            .find(|index| {
+                device
+                    .cursor_plane(*index, &[])
+                    .is_ok_and(|found| found == Some(*first))
+            })
+            .expect("the plane was found for some CRTC a moment ago");
+        assert_ne!(
+            device
+                .cursor_plane(index, &[*first])
+                .expect("the device answers what cursor plane it has"),
+            Some(*first),
+            "a plane named as taken is never the answer"
         );
     }
 }
@@ -144,7 +189,7 @@ fn a_cursor_plane_names_every_property_an_atomic_cursor_commit_sets() {
         .crtcs
         .iter()
         .enumerate()
-        .find_map(|(index, _)| device.cursor_plane(index).ok().flatten())
+        .find_map(|(index, _)| device.cursor_plane(index, &[]).ok().flatten())
     else {
         eprintln!("this device offers no cursor plane, so nothing was asserted");
         return;
@@ -186,7 +231,7 @@ fn a_device_opened_for_the_legacy_interface_lists_no_cursor_plane() {
     for index in 0..resources.crtcs.len() {
         assert_eq!(
             device
-                .cursor_plane(index)
+                .cursor_plane(index, &[])
                 .expect("the device answers what cursor plane it has"),
             None,
             "a legacy client is shown no cursor plane for the CRTC at place {index}"
