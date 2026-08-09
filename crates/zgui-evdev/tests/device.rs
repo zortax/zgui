@@ -9,7 +9,8 @@
 mod support;
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use zgui_evdev::device::Role;
+use rustix::fd::AsFd;
+use zgui_evdev::code::Key;
 
 #[test]
 fn a_device_opens_and_says_what_it_is() {
@@ -212,20 +213,72 @@ fn reading_a_device_that_has_nothing_to_say_waits_for_nothing() {
     }
 }
 
+/// A readable device nobody is typing on, for the tests that take one away.
+///
+/// A grab takes the device from everything else for as long as it is held, so taking the keyboard
+/// the person at the machine is using is a real cost with an easy alternative.
+///
+/// The `Keyboard` role is the wrong question to ask here, deliberately. It is udev's `ID_INPUT_KEY`
+/// and it is meant to be broad: a remote control is a keyboard under it, and so is the mouse node
+/// on the machine this was written on, which advertises `KEY_MACRO27` and its neighbours. What
+/// matters is narrower — whether the device has any key from the block a person types on, which is
+/// everything under `BTN_MISC`.
+fn grabbable(test: &str) -> Option<zgui_evdev::Device> {
+    let found = support::devices(test).into_iter().find(|device| {
+        !device
+            .capabilities()
+            .keys()
+            .iter()
+            .any(|key| key.raw() < Key::BTN_MISC.raw())
+    });
+    if found.is_none() {
+        eprintln!(
+            "{test}: every readable device on this machine has keys a person types on, and \
+             grabbing one takes it from the session, so nothing was asserted"
+        );
+    }
+    found
+}
+
+#[test]
+fn dropping_a_device_gives_its_grab_back() {
+    // `Device::drop` exists for one case, named in its own doc: a caller that duplicated the
+    // descriptor, where closing this one does not close the description the grab is held by. That
+    // case is the only reason the implementation is there, so this is the test of it.
+    let Some(mut device) = grabbable("dropping_a_device_gives_its_grab_back") else {
+        return;
+    };
+    let path = device.path().to_owned();
+
+    // `dup` shares the open file description rather than making a new one, so the kernel keeps it
+    // alive after the `Device` closes its own descriptor — and the grab with it, unless something
+    // gives it back first.
+    let duplicate = device
+        .as_fd()
+        .try_clone_to_owned()
+        .expect("the descriptor duplicates");
+    device.grab().expect("nothing else holds this device");
+    drop(device);
+
+    let mut again = zgui_evdev::Device::open(&path).expect("the device opens again");
+    let regrabbed = again.grab();
+    // The duplicate is held until here on purpose. Dropping it earlier would close the description
+    // and release the grab whatever `Device::drop` did, which is the assertion this is making.
+    drop(duplicate);
+
+    regrabbed.expect(
+        "a grab left behind by drop is a device that reaches nothing, and no later run puts it back",
+    );
+    again.release().expect("what was taken is given back");
+    println!(
+        "{}: the grab survived a dup and was released",
+        path.display()
+    );
+}
+
 #[test]
 fn a_device_can_be_grabbed_and_given_back() {
-    let mut devices = support::devices("a_device_can_be_grabbed_and_given_back");
-    // A grab takes the device away from everything else for as long as it is held, so this asks
-    // for one the person at the machine is not typing on. Grabbing their keyboard for the length
-    // of an ioctl is a real cost and an avoidable one.
-    let device = devices
-        .iter_mut()
-        .find(|device| !device.roles().contains(Role::Keyboard));
-    let Some(device) = device else {
-        eprintln!(
-            "a_device_can_be_grabbed_and_given_back: every readable device on this machine is a \
-             keyboard, and grabbing one takes it from the session, so nothing was asserted"
-        );
+    let Some(mut device) = grabbable("a_device_can_be_grabbed_and_given_back") else {
         return;
     };
 
