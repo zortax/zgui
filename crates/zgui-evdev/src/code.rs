@@ -11,15 +11,53 @@
 //! source, a `libinput` log or an `evtest` dump is the same word here. The numbers come from the
 //! vendored header through `sys`, so no value in this file is transcribed.
 
+/// A code the kernel numbers, and the vocabulary it is drawn from.
+///
+/// Every code type in this module implements it and nothing else does. It lets a *set* of codes
+/// say which vocabulary it holds: [`Bitmap<C>`](crate::device::Bitmap) is the set, and `C` stops a
+/// map of relative axes being read as a map of keys. See [`Bitmap`](crate::device::Bitmap) for a
+/// worked example.
+pub trait Code: Copy {
+    /// The event type these codes arrive under.
+    ///
+    /// [`EventType`]'s own is `EV_SYN`, which is the kernel's own arrangement: `EVIOCGBIT(0, len)`
+    /// asks which event types a device has at all, packed into the slot `EV_SYN` would occupy.
+    const KIND: EventType;
+
+    /// How many codes of this vocabulary the kernel names.
+    ///
+    /// A bitmap of them is this many bits, so it is also how much of one to ask a device for.
+    const COUNT: u16;
+
+    /// The code the kernel numbers `raw`.
+    fn new(raw: u16) -> Self;
+
+    /// The kernel's number for this code.
+    fn raw(self) -> u16;
+}
+
 /// Declares a code type and the kernel constants that belong to it.
 macro_rules! codes {
     (
         $(#[$doc:meta])*
-        $name:ident { $($code:ident),* $(,)? }
+        $name:ident, kind = $kind:expr, count = $count:expr; { $($code:ident),* $(,)? }
     ) => {
         $(#[$doc])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(u16);
+
+        impl Code for $name {
+            const KIND: EventType = $kind;
+            const COUNT: u16 = $count as u16;
+
+            fn new(raw: u16) -> Self {
+                Self(raw)
+            }
+
+            fn raw(self) -> u16 {
+                self.0
+            }
+        }
 
         impl $name {
             $(
@@ -54,7 +92,7 @@ codes! {
     ///
     /// A device reports the types it emits, and a code is read against the type it arrived
     /// under.
-    EventType {
+    EventType, kind = EventType::EV_SYN, count = crate::sys::EV_CNT; {
         EV_SYN, EV_KEY, EV_REL, EV_ABS, EV_MSC, EV_SW, EV_LED, EV_SND, EV_REP, EV_FF, EV_PWR,
         EV_FF_STATUS,
     }
@@ -66,7 +104,7 @@ codes! {
     /// [`Synchronisation::SYN_REPORT`] ends a batch: everything before it happened at once.
     /// [`Synchronisation::SYN_DROPPED`] says the kernel's queue overflowed and the events
     /// around it are incomplete.
-    Synchronisation {
+    Synchronisation, kind = EventType::EV_SYN, count = crate::sys::SYN_CNT; {
         SYN_REPORT, SYN_CONFIG, SYN_MT_REPORT, SYN_DROPPED,
     }
 }
@@ -75,10 +113,10 @@ codes! {
     /// A key or a button.
     ///
     /// The kernel gives both one code space, in blocks. Everything under `BTN_MISC` is a key a
-    /// keyboard has; the buttons follow it; and behind those the kernel added more keys, so the
-    /// space is not one boundary with keys on one side. [`Key::is_keyboard_key`] is the first
-    /// block, which is what tells a keyboard from a mouse.
-    Key {
+    /// keyboard has; the buttons follow it; and behind those the kernel added more keys, so no
+    /// single boundary divides the space. [`Key::is_keyboard_key`] is the first block, and it
+    /// tells a keyboard from a mouse.
+    Key, kind = EventType::EV_KEY, count = crate::sys::KEY_CNT; {
         KEY_RESERVED, KEY_ESC, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
         KEY_0, KEY_MINUS, KEY_EQUAL, KEY_BACKSPACE, KEY_TAB, KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T,
         KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P, KEY_LEFTBRACE, KEY_RIGHTBRACE, KEY_ENTER,
@@ -193,7 +231,7 @@ codes! {
     /// An axis that reports a change.
     ///
     /// A mouse says how far it moved, never where it is.
-    Relative {
+    Relative, kind = EventType::EV_REL, count = crate::sys::REL_CNT; {
         REL_X, REL_Y, REL_Z, REL_RX, REL_RY, REL_RZ, REL_HWHEEL, REL_DIAL, REL_WHEEL, REL_MISC,
         REL_RESERVED, REL_WHEEL_HI_RES, REL_HWHEEL_HI_RES,
     }
@@ -204,7 +242,7 @@ codes! {
     ///
     /// A touchscreen, a tablet and a joystick say where they are, inside a range the
     /// device reports through `EVIOCGABS`.
-    Absolute {
+    Absolute, kind = EventType::EV_ABS, count = crate::sys::ABS_CNT; {
         ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_THROTTLE, ABS_RUDDER, ABS_WHEEL,
         ABS_GAS, ABS_BRAKE, ABS_HAT0X, ABS_HAT0Y, ABS_HAT1X, ABS_HAT1Y, ABS_HAT2X, ABS_HAT2Y,
         ABS_HAT3X, ABS_HAT3Y, ABS_PRESSURE, ABS_DISTANCE, ABS_TILT_X, ABS_TILT_Y, ABS_TOOL_WIDTH,

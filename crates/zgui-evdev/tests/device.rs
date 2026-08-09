@@ -9,7 +9,6 @@
 mod support;
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use zgui_evdev::code::Absolute;
 use zgui_evdev::device::Role;
 
 #[test]
@@ -104,8 +103,7 @@ fn an_absolute_axis_reports_the_range_it_moves_over() {
     }
 
     for device in with_axes {
-        for code in device.capabilities().absolute().iter() {
-            let axis = Absolute::new(code);
+        for axis in device.capabilities().absolute().iter() {
             let range = device
                 .axis(axis)
                 .expect("a device answers for an axis it says it has");
@@ -145,7 +143,7 @@ fn a_device_says_which_keys_are_held_down() {
         for code in held.iter() {
             assert!(
                 device.capabilities().keys().contains(code),
-                "{} reports {code} held, and says it has no such key",
+                "{} reports {code:?} held, and says it has no such key",
                 device.path().display()
             );
         }
