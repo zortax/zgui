@@ -6,8 +6,8 @@ use std::slice;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
-use crate::library::{Library, XkbKeymap};
-use crate::state::State;
+use crate::library::{Library, MOD_INVALID, XkbKeymap};
+use crate::state::{MODIFIERS, NAMED, State};
 
 /// How far an xkb key code sits above the kernel's.
 ///
@@ -27,13 +27,25 @@ pub const EVDEV_OFFSET: u32 = 8;
 /// The offset lives in the constructors. A code from the kernel goes through
 /// [`Keycode::from_evdev`], which applies it; a code that already carries it goes through
 /// [`Keycode::from_raw`], which does not. Both are named for what they take, so a call site says
-/// which numbering it holds. Neither checks: a kernel code handed to [`Keycode::from_raw`] names
-/// the key eight positions earlier.
+/// which numbering it holds. Neither checks: [`Keycode::from_raw`] accepts a kernel code, and the
+/// keymap then answers for the key eight positions earlier.
+///
+/// ```
+/// use zgui_xkb::Keycode;
+///
+/// let a = Keycode::from_evdev(30);
+///
+/// assert_eq!(a.raw(), 38);
+/// assert_eq!(a.to_evdev(), Some(30));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Keycode(u32);
 
 impl Keycode {
     /// Returns the xkb code for a kernel key code, such as `KEY_A`, which is 30.
+    ///
+    /// This is the constructor an evdev event uses. It is the only one that applies
+    /// [`EVDEV_OFFSET`].
     pub const fn from_evdev(code: u16) -> Self {
         Self(code as u32 + EVDEV_OFFSET)
     }
@@ -41,7 +53,8 @@ impl Keycode {
     /// Returns the code as libxkbcommon already numbers it.
     ///
     /// This is for a caller that reads codes out of a keymap or out of a protocol that carries xkb
-    /// numbering. A code from the kernel goes through [`Keycode::from_evdev`].
+    /// numbering. A code from the kernel goes through [`Keycode::from_evdev`] instead. Handed to
+    /// this constructor, it names the key eight positions earlier, so `KEY_A` types `u`.
     pub const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
@@ -116,13 +129,24 @@ impl fmt::Debug for Keysym {
 /// Which of a keymap's layouts a key is read in.
 ///
 /// A keymap can hold several — `de,us` is two — and which one is active is state rather than
-/// layout, so [`crate::State::layout`] is what answers it for a key.
+/// layout, so [`crate::State::layout`] answers it for a key.
+///
+/// ```
+/// use zgui_xkb::Layout;
+///
+/// assert_eq!(Layout::FIRST.raw(), 0);
+/// assert!(Layout::FIRST.is_valid());
+/// assert!(!Layout::INVALID.is_valid());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Layout(u32);
 
 impl Layout {
     /// The first layout, which is the only one on a keyboard set to one.
     pub const FIRST: Self = Self(0);
+
+    /// `XKB_LAYOUT_INVALID`, which stands for a key the keymap has no layout for.
+    pub const INVALID: Self = Self(0xffff_ffff);
 
     /// Returns the layout at this index.
     pub const fn from_raw(raw: u32) -> Self {
@@ -132,6 +156,13 @@ impl Layout {
     /// Returns the index libxkbcommon uses.
     pub const fn raw(self) -> u32 {
         self.0
+    }
+
+    /// Returns `true` if this names a layout of the keymap.
+    ///
+    /// [`Layout::INVALID`] stands for a key the keymap has no layout for.
+    pub const fn is_valid(self) -> bool {
+        self.0 != Self::INVALID.0
     }
 }
 
@@ -150,7 +181,7 @@ impl Layout {
 pub struct Level(u32);
 
 impl Level {
-    /// The key with nothing held: the letter printed on it.
+    /// The key with nothing held: the symbol printed on it.
     pub const UNMODIFIED: Self = Self(0);
 
     /// Returns the level at this index.
@@ -196,20 +227,28 @@ impl Keymap {
         Self { library, handle }
     }
 
-    /// Makes the state that is fed key transitions.
+    /// Creates the state that is fed key transitions.
+    ///
+    /// The modifiers this crate names are resolved to their indices here, once. The state then
+    /// asks for them by index, which costs one call each. Asking by name costs a scan of the
+    /// keymap's modifier table for every modifier on every key press, and a caller reads the
+    /// modifiers on every key press.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Refused`] when the state cannot be built, which is an allocation failure
-    /// and nothing else.
+    /// Returns [`Error::Refused`] when the state cannot be built.
     pub fn state(&self) -> Result<State> {
         // SAFETY: the symbol is `xkb_state_new`. The keymap is live, and the state that comes back
         // is owned by the caller and takes its own reference on the keymap.
-        let handle = unsafe { (self.library.symbols.state_new)(self.handle.as_ptr()) };
+        let handle = unsafe { (self.library.symbols.core.state_new)(self.handle.as_ptr()) };
         let handle = NonNull::new(handle).ok_or(Error::Refused {
             what: "xkb_state_new",
         })?;
-        Ok(State::new(Arc::clone(&self.library), handle))
+        Ok(State::new(
+            Arc::clone(&self.library),
+            handle,
+            self.modifier_indices(),
+        ))
     }
 
     /// Returns `true` if holding this key repeats it.
@@ -219,7 +258,9 @@ impl Keymap {
     pub fn key_repeats(&self, key: Keycode) -> bool {
         // SAFETY: the symbol is `xkb_keymap_key_repeats`, which reads the keymap and answers one
         // or zero. A code the keymap has no key for answers zero.
-        unsafe { (self.library.symbols.keymap_key_repeats)(self.handle.as_ptr(), key.raw()) == 1 }
+        unsafe {
+            (self.library.symbols.core.keymap_key_repeats)(self.handle.as_ptr(), key.raw()) == 1
+        }
     }
 
     /// Returns the keysyms a key carries at one level of one layout, with no state involved.
@@ -229,13 +270,16 @@ impl Keymap {
     /// with does. [`Keymap::unmodified_sym`] is the one-symbol case.
     ///
     /// The slice belongs to the keymap. A key with nothing at that level answers an empty one.
+    ///
+    /// libxkbcommon brings a layout past the last one back into range rather than refusing it,
+    /// exactly as [`crate::State::layout`] does. A keymap with one layout therefore answers layout
+    /// zero for every index, and a wrong index is found by nothing here.
     pub fn syms_at_level(&self, key: Keycode, layout: Layout, level: Level) -> &[Keysym] {
         let mut syms: *const u32 = std::ptr::null();
         // SAFETY: the symbol is `xkb_keymap_key_get_syms_by_level`. It writes a pointer to an array
-        // the keymap owns into `syms` and answers how long the array is. A layout past the last one
-        // is brought back into range by the library rather than refused.
+        // the keymap owns into `syms` and answers how long the array is.
         let count = unsafe {
-            (self.library.symbols.keymap_key_get_syms_by_level)(
+            (self.library.symbols.core.keymap_key_get_syms_by_level)(
                 self.handle.as_ptr(),
                 key.raw(),
                 layout.raw(),
@@ -260,12 +304,35 @@ impl Keymap {
     /// Returns the one keysym a key carries with nothing held.
     ///
     /// This is the symbol printed on the key: `XKB_KEY_a` for the key marked `A` on a Latin
-    /// layout, whatever is held while it is pressed. A shortcut is written against it, so that
+    /// layout, whatever is held while it is pressed. A shortcut table is keyed by it, so that
     /// `Ctrl+A` and `Shift+A` both find the same entry.
+    ///
+    /// The level is always zero. libxkbcommon can also answer which modifiers a key press
+    /// consumed, and match a shortcut against what is left; that rule is fuller and costs a second
+    /// reading of every press, and this crate offers the simpler one.
     pub fn unmodified_sym(&self, key: Keycode, layout: Layout) -> Option<Keysym> {
         self.syms_at_level(key, layout, Level::UNMODIFIED)
             .first()
             .copied()
+    }
+
+    /// Returns where each modifier this crate names sits in the keymap's own table.
+    ///
+    /// A keymap that does not name one answers `XKB_MOD_INVALID`, which becomes nothing here: a
+    /// keymap with no `Mod2` has no num lock, and that reads the same way num lock being off
+    /// reads.
+    fn modifier_indices(&self) -> [Option<u32>; MODIFIERS] {
+        NAMED.map(|(name, _, _)| {
+            // SAFETY: the symbol is `xkb_keymap_mod_get_index`. The keymap is live and the name is
+            // a static C string.
+            let index = unsafe {
+                (self.library.symbols.core.keymap_mod_get_index)(
+                    self.handle.as_ptr(),
+                    name.as_ptr(),
+                )
+            };
+            (index != MOD_INVALID).then_some(index)
+        })
     }
 }
 
@@ -276,7 +343,7 @@ impl Drop for Keymap {
     fn drop(&mut self) {
         // SAFETY: the symbol is `xkb_keymap_unref`, and this is the reference taken by
         // `xkb_keymap_new_from_names`. Nothing here holds another, so it is dropped exactly once.
-        unsafe { (self.library.symbols.keymap_unref)(self.handle.as_ptr()) }
+        unsafe { (self.library.symbols.core.keymap_unref)(self.handle.as_ptr()) }
     }
 }
 
@@ -321,5 +388,12 @@ mod tests {
         assert!(Keysym::from_raw(0).is_none());
         assert!(!Keysym::from_raw(0x0061).is_none());
         assert_eq!(format!("{:?}", Keysym::from_raw(0x0061)), "Keysym(0x0061)");
+    }
+
+    #[test]
+    fn the_layout_of_a_key_the_keymap_lacks_is_no_layout() {
+        assert!(!Layout::INVALID.is_valid());
+        assert!(Layout::FIRST.is_valid());
+        assert!(Layout::from_raw(1).is_valid());
     }
 }

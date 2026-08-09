@@ -6,7 +6,8 @@
 //!
 //! The sequences live in the X11 locale data, which ships apart from the keyboard data. So a
 //! machine that compiles every keymap can still hold no compose file, and
-//! [`crate::Context::compose_table`] answers [`crate::Error::Compose`] there.
+//! [`crate::Context::compose_table`] answers [`crate::Error::Compose`] there. A library with no
+//! compose interface at all answers [`crate::Error::Symbol`] and costs a keyboard nothing else.
 //!
 //! Every keysym a press produces is fed here first. While [`Status::Composing`] holds, the press
 //! produced nothing a caller should show. [`Status::Composed`] replaces what the key would have
@@ -19,7 +20,7 @@ use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::keymap::Keysym;
-use crate::library::{Library, NO_FLAGS, XkbComposeState, XkbComposeTable, read_text};
+use crate::library::{Compose, Library, NO_FLAGS, XkbComposeState, XkbComposeTable, read_text};
 
 /// Returns the locale a session composes in, as libxkbcommon's own callers read it.
 ///
@@ -118,16 +119,29 @@ impl Status {
 /// ```
 #[derive(Debug)]
 pub struct ComposeTable {
-    /// The library every call goes through.
+    /// The library every call goes through, held so that the mapping outlives this.
     library: Arc<Library>,
+    /// The compose half of the interface, resolved when the table was compiled.
+    symbols: Compose,
     /// The table itself.
     handle: NonNull<XkbComposeTable>,
 }
 
 impl ComposeTable {
     /// Takes ownership of a compiled table.
-    pub(crate) fn new(library: Arc<Library>, handle: NonNull<XkbComposeTable>) -> Self {
-        Self { library, handle }
+    ///
+    /// The symbols are copied in rather than looked up again. A table exists only because the
+    /// whole group resolved, so nothing below here has an absent symbol to answer for.
+    pub(crate) fn new(
+        library: Arc<Library>,
+        symbols: Compose,
+        handle: NonNull<XkbComposeTable>,
+    ) -> Self {
+        Self {
+            library,
+            symbols,
+            handle,
+        }
     }
 
     /// Creates the sequence machine that keysyms are fed to.
@@ -139,13 +153,13 @@ impl ComposeTable {
     pub fn state(&self) -> Result<ComposeState> {
         // SAFETY: the symbol is `xkb_compose_state_new`. The table is live, and the state that
         // comes back is owned by the caller and takes its own reference on the table.
-        let handle =
-            unsafe { (self.library.symbols.compose_state_new)(self.handle.as_ptr(), NO_FLAGS) };
+        let handle = unsafe { (self.symbols.state_new)(self.handle.as_ptr(), NO_FLAGS) };
         let handle = NonNull::new(handle).ok_or(Error::Refused {
             what: "xkb_compose_state_new",
         })?;
         Ok(ComposeState {
-            library: Arc::clone(&self.library),
+            _library: Arc::clone(&self.library),
+            symbols: self.symbols,
             handle,
         })
     }
@@ -159,7 +173,7 @@ impl Drop for ComposeTable {
         // SAFETY: the symbol is `xkb_compose_table_unref`, and this is the reference taken by
         // `xkb_compose_table_new_from_locale`. Nothing here holds another, so it is dropped
         // exactly once.
-        unsafe { (self.library.symbols.compose_table_unref)(self.handle.as_ptr()) }
+        unsafe { (self.symbols.table_unref)(self.handle.as_ptr()) }
     }
 }
 
@@ -169,8 +183,11 @@ impl Drop for ComposeTable {
 /// begun on one keyboard is not continued by a key on another.
 #[derive(Debug)]
 pub struct ComposeState {
-    /// The library every call goes through.
-    library: Arc<Library>,
+    /// The open shared object, held and never read: every address this calls points inside it, so
+    /// the mapping has to outlive this state.
+    _library: Arc<Library>,
+    /// The compose half of the interface.
+    symbols: Compose,
     /// The state itself.
     handle: NonNull<XkbComposeState>,
 }
@@ -183,15 +200,14 @@ impl ComposeState {
     pub fn feed(&mut self, sym: Keysym) -> Feed {
         // SAFETY: the symbol is `xkb_compose_state_feed`, which advances the state and answers
         // whether the keysym meant anything. Any number is a keysym, so there is nothing to check.
-        let raw =
-            unsafe { (self.library.symbols.compose_state_feed)(self.handle.as_ptr(), sym.raw()) };
+        let raw = unsafe { (self.symbols.state_feed)(self.handle.as_ptr(), sym.raw()) };
         Feed::from_raw(raw)
     }
 
     /// Returns where the sequence has got to.
     pub fn status(&self) -> Status {
         // SAFETY: the symbol is `xkb_compose_state_get_status`, which reads the state.
-        let raw = unsafe { (self.library.symbols.compose_state_get_status)(self.handle.as_ptr()) };
+        let raw = unsafe { (self.symbols.state_get_status)(self.handle.as_ptr()) };
         Status::from_raw(raw)
     }
 
@@ -204,9 +220,7 @@ impl ComposeState {
             // SAFETY: the symbol is `xkb_compose_state_get_utf8`, which writes into `buffer` up to
             // `size` bytes and answers how many the whole string needs. `read_text` passes the
             // buffer it owns and the length of that buffer.
-            unsafe {
-                (self.library.symbols.compose_state_get_utf8)(self.handle.as_ptr(), buffer, size)
-            }
+            unsafe { (self.symbols.state_get_utf8)(self.handle.as_ptr(), buffer, size) }
         })
     }
 
@@ -216,7 +230,7 @@ impl ComposeState {
     /// that produced text with no single keysym behind it.
     pub fn sym(&self) -> Option<Keysym> {
         // SAFETY: the symbol is `xkb_compose_state_get_one_sym`, which reads the state.
-        let raw = unsafe { (self.library.symbols.compose_state_get_one_sym)(self.handle.as_ptr()) };
+        let raw = unsafe { (self.symbols.state_get_one_sym)(self.handle.as_ptr()) };
         Some(Keysym::from_raw(raw)).filter(|sym| !sym.is_none())
     }
 
@@ -227,7 +241,7 @@ impl ComposeState {
     pub fn reset(&mut self) {
         // SAFETY: the symbol is `xkb_compose_state_reset`, which returns the state to
         // `XKB_COMPOSE_NOTHING` and discards the sequence.
-        unsafe { (self.library.symbols.compose_state_reset)(self.handle.as_ptr()) }
+        unsafe { (self.symbols.state_reset)(self.handle.as_ptr()) }
     }
 }
 
@@ -238,7 +252,7 @@ impl Drop for ComposeState {
     fn drop(&mut self) {
         // SAFETY: the symbol is `xkb_compose_state_unref`, and this is the reference taken by
         // `xkb_compose_state_new`. Nothing here holds another, so it is dropped exactly once.
-        unsafe { (self.library.symbols.compose_state_unref)(self.handle.as_ptr()) }
+        unsafe { (self.symbols.state_unref)(self.handle.as_ptr()) }
     }
 }
 
