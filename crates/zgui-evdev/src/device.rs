@@ -570,14 +570,25 @@ impl AsFd for Device {
 fn read_name(fd: BorrowedFd<'_>) -> Result<String> {
     let mut bytes = [0_u8; NAME_LIMIT];
     let written = ioctl::issue_bytes(fd, ioctl::name(), &mut bytes)?;
-    let written = written.min(NAME_LIMIT);
-    // The kernel counts the terminator in what it wrote, and a driver may write a shorter string
-    // than it claims, so the name ends at the first zero either way.
-    let text = &bytes[..written];
-    let end = text.iter().position(|byte| *byte == 0).unwrap_or(written);
-    // A name that is not UTF-8 is a device with an odd descriptor rather than a device to refuse:
-    // it still reports keys. The replacement character says so where a person reads it.
-    Ok(String::from_utf8_lossy(&text[..end]).into_owned())
+    Ok(name_from(&bytes[..written.min(NAME_LIMIT)]))
+}
+
+/// Returns the name held in what `EVIOCGNAME` wrote.
+///
+/// Three rules:
+///
+/// - The kernel counts the terminator in the length it reports, so the bytes it wrote are one
+///   longer than the name.
+/// - A driver may write a shorter string than the length says, so the name ends at the first zero
+///   whatever the length was.
+/// - A name that is not UTF-8 is kept. Such a device still reports keys, and dropping it would lose
+///   a working one. The replacement character says what happened where a person reads it.
+fn name_from(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 /// Asks the device what the hardware says it is.
@@ -652,6 +663,37 @@ mod tests {
             Bitmap::from_codes(relative.iter().copied()),
             Bitmap::from_codes(absolute.iter().copied()),
         )
+    }
+
+    #[test]
+    fn a_name_ends_at_the_terminator_the_kernel_counted() {
+        // The kernel reports the length including the zero, so what it wrote is one longer than
+        // the name. Keeping the terminator would put a NUL in the middle of every log line.
+        assert_eq!(name_from(b"Razer BlackWidow\0"), "Razer BlackWidow");
+    }
+
+    #[test]
+    fn a_name_ends_at_the_first_zero_whatever_the_length_said() {
+        // A driver may write a shorter string than the length it reports, and the bytes behind it
+        // are whatever was in the buffer. No device here does that, so this is the case only a
+        // written-out test reaches.
+        assert_eq!(name_from(b"Trackball\0\0\0junk\0"), "Trackball");
+    }
+
+    #[test]
+    fn a_name_with_no_terminator_at_all_is_the_whole_of_what_was_written() {
+        // The kernel truncates to the buffer it was given, so a name longer than the buffer
+        // arrives with no room left for the zero.
+        assert_eq!(name_from(b"a name that filled it"), "a name that filled it");
+        assert_eq!(name_from(b""), "");
+    }
+
+    #[test]
+    fn a_name_that_is_not_text_is_kept_rather_than_refused() {
+        // The device still reports keys. Refusing it over its descriptor string would lose a
+        // working device, and the replacement character says what happened where a person reads
+        // it.
+        assert_eq!(name_from(b"caf\xff\0"), "caf\u{fffd}");
     }
 
     #[test]
