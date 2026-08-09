@@ -293,10 +293,10 @@ fn drive(
                     }
                 } else {
                     // The whole frame is what carries the pointer here, so the picture under it
-                    // has to be drawn again. `settled` is what stops this asking every turn for
+                    // has to be drawn again. `asked_for` is what stops this asking every turn for
                     // the rest of the program.
                     drawn.request_redraw();
-                    cursor.settled();
+                    cursor.asked_for();
                 }
             }
 

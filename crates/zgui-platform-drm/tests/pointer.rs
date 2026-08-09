@@ -204,11 +204,22 @@ fn a_display_reports_which_of_the_two_cursor_paths_it_takes() {
             .commit(&device, &mut *commit)
             .expect("a move keeps the image the plane already has");
 
+        // The corner, which is the one position this backend claims about the kernel rather than
+        // about itself: a cursor is placed by its top left corner, so a pointer at (0, 0) commits
+        // a negative coordinate. A refused commit takes this display off the plane for the rest of
+        // the program, and every later frame carries the pointer drawn into it.
+        cursor.place(Some((0, 0)));
+        cursor.commit(&device, &mut *commit).expect(
+            "a pointer at the corner of a display is a negative coordinate, and both \
+                     interfaces take one",
+        );
+        assert!(cursor.on_a_plane(), "and the display kept its plane");
+
         cursor.set_style(CursorStyle::None);
         cursor
             .commit(&device, &mut *commit)
             .expect("and the plane can be turned off again");
-        println!("an image was put on the plane, moved and taken off again");
+        println!("an image was put on the plane, moved to its corner and taken off again");
     } else {
         eprintln!(
             "{test}: this display has no cursor plane, so no commit was exercised; every \

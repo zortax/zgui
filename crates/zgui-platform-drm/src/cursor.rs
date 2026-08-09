@@ -27,6 +27,12 @@
 //! three places, so compositing a cursor into a frame reads the alpha and copies the other three
 //! bytes rather than converting anything.
 //!
+//! **Nothing in this crate can check that order.** Every pixel drawn here is white, black or
+//! clear, so exchanging the blue and the red byte changes no test and no picture. What the order
+//! is for is the day a shape has a colour in it, and until then it is stated rather than checked.
+//! The format itself is checked: `zgui-drm` refuses an image whose format is not the one the
+//! legacy request reads, which is the substitution that turns a cursor invisible.
+//!
 //! # The two ways a cursor reaches a screen
 //!
 //! **A plane.** The display engine composites the image, and moving it is two numbers, so a pointer
@@ -474,6 +480,20 @@ struct Held {
     framebuffer: Option<Framebuffer>,
 }
 
+/// What putting a cursor on its plane would take.
+///
+/// Three, because the two interfaces both charge differently for them: an image is a whole buffer
+/// and a position, a move is two numbers, and taking the cursor off is neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Plan {
+    /// Take the cursor off the plane, because there is nothing to show.
+    Hide,
+    /// Move the image the plane already holds to this corner.
+    Move(i32, i32),
+    /// Put this style's image on the plane, at this corner.
+    Set(CursorStyle, i32, i32),
+}
+
 /// The cursor on one display.
 ///
 /// Both halves of this backend read it. The frame loop decides what it looks like and where it is;
@@ -496,8 +516,13 @@ pub struct Cursor {
     style: CursorStyle,
     /// Where the pointer is on this display, in device pixels, while it is on this one.
     at: Option<(i32, i32)>,
-    /// The style on the screen and the corner it was put at, so that nothing is committed twice.
-    shown: Option<(CursorStyle, (i32, i32))>,
+    /// The style and corner this cursor was last *asked* to take, so that nothing is asked twice.
+    ///
+    /// Asked rather than shown, and the two differ on one of the two paths. A commit blocks until
+    /// the kernel has applied it, so on a plane this is what is on the screen. On the fallback it
+    /// is a frame that was requested and may not arrive: [`Cursor::asked_for`] says which of the
+    /// two ways that happens repairs itself.
+    asked: Option<(CursorStyle, (i32, i32))>,
 }
 
 impl Cursor {
@@ -529,23 +554,22 @@ impl Cursor {
         } else {
             None
         };
-        if let Some(id) = id {
-            taken.push(id);
-        }
-
         let plane = CursorPlane {
             crtc: output.pipe.crtc,
             id,
         };
-        let hardware = !device.is_atomic() || id.is_some();
-        let held = hardware.then(|| allocate(device, size)).flatten();
-        if hardware && held.is_none() {
+        // The legacy interface has a cursor and no plane object, so its request is tried and a
+        // refusal says the CRTC has none. `Cursor::commit` is where that answer arrives.
+        let offered = !device.is_atomic() || id.is_some();
+        let held = offered.then(|| allocate(device, size)).flatten();
+        if offered && held.is_none() {
             warn!(
                 "CRTC {} has a cursor plane and no buffer to put on it, so the pointer is drawn \
                  into the frame instead",
                 output.pipe.crtc
             );
         }
+        taken.extend(reserved(id, held.is_some()));
         Self {
             plane,
             hardware: held.is_some(),
@@ -553,7 +577,7 @@ impl Cursor {
             image: Image::of(CursorStyle::default()),
             style: CursorStyle::default(),
             at: None,
-            shown: None,
+            asked: None,
         }
     }
 
@@ -579,47 +603,102 @@ impl Cursor {
         self.at = at;
     }
 
-    /// Returns `true` if what is on the screen is no longer what this cursor is.
+    /// Returns `true` if what was last asked for is no longer what this cursor is.
     pub fn changed(&self) -> bool {
-        self.wanted() != self.shown
+        self.wanted() != self.asked
     }
 
-    /// Records that what is wanted has reached the screen.
+    /// Records that what this cursor is has been asked for.
     ///
-    /// The plane path calls it for itself. The fallback path is what the loop calls it for, after
-    /// it has asked the surface to be drawn: without it every later turn would ask again, and a
-    /// pointer that moved once would redraw for ever.
-    pub fn settled(&mut self) {
-        self.shown = self.wanted();
+    /// The plane path calls it for itself, where asking and showing are one thing: a cursor commit
+    /// blocks until the kernel has applied it.
+    ///
+    /// The loop calls it for the fallback path, after it has asked the surface to be drawn — and
+    /// there asking is not showing. Without it every later turn would ask again and a pointer that
+    /// moved once would redraw for ever, so the request is recorded rather than the frame. Two
+    /// things can stop that frame arriving, and they end differently:
+    ///
+    /// * **A flip is still on its way**, so [`Scanout::present`](crate::Scanout::present) declines
+    ///   the frame. The contract has the caller ask for another when the completion arrives, so
+    ///   this repairs itself one refresh later.
+    /// * **The runtime draws nothing for the request.** Nothing asks again, so the pointer stays
+    ///   one motion behind until anything else moves it — while every click still lands where the
+    ///   pointer really is, because the position an event carries is never this record.
+    pub fn asked_for(&mut self) {
+        self.asked = self.wanted();
+    }
+
+    /// Returns what putting this cursor on its plane would take, or nothing where it would take
+    /// nothing.
+    ///
+    /// The only part of the plane path that runs without a device. What matters here is the split
+    /// between [`Plan::Set`] and [`Plan::Move`]: a move keeps the image the plane already has,
+    /// which is why it costs two numbers — and a move where a set was needed leaves the wrong
+    /// picture on the plane with every ioctl reporting success, so hovering a button would keep
+    /// showing the arrow.
+    ///
+    /// Keyed on the style rather than on the picture. Two styles that fall back to the same shape
+    /// therefore cost one image commit where a move would have done, which is the safe direction.
+    fn plan(&self) -> Option<Plan> {
+        if !self.changed() {
+            return None;
+        }
+        let Some((style, (x, y))) = self.wanted() else {
+            return Some(Plan::Hide);
+        };
+        if self.asked.is_some_and(|(was, _)| was == style) {
+            Some(Plan::Move(x, y))
+        } else {
+            Some(Plan::Set(style, x, y))
+        }
     }
 
     /// Puts what this cursor is on its plane.
     ///
-    /// Answers at once on a display with no plane, and on one where the screen already holds what
+    /// Answers at once on a display with no plane, and on one where the plane already holds what
     /// is wanted. The loop calls it once a turn rather than once per motion, because a cursor
     /// commit blocks for up to two refreshes and a loop that reads flips, deadlines and input on
     /// one thread does none of the three while it waits.
     ///
+    /// **A refusal takes this display off the plane for the rest of the program**, and the pointer
+    /// is drawn into its frames from then on. It has to: the loop asks again whenever the pointer
+    /// moves, so a display that kept a plane it cannot commit to would reissue the same failing
+    /// ioctl every turn — and would draw no pointer either, because a display on a plane draws
+    /// none into its frames. That is an invisible pointer and one warning a turn, which is the
+    /// loudest and least useful way a console can fail.
+    ///
+    /// [`Cursor::new`] catches every refusal it can see before the first frame. This is the one it
+    /// cannot see: which configurations a driver takes is known only by asking it, and the plane
+    /// path is the part of this backend that a machine holding DRM master has never run.
+    ///
     /// # Errors
     ///
-    /// Returns whatever the kernel refused the image, the move or the hiding with.
+    /// Returns whatever the kernel refused the image, the move or the hiding with. The display has
+    /// already fallen back by then, so a caller logs it rather than acting on it.
     pub fn commit(&mut self, device: &Device, commit: &mut dyn Commit) -> Result<(), Error> {
-        if !self.hardware || !self.changed() {
+        if !self.hardware {
             return Ok(());
         }
-        let Some((style, (x, y))) = self.wanted() else {
-            commit.hide_cursor(device, self.plane)?;
-            self.settled();
+        let Some(plan) = self.plan() else {
             return Ok(());
         };
-        // A move keeps the image the plane already has, which is what makes it cost two numbers.
-        if self.shown.is_some_and(|(was, _)| was == style) {
-            commit.move_cursor(device, self.plane, x, y)?;
-        } else {
-            let image = self.write(device)?;
-            commit.set_cursor(device, self.plane, image, x, y)?;
+        let refused = match plan {
+            Plan::Hide => commit.hide_cursor(device, self.plane),
+            Plan::Move(x, y) => commit.move_cursor(device, self.plane, x, y),
+            Plan::Set(_, x, y) => self
+                .write(device)
+                .and_then(|image| commit.set_cursor(device, self.plane, image, x, y)),
+        };
+        if let Err(error) = refused {
+            self.hardware = false;
+            // Whatever the plane is holding has to go, or the image left on it and the one drawn
+            // into every later frame are two pointers on one screen. The plane may hold nothing —
+            // a refused `set_cursor` puts nothing there — and hiding nothing is not an error.
+            drop(commit.hide_cursor(device, self.plane));
+            self.asked = None;
+            return Err(error);
         }
-        self.settled();
+        self.asked_for();
         Ok(())
     }
 
@@ -728,11 +807,7 @@ fn allocate(device: &Device, size: CursorSize) -> Option<Held> {
                 return None;
             }
         };
-    // The legacy request carries no stride and the kernel reads four bytes a pixel with no
-    // rounding, so a buffer whose rows the driver rounded up would be scanned out sheared. It is
-    // checked here rather than at the commit, because a display that cannot use its plane has to
-    // fall back before the first frame rather than fail on every motion.
-    if !device.is_atomic() && u64::from(buffer.stride()) != CursorImage::legacy_stride(size.width) {
+    if !legible(device.is_atomic(), size.width, buffer.stride()) {
         warn!(
             "this driver gave a {}-pixel cursor buffer rows of {} bytes, and the legacy cursor \
              request reads {} — so the pointer is drawn into the frame instead",
@@ -761,6 +836,28 @@ fn allocate(device: &Device, size: CursorSize) -> Option<Held> {
     })
 }
 
+/// Returns the plane this display keeps other displays away from.
+///
+/// Only one it has a buffer on. A plane recorded for a display that fell back is a plane the next
+/// display cannot have either, so one refused allocation would cost two displays their hardware
+/// cursor rather than one.
+fn reserved(id: Option<u32>, allocated: bool) -> Option<u32> {
+    id.filter(|_| allocated)
+}
+
+/// Returns `true` if the interface in use reads a buffer of this extent the way it was laid out.
+///
+/// The legacy request carries no stride and the kernel reads four bytes a pixel with no rounding,
+/// so a buffer whose rows the driver rounded up is scanned out sheared while every ioctl reports
+/// success. The atomic path reads the stride off the framebuffer and takes any layout the plane
+/// advertises, so it asks nothing.
+///
+/// Asked at allocation rather than at the commit: a display that cannot use its plane has to fall
+/// back before its first frame rather than fail on every motion.
+fn legible(atomic: bool, width: u32, stride: u32) -> bool {
+    atomic || u64::from(stride) == CursorImage::legacy_stride(width)
+}
+
 #[cfg(test)]
 mod tests {
     //! What each style is drawn as, and where a drawn cursor lands.
@@ -768,8 +865,11 @@ mod tests {
     //! Every one of these is pure: a shape is characters and a frame is a slice, so nothing here
     //! needs a device, a plane or DRM master.
 
-    use super::{BYTES_PER_PIXEL, Cursor, Image};
+    use super::{
+        BYTES_PER_PIXEL, Cursor, Image, Plan, Shape, Turn, drawn, legible, reserved, turned,
+    };
     use zgui_drm::cursor::CursorPlane;
+    use zgui_drm::{Device, commit};
     use zgui_platform::CursorStyle;
 
     /// A cursor on a display with no plane to put one on, which a virtual machine has.
@@ -779,13 +879,16 @@ mod tests {
     /// holds on the fallback path: no buffer, and a picture drawn into the frame.
     fn fallback(style: CursorStyle) -> Cursor {
         Cursor {
-            plane: CursorPlane { crtc: 62, id: None },
+            // A CRTC the kernel numbers nothing. One test below issues a real request against this
+            // plane, and a plausible id would be a real display's — so an id that names no object
+            // keeps a test run from taking somebody's cursor away.
+            plane: CursorPlane { crtc: 0, id: None },
             hardware: false,
             held: None,
             image: Image::of(style),
             style,
             at: None,
-            shown: None,
+            asked: None,
         }
     }
 
@@ -911,6 +1014,69 @@ mod tests {
         }
     }
 
+    /// The image a shape is drawn as, the way [`Image::of`] draws one.
+    fn image_of(shape: Shape) -> Image {
+        drawn(&turned(shape), shape.hotspot, shape.turn)
+    }
+
+    #[test]
+    fn mirroring_a_shape_carries_its_hotspot_across_with_it() {
+        // The arithmetic that moves a hotspot when a shape is read backwards, over a shape written
+        // here. The one shape this backend mirrors is fifteen wide and points at its middle
+        // column, so the move lands where it started and the diagonal's own tests cannot tell the
+        // expression from one that dropped it. A silhouette that is not symmetrical, pointed at
+        // off centre, can.
+        const CORNER: &[&str] = &["#", "#", "####"];
+
+        let upright = image_of(Shape {
+            rows: CORNER,
+            hotspot: (0, 0),
+            turn: Turn::Keep,
+        });
+        let mirrored = image_of(Shape {
+            rows: CORNER,
+            hotspot: (0, 0),
+            turn: Turn::Mirrored,
+        });
+
+        assert_eq!((upright.hotspot_x(), upright.hotspot_y()), (1, 1));
+        assert_eq!(
+            (mirrored.hotspot_x(), mirrored.hotspot_y()),
+            (4, 1),
+            "the top of the upright is on the other side once the shape is read backwards"
+        );
+        assert_eq!(
+            pixel(&mirrored, 4, 1),
+            [0xFF, 0xFF, 0xFF, 0xFF],
+            "and it is still a pixel of the picture rather than a hole beside it"
+        );
+    }
+
+    #[test]
+    fn every_shapes_hotspot_is_on_the_shape() {
+        // A hotspot is where a person aims, so it has to be a pixel of the picture rather than a
+        // hole in it. All six shapes satisfy this today; what this catches is a hotspot that
+        // drifts off one when a silhouette is edited, which shows up as clicks landing a few
+        // pixels from where they were aimed.
+        for style in EVERY {
+            let Some(drawn) = Image::of(*style) else {
+                continue;
+            };
+            let (x, y) = (drawn.hotspot_x(), drawn.hotspot_y());
+            assert!(
+                x >= 0 && y >= 0 && (x as u32) < drawn.width() && (y as u32) < drawn.height(),
+                "{style:?} points at ({x}, {y}), which is outside its own {}x{} picture",
+                drawn.width(),
+                drawn.height()
+            );
+            let [_, _, _, alpha] = pixel(&drawn, x as u32, y as u32);
+            assert_ne!(
+                alpha, 0,
+                "{style:?} points at ({x}, {y}), where it has drawn nothing"
+            );
+        }
+    }
+
     #[test]
     fn the_arrows_tip_is_where_it_points() {
         // A hotspot in the middle of the shape puts every click a dozen pixels below and to the
@@ -987,6 +1153,62 @@ mod tests {
     }
 
     #[test]
+    fn a_plane_with_no_buffer_on_it_is_left_for_the_next_display() {
+        assert_eq!(reserved(Some(31), true), Some(31));
+        assert_eq!(
+            reserved(Some(31), false),
+            None,
+            "a display that fell back holds no plane, so the next one can still have it"
+        );
+        assert_eq!(reserved(None, true), None);
+    }
+
+    #[test]
+    fn a_refused_commit_takes_the_display_off_its_plane_for_good() {
+        // The refusal `Cursor::new` cannot see. Which configurations a driver takes is known only
+        // by asking it, so a display can be offered a plane and refused the first image on it —
+        // and a display that kept a plane it cannot commit to would reissue the same failing
+        // ioctl every turn for the rest of the program while drawing no pointer into its frames
+        // either. That is an invisible pointer and one warning a turn.
+        let test = "a_refused_commit_takes_the_display_off_its_plane_for_good";
+        let Ok(device) = Device::open_first() else {
+            eprintln!(
+                "{test}: no DRM device on this machine, so nothing was asserted\n\
+                 load the virtual driver with `sudo modprobe vkms` to run it"
+            );
+            return;
+        };
+        let mut commit = commit::for_device(&device);
+
+        // A display that was offered a plane and has no buffer for it. Writing the image is what
+        // fails, before any request reaches the driver, so this is the refusal path without a
+        // driver having to be talked into refusing anything — and without DRM master, which a
+        // machine running a compositor cannot give.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(Some((10, 10)));
+
+        assert!(cursor.commit(&device, &mut *commit).is_err());
+        assert!(
+            !cursor.on_a_plane(),
+            "the display is off its plane, so its frames carry the pointer from now on"
+        );
+
+        cursor.place(Some((11, 11)));
+        assert!(
+            cursor.commit(&device, &mut *commit).is_ok(),
+            "and it never asks the driver again"
+        );
+        let (width, height) = (64_u32, 64_u32);
+        let mut into = frame(width, height);
+        cursor.draw(&mut into, width as usize * BYTES_PER_PIXEL, width, height);
+        assert!(
+            into.iter().any(|byte| *byte != 0x40),
+            "the pointer is drawn into the frame now, rather than nowhere at all"
+        );
+    }
+
+    #[test]
     fn a_cursor_is_drawn_with_the_pixel_a_person_aims_with_under_the_pointer() {
         // Both interfaces place a cursor by its top left corner, so the caller subtracts the
         // hotspot. Left out, every cursor sits below and to the right of where it points and every
@@ -1023,7 +1245,7 @@ mod tests {
     fn a_style_that_asks_for_no_cursor_draws_none() {
         let mut cursor = fallback(CursorStyle::Default);
         cursor.place(Some((10, 10)));
-        cursor.settled();
+        cursor.asked_for();
         cursor.set_style(CursorStyle::None);
         let (width, height) = (64_u32, 64_u32);
         let mut into = frame(width, height);
@@ -1053,23 +1275,23 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_that_has_reached_the_screen_asks_for_nothing_more() {
+    fn a_cursor_that_has_been_asked_for_asks_for_nothing_more() {
         // What stops the fallback asking for a frame every turn for the rest of the program.
         let mut cursor = fallback(CursorStyle::Default);
         assert!(!cursor.changed(), "a pointer on no display shows nothing");
 
         cursor.place(Some((10, 10)));
         assert!(cursor.changed());
-        cursor.settled();
+        cursor.asked_for();
         assert!(!cursor.changed());
 
         cursor.place(Some((10, 11)));
         assert!(cursor.changed(), "a pointer that moved one pixel has moved");
-        cursor.settled();
+        cursor.asked_for();
 
         cursor.set_style(CursorStyle::Text);
         assert!(cursor.changed(), "and so has one that changed shape");
-        cursor.settled();
+        cursor.asked_for();
         assert!(!cursor.changed());
     }
 
@@ -1080,11 +1302,115 @@ mod tests {
         // — which is the safe direction: the other way round leaves the wrong picture on a plane.
         let mut cursor = fallback(CursorStyle::Default);
         cursor.place(Some((10, 10)));
-        cursor.settled();
+        cursor.asked_for();
 
         cursor.set_style(CursorStyle::Wait);
 
         assert!(cursor.changed());
+    }
+
+    #[test]
+    fn a_shape_that_is_not_on_the_plane_is_put_on_it_rather_than_moved() {
+        // The one decision on the plane path that a device cannot help with, and the one that
+        // fails silently: a move keeps whatever image the plane already holds, so a move where a
+        // set was needed leaves the arrow showing while the pointer is over a button, with every
+        // ioctl reporting success.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(Some((10, 10)));
+
+        assert_eq!(
+            cursor.plan(),
+            Some(Plan::Set(CursorStyle::Default, 9, 9)),
+            "nothing is on the plane yet, so the image has to go on it"
+        );
+        cursor.asked_for();
+
+        cursor.place(Some((20, 30)));
+        assert_eq!(
+            cursor.plan(),
+            Some(Plan::Move(19, 29)),
+            "the same shape somewhere else is two numbers"
+        );
+        cursor.asked_for();
+
+        cursor.set_style(CursorStyle::Text);
+        let Some(Plan::Set(style, ..)) = cursor.plan() else {
+            panic!(
+                "a different shape needs a different image: {:?}",
+                cursor.plan()
+            );
+        };
+        assert_eq!(style, CursorStyle::Text);
+        cursor.asked_for();
+
+        cursor.set_style(CursorStyle::None);
+        assert_eq!(
+            cursor.plan(),
+            Some(Plan::Hide),
+            "and a style that asks for no cursor takes the plane's own away"
+        );
+        cursor.asked_for();
+        assert_eq!(cursor.plan(), None, "then there is nothing left to do");
+    }
+
+    #[test]
+    fn a_plan_puts_the_image_at_the_corner_rather_than_at_the_pointer() {
+        // Both interfaces place a cursor by its top left corner, so the hotspot is subtracted
+        // once, here. A pointer at the very corner of a display therefore commits a negative
+        // coordinate, which is the ordinary case rather than an edge one.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(Some((0, 0)));
+
+        assert_eq!(cursor.plan(), Some(Plan::Set(CursorStyle::Default, -1, -1)));
+    }
+
+    #[test]
+    fn a_style_that_falls_back_to_the_shape_on_the_plane_is_still_put_on_it() {
+        // `Wait` and `Default` are drawn the same. The plan is keyed on the style rather than on
+        // the picture, so this costs one image commit where a move would have done — which is the
+        // safe direction, because the other way round leaves the wrong picture on a plane.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(Some((10, 10)));
+        cursor.asked_for();
+
+        cursor.set_style(CursorStyle::Wait);
+
+        assert!(matches!(cursor.plan(), Some(Plan::Set(..))));
+    }
+
+    #[test]
+    fn a_display_with_no_plane_plans_nothing_for_one() {
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.place(Some((10, 10)));
+
+        // The plan is the same either way. `commit` reads it, and it answers at once where
+        // there is no plane — so the fallback is decided by one field rather than by two that could
+        // disagree.
+        assert!(cursor.plan().is_some());
+        assert!(!cursor.on_a_plane());
+    }
+
+    #[test]
+    fn the_legacy_interface_refuses_a_buffer_whose_rows_it_would_misread() {
+        // `drm_mode_cursor2` carries no stride and the kernel reads four bytes a pixel with no
+        // rounding, so a buffer whose rows a driver rounded up is scanned out sheared while every
+        // ioctl reports success. The atomic path reads the stride off the framebuffer and asks
+        // nothing.
+        assert!(
+            legible(false, 64, 64 * 4),
+            "four bytes a pixel is what it reads"
+        );
+        assert!(
+            !legible(false, 64, 64 * 4 + 64),
+            "and a row the driver rounded up is one it would shear"
+        );
+        assert!(
+            legible(true, 64, 64 * 4 + 64),
+            "the atomic path takes any layout the plane advertises"
+        );
     }
 
     /// A frame of `width` by `height`, filled with a colour no cursor writes.
@@ -1162,6 +1488,36 @@ mod tests {
             dot(&into, width, width - 1, height - 1),
             [0x40; 4],
             "and nothing wrapped round"
+        );
+    }
+
+    #[test]
+    fn a_cursor_partly_past_the_right_edge_is_cut_rather_than_wrapped() {
+        // A row is a run of bytes and the next row follows it, so a column index past the width is
+        // an index into the row below. Without the guard a pointer within its own width of the
+        // right edge smears cursor fragments down the left of the screen, one scanline lower.
+        let arrow = Image::of(CursorStyle::Default).expect("the arrow is drawn");
+        let (width, height) = (32_u32, 32_u32);
+        let mut into = frame(width, height);
+
+        arrow.draw(
+            &mut into,
+            width as usize * BYTES_PER_PIXEL,
+            width,
+            height,
+            30,
+            0,
+        );
+
+        assert_eq!(
+            dot(&into, width, 30, 0),
+            [0x00, 0x00, 0x00, 0x40],
+            "the two columns that fit are drawn"
+        );
+        assert_eq!(
+            dot(&into, width, 0, 1),
+            [0x40; 4],
+            "and the third did not become the first pixel of the row below"
         );
     }
 
