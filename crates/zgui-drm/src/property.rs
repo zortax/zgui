@@ -135,6 +135,51 @@ impl Device {
             .map_err(|_| Error::Unusable(format!("property {id} has a name that is not text")))
     }
 
+    /// Returns the bytes of the property blob `id` names.
+    ///
+    /// A blob property's value is a blob id, and this turns that number into what it stands for:
+    /// the timings of a mode, the format list a plane publishes.
+    ///
+    /// # Why this retries
+    ///
+    /// A blob is immutable for as long as it exists, so the length the first pass reports is the
+    /// length the second pass fills. The one thing that moves is the id: destroying a blob and
+    /// creating another frees the number for the new one. The kernel copies nothing when the
+    /// length it is handed and the length of the blob disagree, so a read that trusted the first
+    /// answer would hand back a buffer of zeros with nothing reported. This read asks again
+    /// instead, as every other two-pass read in this crate does with a count that moved.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when the kernel refuses, which is how an id it does not know is
+    /// answered, and [`Error::Unusable`] when the length kept moving.
+    pub fn blob(&self, id: u32) -> Result<Vec<u8>> {
+        stabilise(
+            || format!("blob {id} changed under every attempt to read it"),
+            || {
+                // First pass: length zero, so the kernel reports the length and writes nothing.
+                let mut length = sys::drm_mode_get_blob {
+                    blob_id: id,
+                    ..Default::default()
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETPROPBLOB, &mut length)?;
+
+                let mut bytes = vec![0_u8; length.length as usize];
+                let mut filled = sys::drm_mode_get_blob {
+                    blob_id: id,
+                    length: length.length,
+                    data: bytes.as_mut_ptr() as u64,
+                };
+                ioctl::issue(self.fd(), ioctl::MODE_GETPROPBLOB, &mut filled)?;
+
+                if filled.length != length.length {
+                    return Ok(None);
+                }
+                Ok(Some(bytes))
+            },
+        )
+    }
+
     /// Creates a blob property holding `bytes`, returning its id.
     ///
     /// A mode is handed to an atomic commit this way: the timings go into a blob, and the blob's
