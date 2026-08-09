@@ -214,17 +214,35 @@ impl PlatformCx for DrmCx {
 /// Built up from nothing, so a capability nobody filled in reads as absent. Two of them are
 /// answered:
 ///
-/// * there are no clipboard representations at all, because there is no selection owner to ask —
-///   the starting set claims plain text, which every desktop has and this console does not; and
+/// * there are no clipboard representations at all. The starting set claims plain text, which every
+///   desktop has and this console does not: there is no selection owner to ask, so a paste command
+///   offered here would fail every time; and
 /// * the decorations are the application's, because nothing else here draws anything. A title bar
 ///   on this backend exists only if the application draws one.
 ///
-/// Three that stay absent are worth naming, because a pointer makes each of them a real question.
-/// `pointer_confine` and `pointer_lock` are absent because the contract offers no method to ask for
-/// either: the pointer here is already confined to the displays, and nothing can ask for it to be
-/// held still and read as pure motion. `native_gestures` is absent and true — this backend reports
-/// the raw pointer stream and recognises no pinch, rotate or pan of its own, so the framework
-/// recognises them.
+/// # Pointer confinement and pointer lock
+///
+/// `pointer_confine` and `pointer_lock` both stay false, and both are close. This backend owns the
+/// pointer's position and already clamps it to the union of the displays, and every relative device
+/// on it reports the pure motion a lock delivers.
+///
+/// What is missing is above this crate. The contract offers no method that asks for either, so a
+/// component told yes would have nothing to call, and `PointerEvent` carries a position and no
+/// movement, so a pointer held in place has nowhere to report what the device did. Declaring either
+/// would offer a command that can never run. That is the half of [`PlatformCapabilities::none`]
+/// that breaks, while the other half degrades. Both become this backend's question again on the day
+/// the contract grows a way to ask.
+///
+/// `native_gestures` stays false and states something: this backend reports the raw pointer stream
+/// and recognises no pinch, rotate or pan of its own, so the framework recognises them.
+///
+/// # The other fields
+///
+/// Every one keeps the empty answer, and each is true here. There is no window manager, so nothing
+/// places a surface, stacks it, draws attention to it, or carries a drag to another application. A
+/// display is not a window, so an overlay has no pop-up surface of its own. There is no input
+/// method to steer, and `DrmSurface::set_text_input` reports that absence by doing nothing. And a
+/// console states no light or dark preference, so the scheme is unknown.
 fn capabilities() -> PlatformCapabilities {
     let mut capabilities = PlatformCapabilities::none();
     capabilities.clipboard_formats = Vec::new();
@@ -242,8 +260,8 @@ mod tests {
     use crate::waker::EventfdWaker;
     use zgui_geom::{DevicePx, Point, Size};
     use zgui_platform::{
-        ClipboardFormat, Clock, MonitorInfo, PlatformCx, PlatformError, Surface, SurfaceAttributes,
-        SurfaceId, Waker,
+        ClipboardFormat, Clock, DecorationSource, MonitorInfo, PlatformCapabilities, PlatformCx,
+        PlatformError, Surface, SurfaceAttributes, SurfaceId, Waker,
     };
     use zgui_platform_headless::OffscreenSurface;
 
@@ -430,5 +448,40 @@ mod tests {
         assert_eq!(cx.color_scheme(), None);
         assert!(!capabilities.native_popup_surfaces);
         assert!(!capabilities.ime);
+    }
+
+    #[test]
+    fn a_console_owns_its_pointer_and_claims_neither_confinement_nor_a_lock() {
+        // Both are a real question now that there is a pointer. This backend owns the position and
+        // already clamps it to the union of the displays, and every relative device on it reports
+        // pure motion — so what is missing is above this crate: the contract has no method that
+        // asks for either, and a pointer event carries a position and no movement. A component
+        // told yes would find nothing to call and nowhere for the answer to arrive.
+        let cx = console(Vec::new(), Vec::new());
+        let capabilities = cx.capabilities();
+
+        assert!(!capabilities.pointer_confine);
+        assert!(!capabilities.pointer_lock);
+        assert!(
+            !capabilities.native_gestures,
+            "and a pinch is the framework's to recognise, because this reports the raw stream"
+        );
+    }
+
+    #[test]
+    fn a_console_declares_the_two_things_it_answers_and_keeps_every_other_answer_empty() {
+        // The whole set at once, so that a field flipped here has to be meant. Building up from
+        // nothing makes a capability nobody filled in read as absent, which degrades. Building down
+        // from everything would make the same omission read as present, which breaks.
+        let cx = console(Vec::new(), Vec::new());
+
+        let mut answered = PlatformCapabilities::none();
+        answered.clipboard_formats = Vec::new();
+        answered.decorations = DecorationSource::Application;
+        assert_eq!(
+            cx.capabilities(),
+            &answered,
+            "a console answers the clipboard and the decorations, and nothing else"
+        );
     }
 }
