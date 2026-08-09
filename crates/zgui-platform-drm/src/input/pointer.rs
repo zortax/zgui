@@ -163,14 +163,37 @@ pub fn absolute(capabilities: &Capabilities) -> bool {
 
 /// Returns which button `key` is, when it is one a pointer has.
 ///
-/// The named five cross to their own names, and the rest of the kernel's mouse block keeps its own
-/// number rather than collapsing into the primary button: a mouse with eight buttons is a mouse
-/// somebody bound all eight of. That number is the kernel's own code here, and each backend fills
-/// the same field in with what its own platform said.
+/// The named five cross to their own names, and they are the five the windowing backend reaches
+/// through its own library for these same codes.
+///
+/// The rest of the kernel's mouse block keeps its own number rather than collapsing into the
+/// primary button: a mouse with eight buttons is a mouse somebody bound all eight of. **That
+/// number is not portable, and it is the kernel's here.** A Wayland session hands winit the evdev
+/// code unchanged, so a button beyond the named five carries the same number on both backends;
+/// an X11 session hands it the X11 button index instead, so the same physical button is a
+/// different number there. Nothing at this layer can reconcile the two — the vocabulary carries
+/// one opaque number and each backend fills it in with what its own platform said — so a shortcut
+/// bound to an unnamed button is a shortcut bound per session type.
 ///
 /// A tool code answers with nothing. `BTN_TOOL_PEN` says a stylus came within range of a tablet
 /// and nobody pressed anything, so reading it as a press would click wherever the pen was pointing
 /// as it approached.
+///
+/// ```
+/// use zgui_evdev::Key;
+/// use zgui_platform_drm::input::pointer::button;
+/// use zgui_vocab::PointerButton;
+///
+/// assert_eq!(button(Key::BTN_LEFT), Some(PointerButton::Primary));
+/// assert_eq!(button(Key::BTN_TOUCH), Some(PointerButton::Primary), "a contact is a press");
+/// assert_eq!(
+///     button(Key::BTN_TASK),
+///     Some(PointerButton::Other(Key::BTN_TASK.raw())),
+///     "past the named five, the kernel's own code is carried"
+/// );
+/// assert_eq!(button(Key::BTN_TOOL_PEN), None, "a tool is no button");
+/// assert_eq!(button(Key::KEY_A), None);
+/// ```
 pub fn button(key: Key) -> Option<PointerButton> {
     match key {
         // A contact is a press of the primary button, and the windowing backend reports the same
@@ -697,8 +720,9 @@ mod tests {
 
     #[test]
     fn every_button_crosses_to_its_own_button() {
-        // The same table the windowing backend reaches through its own library, which reports
-        // these same kernel codes: a shortcut bound to one button is the same button on both.
+        // The five the windowing backend names too. Its Wayland path matches these codes one for
+        // one; its X11 path reads an X11 button index and reaches the same five names by another
+        // route, so a shortcut bound to a *named* button is the same button everywhere.
         let pairs = [
             (Key::BTN_LEFT, PointerButton::Primary),
             (Key::BTN_RIGHT, PointerButton::Secondary),
@@ -717,7 +741,11 @@ mod tests {
     #[test]
     fn a_button_beyond_the_named_ones_keeps_its_own_number() {
         // A mouse with eight buttons is a mouse somebody bound all eight of, and the number is the
-        // kernel's own code — which is the number the windowing backend reports for it too.
+        // kernel's own code. It agrees with the windowing backend on a Wayland session, where the
+        // compositor passes the evdev code through, and not on an X11 one, where that backend
+        // reports the X11 button index instead. The number is opaque above this layer, so nothing
+        // could reconcile them; what this asserts is that it is the kernel's rather than an index
+        // of this backend's own invention.
         assert_eq!(
             button(Key::BTN_TASK),
             Some(PointerButton::Other(Key::BTN_TASK.raw()))
