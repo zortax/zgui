@@ -57,6 +57,9 @@ the crate they sit in. Each keeps the SPDX identifier and the notice the kernel 
 | `crates/zgui-evdev/uapi/uinput.h` | Linux `include/uapi/linux/` | GPL-2.0+ WITH Linux-syscall-note |
 | `crates/zgui-evdev/uapi/time.h` | Linux `include/uapi/linux/` | GPL-2.0 WITH Linux-syscall-note |
 | `crates/zgui-evdev/uapi/time_types.h` | Linux `include/uapi/linux/` | GPL-2.0 WITH Linux-syscall-note |
+| `crates/zgui-evdev/uapi/kd.h` | Linux `include/uapi/linux/` | GPL-2.0 WITH Linux-syscall-note |
+| `crates/zgui-evdev/uapi/keyboard.h` | Linux `include/uapi/linux/` | GPL-2.0 WITH Linux-syscall-note |
+| `crates/zgui-evdev/uapi/wait.h` | Linux `include/uapi/linux/` | GPL-2.0 WITH Linux-syscall-note |
 
 The syscall-note exception states that a user program reaching kernel services through the
 interface these headers describe is normal use of the kernel and is outside the reach of the
