@@ -110,6 +110,7 @@ read_write!(
     0xb9,
     sys::drm_mode_obj_get_properties
 );
+read_write!(MODE_CURSOR2, 0xbb, sys::drm_mode_cursor2);
 read_write!(MODE_ATOMIC, 0xbc, sys::drm_mode_atomic);
 read_write!(MODE_CREATEPROPBLOB, 0xbd, sys::drm_mode_create_blob);
 read_write!(MODE_DESTROYPROPBLOB, 0xbe, sys::drm_mode_destroy_blob);
@@ -201,6 +202,7 @@ mod tests {
         assert_eq!(MODE_GETPLANE.opcode(), 0xc020_64b6);
         assert_eq!(MODE_ADDFB2.opcode(), 0xc068_64b8);
         assert_eq!(MODE_OBJ_GETPROPERTIES.opcode(), 0xc020_64b9);
+        assert_eq!(MODE_CURSOR2.opcode(), 0xc024_64bb);
         assert_eq!(MODE_ATOMIC.opcode(), 0xc038_64bc);
         assert_eq!(MODE_CREATEPROPBLOB.opcode(), 0xc010_64bd);
         assert_eq!(MODE_DESTROYPROPBLOB.opcode(), 0xc004_64be);

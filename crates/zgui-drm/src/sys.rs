@@ -56,6 +56,7 @@ mod tests {
         assert_eq!(size_of::<drm_mode_map_dumb>(), 16);
         assert_eq!(size_of::<drm_mode_destroy_dumb>(), 4);
         assert_eq!(size_of::<drm_mode_crtc_page_flip>(), 24);
+        assert_eq!(size_of::<drm_mode_cursor2>(), 36);
         assert_eq!(size_of::<drm_prime_handle>(), 12);
         assert_eq!(size_of::<drm_mode_create_blob>(), 16);
         assert_eq!(size_of::<drm_mode_destroy_blob>(), 4);
@@ -73,6 +74,10 @@ mod tests {
         assert_eq!(DRM_CLIENT_CAP_ATOMIC, 3);
         assert_eq!(DRM_CAP_DUMB_BUFFER, 1);
         assert_eq!(DRM_CAP_ADDFB2_MODIFIERS, 16);
+        assert_eq!(DRM_CAP_CURSOR_WIDTH, 8);
+        assert_eq!(DRM_CAP_CURSOR_HEIGHT, 9);
+        assert_eq!(DRM_MODE_CURSOR_BO, 0x1);
+        assert_eq!(DRM_MODE_CURSOR_MOVE, 0x2);
         assert_eq!(DRM_MODE_ATOMIC_TEST_ONLY, 0x100);
         assert_eq!(DRM_MODE_ATOMIC_NONBLOCK, 0x200);
         assert_eq!(DRM_MODE_ATOMIC_ALLOW_MODESET, 0x400);
