@@ -34,6 +34,14 @@ const RELATIVE_BITMAP: usize = bytes_for(sys::REL_CNT);
 /// Which bitmap a device reports its absolute axes in.
 const ABSOLUTE_BITMAP: usize = bytes_for(sys::ABS_CNT);
 
+/// The most bytes a bitmap keeps.
+///
+/// A code is a `u16`, so this many bytes hold every code the kernel can name and a byte past them
+/// names none. The kernel's own maps are far smaller — ninety-six bytes for the key codes, the
+/// largest of them — so this bounds what a caller can hand to [`Bitmap::from_bytes`] rather than
+/// anything a device produces.
+pub const BITMAP_LIMIT: usize = (u16::MAX as usize + 1) / 8;
+
 /// A set of codes, as the kernel writes one.
 ///
 /// The kernel answers "which codes does this device have" with a bitmap: bit `n` is code `n`. A
@@ -46,10 +54,14 @@ pub struct Bitmap {
 }
 
 impl Bitmap {
-    /// Returns the bitmap these bytes hold.
+    /// Returns the bitmap these bytes hold, up to the last byte a code can reach.
+    ///
+    /// A code is sixteen bits, so [`BITMAP_LIMIT`] bytes hold every code there is and anything past
+    /// that names nothing. Bytes beyond it are dropped, which makes [`Bitmap::iter`] total: every
+    /// bit it can reach has a code.
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
-            bits: bytes.to_vec(),
+            bits: bytes[..bytes.len().min(BITMAP_LIMIT)].to_vec(),
         }
     }
 
@@ -80,9 +92,11 @@ impl Bitmap {
     /// Returns every code in this map, in order.
     pub fn iter(&self) -> impl Iterator<Item = u16> + '_ {
         self.bits.iter().enumerate().flat_map(|(byte, bits)| {
+            // The cap in `from_bytes` already makes this conversion total. It is written as one
+            // that can decline anyway, so the code holds that totality on its own.
             (0..8)
                 .filter(move |bit| bits & (1 << bit) != 0)
-                .map(move |bit| u16::try_from(byte * 8 + bit).expect("a code fits in sixteen bits"))
+                .filter_map(move |bit| u16::try_from(byte * 8 + bit).ok())
         })
     }
 
@@ -592,6 +606,25 @@ mod tests {
         assert!(map.contains(1));
         assert!(!map.contains(700));
         assert_eq!(map.len(), 2);
+    }
+
+    #[test]
+    fn a_bitmap_longer_than_the_codes_it_could_hold_is_cut_rather_than_walked() {
+        // No kernel path reaches this, and `from_bytes` is public and documented as safe, so a
+        // caller with a long buffer can. Walking it would run the bit index past sixteen bits.
+        let long = Bitmap::from_bytes(&vec![0xff; BITMAP_LIMIT + 1000]);
+
+        assert_eq!(
+            long.iter().count(),
+            BITMAP_LIMIT * 8,
+            "every code there is, and none that there is not"
+        );
+        assert_eq!(
+            long.iter().last(),
+            Some(u16::MAX),
+            "the walk ends on the last code rather than past it"
+        );
+        assert_eq!(long.len(), BITMAP_LIMIT * 8);
     }
 
     #[test]
