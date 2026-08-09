@@ -96,6 +96,13 @@ const LEDGER: &[(&str, &[&str])] = &[
     // computed from `size_of`, so a struct transcribed at the wrong width changes a number rather
     // than failing to compile, and no test would find it.
     ("bindgen", &["zgui-drm", "zgui-evdev"]),
+    // Resolving symbols out of a shared object at run time. One crate may do it, because a second
+    // crate resolving symbols out of a shared object is a second place a process can acquire a
+    // dependency nothing declared: a `dlopen` appears in no manifest, in no lock file and on no
+    // link line, so what a build needs and what a run needs stop being the same list. The one
+    // dependency acquired this way is libxkbcommon, and it is acquired this way on purpose — a
+    // console session has to start where neither the library nor its data files exist.
+    ("libloading", &["zgui-xkb"]),
     (
         "accesskit",
         &[

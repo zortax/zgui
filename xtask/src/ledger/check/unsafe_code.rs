@@ -40,6 +40,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "the ioctls, and reading an event record out of a byte buffer",
     ),
     (
+        "zgui-xkb",
+        "loading libxkbcommon at run time, and every call made into it",
+    ),
+    (
         "zgui-platform-drm",
         "the two `borrow_raw` calls that report a surface's DRM handles",
     ),

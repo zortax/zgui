@@ -173,6 +173,14 @@ rustix = { version = "1.1", default-features = false, features = [
 # call with an errno that points at nothing.
 bindgen = "0.72"
 
+# --- libraries opened at run time: named only by zgui-xkb, zgui-seat, zgui-libinput -------------
+# `dlopen` and `dlsym`, wrapped so that a shared object cannot outlive the symbols taken out of
+# it. Three libraries are reached this way, one crate each: libxkbcommon, libseat and libinput.
+# Each is loaded at run time and never linked, so a build needs neither the library nor the data
+# files it reads, and a console session still starts on a machine that has none of them. There is
+# no feature set to state — the crate has none.
+libloading = "0.8"
+
 # --- test and benchmark tooling ----------------------------------------------------------------
 proptest = "1.11"
 criterion = "0.8"
