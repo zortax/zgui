@@ -352,7 +352,9 @@ impl Console {
     /// one would take a signal on the next hangup.
     ///
     /// `KDGKBMODE` is issued here, because it tells a console from any other terminal. So a
-    /// `Console` in hand is a descriptor that answered a console request at the moment it opened.
+    /// `Console` in hand is a descriptor that answered a console request at the moment it opened. A
+    /// virtual-terminal switch or a hangup can still take it away afterwards, and every later call
+    /// reports that itself.
     ///
     /// # Errors
     ///
