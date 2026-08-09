@@ -40,6 +40,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ),
     ("zgui-drm", "the ioctls, and the mapping of a dumb buffer"),
     (
+        "zgui-evdev",
+        "the ioctls, and reading an event record out of a byte buffer",
+    ),
+    (
         "zgui-platform-drm",
         "the two `borrow_raw` calls that report a surface's DRM handles",
     ),

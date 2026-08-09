@@ -42,6 +42,24 @@ fails the build.
 | `crates/zgui-render-wgpu/src/shader/text.wgsl` | the Windows Terminal project | MIT |
 | `crates/zgui-drm/src/sys.rs` | the Linux kernel DRM uapi headers | MIT |
 
+## Vendored kernel headers
+
+The uapi headers below are copied unchanged from the Linux kernel and are read at build time by
+the crate they sit in. Each keeps the SPDX identifier and the notice the kernel ships it with.
+
+| File | Origin | Licence |
+|---|---|---|
+| `crates/zgui-drm/uapi/drm.h` | Linux `include/uapi/drm/` | MIT |
+| `crates/zgui-drm/uapi/drm_mode.h` | Linux `include/uapi/drm/` | MIT |
+| `crates/zgui-drm/uapi/drm_fourcc.h` | Linux `include/uapi/drm/` | MIT |
+| `crates/zgui-evdev/uapi/input.h` | Linux `include/uapi/linux/` | GPL-2.0 WITH Linux-syscall-note |
+| `crates/zgui-evdev/uapi/input-event-codes.h` | Linux `include/uapi/linux/` | GPL-2.0-only WITH Linux-syscall-note |
+| `crates/zgui-evdev/uapi/uinput.h` | Linux `include/uapi/linux/` | GPL-2.0+ WITH Linux-syscall-note |
+
+The syscall-note exception states that a user program reaching kernel services through the
+interface these headers describe is normal use of the kernel and is outside the reach of the
+kernel's own licence. The generated bindings are that use and nothing more.
+
 ## Bundled fonts
 
 The font files below are used only by `zgui-text-parley`'s test suite, which runs with system font
