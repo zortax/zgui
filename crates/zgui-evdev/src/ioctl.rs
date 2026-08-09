@@ -394,10 +394,11 @@ unsafe impl Ioctl for ValueCall {
 
 /// Issues `request` against `fd`, with `payload` as its argument.
 ///
-/// A call is restarted on `EINTR` and on `EAGAIN`. The kernel returns the first when a signal
-/// arrives mid-call and the second when the device is busy, and neither is a failure of the
-/// request: a caller that did not loop would see a working machine fail at random under load or
-/// under a profiler.
+/// The call is restarted on `EINTR`, and on nothing else. See [`retry`].
+///
+/// # Errors
+///
+/// Returns [`Error::Ioctl`] when the kernel refuses.
 pub(crate) fn issue<T>(fd: BorrowedFd<'_>, request: Request<T>, payload: &mut T) -> Result<()> {
     retry(request.name, || {
         // SAFETY: the claims are stated on the `Ioctl` implementation above. `fd` is a live
@@ -466,12 +467,20 @@ pub(crate) fn issue_value(fd: BorrowedFd<'_>, request: ValueRequest, value: c_in
     })
 }
 
-/// Runs `call` until it answers with something other than `EINTR` or `EAGAIN`.
+/// Runs `call` until it answers with something other than `EINTR`.
+///
+/// `evdev_ioctl` takes the device's own mutex with `mutex_lock_interruptible` before it looks at
+/// the request, so a signal that arrives while another client holds that mutex comes back as
+/// `EINTR` with the request never made. Restarting keeps a working machine from failing at random
+/// under a profiler or a job-control signal.
+///
+/// `EAGAIN` is deliberately not retried. Neither the evdev handler nor the uinput one answers with
+/// it, so a loop on it here would be an arm this interface can never take.
 fn retry<T>(name: &'static str, mut call: impl FnMut() -> rustix::io::Result<T>) -> Result<T> {
     loop {
         return match call() {
             Ok(output) => Ok(output),
-            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => continue,
+            Err(rustix::io::Errno::INTR) => continue,
             Err(errno) => Err(Error::Ioctl {
                 request: name,
                 source: errno.into(),
