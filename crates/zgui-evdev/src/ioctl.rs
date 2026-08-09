@@ -17,9 +17,16 @@
 //! at all. [`issue_bytes`] computes the number from the buffer it is handed, so there is nowhere
 //! for a second length to be written down and nothing for the two to disagree about.
 //!
-//! [`Request<T>`] and [`ByteRequest`] therefore name different call shapes, and neither can be
-//! handed to the other's call: [`issue`] takes a `Request<T>` and a `&mut T`, and [`issue_bytes`]
-//! takes a [`ByteRequest`] and the buffer that decides the number.
+//! # One request type per call shape
+//!
+//! There are three ways the kernel takes an argument here, and each has a request type only its
+//! own call can name. [`Request<T>`] goes to [`issue`], which hands over a pointer to a `T`.
+//! [`ByteRequest`] goes to [`issue_bytes`], which hands over a buffer. [`ValueRequest`] goes to
+//! [`issue_value`], which hands the integer over as the argument and points at nothing.
+//!
+//! Handing one to the wrong call is then a type error. `EVIOCGRAB` reads its argument *as* the
+//! value and branches on whether it is null, so a release written through [`issue`] would pass the
+//! address of a local — never null — and grab the device it was meant to give back.
 
 // The table below is the kernel's interface. Every entry is a constant the headers define, every
 // entry is checked against the value those headers expand to by the test at the foot of this file,
@@ -54,15 +61,30 @@ const ABS_BASE: u8 = 0x40;
 /// refusing, and the kernel then reads a length nobody asked for, so the check has to be here.
 const MAX_PAYLOAD: usize = (1 << 14) - 1;
 
-/// The payload of a request whose argument is the integer itself.
+/// A request whose argument is the integer itself.
 ///
-/// `EVIOCGRAB` and the `UI_SET_*BIT` family are `_IOW(…, int)`, so the request number encodes four
-/// bytes — and the kernel reads the argument *as* those bytes rather than following it. This names
-/// the size the number is computed from, and it is a payload nothing is ever pointed at. Keeping
-/// it distinct from `c_int` is what stops one of these being handed to [`issue`], which would pass
-/// the address of a value the kernel reads as the value.
-#[repr(transparent)]
-pub(crate) struct Value(pub(crate) c_int);
+/// `EVIOCGRAB` and the `UI_SET_*BIT` family are `_IOW(…, int)` numbers, so the number encodes four
+/// bytes, and the kernel reads the argument *as* those bytes without following it.
+///
+/// A marker payload on [`Request<T>`] would stop nothing, because `issue<T>` accepts any `T` and
+/// would accept the marker too. `EVIOCGRAB` branches on `if (p)`, and the address of a local is
+/// never null, so a `release` written through [`issue`] *grabs* the device: a keyboard taken from
+/// the session with nothing left holding a handle that could give it back. [`issue_value`] is the
+/// only call that names this type, and it points at nothing.
+#[derive(Clone, Copy)]
+pub(crate) struct ValueRequest {
+    /// The computed request number.
+    opcode: Opcode,
+    /// What this is, for the error message.
+    name: &'static str,
+}
+
+impl ValueRequest {
+    /// Returns the request number, for the tests that check it against the header.
+    pub(crate) const fn opcode(self) -> Opcode {
+        self.opcode
+    }
+}
 
 /// A request: what to ask the kernel, the payload it is computed for, and the name to report if
 /// it refuses.
@@ -109,16 +131,17 @@ impl<T> Request<T> {
 
 /// A request whose payload is a byte buffer, and which does not know how long that buffer is.
 ///
-/// `EVIOCGNAME(len)` and its neighbours put the length into the request number, and the kernel
-/// writes what the device has, clamped to that length. A number built for ninety-six bytes and a
-/// buffer of four is ninety-two bytes written past the end of the buffer, from a safe function,
-/// with no `unsafe` token anywhere near the call.
+/// The absent length is deliberate. `EVIOCGKEY(len)` and its neighbours put the length into the
+/// request number, and the kernel writes that many bytes: `bits_to_user` copies as many bytes as
+/// the number encodes, bounded only by the length of the map it is copying. A number built for
+/// ninety-six bytes and a buffer of four is therefore ninety-two bytes written past the end of the
+/// buffer, from a safe function, with no `unsafe` token anywhere near the call.
 ///
 /// So the length is never written down twice. It lives in the buffer, [`issue_bytes`] derives the
 /// number from that buffer, and there is no way to spell a second one.
 ///
 /// Every request in this family reads, so there is no direction to choose either. A direction
-/// parameter here could only express a mistake.
+/// parameter here could express only a mistake.
 #[derive(Clone, Copy)]
 pub(crate) struct ByteRequest {
     /// What this is, for the error message.
@@ -172,6 +195,19 @@ macro_rules! write_only {
     };
 }
 
+/// Names a request whose argument is the integer the kernel reads.
+///
+/// The number is `_IOW(…, int)` all the same, so it is computed from `c_int` exactly as the
+/// kernel's own macro does. Only the call differs.
+macro_rules! by_value {
+    ($name:ident, $group:expr, $number:expr) => {
+        pub(crate) const $name: ValueRequest = ValueRequest {
+            opcode: opcode::write::<c_int>($group, $number),
+            name: stringify!($name),
+        };
+    };
+}
+
 /// Names a request that carries no payload.
 ///
 /// The kernel reads and writes nothing through an `_IO` number, and `()` says the same.
@@ -187,16 +223,16 @@ macro_rules! no_payload {
 
 read_only!(GET_VERSION, GROUP, 0x01, c_int);
 read_only!(GET_ID, GROUP, 0x02, sys::input_id);
-write_only!(GRAB, GROUP, 0x90, Value);
+by_value!(GRAB, GROUP, 0x90);
 
 no_payload!(UINPUT_CREATE, UINPUT, 1);
 no_payload!(UINPUT_DESTROY, UINPUT, 2);
 write_only!(UINPUT_SETUP, UINPUT, 3, sys::uinput_setup);
 write_only!(UINPUT_ABS_SETUP, UINPUT, 4, sys::uinput_abs_setup);
-write_only!(UINPUT_SET_EVENT_BIT, UINPUT, 100, Value);
-write_only!(UINPUT_SET_KEY_BIT, UINPUT, 101, Value);
-write_only!(UINPUT_SET_RELATIVE_BIT, UINPUT, 102, Value);
-write_only!(UINPUT_SET_ABSOLUTE_BIT, UINPUT, 103, Value);
+by_value!(UINPUT_SET_EVENT_BIT, UINPUT, 100);
+by_value!(UINPUT_SET_KEY_BIT, UINPUT, 101);
+by_value!(UINPUT_SET_RELATIVE_BIT, UINPUT, 102);
+by_value!(UINPUT_SET_ABSOLUTE_BIT, UINPUT, 103);
 
 /// Returns `EVIOCGNAME`, which answers the device's name into whatever buffer it is issued with.
 pub(crate) const fn name() -> ByteRequest {
@@ -408,7 +444,14 @@ pub(crate) fn issue_bytes(
 }
 
 /// Issues `request` against `fd`, with `value` as the argument itself.
-pub(crate) fn issue_value(fd: BorrowedFd<'_>, request: Request<Value>, value: c_int) -> Result<()> {
+///
+/// Nothing is pointed at. [`ValueRequest`] is the only request type this accepts and the only one
+/// [`issue`] refuses, so the two shapes cannot be confused at a call site.
+///
+/// # Errors
+///
+/// Returns [`Error::Ioctl`] when the kernel refuses.
+pub(crate) fn issue_value(fd: BorrowedFd<'_>, request: ValueRequest, value: c_int) -> Result<()> {
     retry(request.name, || {
         // SAFETY: the claims are stated on the `Ioctl` implementation above.
         unsafe {
