@@ -88,15 +88,19 @@ macro_rules! no_payload {
     };
 }
 
+write_only!(GEM_CLOSE, 0x09, sys::drm_gem_close);
 read_write!(GET_CAP, 0x0c, sys::drm_get_cap);
 write_only!(SET_CLIENT_CAP, 0x0d, sys::drm_set_client_cap);
 no_payload!(SET_MASTER, 0x1e);
 no_payload!(DROP_MASTER, 0x1f);
+read_write!(PRIME_HANDLE_TO_FD, 0x2d, sys::drm_prime_handle);
+read_write!(PRIME_FD_TO_HANDLE, 0x2e, sys::drm_prime_handle);
 read_write!(MODE_GETRESOURCES, 0xa0, sys::drm_mode_card_res);
 read_write!(MODE_SETCRTC, 0xa2, sys::drm_mode_crtc);
 read_write!(MODE_GETENCODER, 0xa6, sys::drm_mode_get_encoder);
 read_write!(MODE_GETCONNECTOR, 0xa7, sys::drm_mode_get_connector);
 read_write!(MODE_GETPROPERTY, 0xaa, sys::drm_mode_get_property);
+read_write!(MODE_GETPROPBLOB, 0xac, sys::drm_mode_get_blob);
 read_write!(MODE_RMFB, 0xaf, u32);
 read_write!(MODE_PAGE_FLIP, 0xb0, sys::drm_mode_crtc_page_flip);
 read_write!(MODE_CREATE_DUMB, 0xb2, sys::drm_mode_create_dumb);
@@ -184,15 +188,23 @@ mod tests {
 
     #[test]
     fn the_request_numbers_are_the_ones_the_headers_expand_to() {
+        // Each number is what `DRM_IOWR(0xa0, struct drm_mode_card_res)` and its neighbours expand
+        // to when the C preprocessor is run over the kernel's own headers. A struct generated at
+        // the wrong size changes the number, and this is where that shows up as a failure instead
+        // of as `EINVAL` from a device.
+        assert_eq!(GEM_CLOSE.opcode(), 0x4008_6409);
         assert_eq!(GET_CAP.opcode(), 0xc010_640c);
         assert_eq!(SET_CLIENT_CAP.opcode(), 0x4010_640d);
         assert_eq!(SET_MASTER.opcode(), 0x0000_641e);
         assert_eq!(DROP_MASTER.opcode(), 0x0000_641f);
+        assert_eq!(PRIME_HANDLE_TO_FD.opcode(), 0xc00c_642d);
+        assert_eq!(PRIME_FD_TO_HANDLE.opcode(), 0xc00c_642e);
         assert_eq!(MODE_GETRESOURCES.opcode(), 0xc040_64a0);
         assert_eq!(MODE_SETCRTC.opcode(), 0xc068_64a2);
         assert_eq!(MODE_GETENCODER.opcode(), 0xc014_64a6);
         assert_eq!(MODE_GETCONNECTOR.opcode(), 0xc050_64a7);
         assert_eq!(MODE_GETPROPERTY.opcode(), 0xc040_64aa);
+        assert_eq!(MODE_GETPROPBLOB.opcode(), 0xc010_64ac);
         assert_eq!(MODE_RMFB.opcode(), 0xc004_64af);
         assert_eq!(MODE_PAGE_FLIP.opcode(), 0xc018_64b0);
         assert_eq!(MODE_CREATE_DUMB.opcode(), 0xc020_64b2);
