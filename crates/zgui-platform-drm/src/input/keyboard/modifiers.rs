@@ -74,15 +74,15 @@ mod tests {
 
     #[test]
     fn each_modifier_xkb_names_crosses_to_its_own_bit_and_no_other() {
-        let pairs: [(fn(&mut zgui_xkb::Modifiers), Modifiers); 4] = [
-            (|held| held.shift = true, Modifiers::SHIFT),
-            (|held| held.control = true, Modifiers::CONTROL),
-            (|held| held.alt = true, Modifiers::ALT),
-            (|held| held.logo = true, Modifiers::META),
-        ];
-        for (set, expected) in pairs {
-            assert_eq!(from_xkb(xkb(set)), expected);
-        }
+        // Written out rather than driven from a table, because each row names a field, and the
+        // field and the bit have to stay paired.
+        assert_eq!(from_xkb(xkb(|held| held.shift = true)), Modifiers::SHIFT);
+        assert_eq!(
+            from_xkb(xkb(|held| held.control = true)),
+            Modifiers::CONTROL
+        );
+        assert_eq!(from_xkb(xkb(|held| held.alt = true)), Modifiers::ALT);
+        assert_eq!(from_xkb(xkb(|held| held.logo = true)), Modifiers::META);
     }
 
     #[test]
