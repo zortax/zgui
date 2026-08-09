@@ -97,19 +97,45 @@ mod tests {
 
     use super::*;
 
-    /// A directory holding one empty file per name.
-    fn directory(names: &[&str]) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "zgui-evdev-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("the directory is made");
-        for name in names {
-            std::fs::write(root.join(name), []).expect("the file is made");
+    /// A directory holding one empty file per name, removed when it goes out of scope.
+    ///
+    /// Named after the test that asked for it, so two tests running at once do not share one.
+    struct Directory(PathBuf);
+
+    impl Directory {
+        /// Makes the directory and the files in it.
+        fn new(test: &str, names: &[&str]) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("zgui-evdev-{}-{test}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("the directory is made");
+            for name in names {
+                std::fs::write(root.join(name), []).expect("the file is made");
+            }
+            Self(root)
         }
-        root
+    }
+
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The file names a walk reported skipping, in the order it reported them.
+    fn skipped(found: &Discovery) -> Vec<String> {
+        found
+            .skipped
+            .iter()
+            .map(|skipped| {
+                skipped
+                    .path
+                    .file_name()
+                    .expect("a node has a name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
     }
 
     #[test]
@@ -118,17 +144,16 @@ mod tests {
         // that matters: it starts with the prefix and is a different interface, so a walk that
         // matched on the prefix alone would read a mouse through a protocol this crate has never
         // heard of.
-        let root = directory(&["event0", "mice", "mouse0", "js0"]);
+        let root = Directory::new(
+            "only_the_event_nodes_are_tried",
+            &["event0", "mice", "mouse0", "js0"],
+        );
 
-        let found = discover_in(&root).expect("the directory reads");
+        let found = discover_in(&root.0).expect("the directory reads");
 
         assert!(found.opened.is_empty(), "an empty file is no device");
         assert_eq!(
-            found
-                .skipped
-                .iter()
-                .map(|skipped| skipped.path.file_name().expect("a name").to_owned())
-                .collect::<Vec<_>>(),
+            skipped(&found),
             ["event0"],
             "only the numbered event nodes are tried at all"
         );
@@ -137,25 +162,24 @@ mod tests {
     #[test]
     fn the_nodes_come_back_in_the_order_the_kernel_numbers_them() {
         // Sorted by name, `event10` comes before `event2`. The number is what the kernel means.
-        let root = directory(&["event0", "event2", "event10", "event11"]);
-
-        let found = discover_in(&root).expect("the directory reads");
-
-        assert_eq!(
-            found
-                .skipped
-                .iter()
-                .map(|skipped| skipped.path.file_name().expect("a name").to_owned())
-                .collect::<Vec<_>>(),
-            ["event0", "event2", "event10", "event11"]
+        let root = Directory::new(
+            "the_nodes_come_back_in_the_order_the_kernel_numbers_them",
+            &["event0", "event2", "event10", "event11"],
         );
+
+        let found = discover_in(&root.0).expect("the directory reads");
+
+        assert_eq!(skipped(&found), ["event0", "event2", "event10", "event11"]);
     }
 
     #[test]
     fn a_node_that_will_not_open_is_reported_with_its_reason() {
-        let root = directory(&["event0"]);
+        let root = Directory::new(
+            "a_node_that_will_not_open_is_reported_with_its_reason",
+            &["event0"],
+        );
 
-        let found = discover_in(&root).expect("the directory reads");
+        let found = discover_in(&root.0).expect("the directory reads");
 
         assert_eq!(found.skipped.len(), 1);
         assert!(

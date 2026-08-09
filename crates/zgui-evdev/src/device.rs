@@ -241,18 +241,21 @@ impl Capabilities {
     /// Each answer is a question about the codes. The types alone put every mouse among the
     /// keyboards, because a mouse has `EV_KEY` for its buttons.
     ///
-    /// - A keyboard has a key in the kernel's first block of keys. See [`Key::is_keyboard_key`].
+    /// - A keyboard has a key in the kernel's first block of keys, `KEY_RESERVED` aside. See
+    ///   [`Key::is_keyboard_key`].
     /// - A pointer has both `REL_X` and `REL_Y`. A device with a wheel and no axes is a keyboard
     ///   with a wheel on it, and there are several.
     /// - A touch device has both `ABS_X` and `ABS_Y`, or the multi-touch pair. A volume dial
     ///   reports an absolute axis too, and it is not a touchscreen.
     pub fn roles(&self) -> Roles {
         Roles {
+            // `KEY_RESERVED` is code zero and means nothing. A driver that sets its bit would
+            // otherwise make a device with one meaningless code into a keyboard, and udev's own
+            // rule leaves it out for the same reason.
             keyboard: self.has(EventType::EV_KEY)
-                && self
-                    .keys
-                    .iter()
-                    .any(|code| Key::new(code).is_keyboard_key()),
+                && self.keys.iter().any(|code| {
+                    code != Key::KEY_RESERVED.raw() && Key::new(code).is_keyboard_key()
+                }),
             pointer: self.has(EventType::EV_REL)
                 && self.relative.contains(Relative::REL_X.raw())
                 && self.relative.contains(Relative::REL_Y.raw()),
@@ -619,6 +622,20 @@ mod tests {
             keyboard.roles().iter().collect::<Vec<_>>(),
             [Role::Keyboard]
         );
+    }
+
+    #[test]
+    fn the_reserved_code_is_not_evidence_of_a_keyboard() {
+        // Code zero means nothing. A device whose map holds it and no other key in the block has
+        // no keyboard in it, whatever the bit says.
+        let odd = capabilities(
+            &[EventType::EV_SYN, EventType::EV_KEY],
+            &[Key::KEY_RESERVED, Key::BTN_LEFT],
+            &[],
+            &[],
+        );
+
+        assert!(!odd.roles().contains(Role::Keyboard));
     }
 
     #[test]
