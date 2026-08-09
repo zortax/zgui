@@ -1,0 +1,11 @@
+[package]
+name = "zgui-geom"
+version = "0.1.0"
+edition = "2024"
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+
+# A development edge from L0 to L2, which the rule deliberately permits: the test binary is the
+# only thing that links it, so a consumer's graph never sees it.
+[dev-dependencies]
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }

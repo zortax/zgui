@@ -1,0 +1,9 @@
+[package]
+name = "zgui-canvas"
+version = "0.1.0"
+edition = "2024"
+
+# PLANTED VIOLATION: a layered member with no `# L<n> — …` header. Nothing compares its edges, so
+# it reaches every layer above it and no check says a word.
+[dependencies]
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
