@@ -53,6 +53,7 @@ use zgui_platform::{
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
+use crate::cursor::Cursor;
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
 use crate::input::pointer::{Pointer, Screen};
@@ -120,6 +121,15 @@ fn drive(
         }
     }
 
+    // One cursor per display, and a plane for each that the device can give one to. The list of
+    // planes already taken travels with it: a plane drives one CRTC at a time, so a second display
+    // given the first one's plane takes the first one's cursor away with nothing reported.
+    let mut taken = Vec::new();
+    let cursors: Vec<Rc<RefCell<Cursor>>> = outputs
+        .iter()
+        .map(|output| Rc::new(RefCell::new(Cursor::new(device, output, &mut taken))))
+        .collect();
+
     let surfaces = surface::one_per_output(outputs, Arc::clone(device));
     let waker = Arc::new(EventfdWaker::new()?);
     let clock = Arc::new(SystemClock::new());
@@ -141,10 +151,16 @@ fn drive(
         surfaces
             .iter()
             .zip(&scanouts)
-            .map(|(drawn, scanout)| {
+            .zip(&cursors)
+            .map(|((drawn, scanout), cursor)| {
                 (
                     drawn.id(),
-                    DrmDisplay::new(Arc::clone(device), Rc::clone(&commit), Rc::clone(scanout)),
+                    DrmDisplay::new(
+                        Arc::clone(device),
+                        Rc::clone(&commit),
+                        Rc::clone(scanout),
+                        Rc::clone(cursor),
+                    ),
                 )
             })
             .collect(),
@@ -237,6 +253,44 @@ fn drive(
                 break;
             }
 
+            // After the input and before the frames. The shape comes from what the runtime asked
+            // for while it was being told about the pointer, and the place comes from where that
+            // pointer ended up — so both halves are settled by the time a frame is drawn, and a
+            // display on the fallback asks for that frame here rather than one turn late.
+            //
+            // Once a turn rather than once per motion. A cursor commit blocks for up to two
+            // refreshes, and a loop that reads flips, deadlines and input on one thread does none
+            // of the three while it waits.
+            for (drawn, cursor) in surfaces[..claimed].iter().zip(&cursors) {
+                let mut cursor = cursor.borrow_mut();
+                if let Some(style) = drawn.take_cursor() {
+                    cursor.set_style(style);
+                }
+                cursor.place(
+                    pointer
+                        .on(&screens)
+                        .filter(|screen| screen.id == drawn.id())
+                        .map(|screen| {
+                            let (x, y) = pointer.union();
+                            ((x - screen.left) as i32, y as i32)
+                        }),
+                );
+                if !cursor.changed() {
+                    continue;
+                }
+                if cursor.on_a_plane() {
+                    if let Err(error) = cursor.commit(device, &mut **commit.borrow_mut()) {
+                        warn!("the pointer could not be put on its plane: {error}");
+                    }
+                } else {
+                    // The whole frame is what carries the pointer here, so the picture under it
+                    // has to be drawn again. `settled` is what stops this asking every turn for
+                    // the rest of the program.
+                    drawn.request_redraw();
+                    cursor.settled();
+                }
+            }
+
             for drawn in &surfaces[..claimed] {
                 if drawn.take_redraw() {
                     handler.surface_event(&cx, drawn.id(), SurfaceEvent::RedrawRequested);
@@ -299,6 +353,9 @@ fn drive(
     for scanout in scanouts {
         release(scanout, device);
     }
+    for cursor in cursors {
+        release_cursor(cursor, device);
+    }
     outcome
 }
 
@@ -317,8 +374,23 @@ fn release(scanout: Rc<RefCell<Scanout>>, device: &Device) {
     }
 }
 
-/// Waits on the device, the wake channel and every keyboard, reporting whether the wait ran to its
-/// end.
+/// Gives one display's cursor buffer back, if nothing that draws still holds it.
+///
+/// The same rule the scanout follows, for the same reason: the buffer is released by value, so
+/// whatever still holds it is reported. The kernel releases it when the device closes, which is
+/// moments later.
+fn release_cursor(cursor: Rc<RefCell<Cursor>>, device: &Device) {
+    match Rc::try_unwrap(cursor) {
+        Ok(held) => held.into_inner().release(device),
+        Err(_) => warn!(
+            "a display's cursor is still held by something that draws, so its buffer stays \
+             allocated until the device closes"
+        ),
+    }
+}
+
+/// Waits on the device, the wake channel and every device a person works with, reporting whether
+/// the wait ran to its end.
 ///
 /// `false` covers a descriptor with something to report and a signal that cut the wait short. Both
 /// mean the same thing to the loop: the wait ended before its moment.

@@ -30,6 +30,13 @@ const PRIMARY: u64 = 1;
 pub struct Output {
     /// The connector, the CRTC and the plane, as a commit names them.
     pub pipe: Pipe,
+    /// Where this display's CRTC sits in the device's own list of them.
+    ///
+    /// A place rather than an id, because a plane's `possible_crtcs` mask is indexed by place and
+    /// [`Device::cursor_plane`] therefore asks for one. It is kept here because the discovery below
+    /// already knows it, and a second walk of the resources is a lookup that can answer wrongly
+    /// where this cannot.
+    pub crtc_index: usize,
     /// The mode the display is driven at.
     pub mode: Mode,
 }
@@ -104,6 +111,7 @@ impl Output {
                     crtc,
                     plane,
                 },
+                crtc_index: index as usize,
                 mode,
             });
         }
@@ -269,6 +277,7 @@ mod tests {
                 crtc,
                 plane: crtc + 2,
             },
+            crtc_index: crtc as usize,
             mode: Mode::builder(clock, horizontal, vertical).build(),
         }
     }

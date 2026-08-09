@@ -1,8 +1,8 @@
 //! One output, seen as a thing the framework draws into.
 
 use std::os::fd::{AsFd, AsRawFd};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use accesskit::TreeUpdate;
 use raw_window_handle::{
@@ -49,6 +49,18 @@ pub struct DrmSurface {
     device: Arc<DrmDevice>,
     /// Whether a frame has been asked for and not yet taken.
     redraw: AtomicBool,
+    /// The shape the pointer was last asked to take, until the loop reads it.
+    ///
+    /// A pending value rather than a command, for the same reason the redraw request is one: this
+    /// runs wherever the runtime dispatches an event, and the frame loop's own commit is what moves
+    /// a cursor. The runtime asks for a shape on every pointer move, so a hundred requests between
+    /// two turns are one commit.
+    ///
+    /// [`Displays`](crate::Displays) solves the same shape of problem for presenting a frame and
+    /// cannot solve this one: a [`DrmDisplay`](crate::DrmDisplay) holds [`Rc`](std::rc::Rc)
+    /// handles to the loop's own state and a [`Surface`] is `Send + Sync`, so a surface cannot
+    /// hold one. The value crosses, and the loop carries it.
+    cursor: Mutex<Option<CursorStyle>>,
 }
 
 impl DrmSurface {
@@ -63,6 +75,7 @@ impl DrmSurface {
             output,
             device,
             redraw: AtomicBool::new(false),
+            cursor: Mutex::new(None),
         }
     }
 
@@ -91,6 +104,19 @@ impl DrmSurface {
     /// deadline the application turns into a redraw from inside the callback that reports it.
     pub fn wants_redraw(&self) -> bool {
         self.redraw.load(Ordering::Relaxed)
+    }
+
+    /// Takes the shape the pointer was last asked for, where it was asked for one.
+    ///
+    /// Coalescing lives here, the way it does for a redraw request: the runtime states a cursor
+    /// for whatever is under the pointer on every move, and what the loop pays for is one commit
+    /// per turn rather than one per request.
+    ///
+    /// A poisoned lock answers with nothing. The only thing under it is a value, so a panic while
+    /// it was held left it whole — and a cursor that keeps its old shape is a cosmetic fault where
+    /// a panic in a frame loop is not.
+    pub fn take_cursor(&self) -> Option<CursorStyle> {
+        self.cursor.lock().map_or(None, |mut asked| asked.take())
     }
 }
 
@@ -164,9 +190,17 @@ impl Surface for DrmSurface {
         Some(FullscreenMode::Exclusive)
     }
 
-    /// Nothing: the keyboard is read and the pointer is not, so there is no cursor to give a shape
-    /// to.
-    fn set_cursor(&self, _cursor: CursorStyle) {}
+    /// Remembers the shape, for the frame loop to put on the screen.
+    ///
+    /// Nothing is committed here. This runs wherever the runtime dispatches an event and the loop's
+    /// own commit is what moves a cursor, so the value crosses and the loop carries it. A shape
+    /// asked for while no loop is running is read by nothing, which is a surface nothing is drawing
+    /// to either.
+    fn set_cursor(&self, cursor: CursorStyle) {
+        if let Ok(mut asked) = self.cursor.lock() {
+            *asked = Some(cursor);
+        }
+    }
 
     /// Does nothing: there is no input method on this backend to steer.
     ///

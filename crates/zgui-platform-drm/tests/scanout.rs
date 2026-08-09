@@ -18,6 +18,7 @@ use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::{Device, Event};
 use zgui_geom::{Device as DeviceSpace, DevicePx, Point, Rect, Scale, Size};
+use zgui_platform_drm::cursor::Cursor;
 use zgui_platform_drm::{Output, Scanout};
 use zgui_render::{RenderTarget, Renderer};
 use zgui_render_wgpu::{Builder, Pixels, wgpu};
@@ -155,15 +156,33 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     let mut scanout = Scanout::new(&device, output, &mut *commit, pixels.is_bgra())
         .expect("the mode is set on this display");
 
+    // The pointer this display carries. It is placed here so that what reaches the screen is what
+    // a person would be looking at, and it says which of the two paths this device took.
+    let mut cursor = Cursor::new(&device, output, &mut Vec::new());
+    println!(
+        "the pointer on this display is {}",
+        if cursor.on_a_plane() {
+            "composited by the display engine"
+        } else {
+            "drawn into the frame"
+        }
+    );
+    cursor.place(Some((width as i32 / 2, height as i32 / 2)));
+    if cursor.on_a_plane() {
+        cursor
+            .commit(&device, &mut *commit)
+            .expect("the driver takes an image on the cursor plane it offered");
+    }
+
     assert!(
         scanout
-            .present(&device, &mut *commit, &pixels)
+            .present(&device, &mut *commit, &pixels, &cursor)
             .expect("the driver accepts the first flip"),
         "nothing is outstanding in front of the first frame"
     );
     assert!(
         !scanout
-            .present(&device, &mut *commit, &pixels)
+            .present(&device, &mut *commit, &pixels, &cursor)
             .expect("a refused frame is not an error"),
         "a second frame before the completion is declined rather than written over the buffer \
          that is still on screen"
@@ -178,7 +197,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     // A second frame proves the pair really rotates rather than the first one having worked once.
     assert!(
         scanout
-            .present(&device, &mut *commit, &pixels)
+            .present(&device, &mut *commit, &pixels, &cursor)
             .expect("the driver accepts the second flip"),
         "the completion freed the other buffer"
     );
@@ -192,5 +211,6 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
         output.pipe.crtc
     );
     scanout.release(&device);
+    cursor.release(&device);
     drop(device.drop_master());
 }

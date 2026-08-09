@@ -26,8 +26,34 @@
 //! That byte order also makes the fallback cheap. `XRGB8888` puts blue, green and red in the same
 //! three places, so compositing a cursor into a frame reads the alpha and copies the other three
 //! bytes rather than converting anything.
+//!
+//! # The two ways a cursor reaches a screen
+//!
+//! **A plane.** The display engine composites the image, and moving it is two numbers, so a pointer
+//! costs one commit per motion and no frame at all. A real device on the atomic interface has such
+//! a plane, and so does every device on the legacy interface — the legacy request names the CRTC
+//! and reads no plane, so [`Device::cursor_plane`] answering `None` there says nothing about the
+//! hardware.
+//!
+//! **The frame.** A device that offers neither has the image drawn into the picture as it is
+//! copied for scanout, which costs a whole frame per motion. So the two paths differ in what the
+//! loop does with a pointer that moved: a display on a plane commits, and a display on the
+//! fallback asks its surface to be drawn again.
+//!
+//! On the atomic interface the para-virtualised drivers are on the fallback. vmwgfx, qxl, virtio
+//! and virtualbox hide their cursor plane from a client that has not set
+//! `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`, which `zgui-drm` does not ask for, so **a virtual machine
+//! on one of those drivers has no hardware cursor here**.
 
+use tracing::warn;
+use zgui_drm::buffer::DumbBuffer;
+use zgui_drm::commit::Commit;
+use zgui_drm::cursor::{CursorImage, CursorPlane, CursorSize};
+use zgui_drm::framebuffer::Framebuffer;
+use zgui_drm::{Device, Error};
 use zgui_platform::CursorStyle;
+
+use crate::output::Output;
 
 /// How many bytes one pixel takes, in a cursor image and in a scanout buffer alike.
 const BYTES_PER_PIXEL: usize = 4;
@@ -435,6 +461,306 @@ fn drawn(silhouette: &[Vec<bool>], hotspot: (i32, i32), turn: Turn) -> Image {
     }
 }
 
+/// The buffer a cursor plane scans an image out of.
+#[derive(Debug)]
+struct Held {
+    /// The buffer itself, mapped when an image is written into it.
+    buffer: DumbBuffer,
+    /// The framebuffer the atomic interface names it by, where one was registered.
+    ///
+    /// `None` on the legacy interface, which names the GEM handle and reads no framebuffer. One
+    /// registered there would cost a kernel object for nothing and an `ADDFB2` that fails wherever
+    /// no plane advertises the format.
+    framebuffer: Option<Framebuffer>,
+}
+
+/// The cursor on one display.
+///
+/// Both halves of this backend read it. The frame loop decides what it looks like and where it is;
+/// a display on the fallback draws it into the frame as one is presented. Both run on the loop's
+/// thread, one at a time.
+#[derive(Debug)]
+pub struct Cursor {
+    /// The CRTC that shows it, and the plane the atomic interface puts it on.
+    plane: CursorPlane,
+    /// Whether this display has a cursor plane at all.
+    ///
+    /// Not the same question as [`CursorPlane::id`] being `None`. The legacy interface names the
+    /// CRTC and has a hardware cursor with no plane object anywhere.
+    hardware: bool,
+    /// The buffer the plane scans out of, where there is one.
+    held: Option<Held>,
+    /// The picture, or nothing where the style asks for no cursor.
+    image: Option<Image>,
+    /// The style the picture was drawn from.
+    style: CursorStyle,
+    /// Where the pointer is on this display, in device pixels, while it is on this one.
+    at: Option<(i32, i32)>,
+    /// The style on the screen and the corner it was put at, so that nothing is committed twice.
+    shown: Option<(CursorStyle, (i32, i32))>,
+}
+
+impl Cursor {
+    /// Creates the cursor for `output`, taking a plane for it where the device has one to give.
+    ///
+    /// `taken` is the cursor planes already given to other displays, and this adds the one it
+    /// takes. A plane drives one CRTC at a time, so a second display given the first one's plane
+    /// takes the first one's cursor away with nothing reported.
+    ///
+    /// Nothing here fails. A device that offers no plane, a driver that refuses the buffer and a
+    /// buffer the legacy interface would misread all leave a cursor drawn into the frame instead,
+    /// which is slower and correct. The refusal is written to the log where it happened.
+    pub fn new(device: &Device, output: &Output, taken: &mut Vec<u32>) -> Self {
+        let size = device.cursor_size();
+        // Asked only on the atomic interface. The legacy one hides every plane from a client that
+        // did not ask for universal planes, so a `None` there says nothing about the hardware.
+        let id = if device.is_atomic() {
+            match device.cursor_plane(output.crtc_index, taken) {
+                Ok(id) => id,
+                Err(error) => {
+                    warn!(
+                        "the cursor plane for CRTC {} could not be read, so the pointer is drawn \
+                         into the frame instead: {error}",
+                        output.pipe.crtc
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(id) = id {
+            taken.push(id);
+        }
+
+        let plane = CursorPlane {
+            crtc: output.pipe.crtc,
+            id,
+        };
+        let hardware = !device.is_atomic() || id.is_some();
+        let held = hardware.then(|| allocate(device, size)).flatten();
+        if hardware && held.is_none() {
+            warn!(
+                "CRTC {} has a cursor plane and no buffer to put on it, so the pointer is drawn \
+                 into the frame instead",
+                output.pipe.crtc
+            );
+        }
+        Self {
+            plane,
+            hardware: held.is_some(),
+            held,
+            image: Image::of(CursorStyle::default()),
+            style: CursorStyle::default(),
+            at: None,
+            shown: None,
+        }
+    }
+
+    /// Returns `true` if the display engine composites this cursor.
+    ///
+    /// The loop reads it to decide what a pointer that moved costs: a commit where this is true,
+    /// and a whole frame where it is false.
+    pub const fn on_a_plane(&self) -> bool {
+        self.hardware
+    }
+
+    /// Gives it a new shape.
+    pub fn set_style(&mut self, style: CursorStyle) {
+        if style == self.style {
+            return;
+        }
+        self.style = style;
+        self.image = Image::of(style);
+    }
+
+    /// Puts it where the pointer is on this display, or nowhere while the pointer is on another.
+    pub fn place(&mut self, at: Option<(i32, i32)>) {
+        self.at = at;
+    }
+
+    /// Returns `true` if what is on the screen is no longer what this cursor is.
+    pub fn changed(&self) -> bool {
+        self.wanted() != self.shown
+    }
+
+    /// Records that what is wanted has reached the screen.
+    ///
+    /// The plane path calls it for itself. The fallback path is what the loop calls it for, after
+    /// it has asked the surface to be drawn: without it every later turn would ask again, and a
+    /// pointer that moved once would redraw for ever.
+    pub fn settled(&mut self) {
+        self.shown = self.wanted();
+    }
+
+    /// Puts what this cursor is on its plane.
+    ///
+    /// Answers at once on a display with no plane, and on one where the screen already holds what
+    /// is wanted. The loop calls it once a turn rather than once per motion, because a cursor
+    /// commit blocks for up to two refreshes and a loop that reads flips, deadlines and input on
+    /// one thread does none of the three while it waits.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever the kernel refused the image, the move or the hiding with.
+    pub fn commit(&mut self, device: &Device, commit: &mut dyn Commit) -> Result<(), Error> {
+        if !self.hardware || !self.changed() {
+            return Ok(());
+        }
+        let Some((style, (x, y))) = self.wanted() else {
+            commit.hide_cursor(device, self.plane)?;
+            self.settled();
+            return Ok(());
+        };
+        // A move keeps the image the plane already has, which is what makes it cost two numbers.
+        if self.shown.is_some_and(|(was, _)| was == style) {
+            commit.move_cursor(device, self.plane, x, y)?;
+        } else {
+            let image = self.write(device)?;
+            commit.set_cursor(device, self.plane, image, x, y)?;
+        }
+        self.settled();
+        Ok(())
+    }
+
+    /// Draws it into a frame, for a display with no plane to put it on.
+    ///
+    /// Answers by drawing nothing where the pointer is on another display, where the style asks
+    /// for no cursor, and where the display engine is compositing it already.
+    pub fn draw(&self, into: &mut [u8], stride: usize, width: u32, height: u32) {
+        if self.hardware {
+            return;
+        }
+        let (Some(image), Some((x, y))) = (self.image.as_ref(), self.wanted().map(|(_, at)| at))
+        else {
+            return;
+        };
+        image.draw(into, stride, width, height, x, y);
+    }
+
+    /// Gives the buffer back.
+    ///
+    /// Taken by value, because the plane is dead afterwards. A refusal is reported through the log
+    /// rather than returned: this runs while a program is shutting down, and the kernel releases
+    /// the buffer when the device closes either way.
+    ///
+    /// The cursor is not taken off its plane first. A hide here would be one more blocking commit
+    /// while the program is shutting down.
+    ///
+    /// A direct run on an atomic device has the plane cleared for it: closing its own descriptor is
+    /// the last handle on the device, so the kernel's client restores from `drm_lastclose` and
+    /// `drm_client_modeset_commit_atomic` disables every plane that is not primary. The legacy
+    /// commit disables none, and a seated run reaches neither — the daemon holds a duplicate of this
+    /// descriptor, so the process exiting closes no last handle.
+    ///
+    /// **So a seated shutdown leaves the image on the plane.** What takes a pointer off a seated
+    /// run's screen is [`Cursor::give_the_plane_back`] before the switch, and a run that stops
+    /// without ever switching leaves it up for the next session.
+    pub fn release(self, device: &Device) {
+        let Some(held) = self.held else {
+            return;
+        };
+        if let Some(framebuffer) = held.framebuffer
+            && let Err(error) = device.remove_framebuffer(framebuffer)
+        {
+            warn!("a cursor framebuffer could not be removed: {error}");
+        }
+        if let Err(error) = device.destroy_dumb_buffer(held.buffer) {
+            warn!("a cursor buffer could not be released: {error}");
+        }
+    }
+
+    /// Returns the style that should be on the screen and the corner its image goes at.
+    ///
+    /// The corner rather than the pointer: both interfaces place a cursor by its top left corner,
+    /// so the caller subtracts the hotspot. A pointer near the left or the top edge lands at a
+    /// negative coordinate, which both interfaces take.
+    fn wanted(&self) -> Option<(CursorStyle, (i32, i32))> {
+        let (x, y) = self.at?;
+        let image = self.image.as_ref()?;
+        Some((self.style, (x - image.hotspot_x(), y - image.hotspot_y())))
+    }
+
+    /// Writes the picture into the buffer and names it the way both interfaces need.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unusable`] when there is no buffer to write into, and whatever the driver
+    /// refused the mapping with.
+    fn write(&mut self, device: &Device) -> Result<CursorImage, Error> {
+        let (Some(held), Some(image)) = (self.held.as_mut(), self.image.as_ref()) else {
+            return Err(Error::Unusable(
+                "this display has no cursor buffer to put an image in".to_owned(),
+            ));
+        };
+        let (width, height) = (held.buffer.width(), held.buffer.height());
+        let stride = held.buffer.stride();
+        image.fill(held.buffer.bytes(device)?, stride as usize, height);
+        Ok(CursorImage {
+            framebuffer: held.framebuffer,
+            handle: held.buffer.handle(),
+            // The buffer's extent rather than the picture's: the plane scans out every pixel of
+            // it, and the picture sits in its top left corner with the rest cleared.
+            width,
+            height,
+            stride,
+            format: CursorImage::LEGACY_FORMAT,
+            hotspot_x: image.hotspot_x(),
+            hotspot_y: image.hotspot_y(),
+        })
+    }
+}
+
+/// Allocates one buffer of the extent this device asked for, registered where the atomic interface
+/// needs it.
+///
+/// Answers with nothing where the driver refuses, and where the buffer it gave back is one the
+/// legacy interface would read as something else. Both leave the pointer drawn into the frame.
+fn allocate(device: &Device, size: CursorSize) -> Option<Held> {
+    let buffer =
+        match device.create_dumb_buffer(size.width, size.height, CursorImage::LEGACY_FORMAT) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                warn!(
+                    "a {}x{} cursor buffer was refused: {error}",
+                    size.width, size.height
+                );
+                return None;
+            }
+        };
+    // The legacy request carries no stride and the kernel reads four bytes a pixel with no
+    // rounding, so a buffer whose rows the driver rounded up would be scanned out sheared. It is
+    // checked here rather than at the commit, because a display that cannot use its plane has to
+    // fall back before the first frame rather than fail on every motion.
+    if !device.is_atomic() && u64::from(buffer.stride()) != CursorImage::legacy_stride(size.width) {
+        warn!(
+            "this driver gave a {}-pixel cursor buffer rows of {} bytes, and the legacy cursor \
+             request reads {} — so the pointer is drawn into the frame instead",
+            size.width,
+            buffer.stride(),
+            CursorImage::legacy_stride(size.width)
+        );
+        drop(device.destroy_dumb_buffer(buffer));
+        return None;
+    }
+    let framebuffer = if device.is_atomic() {
+        match device.add_framebuffer(&buffer, CursorImage::LEGACY_FORMAT) {
+            Ok(framebuffer) => Some(framebuffer),
+            Err(error) => {
+                warn!("a cursor buffer could not be registered for scanout: {error}");
+                drop(device.destroy_dumb_buffer(buffer));
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+    Some(Held {
+        buffer,
+        framebuffer,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! What each style is drawn as, and where a drawn cursor lands.
@@ -442,8 +768,26 @@ mod tests {
     //! Every one of these is pure: a shape is characters and a frame is a slice, so nothing here
     //! needs a device, a plane or DRM master.
 
-    use super::{BYTES_PER_PIXEL, Image};
+    use super::{BYTES_PER_PIXEL, Cursor, Image};
+    use zgui_drm::cursor::CursorPlane;
     use zgui_platform::CursorStyle;
+
+    /// A cursor on a display with no plane to put one on, which a virtual machine has.
+    ///
+    /// Built here rather than through [`Cursor::new`], which needs a device, DRM master and a
+    /// driver that hands over a plane. What it holds afterwards is the same state the real one
+    /// holds on the fallback path: no buffer, and a picture drawn into the frame.
+    fn fallback(style: CursorStyle) -> Cursor {
+        Cursor {
+            plane: CursorPlane { crtc: 62, id: None },
+            hardware: false,
+            held: None,
+            image: Image::of(style),
+            style,
+            at: None,
+            shown: None,
+        }
+    }
 
     /// Every style the contract names.
     const EVERY: &[CursorStyle] = &[
@@ -640,6 +984,107 @@ mod tests {
             [0x00, 0x00, 0x00, 0x00],
             "and a corner nothing reaches is clear"
         );
+    }
+
+    #[test]
+    fn a_cursor_is_drawn_with_the_pixel_a_person_aims_with_under_the_pointer() {
+        // Both interfaces place a cursor by its top left corner, so the caller subtracts the
+        // hotspot. Left out, every cursor sits below and to the right of where it points and every
+        // click lands where the person was not aiming.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.place(Some((40, 50)));
+        let (width, height) = (64_u32, 64_u32);
+        let mut into = frame(width, height);
+
+        cursor.draw(&mut into, width as usize * BYTES_PER_PIXEL, width, height);
+
+        assert_eq!(
+            dot(&into, width, 40, 50),
+            [0xFF, 0xFF, 0xFF, 0x40],
+            "the tip of the arrow is exactly where the pointer is"
+        );
+    }
+
+    #[test]
+    fn a_pointer_on_another_display_draws_nothing_on_this_one() {
+        // Two displays and one pointer. A display that drew the cursor whether or not the pointer
+        // was on it would show one on every screen at once.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.place(None);
+        let (width, height) = (64_u32, 64_u32);
+        let mut into = frame(width, height);
+
+        cursor.draw(&mut into, width as usize * BYTES_PER_PIXEL, width, height);
+
+        assert!(into.iter().all(|byte| *byte == 0x40));
+    }
+
+    #[test]
+    fn a_style_that_asks_for_no_cursor_draws_none() {
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.place(Some((10, 10)));
+        cursor.settled();
+        cursor.set_style(CursorStyle::None);
+        let (width, height) = (64_u32, 64_u32);
+        let mut into = frame(width, height);
+
+        cursor.draw(&mut into, width as usize * BYTES_PER_PIXEL, width, height);
+
+        assert!(into.iter().all(|byte| *byte == 0x40));
+        assert!(
+            cursor.changed(),
+            "and taking a cursor away is itself a change the screen has not seen yet"
+        );
+    }
+
+    #[test]
+    fn a_display_on_a_plane_draws_nothing_into_its_frames() {
+        // The display engine composites the image, so a backend that also drew it would show two
+        // cursors, one of which never moves between frames.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(Some((10, 10)));
+        let (width, height) = (64_u32, 64_u32);
+        let mut into = frame(width, height);
+
+        cursor.draw(&mut into, width as usize * BYTES_PER_PIXEL, width, height);
+
+        assert!(into.iter().all(|byte| *byte == 0x40));
+    }
+
+    #[test]
+    fn a_cursor_that_has_reached_the_screen_asks_for_nothing_more() {
+        // What stops the fallback asking for a frame every turn for the rest of the program.
+        let mut cursor = fallback(CursorStyle::Default);
+        assert!(!cursor.changed(), "a pointer on no display shows nothing");
+
+        cursor.place(Some((10, 10)));
+        assert!(cursor.changed());
+        cursor.settled();
+        assert!(!cursor.changed());
+
+        cursor.place(Some((10, 11)));
+        assert!(cursor.changed(), "a pointer that moved one pixel has moved");
+        cursor.settled();
+
+        cursor.set_style(CursorStyle::Text);
+        assert!(cursor.changed(), "and so has one that changed shape");
+        cursor.settled();
+        assert!(!cursor.changed());
+    }
+
+    #[test]
+    fn a_style_that_falls_back_to_the_one_already_shown_is_still_a_change_of_style() {
+        // `Wait` and `Grab` are both drawn as the arrow. What is committed is keyed on the style
+        // rather than on the picture, so this costs one image commit where a move would have done
+        // — which is the safe direction: the other way round leaves the wrong picture on a plane.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.place(Some((10, 10)));
+        cursor.settled();
+
+        cursor.set_style(CursorStyle::Wait);
+
+        assert!(cursor.changed());
     }
 
     /// A frame of `width` by `height`, filled with a colour no cursor writes.

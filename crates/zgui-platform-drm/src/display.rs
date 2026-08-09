@@ -29,6 +29,7 @@ use zgui_drm::commit::Commit;
 use zgui_platform::{PlatformError, SurfaceId};
 use zgui_render_wgpu::Pixels;
 
+use crate::cursor::Cursor;
 use crate::scanout::Scanout;
 
 /// The displays a frame loop is driving, by the surface each is seen as.
@@ -77,8 +78,9 @@ impl Displays {
 
 /// One display, as the thing a frame is put on.
 ///
-/// A cheap handle: cloning it costs two reference counts. What it names is one display's pair of
-/// buffers, the device they live on, and the commit every flip on that device goes through.
+/// A cheap handle: cloning it costs three reference counts. What it names is one display's pair of
+/// buffers, the pointer that is drawn over them, the device they live on, and the commit every
+/// flip on that device goes through.
 #[derive(Clone)]
 pub struct DrmDisplay {
     /// The device the display hangs off, kept open for as long as anything draws to it.
@@ -87,30 +89,44 @@ pub struct DrmDisplay {
     commit: Rc<RefCell<Box<dyn Commit>>>,
     /// The two buffers this display is driven from, shared with the loop that drains its flips.
     scanout: Rc<RefCell<Scanout>>,
+    /// The pointer on this display, shared with the loop that decides where it is.
+    ///
+    /// Here for the same reason the buffers are. `Surface::set_cursor` cannot reach a display: a
+    /// surface is `Send + Sync` and this handle is neither, so the shape a surface was asked for
+    /// travels to the loop as a value on the surface. What the loop cannot do for itself is draw
+    /// the pointer into a frame, because the frame arrives here — so the loop writes the cursor
+    /// and this reads it, which is the arrangement the scanout already has.
+    cursor: Rc<RefCell<Cursor>>,
 }
 
 impl DrmDisplay {
-    /// Creates the display `scanout` drives, flipped through `commit` on `device`.
+    /// Creates the display `scanout` drives, flipped through `commit` on `device`, with `cursor`
+    /// over it.
     ///
-    /// The frame loop calls this. It owns all three, and it puts the result in a [`Displays`] so
+    /// The frame loop calls this. It owns all four, and it puts the result in a [`Displays`] so
     /// that the renderer can find it.
     pub fn new(
         device: Arc<Device>,
         commit: Rc<RefCell<Box<dyn Commit>>>,
         scanout: Rc<RefCell<Scanout>>,
+        cursor: Rc<RefCell<Cursor>>,
     ) -> Self {
         Self {
             device,
             commit,
             scanout,
+            cursor,
         }
     }
 
-    /// Copies `pixels` into the back buffer and flips to it, reporting whether it went.
+    /// Copies `pixels` into the back buffer, draws the pointer over it, and flips to it.
     ///
     /// Answers `false` while a flip is still on its way, which is [`Scanout::present`]'s own
     /// answer: the back buffer is the one still on the screen until the completion arrives, so the
     /// frame is declined rather than shown torn.
+    ///
+    /// The pointer is drawn only where this display has no cursor plane. Where it has one the
+    /// display engine composites it, and a frame that drew it as well would show two.
     ///
     /// # Errors
     ///
@@ -118,9 +134,12 @@ impl DrmDisplay {
     /// buffer cannot be mapped, and when the driver refuses the flip.
     pub fn present(&self, pixels: &Pixels) -> Result<bool, PlatformError> {
         let mut commit = self.commit.borrow_mut();
-        self.scanout
-            .borrow_mut()
-            .present(&self.device, &mut **commit, pixels)
+        self.scanout.borrow_mut().present(
+            &self.device,
+            &mut **commit,
+            pixels,
+            &self.cursor.borrow(),
+        )
     }
 }
 
