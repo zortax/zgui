@@ -30,16 +30,22 @@
 //!
 //! # The console's request numbers
 //!
-//! `KDGKBENT` and `KDGKBMODE` belong to the terminal driver rather than to an input device, and
-//! their numbers were assigned before `_IOC` existed. Each is a whole number in `kd.h` with no
-//! direction and no size in it. They still go to [`issue`] with a payload, because the kernel
-//! reaches that payload through the pointer exactly as the input requests do — what changes is
-//! that the size is a claim the row states rather than one `size_of` computes.
+//! `KDGKBENT`, `KDGKBMODE` and `KDSETMODE` belong to the terminal driver rather than to an input
+//! device, and their numbers were assigned before `_IOC` existed. Each is a whole number in `kd.h`
+//! with no direction and no size in it. The first two go to [`issue`] with a payload, because the
+//! kernel reaches that payload through the pointer exactly as the input requests do — what changes
+//! is that the size is a claim [`console`] states rather than one `size_of` computes.
+//!
+//! `KDSETMODE` is the third shape instead. `vt_ioctl` reads its argument *as* the mode and never
+//! follows it, exactly as `EVIOCGRAB` reads its own, so it is a [`ValueRequest`] built from the
+//! header's whole number.
 
 // The table below is the kernel's interface. Every entry is a constant the headers define, every
-// entry is checked against the value those headers expand to by the test at the foot of this file,
-// and the callers arrive over the tasks that follow. Without the allowance, building the table in
-// one piece would fail `-D warnings` until the last caller was written.
+// entry is checked against the value those headers expand
+// to by the test at the foot of this file, and the callers arrive over the tasks that follow. The
+// uinput family has no caller outside those tests: it makes a device where the rest of this crate
+// reads one. Without the allowance, building the table in one piece would fail `-D warnings` until
+// the last caller was written.
 #![allow(dead_code)]
 
 use std::ffi::{c_int, c_void};
@@ -250,6 +256,22 @@ macro_rules! console {
     };
 }
 
+/// Names a console request whose argument is the value the kernel reads.
+///
+/// The same shape [`by_value`] names, over a number the header holds whole. `vt_ioctl` reads
+/// `KDSETMODE`'s argument as the mode and never dereferences it, so a call written through
+/// [`issue`] would hand the kernel the address of a local and set whichever mode that address
+/// happens to be — which for a value the kernel does not name is `EINVAL`, and for one it does is
+/// the wrong mode with every return value reporting success.
+macro_rules! console_by_value {
+    ($name:ident) => {
+        pub(crate) const $name: ValueRequest = ValueRequest {
+            opcode: sys::$name as Opcode,
+            name: stringify!($name),
+        };
+    };
+}
+
 read_only!(GET_VERSION, GROUP, 0x01, c_int);
 read_only!(GET_ID, GROUP, 0x02, sys::input_id);
 by_value!(GRAB, GROUP, 0x90);
@@ -272,6 +294,8 @@ by_value!(UINPUT_SET_ABSOLUTE_BIT, UINPUT, 103);
 // travels both ways through one pointer. `KDGKBMODE` writes one `int`.
 console!(KDGKBENT, sys::kbentry);
 console!(KDGKBMODE, c_int);
+// Which of text and graphics the console's screen is in. The mode travels as the argument itself.
+console_by_value!(KDSETMODE);
 
 /// Returns `EVIOCGNAME`, which answers the device's name into whatever buffer it is issued with.
 pub(crate) const fn name() -> ByteRequest {
@@ -554,6 +578,7 @@ mod tests {
         // had. So the header holds each number whole and nothing computes it.
         assert_eq!(KDGKBENT.opcode(), 0x4b46);
         assert_eq!(KDGKBMODE.opcode(), 0x4b44);
+        assert_eq!(KDSETMODE.opcode(), 0x4b3a);
     }
 
     #[test]

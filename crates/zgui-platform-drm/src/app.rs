@@ -35,6 +35,13 @@
 //! and nothing asks a session daemon for it, so this needs a free virtual terminal or root and
 //! fails to start while a compositor holds the device.
 //!
+//! # What holds the screen
+//!
+//! The console is put into graphics mode after the master is taken and back into text mode before
+//! it is given up, so the kernel's own text console stops drawing over the picture and redraws
+//! when the program stops. [`crate::console`] is that pair of calls and says where their scope
+//! ends: it is two ioctls, and it is not terminal switching.
+//!
 //! # What holds the keyboard and the mouse
 //!
 //! The same process, and it takes both **after** DRM master. That ordering is the safety
@@ -66,6 +73,7 @@ use zgui_platform::{
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
+use crate::console::ConsoleScreen;
 use crate::cursor::Cursor;
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
@@ -96,10 +104,20 @@ pub fn run(handler: Box<dyn AppHandler>, displays: &Displays) -> Result<(), Plat
     let device = Arc::new(Device::open_first().map_err(backend)?);
     device.become_master().map_err(backend)?;
 
+    // After the master, so that a run on a machine where a compositor holds the device has already
+    // returned and never blanks a console it was not going to draw on. See `crate::console`.
+    let screen = ConsoleScreen::taken();
+
     let outcome = drive(&device, handler, displays);
 
-    // The device goes back whatever happened above. A process that kept master would leave the
-    // console with no way to draw for anybody else until it exits.
+    // Both of these run whatever happened above, including an error return.
+    //
+    // The console first. Telling it the screen is its own is what puts the kernel's own picture
+    // back — handing the device over does not — and it is the order Xorg established and the
+    // kernel carries an exception for.
+    screen.restore();
+    // A process that kept master would leave the console with no way to draw for anybody else
+    // until it exits.
     if let Err(error) = device.drop_master() {
         warn!("the device could not be handed back before this process exits: {error}");
     }
@@ -275,9 +293,11 @@ fn drive(
             // pointer ended up — so both halves are settled by the time a frame is drawn, and a
             // display on the fallback asks for that frame here rather than one turn late.
             //
-            // Once a turn rather than once per motion. A cursor commit blocks for up to two
-            // refreshes, and a loop that reads flips, deadlines and input on one thread does none
-            // of the three while it waits.
+            // Once a turn rather than once per motion. A move is one cheap ioctl that can still
+            // wait for an outstanding flip, and a change of shape is a property commit that waits
+            // for up to two refreshes — and a loop that reads flips, deadlines and input on one
+            // thread does none of the three while it waits. One turn is one wake, so a person
+            // moving the mouse gets one move per report all the same.
             for (drawn, cursor) in surfaces[..claimed].iter().zip(&cursors) {
                 let mut cursor = cursor.borrow_mut();
                 if let Some(style) = drawn.take_cursor() {

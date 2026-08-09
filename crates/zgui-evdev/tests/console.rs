@@ -8,8 +8,21 @@
 //! letter, whichever letter a `us`, `de`, `fr` or Dvorak keymap puts there, and shift changes at
 //! least one key. Which keymap this machine loaded is printed for a person to read.
 //!
-//! The probe lives here rather than in `support`, because `tests/device.rs` includes that module
-//! and a helper it never calls would be dead code in its binary.
+//! The probe lives beside the tests that call it. `tests/device.rs` includes `support` too, and a
+//! helper it never calls would be dead code in that binary.
+//!
+//! # The screen mode
+//!
+//! [`Console::set_screen`](zgui_evdev::Console::set_screen) writes, and what it writes is the
+//! screen everybody on the machine is looking at. A test that put a console into graphics mode
+//! would blank the terminal it was run from, and one that put a console into text mode could take
+//! the display away from a compositor running on it — a test that fails is a nuisance, and a test
+//! that blanks a machine is a reason to stop running the suite.
+//!
+//! Arithmetic against the header holds it up instead: `console::tests` checks the two mode numbers,
+//! and `ioctl::tests` checks the request number and that the argument shape is the one `EVIOCGRAB`
+//! uses — which is itself driven against a live kernel object through `/dev/uinput`. The rest is a
+//! claim about a running console, and only a run on one can settle it.
 
 #![cfg(target_os = "linux")]
 
