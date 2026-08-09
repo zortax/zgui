@@ -14,9 +14,11 @@
 //! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
 //!    which is the second descriptor the wait watches, and arrives as a
 //!    [`WakeReason`](zgui_platform::WakeReason).
-//! 3. **Somebody pressed a key.** A keyboard's descriptor becomes readable, and every device the
-//!    seat took is one more descriptor the wait watches — so the watch set is built per turn and
-//!    shrinks with a device that stopped answering. What is read goes to the focused surface.
+//! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable,
+//!    and every device the seat took is one more descriptor the wait watches — so the watch set is
+//!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
+//!    surface and a pointer event goes to the display the pointer is on — the display that decides
+//!    the focused surface.
 //! 4. **A surface asked to be drawn.** A request on a console is a flag on the surface and moves no
 //!    descriptor, so the loop reads the flags — before it parks as well as after it wakes.
 //! 5. **A deadline arrived.** The wait ran to its end, and the moment is reported through
@@ -29,13 +31,20 @@
 //! and nothing asks a session daemon for it, so this needs a free virtual terminal or root and
 //! fails to start while a compositor holds the device.
 //!
-//! # What holds the keyboard
+//! # What holds the keyboard and the mouse
 //!
-//! The same process, and it takes it **after** DRM master. That ordering is the safety interlock:
-//! a run on a busy machine fails at the master and never reaches the grab, so it cannot take the
-//! keyboard away from the desktop that is using it. See [`crate::input::seat`] for what the grab
-//! gives and for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application
-//! that binds no way out has to be killed from another terminal.
+//! The same process, and it takes both **after** DRM master. That ordering is the safety
+//! interlock: a run on a busy machine fails at the master and never reaches the grab, so it cannot
+//! take either away from the desktop that is using them. See [`crate::input::seat`] for what the
+//! grab gives and for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an
+//! application that binds no way out has to be killed from another terminal.
+//!
+//! # What moves the cursor
+//!
+//! This loop, once a turn. The shape comes from the surface, where the runtime left it, and the
+//! place comes from the pointer this loop owns — so the two meet here and nowhere else. A display
+//! with a cursor plane is committed to; a display without one is asked for a frame, because there
+//! the picture is what carries the pointer. [`crate::cursor`] is where that difference lives.
 
 use std::cell::RefCell;
 use std::rc::Rc;
