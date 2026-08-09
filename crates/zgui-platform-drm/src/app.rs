@@ -238,6 +238,11 @@ fn drive(
                     Pointer::at(x, y, &screens)
                 };
             }
+            // Read before the focus is worked out and before anything is dispatched, because
+            // reading is what moves the pointer and the pointer is what decides the focus. Worked
+            // out first, a key struck in the same turn as a crossing goes to the display the
+            // pointer has just left.
+            let reports = seat.read(&mut pointer, &screens);
             let holds_keys =
                 seat::focused(&claimed_ids, pointer.on(&screens).map(|screen| screen.id));
             if holds_keys != focused {
@@ -249,10 +254,9 @@ fn drive(
                 }
                 focused = holds_keys;
             }
-            for report in seat.read(&mut pointer, &screens) {
+            for report in reports {
                 // A pointer event names the display it happened on; everything else goes to
-                // whatever holds the keyboard. The pointer can cross displays inside one turn, so
-                // its own answer is the one that is used rather than the focus computed above.
+                // whatever holds the keyboard.
                 let Some(id) = report.surface.or(focused) else {
                     continue;
                 };

@@ -118,9 +118,11 @@ impl Renderer for DrmRenderer {
     /// be rebuilt — and there is nothing to put anywhere.
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
         let drawn = self.inner.draw(scene, damage);
-        let carries_the_pointer = matches!(drawn, FrameOutcome::Skipped(SkipReason::Undamaged))
+        // An undamaged frame that has to go on the screen anyway, because the pointer drawn over
+        // it has moved even though the picture has not.
+        let unchanged_but_owed = matches!(drawn, FrameOutcome::Skipped(SkipReason::Undamaged))
             && self.display.carries_the_pointer();
-        if matches!(drawn, FrameOutcome::Presented(_)) || carries_the_pointer {
+        if matches!(drawn, FrameOutcome::Presented(_)) || unchanged_but_owed {
             self.present(drawn)
         } else {
             drawn

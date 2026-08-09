@@ -35,6 +35,11 @@
 //!   `ABS_Y`, and the multi-touch codes under `ABS_MT_SLOT` are read by nothing — so two fingers
 //!   are one pointer that jumps between them, no event carries a pressure, and a tablet is not
 //!   bound to the display it is stuck to.
+//! * **The displays are arranged by this backend rather than by the machine.** The kernel says
+//!   where none of them is, so the pointer crosses from one to the next left to right in the order
+//!   the connectors enumerated — which is not how the monitors sit on the desk unless it happens
+//!   to be. There is nothing here to ask: a console has no desktop coordinate space, and every
+//!   display reports its position as the origin.
 //! * **No device found while the program runs.** The set of devices is read once, at start-up. A
 //!   mouse plugged in afterwards reaches nothing, and one unplugged is dropped and never comes
 //!   back.
