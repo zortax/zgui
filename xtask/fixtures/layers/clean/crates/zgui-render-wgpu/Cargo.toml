@@ -1,0 +1,13 @@
+[package]
+name = "zgui-render-wgpu"
+version = "0.1.0"
+edition = "2024"
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+
+# A build script reaches a consumer's graph, so it is held to the same rule.
+[build-dependencies]
+zgui-color = { path = "../zgui-color", version = "0.1.0" }

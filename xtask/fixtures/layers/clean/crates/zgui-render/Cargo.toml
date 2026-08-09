@@ -1,0 +1,9 @@
+[package]
+name = "zgui-render"
+version = "0.1.0"
+edition = "2024"
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }

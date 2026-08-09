@@ -6,6 +6,7 @@ pub(crate) mod counters;
 pub(crate) mod engines;
 pub(crate) mod ignored;
 pub(crate) mod inert;
+pub(crate) mod layers;
 pub(crate) mod mutation;
 pub(crate) mod pinned;
 pub(crate) mod skips;
@@ -54,6 +55,13 @@ pub(crate) const CHECKS: &[Check] = &[
         name: "pinned",
         description: "the two dependency lists that are pinned exactly, and the edge that must not exist",
         run: pinned::check,
+    },
+    // Before `topo`, which asks a related question from a schedule a clone may not have. The layer
+    // headers are committed; `docs/planning/PHASES.md` is not.
+    Check {
+        name: "layers",
+        description: "every dependency points at the crate's own layer or a lower one",
+        run: layers::check,
     },
     Check {
         name: "topo",
