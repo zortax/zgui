@@ -114,6 +114,48 @@ impl Event {
 }
 
 /// One coherent update: everything the device reported at the same moment.
+///
+/// # Dropped events
+///
+/// A client that reads too slowly overruns the kernel's queue. The kernel discards that client's
+/// whole queue and puts a `SYN_DROPPED` in its place, so what arrives next is the tail of an update
+/// whose beginning no longer exists. A key that went down in the discarded part stays down for ever
+/// as far as the caller can tell.
+///
+/// The kernel's rule is to discard everything up to and including the next `SYN_REPORT`, and then
+/// to ask the device what its state is now. Batches make the first half of that one decision: a
+/// batch holding a `SYN_DROPPED` is the incomplete one, and dropping that whole batch is the rule
+/// exactly.
+///
+/// A caller spots such a batch by the marker it carries, and drops it whole:
+///
+/// ```
+/// use std::time::Duration;
+/// use zgui_evdev::{Batch, Event, EventType, Synchronisation};
+///
+/// fn incomplete(batch: &Batch) -> bool {
+///     batch.events.iter().any(|event| {
+///         event.kind == EventType::EV_SYN && event.code == Synchronisation::SYN_DROPPED.raw()
+///     })
+/// }
+///
+/// let overrun = Batch {
+///     at: Duration::from_secs(1),
+///     events: vec![Event {
+///         at: Duration::from_secs(1),
+///         kind: EventType::EV_SYN,
+///         code: Synchronisation::SYN_DROPPED.raw(),
+///         value: 0,
+///     }],
+/// };
+///
+/// assert!(incomplete(&overrun), "the marker stays in the batch it arrived in");
+/// assert!(!incomplete(&Batch::default()));
+/// ```
+///
+/// The second half is a requery. [`Device::pressed_keys`](crate::Device::pressed_keys) says which
+/// keys are down now, and [`Device::axis`](crate::Device::axis) gives each absolute axis its
+/// current reading. Both ask the device itself, so neither depends on the events that were lost.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Batch {
     /// The moment the terminating `SYN_REPORT` carried.

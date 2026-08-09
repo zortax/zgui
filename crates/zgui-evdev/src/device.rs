@@ -479,6 +479,10 @@ impl Device {
 
     /// Returns the range and the current reading of one absolute axis.
     ///
+    /// The reading comes from the axis itself, so this is the other half of resynchronising after a
+    /// `SYN_DROPPED` — see [`Batch`] — where the position an axis reached in the discarded part is
+    /// otherwise unknowable.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Unusable`] when `axis` is past the last one the kernel names, and
@@ -498,9 +502,11 @@ impl Device {
 
     /// Returns which keys are held down right now.
     ///
-    /// The device itself is asked, so this answers where a stream cannot. A caller that opens a
-    /// device already in use needs it: a modifier held when the first event arrives was pressed
-    /// before anything was listening, and nothing later in the stream says so.
+    /// The device itself is asked, so this answers in the two places a stream cannot.
+    /// One is opening a device already in use: a modifier held when the first event arrives was
+    /// pressed before anything was listening, and nothing later in the stream says so. The other is
+    /// resynchronising after the kernel reports `SYN_DROPPED` — see [`Batch`] — where a key that
+    /// went down in the discarded part would otherwise stay down for ever.
     ///
     /// # Errors
     ///
