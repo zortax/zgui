@@ -81,6 +81,14 @@ pub struct Reading {
 /// One implementation stands for one keyboard's state. Which keys are down is state rather than
 /// layout, so a caller that holds one of these for two keyboards has shift held on either of them
 /// shifting a key struck on the other.
+///
+/// # The modifier count
+///
+/// Both implementations count a modifier's transitions, because libxkbcommon does and the two have
+/// to agree: shift held on two keyboards at once is two transitions, and it stays held until both
+/// come up. So every [`Layout::press`] and every [`Layout::hold`] needs exactly one
+/// [`Layout::release`], and the caller keeps that true — a repeat that recorded a press, or a
+/// release with no press behind it, moves the count somewhere no later key brings it back from.
 pub trait Layout {
     /// Returns which source this layout reads.
     fn source(&self) -> Source;
@@ -108,6 +116,22 @@ pub trait Layout {
 
     /// Records a key coming up.
     fn release(&mut self, key: Key);
+
+    /// Reads what the key meant, and then records that it came up.
+    ///
+    /// One call rather than two lines a caller writes in an order, for the same reason
+    /// `zgui_xkb::State::press` is one call: reading *after* the release reports what the key means
+    /// with itself already up, and for a modifier that is a different level of every key it was
+    /// holding — so releasing shift would report the unshifted key.
+    ///
+    /// It is provided rather than required, so an implementation gets the order without writing it.
+    /// Neither implementation here overrides it, and one that did would be taking on the ordering
+    /// this exists to settle.
+    fn reading_before_release(&mut self, key: Key) -> Reading {
+        let reading = self.reading(key);
+        self.release(key);
+        reading
+    }
 
     /// Records a key that was already down before this layout existed.
     ///
@@ -200,11 +224,12 @@ const RENAMED: &[(&str, NamedKey)] = &[
     ("Control_R", NamedKey::Control),
     ("Alt_L", NamedKey::Alt),
     ("Alt_R", NamedKey::Alt),
-    // xkb calls the key beside the space bar super, and the standard calls the command modifier
-    // meta. `Meta_L` is a modifier of xkb's own that almost no keymap binds, and a program that
-    // saw it would want the command modifier from it too.
-    ("Super_L", NamedKey::Meta),
-    ("Super_R", NamedKey::Meta),
+    // The key beside the space bar is *super*, and it stays super here because that is what the
+    // windowing backend calls it. The two are the same key and the vocabulary has a name for each,
+    // so a shortcut written against one of them has to find the same name on both backends. What
+    // agrees either way is the modifier bit: both reach `Modifiers::META`.
+    ("Super_L", NamedKey::Super),
+    ("Super_R", NamedKey::Super),
     ("Meta_L", NamedKey::Meta),
     ("Meta_R", NamedKey::Meta),
     ("Hyper_L", NamedKey::Hyper),
@@ -213,19 +238,33 @@ const RENAMED: &[(&str, NamedKey)] = &[
     ("Shift_Lock", NamedKey::CapsLock),
     ("Num_Lock", NamedKey::NumLock),
     ("Scroll_Lock", NamedKey::ScrollLock),
+    // Level three is AltGr, latched or held. Level *five* is a different modifier that a handful
+    // of layouts use for a fourth and fifth level, and it has no name in the vocabulary — so it is
+    // left out rather than folded in here, and arrives carrying its own name. Calling it AltGraph
+    // would make a shortcut matcher read the two as one key.
     ("ISO_Level3_Shift", NamedKey::AltGraph),
     ("ISO_Level3_Latch", NamedKey::AltGraph),
-    ("ISO_Level5_Shift", NamedKey::AltGraph),
-    ("Mode_switch", NamedKey::ModeChange),
+    ("ISO_Level3_Lock", NamedKey::AltGraph),
+    ("ISO_Group_Shift", NamedKey::ModeChange),
+    ("ISO_Enter", NamedKey::Enter),
+    ("KP_Tab", NamedKey::Tab),
+    ("KP_F1", NamedKey::F1),
+    ("KP_F2", NamedKey::F2),
+    ("KP_F3", NamedKey::F3),
+    ("KP_F4", NamedKey::F4),
     ("Multi_key", NamedKey::Compose),
     ("Menu", NamedKey::ContextMenu),
     ("Print", NamedKey::PrintScreen),
     ("Sys_Req", NamedKey::PrintScreen),
     ("Break", NamedKey::Pause),
-    ("Henkan", NamedKey::Convert),
+    ("Henkan_Mode", NamedKey::Convert),
     ("Muhenkan", NamedKey::NonConvert),
     ("Hiragana_Katakana", NamedKey::KanaMode),
+    ("Kana_Lock", NamedKey::KanaMode),
+    ("Kana_Shift", NamedKey::KanaMode),
+    ("Kanji", NamedKey::KanjiMode),
     ("Zenkaku_Hankaku", NamedKey::ZenkakuHankaku),
+    ("MultipleCandidate", NamedKey::AllCandidates),
     ("Hangul", NamedKey::HangulMode),
     ("Hangul_Hanja", NamedKey::HanjaMode),
     ("XF86AudioLowerVolume", NamedKey::AudioVolumeDown),
@@ -246,6 +285,43 @@ const RENAMED: &[(&str, NamedKey)] = &[
     ("XF86Search", NamedKey::BrowserSearch),
     ("XF86HomePage", NamedKey::BrowserHome),
 ];
+
+/// The accent each dead key stands for.
+///
+/// A dead key produces its character after the next one, and until then what a person has typed is
+/// the accent itself. That is what [`zgui_vocab::Key::Dead`] carries, and what something drawing a
+/// preedit shows. libxkbcommon states a dead key as a keysym of its own and offers no character for
+/// one, so the correspondence is written down.
+///
+/// These are the accents the layouts `xkeyboard-config` ships for Latin Europe use, as their
+/// *spacing* characters. Every other dead key answers [`zgui_vocab::Key::Dead`] with nothing, which
+/// the vocabulary allows: the sequence still composes, and what is lost is the glyph a preedit
+/// would have shown while it was in progress.
+const ACCENTS: &[(&str, char)] = &[
+    ("dead_grave", '`'),
+    ("dead_acute", '´'),
+    ("dead_circumflex", '^'),
+    ("dead_tilde", '~'),
+    ("dead_macron", '¯'),
+    ("dead_breve", '˘'),
+    ("dead_abovedot", '˙'),
+    ("dead_diaeresis", '¨'),
+    ("dead_abovering", '˚'),
+    ("dead_doubleacute", '˝'),
+    ("dead_caron", 'ˇ'),
+    ("dead_cedilla", '¸'),
+    ("dead_ogonek", '˛'),
+    ("dead_stroke", '/'),
+    ("dead_currency", '¤'),
+];
+
+/// Returns the accent a dead key called `name` stands for.
+fn accent(name: &str) -> Option<char> {
+    ACCENTS
+        .iter()
+        .find(|(dead, _)| *dead == name)
+        .map(|(_, accent)| *accent)
+}
 
 /// Returns what a keysym called `name` is, when the vocabulary names it.
 fn named_key(name: &str) -> Option<NamedKey> {
@@ -303,6 +379,45 @@ const UNICODE: u32 = 0x0100_0000;
 /// What a dead keysym's name begins with.
 const DEAD: &str = "dead_";
 
+/// What a sequence machine's answer means for the key that was fed to it.
+///
+/// Split out from the call that feeds it, so the decision can be exercised with no library at all.
+/// A caller has to get three things right — which answers show the key, which show an accent and
+/// which replace the key entirely — and each of the three is wrong in a way a person notices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sequence {
+    /// The key means what it means.
+    Key,
+    /// A sequence has begun and has not finished.
+    Begun,
+    /// A sequence finished, and what it made replaces the key.
+    Made,
+}
+
+impl Sequence {
+    /// Returns what `feed` and `status` together amount to.
+    ///
+    /// **The feed is read first.** An ignored keysym changed nothing, and the status still
+    /// describes whatever sequence was already under way. Reading the status alone would report a
+    /// modifier pressed in the middle of a sequence as beginning it, and would insert nothing while
+    /// a person held shift.
+    fn of(feed: zgui_xkb::Feed, status: zgui_xkb::Status) -> Self {
+        if feed == zgui_xkb::Feed::Ignored {
+            return Self::Key;
+        }
+        match status {
+            zgui_xkb::Status::Composing => Self::Begun,
+            zgui_xkb::Status::Composed => Self::Made,
+            // A key that continues no sequence throws away whatever was under way, and a key that
+            // began none never had one. Both leave the key meaning what it means.
+            zgui_xkb::Status::Cancelled | zgui_xkb::Status::Nothing => Self::Key,
+            // A status a newer libxkbcommon grew. Showing the key is what two of the four above
+            // already do, and it is the answer that loses nothing.
+            _ => Self::Key,
+        }
+    }
+}
+
 /// A layout libxkbcommon reads.
 ///
 /// The context is held beside the keymap because this crate matches a keysym by its *name*, and
@@ -317,8 +432,19 @@ struct Xkb {
     keymap: zgui_xkb::Keymap,
     /// Which keys are down, which modifiers are on, and which layout is active.
     state: zgui_xkb::State,
+    /// How far through a dead key or a compose sequence this keyboard is.
+    ///
+    /// Nothing on a machine with no compose data. That is a separate package from the keyboard
+    /// data — the sequences live in the X11 locale directory — so a machine that compiles every
+    /// keymap can still hold none of them, and a dead key there types the base character on its
+    /// own.
+    compose: Option<zgui_xkb::ComposeState>,
+    /// Why there is no sequence machine, for the line a person reads at start-up.
+    without_compose: Option<String>,
     /// The names the keymap was asked for, for the line a person reads at start-up.
     names: zgui_xkb::RuleNames,
+    /// The locale the sequences were compiled for.
+    locale: String,
 }
 
 impl Xkb {
@@ -330,18 +456,80 @@ impl Xkb {
     /// rather than branches on: the library is absent, its keyboard data is absent, or the names
     /// the machine is set to name a layout the rules do not know.
     fn open() -> Result<Self, String> {
+        Self::over(zgui_xkb::RuleNames::default())
+    }
+
+    /// The same, from names a caller states.
+    ///
+    /// Private, and the only caller outside the tests is [`Xkb::open`] with the machine's own
+    /// names. It exists because the compose path can be exercised only on a layout that has a dead
+    /// key, and which layout a machine is set to is not something a test may choose.
+    ///
+    /// # Errors
+    ///
+    /// The same three as [`Xkb::open`], and a layout name the rules do not know.
+    fn over(names: zgui_xkb::RuleNames) -> Result<Self, String> {
         // The context takes libxkbcommon's diagnostics away from standard error as it is made, so
         // the routing is done before anything below can produce a message.
         let context = zgui_xkb::Context::new().map_err(|error| error.to_string())?;
-        let names = zgui_xkb::RuleNames::default();
         let keymap = context.keymap(&names).map_err(|error| error.to_string())?;
         let state = keymap.state().map_err(|error| error.to_string())?;
+        // The one part of this that may be absent on a machine where everything else worked, so
+        // its refusal is carried rather than returned: a keyboard with no compose data still types
+        // every key it has.
+        let locale = zgui_xkb::locale_from_environment();
+        let (compose, without_compose) = match context
+            .compose_table(&locale)
+            .and_then(|table| table.state())
+        {
+            Ok(compose) => (Some(compose), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
         Ok(Self {
             context,
             keymap,
             state,
+            compose,
+            without_compose,
             names,
+            locale,
         })
+    }
+
+    /// Returns what one keysym did to a sequence.
+    ///
+    /// Every keysym a press produces is fed here first, which is the order libxkbcommon states.
+    /// A keysym the machine ignored — a modifier going down is the ordinary one — leaves whatever
+    /// sequence is under way alone and answers nothing, so the key means what it means.
+    ///
+    /// Nothing is reset afterwards. libxkbcommon starts a fresh sequence on the next keysym fed
+    /// after a finished or cancelled one, so a reset would only throw away a sequence that has
+    /// already ended.
+    fn composed(&mut self, sym: zgui_xkb::Keysym) -> Option<zgui_vocab::Key> {
+        let (sequence, text, produced) = {
+            let compose = self.compose.as_mut()?;
+            let feed = compose.feed(sym);
+            (
+                Sequence::of(feed, compose.status()),
+                compose.text(),
+                compose.sym(),
+            )
+        };
+        match sequence {
+            // Nothing to show for the sequence, so the key means what it means.
+            Sequence::Key => None,
+            // A sequence has begun and has not finished, so this press produced nothing to insert.
+            // It did produce the accent, which is the meaning of a dead key.
+            Sequence::Begun => Some(zgui_vocab::Key::Dead(
+                self.context.keysym_name(sym).as_deref().and_then(accent),
+            )),
+            // A sequence finished, and what it made replaces what this key would have produced.
+            Sequence::Made => match text.as_deref().filter(|text| is_typed(text)) {
+                Some(text) => Some(typed_key(text)),
+                // A sequence whose result is a keysym with no text of its own.
+                None => produced.map(|produced| self.named(produced, None)),
+            },
+        }
     }
 
     /// Returns what is printed on this key, whatever is held.
@@ -375,10 +563,10 @@ impl Xkb {
                 return zgui_vocab::Key::Named(named);
             }
             if name.starts_with(DEAD) {
-                // Which accent it is stays unreported. libxkbcommon states it as a keysym of its
-                // own and offers no character for one, and the vocabulary allows a dead key that
-                // does not say which it is.
-                return zgui_vocab::Key::Dead(None);
+                // Reached where a sequence machine would have answered first: a machine with no
+                // compose data, and the modifier-free reading of a dead key, which begins no
+                // sequence because nothing was pressed.
+                return zgui_vocab::Key::Dead(accent(name));
             }
         }
         if let Some(text) = text.filter(|text| is_typed(text)) {
@@ -401,7 +589,11 @@ impl Layout for Xkb {
     }
 
     fn describe(&self) -> String {
-        format!("libxkbcommon, compiled from {}", self.names)
+        let composing = match &self.without_compose {
+            Some(reason) => format!("no dead key or compose sequence works ({reason})"),
+            None => format!("composing in {}", self.locale),
+        };
+        format!("libxkbcommon, compiled from {}, {composing}", self.names)
     }
 
     fn press(&mut self, key: Key) -> Reading {
@@ -410,11 +602,19 @@ impl Layout for Xkb {
         let without_modifiers = self.printed(code);
         let press = self.state.press(code);
         Reading {
-            key: self.named(press.sym, press.text.as_deref()),
+            key: self
+                .composed(press.sym)
+                .unwrap_or_else(|| self.named(press.sym, press.text.as_deref())),
             without_modifiers,
         }
     }
 
+    /// Reads the key without advancing a sequence, which `&self` enforces.
+    ///
+    /// A repeat and a release both arrive here, and neither is a keysym to feed: a sequence is
+    /// advanced by keys somebody pressed. So a key held down inside a sequence repeats its own
+    /// meaning rather than composing again, as holding a letter through a dead key does on a
+    /// desktop too.
     fn reading(&self, key: Key) -> Reading {
         let code = zgui_xkb::Keycode::from_evdev(key.raw());
         Reading {
@@ -584,8 +784,15 @@ impl Layout for Console {
         self.read(key)
     }
 
+    /// Gives back one hold of this key rather than every hold of it.
+    ///
+    /// A count, because the layout above it counts: one state serves every keyboard on the seat, so
+    /// a modifier held on two of them is two transitions and needs two releases. Clearing every
+    /// entry would stop reporting shift while a finger was still on the other keyboard's.
     fn release(&mut self, key: Key) {
-        self.held.retain(|(held, _)| *held != key);
+        if let Some(at) = self.held.iter().position(|(held, _)| *held == key) {
+            self.held.remove(at);
+        }
     }
 
     fn hold(&mut self, key: Key) {
@@ -607,8 +814,246 @@ mod tests {
 
     use std::str::FromStr;
 
-    use super::{RENAMED, character, is_typed, named_key, typed_key};
+    use super::{
+        ACCENTS, RENAMED, Sequence, Xkb, accent, character, is_typed, named_key, typed_key,
+    };
+    use crate::input::keyboard::layout::Layout;
+    // `Key` in this module is the vocabulary's. A kernel key code is `Code`, so the two cannot
+    // be confused where both appear in one line.
+    use zgui_evdev::Key as Code;
     use zgui_vocab::{Key, NamedKey};
+
+    /// A context over this machine's libxkbcommon, or nothing with the reason printed.
+    ///
+    /// The two tables below are the only things here that need the library, and they need it for
+    /// the one question no amount of arithmetic answers: whether a name written down by hand is the
+    /// name the library gives back.
+    fn library(test: &str) -> Option<zgui_xkb::Context> {
+        match zgui_xkb::Context::new() {
+            Ok(context) => Some(context),
+            Err(error) => {
+                eprintln!(
+                    "{test}: {error}, so no keysym name was checked; install libxkbcommon to run \
+                     it"
+                );
+                None
+            }
+        }
+    }
+
+    /// Every row of `table` whose name libxkbcommon does not answer with.
+    fn aliases(
+        context: &zgui_xkb::Context,
+        table: impl Iterator<Item = &'static str>,
+    ) -> Vec<String> {
+        let mut wrong = Vec::new();
+        for name in table {
+            let Some(sym) = context.keysym_from_name(name) else {
+                wrong.push(format!("`{name}` is no keysym at all"));
+                continue;
+            };
+            let canonical = context.keysym_name(sym);
+            if canonical.as_deref() != Some(name) {
+                wrong.push(format!(
+                    "`{name}` is an alias for `{}`",
+                    canonical.unwrap_or_default()
+                ));
+            }
+        }
+        wrong
+    }
+
+    #[test]
+    fn every_row_is_the_name_the_library_gives_back() {
+        // A press is looked up under whatever `keysym_name` answers, so a row written with an
+        // alias reads correctly and matches nothing at all. Nothing else finds one: the key still
+        // arrives, at the right position, carrying a name instead of the meaning it has.
+        let test = "every_row_is_the_name_the_library_gives_back";
+        let Some(context) = library(test) else {
+            return;
+        };
+
+        let wrong = aliases(&context, RENAMED.iter().map(|(name, _)| *name));
+
+        assert!(
+            wrong.is_empty(),
+            "{} row(s) can never match:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    #[test]
+    fn every_dead_key_is_the_name_the_library_gives_back() {
+        let test = "every_dead_key_is_the_name_the_library_gives_back";
+        let Some(context) = library(test) else {
+            return;
+        };
+
+        let wrong = aliases(&context, ACCENTS.iter().map(|(name, _)| *name));
+
+        assert!(
+            wrong.is_empty(),
+            "{} row(s) can never match:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_keysym_the_machine_ignored_leaves_the_key_meaning_what_it_means() {
+        // The feed is read before the status, and this is why. A modifier pressed in the middle of
+        // a sequence is ignored by the machine and leaves the status at `Composing` — so reading
+        // the status alone would report shift going down as beginning the sequence, and it would
+        // insert nothing for as long as a person held it.
+        for status in [
+            zgui_xkb::Status::Nothing,
+            zgui_xkb::Status::Composing,
+            zgui_xkb::Status::Composed,
+            zgui_xkb::Status::Cancelled,
+        ] {
+            assert_eq!(
+                Sequence::of(zgui_xkb::Feed::Ignored, status),
+                Sequence::Key,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_keysym_the_machine_took_is_read_against_where_the_sequence_got_to() {
+        let taken = |status| Sequence::of(zgui_xkb::Feed::Accepted, status);
+
+        assert_eq!(taken(zgui_xkb::Status::Composing), Sequence::Begun);
+        assert_eq!(taken(zgui_xkb::Status::Composed), Sequence::Made);
+        // A key that continues no sequence throws away whatever was under way, and a key that began
+        // none never had one. Swallowing either would lose a keystroke outright.
+        assert_eq!(taken(zgui_xkb::Status::Cancelled), Sequence::Key);
+        assert_eq!(taken(zgui_xkb::Status::Nothing), Sequence::Key);
+    }
+
+    /// A layout over `layout`, or nothing with the reason printed.
+    ///
+    /// The machine's own layout is not something a test may choose, and the compose path can only
+    /// be walked on one that has a dead key.
+    fn layout_named(test: &str, layout: &str) -> Option<Xkb> {
+        let names = zgui_xkb::RuleNames {
+            layout: Some(layout.to_owned()),
+            ..zgui_xkb::RuleNames::default()
+        };
+        match Xkb::over(names) {
+            Ok(built) => Some(built),
+            Err(reason) => {
+                eprintln!(
+                    "{test}: no `{layout}` layout on this machine ({reason}), so nothing was \
+                     asserted; install libxkbcommon and the `xkeyboard-config` data to run it"
+                );
+                None
+            }
+        }
+    }
+
+    /// The first key of `layout` that begins a dead-key sequence.
+    ///
+    /// Found by reading rather than by pressing, so the state is left exactly as it was.
+    fn dead_key(layout: &Xkb) -> Option<Code> {
+        (1..=255)
+            .map(Code::new)
+            .find(|key| matches!(layout.reading(*key).key, Key::Dead(_)))
+    }
+
+    #[test]
+    fn a_dead_key_and_the_letter_after_it_compose_into_one_character() {
+        // The reason libxkbcommon is preferred over the console keymap at all. On a German layout
+        // `´` then `e` is `é`, and a backend that fed the sequence machine nothing inserts a bare
+        // `e` — the accent silently dropped, on every layout in Europe that has one.
+        let test = "a_dead_key_and_the_letter_after_it_compose_into_one_character";
+        let Some(mut layout) = layout_named(test, "de") else {
+            return;
+        };
+        let Some(dead) = dead_key(&layout) else {
+            eprintln!("{test}: this machine's `de` layout has no dead key");
+            return;
+        };
+
+        let plain = layout.press(Code::KEY_E).key;
+        layout.release(Code::KEY_E);
+
+        let begun = layout.press(dead);
+        layout.release(dead);
+        let composed = layout.press(Code::KEY_E);
+        layout.release(Code::KEY_E);
+
+        assert_eq!(
+            begun.key,
+            Key::Dead(Some('´')),
+            "the dead key began a sequence and said which accent it is"
+        );
+        assert_eq!(
+            begun.key.inserted_text(),
+            None,
+            "and inserted nothing while the sequence was under way"
+        );
+        assert_eq!(plain.inserted_text(), Some("e"));
+        assert_eq!(
+            composed.key.inserted_text(),
+            Some("é"),
+            "the key after it inserted what the sequence made"
+        );
+    }
+
+    #[test]
+    fn a_modifier_pressed_inside_a_sequence_does_not_take_it_over() {
+        // Shift held between the dead key and the letter is the ordinary way to type `É`. The
+        // sequence machine ignores the modifier, and a caller that read the status without the feed
+        // would report shift going down as a dead key and insert nothing for it.
+        let test = "a_modifier_pressed_inside_a_sequence_does_not_take_it_over";
+        let Some(mut layout) = layout_named(test, "de") else {
+            return;
+        };
+        let Some(dead) = dead_key(&layout) else {
+            eprintln!("{test}: this machine's `de` layout has no dead key");
+            return;
+        };
+
+        layout.press(dead);
+        layout.release(dead);
+        let shift = layout.press(Code::KEY_LEFTSHIFT);
+        let composed = layout.press(Code::KEY_E);
+
+        assert_eq!(
+            shift.key,
+            zgui_vocab::Key::Named(NamedKey::Shift),
+            "shift is shift in the middle of a sequence"
+        );
+        assert_eq!(composed.key.inserted_text(), Some("É"));
+    }
+
+    #[test]
+    fn a_key_that_continues_no_sequence_is_still_typed() {
+        // Two dead keys in a row continue nothing in most tables. Swallowing the second would lose
+        // a keystroke outright, which is the failure a person reports as "it dropped a letter".
+        let test = "a_key_that_continues_no_sequence_is_still_typed";
+        let Some(mut layout) = layout_named(test, "de") else {
+            return;
+        };
+        let Some(dead) = dead_key(&layout) else {
+            eprintln!("{test}: this machine's `de` layout has no dead key");
+            return;
+        };
+
+        layout.press(dead);
+        layout.release(dead);
+        layout.press(dead);
+        layout.release(dead);
+        let after = layout.press(Code::KEY_E);
+
+        assert!(
+            after.key.inserted_text().is_some(),
+            "the key after a sequence that led nowhere still types: {:?}",
+            after.key
+        );
+    }
 
     #[test]
     fn a_keysym_the_two_vocabularies_name_alike_crosses_on_its_name() {
@@ -658,12 +1103,38 @@ mod tests {
     }
 
     #[test]
-    fn the_command_key_is_meta_here_whatever_xkb_calls_it() {
-        // xkb calls the key beside the space bar super. A shortcut written against the command key
-        // has to match it, and the only way that happens is if it is one name by the time anything
-        // above this crate sees it.
-        assert_eq!(named_key("Super_L"), Some(NamedKey::Meta));
-        assert_eq!(named_key("Super_R"), Some(NamedKey::Meta));
+    fn the_key_beside_the_space_bar_is_named_the_way_the_other_backend_names_it() {
+        // The vocabulary names super and meta apart, and the windowing backend reaches `Super` for
+        // this key. A shortcut written against one of the two names has to match on both backends,
+        // and the modifier bit agreeing is what would otherwise hide the difference.
+        assert_eq!(named_key("Super_L"), Some(NamedKey::Super));
+        assert_eq!(named_key("Super_R"), Some(NamedKey::Super));
+        assert_eq!(named_key("Meta_L"), Some(NamedKey::Meta));
+    }
+
+    #[test]
+    fn a_dead_key_carries_the_accent_it_stands_for() {
+        // What something drawing a preedit shows while a sequence is in progress, and what the
+        // windowing backend puts in the same field.
+        assert_eq!(accent("dead_acute"), Some('´'));
+        assert_eq!(accent("dead_grave"), Some('`'));
+        assert_eq!(accent("dead_diaeresis"), Some('¨'));
+        assert_eq!(accent("dead_circumflex"), Some('^'));
+        // Every accent is a character in its own right, so a preedit has something to draw.
+        for (name, accent) in ACCENTS {
+            assert!(
+                !accent.is_control(),
+                "{name} stands for a control character"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dead_key_this_table_has_no_accent_for_is_still_a_dead_key() {
+        // The vocabulary allows a dead key that does not say which it is, and the sequence composes
+        // either way: what is lost is the glyph a preedit would have shown.
+        assert_eq!(accent("dead_belowdot"), None);
+        assert_eq!(accent("Escape"), None);
     }
 
     #[test]

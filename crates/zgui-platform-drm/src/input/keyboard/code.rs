@@ -199,8 +199,11 @@ const NAMES: &[(KeyCode, NamedKey)] = &[
     // decision, and the layout reports it as a held modifier rather than as this key's name.
     (KeyCode::AltLeft, NamedKey::Alt),
     (KeyCode::AltRight, NamedKey::Alt),
-    (KeyCode::MetaLeft, NamedKey::Meta),
-    (KeyCode::MetaRight, NamedKey::Meta),
+    // Super rather than meta, because that is what the key beside the space bar is called on both
+    // backends. The vocabulary names each of the two, and a shortcut written against one of them
+    // has to find the same name whichever backend ran.
+    (KeyCode::MetaLeft, NamedKey::Super),
+    (KeyCode::MetaRight, NamedKey::Super),
     (KeyCode::ContextMenu, NamedKey::ContextMenu),
     (KeyCode::CapsLock, NamedKey::CapsLock),
     (KeyCode::NumLock, NamedKey::NumLock),
