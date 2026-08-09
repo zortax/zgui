@@ -1,0 +1,225 @@
+//! Opening real devices.
+//!
+//! Everything here needs a node this user may read, so every test looks for one first. What is
+//! asserted is that a call *answers*, rather than what it answers: the answer is a fact about the
+//! hardware, and the call working is a fact about this crate.
+
+#![cfg(target_os = "linux")]
+
+mod support;
+
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use zgui_evdev::code::Absolute;
+use zgui_evdev::device::Role;
+
+#[test]
+fn a_device_opens_and_says_what_it_is() {
+    let devices = support::devices("a_device_opens_and_says_what_it_is");
+    if devices.is_empty() {
+        return;
+    }
+
+    for device in &devices {
+        let identity = device.identity();
+        println!(
+            "{} {:?} bus={:#06x} vendor={:#06x} product={:#06x} version={:#06x} roles={:?}",
+            device.path().display(),
+            device.name(),
+            identity.bus,
+            identity.vendor,
+            identity.product,
+            identity.version,
+            device.roles().iter().collect::<Vec<_>>(),
+        );
+        // A driver that reported no name at all would still open, and every read of it would be
+        // of a device nothing can identify.
+        assert!(
+            !device.name().is_empty(),
+            "an input device tells the kernel what it is called"
+        );
+        // Every input device emits `EV_SYN`, because the kernel ends every report with one. A
+        // device whose type map came back empty is a map read out of the wrong request.
+        assert!(
+            !device.capabilities().types().is_empty(),
+            "a device reports at least one event type"
+        );
+    }
+}
+
+#[test]
+fn a_device_reports_the_codes_behind_the_types_it_has() {
+    let devices = support::devices("a_device_reports_the_codes_behind_the_types_it_has");
+    if devices.is_empty() {
+        return;
+    }
+
+    let mut with_keys = 0;
+    for device in &devices {
+        let capabilities = device.capabilities();
+        // The two maps are read against the type map, so a device that says it has keys and then
+        // reports none of them is the case where the second request went wrong.
+        if capabilities.has(zgui_evdev::EventType::EV_KEY) {
+            with_keys += 1;
+            assert!(
+                !capabilities.keys().is_empty(),
+                "{} says it has keys, so it names some",
+                device.path().display()
+            );
+        } else {
+            assert!(
+                capabilities.keys().is_empty(),
+                "{} was not asked for a map it has no type for",
+                device.path().display()
+            );
+        }
+        println!(
+            "{}: {} types, {} keys, {} relative axes, {} absolute axes",
+            device.path().display(),
+            capabilities.types().len(),
+            capabilities.keys().len(),
+            capabilities.relative().len(),
+            capabilities.absolute().len(),
+        );
+    }
+
+    assert!(
+        with_keys > 0,
+        "a machine with a readable input device has one with keys or buttons on it"
+    );
+}
+
+#[test]
+fn an_absolute_axis_reports_the_range_it_moves_over() {
+    let devices = support::devices("an_absolute_axis_reports_the_range_it_moves_over");
+    let with_axes: Vec<_> = devices
+        .iter()
+        .filter(|device| !device.capabilities().absolute().is_empty())
+        .collect();
+    if with_axes.is_empty() {
+        eprintln!(
+            "an_absolute_axis_reports_the_range_it_moves_over: no readable device has an \
+             absolute axis, so nothing was asserted"
+        );
+        return;
+    }
+
+    for device in with_axes {
+        for code in device.capabilities().absolute().iter() {
+            let axis = Absolute::new(code);
+            let range = device
+                .axis(axis)
+                .expect("a device answers for an axis it says it has");
+            println!("{} {axis:?}: {range:?}", device.path().display());
+            // An `input_absinfo` read out of the wrong offsets produces a range the wrong way
+            // round, and nothing else reports it.
+            assert!(
+                range.minimum <= range.maximum,
+                "an axis moves from its minimum to its maximum"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_device_says_which_keys_are_held_down() {
+    let devices = support::devices("a_device_says_which_keys_are_held_down");
+    let with_keys: Vec<_> = devices
+        .iter()
+        .filter(|device| device.capabilities().has(zgui_evdev::EventType::EV_KEY))
+        .collect();
+    if with_keys.is_empty() {
+        eprintln!(
+            "a_device_says_which_keys_are_held_down: no readable device has keys, so nothing was \
+             asserted"
+        );
+        return;
+    }
+
+    for device in with_keys {
+        let held = device
+            .pressed_keys()
+            .expect("a device with keys answers which are held");
+        // Which keys are down is whatever the person at the machine is doing, so what is asserted
+        // is that every one of them is a key the device has. A map read at the wrong length or
+        // through the wrong request reports codes the device never had.
+        for code in held.iter() {
+            assert!(
+                device.capabilities().keys().contains(code),
+                "{} reports {code} held, and says it has no such key",
+                device.path().display()
+            );
+        }
+        println!("{}: {} keys held", device.path().display(), held.len());
+    }
+}
+
+#[test]
+fn a_device_hands_out_a_descriptor_that_can_be_polled() {
+    let devices = support::devices("a_device_hands_out_a_descriptor_that_can_be_polled");
+    let Some(device) = devices.first() else {
+        return;
+    };
+
+    // A zero timeout is the point: a loop asks whether the device has anything to say and carries
+    // on when it has not. A descriptor that could not be polled fails here instead of blocking,
+    // because `poll` refuses a bad one.
+    let mut watched = [PollFd::new(device, PollFlags::IN)];
+    let ready = poll(&mut watched, Some(&Timespec::default())).expect("the descriptor is pollable");
+
+    println!(
+        "{}: {ready} descriptor(s) ready with nothing waited for",
+        device.path().display()
+    );
+}
+
+#[test]
+fn reading_a_device_that_has_nothing_to_say_waits_for_nothing() {
+    let mut devices =
+        support::devices("reading_a_device_that_has_nothing_to_say_waits_for_nothing");
+    let Some(device) = devices.first_mut() else {
+        return;
+    };
+
+    // The node is opened non-blocking, so this returns rather than parking. That this test ends
+    // at all is the assertion: a read that blocked would hang here until the runner gave up, and
+    // no timing check would report it any sooner.
+    let batches = device.read().expect("a quiet device reads as nothing");
+
+    for batch in &batches {
+        // Whatever arrived came from someone at the keyboard. A batch is still a batch.
+        assert!(
+            !batch.events.is_empty(),
+            "an update the kernel reported has something in it"
+        );
+    }
+}
+
+#[test]
+fn a_device_can_be_grabbed_and_given_back() {
+    let mut devices = support::devices("a_device_can_be_grabbed_and_given_back");
+    // A grab takes the device away from everything else for as long as it is held, so this asks
+    // for one the person at the machine is not typing on. Grabbing their keyboard for the length
+    // of an ioctl is a real cost and an avoidable one.
+    let device = devices
+        .iter_mut()
+        .find(|device| !device.roles().contains(Role::Keyboard));
+    let Some(device) = device else {
+        eprintln!(
+            "a_device_can_be_grabbed_and_given_back: every readable device on this machine is a \
+             keyboard, and grabbing one takes it from the session, so nothing was asserted"
+        );
+        return;
+    };
+
+    assert!(!device.is_grabbed(), "a device opens ungrabbed");
+    device.grab().expect("nothing else holds this device");
+    assert!(device.is_grabbed());
+    device.release().expect("what was taken is given back");
+    assert!(!device.is_grabbed());
+
+    // Grabbing twice in a row is what proves the release reached the kernel rather than only the
+    // flag: a device still held answers the second grab with `EBUSY`.
+    device.grab().expect("the release reached the kernel");
+    device.release().expect("and so did the second one");
+    println!("{}: grabbed and released twice", device.path().display());
+}
