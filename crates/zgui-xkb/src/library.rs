@@ -332,7 +332,7 @@ impl Library {
     }
 }
 
-/// Says that the library is open, without listing twenty-seven addresses.
+/// Says that the library is open, without listing twenty-six addresses.
 impl fmt::Debug for Library {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Library")
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn a_shared_object_that_is_not_libxkbcommon_names_the_symbol_it_lacks() {
-        // The C library is on every machine this crate runs on and carries none of the twenty-seven
+        // The C library is on every machine this crate runs on and carries none of the twenty-six
         // symbols, so this reaches the second absence path wherever the first one cannot: a library
         // that opens and answers nothing. A machine without `libc.so.6` gets the first path again,
         // which is still an error rather than a panic.
