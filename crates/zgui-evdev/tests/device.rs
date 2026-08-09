@@ -213,6 +213,22 @@ fn reading_a_device_that_has_nothing_to_say_waits_for_nothing() {
     }
 }
 
+/// Held for as long as a test holds a grab.
+///
+/// The runner runs these in parallel, and there is one grabbable device on an ordinary machine, so
+/// two tests grabbing at once means the second answers `EBUSY`. Only one client may hold a device,
+/// so the tests take turns instead of the device.
+static GRAB: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Takes the turn to grab a device.
+///
+/// A test that panicked while holding it poisons the lock, and the turn is still free: the grab
+/// went with the descriptor the panic dropped.
+fn turn() -> std::sync::MutexGuard<'static, ()> {
+    GRAB.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// A readable device nobody is typing on, for the tests that take one away.
 ///
 /// A grab takes the device from everything else for as long as it is held, so taking the keyboard
@@ -245,6 +261,7 @@ fn dropping_a_device_gives_its_grab_back() {
     // `Device::drop` exists for one case, named in its own doc: a caller that duplicated the
     // descriptor, where closing this one does not close the description the grab is held by. That
     // case is the only reason the implementation is there, so this is the test of it.
+    let _turn = turn();
     let Some(mut device) = grabbable("dropping_a_device_gives_its_grab_back") else {
         return;
     };
@@ -278,6 +295,7 @@ fn dropping_a_device_gives_its_grab_back() {
 
 #[test]
 fn a_device_can_be_grabbed_and_given_back() {
+    let _turn = turn();
     let Some(mut device) = grabbable("a_device_can_be_grabbed_and_given_back") else {
         return;
     };
