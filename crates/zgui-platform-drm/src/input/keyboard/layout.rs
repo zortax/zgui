@@ -8,8 +8,24 @@
 //! * **libxkbcommon** ([`Source::Xkb`]) reads the keyboard data the machine has installed. It
 //!   knows every level of every key, every layout in a group, and which keys repeat.
 //! * **the console keymap** ([`Source::Console`]) is what the kernel's own console driver holds,
-//!   put there by `loadkeys` at boot. It is the layout of last resort, and it is worse in ways a
-//!   person will notice.
+//!   put there by `loadkeys` at boot. It is the layout of last resort: a machine with no
+//!   libxkbcommon — or with the library and none of the keyboard data it reads — still has this
+//!   one.
+//!
+//! # What a program gives up on the console keymap
+//!
+//! Three things, and a person will meet all three:
+//!
+//! * **Characters the keymap holds and the console cannot report.** Outside `K_UNICODE` the kernel
+//!   substitutes a hole for every entry above its eight-bit types, so a German keymap read in
+//!   `K_XLATE` keeps its umlauts, which are Latin-1, and loses its euro sign.
+//! * **No name for a key that types nothing.** Escape, enter, the arrows and the function keys are
+//!   actions the console driver takes on itself rather than names, so each is named from the
+//!   position it sits at instead. The position table is exact, so the name is right for a standard
+//!   keyboard whatever the layout.
+//! * **No caps lock and no command modifier.** The kernel builds a map index out of eight modifier
+//!   bits. Caps lock sits outside them, as one more of the driver's own actions, and there is no
+//!   super key among the eight either, so a shortcut that names meta can never match.
 //!
 //! # The order of a reading and an update
 //!
@@ -47,8 +63,8 @@ pub enum Source {
 
 /// What one key means, under the two readings a layout answers.
 ///
-/// The third reading of a press — where the key sits — is no layout's business and comes from
-/// [`code::physical`](crate::input::keyboard::code) instead.
+/// The third reading of a press — where the key sits — is no layout's business, and the position
+/// table answers it instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reading {
     /// What the key means with the modifiers applied. This is what gets inserted.
@@ -421,21 +437,8 @@ impl Layout for Xkb {
 
 /// A layout the kernel's console driver holds.
 ///
-/// This is the layout of last resort: `loadkeys` puts a keymap in the console driver at boot, so a
-/// machine with no libxkbcommon — or with the library and none of the keyboard data it reads —
-/// still has this one. What a program gives up by landing here is worth stating, because a person
-/// will meet all three:
-///
-/// * **Characters the keymap holds and the console cannot report.** Outside `K_UNICODE` the kernel
-///   substitutes a hole for every entry above its eight-bit types, so a German keymap read in
-///   `K_XLATE` keeps its umlauts, which are Latin-1, and loses its euro sign.
-/// * **No name for a key that types nothing.** Escape, enter, the arrows and the function keys are
-///   actions the console driver takes on itself rather than names, so each is named from the
-///   position it sits at instead. The position table is exact, so the name is right for a standard
-///   keyboard whatever the layout.
-/// * **No caps lock and no command modifier.** The kernel builds a map index out of eight modifier
-///   bits. Caps lock sits outside them, as one more of the driver's own actions, and there is no
-///   super key among the eight either, so a shortcut that names meta can never match.
+/// The layout of last resort. What a program gives up by landing here is in the module
+/// documentation, because it is what somebody reading that line at start-up needs.
 ///
 /// # The modifier keys
 ///

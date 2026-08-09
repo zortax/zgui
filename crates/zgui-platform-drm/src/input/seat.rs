@@ -39,6 +39,7 @@ use zgui_evdev::{Batch, Capabilities, Device, EventType, Key, Synchronisation};
 use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
 use zgui_vocab::{KeyState, Modifiers, Timestamp};
 
+use crate::input::keyboard;
 use crate::input::keyboard::layout::{Layout, Reading};
 use crate::input::keyboard::{code, layout};
 
@@ -285,7 +286,7 @@ impl Keys {
             }
             events.push(SurfaceEvent::Key {
                 state,
-                event: crate::input::keyboard::event(
+                event: keyboard::event(
                     code::physical(key),
                     reading.key,
                     reading.without_modifiers,
