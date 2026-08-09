@@ -614,7 +614,8 @@ pub struct Seat {
 }
 
 impl Seat {
-    /// Opens every device this process may read and work with, takes each one, and finds a layout.
+    /// Opens every device this process may read and work with, takes each one, finds a layout, and
+    /// starts watching for the devices that arrive afterwards.
     ///
     /// **Call this after DRM master has been taken.** See the module documentation for why that
     /// ordering is the safety interlock rather than a preference.
@@ -828,6 +829,9 @@ impl Seat {
     }
 
     /// Reads every device and reports what a person did, moving `pointer` as they moved it.
+    ///
+    /// It also reads the watch, so this is where the set of devices changes: one that stopped
+    /// answering is dropped and one that has arrived is taken, in that order.
     ///
     /// `screens` is the ground the pointer moves over, so it decides which surface each pointer
     /// event belongs to and how far the pointer can go. It is passed in rather than kept because
