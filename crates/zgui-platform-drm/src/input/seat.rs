@@ -14,21 +14,22 @@
 //! `SIGINT` is raised and an application with no way out has to be killed from another terminal.
 //! This backend invents no quit key: which key leaves a program is the program's own decision, and
 //! a backend that chose one would take that key away from every application that wanted it for
-//! something else.
+//! something else. `examples/tty.rs` binds Escape, which an example has to do to be usable.
 //!
 //! # Order against DRM master
 //!
 //! The frame loop takes master first and fails to start while a compositor holds it. That ordering
 //! is the interlock: a run on a busy machine cannot take the keyboard from the desktop, because it
-//! never reaches the point where it would ask for one. [`Seat::open`] has to be called from the
-//! loop after `become_master`, and nothing else keeps it.
+//! never reaches the point where it would ask for one. [`Seat::open`] being called from the loop
+//! after `become_master` keeps it, and nothing else does.
 //!
 //! # Which devices are keyboards
 //!
 //! [`Role::Keyboard`](zgui_evdev::Role) is udev's `ID_INPUT_KEY`, and it is meant to be broad — a
-//! remote control is a keyboard under it, and so is a gaming mouse that advertises `KEY_MACRO27`
-//! and its neighbours. The narrower question is whether the device has a key from the block a
-//! person types on, and [`types_on`] asks it.
+//! remote control is a keyboard under it, so is a gaming mouse that advertises `KEY_MACRO27` and
+//! its neighbours, and so is the power button. [`types_on`] asks the narrower question, and it asks
+//! for a *letter*: taking a device somebody does not type on removes a function from the session
+//! with no way to get it back while the program runs.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -43,20 +44,80 @@ use crate::input::keyboard;
 use crate::input::keyboard::layout::{Layout, Reading};
 use crate::input::keyboard::{code, layout};
 
+/// The twenty-six letter positions of a keyboard.
+///
+/// A code rather than a character: `KEY_A` is where a standard layout puts `A`, and a keyboard set
+/// to any layout at all reports these same codes. So this asks whether the *hardware* is a
+/// keyboard, and a Russian or a Dvorak one answers yes.
+const LETTERS: &[Key] = &[
+    Key::KEY_A,
+    Key::KEY_B,
+    Key::KEY_C,
+    Key::KEY_D,
+    Key::KEY_E,
+    Key::KEY_F,
+    Key::KEY_G,
+    Key::KEY_H,
+    Key::KEY_I,
+    Key::KEY_J,
+    Key::KEY_K,
+    Key::KEY_L,
+    Key::KEY_M,
+    Key::KEY_N,
+    Key::KEY_O,
+    Key::KEY_P,
+    Key::KEY_Q,
+    Key::KEY_R,
+    Key::KEY_S,
+    Key::KEY_T,
+    Key::KEY_U,
+    Key::KEY_V,
+    Key::KEY_W,
+    Key::KEY_X,
+    Key::KEY_Y,
+    Key::KEY_Z,
+];
+
 /// Returns `true` if a person types on this device.
 ///
-/// A key **below `BTN_MISC`** is the block a keyboard sends: the letters, the digits, the
-/// modifiers, the function keys and the media keys. A device with none of them is a mouse or a lid
-/// switch, whatever udev's broader rule calls it.
+/// **The device has to have a letter.** Sitting below `BTN_MISC` is not enough, and the power
+/// button proves it: `KEY_POWER` is 116, inside the block a keyboard sends, so a rule written that
+/// way takes it. `EVIOCGRAB` then routes the power button to this process alone — `acpid` and
+/// `logind` never see it, and this backend does nothing with it — so **pressing power stops working
+/// for as long as the program runs**. Beside a grabbed keyboard raising no `SIGINT`, that leaves a
+/// machine with no soft way to stop. The same rule refuses a laptop's own hotkey node and a
+/// webcam's consumer-control node, which report brightness and camera keys and no letters.
 ///
-/// `KEY_RESERVED` is code zero and says nothing, so it is excluded by
-/// [`Key::is_key`](zgui_evdev::Key::is_key) and by this.
+/// The trade is deliberate and it runs one way. A device wrongly taken is a function somebody loses
+/// with no way to get it back while the program runs. A device wrongly left alone still works for
+/// the session, and it costs this program the keys on that device. A numeric keypad on its own is
+/// the price: it carries no letter, so it stays with the session.
+///
+/// ```
+/// use zgui_evdev::{Bitmap, Capabilities, EventType, Key};
+/// use zgui_platform_drm::input::seat::types_on;
+///
+/// let keyboard = Capabilities::new(
+///     Bitmap::from_codes([EventType::EV_KEY]),
+///     Bitmap::from_codes([Key::KEY_ESC, Key::KEY_Q, Key::KEY_LEFTSHIFT]),
+///     Bitmap::default(),
+///     Bitmap::default(),
+/// );
+/// let power = Capabilities::new(
+///     Bitmap::from_codes([EventType::EV_KEY]),
+///     Bitmap::from_codes([Key::KEY_POWER, Key::KEY_SLEEP]),
+///     Bitmap::default(),
+///     Bitmap::default(),
+/// );
+///
+/// assert!(types_on(&keyboard));
+/// assert!(!types_on(&power));
+/// ```
 pub fn types_on(capabilities: &Capabilities) -> bool {
     capabilities.has(EventType::EV_KEY)
-        && capabilities
-            .keys()
+        && LETTERS
             .iter()
-            .any(|key| key.is_key() && key.raw() < Key::BTN_MISC.raw())
+            .any(|letter| capabilities.keys().contains(*letter))
 }
 
 /// Returns `true` if this code is one a person typed.
@@ -109,29 +170,65 @@ impl Transition {
     }
 }
 
-/// Where the frame loop's clock and the kernel's meet.
+/// How one device's events are given a moment.
 ///
-/// `zgui-evdev` asks every device for `CLOCK_MONOTONIC`, and a [`Timestamp`] counts from the moment
-/// the application started. One reading of the kernel's clock, taken beside one reading of the
-/// loop's, puts the two on the same zero. Both run at the same rate, so the anchor holds for as
-/// long as the program does.
+/// The kernel stamps an event when the key moved. A loop that stamped when it woke instead would
+/// give every event in one wake the same moment, and a double click and a key repeat are measured
+/// against the difference between two of them.
+///
+/// [`Device::has_monotonic_timestamps`](zgui_evdev::Device::has_monotonic_timestamps) chooses
+/// between the two, and it has to be asked. `zgui-evdev` requests `CLOCK_MONOTONIC` for every
+/// device it opens and a driver may refuse, which leaves that device's stream on `CLOCK_REALTIME` —
+/// around 1.75e9 seconds. Anchoring one of those against a few hours of uptime stamps every key
+/// some fifty-five years after the application started, beside frame stamps measured in seconds,
+/// and nothing downstream could tell.
+///
+/// ```
+/// use std::time::Duration;
+/// use zgui_platform_drm::input::seat::Stamps;
+///
+/// // What the kernel's clock read when the frame loop started.
+/// let stamps = Stamps::from_origin(Duration::from_secs(1_000));
+///
+/// assert_eq!(
+///     stamps.at(Duration::from_secs(1_002)).since_origin(),
+///     Duration::from_secs(2)
+/// );
+/// // A device can report a moment from a hair before the anchor was taken.
+/// assert_eq!(
+///     stamps.at(Duration::from_secs(999)).since_origin(),
+///     Duration::ZERO
+/// );
+/// ```
 #[derive(Clone, Copy, Debug)]
-pub struct Stamps {
-    /// What the kernel's clock read at the loop's own origin.
-    origin: Duration,
+pub enum Stamps {
+    /// The kernel's own moment, anchored to the frame loop's origin.
+    ///
+    /// One reading of the kernel's clock taken beside one reading of the loop's puts the two on the
+    /// same zero. Both run at the same rate, so the anchor holds for as long as the program does.
+    Monotonic {
+        /// What the kernel's clock read at the loop's own origin.
+        origin: Duration,
+    },
+    /// The moment the loop read them, for a device whose stream is on the wall clock.
+    ///
+    /// Coarser: every event read in one wake shares it. That is what the driver's refusal costs.
+    /// The moment can still be compared with the frame it arrived in, and a wall-clock moment
+    /// cannot.
+    Read(Timestamp),
 }
 
 impl Stamps {
     /// Returns the anchor between the two clocks, read now.
     pub fn anchored(clock: &dyn Clock) -> Self {
-        Self {
+        Self::Monotonic {
             origin: monotonic().saturating_sub(clock.timestamp().since_origin()),
         }
     }
 
     /// Returns the anchor a caller states, for a test with no clock in it.
     pub const fn from_origin(origin: Duration) -> Self {
-        Self { origin }
+        Self::Monotonic { origin }
     }
 
     /// Returns the moment `at` is, in the contract's numbering.
@@ -142,7 +239,10 @@ impl Stamps {
     /// On a stream stamped when it was read, `at` is discarded: every event of that read carries
     /// the moment the loop read it.
     pub fn at(self, at: Duration) -> Timestamp {
-        Timestamp::from_origin(at.saturating_sub(self.origin))
+        match self {
+            Self::Monotonic { origin } => Timestamp::from_origin(at.saturating_sub(origin)),
+            Self::Read(read) => read,
+        }
     }
 }
 
@@ -174,6 +274,13 @@ fn dropped(batch: &Batch) -> bool {
 ///
 /// The whole translation, and it holds no device, so every part of it can be exercised over bytes
 /// written by hand.
+///
+/// # One set of held keys per device
+///
+/// Every method here takes the calling device's own `down` set. One layout serves every keyboard
+/// this seat holds, and libxkbcommon counts a modifier's transitions — so shift held on two
+/// keyboards is two transitions and needs two releases. A set shared between them would hold one
+/// code, repair one, and leave the count stuck at one with nothing holding the key.
 pub struct Keys {
     /// What a key means, or nothing on a machine with no layout source at all.
     ///
@@ -183,23 +290,14 @@ pub struct Keys {
     layout: Option<Box<dyn Layout>>,
     /// The held set as it was last reported, so a change is announced once.
     modifiers: Modifiers,
-    /// Where the two clocks meet.
-    stamps: Stamps,
-    /// Which keys this seat believes are down.
-    ///
-    /// Kept for one job: putting the layout back in step after the kernel says it dropped part of
-    /// an update. See [`Keys::resynchronise`].
-    down: BTreeSet<u16>,
 }
 
 impl Keys {
-    /// A translation over `layout`, stamping against `stamps`.
-    pub fn new(layout: Option<Box<dyn Layout>>, stamps: Stamps) -> Self {
+    /// Creates a translation over `layout`.
+    pub fn new(layout: Option<Box<dyn Layout>>) -> Self {
         Self {
             layout,
             modifiers: Modifiers::NONE,
-            stamps,
-            down: BTreeSet::new(),
         }
     }
 
@@ -208,54 +306,62 @@ impl Keys {
         self.modifiers
     }
 
-    /// Records the keys that were already down when the seat opened.
+    /// Puts one device's keys back in step with what the kernel says it has down.
     ///
-    /// `EVIOCGKEY` is what reports them: a modifier held before this process was listening is in
-    /// the kernel's own map of held keys and in no event, so without this it is invisible until it
-    /// is released and pressed again. Each reaches the layout as a **down transition with no
-    /// reading**, balanced by the release the kernel will send when the finger comes up.
-    pub fn hold(&mut self, keys: impl IntoIterator<Item = Key>) -> Option<SurfaceEvent> {
-        for key in keys.into_iter().filter(|key| typed(*key)) {
-            self.down.insert(key.raw());
-            if let Some(layout) = self.layout.as_mut() {
-                layout.hold(key);
-            }
-        }
-        self.announce()
-    }
-
-    /// Puts the layout back in step with the keys the kernel says are down.
+    /// Three moments need this and it is the same repair in all three.
     ///
-    /// The other half of what a `SYN_DROPPED` asks for. The kernel's rule is to discard everything
-    /// up to the next `SYN_REPORT` — which [`Keys::batch`] does by answering with nothing — and
-    /// then to ask the device what its state is now. A key the layout believes is down and the
-    /// device does not is released; a key the device reports and the layout has not seen is held.
-    /// Neither is a key press, because nobody pressed anything: what changed is what this process
-    /// knows.
-    pub fn resynchronise(&mut self, held: &BTreeSet<u16>) -> Option<SurfaceEvent> {
+    /// * **A device was just taken.** `down` is empty and `held` is what `EVIOCGKEY` reported: a
+    ///   modifier held before this process was listening is in the kernel's own map and in no
+    ///   event, so without this it stays invisible until it is released and pressed again.
+    /// * **The kernel dropped part of an update.** Its rule is to discard everything up to the next
+    ///   `SYN_REPORT` — which [`Keys::batch`] does by answering with nothing — and then to ask the
+    ///   device what its state is now.
+    /// * **A device stopped answering.** `held` is then empty, because a device that is gone holds
+    ///   nothing. The releases the kernel queued for it are never read, so without this a modifier
+    ///   held while it was unplugged stays held for the rest of the process, and every later key
+    ///   struck on another keyboard comes out shifted with no way back.
+    ///
+    /// A key `down` holds and `held` does not is released; a key `held` reports and `down` has not
+    /// seen is recorded down with no reading taken. Neither is a key press, because nobody pressed
+    /// anything: what changed is what this process knows, so what comes back is at most a change in
+    /// the held set.
+    pub fn resynchronise(
+        &mut self,
+        down: &mut BTreeSet<u16>,
+        held: &BTreeSet<u16>,
+    ) -> Option<SurfaceEvent> {
         let held: BTreeSet<u16> = held
             .iter()
             .copied()
             .filter(|code| typed(Key::new(*code)))
             .collect();
         if let Some(layout) = self.layout.as_mut() {
-            for code in self.down.difference(&held) {
+            for code in down.difference(&held) {
                 layout.release(Key::new(*code));
             }
-            for code in held.difference(&self.down) {
+            for code in held.difference(down) {
                 layout.hold(Key::new(*code));
             }
         }
-        self.down = held;
+        *down = held;
         self.announce()
     }
 
-    /// What one batch of events amounts to.
+    /// What one batch from one device amounts to.
     ///
     /// A batch is one coherent update, and a key event in it is a press, a release or a repeat.
-    /// Everything else the batch carries — a relative axis, a scan code, a button — belongs to
-    /// work this backend has not done and is left alone.
-    pub fn batch(&mut self, batch: &Batch) -> Vec<SurfaceEvent> {
+    /// Everything else the batch carries — a relative axis, a scan code, a button — belongs to work
+    /// this backend has not done and is left alone.
+    ///
+    /// `stamps` is how this device's moments are read. It belongs to the device rather than to the
+    /// seat because the choice does: a driver may refuse the monotonic clock for one device and
+    /// accept it for the next.
+    pub fn batch(
+        &mut self,
+        down: &mut BTreeSet<u16>,
+        batch: &Batch,
+        stamps: Stamps,
+    ) -> Vec<SurfaceEvent> {
         if dropped(batch) {
             return Vec::new();
         }
@@ -265,7 +371,7 @@ impl Keys {
                 continue;
             };
             let transition = Transition::of(event.value);
-            let reading = self.read(key, transition);
+            let reading = self.read(down, key, transition);
             let (state, repeat) = match transition {
                 Transition::Pressed => (KeyState::Pressed, false),
                 Transition::Repeated => (KeyState::Pressed, true),
@@ -293,23 +399,28 @@ impl Keys {
                     repeat,
                 ),
                 modifiers,
-                timestamp: self.stamps.at(event.at),
+                timestamp: stamps.at(event.at),
             });
         }
         events
     }
 
     /// Reads the layout for one transition, and records the transition where there is one.
-    fn read(&mut self, key: Key, transition: Transition) -> Reading {
-        match transition {
-            Transition::Pressed => {
-                self.down.insert(key.raw());
-            }
-            Transition::Released => {
-                self.down.remove(&key.raw());
-            }
-            Transition::Repeated => {}
-        }
+    ///
+    /// The device's own `down` set decides whether the layout is told at all. A press of a key that
+    /// device already has down records nothing, and a release of one it does not have down records
+    /// nothing either — so the layout's count follows the keyboard rather than the stream.
+    ///
+    /// The press case is reachable on any machine: `zgui_evdev::Device::open` starts the kernel
+    /// queuing events to this client, and the grab and the read of `EVIOCGKEY` happen after it, so
+    /// a key struck in between arrives through the map *and* through the stream. Counted twice, it
+    /// needs two releases and gets one.
+    fn read(&mut self, down: &mut BTreeSet<u16>, key: Key, transition: Transition) -> Reading {
+        let moved = match transition {
+            Transition::Pressed => down.insert(key.raw()),
+            Transition::Released => down.remove(&key.raw()),
+            Transition::Repeated => false,
+        };
         let Some(layout) = self.layout.as_mut() else {
             // No layout at all. The position still crosses, so a binding written against where the
             // key sits keeps working.
@@ -321,15 +432,15 @@ impl Keys {
         match transition {
             // One call, which reads before it records so that a latched modifier is spent by the
             // key that consumed it rather than by the key before.
-            Transition::Pressed => layout.press(key),
-            // A repeat is no transition at all.
-            Transition::Repeated => layout.reading(key),
-            // A release reports what the key meant while it was down, so it is read first.
-            Transition::Released => {
-                let reading = layout.reading(key);
-                layout.release(key);
-                reading
-            }
+            Transition::Pressed if moved => layout.press(key),
+            // A release reports what the key meant while it was down, so it is read first. The two
+            // are one call rather than two lines that could be swapped: reading afterwards reports
+            // what the key means with itself already up, which for a modifier is a different level
+            // of every key it was holding.
+            Transition::Released if moved => layout.reading_before_release(key),
+            // A repeat is no transition at all, and so is a transition this device had already
+            // made.
+            _ => layout.reading(key),
         }
     }
 
@@ -346,12 +457,29 @@ impl Keys {
     }
 }
 
+/// One keyboard this seat took.
+struct Keyboard {
+    /// The device, grabbed for as long as this lives.
+    device: Device,
+    /// Which of its keys this seat believes are down.
+    down: BTreeSet<u16>,
+    /// How its moments are read.
+    stamps: Stamps,
+}
+
 /// Every keyboard on this machine, taken.
 pub struct Seat {
     /// The devices, each grabbed for as long as this lives.
-    keyboards: Vec<Device>,
+    keyboards: Vec<Keyboard>,
     /// The layout and the translation over it.
     keys: Keys,
+    /// What this seat has to say before it has read anything.
+    ///
+    /// The modifiers that were already held when the devices were taken. Nothing has been told
+    /// about them yet — the loop asks for events, and this is the first answer — and a caller left
+    /// to work them out from key events alone would believe none were held while every key event
+    /// said otherwise.
+    pending: Vec<SurfaceEvent>,
 }
 
 impl Seat {
@@ -381,8 +509,10 @@ impl Seat {
             ),
         }
 
-        let mut keys = Keys::new(found.layout, Stamps::anchored(clock));
+        let anchored = Stamps::anchored(clock);
+        let mut keys = Keys::new(found.layout);
         let mut keyboards = Vec::new();
+        let mut pending = Vec::new();
         match zgui_evdev::discover() {
             Ok(discovery) => {
                 for skipped in &discovery.skipped {
@@ -392,22 +522,42 @@ impl Seat {
                     );
                 }
                 for device in discovery.opened {
-                    if let Some(device) = take(device) {
-                        // After the grab, so that a key pressed between the two does not arrive
-                        // through both the map and the stream.
-                        match device.pressed_keys() {
-                            Ok(held) => {
-                                let _ = keys.hold(held.iter());
-                            }
-                            Err(error) => warn!(
-                                target: "zgui::platform",
-                                "{} will not say which keys are held, so a modifier held now stays \
-                                 invisible until it is pressed again: {error}",
-                                device.path().display()
-                            ),
+                    let Some(device) = take(device) else {
+                        continue;
+                    };
+                    // Asked rather than assumed. A driver that refused `EVIOCSCLOCKID` leaves this
+                    // device's stream on the wall clock, which shares no zero with the frame loop's
+                    // own reading, so its events are stamped when they are read instead.
+                    let stamps = if device.has_monotonic_timestamps() {
+                        anchored
+                    } else {
+                        warn!(
+                            target: "zgui::platform",
+                            "{} refused the monotonic clock, so its keys are stamped when the loop \
+                             reads them rather than when they moved",
+                            device.path().display()
+                        );
+                        Stamps::Read(clock.timestamp())
+                    };
+                    let mut keyboard = Keyboard {
+                        device,
+                        down: BTreeSet::new(),
+                        stamps,
+                    };
+                    // After the grab, so that nothing else can change what is held between the two.
+                    match keyboard.device.pressed_keys() {
+                        Ok(held) => {
+                            let held = held.iter().map(Key::raw).collect();
+                            pending.extend(keys.resynchronise(&mut keyboard.down, &held));
                         }
-                        keyboards.push(device);
+                        Err(error) => warn!(
+                            target: "zgui::platform",
+                            "{} will not say which keys are held, so a modifier held now stays \
+                             invisible until it is pressed again: {error}",
+                            keyboard.device.path().display()
+                        ),
                     }
+                    keyboards.push(keyboard);
                 }
             }
             Err(error) => warn!(
@@ -422,58 +572,78 @@ impl Seat {
                  program"
             );
         }
-        Self { keyboards, keys }
+        Self {
+            keyboards,
+            keys,
+            pending,
+        }
     }
 
     /// Returns the descriptors the frame loop waits on beside the device and the wake channel.
     pub fn descriptors(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
-        self.keyboards.iter().map(AsFd::as_fd)
-    }
-
-    /// Which modifiers are held, as this seat last reported them.
-    pub fn modifiers(&self) -> Modifiers {
-        self.keys.modifiers()
+        self.keyboards
+            .iter()
+            .map(|keyboard| keyboard.device.as_fd())
     }
 
     /// Reads every keyboard and reports what a person did.
     ///
-    /// A device that answers a read with a failure is dropped rather than read again: `ENODEV` is
-    /// what an unplugged device and a revoked descriptor both answer, and both then answer every
-    /// later read the same way while `poll` reports the descriptor permanently ready — so a loop
-    /// that kept one would spin at the speed of the processor for as long as it ran.
+    /// A device that answers a read with a failure is dropped and its keys are released. Any errno
+    /// is treated that way, because the one that matters cannot be told from the others by anything
+    /// this loop could do differently: `ENODEV` is what an unplugged device and a descriptor
+    /// `logind` revoked both answer, and both then answer every later read the same way while
+    /// `poll` reports the descriptor permanently ready — so a loop that kept one would spin at the
+    /// speed of the processor for as long as it ran. A device dropped over a passing failure costs
+    /// a keyboard that has to be plugged in again; a device kept costs the whole program.
     pub fn read(&mut self) -> Vec<SurfaceEvent> {
-        let Self { keyboards, keys } = self;
-        let mut events = Vec::new();
-        let mut resynchronise = false;
+        let Self {
+            keyboards,
+            keys,
+            pending,
+        } = self;
+        let mut events = std::mem::take(pending);
         let mut lost = Vec::new();
-        for (index, device) in keyboards.iter_mut().enumerate() {
-            match device.read() {
-                Ok(batches) => {
-                    for batch in &batches {
-                        resynchronise |= dropped(batch);
-                        events.append(&mut keys.batch(batch));
-                    }
-                }
+        for (index, keyboard) in keyboards.iter_mut().enumerate() {
+            let batches = match keyboard.device.read() {
+                Ok(batches) => batches,
                 Err(error) => {
                     warn!(
                         target: "zgui::platform",
                         "{} stopped answering and is no longer watched: {error}",
-                        device.path().display()
+                        keyboard.device.path().display()
                     );
                     lost.push(index);
+                    continue;
+                }
+            };
+            let mut resynchronise = false;
+            for batch in &batches {
+                resynchronise |= dropped(batch);
+                events.append(&mut keys.batch(&mut keyboard.down, batch, keyboard.stamps));
+            }
+            if resynchronise {
+                match keyboard.device.pressed_keys() {
+                    Ok(held) => {
+                        let held = held.iter().map(Key::raw).collect();
+                        events.extend(keys.resynchronise(&mut keyboard.down, &held));
+                    }
+                    // What is believed is left alone. Repairing against nothing would release every
+                    // key the person is holding, which is worse than carrying a stale belief until
+                    // the next answer.
+                    Err(error) => warn!(
+                        target: "zgui::platform",
+                        "{} will not say which keys are held, so what this loop believes is down \
+                         stays as it was: {error}",
+                        keyboard.device.path().display()
+                    ),
                 }
             }
         }
         for index in lost.into_iter().rev() {
-            keyboards.remove(index);
-        }
-        if resynchronise {
-            let held = keyboards
-                .iter()
-                .filter_map(|device| device.pressed_keys().ok())
-                .flat_map(|map| map.iter().map(Key::raw).collect::<Vec<_>>())
-                .collect();
-            events.extend(keys.resynchronise(&held));
+            let mut gone = keyboards.remove(index);
+            // A device that is gone holds nothing. The releases the kernel queued for it are never
+            // read, so this is the only thing that takes its keys back off the layout.
+            events.extend(keys.resynchronise(&mut gone.down, &BTreeSet::new()));
         }
         events
     }
@@ -482,8 +652,8 @@ impl Seat {
 /// Opens the grab on a device somebody types on, or answers with nothing.
 ///
 /// A device nobody types on is left alone. So is one the kernel refuses to hand over: a grab is
-/// exclusive, so another client already holding it is the ordinary reason, and the device is left
-/// alone either way.
+/// exclusive, so another client already holding it is the ordinary reason, and either way the
+/// device stays with whatever has it.
 fn take(mut device: Device) -> Option<Device> {
     if !types_on(device.capabilities()) {
         return None;
@@ -499,7 +669,7 @@ fn take(mut device: Device) -> Option<Device> {
         Err(error) => {
             warn!(
                 target: "zgui::platform",
-                "{} is held by something else and is left with it: {error}",
+                "{} will not be handed over and is left where it is: {error}",
                 device.path().display()
             );
             None
@@ -524,8 +694,8 @@ mod tests {
     use zgui_evdev::{
         Absolute, Bitmap, Capabilities, EventType, Key, Reader, Relative, Synchronisation,
     };
-    use zgui_platform::{SurfaceEvent, SurfaceId};
-    use zgui_vocab::{EventKind, KeyCode, KeyState, Modifiers, NamedKey, PhysicalKey};
+    use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
+    use zgui_vocab::{EventKind, KeyCode, KeyState, Modifiers, NamedKey, PhysicalKey, Timestamp};
 
     /// A layout that records what it was told, and holds shift the way a real one would.
     ///
@@ -536,10 +706,12 @@ mod tests {
     struct Recording {
         /// How many times shift was recorded down, less the times it was recorded up.
         shift: i32,
-        /// Every call that recorded something, in order.
-        recorded: Vec<(&'static str, u16)>,
-        /// Every call that read without recording, in order.
-        read: Vec<u16>,
+        /// Every call, in the order they were made.
+        ///
+        /// One list rather than two, because the order *between* a read and a record is what half
+        /// of these tests are about: a release that recorded before it read would report the key
+        /// with itself already up.
+        calls: Vec<(&'static str, u16)>,
     }
 
     impl Recording {
@@ -582,7 +754,7 @@ mod tests {
         fn press(&mut self, key: Key) -> Reading {
             // Read before the record, the order the real one is written in.
             let reading = self.reading_of(key);
-            self.recorded.push(("press", key.raw()));
+            self.calls.push(("press", key.raw()));
             if key == Key::KEY_LEFTSHIFT {
                 self.shift += 1;
             }
@@ -596,14 +768,14 @@ mod tests {
         }
 
         fn release(&mut self, key: Key) {
-            self.recorded.push(("release", key.raw()));
+            self.calls.push(("release", key.raw()));
             if key == Key::KEY_LEFTSHIFT {
                 self.shift -= 1;
             }
         }
 
         fn hold(&mut self, key: Key) {
-            self.recorded.push(("hold", key.raw()));
+            self.calls.push(("hold", key.raw()));
             if key == Key::KEY_LEFTSHIFT {
                 self.shift += 1;
             }
@@ -636,7 +808,7 @@ mod tests {
 
         fn reading(&self, key: Key) -> Reading {
             let reading = self.0.borrow().reading(key);
-            self.0.borrow_mut().read.push(key.raw());
+            self.0.borrow_mut().calls.push(("read", key.raw()));
             reading
         }
 
@@ -653,12 +825,44 @@ mod tests {
         }
     }
 
-    /// A translation over a recording layout, and the record it writes.
-    fn keys() -> (Keys, Shared) {
+    impl Shared {
+        /// Every call the layout was given, in order.
+        fn calls(&self) -> Vec<(&'static str, u16)> {
+            self.0.borrow().calls.clone()
+        }
+
+        /// Every call that recorded a transition, in order.
+        fn recorded(&self) -> Vec<(&'static str, u16)> {
+            self.0
+                .borrow()
+                .calls
+                .iter()
+                .filter(|(call, _)| *call != "read")
+                .copied()
+                .collect()
+        }
+
+        /// How many times the layout was read without being told anything.
+        fn reads(&self) -> usize {
+            self.0
+                .borrow()
+                .calls
+                .iter()
+                .filter(|(call, _)| *call == "read")
+                .count()
+        }
+    }
+
+    /// One keyboard's worth of state: the translation, the record, and the keys it has down.
+    ///
+    /// The down set is the device's rather than the seat's, so a test that wants two keyboards
+    /// keeps two of them over one `Keys`.
+    fn keys() -> (Keys, Shared, BTreeSet<u16>) {
         let shared = Shared::default();
         (
-            Keys::new(Some(Box::new(shared.clone())), Stamps::from_origin(SINCE)),
+            Keys::new(Some(Box::new(shared.clone()))),
             shared,
+            BTreeSet::new(),
         )
     }
 
@@ -694,14 +898,15 @@ mod tests {
         bytes
     }
 
-    /// What a stream of bytes turns into, through the whole translation.
-    fn translate(keys: &mut Keys, bytes: &[u8]) -> Vec<SurfaceEvent> {
+    /// What a stream of bytes from one keyboard turns into, through the whole translation.
+    fn translate(keys: &mut Keys, down: &mut BTreeSet<u16>, bytes: &[u8]) -> Vec<SurfaceEvent> {
         let mut reader = Reader::new();
-        reader
-            .feed(bytes)
-            .iter()
-            .flat_map(|batch| keys.batch(batch))
-            .collect()
+        let batches = reader.feed(bytes);
+        let mut events = Vec::new();
+        for batch in &batches {
+            events.append(&mut keys.batch(down, batch, Stamps::from_origin(SINCE)));
+        }
+        events
     }
 
     /// The key events among what came out, as the fields a test asserts on.
@@ -746,11 +951,11 @@ mod tests {
 
     #[test]
     fn a_press_and_its_release_arrive_as_two_events() {
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_A, 1);
         bytes.extend(moved(SINCE, Key::KEY_A, 0));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         assert_eq!(
             presses(&events),
@@ -777,11 +982,11 @@ mod tests {
         // `is_input` says so, and turns it into a document event through `to_dispatch`, which is
         // the contract's own bridge between the two vocabularies — so an event that answers both
         // is one that reaches a document.
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_A, 1);
         bytes.extend(moved(SINCE, Key::KEY_A, 0));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         let dispatched: Vec<_> = events
             .iter()
@@ -803,11 +1008,11 @@ mod tests {
 
     #[test]
     fn a_press_carries_all_three_readings_of_it() {
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_LEFTSHIFT, 1);
         bytes.extend(moved(SINCE, Key::KEY_A, 1));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         let SurfaceEvent::Key { event, .. } = events.last().expect("the letter arrived") else {
             panic!("the last event is the letter: {events:?}");
@@ -828,11 +1033,11 @@ mod tests {
 
     #[test]
     fn a_repeat_arrives_as_a_press_that_says_it_is_one() {
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_A, 1);
         bytes.extend(moved(SINCE, Key::KEY_A, 2));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         assert_eq!(
             presses(&events)
@@ -851,7 +1056,7 @@ mod tests {
         // key over and over with value 2, and a caller that recorded each one would call the
         // layout's update eight times and its release once — leaving shift down for the rest of
         // the program, so every later letter comes out in the wrong case.
-        let (mut keys, layout) = keys();
+        let (mut keys, layout, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_LEFTSHIFT, 1);
         for _ in 0..8 {
             bytes.extend(moved(SINCE, Key::KEY_LEFTSHIFT, 2));
@@ -859,10 +1064,10 @@ mod tests {
         bytes.extend(moved(SINCE, Key::KEY_LEFTSHIFT, 0));
         bytes.extend(moved(SINCE, Key::KEY_A, 1));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         assert_eq!(
-            layout.0.borrow().recorded,
+            layout.recorded(),
             [
                 ("press", Key::KEY_LEFTSHIFT.raw()),
                 ("release", Key::KEY_LEFTSHIFT.raw()),
@@ -871,7 +1076,7 @@ mod tests {
             "one press and one release reached the layout, whatever came between them"
         );
         assert_eq!(
-            layout.0.borrow().read.len(),
+            layout.reads(),
             9,
             "every repeat was read, and so was the release, which reports what the key meant while \
              it was down"
@@ -891,11 +1096,11 @@ mod tests {
     fn the_modifiers_are_read_after_the_transition_that_changed_them() {
         // What a browser reports and what a handler reading the modifiers off a key event expects:
         // the press of shift carries shift, and its release carries nothing.
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_LEFTSHIFT, 1);
         bytes.extend(moved(SINCE, Key::KEY_LEFTSHIFT, 0));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         assert_eq!(
             presses(&events)
@@ -913,11 +1118,11 @@ mod tests {
     fn a_change_in_what_is_held_is_announced_before_the_key_that_changed_it() {
         // The state a key was struck in, before the event that happened in it. A caller that keeps
         // the held set from this event alone stays right, and that is what the announcement is for.
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = moved(SINCE, Key::KEY_LEFTSHIFT, 1);
         bytes.extend(moved(SINCE, Key::KEY_A, 1));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         assert!(
             matches!(events[0], SurfaceEvent::ModifiersChanged(held) if held == Modifiers::SHIFT),
@@ -935,13 +1140,13 @@ mod tests {
     fn a_button_on_a_keyboard_node_is_not_a_key() {
         // A keyboard with a trackpoint reports its buttons on the same node. A button belongs to a
         // pointer, and the pointer is later work.
-        let (mut keys, layout) = keys();
+        let (mut keys, layout, mut down) = keys();
 
-        let events = translate(&mut keys, &moved(SINCE, Key::BTN_LEFT, 1));
+        let events = translate(&mut keys, &mut down, &moved(SINCE, Key::BTN_LEFT, 1));
 
         assert!(events.is_empty(), "{events:?}");
         assert!(
-            layout.0.borrow().recorded.is_empty(),
+            layout.recorded().is_empty(),
             "and the layout was never told about it"
         );
     }
@@ -949,16 +1154,16 @@ mod tests {
     #[test]
     fn the_code_that_sends_nothing_is_not_a_key_either() {
         // `KEY_RESERVED` is code zero. A driver that reports it has said nothing.
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
 
-        assert!(translate(&mut keys, &moved(SINCE, Key::KEY_RESERVED, 1)).is_empty());
+        assert!(translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_RESERVED, 1)).is_empty());
     }
 
     #[test]
     fn an_event_that_is_not_a_key_at_all_is_left_alone() {
         // A wheel and a scan code both arrive in a keyboard's own batches. Reading one as a key
         // would press whichever key the axis number happens to name.
-        let (mut keys, _) = keys();
+        let (mut keys, _, mut down) = keys();
         let mut bytes = record(SINCE, EventType::EV_REL, Relative::REL_WHEEL.raw(), 1);
         bytes.extend(record(SINCE, EventType::EV_MSC, 4, 0x0007_0004));
         bytes.extend(record(
@@ -968,14 +1173,14 @@ mod tests {
             0,
         ));
 
-        assert!(translate(&mut keys, &bytes).is_empty());
+        assert!(translate(&mut keys, &mut down, &bytes).is_empty());
     }
 
     #[test]
     fn a_batch_the_kernel_dropped_part_of_reports_nothing() {
         // What arrives after a `SYN_DROPPED` is the tail of an update whose beginning no longer
         // exists. Delivering it would press a key nobody pressed, and release one nobody released.
-        let (mut keys, layout) = keys();
+        let (mut keys, layout, mut down) = keys();
         let mut bytes = record(
             SINCE,
             EventType::EV_SYN,
@@ -990,28 +1195,28 @@ mod tests {
             0,
         ));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         assert!(events.is_empty(), "{events:?}");
-        assert!(layout.0.borrow().recorded.is_empty());
+        assert!(layout.recorded().is_empty());
     }
 
     #[test]
     fn a_resynchronisation_puts_the_layout_back_in_step_without_pressing_anything() {
         // The other half of what a `SYN_DROPPED` asks for. Shift went down before the overflow and
         // came up during it, so the layout believes it is held and the device says it is not.
-        let (mut keys, layout) = keys();
-        translate(&mut keys, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
+        let (mut keys, layout, mut down) = keys();
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
         assert_eq!(keys.modifiers(), Modifiers::SHIFT);
 
-        let announced = keys.resynchronise(&BTreeSet::new());
+        let announced = keys.resynchronise(&mut down, &BTreeSet::new());
 
         assert!(
             matches!(announced, Some(SurfaceEvent::ModifiersChanged(held)) if held.is_empty()),
             "the change is announced, and no key press is invented: {announced:?}"
         );
         assert_eq!(
-            layout.0.borrow().recorded.last(),
+            layout.recorded().last(),
             Some(&("release", Key::KEY_LEFTSHIFT.raw())),
             "the layout was told the key came up"
         );
@@ -1020,13 +1225,13 @@ mod tests {
 
     #[test]
     fn a_resynchronisation_records_a_key_the_kernel_says_is_down() {
-        let (mut keys, layout) = keys();
+        let (mut keys, layout, mut down) = keys();
 
-        let announced = keys.resynchronise(&BTreeSet::from([Key::KEY_LEFTSHIFT.raw()]));
+        let announced = keys.resynchronise(&mut down, &BTreeSet::from([Key::KEY_LEFTSHIFT.raw()]));
 
         assert!(matches!(announced, Some(SurfaceEvent::ModifiersChanged(_))));
         assert_eq!(
-            layout.0.borrow().recorded,
+            layout.recorded(),
             [("hold", Key::KEY_LEFTSHIFT.raw())],
             "a key that was down through the overflow is held rather than pressed"
         );
@@ -1037,21 +1242,24 @@ mod tests {
     fn a_key_already_down_when_the_seat_opened_reaches_the_layout() {
         // `EVIOCGKEY` says shift is under a finger. Nothing later in the stream says so, so
         // without this it stays invisible until it is released and pressed again.
-        let (mut keys, layout) = keys();
+        let (mut keys, layout, mut down) = keys();
 
-        let announced = keys.hold([Key::KEY_LEFTSHIFT, Key::BTN_LEFT]);
+        let announced = keys.resynchronise(
+            &mut down,
+            &BTreeSet::from([Key::KEY_LEFTSHIFT.raw(), Key::BTN_LEFT.raw()]),
+        );
 
         assert!(
             matches!(announced, Some(SurfaceEvent::ModifiersChanged(held)) if held == Modifiers::SHIFT)
         );
         assert_eq!(
-            layout.0.borrow().recorded,
+            layout.recorded(),
             [("hold", Key::KEY_LEFTSHIFT.raw())],
             "a button is no key, and a held key is recorded with no reading taken"
         );
 
         // And the release the kernel sends when the finger comes up balances it.
-        let events = translate(&mut keys, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
+        let events = translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
         assert_eq!(keys.modifiers(), Modifiers::NONE);
         assert!(!events.is_empty());
     }
@@ -1061,11 +1269,11 @@ mod tests {
         // The kernel timestamps when the key moved. A loop that stamped when it woke would give
         // every event in one wake the same moment, and a double click and a key repeat are
         // measured against the difference between two of them.
-        let mut keys = Keys::new(None, Stamps::from_origin(SINCE));
+        let (mut keys, mut down) = (Keys::new(None), BTreeSet::new());
         let mut bytes = moved(SINCE + Duration::from_millis(250), Key::KEY_A, 1);
         bytes.extend(moved(SINCE + Duration::from_millis(400), Key::KEY_A, 0));
 
-        let events = translate(&mut keys, &bytes);
+        let events = translate(&mut keys, &mut down, &bytes);
 
         let moments: Vec<_> = events
             .iter()
@@ -1096,9 +1304,9 @@ mod tests {
     fn a_seat_with_no_layout_still_reports_where_the_key_was() {
         // A machine with neither libxkbcommon nor a readable console. The position is the kernel's
         // own and needs no layout, so a binding written against where a key sits keeps working.
-        let mut keys = Keys::new(None, Stamps::from_origin(SINCE));
+        let (mut keys, mut down) = (Keys::new(None), BTreeSet::new());
 
-        let events = translate(&mut keys, &moved(SINCE, Key::KEY_A, 1));
+        let events = translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_A, 1));
 
         let SurfaceEvent::Key { event, .. } = &events[0] else {
             panic!("a press arrived: {events:?}");
@@ -1106,6 +1314,209 @@ mod tests {
         assert_eq!(event.physical, PhysicalKey::Code(KeyCode::KeyA));
         assert_eq!(event.key, zgui_vocab::Key::Unidentified);
         assert_eq!(event.key.inserted_text(), None);
+    }
+
+    #[test]
+    fn the_anchor_puts_the_kernels_clock_and_the_loops_on_one_zero() {
+        // The one piece of arithmetic that joins two clocks, and the only thing here that reads a
+        // real one. An anchor with its sign inverted, or one taken against the wrong origin, lands
+        // decades away rather than microseconds — and every stamp downstream is beside frame stamps
+        // measured in seconds, where nothing could tell.
+        let clock = crate::clock::SystemClock::new();
+        let stamps = Stamps::anchored(&clock);
+
+        let now = super::monotonic();
+        let mapped = stamps.at(now).since_origin();
+        let reads = clock.timestamp().since_origin();
+
+        assert!(
+            mapped.abs_diff(reads) < Duration::from_millis(50),
+            "the kernel's {now:?} became {mapped:?} where the loop reads {reads:?}"
+        );
+        // And the two run at one rate, so the anchor holds for as long as the program does.
+        assert_eq!(
+            stamps.at(now + Duration::from_secs(5)) - stamps.at(now),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn a_device_that_refused_the_monotonic_clock_is_stamped_when_it_is_read() {
+        // `EVIOCSCLOCKID` can be refused, which leaves that device's stream on the wall clock.
+        // Anchored against a few hours of uptime, a wall-clock moment is some fifty-five years
+        // after the application started.
+        let read = Timestamp::from_origin(Duration::from_millis(40));
+        let wall = Duration::from_secs(1_750_000_000);
+
+        assert_eq!(Stamps::Read(read).at(wall), read);
+        assert!(
+            Stamps::from_origin(SINCE).at(wall).since_origin() > Duration::from_secs(1_000_000_000),
+            "which is what asking the device saves"
+        );
+    }
+
+    #[test]
+    fn a_release_reads_the_key_before_it_records_that_it_came_up() {
+        // Reading afterwards reports what the key means with itself already up, and for a modifier
+        // that is a different level of every key it was holding. The order is one call on the
+        // layout so that nothing can write it the other way round, and this asserts it.
+        let (mut keys, layout, mut down) = keys();
+        let mut bytes = moved(SINCE, Key::KEY_LEFTSHIFT, 1);
+        bytes.extend(moved(SINCE, Key::KEY_LEFTSHIFT, 0));
+
+        translate(&mut keys, &mut down, &bytes);
+
+        assert_eq!(
+            layout.calls(),
+            [
+                ("press", Key::KEY_LEFTSHIFT.raw()),
+                ("read", Key::KEY_LEFTSHIFT.raw()),
+                ("release", Key::KEY_LEFTSHIFT.raw()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_keyboard_that_stops_answering_leaves_no_modifier_behind() {
+        // Two keyboards over one layout, which is how this seat works. Shift is held on the
+        // external one and it is unplugged: the kernel queues its releases and then answers
+        // `ENODEV` the moment the device is gone, so those releases are never read. Without the
+        // repair the count never returns to zero, and every letter typed on the built-in keyboard
+        // comes out shifted for the rest of the process with no way back.
+        let (mut keys, _, mut external) = keys();
+        let mut internal = BTreeSet::new();
+        translate(
+            &mut keys,
+            &mut external,
+            &moved(SINCE, Key::KEY_LEFTSHIFT, 1),
+        );
+        assert_eq!(keys.modifiers(), Modifiers::SHIFT);
+
+        // What `Seat::read` does with a device it has just dropped: one that is gone holds nothing.
+        keys.resynchronise(&mut external, &BTreeSet::new());
+
+        let events = translate(&mut keys, &mut internal, &moved(SINCE, Key::KEY_A, 1));
+        let SurfaceEvent::Key { event, .. } = events.last().expect("the letter arrived") else {
+            panic!("the last event is the letter: {events:?}");
+        };
+        assert_eq!(keys.modifiers(), Modifiers::NONE);
+        assert_eq!(
+            event.key.inserted_text(),
+            Some("a"),
+            "the keyboard that is still here types in lower case"
+        );
+    }
+
+    #[test]
+    fn a_key_held_on_two_keyboards_needs_two_releases() {
+        // One layout serves the whole seat and it counts a modifier's transitions, so shift under a
+        // finger on each of two keyboards is two of them. A set of held keys shared between the two
+        // would hold one code, and letting go of one keyboard would stop reporting shift while the
+        // other was still held down.
+        let (mut keys, _, mut first) = keys();
+        let mut second = BTreeSet::new();
+
+        translate(&mut keys, &mut first, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
+        translate(&mut keys, &mut second, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
+        translate(&mut keys, &mut first, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
+
+        assert_eq!(
+            keys.modifiers(),
+            Modifiers::SHIFT,
+            "a finger is still on the other one"
+        );
+
+        translate(&mut keys, &mut second, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
+        assert_eq!(keys.modifiers(), Modifiers::NONE);
+    }
+
+    #[test]
+    fn a_key_the_map_and_the_stream_both_report_is_recorded_once() {
+        // `zgui_evdev::Device::open` starts the kernel queuing events to this client, and the grab
+        // and the read of `EVIOCGKEY` both happen after it — so a key struck in between arrives
+        // through the map *and* through the stream. Counted twice it needs two releases and gets
+        // one, and the modifier sticks.
+        let (mut keys, layout, mut down) = keys();
+
+        keys.resynchronise(&mut down, &BTreeSet::from([Key::KEY_LEFTSHIFT.raw()]));
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
+
+        assert_eq!(keys.modifiers(), Modifiers::NONE, "one release balanced it");
+        assert_eq!(
+            layout.recorded(),
+            [
+                ("hold", Key::KEY_LEFTSHIFT.raw()),
+                ("release", Key::KEY_LEFTSHIFT.raw()),
+            ],
+            "the press the stream repeated recorded nothing"
+        );
+    }
+
+    #[test]
+    fn a_release_of_a_key_that_was_never_down_records_nothing() {
+        // The other half of the same rule. A release with no press behind it would take the count
+        // below zero, where nothing brings it back.
+        let (mut keys, layout, mut down) = keys();
+
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
+
+        assert_eq!(keys.modifiers(), Modifiers::SHIFT);
+        assert_eq!(
+            layout.recorded(),
+            [("press", Key::KEY_LEFTSHIFT.raw())],
+            "only the press was a transition this keyboard made"
+        );
+    }
+
+    #[test]
+    fn the_power_button_is_not_something_a_person_types_on() {
+        // `/proc/bus/input/devices` on the development machine: `Name="Power Button"`, carrying
+        // `KEY_POWER` and `KEY_SLEEP` and nothing else. Both are under `BTN_MISC`, so a rule
+        // written that way takes it — and `EVIOCGRAB` then routes the power button to this process
+        // alone, where `acpid` and `logind` never see it and this backend does nothing with it.
+        // Beside a grabbed keyboard raising no `SIGINT`, that is a machine with no soft way to stop.
+        let power = capabilities(
+            &[EventType::EV_SYN, EventType::EV_KEY],
+            &[Key::KEY_POWER, Key::KEY_SLEEP],
+        );
+
+        assert!(
+            power.roles().contains(zgui_evdev::Role::Keyboard),
+            "udev's rule calls it a keyboard, which is why the narrower question exists"
+        );
+        assert!(!types_on(&power), "and pressing power has to keep working");
+    }
+
+    #[test]
+    fn a_hotkey_node_is_not_something_a_person_types_on() {
+        // A laptop's own WMI node and a webcam's consumer-control node. Every key on them is under
+        // `BTN_MISC` and none of them is a letter.
+        let hotkeys = capabilities(
+            &[EventType::EV_SYN, EventType::EV_KEY],
+            &[
+                Key::KEY_BRIGHTNESSUP,
+                Key::KEY_BRIGHTNESSDOWN,
+                Key::KEY_WLAN,
+                Key::KEY_CAMERA,
+            ],
+        );
+
+        assert!(!types_on(&hotkeys));
+    }
+
+    #[test]
+    fn a_keyboard_set_to_any_layout_at_all_is_one() {
+        // The codes are positions rather than characters, so a Russian, a Dvorak and a French
+        // keyboard all report the same ones. A rule written against what a key *types* would refuse
+        // every keyboard outside the Latin alphabet.
+        let keyboard = capabilities(
+            &[EventType::EV_SYN, EventType::EV_KEY],
+            &[Key::KEY_ESC, Key::KEY_Q, Key::KEY_LEFTSHIFT],
+        );
+
+        assert!(types_on(&keyboard));
     }
 
     #[test]
