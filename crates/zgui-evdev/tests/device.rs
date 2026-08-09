@@ -152,6 +152,26 @@ fn a_device_says_which_keys_are_held_down() {
 }
 
 #[test]
+fn a_device_timestamps_its_events_on_the_monotonic_clock() {
+    let devices = support::devices("a_device_timestamps_its_events_on_the_monotonic_clock");
+    if devices.is_empty() {
+        return;
+    }
+
+    for device in &devices {
+        // `EVIOCSCLOCKID` arrived in 2.6.36, so a kernel that refuses it is one from before 2010.
+        // On anything newer this is the request working, and it is worth asserting because the
+        // alternative is silent: the stream stays on the real clock and every measured interval
+        // is wrong only when someone steps the clock.
+        assert!(
+            device.has_monotonic_timestamps(),
+            "{} refused the monotonic clock, which only a kernel older than 2.6.36 does",
+            device.path().display()
+        );
+    }
+}
+
+#[test]
 fn a_device_hands_out_a_descriptor_that_can_be_polled() {
     let devices = support::devices("a_device_hands_out_a_descriptor_that_can_be_polled");
     let Some(device) = devices.first() else {
