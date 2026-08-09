@@ -60,6 +60,12 @@ const TICK: Duration = Duration::from_secs(1);
 /// How many segments the seconds bar has.
 const SEGMENTS: u64 = 60;
 
+/// How often the caret changes state.
+///
+/// Half a second on and half a second off is the rate every text field blinks at, and it is slow
+/// enough that the frames it costs on an otherwise idle console are two a second.
+const BLINK: Duration = Duration::from_millis(500);
+
 /// A clock that counts from the moment the program started.
 ///
 /// The elapsed time rather than the time of day, because a console has no locale, no time zone
@@ -90,6 +96,17 @@ fn Clock() -> impl IntoView {
     // a caret drawn beside a string.
     let typed = RwSignal::new(String::new());
     let at = RwSignal::new(None::<(f32, f32)>);
+    // How far the wheel has asked to scroll altogether. A reading that stands still while the wheel
+    // turns says no turn reached the document at all, which is a different fault from a turn that
+    // reached it and scrolled nothing.
+    let turned = RwSignal::new(0.0_f32);
+
+    // A caret that stands still looks like a program that has stopped. This one is a signal read by
+    // the glyph's own class, so a blink writes one attribute rather than rebuilding the row.
+    let lit = RwSignal::new(true);
+    let _blink = RwSignal::new_local(set_interval(BLINK, move || {
+        lit.update(|lit| *lit = !*lit);
+    }));
 
     let windows = use_windows();
     let window = use_window();
@@ -111,7 +128,13 @@ fn Clock() -> impl IntoView {
                 // key arrives again as a repeat, and a repeat inserts text the way a press does.
                 key => {
                     if let Some(text) = key.inserted_text() {
-                        typed.update(|typed| typed.push_str(text));
+                        // A chord such as `Ctrl+A` inserts text too — the control character the
+                        // layout says that chord means. A field with no notion of selection has
+                        // nothing to do with one, and putting it in the string would show as a
+                        // hole, so what cannot be read is left out.
+                        typed.update(|typed| {
+                            typed.extend(text.chars().filter(|glyph| !glyph.is_control()));
+                        });
                     }
                 }
             },
@@ -120,6 +143,14 @@ fn Clock() -> impl IntoView {
             // and stands still for the first.
             on:pointer_move = move |ev| {
                 at.set(Some((ev.position.x.0, ev.position.y.0)));
+            },
+            // Counted here rather than on the list, so that a turn is recorded wherever the pointer
+            // was. A turn that arrives and scrolls nothing is a scroll that did not reach what it
+            // was over; a turn that never arrives is a wheel this backend did not read.
+            on:wheel = move |ev| {
+                if let ScrollDelta::Lines { y, .. } = ev.delta {
+                    turned.update(|turned| *turned += y);
+                }
             },
             a11y:role = Role::Group,
             a11y:label = "Running time"
@@ -179,6 +210,7 @@ fn Clock() -> impl IntoView {
             // Taller than the box it is in, so the wheel has somewhere to go. A detent leaves the
             // backend as a detent and the framework decides how far one travels, which is why this
             // scrolls by three lines here and on a desktop alike.
+            label(class = "log__caption") {"SCROLL THIS BOX"}
             column(class = "log", a11y:role = Role::Group, a11y:label = "Ticks") {
                 for segment in || 0..SEGMENTS, key = |segment: &u64| *segment {
                     label(class = "log__line") {{move || format!("tick {segment:02}")}}
@@ -189,16 +221,19 @@ fn Clock() -> impl IntoView {
             // rather than two.
             row(class = "field", a11y:role = Role::TextInput, a11y:label = "Type here") {
                 text(class = "field__text") {{move || typed.get()}}
-                text(class = "field__caret") {"|"}
+                text(class = "field__caret", class:field__caret-lit = move || lit.get()) {"|"}
                 spacer()
                 text(class = "field__hint") {"type — backspace deletes"}
             }
             // The pointer as the document heard about it. A reading that stands still while the
             // mouse moves says the pointer never arrived; a reading that moves under a cursor that
             // does not says the pointer arrived and the plane was never told.
-            label(class = "clock__note") {{move || match at.get() {
-                Some((x, y)) => format!("pointer {x:.0}, {y:.0} — ESC to leave"),
-                None => "no pointer has moved yet — ESC to leave".to_owned(),
+            label(class = "clock__note") {{move || {
+                let where_it_is = match at.get() {
+                    Some((x, y)) => format!("pointer {x:.0}, {y:.0}"),
+                    None => "pointer has not moved".to_owned(),
+                };
+                format!("{where_it_is} · wheel {:+.1} — ESC to leave", turned.get())
             }}}
         }
     }
@@ -290,6 +325,12 @@ const SHEET: &str = css!(
         background-color: #090d15;
     }
 
+    .log__caption {
+        font-size: 12px;
+        letter-spacing: 4px;
+        color: #55627a;
+    }
+
     .log__line {
         font-size: 13px;
         color: #55627a;
@@ -312,7 +353,8 @@ const SHEET: &str = css!(
     }
 
     .field__text { font-size: 16px; }
-    .field__caret { font-size: 16px; color: #3b6cf6; }
+    .field__caret { font-size: 16px; color: #05070c; }
+    .field__caret-lit { color: #3b6cf6; }
 
     .field__hint {
         font-size: 13px;
