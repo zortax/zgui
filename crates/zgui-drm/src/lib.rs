@@ -33,6 +33,8 @@ pub mod buffer;
 #[cfg(target_os = "linux")]
 pub mod commit;
 #[cfg(target_os = "linux")]
+pub mod cursor;
+#[cfg(target_os = "linux")]
 pub mod device;
 #[cfg(target_os = "linux")]
 pub mod error;
