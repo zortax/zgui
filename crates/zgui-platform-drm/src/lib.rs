@@ -92,6 +92,8 @@ pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod clock;
 #[cfg(target_os = "linux")]
+pub mod cursor;
+#[cfg(target_os = "linux")]
 pub mod cx;
 #[cfg(target_os = "linux")]
 pub mod display;
