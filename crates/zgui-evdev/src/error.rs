@@ -62,8 +62,9 @@ pub enum Error {
     /// The request could not be built, so nothing was asked.
     ///
     /// The crate refuses here: an event type past `EV_MAX` or an axis past `ABS_MAX`, whose request
-    /// number would run into another request's range, and a buffer longer than the fourteen bits a
-    /// request number has for its length.
+    /// number would run into another request's range, a buffer longer than the fourteen bits a
+    /// request number has for its length, and a key code past the last entry a console keymap
+    /// holds, which truncated would name another key.
     Unusable(String),
 }
 
