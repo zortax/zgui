@@ -43,6 +43,30 @@ include!(concat!(env!("OUT_DIR"), "/uapi.rs"));
 // input headers. See `build.rs`.
 include!(concat!(env!("OUT_DIR"), "/clock.rs"));
 
+// A record is twenty-four bytes, and every read of an event stream walks it in that stride. A
+// record of any other size fails the build here. A test would report it after the build had
+// already succeeded.
+const _: () = assert!(
+    size_of::<input_event>() == 24,
+    "an input_event is 24 bytes: a 16-byte timeval, two __u16 and one __s32"
+);
+
+// The size above is necessary and not sufficient on a 32-bit target, so the target is refused.
+//
+// There, the C library chooses `struct timeval` against `_TIME_BITS`: eight bytes without it and
+// sixteen with. A build that opted into 64-bit time therefore passes the assertion at twenty-four
+// — while the kernel still delivers records with an eight-byte time to any process that did not
+// also opt into the time64 system calls, so every record read slides by eight bytes and the
+// stream decodes as nonsense with nothing reporting it. Getting this right means agreeing with
+// the C library about which `read` is being called, which is a decision this crate does not make
+// and cannot see. A 32-bit console backend can have it when something can test it.
+#[cfg(target_pointer_width = "32")]
+compile_error!(
+    "zgui-evdev has no 32-bit build: `struct input_event` embeds the C library's `timeval`, whose \
+     width there depends on `_TIME_BITS`, and the size alone cannot tell a correct layout from one \
+     that slides every record by eight bytes"
+);
+
 #[cfg(test)]
 mod tests {
     //! What the generated interface has to agree with the headers about.
