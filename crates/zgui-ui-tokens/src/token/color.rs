@@ -39,6 +39,15 @@
 //! `@media (prefers-color-scheme: dark)`, or under whatever selector
 //! [`ColorScheme`](crate::ColorScheme) put the dark set behind.
 //!
+//! # The tones, which the tint leaves alone
+//!
+//! `destructive`, `success`, `warning` and `info` say what happened: something was destroyed,
+//! something came out right, something wants a look, something is being reported. Each carries a
+//! foreground for the text that sits on it. They stay out of the handful above because an
+//! interface whose warnings took the brand's colour would be announcing the brand where it meant
+//! to announce the warning, and because red, green and amber are read before any word beside them
+//! is.
+//!
 //! Colours are written in `oklch()`, which is perceptually uniform: holding the first number and
 //! moving the last two re-tints without changing how light anything looks.
 
@@ -93,6 +102,29 @@ group! {
         /// different places and an application may want the message redder than the button.
         danger => "danger", light = "var(--zui-color-destructive)",
             dark = "var(--zui-color-destructive)";
+
+        /// The fill, text and border of something that came out right.
+        success => "success", light = "oklch(0.627 0.194 149.214)",
+            dark = "oklch(0.723 0.219 149.579)";
+        /// Text on a success fill.
+        success_foreground => "success-foreground", light = "oklch(0.982 0.018 155.826)",
+            dark = "oklch(0.266 0.065 152.934)";
+        /// The fill, text and border of something that is about to go wrong.
+        warning => "warning", light = "oklch(0.769 0.188 70.08)",
+            dark = "oklch(0.828 0.189 84.429)";
+        /// Text on a warning fill.
+        ///
+        /// Dark in both schemes. Amber is light enough either way that pale text on it is the one
+        /// pairing here a reader would have to work at.
+        warning_foreground => "warning-foreground", light = "oklch(0.279 0.077 45.635)",
+            dark = "oklch(0.279 0.077 45.635)";
+        /// The fill, text and border of something the reader is only being told.
+        info => "info", light = "oklch(0.546 0.245 262.881)",
+            dark = "oklch(0.707 0.165 254.624)";
+        /// Text on an info fill.
+        info_foreground => "info-foreground", light = "oklch(0.97 0.014 254.604)",
+            dark = "oklch(0.282 0.091 267.935)";
+
         /// An ordinary border.
         border => "border", light = "oklch(0.922 0 0)", dark = "oklch(1 0 0 / 10%)";
         /// The border of something the user types into.
@@ -167,6 +199,43 @@ mod tests {
                 value.starts_with("oklch(") || value.starts_with("var("),
                 "{name} is {value}, which is not the space the palette was measured in"
             );
+        }
+    }
+
+    #[test]
+    fn every_tone_comes_with_the_text_that_goes_on_it() {
+        // A tone is a fill as often as it is a mark, and a fill with no foreground beside it is a
+        // component author guessing which of the page's text colours survives on green.
+        for tone in ["destructive", "success", "warning", "info"] {
+            for property in [
+                format!("--zui-color-{tone}"),
+                format!("--zui-color-{tone}-foreground"),
+            ] {
+                assert!(
+                    ColorTokens::PROPERTIES.contains(&property.as_str()),
+                    "{property} is missing"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_tones_arrive_at_the_same_colour_in_either_scheme() {
+        // What a tone is for: the mark says what happened before the words beside it are read. Two
+        // tones that resolve to one value are two messages nobody can tell apart, which is what a
+        // success drawn in a chart's grey was.
+        for tokens in [ColorTokens::light(), ColorTokens::dark()] {
+            let tones = [
+                ("destructive", &tokens.destructive),
+                ("success", &tokens.success),
+                ("warning", &tokens.warning),
+                ("info", &tokens.info),
+            ];
+            for (index, (name, value)) in tones.iter().enumerate() {
+                for (other, colour) in &tones[index + 1..] {
+                    assert_ne!(value, colour, "{name} and {other} are the same colour");
+                }
+            }
         }
     }
 

@@ -166,9 +166,12 @@ style! { pub ToastStyle =>
         margin-left: -3px;
         margin-right: var(--zui-space-base);
     }"
-    ".zui-toast[data-kind=\"success\"] .zui-toast__icon { color: var(--zui-color-chart-2); }"
-    ".zui-toast[data-kind=\"info\"] .zui-toast__icon { color: var(--zui-color-chart-3); }"
-    ".zui-toast[data-kind=\"warning\"] .zui-toast__icon { color: var(--zui-color-chart-4); }"
+    // The mark carries the kind on its own, because the surface is the same for every toast: the
+    // colour of this one glyph is the whole of what tells a finished job from a failed one. Each
+    // names the tone for that meaning, so an application that re-takes its tones re-takes these.
+    ".zui-toast[data-kind=\"success\"] .zui-toast__icon { color: var(--zui-color-success); }"
+    ".zui-toast[data-kind=\"info\"] .zui-toast__icon { color: var(--zui-color-info); }"
+    ".zui-toast[data-kind=\"warning\"] .zui-toast__icon { color: var(--zui-color-warning); }"
     ".zui-toast[data-kind=\"error\"] .zui-toast__icon { color: var(--zui-color-destructive); }"
     ".zui-toast[data-kind=\"loading\"] .zui-toast__icon {
         animation: zui-toast-spin 1000ms var(--zui-motion-ease-linear) infinite;
