@@ -85,6 +85,12 @@ fn Clock() -> impl IntoView {
     });
     on_cleanup_local(move || drop(registration));
 
+    // What has been typed into this window, and where the document was last told the pointer is.
+    // Neither is a control: a console has no text field element, and a text field anywhere else is
+    // a caret drawn beside a string.
+    let typed = RwSignal::new(String::new());
+    let at = RwSignal::new(None::<(f32, f32)>);
+
     let windows = use_windows();
     let window = use_window();
 
@@ -95,10 +101,25 @@ fn Clock() -> impl IntoView {
             // The only way out. See the note at the top of this file: the keyboard is grabbed, so
             // no `SIGINT` is raised and a program that binds nothing here cannot be stopped from
             // the terminal it is running on.
-            on:key_down = move |ev| {
-                if ev.key == Key::Named(NamedKey::Escape) {
-                    windows.quit();
+            on:key_down = move |ev| match &ev.key {
+                Key::Named(NamedKey::Escape) => windows.quit(),
+                Key::Named(NamedKey::Backspace) => typed.update(|typed| {
+                    typed.pop();
+                }),
+                // Every other key is asked what text it inserts, which is the only reading that
+                // gets the space bar right: it is a *named* key whose text is one space. A held
+                // key arrives again as a repeat, and a repeat inserts text the way a press does.
+                key => {
+                    if let Some(text) = key.inserted_text() {
+                        typed.update(|typed| typed.push_str(text));
+                    }
                 }
+            },
+            // Where the pointer is, as the document was told. This separates a pointer that does
+            // not move from a cursor that does not follow one: the reading changes for the second
+            // and stands still for the first.
+            on:pointer_move = move |ev| {
+                at.set(Some((ev.position.x.0, ev.position.y.0)));
             },
             a11y:role = Role::Group,
             a11y:label = "Running time"
@@ -163,9 +184,22 @@ fn Clock() -> impl IntoView {
                     label(class = "log__line") {{move || format!("tick {segment:02}")}}
                 }
             }
-            label(class = "clock__note") {
-                "no display server, no window — point, scroll, press ESC to leave"
+            // A text field is a string and a caret. `inserted_text` fills it, so holding a key
+            // repeats into it and a dead key followed by a letter arrives as one composed character
+            // rather than two.
+            row(class = "field", a11y:role = Role::TextInput, a11y:label = "Type here") {
+                text(class = "field__text") {{move || typed.get()}}
+                text(class = "field__caret") {"|"}
+                spacer()
+                text(class = "field__hint") {"type — backspace deletes"}
             }
+            // The pointer as the document heard about it. A reading that stands still while the
+            // mouse moves says the pointer never arrived; a reading that moves under a cursor that
+            // does not says the pointer arrived and the plane was never told.
+            label(class = "clock__note") {{move || match at.get() {
+                Some((x, y)) => format!("pointer {x:.0}, {y:.0} — ESC to leave"),
+                None => "no pointer has moved yet — ESC to leave".to_owned(),
+            }}}
         }
     }
 }
@@ -264,6 +298,25 @@ const SHEET: &str = css!(
     .clock__note {
         font-size: 14px;
         letter-spacing: 2px;
+        color: #55627a;
+    }
+
+    .field {
+        align-items: center;
+        gap: 2px;
+        width: 420px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid #1b2230;
+        background-color: #05070c;
+    }
+
+    .field__text { font-size: 16px; }
+    .field__caret { font-size: 16px; color: #3b6cf6; }
+
+    .field__hint {
+        font-size: 13px;
+        letter-spacing: 1px;
         color: #55627a;
     }"
 );
