@@ -194,9 +194,15 @@ symbols! {
 }
 
 symbols! {
-    /// What a keysym is called. Absent, [`crate::Context::keysym_name`] answers nothing.
+    /// What a keysym is called, and which keysym a name stands for.
+    ///
+    /// Absent, [`crate::Context::keysym_name`] and [`crate::Context::keysym_from_name`] both answer
+    /// nothing. The two are one group because they are one table read in two directions: a caller
+    /// that keys anything by a keysym name needs both to check that the name it holds is the name
+    /// the library would give back.
     Naming {
         keysym_get_name: "xkb_keysym_get_name" => fn(u32, *mut c_char, usize) -> c_int;
+        keysym_from_name: "xkb_keysym_from_name" => fn(*const c_char, c_uint) -> u32;
     }
 }
 
@@ -332,7 +338,7 @@ impl Library {
     }
 }
 
-/// Says that the library is open, without listing twenty-six addresses.
+/// Says that the library is open, without listing twenty-seven addresses.
 impl fmt::Debug for Library {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Library")

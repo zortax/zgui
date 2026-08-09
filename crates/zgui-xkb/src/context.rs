@@ -304,6 +304,30 @@ impl Context {
         })
     }
 
+    /// Returns the keysym a name stands for: `a`, `Shift_L`, `Multi_key`.
+    ///
+    /// This is the other direction of [`Context::keysym_name`], and the two together check each
+    /// other. A caller that keys a table by keysym *name* has written down names by hand, and a
+    /// name libxkbcommon knows as an alias — `Mode_switch` for `ISO_Group_Shift` — is a row that
+    /// reads correctly and matches nothing, because a press is looked up under whatever
+    /// [`Context::keysym_name`] answers. Feeding a name through here and back through that call
+    /// finds one.
+    ///
+    /// Answers nothing for a name no keysym has, and for every name when the loaded library
+    /// carries no `xkb_keysym_from_name`. A name holding a zero byte answers nothing as well: a C
+    /// string ends at its first zero, so such a name would be looked up cut short.
+    ///
+    /// The lookup is exact. libxkbcommon can also be asked to fold case, which this does not: `a`
+    /// and `A` are two keysyms, and a case-folded lookup answers with the lower-case one.
+    pub fn keysym_from_name(&self, name: &str) -> Option<Keysym> {
+        let naming = self.library.symbols.naming.as_ref().ok()?;
+        let held = CString::new(name).ok()?;
+        // SAFETY: the symbol is `xkb_keysym_from_name`, which reads the C string it is given and
+        // answers a keysym or `XKB_KEY_NoSymbol`. `held` outlives the call.
+        let raw = unsafe { (naming.keysym_from_name)(held.as_ptr(), NO_FLAGS) };
+        Some(Keysym::from_raw(raw)).filter(|sym| !sym.is_none())
+    }
+
     /// Takes the diagnostics away from the library's own handler.
     ///
     /// Standard error is where libxkbcommon writes by default, and on a bare console that is often

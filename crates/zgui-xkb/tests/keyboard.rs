@@ -454,3 +454,44 @@ fn the_diagnostics_reach_a_sink_the_caller_set() {
         println!("{line}");
     }
 }
+
+#[test]
+fn a_name_and_a_keysym_are_one_table_read_in_two_directions() {
+    // What this pair is for: a caller that keys anything by keysym *name* has written those names
+    // down by hand, and libxkbcommon knows names it never gives back. `Mode_switch` is one — the
+    // library answers `ISO_Group_Shift` for that keysym — so a table keyed on the alias reads
+    // correctly and matches nothing at all. Feeding a name through here and back finds one.
+    let test = "a_name_and_a_keysym_are_one_table_read_in_two_directions";
+    let Some(context) = support::context(test) else {
+        return;
+    };
+
+    assert_eq!(context.keysym_from_name("a"), Some(SYM_A_LOWER));
+    assert_eq!(context.keysym_from_name("Multi_key"), Some(SYM_COMPOSE));
+
+    let alias = context
+        .keysym_from_name("Mode_switch")
+        .expect("`Mode_switch` names a keysym");
+    let canonical = context
+        .keysym_name(alias)
+        .expect("and the keysym it names has a name");
+    println!("{test}: `Mode_switch` is `{canonical}`");
+    assert_eq!(
+        context.keysym_from_name(&canonical),
+        Some(alias),
+        "the name that comes back names the same keysym"
+    );
+
+    // The lookup is exact rather than case-folded, which matters because `a` and `A` are two
+    // keysyms and a case-folded lookup answers with the lower-case one.
+    assert_eq!(context.keysym_from_name("A"), Some(SYM_A_UPPER));
+    assert_ne!(context.keysym_from_name("A"), context.keysym_from_name("a"));
+
+    // A name no keysym has, and one that would arrive at C cut short.
+    assert_eq!(
+        context.keysym_from_name("zgui-there-is-no-such-keysym"),
+        None
+    );
+    assert_eq!(context.keysym_from_name("Escape\0Return"), None);
+    assert_eq!(context.keysym_from_name(""), None);
+}
