@@ -297,27 +297,20 @@ impl Capabilities {
         self.types.contains(kind)
     }
 
-    /// Returns the jobs these capabilities amount to.
+    /// The jobs these capabilities amount to.
     ///
-    /// Each answer is a question about the codes. The types alone put every mouse among the
-    /// keyboards, because a mouse has `EV_KEY` for its buttons.
+    /// Each answer is a question about the codes rather than about the types, because the types
+    /// alone put every mouse in the keyboard bucket — a mouse has `EV_KEY` for its buttons.
     ///
-    /// - A keyboard has a key in the kernel's first block of keys, `KEY_RESERVED` aside. See
-    ///   [`Key::is_keyboard_key`].
+    /// - A keyboard has a code that is a key rather than a button, in any of the blocks the kernel
+    ///   puts keys in. This is udev's `ID_INPUT_KEY` rule. See [`Key::is_key`].
     /// - A pointer has both `REL_X` and `REL_Y`. A device with a wheel and no axes is a keyboard
     ///   with a wheel on it, and there are several.
     /// - A touch device has both `ABS_X` and `ABS_Y`, or the multi-touch pair. A volume dial
     ///   reports an absolute axis too, and it is not a touchscreen.
     pub fn roles(&self) -> Roles {
         Roles {
-            // `KEY_RESERVED` is code zero and means nothing. A driver that sets its bit would
-            // otherwise make a device with one meaningless code into a keyboard, and udev's own
-            // rule leaves it out for the same reason.
-            keyboard: self.has(EventType::EV_KEY)
-                && self
-                    .keys
-                    .iter()
-                    .any(|code| code != Key::KEY_RESERVED && code.is_keyboard_key()),
+            keyboard: self.has(EventType::EV_KEY) && self.keys.iter().any(Key::is_key),
             pointer: self.has(EventType::EV_REL)
                 && self.relative.contains(Relative::REL_X)
                 && self.relative.contains(Relative::REL_Y),
@@ -687,6 +680,22 @@ mod tests {
             Bitmap::<Key>::from_bytes(&[0, 0, 0]).is_empty(),
             "bytes the kernel wrote as zero are no codes at all"
         );
+    }
+
+    #[test]
+    fn a_remote_control_that_reports_only_the_high_keys_is_still_a_keyboard() {
+        // An HDMI-CEC remote or an infrared receiver reports `KEY_OK` and its neighbours and
+        // nothing under `BTN_MISC`. Reading the first block alone left this classified as nothing,
+        // so a consumer would never open it and every button on it would reach nothing. Nothing on
+        // the development machine has this shape, which is why it is asserted here.
+        let remote = capabilities(
+            &[EventType::EV_SYN, EventType::EV_KEY],
+            &[Key::KEY_OK, Key::KEY_CHANNELUP, Key::KEY_SUBTITLE],
+            &[],
+            &[],
+        );
+
+        assert_eq!(remote.roles().iter().collect::<Vec<_>>(), [Role::Keyboard]);
     }
 
     #[test]
