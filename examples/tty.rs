@@ -9,27 +9,35 @@
 //! ./target/debug/examples/tty
 //! ```
 //!
-//! Every display that is plugged in is lit at its own preferred mode. Stop it with `Ctrl+C`.
+//! Every display that is plugged in is lit at its own preferred mode.
 //!
-//! **There is no input.** Reading the evdev devices is a sub-project this backend has not started,
-//! so nothing here can be pressed, pointed at or typed into. The example is a clock for that
-//! reason: it moves on its own, which is the only thing an application on this backend can do.
+//! **Press Escape to stop it, and read the next paragraph before running it.** The backend takes
+//! the keyboard away from everything else, so `Ctrl+C` never reaches the terminal's line discipline
+//! and raises no `SIGINT`. The backend binds no key of its own — which key leaves a program is the
+//! program's decision, and one chosen by a backend is one taken away from every application that
+//! wanted it for something else — so an application on a console has to bind one, and `Clock` binds
+//! Escape. A build of this without that binding has to be killed from another terminal.
 //!
 //! What it is worth reading for:
 //!
 //! * **the application is an ordinary one.** Everything below the `main` is written against
-//!   `zgui::prelude::*` and says nothing about the kernel, the mode or the flip. The one line that
-//!   knows where this runs is `run_drm`;
+//!   `zgui::prelude::*` and says nothing about the kernel, the mode, the flip or the keyboard. The
+//!   one line that knows where this runs is `run_drm`;
 //! * **a timer paces it.** Nothing spins. The interval asks for a frame once a second, the loop
 //!   sleeps in `poll` in between, and a console with nothing moving on it costs no processor time
 //!   at all;
 //! * **the seconds bar is the proof.** A clock that only shows a time could be a still picture with
 //!   the right time on it. The bar fills one segment per second and empties on the minute, which is
-//!   something no still frame can be.
+//!   something no still frame can be;
+//! * **the key that leaves is a window shortcut**, and it has to be. A key is delivered along the
+//!   path to whatever holds focus, and a window in which nothing holds focus routes one to the
+//!   document's root and no further — so a listener on the column below would hear nothing at all
+//!   until something had been focused, and there is no pointer here to focus anything with.
 
 use std::time::Duration;
 
 use zgui::prelude::*;
+use zgui::reactive::RenderEffect;
 
 /// How often the clock is asked for the time.
 ///
@@ -54,8 +62,34 @@ fn Clock() -> impl IntoView {
         elapsed.update(|seconds| *seconds += 1);
     }));
 
+    // What hears a key on a window in which nothing has focus. The registration is renewed whenever
+    // the element it names is bound, and the guard is dropped with the scope, so nothing outlives
+    // the document.
+    let anchor = NodeRef::new();
+    let registration = RenderEffect::new(move |previous: Option<Option<WindowShortcut>>| {
+        drop(previous);
+        anchor.get();
+        anchor.window_shortcut()
+    });
+    on_cleanup_local(move || drop(registration));
+
+    let windows = use_windows();
+
     view! {
-        column(class = "clock", a11y:role = Role::Group, a11y:label = "Running time") {
+        column(
+            class = "clock",
+            node_ref = anchor,
+            // The only way out. See the note at the top of this file: the keyboard is grabbed, so
+            // no `SIGINT` is raised and a program that binds nothing here cannot be stopped from
+            // the terminal it is running on.
+            on:key_down = move |ev| {
+                if ev.key == Key::Named(NamedKey::Escape) {
+                    windows.quit();
+                }
+            },
+            a11y:role = Role::Group,
+            a11y:label = "Running time"
+        ) {
             label(class = "clock__caption") {"RUNNING FOR"}
             text(class = "clock__time") {{move || written(elapsed.get())}}
             row(class = "clock__bar") {
@@ -68,7 +102,7 @@ fn Clock() -> impl IntoView {
                     )
                 }
             }
-            label(class = "clock__note") {"no display server, no window, no input"}
+            label(class = "clock__note") {"no display server, no window — press ESC to leave"}
         }
     }
 }
