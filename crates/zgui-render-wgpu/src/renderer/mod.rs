@@ -67,6 +67,8 @@ pub enum Origin {
     },
     /// A window's surface, which only whatever owns the window can produce again.
     Surface,
+    /// Textures from outside the renderer, which only whatever supplied them can produce again.
+    Supplied,
 }
 
 /// A renderer over one graphics device.
@@ -275,18 +277,28 @@ impl WgpuRenderer {
     /// pipeline, not a target, and not one cached tile's contents — so cached rasters are produced
     /// again on demand rather than salvaged.
     ///
-    /// The surface arm cannot be recovered here: a surface belongs to a window, and only whatever
-    /// owns that window can produce another one.
+    /// Two arms cannot be recovered here, for the same reason: what a frame is presented to came
+    /// from outside. A surface belongs to a window, and supplied textures belong to whatever
+    /// created them; only their owner can produce them again on the new device.
     pub fn recover(&mut self) -> Result<(), zgui_render::GpuUnavailable> {
-        let Origin::Offscreen {
-            format,
-            mutable_texture_formats,
-        } = self.origin
-        else {
-            return Err(zgui_render::GpuUnavailable::new().rejected(
-                "the current surface",
-                "a window's surface has to be created again by whatever owns the window",
-            ));
+        let (format, mutable_texture_formats) = match self.origin {
+            Origin::Offscreen {
+                format,
+                mutable_texture_formats,
+            } => (format, mutable_texture_formats),
+            Origin::Surface => {
+                return Err(zgui_render::GpuUnavailable::new().rejected(
+                    "the current surface",
+                    "a window's surface has to be created again by whatever owns the window",
+                ));
+            }
+            Origin::Supplied => {
+                return Err(zgui_render::GpuUnavailable::new().rejected(
+                    "the supplied textures",
+                    "textures supplied from outside have to be created again on the new device by \
+                     whatever supplied them, and a renderer asked for over the new set",
+                ));
+            }
         };
         // The old device is dropped before the new one is asked for, so its memory is not held
         // twice across the changeover.
@@ -450,6 +462,23 @@ impl WgpuRenderer {
         self.groups = GroupPool::new(self.composed.used().size, bytes);
     }
 
+    /// Chooses which supplied texture the next frame is copied into.
+    ///
+    /// Answers whether the slot was taken. A caller that owns the buffers a display controller
+    /// scans out of calls this before every [`Renderer::draw`](zgui_render::Renderer::draw), so
+    /// that the frame lands on the buffer the hardware is not reading. A slot outside the set is
+    /// refused and leaves the selection alone, because the alternative is a frame drawn over a
+    /// buffer on screen.
+    ///
+    /// The other two presentations have nothing to choose and answer `false`: a swap chain hands
+    /// out its own image each frame, and a texture standing in for a surface is one texture.
+    pub fn present_into(&mut self, slot: usize) -> bool {
+        match &mut self.presentation {
+            Presentation::Supplied(supplied) => supplied.select(slot),
+            Presentation::Surface(_) | Presentation::Offscreen(_) => false,
+        }
+    }
+
     /// Reads back the persistent target frames are composed into.
     pub fn read_composed(&self) -> Pixels {
         readback::read(
@@ -465,12 +494,23 @@ impl WgpuRenderer {
     /// A window's surface cannot be read back — the compositor owns it the moment it is
     /// presented — so this answers `None` for one, and every pixel assertion runs against a
     /// stand-in surface configured by the same rules.
+    ///
+    /// A supplied set answers with the texture the caller selected. This exists for a test, and it
+    /// needs the caller to have created that texture with [`wgpu::TextureUsages::COPY_SRC`]. A
+    /// backend that supplies scanout buffers reads nothing back: a frame that landed in the buffer
+    /// the display controller reads has already arrived where it was going.
     pub fn read_presented(&self) -> Option<Pixels> {
         match &self.presentation {
             Presentation::Offscreen(offscreen) => Some(readback::read(
                 &self.gpu,
                 offscreen.texture(),
                 offscreen.formats().surface,
+                self.target.size,
+            )),
+            Presentation::Supplied(supplied) => Some(readback::read(
+                &self.gpu,
+                supplied.texture(),
+                supplied.formats().surface,
                 self.target.size,
             )),
             Presentation::Surface(_) => None,
