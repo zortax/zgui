@@ -38,7 +38,7 @@ use crate::gpu::surface::ConfiguredSurface;
 use crate::pipeline::Pipelines;
 use crate::renderer::builder::open_device;
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
-use crate::target::swapchain::{Offscreen, Presentation};
+use crate::target::swapchain::{Offscreen, Presentation, Supplied};
 
 /// Everything device-level that the renderers on one device share.
 pub(crate) struct DeviceState {
@@ -134,6 +134,20 @@ impl SharedGraphics {
             .borrow()
             .as_ref()
             .map(|state| Arc::clone(&state.gpu))
+    }
+
+    /// Opens the shared device, or answers the one that is already open.
+    ///
+    /// [`SharedGraphics::gpu`] answers only a device that is already open. This one reverses the
+    /// order every other entry point here uses: a caller that presents into textures of its own
+    /// has to create them on a device, so it needs the device before it can ask for a renderer.
+    /// The candidate loop proves each adapter with a one-pixel texture, because no surface exists
+    /// to prove one with.
+    pub fn open_gpu(&self) -> Result<Arc<Gpu>, GpuUnavailable> {
+        if let Some(state) = self.usable_primary() {
+            return Ok(Arc::clone(&state.gpu));
+        }
+        Ok(Arc::clone(&self.open_primary()?.gpu))
     }
 
     /// A renderer for one more window, on the shared device where it can present there.
@@ -233,6 +247,52 @@ impl SharedGraphics {
         Ok(self.assemble(state, presentation, target, None, origin))
     }
 
+    /// A renderer presenting into textures the caller supplies, on the shared device.
+    ///
+    /// What a backend that owns the buffers a display controller scans out of uses: the frame is
+    /// copied into the buffer the hardware reads, so nothing is read back to the processor and
+    /// nothing is copied through it. The caller chooses which of them each frame goes to with
+    /// [`WgpuRenderer::present_into`].
+    ///
+    /// # Order
+    ///
+    /// The textures have to be created on this device first, through
+    /// [`SharedGraphics::open_gpu`]. Nothing here can open one for them: a texture belongs to the
+    /// device that created it, so a device opened at this point would be the wrong one for
+    /// everything handed in.
+    ///
+    /// # Errors
+    ///
+    /// Refuses where no device is open, and where the textures cannot be presented to as one set —
+    /// see [`Supplied::new`] for what that means.
+    pub fn renderer_supplied(
+        &self,
+        target: RenderTarget,
+        textures: Vec<wgpu::Texture>,
+    ) -> Result<WgpuRenderer, GpuUnavailable> {
+        let Some(state) = self.usable_primary() else {
+            return Err(GpuUnavailable::new().rejected(
+                "the shared device",
+                "supplied textures come from a device, so one has to be open before a renderer can \
+                 present into them: open it with SharedGraphics::open_gpu",
+            ));
+        };
+        let Some(supplied) = Supplied::new(textures, extent(target)) else {
+            return Err(GpuUnavailable::new().rejected(
+                state.gpu.describe(),
+                "the supplied textures cannot be presented to as one set: they have to agree about \
+                 their format and their extent, and there has to be at least one",
+            ));
+        };
+        Ok(self.assemble(
+            state,
+            Presentation::Supplied(supplied),
+            target,
+            None,
+            Origin::Supplied,
+        ))
+    }
+
     /// The device to rebuild on after `lost` died, opened once and then answered to everyone.
     ///
     /// With N windows on one device, every one of them notices the same loss on its own next frame.
@@ -247,8 +307,15 @@ impl SharedGraphics {
         {
             return Ok(state);
         }
-        // No surface exists during recovery — the window's own surface died with the device — so a
-        // small offscreen target is what the candidate loop proves an adapter with.
+        self.open_primary()
+    }
+
+    /// Opens the shared device with no surface, and records it as the primary.
+    ///
+    /// A one-pixel offscreen target is what the candidate loop proves an adapter with here.
+    /// Recovery has nothing else to use, the window's own surface having died with the device, and
+    /// neither has a caller that has yet to create anything.
+    fn open_primary(&self) -> Result<Rc<DeviceState>, GpuUnavailable> {
         let (gpu, _) = open_device(&self.0.instance, self.0.backends, |gpu| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
@@ -258,7 +325,7 @@ impl SharedGraphics {
             )))
         })?;
         let state = DeviceState::new(gpu);
-        // Assigning drops the strong reference to the dead device, so its memory is released as
+        // Assigning drops the strong reference to any dead device, so its memory is released as
         // soon as the last renderer has swapped over.
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
         Ok(state)
