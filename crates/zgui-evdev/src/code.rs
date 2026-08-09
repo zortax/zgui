@@ -112,10 +112,10 @@ codes! {
 codes! {
     /// A key or a button.
     ///
-    /// The kernel gives both one code space, in blocks. Everything under `BTN_MISC` is a key a
-    /// keyboard has; the buttons follow it; and behind those the kernel added more keys, so no
-    /// single boundary divides the space. [`Key::is_keyboard_key`] is the first block, and it
-    /// tells a keyboard from a mouse.
+    /// The kernel gives both one code space, laid out in alternating blocks: the keys a keyboard
+    /// sends, then the buttons, then two more blocks of keys behind those. So no single boundary
+    /// divides the space. [`Key::is_key`] is the three ranges that hold the keys, and it tells a
+    /// keyboard from a mouse.
     Key, kind = EventType::EV_KEY, count = crate::sys::KEY_CNT; {
         KEY_RESERVED, KEY_ESC, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
         KEY_0, KEY_MINUS, KEY_EQUAL, KEY_BACKSPACE, KEY_TAB, KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T,
@@ -255,15 +255,35 @@ codes! {
 }
 
 impl Key {
-    /// Whether this code is in the kernel's first block of keys, the one that ends at `BTN_MISC`.
+    /// Returns `true` for a key and `false` for a button.
     ///
-    /// The block holds every code a keyboard sends: the letters, the digits, the modifiers, the
-    /// function keys and the media keys. The buttons follow it, and behind those the kernel put
-    /// more keys — `KEY_OK` is `0x160` — so this is a test for "a key a keyboard has" rather than
-    /// for "not a button". A device whose only codes are outside the block has no keyboard in it,
-    /// which is the question [`Roles`](crate::device::Roles) asks.
-    pub const fn is_keyboard_key(self) -> bool {
-        self.0 < Self::BTN_MISC.0
+    /// The kernel lays the two out in alternating blocks, so the answer is three ranges. Under
+    /// `BTN_MISC` are the keys a keyboard sends: the letters, the digits, the modifiers, the
+    /// function keys and the media keys. The buttons follow. Then the kernel added two more blocks
+    /// of keys behind them — `KEY_OK` at `0x160` and `KEY_ALS_TOGGLE` at `0x230` — each ending
+    /// where a block of buttons begins.
+    ///
+    /// ```
+    /// use zgui_evdev::Key;
+    ///
+    /// assert!(Key::KEY_A.is_key());
+    /// assert!(!Key::BTN_LEFT.is_key());
+    /// // A remote control reports only the block behind the buttons, and it is still a keyboard.
+    /// assert!(Key::KEY_CHANNELUP.is_key());
+    /// ```
+    ///
+    /// The three ranges are udev's own, from the `input_id` builtin that decides `ID_INPUT_KEY`,
+    /// and they are exact against the vendored header: every `KEY_*` it names falls inside one of
+    /// them, and no `BTN_*` does.
+    ///
+    /// `KEY_RESERVED` is the one exclusion. It is code zero, it sends nothing, and a driver that
+    /// sets its bit says nothing by doing so. udev counts it and this does not, because
+    /// [`Roles`](crate::device::Roles) asks the answer whether there is a keyboard here.
+    pub const fn is_key(self) -> bool {
+        let code = self.0;
+        (code > Self::KEY_RESERVED.0 && code < Self::BTN_MISC.0)
+            || (code >= Self::KEY_OK.0 && code < Self::BTN_DPAD_UP.0)
+            || (code >= Self::KEY_ALS_TOGGLE.0 && code < Self::BTN_TRIGGER_HAPPY.0)
     }
 }
 
@@ -303,23 +323,41 @@ mod tests {
     }
 
     #[test]
-    fn the_first_block_of_keys_ends_where_the_buttons_start() {
-        assert!(Key::KEY_A.is_keyboard_key(), "a letter is in the block");
+    fn a_key_is_a_key_in_any_of_the_blocks_the_kernel_put_them_in() {
+        assert!(Key::KEY_A.is_key(), "a letter is in the first block");
         assert!(
-            Key::KEY_MICMUTE.is_keyboard_key(),
-            "and so is the last code before the boundary"
+            Key::KEY_MICMUTE.is_key(),
+            "and so is the last code before the buttons start"
         );
+        // The two blocks the kernel added behind the buttons. A remote control or an infrared
+        // receiver reports only these, and reading the first block alone would leave one
+        // classified as nothing at all, so a consumer would never open it.
+        assert!(Key::KEY_OK.is_key(), "the first block behind the buttons");
+        assert!(Key::KEY_CHANNELUP.is_key());
+        assert!(Key::KEY_SUBTITLE.is_key());
+        assert!(Key::KEY_ALS_TOGGLE.is_key(), "the second such block");
+        assert!(Key::KEY_KBD_LCD_MENU1.is_key());
+    }
+
+    #[test]
+    fn a_button_is_not_a_key_in_any_of_the_blocks_between_them() {
+        assert!(!Key::BTN_MISC.is_key(), "the first block of buttons");
+        assert!(!Key::BTN_LEFT.is_key(), "a mouse button");
+        assert!(!Key::BTN_DPAD_UP.is_key(), "the block that ends the first");
         assert!(
-            !Key::BTN_MISC.is_keyboard_key(),
-            "the boundary itself is a button"
+            !Key::BTN_TRIGGER_HAPPY.is_key(),
+            "and the one that ends the second"
         );
-        assert!(!Key::BTN_LEFT.is_keyboard_key(), "a mouse button is not");
-        // The kernel put more keys behind the buttons, so this is a test for the first block and
-        // not for "anything the kernel calls a key". Treating `KEY_OK` as evidence of a keyboard
-        // would make a remote control and a headset into keyboards.
+    }
+
+    #[test]
+    fn the_code_that_sends_nothing_is_not_a_key() {
+        // `KEY_RESERVED` is code zero. A driver that sets its bit has said nothing, and counting
+        // it would make a device with one meaningless code into a keyboard.
+        assert!(!Key::KEY_RESERVED.is_key());
         assert!(
-            !Key::KEY_OK.is_keyboard_key(),
-            "a key above the button range is outside the block"
+            Key::new(1).is_key(),
+            "the code above it is where the block really starts"
         );
     }
 
