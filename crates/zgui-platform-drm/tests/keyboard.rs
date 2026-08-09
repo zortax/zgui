@@ -122,7 +122,7 @@ fn a_repeat_reads_the_layout_and_records_nothing() {
 
     layout.press(Key::KEY_LEFTSHIFT);
     for _ in 0..32 {
-        let repeated = layout.repeat(Key::KEY_LEFTSHIFT);
+        let repeated = layout.reading(Key::KEY_LEFTSHIFT);
         assert!(
             repeated.key.is_modifier() || repeated.key == zgui_vocab::Key::Unidentified,
             "a repeat still reads the key: {:?}",
