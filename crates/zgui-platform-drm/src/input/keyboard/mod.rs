@@ -14,6 +14,7 @@
 //! the thing being told about the press knows which of those it is doing.
 
 pub(crate) mod code;
+pub mod layout;
 pub(crate) mod modifiers;
 
 use zgui_vocab::{KeyCode, KeyEvent, KeyLocation, PhysicalKey};
