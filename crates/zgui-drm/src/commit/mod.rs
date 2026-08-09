@@ -15,6 +15,7 @@ mod legacy;
 pub use crate::commit::atomic::AtomicCommit;
 pub use crate::commit::legacy::LegacyCommit;
 
+use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
 use crate::error::Result;
 use crate::framebuffer::Framebuffer;
@@ -68,6 +69,49 @@ pub trait Commit {
     /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the flip, which is
     /// what asking for a second flip before the first completed looks like.
     fn flip(&mut self, device: &Device, pipe: Pipe, framebuffer: Framebuffer) -> Result<()>;
+
+    /// Puts `image` on `plane`, with its top left corner at `x`, `y` on the CRTC.
+    ///
+    /// The position is the image's top left corner on both interfaces, so a caller that wants the
+    /// pointer at a point puts the image at that point less its hotspot. That leaves a pointer
+    /// near the left or the top edge at a negative coordinate, which both interfaces take: the
+    /// position is a signed field on one and a signed range property on the other.
+    ///
+    /// [`CursorImage`] carries a framebuffer id and a GEM handle because the two interfaces name
+    /// the buffer differently. This decides which of the two is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the image, which is
+    /// how a buffer of a size the driver will not take is reported. The atomic interface returns
+    /// [`Error::Unusable`](crate::Error::Unusable) when [`CursorPlane::id`] is zero, because a
+    /// plane id is the only way it can name a cursor.
+    fn set_cursor(
+        &mut self,
+        device: &Device,
+        plane: CursorPlane,
+        image: CursorImage,
+        x: i32,
+        y: i32,
+    ) -> Result<()>;
+
+    /// Moves the cursor already on `plane` to `x`, `y`, leaving its image where it is.
+    ///
+    /// A pointer costs this per motion event: no buffer is touched and no frame is drawn.
+    ///
+    /// # Errors
+    ///
+    /// The ones [`Commit::set_cursor`] returns.
+    fn move_cursor(&mut self, device: &Device, plane: CursorPlane, x: i32, y: i32) -> Result<()>;
+
+    /// Takes the cursor off `plane`.
+    ///
+    /// The buffer behind the image stays allocated, so the same image can be put back.
+    ///
+    /// # Errors
+    ///
+    /// The ones [`Commit::set_cursor`] returns.
+    fn hide_cursor(&mut self, device: &Device, plane: CursorPlane) -> Result<()>;
 }
 
 /// Returns the commit interface `device` is driven through.

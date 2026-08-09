@@ -43,8 +43,8 @@ impl CursorSize {
         height: 64,
     };
 
-    /// Returns the size two capability answers describe, with [`CursorSize::DEFAULT`] for each
-    /// axis the driver said nothing usable about.
+    /// Returns the size two capability answers describe, defaulting each axis the driver said
+    /// nothing usable about.
     ///
     /// DRM core answers these two capabilities on the driver's behalf, and it substitutes 64 where
     /// a driver states no cursor extent. So the reachable `None` is a node that serves no
@@ -70,8 +70,8 @@ impl CursorSize {
 ///
 /// The two interfaces name the same buffer differently, and neither name can be derived from the
 /// other here. An atomic commit sets the cursor plane's `FB_ID`, which is a framebuffer id.
-/// `DRM_IOCTL_MODE_CURSOR2` names the GEM handle the buffer was allocated as, and builds its own
-/// framebuffer over it. So both travel, and the interface decides which one is read. A caller
+/// `DRM_IOCTL_MODE_CURSOR2` names the GEM handle the driver allocated the buffer as, and states
+/// its extent beside it. So both travel, and the interface decides which one is read. A caller
 /// holding a dumb buffer has both already: [`DumbBuffer::handle`] and the [`Framebuffer`] that
 /// [`Device::add_framebuffer`] made from it.
 ///
@@ -84,9 +84,9 @@ pub struct CursorImage {
     pub handle: u32,
     /// How wide the image is, in pixels.
     ///
-    /// The legacy interface states the extent and the handle and nothing else — the request
-    /// carries no stride and no format — so the buffer has to be the extent it is told. Allocating
-    /// at [`Device::cursor_size`] is what keeps that true.
+    /// The legacy request carries the extent and the handle and nothing else — no stride and no
+    /// format — so the buffer has to hold exactly this. Allocating at [`Device::cursor_size`] is
+    /// what keeps that true.
     pub width: u32,
     /// How tall the image is, in pixels.
     pub height: u32,
@@ -97,11 +97,12 @@ pub struct CursorImage {
     /// `DRM_IOCTL_MODE_CURSOR2` is the only request with a field for it: a para-virtualised driver
     /// relays it to the host that draws the pointer.
     ///
-    /// The atomic property set has no standard equivalent, so an atomic commit sends the position
-    /// alone. `HOTSPOT_X` and `HOTSPOT_Y` exist on those same para-virtualised drivers behind
-    /// `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`, which this crate does not ask for. The kernel hides
-    /// a cursor plane from a client that did not ask, so [`Device::cursor_plane`] finds none on
-    /// those drivers.
+    /// The atomic property set has no standard equivalent, so the atomic path drops it and sends
+    /// the position alone. `HOTSPOT_X` and `HOTSPOT_Y` exist on those same para-virtualised
+    /// drivers behind `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`, which this crate does not ask for.
+    /// On the atomic interface the kernel hides a cursor plane from a client that did not ask, so
+    /// [`Device::cursor_plane`] finds none on those drivers. A legacy client is served by
+    /// `DRM_IOCTL_MODE_CURSOR2`, which carries the hotspot and reads no plane.
     pub hotspot_x: i32,
     /// Where in the image the pointer points, in pixels below its top edge.
     ///
@@ -109,7 +110,7 @@ pub struct CursorImage {
     pub hotspot_y: i32,
 }
 
-/// Where a cursor goes.
+/// Where a cursor goes: the CRTC that shows it, and the plane the atomic interface puts it on.
 #[derive(Debug, Clone, Copy)]
 pub struct CursorPlane {
     /// The CRTC showing the cursor.
@@ -141,9 +142,9 @@ impl Device {
     /// The cursor plane that can drive the CRTC at `crtc_index`, where this device has one.
     ///
     /// `crtc_index` is a place in [`Resources::crtcs`](crate::resources::Resources::crtcs) rather
-    /// than a CRTC id, because that is what a plane's [`possible_crtcs`](crate::resources::Plane)
-    /// mask indexes. A device usually carries one cursor plane per CRTC, so the mask is what tells
-    /// them apart.
+    /// than a CRTC id, because that is what
+    /// [`Plane::possible_crtcs`](crate::resources::Plane::possible_crtcs) indexes. A device
+    /// usually carries one cursor plane per CRTC, so the mask is what tells them apart.
     ///
     /// What makes a plane a cursor plane is the value of its `type` property, which is read here
     /// the way any other property is read.

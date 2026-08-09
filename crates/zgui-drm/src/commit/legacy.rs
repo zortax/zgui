@@ -14,6 +14,7 @@
 //! any more, and this crate has no way to reach one.
 
 use crate::commit::{Commit, Pipe};
+use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
 use crate::error::Result;
 use crate::framebuffer::Framebuffer;
@@ -92,4 +93,78 @@ impl Commit for LegacyCommit {
         };
         ioctl::issue(device.fd(), ioctl::MODE_PAGE_FLIP, &mut request)
     }
+
+    fn set_cursor(
+        &mut self,
+        device: &Device,
+        plane: CursorPlane,
+        image: CursorImage,
+        x: i32,
+        y: i32,
+    ) -> Result<()> {
+        // The buffer and the position in one request. The two flags are separate so that a move
+        // costs no buffer change, and both are set here so the image appears where the caller
+        // asked: without `CURSOR_MOVE` the kernel reads `crtc->cursor_x` and `crtc->cursor_y`,
+        // which hold where the last cursor on this CRTC was.
+        //
+        // `handle` is the GEM handle the driver allocated the buffer as, which the header calls a
+        // driver specific handle, and the extent beside it is all the request states about the
+        // buffer. `CursorPlane::id` is read by the atomic interface alone, and this request names
+        // the CRTC.
+        cursor(
+            device,
+            sys::drm_mode_cursor2 {
+                flags: sys::DRM_MODE_CURSOR_BO | sys::DRM_MODE_CURSOR_MOVE,
+                crtc_id: plane.crtc,
+                x,
+                y,
+                width: image.width,
+                height: image.height,
+                handle: image.handle,
+                // The one thing this interface carries and the atomic property set does not. A
+                // para-virtualised driver relays it to the host that draws the pointer.
+                hot_x: image.hotspot_x,
+                hot_y: image.hotspot_y,
+            },
+        )
+    }
+
+    fn move_cursor(&mut self, device: &Device, plane: CursorPlane, x: i32, y: i32) -> Result<()> {
+        // Without `DRM_MODE_CURSOR_BO` the kernel reads no buffer field and keeps the image the
+        // CRTC already has, which is what makes a move as cheap as it is.
+        cursor(
+            device,
+            sys::drm_mode_cursor2 {
+                flags: sys::DRM_MODE_CURSOR_MOVE,
+                crtc_id: plane.crtc,
+                x,
+                y,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn hide_cursor(&mut self, device: &Device, plane: CursorPlane) -> Result<()> {
+        // A handle of zero with `DRM_MODE_CURSOR_BO` is how this interface spells "no cursor", and
+        // the header says so. The position is left alone, so the image can be put back where it
+        // was.
+        cursor(
+            device,
+            sys::drm_mode_cursor2 {
+                flags: sys::DRM_MODE_CURSOR_BO,
+                crtc_id: plane.crtc,
+                handle: 0,
+                ..Default::default()
+            },
+        )
+    }
+}
+
+/// Issues one cursor request.
+///
+/// # Errors
+///
+/// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses.
+fn cursor(device: &Device, mut request: sys::drm_mode_cursor2) -> Result<()> {
+    ioctl::issue(device.fd(), ioctl::MODE_CURSOR2, &mut request)
 }
