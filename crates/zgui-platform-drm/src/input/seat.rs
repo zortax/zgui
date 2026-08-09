@@ -273,9 +273,10 @@ impl Keys {
             // The held set is read *after* the transition is recorded, so the press of shift
             // carries shift and its release carries nothing — which is what a browser reports and
             // what a handler reading the modifiers off a key event expects.
-            let modifiers = self.layout.as_ref().map_or(Modifiers::NONE, |layout| {
-                layout.modifiers()
-            });
+            let modifiers = self
+                .layout
+                .as_ref()
+                .map_or(Modifiers::NONE, |layout| layout.modifiers());
             // Before the key, because the state a key was struck in is announced before the event
             // that happened in it.
             if modifiers != self.modifiers {
@@ -919,9 +920,7 @@ mod tests {
         // `KEY_RESERVED` is code zero. A driver that reports it has said nothing.
         let (mut keys, _) = keys();
 
-        assert!(
-            translate(&mut keys, &moved(SINCE, Key::KEY_RESERVED, 1)).is_empty()
-        );
+        assert!(translate(&mut keys, &moved(SINCE, Key::KEY_RESERVED, 1)).is_empty());
     }
 
     #[test]
@@ -994,10 +993,7 @@ mod tests {
 
         let announced = keys.resynchronise(&BTreeSet::from([Key::KEY_LEFTSHIFT.raw()]));
 
-        assert!(matches!(
-            announced,
-            Some(SurfaceEvent::ModifiersChanged(_))
-        ));
+        assert!(matches!(announced, Some(SurfaceEvent::ModifiersChanged(_))));
         assert_eq!(
             layout.0.borrow().recorded,
             [("hold", Key::KEY_LEFTSHIFT.raw())],

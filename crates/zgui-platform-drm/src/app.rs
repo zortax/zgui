@@ -1,30 +1,41 @@
 //! The frame loop: take the device, light the displays, and turn until the application stops.
 //!
-//! The driver, and the only one this backend has. It opens the device, takes DRM master, discovers
-//! the displays, gives each one two buffers and a mode, and then turns: read the device, hand the
+//! This is the backend's only driver. It opens the device, takes DRM master, discovers the
+//! displays, gives each one two buffers and a mode, and then turns: read the device, hand the
 //! frames that were asked for to the application, ask it how to wait, and wait.
 //!
-//! # The four ways a turn happens
+//! # The five ways a turn happens
 //!
 //! The list is exhaustive on purpose. A missing entry is an application that quietly stops
 //! answering one whole class of event.
 //!
 //! 1. **A display finished a flip.** The device becomes readable, the completion is read, and the
-//!    buffer the display had before the flip is free for the next frame.
+//!    buffer the display had before it is free for the next frame.
 //! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
 //!    which is the second descriptor the wait watches, and arrives as a
 //!    [`WakeReason`](zgui_platform::WakeReason).
-//! 3. **A surface asked to be drawn.** A request on a console is a flag on the surface and moves no
+//! 3. **Somebody pressed a key.** A keyboard's descriptor becomes readable, and every device the
+//!    seat took is one more descriptor the wait watches — so the watch set is built per turn and
+//!    shrinks with a device that stopped answering. What is read goes to the focused surface.
+//! 4. **A surface asked to be drawn.** A request on a console is a flag on the surface and moves no
 //!    descriptor, so the loop reads the flags — before it parks as well as after it wakes.
-//! 4. **A deadline arrived.** The wait ran to its end, and the moment is reported through
+//! 5. **A deadline arrived.** The wait ran to its end, and the moment is reported through
 //!    [`AppHandler::deadline_reached`]. It draws nothing by itself. What draws is the request the
-//!    application makes while it is being told, and entry 3 picks that up.
+//!    application makes while it is being told, and entry 4 picks that up.
 //!
 //! # What holds the device
 //!
 //! One process, for as long as the loop runs. Nothing hands the device back on a terminal switch
-//! and nothing asks a session daemon for it, so this run needs root or a free virtual terminal and
+//! and nothing asks a session daemon for it, so this needs a free virtual terminal or root and
 //! fails to start while a compositor holds the device.
+//!
+//! # What holds the keyboard
+//!
+//! The same process, and it takes it **after** DRM master. That ordering is the safety interlock:
+//! a run on a busy machine fails at the master and never reaches the grab, so it cannot take the
+//! keyboard away from the desktop that is using it. See [`crate::input::seat`] for what the grab
+//! gives and for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application
+//! that binds no way out has to be killed from another terminal.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -36,12 +47,15 @@ use rustix::io::Errno;
 use tracing::warn;
 use zgui_drm::Device;
 use zgui_drm::commit;
-use zgui_platform::{AppHandler, Clock, PlatformCx, PlatformError, Surface, SurfaceEvent, Waker};
+use zgui_platform::{
+    AppHandler, Clock, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, Waker,
+};
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
+use crate::input::seat::{self, Seat};
 use crate::output::{self, Output, backend};
 use crate::park::{Park, Parked, timeout};
 use crate::scanout::{BGRA, Scanout};
@@ -137,6 +151,13 @@ fn drive(
 
     handler.surfaces_available(&cx);
 
+    // After the master, and only here. A run on a machine where a compositor holds the device has
+    // already returned above, so it never reaches the grab and cannot take the keyboard from the
+    // desktop that is using it.
+    let mut seat = Seat::open(&*clock);
+    // Which surface the keys reach, and whether it has been told it has them.
+    let mut focused: Option<SurfaceId> = None;
+
     let outcome: Result<(), PlatformError> = 'running: {
         let mut park = Park::new();
         while !cx.is_exiting() {
@@ -154,6 +175,30 @@ fn drive(
             // a frame, because a flip of a framebuffer nothing drew into blanks a screen the
             // application never took.
             let claimed = cx.claimed();
+
+            // Before the frames, so that a key pressed since the last turn is dispatched into the
+            // document that the frame below then draws. The keyboards are read whether or not
+            // anything can be told about them: a descriptor left unread stays ready, and every
+            // later wait would return at once.
+            let claimed_ids: Vec<SurfaceId> =
+                surfaces[..claimed].iter().map(|drawn| drawn.id()).collect();
+            let holds_keys = seat::focused(&claimed_ids);
+            if let Some(id) = holds_keys
+                && focused != Some(id)
+            {
+                focused = Some(id);
+                handler.surface_event(&cx, id, SurfaceEvent::Focused(true));
+            }
+            for event in seat.read() {
+                let Some(id) = focused else {
+                    continue;
+                };
+                handler.surface_event(&cx, id, event);
+            }
+            if cx.is_exiting() {
+                break;
+            }
+
             for drawn in &surfaces[..claimed] {
                 if drawn.take_redraw() {
                     handler.surface_event(&cx, drawn.id(), SurfaceEvent::RedrawRequested);
@@ -182,7 +227,7 @@ fn drive(
             let owed = answered || surfaces[..claimed].iter().any(|drawn| drawn.wants_redraw());
             let parked = if owed { park.handed_back() } else { parked };
 
-            match wait(device, &waker, parked, clock.now()) {
+            match wait(device, &waker, &seat, parked, clock.now()) {
                 // The wait ran to its end. Where it carried a deadline, that is the deadline
                 // arriving; where it carried none, nothing happened and nothing is reported.
                 Ok(true) => {
@@ -234,10 +279,15 @@ fn release(scanout: Rc<RefCell<Scanout>>, device: &Device) {
     }
 }
 
-/// Waits on the device and the wake channel, reporting whether the wait ran to its end.
+/// Waits on the device, the wake channel and every keyboard, reporting whether the wait ran to its
+/// end.
 ///
 /// `false` covers a descriptor with something to report and a signal that cut the wait short. Both
 /// mean the same thing to the loop: the wait ended before its moment.
+///
+/// The watch set is built once per wait, because it is not fixed. Every device the seat took is one
+/// more descriptor, and a device that stopped answering is dropped from the seat and leaves the set
+/// with it. A set that kept a closed descriptor would fail every later wait.
 ///
 /// # Errors
 ///
@@ -246,13 +296,18 @@ fn release(scanout: Rc<RefCell<Scanout>>, device: &Device) {
 fn wait(
     device: &Device,
     waker: &EventfdWaker,
+    seat: &Seat,
     parked: Parked,
     now: Instant,
 ) -> Result<bool, PlatformError> {
-    let mut watched = [
+    let mut watched = vec![
         PollFd::new(device, PollFlags::IN),
         PollFd::new(waker, PollFlags::IN),
     ];
+    watched.extend(
+        seat.descriptors()
+            .map(|keyboard| PollFd::from_borrowed_fd(keyboard, PollFlags::IN)),
+    );
     match poll(&mut watched, timeout(parked, now).as_ref()) {
         Ok(ready) => Ok(ready == 0),
         // A signal arrived first. Waiting again here would wait the whole length a second time on

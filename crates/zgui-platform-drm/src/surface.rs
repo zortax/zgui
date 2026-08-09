@@ -164,10 +164,14 @@ impl Surface for DrmSurface {
         Some(FullscreenMode::Exclusive)
     }
 
-    /// Nothing until the input sub-project: there is no pointer to give a shape to.
+    /// Nothing: the keyboard is read and the pointer is not, so there is no cursor to give a shape
+    /// to.
     fn set_cursor(&self, _cursor: CursorStyle) {}
 
-    /// Does nothing until the input sub-project: there is no input method to steer.
+    /// Does nothing: there is no input method on this backend to steer.
+    ///
+    /// A layout's own dead keys compose a character here, and those are the layout's business
+    /// rather than a surface's.
     fn set_text_input(&self, _state: Option<TextInput>) {}
 
     /// Does nothing: no assistive technology is connected, so the closure is never run and no
