@@ -2,7 +2,11 @@
 name = "zgui-evdev"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+# The one crate in the workspace that does not inherit the licence. The vendored uapi headers are
+# the kernel's and keep the kernel's, so a package built from this directory carries both and says
+# so. The syscall-note exception puts a program that reaches the kernel through those headers
+# outside the reach of the GPL, and an interface such as this one stands on that exception.
+license = "Apache-2.0 AND (GPL-2.0-only WITH Linux-syscall-note)"
 
 # L2 — backends. Every dependency is inherited: `foo.workspace = true`.
 #
