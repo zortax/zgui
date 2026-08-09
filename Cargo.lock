@@ -5996,12 +5996,15 @@ dependencies = [
  "zgui-bits",
  "zgui-color",
  "zgui-drm",
+ "zgui-evdev",
  "zgui-geom",
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-render",
  "zgui-render-wgpu",
  "zgui-scene",
+ "zgui-vocab",
+ "zgui-xkb",
 ]
 
 [[package]]
