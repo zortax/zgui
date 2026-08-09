@@ -44,6 +44,18 @@ fn an_exported_buffer_imports_back_and_is_accepted_for_scanout() {
     if !can_share(test, &device) {
         return;
     }
+    // This is the one test in the file that builds a framebuffer, and it states `Modifier::LINEAR`
+    // to do it. That raises `DRM_MODE_FB_MODIFIERS`, and a driver reporting no modifier support
+    // answers the flag with `EINVAL`, so the capability is gated here the way `tests/device.rs`
+    // gates it. The other two tests state no modifier and run without it.
+    if !device.supports_format_modifiers() {
+        eprintln!(
+            "{test}: this device does not take framebuffer modifiers, so nothing was asserted\n\
+             name a device that does with {}=/dev/dri/cardN, or load one with `sudo modprobe vkms`",
+            support::DEVICE
+        );
+        return;
+    }
 
     let buffer = device
         .create_dumb_buffer(WIDTH, HEIGHT, Format::XRGB8888)
@@ -192,25 +204,16 @@ fn an_exported_descriptor_is_closed_on_exec_and_writable() {
 
 /// Returns `true` if `device` can carry a buffer over a descriptor, and reports on standard error
 /// where it cannot.
+///
+/// This gates the two things every test in the file needs: a dumb buffer to stand in for a
+/// graphics API's image, and a driver that shares memory in both directions. A test that needs
+/// more than that says so itself.
 fn can_share(test: &str, device: &zgui_drm::Device) -> bool {
     if !device.supports_dumb_buffers() {
         eprintln!(
             "{test}: this device has no dumb buffers, so nothing was asserted\n\
              add a device that has them with `sudo modprobe vkms` and name it with \
              {}=/dev/dri/cardN",
-            support::DEVICE
-        );
-        return false;
-    }
-
-    // Every framebuffer below states `Modifier::LINEAR`, which raises `DRM_MODE_FB_MODIFIERS`, and
-    // a driver that reports no modifier support answers that flag with `EINVAL`. So the modifier
-    // has to be gated the same way `tests/device.rs` gates it, or the skip contract here would end
-    // in a panic on the drivers it was written for.
-    if !device.supports_format_modifiers() {
-        eprintln!(
-            "{test}: this device does not take framebuffer modifiers, so nothing was asserted\n\
-             name a device that does with {}=/dev/dri/cardN",
             support::DEVICE
         );
         return false;
