@@ -1,12 +1,15 @@
-//! The generated interface to the kernel's input headers.
+//! The generated interface to the kernel's input and console headers.
 //!
-//! `uapi/input.h`, `uapi/input-event-codes.h` and `uapi/uinput.h` are copied unchanged from the
-//! Linux kernel's `include/uapi/linux/`. This module is the generated Rust form of them, produced
-//! by `build.rs`.
+//! Every file under `uapi/` other than `wrapper.h` is copied unchanged from the Linux kernel's
+//! `include/uapi/linux/`, and this module is the generated Rust form of them, produced by
+//! `build.rs`. `input.h`, `input-event-codes.h` and `uinput.h` carry the input interface. `kd.h`
+//! and `keyboard.h` carry the console keymap, which the input interface has no answer for. `time.h`
+//! is read on its own for `CLOCK_MONOTONIC`. `time_types.h` and `wait.h` are staged because
+//! `time.h` and `keyboard.h` include them.
 //!
 //! # Licence
 //!
-//! The input headers are `GPL-2.0 WITH Linux-syscall-note`, and the vendored copies keep their own
+//! The kernel headers are `GPL-2.0 WITH Linux-syscall-note`, and the vendored copies keep their own
 //! SPDX identifier and notice. The syscall-note exception states that a user program reaching
 //! kernel services through the interface these headers describe makes normal use of the kernel and
 //! stays outside the reach of the kernel's own licence, so an ioctl wrapper such as this one can
@@ -160,5 +163,77 @@ mod tests {
         // The clock `EVIOCSCLOCKID` is asked for. A different number here would set a different
         // clock, and every timestamp would be on it with nothing reporting the substitution.
         assert_eq!(CLOCK_MONOTONIC, 1);
+    }
+
+    #[test]
+    fn the_console_keymap_entry_is_the_size_the_header_says() {
+        // Four bytes: two `unsigned char` and one `unsigned short`. `KDGKBENT` carries no size in
+        // its request number, so the kernel reads and writes this shape whatever is handed over.
+        assert_eq!(size_of::<kbentry>(), 4);
+        assert_eq!(std::mem::offset_of!(kbentry, kb_table), 0);
+        assert_eq!(std::mem::offset_of!(kbentry, kb_index), 1);
+        assert_eq!(std::mem::offset_of!(kbentry, kb_value), 2);
+    }
+
+    #[test]
+    fn the_console_request_numbers_are_the_ones_the_header_names() {
+        // These are whole request numbers rather than a group and an index, so the header holds
+        // the value and nothing computes it. A wrong one reaches another console interface.
+        assert_eq!(KDGKBENT, 0x4b46);
+        assert_eq!(KDGKBMODE, 0x4b44);
+    }
+
+    #[test]
+    fn the_console_keyboard_modes_are_the_ones_the_header_names() {
+        assert_eq!(K_RAW, 0x00);
+        assert_eq!(K_XLATE, 0x01);
+        assert_eq!(K_MEDIUMRAW, 0x02);
+        assert_eq!(K_UNICODE, 0x03);
+        assert_eq!(K_OFF, 0x04);
+    }
+
+    #[test]
+    fn the_console_keymap_vocabulary_is_the_one_the_header_names() {
+        // The entry types. The kernel's own header says it depends on `KT_LATIN` being zero, and
+        // `KT_SPEC` is the type a hole carries, which every unbound key of a map decodes as.
+        assert_eq!(KT_LATIN, 0);
+        assert_eq!(KT_FN, 1);
+        assert_eq!(KT_SPEC, 2);
+        assert_eq!(KT_PAD, 3);
+        assert_eq!(KT_DEAD, 4);
+        assert_eq!(KT_CONS, 5);
+        assert_eq!(KT_CUR, 6);
+        assert_eq!(KT_SHIFT, 7);
+        assert_eq!(KT_META, 8);
+        assert_eq!(KT_ASCII, 9);
+        assert_eq!(KT_LOCK, 10);
+        assert_eq!(KT_LETTER, 11);
+        assert_eq!(KT_SLOCK, 12);
+        assert_eq!(KT_DEAD2, 13);
+        assert_eq!(KT_BRL, 14);
+
+        // The modifier bits. Each one is a bit of the map index, so a wrong number reads a
+        // different map and reports the wrong character for every key in it.
+        assert_eq!(KG_SHIFT, 0);
+        assert_eq!(KG_ALTGR, 1);
+        assert_eq!(KG_CTRL, 2);
+        assert_eq!(KG_ALT, 3);
+        assert_eq!(KG_SHIFTL, 4);
+        assert_eq!(KG_SHIFTR, 5);
+        assert_eq!(KG_CTRLL, 6);
+        assert_eq!(KG_CTRLR, 7);
+        assert_eq!(KG_CAPSSHIFT, 8);
+
+        // How many keys a console keymap holds, which is where a keycode stops being expressible.
+        assert_eq!(NR_KEYS, 256);
+    }
+
+    #[test]
+    fn the_two_composite_entries_are_the_ones_the_header_builds() {
+        // `wrapper.h` asks the C compiler for these, because bindgen evaluates nothing built from
+        // the header's `K(t,v)` macro. A hole is the entry a keymap does not define, and
+        // `K_NOSUCHMAP` is what `KDGKBENT` answers for keycode zero when the whole map is absent.
+        assert_eq!(ZGUI_K_HOLE, 0x0200);
+        assert_eq!(ZGUI_K_NOSUCHMAP, 0x027f);
     }
 }
