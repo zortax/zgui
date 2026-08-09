@@ -231,9 +231,11 @@ mod tests {
     #[test]
     fn the_two_composite_entries_are_the_ones_the_header_builds() {
         // `wrapper.h` asks the C compiler for these, because bindgen evaluates nothing built from
-        // the header's `K(t,v)` macro. A hole is the entry a keymap does not define, and
-        // `K_NOSUCHMAP` is what `KDGKBENT` answers for keycode zero when the whole map is absent.
+        // the header's `K(t,v)` macro. All three are what key code zero of a map can answer: a
+        // hole for a compiled-in map that leaves it unbound, `K_NOSUCHMAP` for a map that was
+        // never loaded, and `K_ALLOCATED` for one the kernel built.
         assert_eq!(ZGUI_K_HOLE, 0x0200);
         assert_eq!(ZGUI_K_NOSUCHMAP, 0x027f);
+        assert_eq!(ZGUI_K_ALLOCATED, 0x027e);
     }
 }
