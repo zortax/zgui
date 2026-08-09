@@ -58,14 +58,17 @@ fn main() {
         // bits under `KG_`, and the counts that bound a keycode and a map index. A console keymap
         // entry is read as a type and a value, and both vocabularies are the header's.
         .allowlist_type("kbentry")
-        // The two composite entries `wrapper.h` restates, as plain constants rather than a Rust
-        // enumeration: they are two values of a sixteen-bit field, and the field holds far more
-        // than two.
+        // The composite entries `wrapper.h` restates. bindgen writes an enumeration as constants
+        // by default, and that is the form these want: they are values of a sixteen-bit field, and
+        // the field holds far more than three.
         .allowlist_type("zgui_console_entry")
-        .constified_enum("zgui_console_entry")
-        // That enumeration is the only one these headers hold, and its members already carry the
-        // header's own names. Prepending the enumeration's name would spell one of them
-        // `zgui_console_entry_ZGUI_K_HOLE`, which names the header's `K_HOLE` twice over.
+        // Their names are already the header's. Prepending the enumeration's name would spell one
+        // of them `zgui_console_entry_ZGUI_K_HOLE`, which says `K_HOLE` twice over.
+        //
+        // The setting is global, and it is right only while `zgui_console_entry` is the one `enum`
+        // in all eight headers. Nothing checks that. A header that brought another one would have
+        // its members generated without their enumeration's name, so whoever adds a header reads
+        // this line — `wrapper.h` says the same thing where the enumeration is written.
         .prepend_enum_name(false)
         .allowlist_var("KD.*")
         .allowlist_var("K_.*")

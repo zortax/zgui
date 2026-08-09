@@ -23,11 +23,19 @@
 #include <linux/keyboard.h>
 
 /* `keyboard.h` builds every named keymap entry from `K(t,v)`, and bindgen evaluates no constant
- * built from a function-like macro, so none of them reaches Rust. The two this crate names are
+ * built from a function-like macro, so none of them reaches Rust. The three this crate names are
  * restated here as an enumeration, which the compiler folds. So the values still come from the
  * header, and `pack` in `console.rs` is checked against the header's own `K(t,v)` rather than
- * against a number copied beside it. */
+ * against a number copied beside it.
+ *
+ * These three are what key code zero of a map can answer, which is how a caller asks whether a
+ * modifier combination has a map at all: no map, a map `loadkeys` allocated, or a compiled-in map
+ * that leaves the code unbound.
+ *
+ * This is the only `enum` in the eight headers, which `build.rs` depends on when it turns the
+ * enumeration-name prefix off. */
 enum zgui_console_entry {
 	ZGUI_K_HOLE = K_HOLE,
 	ZGUI_K_NOSUCHMAP = K_NOSUCHMAP,
+	ZGUI_K_ALLOCATED = K_ALLOCATED,
 };
