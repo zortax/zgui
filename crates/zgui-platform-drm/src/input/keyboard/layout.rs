@@ -76,14 +76,18 @@ pub trait Layout {
     /// The reading is taken before the state is updated. See the module documentation.
     fn press(&mut self, key: Key) -> Reading;
 
-    /// What a key that is being held produces, recording nothing.
+    /// Returns what this key means as the layout stands, recording nothing.
     ///
-    /// The kernel reports a held key over and over, and each report is a reading rather than a
-    /// transition: an implementation that recorded one would count more presses than releases and
-    /// leave a modifier held for good. It takes `&self`, so an implementation cannot record one —
-    /// what is still a caller's to get right is asking for this rather than for
-    /// [`Layout::press`], which is what the value on the event decides.
-    fn repeat(&self, key: Key) -> Reading;
+    /// Two things are read without recording. **A repeat** is no transition: the kernel reports a
+    /// held key over and over, and an implementation that recorded one would count more presses
+    /// than releases and leave a modifier held with nothing to release it. **A release** reports
+    /// what the key meant while it was down, read before [`Layout::release`] records that it came
+    /// up.
+    ///
+    /// It takes `&self`, so an implementation cannot record either of them. A caller still has to
+    /// ask for this rather than for [`Layout::press`], and the value the kernel put on the event
+    /// decides which.
+    fn reading(&self, key: Key) -> Reading;
 
     /// Records a key coming up.
     fn release(&mut self, key: Key);
@@ -394,7 +398,7 @@ impl Layout for Xkb {
         }
     }
 
-    fn repeat(&self, key: Key) -> Reading {
+    fn reading(&self, key: Key) -> Reading {
         let code = zgui_xkb::Keycode::from_evdev(key.raw());
         Reading {
             key: self.named(self.state.sym(code), self.state.text(code).as_deref()),
@@ -519,7 +523,7 @@ impl Console {
     }
 
     /// Returns what this key means now, and what it means with nothing held.
-    fn reading(&self, key: Key) -> Reading {
+    fn read(&self, key: Key) -> Reading {
         let at = code::physical(key);
         Reading {
             key: Self::key_of(self.character(key, self.mask()), at),
@@ -558,13 +562,13 @@ impl Layout for Console {
     fn press(&mut self, key: Key) -> Reading {
         // Before the record, so that a modifier key reports what it meant rather than what the
         // map it just selected says. This is the same order libxkbcommon's own is written in.
-        let reading = self.reading(key);
+        let reading = self.read(key);
         self.record(key);
         reading
     }
 
-    fn repeat(&self, key: Key) -> Reading {
-        self.reading(key)
+    fn reading(&self, key: Key) -> Reading {
+        self.read(key)
     }
 
     fn release(&mut self, key: Key) {
