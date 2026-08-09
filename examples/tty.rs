@@ -35,7 +35,11 @@
 //!   until something has been focused;
 //! * **the pointer is the same pointer.** The two controls are ordinary `on:click` listeners with
 //!   ordinary `:hover` rules over them, and the wheel scrolls the list below them because the list
-//!   overflows. Nothing about any of it is written for a console.
+//!   overflows. Nothing about any of it is written for a console;
+//! * **a device plugged in while it runs is picked up.** Unplug the mouse and the cursor stops;
+//!   plug it in again and it moves, with the program still running. A key or a button the vanished
+//!   device was holding is let go, so a button lit under a finger goes out rather than staying lit
+//!   for the rest of the run.
 //!
 //! The pointer costs one thing worth knowing in advance. The mouse is grabbed the way the keyboard
 //! is, so it stops reaching whatever else was reading it for as long as this runs. The cursor goes

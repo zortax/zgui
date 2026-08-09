@@ -16,6 +16,12 @@
 //! start-up. Dead keys and compose sequences are applied where libxkbcommon has the data for them,
 //! so `´` then `e` inserts `é`.
 //!
+//! **The set of devices is not fixed.** A keyboard or a mouse plugged in while the program runs is
+//! opened, taken and read from the next turn on, because the loop waits on the device directory
+//! beside the devices themselves. One that goes is dropped, and it lets go of every key and every
+//! button it was holding — so a modifier held while its keyboard was unplugged comes back up
+//! rather than shifting every letter typed afterwards.
+//!
 //! The pointer's position is this backend's own, because a mouse says how far it moved and never
 //! where it is. It can cross between displays, and it stays inside them. Which display holds the
 //! keyboard is the display it is over. `cursor` is what a person sees of it: the shapes are drawn
@@ -40,13 +46,23 @@
 //!   the connectors enumerated — which is not how the monitors sit on the desk unless it happens
 //!   to be. There is nothing here to ask: a console has no desktop coordinate space, and every
 //!   display reports its position as the origin.
-//! * **No device found while the program runs.** The set of devices is read once, at start-up. A
-//!   mouse plugged in afterwards reaches nothing, and one unplugged is dropped and never comes
-//!   back.
+//! * **What a key types depends on which of three layout answers this machine gives.** With
+//!   libxkbcommon and its keyboard data, every level of every key is read, and dead keys and
+//!   compose sequences work. With the kernel's own console keymap instead, three things go: a
+//!   character the console cannot report outside `K_UNICODE` — a German keymap keeps its umlauts,
+//!   which are Latin-1, and loses its euro sign; a name for every key that types nothing, so
+//!   escape, the arrows and the function keys are named from where they sit; and caps lock and the
+//!   meta modifier, which sit outside the eight bits the kernel builds its map index from, so a
+//!   shortcut naming meta never matches. With neither source, a key still arrives by its position,
+//!   so a binding written against where a key sits keeps working and what the key types is lost.
 //! * **No input method.** Dead keys and compose sequences work, because libxkbcommon carries them
 //!   and this backend feeds them. What is absent is an input method with a candidate window, so a
 //!   Japanese or a Chinese keyboard types no more here than its Latin keys and
 //!   `DrmSurface::set_text_input` does nothing.
+//! * **No pointer confinement and no pointer lock.** The position is this backend's own and is
+//!   already kept inside the union of the displays, so both are close. The contract offers no
+//!   method that asks for either, and a pointer event carries a position and no movement, so
+//!   neither is declared. `cx` is where that decision is written down.
 //! * **No session or virtual terminal management.** The frame loop takes DRM master and holds it
 //!   for as long as the program runs. Nothing hands the device back on a terminal switch, and
 //!   nothing asks a session daemon for it. So a program here needs a free virtual terminal, or
