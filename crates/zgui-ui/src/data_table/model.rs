@@ -220,14 +220,37 @@ impl<T: Clone + 'static> DataModel<T> {
     /// A column with no comparison is left alone, so a header that cannot sort does nothing rather
     /// than claiming a direction it will not honour.
     pub fn press_header(&self, key: &str) {
-        if !self
-            .columns()
-            .iter()
-            .any(|column| column.key() == key && column.is_sortable())
-        {
+        if !self.can_sort_by(key) {
             return;
         }
         self.sort.update(|sort| *sort = sort.pressed(key));
+    }
+
+    /// Sorts by `state`, whatever a reader last pressed.
+    ///
+    /// What a stored sort is restored through. [`DataModel::press_header`] cycles from where the
+    /// table already is, so a table reaching `Descending` that way would sort itself twice on the
+    /// way and would depend on the direction it started in.
+    ///
+    /// A [`SortState`] naming a column with no comparison is refused, exactly as pressing that
+    /// column's header is, so a sort read back from a file cannot make a header claim a direction
+    /// it will not honour. A state naming no column at all restores the arrival order.
+    pub fn set_sort(&self, state: SortState) {
+        if state
+            .key
+            .as_deref()
+            .is_some_and(|key| !self.can_sort_by(key))
+        {
+            return;
+        }
+        self.sort.set(state);
+    }
+
+    /// Whether the column named `key` has a comparison to sort by.
+    fn can_sort_by(&self, key: &str) -> bool {
+        self.columns()
+            .iter()
+            .any(|column| column.key() == key && column.is_sortable())
     }
 
     // ---- filtering -----------------------------------------------------------------------------
@@ -517,6 +540,49 @@ mod tests {
         let descending = table.ordered();
         assert_eq!(descending.first().map(|row| row.size), Some(200));
         assert_eq!(table.sort().direction, ColumnSort::Descending);
+
+        scope.unmount();
+    }
+
+    #[test]
+    fn a_stored_sort_is_restored_in_one_step() {
+        install().ok();
+        let scope = Mounted::new();
+        let table = model(&scope, 20, Page::ALL);
+
+        table.set_sort(SortState {
+            key: Some(String::from("size")),
+            direction: ColumnSort::Descending,
+        });
+        assert_eq!(table.sort().direction, ColumnSort::Descending);
+        assert_eq!(table.ordered().first().map(|row| row.size), Some(200));
+
+        table.set_sort(SortState::default());
+        assert_eq!(
+            table.ordered(),
+            rows(20),
+            "and clearing it restores the order"
+        );
+
+        scope.unmount();
+    }
+
+    #[test]
+    fn a_sort_naming_a_column_with_no_comparison_is_refused() {
+        install().ok();
+        let scope = Mounted::new();
+        let table = model(&scope, 5, Page::ALL);
+
+        table.press_header("name");
+        table.set_sort(SortState {
+            key: Some(String::from("actions")),
+            direction: ColumnSort::Ascending,
+        });
+        assert_eq!(
+            table.sort().key.as_deref(),
+            Some("name"),
+            "the sort stayed where it was",
+        );
 
         scope.unmount();
     }
