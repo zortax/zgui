@@ -32,7 +32,15 @@
 //! * **the key that leaves is a window shortcut**, and it has to be. A key is delivered along the
 //!   path to whatever holds focus, and a window in which nothing holds focus routes one to the
 //!   document's root and no further — so a listener on the column below would hear nothing at all
-//!   until something had been focused, and there is no pointer here to focus anything with.
+//!   until something has been focused;
+//! * **the pointer is the same pointer.** The two controls are ordinary `on:click` listeners with
+//!   ordinary `:hover` rules over them, and the wheel scrolls the list below them because the list
+//!   overflows. Nothing about any of it is written for a console.
+//!
+//! The pointer costs one thing worth knowing in advance. The mouse is grabbed the way the keyboard
+//! is, so it stops reaching whatever else was reading it for as long as this runs. The cursor goes
+//! on a hardware plane where the device has one — every real card — and is drawn into the frame
+//! where it does not, which is every virtual machine.
 
 use std::time::Duration;
 
@@ -74,6 +82,7 @@ fn Clock() -> impl IntoView {
     on_cleanup_local(move || drop(registration));
 
     let windows = use_windows();
+    let window = use_window();
 
     view! {
         column(
@@ -102,7 +111,57 @@ fn Clock() -> impl IntoView {
                     )
                 }
             }
-            label(class = "clock__note") {"no display server, no window — press ESC to leave"}
+            row(class = "clock__buttons") {
+                // What the pointer is over decides the shape it takes, and an application says so:
+                // a cursor is not a style this engine reads out of a sheet. The console backend
+                // draws each shape itself, because a machine with no display server has no cursor
+                // theme to read one from.
+                control(
+                    class = "button",
+                    tabindex = Focus::Sequential,
+                    a11y:label = "Back a minute",
+                    on:pointer_enter = {
+                        let window = window.clone();
+                        move |_| window.set_cursor(CursorStyle::Pointer)
+                    },
+                    on:pointer_leave = {
+                        let window = window.clone();
+                        move |_| window.set_cursor(CursorStyle::Default)
+                    },
+                    on:click = move |_| {
+                        elapsed.update(|seconds| *seconds = seconds.saturating_sub(60));
+                    }
+                ) {
+                    "-1 min"
+                }
+                control(
+                    class = "button",
+                    tabindex = Focus::Sequential,
+                    a11y:label = "Start again",
+                    on:pointer_enter = {
+                        let window = window.clone();
+                        move |_| window.set_cursor(CursorStyle::Pointer)
+                    },
+                    on:pointer_leave = {
+                        let window = window.clone();
+                        move |_| window.set_cursor(CursorStyle::Default)
+                    },
+                    on:click = move |_| elapsed.set(0)
+                ) {
+                    "reset"
+                }
+            }
+            // Taller than the box it is in, so the wheel has somewhere to go. A detent leaves the
+            // backend as a detent and the framework decides how far one travels, which is why this
+            // scrolls by three lines here and on a desktop alike.
+            column(class = "log", a11y:role = Role::Group, a11y:label = "Ticks") {
+                for segment in || 0..SEGMENTS, key = |segment: &u64| *segment {
+                    label(class = "log__line") {{move || format!("tick {segment:02}")}}
+                }
+            }
+            label(class = "clock__note") {
+                "no display server, no window — point, scroll, press ESC to leave"
+            }
         }
     }
 }
@@ -165,6 +224,38 @@ const SHEET: &str = css!(
     }
 
     .seg-lit { background-color: #3b6cf6; }
+
+    .clock__buttons { gap: 12px; }
+
+    .button {
+        padding: 8px 18px;
+        border-radius: 10px;
+        border: 1px solid #1b2230;
+        background-color: #141a26;
+        color: #e8ecf4;
+        font-size: 15px;
+    }
+
+    /* Read by the pointer and by the keyboard alike, which is what a console has to prove: the
+       same rule lights under a hover and under a tab. */
+    .button:hover { background-color: #2b3243; }
+    .button:active { background-color: #3b6cf6; }
+    .button:focus-visible { border-color: #3b6cf6; }
+
+    .log {
+        width: 260px;
+        height: 96px;
+        overflow: auto;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid #1b2230;
+        background-color: #090d15;
+    }
+
+    .log__line {
+        font-size: 13px;
+        color: #55627a;
+    }
 
     .clock__note {
         font-size: 14px;
