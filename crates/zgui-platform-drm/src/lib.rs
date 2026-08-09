@@ -6,24 +6,38 @@
 //!
 //! # Input
 //!
-//! **A person can type into an application here.** The frame loop opens every device somebody
-//! could type on, takes each one away from everything else, and turns what the kernel reports into
-//! the events a document is dispatched. What a key *means* comes from libxkbcommon where the
-//! machine has it and from the kernel's own console keymap where it does not, and which of the two
-//! a program got is stated once at start-up. Dead keys and compose sequences are applied where
-//! libxkbcommon has the data for them, so `´` then `e` inserts `é`. `input` holds that
+//! **A person can type into an application here, and point at it.** The frame loop opens every
+//! device somebody could type on or point with, takes each one away from everything else, and
+//! turns what the kernel reports into the events a document is dispatched. `input` holds that
 //! translation, all of it.
+//!
+//! What a key *means* comes from libxkbcommon where the machine has it and from the kernel's own
+//! console keymap where it does not, and which of the two a program got is stated once at
+//! start-up. Dead keys and compose sequences are applied where libxkbcommon has the data for them,
+//! so `´` then `e` inserts `é`.
+//!
+//! The pointer's position is this backend's own, because a mouse says how far it moved and never
+//! where it is. It can cross between displays, and it stays inside them. Which display holds the
+//! keyboard is the display it is over. `cursor` is what a person sees of it: the shapes are drawn
+//! in code, and the picture reaches the screen on a hardware cursor plane where the device has one
+//! and inside the frame where it does not.
 //!
 //! A grabbed keyboard costs one thing worth knowing before running anything here: `Ctrl+C` never
 //! reaches the terminal's line discipline, so no `SIGINT` is raised. This backend invents no quit
 //! key — which key leaves a program is the program's own decision — so an application that binds
-//! none has to be killed from another terminal.
+//! none has to be killed from another terminal. The pointer is grabbed with it, so a mouse also
+//! stops reaching whatever else was reading it.
 //!
 //! # What this does not have yet
 //!
-//! * **No pointer and no touch.** Only the keyboard is read. A mouse's own node is opened by
-//!   nothing here, there is no cursor to give a shape to, and a device plugged in while the
-//!   program runs is found by nothing: the set of devices is read once.
+//! * **One pointer, and no touch protocol.** Every device drives the same pointer and every event
+//!   reports it as the mouse. A touchscreen and a graphics tablet move it through `ABS_X` and
+//!   `ABS_Y`, and the multi-touch codes under `ABS_MT_SLOT` are read by nothing — so two fingers
+//!   are one pointer that jumps between them, no event carries a pressure, and a tablet is not
+//!   bound to the display it is stuck to.
+//! * **No device found while the program runs.** The set of devices is read once, at start-up. A
+//!   mouse plugged in afterwards reaches nothing, and one unplugged is dropped and never comes
+//!   back.
 //! * **No input method.** Dead keys and compose sequences work, because libxkbcommon carries them
 //!   and this backend feeds them. What is absent is an input method with a candidate window, so a
 //!   Japanese or a Chinese keyboard types no more here than its Latin keys and
@@ -33,7 +47,7 @@
 //!   nothing asks a session daemon for it. So a program here needs a free virtual terminal, or
 //!   root, and fails to start while a compositor holds the master.
 //!
-//! The crate's dependencies say the same: no session library.
+//! The last is visible in what the crate names: no session library.
 //!
 //! # How a frame reaches the screen
 //!
@@ -52,10 +66,9 @@
 //! # The loop
 //!
 //! `run` is the driver. It opens the device, takes master, lights every display it finds, and then
-//! turns: read the completions, read what the keyboards reported, draw the frames that were asked
-//! for, ask the application how to wait, and wait on the device, the wake channel and every
-//! keyboard together. `park` is where the waiting is decided, and it is the same state machine the
-//! windowing backend parks with.
+//! turns: read the completions, draw the frames that were asked for, ask the application how to
+//! wait, and wait on the device, the wake channel and every input device together. `park` decides
+//! the waiting, and it is the same state machine the windowing backend parks with.
 //!
 //! It also writes the displays it lit into the `Displays` it was given, for as long as it turns.
 //! That map and the renderer are one decision, so `App::run_drm` makes one map and hands it to
@@ -118,6 +131,8 @@ pub use crate::app::run;
 pub use crate::clipboard::ConsoleClipboard;
 #[cfg(target_os = "linux")]
 pub use crate::clock::SystemClock;
+#[cfg(target_os = "linux")]
+pub use crate::cursor::Cursor;
 #[cfg(target_os = "linux")]
 pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]

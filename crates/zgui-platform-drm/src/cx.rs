@@ -218,6 +218,13 @@ impl PlatformCx for DrmCx {
 ///   the starting set claims plain text, which every desktop has and this console does not; and
 /// * the decorations are the application's, because nothing else here draws anything. A title bar
 ///   on this backend exists only if the application draws one.
+///
+/// Three that stay absent are worth naming, because a pointer makes each of them a real question.
+/// `pointer_confine` and `pointer_lock` are absent because the contract offers no method to ask for
+/// either: the pointer here is already confined to the displays, and nothing can ask for it to be
+/// held still and read as pure motion. `native_gestures` is absent and true — this backend reports
+/// the raw pointer stream and recognises no pinch, rotate or pan of its own, so the framework
+/// recognises them.
 fn capabilities() -> PlatformCapabilities {
     let mut capabilities = PlatformCapabilities::none();
     capabilities.clipboard_formats = Vec::new();
