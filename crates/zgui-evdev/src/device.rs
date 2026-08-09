@@ -1,11 +1,12 @@
 //! One `/dev/input/eventN` node: what it is, what it can report, and what it reports.
 
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::fs::{Mode, OFlags};
 
-use crate::code::{Absolute, EventType, Key, Relative};
+use crate::code::{Absolute, Code, EventType, Key, Relative};
 use crate::error::{Error, Result};
 use crate::event::{Batch, Reader};
 use crate::ioctl;
@@ -17,22 +18,13 @@ use crate::sys;
 /// than this arrives cut rather than lost.
 const NAME_LIMIT: usize = 256;
 
-/// How many bytes hold `codes` bits.
-const fn bytes_for(codes: u32) -> usize {
-    codes.div_ceil(8) as usize
+/// Returns how many bytes hold every code of `C`.
+///
+/// The count comes from the code type, so a map can only be asked for at the length its own
+/// vocabulary needs.
+const fn bitmap_bytes<C: Code>() -> usize {
+    C::COUNT.div_ceil(8) as usize
 }
-
-/// Which bitmap a device reports its event types in.
-const TYPE_BITMAP: usize = bytes_for(sys::EV_CNT);
-
-/// Which bitmap a device reports its key codes in.
-const KEY_BITMAP: usize = bytes_for(sys::KEY_CNT);
-
-/// Which bitmap a device reports its relative axes in.
-const RELATIVE_BITMAP: usize = bytes_for(sys::REL_CNT);
-
-/// Which bitmap a device reports its absolute axes in.
-const ABSOLUTE_BITMAP: usize = bytes_for(sys::ABS_CNT);
 
 /// The most bytes a bitmap keeps.
 ///
@@ -42,18 +34,59 @@ const ABSOLUTE_BITMAP: usize = bytes_for(sys::ABS_CNT);
 /// anything a device produces.
 pub const BITMAP_LIMIT: usize = (u16::MAX as usize + 1) / 8;
 
-/// A set of codes, as the kernel writes one.
+/// A set of codes drawn from one vocabulary.
 ///
 /// The kernel answers "which codes does this device have" with a bitmap: bit `n` is code `n`. A
 /// map is as long as the caller asked for, so a code past its end is a code the kernel had no room
 /// to report and reads as absent.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Bitmap {
+///
+/// `C` is what the bits mean. Bit one is `KEY_ESC` in a `Bitmap<Key>` and `REL_Y` in a
+/// `Bitmap<Relative>`, and the two are different types, so a map cannot be read against a
+/// vocabulary it was not filled from and [`Capabilities::new`] cannot be given its four maps in
+/// the wrong order.
+pub struct Bitmap<C> {
     /// The bits, least significant first, as the kernel wrote them.
     bits: Vec<u8>,
+    /// What the bits mean, carrying no value.
+    vocabulary: PhantomData<fn() -> C>,
 }
 
-impl Bitmap {
+// The four impls below are written out by hand. A derive would bound `C`, and `C` is a marker no
+// value here is ever an instance of: a `Bitmap<Key>` is as comparable and as cloneable as its bytes
+// are, whatever `Key` implements.
+impl<C> Clone for Bitmap<C> {
+    fn clone(&self) -> Self {
+        Self {
+            bits: self.bits.clone(),
+            vocabulary: PhantomData,
+        }
+    }
+}
+
+impl<C> Default for Bitmap<C> {
+    fn default() -> Self {
+        Self {
+            bits: Vec::new(),
+            vocabulary: PhantomData,
+        }
+    }
+}
+
+impl<C> PartialEq for Bitmap<C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.bits == other.bits
+    }
+}
+
+impl<C> Eq for Bitmap<C> {}
+
+impl<C: Code> std::fmt::Debug for Bitmap<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.iter().map(Code::raw)).finish()
+    }
+}
+
+impl<C: Code> Bitmap<C> {
     /// Returns the bitmap these bytes hold, up to the last byte a code can reach.
     ///
     /// A code is sixteen bits, so [`BITMAP_LIMIT`] bytes hold every code there is and anything past
@@ -62,6 +95,7 @@ impl Bitmap {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             bits: bytes[..bytes.len().min(BITMAP_LIMIT)].to_vec(),
+            vocabulary: PhantomData,
         }
     }
 
@@ -69,20 +103,25 @@ impl Bitmap {
     ///
     /// This is how a test states a device's capabilities without a device, and how a caller
     /// describes one it is about to create.
-    pub fn from_codes(codes: impl IntoIterator<Item = u16>) -> Self {
+    pub fn from_codes(codes: impl IntoIterator<Item = C>) -> Self {
         let mut bits: Vec<u8> = Vec::new();
         for code in codes {
+            let code = code.raw();
             let byte = usize::from(code) / 8;
             if bits.len() <= byte {
                 bits.resize(byte + 1, 0);
             }
             bits[byte] |= 1 << (code % 8);
         }
-        Self { bits }
+        Self {
+            bits,
+            vocabulary: PhantomData,
+        }
     }
 
     /// Returns `true` if `code` is in this map.
-    pub fn contains(&self, code: u16) -> bool {
+    pub fn contains(&self, code: C) -> bool {
+        let code = code.raw();
         let byte = usize::from(code) / 8;
         self.bits
             .get(byte)
@@ -90,13 +129,14 @@ impl Bitmap {
     }
 
     /// Returns every code in this map, in order.
-    pub fn iter(&self) -> impl Iterator<Item = u16> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = C> + '_ {
         self.bits.iter().enumerate().flat_map(|(byte, bits)| {
             // The cap in `from_bytes` already makes this conversion total. It is written as one
             // that can decline anyway, so the code holds that totality on its own.
             (0..8)
                 .filter(move |bit| bits & (1 << bit) != 0)
                 .filter_map(move |bit| u16::try_from(byte * 8 + bit).ok())
+                .map(C::new)
         })
     }
 
@@ -205,18 +245,25 @@ impl Roles {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Capabilities {
     /// Which event types the device emits.
-    types: Bitmap,
+    types: Bitmap<EventType>,
     /// Which keys and buttons it has.
-    keys: Bitmap,
+    keys: Bitmap<Key>,
     /// Which relative axes it has.
-    relative: Bitmap,
+    relative: Bitmap<Relative>,
     /// Which absolute axes it has.
-    absolute: Bitmap,
+    absolute: Bitmap<Absolute>,
 }
 
 impl Capabilities {
-    /// The capabilities these four maps describe.
-    pub fn new(types: Bitmap, keys: Bitmap, relative: Bitmap, absolute: Bitmap) -> Self {
+    /// Builds the capabilities these four maps describe.
+    ///
+    /// Each map names the vocabulary it holds, so the four cannot be given in the wrong order.
+    pub fn new(
+        types: Bitmap<EventType>,
+        keys: Bitmap<Key>,
+        relative: Bitmap<Relative>,
+        absolute: Bitmap<Absolute>,
+    ) -> Self {
         Self {
             types,
             keys,
@@ -226,28 +273,28 @@ impl Capabilities {
     }
 
     /// Returns which event types the device emits.
-    pub fn types(&self) -> &Bitmap {
+    pub fn types(&self) -> &Bitmap<EventType> {
         &self.types
     }
 
     /// Returns which keys and buttons it has.
-    pub fn keys(&self) -> &Bitmap {
+    pub fn keys(&self) -> &Bitmap<Key> {
         &self.keys
     }
 
     /// Returns which relative axes it has.
-    pub fn relative(&self) -> &Bitmap {
+    pub fn relative(&self) -> &Bitmap<Relative> {
         &self.relative
     }
 
     /// Returns which absolute axes it has.
-    pub fn absolute(&self) -> &Bitmap {
+    pub fn absolute(&self) -> &Bitmap<Absolute> {
         &self.absolute
     }
 
     /// Returns `true` if the device emits `kind` at all.
     pub fn has(&self, kind: EventType) -> bool {
-        self.types.contains(kind.raw())
+        self.types.contains(kind)
     }
 
     /// Returns the jobs these capabilities amount to.
@@ -267,17 +314,18 @@ impl Capabilities {
             // otherwise make a device with one meaningless code into a keyboard, and udev's own
             // rule leaves it out for the same reason.
             keyboard: self.has(EventType::EV_KEY)
-                && self.keys.iter().any(|code| {
-                    code != Key::KEY_RESERVED.raw() && Key::new(code).is_keyboard_key()
-                }),
+                && self
+                    .keys
+                    .iter()
+                    .any(|code| code != Key::KEY_RESERVED && code.is_keyboard_key()),
             pointer: self.has(EventType::EV_REL)
-                && self.relative.contains(Relative::REL_X.raw())
-                && self.relative.contains(Relative::REL_Y.raw()),
+                && self.relative.contains(Relative::REL_X)
+                && self.relative.contains(Relative::REL_Y),
             touch: self.has(EventType::EV_ABS)
-                && ((self.absolute.contains(Absolute::ABS_X.raw())
-                    && self.absolute.contains(Absolute::ABS_Y.raw()))
-                    || (self.absolute.contains(Absolute::ABS_MT_POSITION_X.raw())
-                        && self.absolute.contains(Absolute::ABS_MT_POSITION_Y.raw()))),
+                && ((self.absolute.contains(Absolute::ABS_X)
+                    && self.absolute.contains(Absolute::ABS_Y))
+                    || (self.absolute.contains(Absolute::ABS_MT_POSITION_X)
+                        && self.absolute.contains(Absolute::ABS_MT_POSITION_Y))),
         }
     }
 }
@@ -404,19 +452,19 @@ impl Device {
         })
     }
 
-    /// Which keys are held down right now.
+    /// Returns which keys are held down right now.
     ///
-    /// This is the state a caller needs when it opens a device that is already in use: a modifier
-    /// held when the first event arrives was pressed before anything was listening, and nothing
-    /// later in the stream says so.
+    /// The device itself is asked, so this answers where a stream cannot. A caller that opens a
+    /// device already in use needs it: a modifier held when the first event arrives was pressed
+    /// before anything was listening, and nothing later in the stream says so.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Ioctl`] when the kernel refuses the query.
-    pub fn pressed_keys(&self) -> Result<Bitmap> {
-        let mut bits = [0_u8; KEY_BITMAP];
+    pub fn pressed_keys(&self) -> Result<Bitmap<Key>> {
+        let mut bits = [0_u8; bitmap_bytes::<Key>()];
         let written = ioctl::issue_bytes(self.fd(), ioctl::key_state(), &mut bits)?;
-        Ok(Bitmap::from_bytes(&bits[..written.min(KEY_BITMAP)]))
+        Ok(Bitmap::from_bytes(&bits[..written.min(bits.len())]))
     }
 
     /// Takes the device, so that its events reach this process and no other.
@@ -529,27 +577,32 @@ fn read_identity(fd: BorrowedFd<'_>) -> Result<Identity> {
 /// something to read. A device with no absolute axes is the ordinary case, and asking it for them
 /// gets zeros at best.
 fn read_capabilities(fd: BorrowedFd<'_>) -> Result<Capabilities> {
-    let types = read_bits(fd, 0, TYPE_BITMAP)?;
-
-    let map = |kind: EventType, len: usize| -> Result<Bitmap> {
-        if types.contains(kind.raw()) {
-            read_bits(fd, kind.raw(), len)
-        } else {
-            Ok(Bitmap::default())
-        }
-    };
-
-    let keys = map(EventType::EV_KEY, KEY_BITMAP)?;
-    let relative = map(EventType::EV_REL, RELATIVE_BITMAP)?;
-    let absolute = map(EventType::EV_ABS, ABSOLUTE_BITMAP)?;
+    // The type map is the one request that is not `read_codes`: it is asked for through the slot
+    // `EV_SYN` would occupy, and there is nothing to check it against yet.
+    let types = read_bits(fd, EventType::EV_SYN, bitmap_bytes::<EventType>())?;
+    let keys = read_codes(fd, &types)?;
+    let relative = read_codes(fd, &types)?;
+    let absolute = read_codes(fd, &types)?;
 
     Ok(Capabilities::new(types, keys, relative, absolute))
 }
 
+/// Reads the codes of one vocabulary, or an empty map where the device has no such type.
+///
+/// Which request to issue and how long the map is both come from `C`, so a call cannot ask for one
+/// vocabulary and store the answer as another.
+fn read_codes<C: Code>(fd: BorrowedFd<'_>, types: &Bitmap<EventType>) -> Result<Bitmap<C>> {
+    if types.contains(C::KIND) {
+        read_bits(fd, C::KIND, bitmap_bytes::<C>())
+    } else {
+        Ok(Bitmap::default())
+    }
+}
+
 /// Reads one `EVIOCGBIT` map of `len` bytes.
-fn read_bits(fd: BorrowedFd<'_>, kind: u16, len: usize) -> Result<Bitmap> {
+fn read_bits<C: Code>(fd: BorrowedFd<'_>, kind: EventType, len: usize) -> Result<Bitmap<C>> {
     let mut bits = vec![0_u8; len];
-    let written = ioctl::issue_bytes(fd, ioctl::bits(kind)?, &mut bits)?;
+    let written = ioctl::issue_bytes(fd, ioctl::bits(kind.raw())?, &mut bits)?;
     bits.truncate(written.min(len));
     Ok(Bitmap::from_bytes(&bits))
 }
@@ -573,25 +626,25 @@ mod tests {
         absolute: &[Absolute],
     ) -> Capabilities {
         Capabilities::new(
-            Bitmap::from_codes(types.iter().map(|kind| kind.raw())),
-            Bitmap::from_codes(keys.iter().map(|key| key.raw())),
-            Bitmap::from_codes(relative.iter().map(|axis| axis.raw())),
-            Bitmap::from_codes(absolute.iter().map(|axis| axis.raw())),
+            Bitmap::from_codes(types.iter().copied()),
+            Bitmap::from_codes(keys.iter().copied()),
+            Bitmap::from_codes(relative.iter().copied()),
+            Bitmap::from_codes(absolute.iter().copied()),
         )
     }
 
     #[test]
     fn a_bitmap_holds_the_codes_it_was_built_from() {
-        let map = Bitmap::from_codes([Key::KEY_A.raw(), Key::KEY_Z.raw(), Key::BTN_LEFT.raw()]);
+        let map = Bitmap::from_codes([Key::KEY_A, Key::KEY_Z, Key::BTN_LEFT]);
 
-        assert!(map.contains(Key::KEY_A.raw()));
-        assert!(map.contains(Key::BTN_LEFT.raw()));
-        assert!(!map.contains(Key::KEY_B.raw()));
+        assert!(map.contains(Key::KEY_A));
+        assert!(map.contains(Key::BTN_LEFT));
+        assert!(!map.contains(Key::KEY_B));
         assert_eq!(map.len(), 3);
         assert!(!map.is_empty());
         assert_eq!(
             map.iter().collect::<Vec<_>>(),
-            [Key::KEY_A.raw(), Key::KEY_Z.raw(), Key::BTN_LEFT.raw()],
+            [Key::KEY_A, Key::KEY_Z, Key::BTN_LEFT],
             "the codes come back in order, whatever order they went in"
         );
     }
@@ -602,9 +655,9 @@ mod tests {
         // and then asks about code 700 gets an answer rather than an index out of range.
         let map = Bitmap::from_bytes(&[0b0000_0011, 0]);
 
-        assert!(map.contains(0));
-        assert!(map.contains(1));
-        assert!(!map.contains(700));
+        assert!(map.contains(Key::new(0)));
+        assert!(map.contains(Key::new(1)));
+        assert!(!map.contains(Key::new(700)));
         assert_eq!(map.len(), 2);
     }
 
@@ -612,7 +665,7 @@ mod tests {
     fn a_bitmap_longer_than_the_codes_it_could_hold_is_cut_rather_than_walked() {
         // No kernel path reaches this, and `from_bytes` is public and documented as safe, so a
         // caller with a long buffer can. Walking it would run the bit index past sixteen bits.
-        let long = Bitmap::from_bytes(&vec![0xff; BITMAP_LIMIT + 1000]);
+        let long: Bitmap<Key> = Bitmap::from_bytes(&vec![0xff; BITMAP_LIMIT + 1000]);
 
         assert_eq!(
             long.iter().count(),
@@ -621,7 +674,7 @@ mod tests {
         );
         assert_eq!(
             long.iter().last(),
-            Some(u16::MAX),
+            Some(Key::new(u16::MAX)),
             "the walk ends on the last code rather than past it"
         );
         assert_eq!(long.len(), BITMAP_LIMIT * 8);
@@ -629,9 +682,9 @@ mod tests {
 
     #[test]
     fn an_empty_bitmap_holds_nothing() {
-        assert!(Bitmap::default().is_empty());
+        assert!(Bitmap::<Key>::default().is_empty());
         assert!(
-            Bitmap::from_bytes(&[0, 0, 0]).is_empty(),
+            Bitmap::<Key>::from_bytes(&[0, 0, 0]).is_empty(),
             "bytes the kernel wrote as zero are no codes at all"
         );
     }
@@ -793,10 +846,26 @@ mod tests {
     }
 
     #[test]
-    fn a_bitmap_is_as_many_bytes_as_the_codes_need() {
-        assert_eq!(TYPE_BITMAP, 4, "thirty-two event types");
-        assert_eq!(KEY_BITMAP, 96, "seven hundred and sixty-eight key codes");
-        assert_eq!(RELATIVE_BITMAP, 2, "sixteen relative axes");
-        assert_eq!(ABSOLUTE_BITMAP, 8, "sixty-four absolute axes");
+    fn a_bitmap_is_as_many_bytes_as_its_own_vocabulary_needs() {
+        assert_eq!(bitmap_bytes::<EventType>(), 4, "thirty-two event types");
+        assert_eq!(
+            bitmap_bytes::<Key>(),
+            96,
+            "seven hundred and sixty-eight key codes"
+        );
+        assert_eq!(bitmap_bytes::<Relative>(), 2, "sixteen relative axes");
+        assert_eq!(bitmap_bytes::<Absolute>(), 8, "sixty-four absolute axes");
+    }
+
+    #[test]
+    fn a_map_of_one_vocabulary_is_not_a_map_of_another() {
+        // Bit one is `KEY_ESC` here and `REL_Y` there, and the two maps are different types, so
+        // `Capabilities::new` cannot be handed them the wrong way round. This is the assertion
+        // that the marker is doing something; the rest of it is the compiler's.
+        let keys = Bitmap::from_codes([Key::new(1)]);
+        let axes = Bitmap::from_codes([Relative::new(1)]);
+
+        assert!(keys.contains(Key::KEY_ESC));
+        assert!(axes.contains(Relative::REL_Y));
     }
 }
