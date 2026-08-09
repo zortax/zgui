@@ -2,7 +2,7 @@
 
 mod bridge;
 pub mod color;
-mod query;
+pub(crate) mod query;
 mod register;
 pub(crate) mod registry;
 pub(crate) mod resolve;

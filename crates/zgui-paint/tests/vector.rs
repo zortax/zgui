@@ -601,3 +601,49 @@ fn an_unchanged_drawing_is_drawn_again_on_every_frame_that_reaches_it() {
         );
     }
 }
+
+/// A root large enough to hold a drawing at the mask limit and one past it.
+const LARGE_ROOT: &str = "root { display: block; width: 400px; height: 400px }";
+
+/// The fixture tree with the mark sized to `edge` device pixels square.
+fn sized_tree(edge: u32) -> (Element, String) {
+    let css = format!(
+        "{LARGE_ROOT}
+         mark {{ display: block; width: {edge}px; height: {edge}px; color: rgb(0, 128, 255) }}"
+    );
+    (tree(), css)
+}
+
+/// The route a drawing of `edge` square takes.
+fn route_at(edge: u32) -> (zgui_paint::VectorRoutes, usize, usize) {
+    let (tree, css) = sized_tree(edge);
+    let mut harness = Harness::new(tree, css.as_str());
+    let report = harness.paint_cached_vectors(
+        &VectorCache::new(),
+        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+    (
+        report.vector_routes[0].routes,
+        harness.scene().primitives.mono_sprites.len(),
+        harness.scene().primitives.vectors.len(),
+    )
+}
+
+#[test]
+fn a_drawing_at_the_mask_limit_still_uses_the_atlas_mask() {
+    let (routes, sprites, vectors) = route_at(256);
+    assert!(routes.contains(zgui_paint::VectorRoute::AtlasMask));
+    assert!(!routes.contains(zgui_paint::VectorRoute::GeneralRaster));
+    assert_eq!(sprites, 1);
+    assert!(vectors == 0);
+}
+
+#[test]
+fn a_drawing_over_the_mask_limit_takes_the_general_raster() {
+    let (routes, sprites, vectors) = route_at(257);
+    assert!(routes.contains(zgui_paint::VectorRoute::GeneralRaster));
+    assert!(!routes.contains(zgui_paint::VectorRoute::AtlasMask));
+    assert_eq!(sprites, 0);
+    assert_eq!(vectors, 1);
+}

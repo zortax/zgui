@@ -142,15 +142,19 @@ fn the_headless_clipboard_round_trips_through_the_contract() {
 fn an_asynchronous_clipboard_read_is_answered_by_a_wake_naming_the_same_request() {
     let platform = Headless::new();
     let cx: &dyn PlatformCx = &platform;
+    cx.clipboard()
+        .write(
+            ClipboardKind::Standard,
+            ClipboardData::from("pasted"),
+            ClipboardWriteOptions::default(),
+        )
+        .expect("memory is writable");
+
+    // A backend answers by waking the loop; nothing else closes the request. This one answers
+    // itself, so nothing here manufactures the reply.
     let serial = cx
         .clipboard()
         .read(ClipboardKind::Standard, ClipboardFormat::Text);
-
-    // A backend answers by waking the loop; nothing else closes the request.
-    cx.waker().wake(WakeReason::ClipboardRead {
-        serial,
-        result: Ok(ClipboardData::from("pasted")),
-    });
 
     let delivered = platform.drain_wakes();
     assert_eq!(delivered.len(), 1);

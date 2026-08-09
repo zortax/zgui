@@ -2,14 +2,17 @@
 
 use std::sync::Arc;
 
+use zgui_geom::CssPx;
 use zgui_text::{
-    BreakRequest, BrokenParagraph, ParagraphContent, ParagraphShaper, ShapedParagraph, StrutMetrics,
+    BreakRequest, BrokenParagraph, ParagraphContent, ParagraphShaper, ShapedParagraph,
+    ShapedRunOwned, StrutMetrics,
 };
 use zgui_text_style::TextStyle;
 
 use crate::direction::Controls;
 use crate::shape::brush::SlotBrush;
 use crate::shape::engine::ShapedLayout;
+use crate::shape::line::{LineRequest, ResolvedLineMetrics};
 use crate::shape::strut::StrutCache;
 use crate::shape::{breaking, build};
 use crate::system::FontSystem;
@@ -78,6 +81,62 @@ impl Shaper {
     /// How this shaper forces the base direction.
     pub fn controls(&self) -> Controls {
         self.controls
+    }
+
+    /// Shapes one line of one uniform style, with no wrapping.
+    ///
+    /// Answers with owned runs, so the result can be held across frames and drawn from until the
+    /// line changes. Each run reports where in `text` every glyph came from, which is what places a
+    /// caret and clamps a glyph to a cell.
+    ///
+    /// The face each character is drawn from is resolved per cluster, so a line mixing scripts
+    /// comes back as several runs.
+    ///
+    /// ```
+    /// use zgui_interned::Ident;
+    /// use zgui_text_parley::{FontSystem, FontSystemOptions, LineRequest, Shaper};
+    /// use std::sync::Arc;
+    ///
+    /// let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    /// let mut shaper = Shaper::new(fonts);
+    /// let families = [Ident::new("Whatever")];
+    /// let request = LineRequest {
+    ///     families: &families,
+    ///     weight: 400,
+    ///     italic: false,
+    ///     size_device_px: 16.0,
+    ///     letter_spacing: 0.0,
+    ///     ligatures: true,
+    /// };
+    /// // With nothing registered there is nothing to draw the text with.
+    /// assert!(shaper.shape_line("", &request).is_empty());
+    /// ```
+    pub fn shape_line(&mut self, text: &str, request: &LineRequest<'_>) -> Vec<ShapedRunOwned> {
+        crate::shape::line::shape(
+            text,
+            request,
+            &self.fonts,
+            &mut self.context,
+            &mut self.scratch,
+        )
+    }
+
+    /// The face one request resolves to, and what its line is measured by.
+    ///
+    /// The face named here is the face [`shape_line`](Self::shape_line) sets the request's text in,
+    /// so cell geometry taken from these metrics and glyphs taken from that call agree. `None` when
+    /// the request matches no face at all.
+    pub fn line_metrics(&self, request: &LineRequest<'_>) -> Option<ResolvedLineMetrics> {
+        let style = crate::shape::line::text_style(request);
+        let size = CssPx(request.size_device_px);
+        let (face, metrics) = self
+            .fonts
+            .resolved_metrics(&zgui_text::FaceQuery::of(&style), size)?;
+        Some(ResolvedLineMetrics {
+            face,
+            metrics,
+            cell_advance: metrics.zero_advance_or_fallback(size, false),
+        })
     }
 
     /// Forgets every measured strut, which a newly registered face makes necessary.

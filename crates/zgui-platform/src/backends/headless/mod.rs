@@ -41,11 +41,15 @@ pub(super) struct Headless {
 impl Headless {
     /// A platform with no surfaces, a clock at its origin and an empty clipboard.
     pub(super) fn new() -> Self {
+        let waker = Arc::new(RecordingWaker::default());
+        let clipboard = MemoryClipboard::default();
+        // A read started through the loop is answered through the loop.
+        clipboard.attach_waker(Arc::clone(&waker) as Arc<dyn crate::waker::Waker>);
         Self {
             clock: Arc::new(VirtualClock::new()),
-            clipboard: MemoryClipboard::default(),
+            clipboard,
             capabilities: PlatformCapabilities::none(),
-            waker: Arc::new(RecordingWaker::default()),
+            waker,
             surfaces: Mutex::new(Vec::new()),
             next_surface: AtomicU64::new(1),
             exiting: AtomicBool::new(false),

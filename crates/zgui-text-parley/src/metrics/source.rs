@@ -68,6 +68,44 @@ impl FontSystem {
             .clear();
     }
 
+    /// The face a query resolves to, and its metrics at one size.
+    ///
+    /// [`face_metrics`](FontMetricsSource::face_metrics) reports the same measurements without
+    /// naming the face. This names it, which is what lets a caller that shapes its own text agree
+    /// with the shaper about which face the text is set in: the handle returned here is the one the
+    /// first run of that text carries.
+    ///
+    /// `None` when the query matches no face at all.
+    pub fn resolved_metrics(
+        &self,
+        query: &FaceQuery<'_>,
+        size: CssPx,
+    ) -> Option<(zgui_text::FaceId, FaceMetrics)> {
+        let key = MemoKey::of(query, size, false);
+        if let Some(answer) = self
+            .memo
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_resolved(key)
+        {
+            return answer;
+        }
+        let families = crate::font::resolve::families(query);
+        let attributes = crate::font::resolve::attributes(query);
+        let variations = query.variations.to_vec();
+        let answer = self.locked(|shared| {
+            let id = crate::font::query::first_match(shared, &families, attributes, None)?;
+            let entry = shared.faces.get(id)?;
+            let metrics = face_metrics(entry.blob.data(), entry.index, size, &variations, false)?;
+            Some((id, metrics))
+        });
+        self.memo
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert_resolved(key, answer);
+        answer
+    }
+
     /// Resolves the face and reads its metrics, taking the collection's lock exactly once.
     ///
     /// A query that matches no face at all reports the default metrics — every optional field

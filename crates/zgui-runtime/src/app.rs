@@ -385,6 +385,8 @@ pub struct Runtime {
     primary: WindowToken,
     /// What the application has asked its own runtime to do.
     commands: WindowCommands,
+    /// The desktop's clipboards, as the application asks for them.
+    clipboards: crate::clipboard::Clipboards,
     /// The windows as the application holds them.
     windows_api: crate::windows::Windows,
     /// The scope above every window's, where what is shared between them lives.
@@ -440,6 +442,7 @@ impl Runtime {
     /// Builds the handler for `app`.
     fn new(mut app: App, view: ViewFactory) -> Self {
         let commands = WindowCommands::new();
+        let clipboards = crate::clipboard::Clipboards::new();
         // The scope above every window: what is provided here is visible in all of them, and what a
         // window provides stays its own. It is created before any window so that each window's own
         // scope can be mounted under it.
@@ -450,6 +453,8 @@ impl Runtime {
             zgui_reactive::provide_local_context(commands.clone());
             // How every window reaches the others, and how any of them opens one.
             zgui_reactive::provide_local_context(windows_api.clone());
+            // The desktop's clipboards, reachable from every window.
+            zgui_reactive::provide_local_context(clipboards.clone());
             // Work spawned above the windows dies with the application rather than never.
             zgui_reactive::provide_task_set();
             // The application's own state, provided where every window can resolve it.
@@ -480,6 +485,7 @@ impl Runtime {
             live,
             primary,
             commands,
+            clipboards,
             windows_api,
             scope,
             exit: app.exit,
@@ -864,6 +870,7 @@ impl AppHandler for Runtime {
         zgui_reactive::set_frame_waker(Arc::clone(&waker) as Arc<dyn zgui_reactive::FrameWaker>);
         self.waker = Some(waker);
         self.commands.set_platform(cx.waker());
+        self.clipboards.set_platform(cx.waker());
         *self.windows_api.capabilities_slot().borrow_mut() = cx.capabilities().clone();
 
         // Every window the application wants and has no surface for. At launch that is the window
@@ -974,6 +981,12 @@ impl AppHandler for Runtime {
         if !self.commands.is_empty() {
             self.drain_window_commands(cx);
         }
+        // The editor's own copies were put on the clipboard while the frame ran, so what the
+        // application asked for lands after them: a component that copies and pastes in one batch
+        // pastes what it just copied.
+        if !self.clipboards.is_empty() {
+            self.clipboards.drain(cx);
+        }
     }
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
@@ -1026,12 +1039,20 @@ impl AppHandler for Runtime {
                     }
                 }
             }
+            // A read the application started has been answered. The callback runs before the
+            // drain below, so a read that asks for another read is carried out on this same turn.
+            WakeReason::ClipboardRead { serial, result } => {
+                self.clipboards.resolve(serial, result);
+            }
             _ => {}
         }
         // Every wake is a turn of the loop with a platform context in hand, which is what carrying
         // out a queued window needs. A wake that queued nothing drains nothing.
         if !self.commands.is_empty() {
             self.drain_window_commands(cx);
+        }
+        if !self.clipboards.is_empty() {
+            self.clipboards.drain(cx);
         }
     }
 

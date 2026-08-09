@@ -50,6 +50,14 @@ pub mod ratio {
     pub const ASCENT: f32 = 0.8;
     /// Distance from the baseline to the bottom of the content area.
     pub const DESCENT: f32 = 0.2;
+    /// Extra leading between one line and the next.
+    pub const LINE_GAP: f32 = 0.0;
+    /// How far the underline sits below the baseline, measured upwards.
+    pub const UNDERLINE_OFFSET: f32 = -0.1;
+    /// Thickness of the underline and of the strikeout.
+    pub const DECORATION_THICKNESS: f32 = 0.07;
+    /// How far the strikeout sits above the baseline.
+    pub const STRIKEOUT_OFFSET: f32 = 0.25;
 }
 
 /// How far a first-level script is scaled down.
@@ -79,6 +87,12 @@ impl FixedMetrics {
             cap_height: Some(CssPx(size.0 * ratio::CAP_HEIGHT)),
             ic_width: Some(CssPx(size.0 * ratio::IC_WIDTH)),
             ascent: CssPx(size.0 * ratio::ASCENT),
+            descent: CssPx(size.0 * ratio::DESCENT),
+            line_gap: CssPx(size.0 * ratio::LINE_GAP),
+            underline_offset: Some(CssPx(size.0 * ratio::UNDERLINE_OFFSET)),
+            underline_thickness: Some(CssPx(size.0 * ratio::DECORATION_THICKNESS)),
+            strikeout_offset: Some(CssPx(size.0 * ratio::STRIKEOUT_OFFSET)),
+            strikeout_thickness: Some(CssPx(size.0 * ratio::DECORATION_THICKNESS)),
             script_percent: Some(SCRIPT_PERCENT),
             script_script_percent: Some(SCRIPT_SCRIPT_PERCENT),
         }
@@ -86,10 +100,9 @@ impl FixedMetrics {
 
     /// The descent reported at one size.
     ///
-    /// Not part of the metrics the cascade reads — no CSS unit resolves against a descent — but a
-    /// line box needs it, and it comes from the same fixed face.
+    /// Reads the same field [`at`](Self::at) fills, so the two can never disagree.
     pub fn descent_at(size: CssPx) -> CssPx {
-        CssPx(size.0 * ratio::DESCENT)
+        Self::at(size).descent
     }
 }
 

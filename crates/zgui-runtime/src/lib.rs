@@ -67,6 +67,7 @@ pub mod app;
 pub mod binding;
 pub mod budget;
 pub mod caret;
+pub mod clipboard;
 pub mod commands;
 pub mod dispatch;
 pub mod editing;
@@ -91,6 +92,7 @@ pub use crate::app::{
 };
 pub use crate::binding::{HostBinding, NoBinding};
 pub use crate::budget::{BudgetReport, Budgeted, CacheId, CacheReport};
+pub use crate::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 pub use crate::commands::{
     CloseCallbacks, CloseResponse, WindowCommands, WindowSpec, WindowStatus, WindowToken,
 };

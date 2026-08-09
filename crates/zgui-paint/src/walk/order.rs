@@ -69,6 +69,8 @@ pub struct Emission<'a> {
     pub text_fill: Option<&'a crate::lower::background::GradientSpec>,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
+    /// Where a run a custom element shaped itself gets its tiles.
+    pub glyph_placements: &'a dyn crate::emit::text::GlyphPlacementSource,
     /// Where the caret and the selection bands drawn with a line come from.
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
@@ -265,6 +267,10 @@ fn content_tracked(
                 scale: emission.scale,
                 shape_paint: style.shape,
                 vector_masks: emission.vector_masks,
+                glyph_placements: emission.glyph_placements,
+                // The same question the text stage asks of this fragment: per-channel coverage
+                // survives an opaque destination under no transform, and nothing else.
+                text_subpixel: emission.text_placement.keeps_subpixel(),
                 vector_id: VectorId(fragment.key.index()),
                 shapes_pushed: 0,
                 vector_routes: vector::VectorRoutes::NONE,

@@ -37,7 +37,7 @@ use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, Vector
 use crate::emit::group::{self, Isolation};
 use crate::emit::highlight::{HighlightSource, NoHighlights};
 use crate::emit::scrollbar::ScrollbarPaint;
-use crate::emit::text::{GlyphSource, TextPlacement};
+use crate::emit::text::{GlyphPlacementSource, GlyphSource, TextPlacement};
 use crate::emit::{BoxPlacement, NoGlyphs};
 use zgui_dom::NodeKey;
 use zgui_dom::side::AnimOverride;
@@ -60,6 +60,8 @@ pub struct PaintInput<'a> {
     pub damage: &'a DamageSet,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
+    /// Where a run a custom element shaped itself gets its tiles.
+    pub glyph_placements: &'a dyn GlyphPlacementSource,
     /// Where the caret and the selection bands drawn with a line come from.
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
@@ -128,6 +130,7 @@ impl<'a> PaintInput<'a> {
             store,
             damage,
             glyphs: &NoGlyphs,
+            glyph_placements: &crate::emit::text::NoGlyphPlacements,
             highlights: &NoHighlights,
             replaced: &NoReplaced,
             vectors: &NoVectors,
@@ -447,6 +450,7 @@ impl Pass<'_, '_> {
             decorations,
             text_fill,
             glyphs: self.input.glyphs,
+            glyph_placements: self.input.glyph_placements,
             highlights: self.input.highlights,
             replaced: self.input.replaced,
             vectors: self.input.vectors,

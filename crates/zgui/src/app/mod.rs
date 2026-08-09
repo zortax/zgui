@@ -9,6 +9,16 @@ use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 pub use crate::app::fonts::Fonts;
 
+/// Shaping text outside the paragraph pipeline: the shaper [`Fonts::shaper`] answers with, what one
+/// line is asked for in, and what the resolved face measures.
+///
+/// An element that positions its own glyphs — text in cells, one line at a time — shapes through
+/// these and draws the result with
+/// [`ScenePainter::glyphs`](zgui_custom::ScenePainter::glyphs). The shaped runs are owned
+/// ([`ShapedRunOwned`](zgui_text::ShapedRunOwned)), so they are held across frames rather than
+/// rebuilt for each one.
+pub use zgui_text_parley::{LineRequest, ResolvedLineMetrics, Shaper};
+
 /// A platform backend's entry point: it takes the application and drives it until it stops.
 ///
 /// A windowing backend blocks until the last window closes; one over buffers may return at once,
@@ -90,6 +100,11 @@ pub struct App {
     fonts: std::cell::OnceCell<Fonts>,
     /// What draws its windows, when it is not this machine's own graphics device.
     renderer: Option<zgui_runtime::RendererFactory>,
+    /// The application's own context setup, held until the faces are known.
+    ///
+    /// Held here rather than passed straight down because the faces are provided in the same scope
+    /// and are decided last. The two are composed in [`App::into_handler`], faces first.
+    context: Option<Box<dyn FnOnce()>>,
 }
 
 impl Default for App {
@@ -113,6 +128,7 @@ impl App {
             inner: zgui_runtime::App::new(),
             fonts: std::cell::OnceCell::new(),
             renderer: None,
+            context: None,
         }
     }
 
@@ -233,6 +249,9 @@ impl App {
     /// provided inside a window's view is that window's own and no other window resolves it; one
     /// provided here is resolved by every window there will ever be.
     ///
+    /// The application's faces are provided in this same scope, before `setup` runs, so `setup`
+    /// resolves [`Fonts`] with [`use_context`](zgui_reactive::use_context) like any component does.
+    ///
     /// ```no_run
     /// use zgui::prelude::*;
     ///
@@ -246,7 +265,7 @@ impl App {
     /// # }
     /// ```
     pub fn with_context(mut self, setup: impl FnOnce() + 'static) -> Self {
-        self.inner = self.inner.with_context(setup);
+        self.context = Some(Box::new(setup));
         self
     }
 
@@ -380,8 +399,19 @@ impl App {
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
         let renderer = self.renderer.unwrap_or_else(graphics::factory);
+        // The faces are provided above every window, so a component that shapes its own text
+        // reaches the same collection the frame does. The application's own setup runs after, and
+        // therefore resolves them like any other context.
+        let context_fonts = fonts.clone();
+        let setup = self.context;
         let runtime = self
             .inner
+            .with_context(move || {
+                zgui_reactive::provide_context(context_fonts);
+                if let Some(setup) = setup {
+                    setup();
+                }
+            })
             .with_renderer(renderer)
             .with_metrics(Box::new({
                 let fonts = fonts.clone();

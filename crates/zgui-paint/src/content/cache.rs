@@ -18,7 +18,9 @@ use crate::content::glyphs::{GlyphCache, Rasterising};
 use crate::content::images::{Content, ImageError};
 use crate::content::vectors::{VectorMaskCache, VectorMaskRequest, VectorMaskSource};
 use crate::emit::replaced::Source;
-use crate::emit::text::{GlyphRequest, GlyphRun, GlyphSource, PlacedGlyph, RunContent};
+use crate::emit::text::{
+    GlyphPlacementSource, GlyphRequest, GlyphRun, GlyphSource, PlacedGlyph, RunContent,
+};
 use crate::walk::order::ReplacedSource;
 use crate::walk::replay::hold::ResourceOwner;
 
@@ -344,6 +346,29 @@ pub struct FrameContent<'a> {
     /// The atlas, the glyph cache and their sink, behind a cell because emitting is an immutable
     /// walk.
     writing: RefCell<Rasterising<'a>>,
+}
+
+impl GlyphPlacementSource for FrameContent<'_> {
+    /// Places a caller's own run through the same cache, atlas and split the paragraph path uses.
+    ///
+    /// Every tile handed out is named to the frame, so a fragment that replays keeps the tiles its
+    /// recorded primitives draw from.
+    fn place_run(
+        &self,
+        run: &zgui_text::ShapedRun<'_>,
+        style: zgui_text::RasterStyle,
+        origin: zgui_geom::Point<zgui_geom::DevicePx, Device>,
+        out: &mut Vec<PlacedGlyph>,
+    ) {
+        crate::content::glyphs::place(
+            &mut self.writing.borrow_mut(),
+            self.raster,
+            run,
+            style,
+            origin,
+            out,
+        );
+    }
 }
 
 impl GlyphSource for FrameContent<'_> {

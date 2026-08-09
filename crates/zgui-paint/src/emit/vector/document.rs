@@ -96,6 +96,13 @@ pub(crate) fn emit_tracked(
     }
 }
 
+/// The longest edge, in device pixels, a shape may have and still take the atlas-mask path.
+///
+/// A mask holds one byte per texel, so the largest one is 64 KiB and several fit one default atlas
+/// texture. A larger shape takes the general vector path, which draws it correctly at any size. The
+/// atlas refuses anything past the device's own limit, which turns into the same fallback.
+const MAX_MASK_SIZE: i32 = 256;
+
 /// Emits a small solid translation-only shape as an atlas mask, or declines the fast path.
 fn emit_mask(
     scene: &mut Scene,
@@ -171,7 +178,7 @@ fn emit_mask(
     }
     let width = (right - left) as i32;
     let height = (bottom - top) as i32;
-    if width <= 0 || height <= 0 || width > 96 || height > 96 {
+    if width <= 0 || height <= 0 || width > MAX_MASK_SIZE || height > MAX_MASK_SIZE {
         return None;
     }
     let bounds = Rect::new(

@@ -87,7 +87,7 @@ pub use crate::geometry::{LineGeometry, StrutMetrics, TextGeometry};
 pub use crate::glyph::{
     ATLAS_MAX_SIZE, AtlasGlyph, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline, GlyphRaster,
     NoRaster, OutlineKey, PenPosition, RasterPath, RasterStyle, RunProfile, RunSurface,
-    SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun, SubpixelOffset,
+    SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun, ShapedRunOwned, SubpixelOffset,
 };
 pub use crate::map::{Segment, SourcePos, TextMap};
 pub use crate::metrics::{FaceMetrics, FaceQuery, FixedMetrics, FontMetricsSource};

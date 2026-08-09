@@ -27,6 +27,32 @@ pub struct FaceMetrics {
     ///
     /// Not optional: every face has one, and a line box cannot be built without it.
     pub ascent: CssPx,
+    /// Distance from the baseline down to the bottom of the face's content area, positive
+    /// downwards.
+    ///
+    /// Required for the reason the ascent is: the two together are the height of the face's own
+    /// content area, which is what a line box is built from.
+    ///
+    /// This is read from the face's tables.
+    /// [`StrutMetrics::font_descent`](crate::geometry::StrutMetrics) answers the same question by
+    /// measuring shaped text, so the two may differ by what the shaper resolved the stack to.
+    pub descent: CssPx,
+    /// The extra leading the face recommends between one line and the next.
+    ///
+    /// A face that declares none reports zero, which is the value that adds nothing.
+    pub line_gap: CssPx,
+    /// Offset from the baseline to the underline, when the face declares one.
+    ///
+    /// Positive is above the baseline, so an underline is normally negative.
+    pub underline_offset: Option<CssPx>,
+    /// Thickness of the underline, when the face declares one.
+    pub underline_thickness: Option<CssPx>,
+    /// Offset from the baseline to the strikeout, when the face declares one.
+    ///
+    /// Positive is above the baseline, so a strikeout is normally positive.
+    pub strikeout_offset: Option<CssPx>,
+    /// Thickness of the strikeout, when the face declares one.
+    pub strikeout_thickness: Option<CssPx>,
     /// How far a first-level superscript or subscript is scaled down, as a fraction.
     pub script_percent: Option<f32>,
     /// How far a second-level script is scaled down, as a fraction.
@@ -65,6 +91,31 @@ impl FaceMetrics {
     pub fn ic_width_or_fallback(&self, size: CssPx) -> CssPx {
         self.ic_width.unwrap_or(size)
     }
+
+    /// The underline thickness, falling back to a fraction of the font size.
+    pub fn underline_thickness_or_fallback(&self, size: CssPx) -> CssPx {
+        self.underline_thickness
+            .unwrap_or(CssPx(size.0 * DECORATION_THICKNESS_FALLBACK))
+    }
+
+    /// The underline offset, falling back to a fraction of the font size below the baseline.
+    pub fn underline_offset_or_fallback(&self, size: CssPx) -> CssPx {
+        self.underline_offset
+            .unwrap_or(CssPx(size.0 * UNDERLINE_OFFSET_FALLBACK))
+    }
+
+    /// The strikeout thickness, which falls back to the underline's.
+    pub fn strikeout_thickness_or_fallback(&self, size: CssPx) -> CssPx {
+        self.strikeout_thickness
+            .unwrap_or(CssPx(size.0 * DECORATION_THICKNESS_FALLBACK))
+    }
+
+    /// The strikeout offset, falling back to half the x-height, which centres the bar on lowercase
+    /// letters.
+    pub fn strikeout_offset_or_fallback(&self, size: CssPx) -> CssPx {
+        self.strikeout_offset
+            .unwrap_or(CssPx(self.x_height_or_fallback(size).0 / 2.0))
+    }
 }
 
 /// The fraction of the font size `ex` resolves to when the face declares no x-height.
@@ -73,6 +124,14 @@ pub const X_HEIGHT_FALLBACK: f32 = 0.5;
 /// The fraction of the font size `ch` resolves to when the face has no digit zero and its glyphs
 /// are not set upright.
 pub const ZERO_ADVANCE_FALLBACK: f32 = 0.5;
+
+/// The fraction of the font size an underline or a strikeout is thick when the face declares no
+/// thickness.
+pub const DECORATION_THICKNESS_FALLBACK: f32 = 1.0 / 14.0;
+
+/// The fraction of the font size an underline sits below the baseline when the face declares no
+/// offset. Negative, because the offset is measured upwards.
+pub const UNDERLINE_OFFSET_FALLBACK: f32 = -1.0 / 9.0;
 
 #[cfg(test)]
 mod tests {
@@ -122,6 +181,39 @@ mod tests {
         let metrics = bare(CssPx(18.0));
         assert_eq!(metrics.cap_height_or_fallback(), CssPx(18.0));
         assert_ne!(metrics.cap_height_or_fallback(), CssPx(20.0 * 0.8));
+    }
+
+    #[test]
+    fn an_undeclared_decoration_falls_back_to_a_fraction_of_the_size() {
+        let size = CssPx(28.0);
+        let bare = bare(CssPx(18.0));
+        assert_eq!(
+            bare.underline_thickness_or_fallback(size),
+            CssPx(28.0 / 14.0)
+        );
+        assert_eq!(
+            bare.strikeout_thickness_or_fallback(size),
+            CssPx(28.0 / 14.0)
+        );
+        assert_eq!(bare.underline_offset_or_fallback(size), CssPx(-28.0 / 9.0));
+        // Half the x-height, which is itself a fallback here.
+        assert_eq!(bare.strikeout_offset_or_fallback(size), CssPx(7.0));
+    }
+
+    #[test]
+    fn a_declared_decoration_is_used_as_declared() {
+        let size = CssPx(28.0);
+        let declared = FaceMetrics {
+            underline_offset: Some(CssPx(-3.0)),
+            underline_thickness: Some(CssPx(1.5)),
+            strikeout_offset: Some(CssPx(8.0)),
+            strikeout_thickness: Some(CssPx(2.0)),
+            ..bare(CssPx(18.0))
+        };
+        assert_eq!(declared.underline_offset_or_fallback(size), CssPx(-3.0));
+        assert_eq!(declared.underline_thickness_or_fallback(size), CssPx(1.5));
+        assert_eq!(declared.strikeout_offset_or_fallback(size), CssPx(8.0));
+        assert_eq!(declared.strikeout_thickness_or_fallback(size), CssPx(2.0));
     }
 
     #[test]

@@ -149,6 +149,46 @@ impl GlyphSource for NoGlyphs {
     }
 }
 
+/// Where a run the caller shaped itself gets its rasterised tiles.
+///
+/// [`GlyphSource`] answers for the lines a paragraph was broken into, and is asked by paragraph and
+/// line number. This answers for a run its caller shaped — a custom element drawing its own text —
+/// and is asked with the run itself.
+///
+/// The placements are written into the caller's own vector rather than visited, because the source
+/// holds the glyph cache and the atlas while it answers and whoever draws holds the scene. Handing
+/// back an owned answer closes the first borrow before the second is needed.
+pub trait GlyphPlacementSource {
+    /// Places `run`'s glyphs with the line box's top-left corner at `origin`, rasterising and
+    /// uploading whatever is not cached yet.
+    ///
+    /// `origin` is absolute device pixels on the surface, because the phase a glyph is rasterised
+    /// at is a property of where it lands there. A glyph with no pixels — a space — and a glyph the
+    /// atlas has no room for are both left out, so the answer may be shorter than the run.
+    fn place_run(
+        &self,
+        run: &zgui_text::ShapedRun<'_>,
+        style: zgui_text::RasterStyle,
+        origin: Point<DevicePx, Device>,
+        out: &mut Vec<PlacedGlyph>,
+    );
+}
+
+/// A placement source with no atlas behind it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoGlyphPlacements;
+
+impl GlyphPlacementSource for NoGlyphPlacements {
+    fn place_run(
+        &self,
+        _run: &zgui_text::ShapedRun<'_>,
+        _style: zgui_text::RasterStyle,
+        _origin: Point<DevicePx, Device>,
+        _out: &mut Vec<PlacedGlyph>,
+    ) {
+    }
+}
+
 /// Which decoration lines a box draws over the text inside it, and how.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DecorationStyle {

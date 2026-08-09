@@ -50,6 +50,11 @@ impl MemoKey {
 pub(crate) struct MetricsMemo {
     /// The answers.
     entries: FxHashMap<MemoKey, FaceMetrics>,
+    /// The answers that name the face as well as its metrics.
+    ///
+    /// Held apart from `entries` because the two answer different questions under the same key: one
+    /// reports metrics for a query that matched nothing, the other reports that nothing matched.
+    resolved: FxHashMap<MemoKey, Option<(zgui_text::FaceId, FaceMetrics)>>,
 }
 
 impl MetricsMemo {
@@ -63,9 +68,27 @@ impl MetricsMemo {
         self.entries.insert(key, metrics);
     }
 
+    /// The resolved-face answer held for a key.
+    pub(crate) fn get_resolved(
+        &self,
+        key: MemoKey,
+    ) -> Option<Option<(zgui_text::FaceId, FaceMetrics)>> {
+        self.resolved.get(&key).copied()
+    }
+
+    /// Records a resolved-face answer.
+    pub(crate) fn insert_resolved(
+        &mut self,
+        key: MemoKey,
+        answer: Option<(zgui_text::FaceId, FaceMetrics)>,
+    ) {
+        self.resolved.insert(key, answer);
+    }
+
     /// Drops every answer.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.resolved.clear();
     }
 
     /// How many answers are held.

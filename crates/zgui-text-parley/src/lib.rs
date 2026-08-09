@@ -91,7 +91,7 @@ pub use crate::direction::{Controls, LEFT_TO_RIGHT_MARK, RIGHT_TO_LEFT_MARK};
 pub use crate::font::{ColorSupport, script_of};
 pub use crate::metrics::{BASE_SIZE, MONOSPACE_BASE_SIZE};
 pub use crate::raster::Rasteriser;
-pub use crate::shape::{ShapedLayout, Shaper, SlotBrush};
+pub use crate::shape::{LineRequest, ResolvedLineMetrics, ShapedLayout, Shaper, SlotBrush};
 pub use crate::system::{Enumeration, FontSystem, FontSystemOptions};
 
 /// A script, as a fallback list is keyed on it.

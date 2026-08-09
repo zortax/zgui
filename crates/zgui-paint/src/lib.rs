@@ -68,7 +68,8 @@ pub use crate::emit::highlight::{
     Highlight, HighlightLayer, HighlightRequest, HighlightSource, NoHighlights,
 };
 pub use crate::emit::text::{
-    GlyphRequest, GlyphRun, GlyphSource, NoGlyphs, PlacedGlyph, RunContent,
+    GlyphPlacementSource, GlyphRequest, GlyphRun, GlyphSource, NoGlyphPlacements, NoGlyphs,
+    PlacedGlyph, RunContent,
 };
 pub use crate::emit::vector::{VectorRoute, VectorRoutes};
 pub use crate::lower::anim::{AnimOverrides, NoAnim};
@@ -76,3 +77,12 @@ pub use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 pub use crate::lower::key::LoweringKey;
 pub use crate::lower::{PaintStyle, lower};
 pub use crate::walk::{PaintInput, PaintReport, Painter, VectorRouteReport};
+/// The sprite primitives glyphs are drawn as, and the brush slot a run names, from the scene
+/// vocabulary.
+pub use zgui_scene::{ColorSprite, MonoSprite, PaintSlot, SubpixelSprite};
+/// The shaped-text vocabulary the glyph seams speak, from the text layer.
+///
+/// Re-exported because a caller that shapes its own runs and draws them through
+/// [`GlyphPlacementSource`] names these types in both halves, and should not have to reach past
+/// this crate for the spelling.
+pub use zgui_text::{Brush, FaceId, RasterStyle, ShapedGlyph, ShapedRun, ShapedRunOwned};

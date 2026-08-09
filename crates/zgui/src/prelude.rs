@@ -33,6 +33,14 @@ pub use zgui_runtime::windows::{
     try_use_windows, use_window, use_windows,
 };
 
+/// The desktop's clipboards: what to copy onto, and what to read back.
+///
+/// [`ClipboardKind::Standard`] is the one a copy and a paste use.
+/// [`ClipboardKind::Primary`] is the selection Linux desktops paste with the middle button;
+/// everywhere else it does nothing, so copy-on-select needs no branch per platform.
+pub use zgui_platform::ClipboardKind;
+pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
+
 /// What a window can be asked to be, what it answers, and when an application stops.
 ///
 /// The desktop's own light-or-dark preference is deliberately absent: `ColorScheme` is already the

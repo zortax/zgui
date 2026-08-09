@@ -1,4 +1,4 @@
-//! Reading the seven cascade metrics out of one face.
+//! Reading the metrics one face reports out of its tables.
 
 use skrifa::instance::{LocationRef, Size};
 use skrifa::{FontRef, MetadataProvider};
@@ -51,6 +51,14 @@ pub(crate) fn face_metrics(
         cap_height: metrics.cap_height.map(CssPx),
         ic_width: advance(IDEOGRAPH),
         ascent: CssPx(metrics.ascent),
+        // Skrifa measures upwards from the baseline, so a descent arrives negative. Ours is a
+        // distance downwards.
+        descent: CssPx(-metrics.descent),
+        line_gap: CssPx(metrics.leading),
+        underline_offset: metrics.underline.map(|line| CssPx(line.offset)),
+        underline_thickness: metrics.underline.map(|line| CssPx(line.thickness)),
+        strikeout_offset: metrics.strikeout.map(|line| CssPx(line.offset)),
+        strikeout_thickness: metrics.strikeout.map(|line| CssPx(line.thickness)),
         // The two script scale-downs live in the `MATH` table, which is read for mathematical
         // typesetting and is absent from every text face. Reporting them as absent is the honest
         // answer and resolves each dependent unit against its documented fallback.

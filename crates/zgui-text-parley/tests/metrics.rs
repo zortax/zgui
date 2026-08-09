@@ -141,3 +141,110 @@ fn registering_a_face_drops_stale_answers() {
         "the answer must come from the face registered since"
     );
 }
+
+/// A real face reports the metrics a line box and a decoration are placed with.
+///
+/// Every one of these comes from the face's own tables, so the assertions are about shape rather
+/// than about exact values: a descent measured downwards, leading that adds nothing when the face
+/// asks for nothing, and decorations that are declared at all.
+#[test]
+fn a_shipped_face_reports_its_descent_leading_and_decorations() {
+    let fonts = support::fonts();
+    let style = support::style();
+    let metrics = fonts.face_metrics(&FaceQuery::of(&style), CssPx(16.0), false);
+
+    assert!(
+        metrics.descent > CssPx(0.0),
+        "the descent is a distance downwards, and this face has one"
+    );
+    assert!(metrics.ascent > CssPx(0.0));
+    assert!(
+        metrics.line_gap >= CssPx(0.0),
+        "leading is never negative, and reads as zero when the face declares none"
+    );
+
+    let underline = metrics
+        .underline_thickness
+        .expect("the shipped face declares an underline");
+    assert!(underline > CssPx(0.0));
+    assert!(
+        metrics
+            .underline_offset
+            .expect("declared beside the thickness")
+            < CssPx(0.0),
+        "an underline sits below the baseline, and the offset is measured upwards"
+    );
+    let strikeout = metrics
+        .strikeout_thickness
+        .expect("the shipped face declares a strikeout");
+    assert!(strikeout > CssPx(0.0));
+    assert!(metrics.strikeout_offset.expect("declared") > CssPx(0.0));
+}
+
+/// The metrics scale with the size they were asked at.
+#[test]
+fn the_new_metrics_scale_with_the_size() {
+    let fonts = support::fonts();
+    let style = support::style();
+    let query = FaceQuery::of(&style);
+    let small = fonts.face_metrics(&query, CssPx(16.0), false);
+    let large = fonts.face_metrics(&query, CssPx(32.0), false);
+
+    let ratio = large.descent.0 / small.descent.0;
+    assert!(
+        (ratio - 2.0).abs() < 1.0e-3,
+        "twice the size, twice the descent"
+    );
+    assert!(large.underline_thickness.unwrap() > small.underline_thickness.unwrap());
+}
+
+/// The resolved query names the face, and names the same one every time it is asked.
+#[test]
+fn the_resolved_query_names_a_face_and_remembers_it() {
+    let fonts = support::fonts();
+    let style = support::style();
+    let query = FaceQuery::of(&style);
+
+    let (face, metrics) = fonts
+        .resolved_metrics(&query, CssPx(16.0))
+        .expect("the shipped faces match");
+    assert_eq!(
+        metrics,
+        fonts.face_metrics(&query, CssPx(16.0), false),
+        "the same measurements the metrics seam reports"
+    );
+
+    let before = fonts.lock_acquisitions();
+    for _ in 0..1_000 {
+        let (again, _) = fonts.resolved_metrics(&query, CssPx(16.0)).expect("held");
+        assert_eq!(again, face, "the same face every time");
+    }
+    assert_eq!(
+        fonts.lock_acquisitions(),
+        before,
+        "a remembered answer reaches the collection no more"
+    );
+}
+
+/// A family arriving invalidates the resolved answers with everything else.
+#[test]
+fn registering_a_family_forgets_the_resolved_answers() {
+    let fonts = support::fonts();
+    let style = support::style();
+    let query = FaceQuery::of(&style);
+    fonts
+        .resolved_metrics(&query, CssPx(16.0))
+        .expect("the shipped faces match");
+
+    let before = fonts.lock_acquisitions();
+    fonts
+        .register(support::face("NotoSansArabic-Regular.ttf"), None)
+        .expect("registering again");
+    fonts
+        .resolved_metrics(&query, CssPx(16.0))
+        .expect("still matches");
+    assert!(
+        fonts.lock_acquisitions() > before,
+        "the answer was read again rather than remembered across the change"
+    );
+}

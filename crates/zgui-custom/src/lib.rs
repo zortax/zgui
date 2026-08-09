@@ -69,6 +69,9 @@ pub use zgui_layout::custom::{
     ChildMeasure, CustomLayoutCx, CustomLayoutSource, CustomMeasured, LayoutAccess, Space,
 };
 pub use zgui_paint::content::custom::{CustomPaintSource, ScenePainter};
+/// What [`ScenePainter::glyphs`] is handed: one style-uniform run of positioned glyphs, the owned
+/// form a caller holds across frames, and the two handles they are described by.
+pub use zgui_paint::{Brush, FaceId, PaintSlot, ShapedGlyph, ShapedRun, ShapedRunOwned};
 
 /// A retained element the application implements rather than composes.
 ///

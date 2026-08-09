@@ -18,7 +18,7 @@ fn a_thousand_calls_from_eight_threads_agree() {
     let source = Arc::new(FixedMetrics::new());
     let mut answers = BTreeSet::new();
 
-    let collected: Vec<Vec<[u32; 7]>> = thread::scope(|scope| {
+    let collected: Vec<Vec<[u32; 13]>> = thread::scope(|scope| {
         let handles: Vec<_> = (0..8)
             .map(|_| {
                 let source = Arc::clone(&source);
@@ -110,8 +110,8 @@ fn a_query_carries_the_face_selecting_properties() {
     assert!(std::ptr::eq(query.family, &style.family));
 }
 
-/// The seven fields as bits, so that two answers can be compared exactly.
-fn bits(metrics: &zgui_text::FaceMetrics) -> [u32; 7] {
+/// Every field as bits, so that two answers can be compared exactly.
+fn bits(metrics: &zgui_text::FaceMetrics) -> [u32; 13] {
     let optional = |value: Option<CssPx>| value.map_or(u32::MAX, |length| length.0.to_bits());
     [
         optional(metrics.x_height),
@@ -119,6 +119,12 @@ fn bits(metrics: &zgui_text::FaceMetrics) -> [u32; 7] {
         optional(metrics.cap_height),
         optional(metrics.ic_width),
         metrics.ascent.0.to_bits(),
+        metrics.descent.0.to_bits(),
+        metrics.line_gap.0.to_bits(),
+        optional(metrics.underline_offset),
+        optional(metrics.underline_thickness),
+        optional(metrics.strikeout_offset),
+        optional(metrics.strikeout_thickness),
         metrics.script_percent.map_or(u32::MAX, f32::to_bits),
         metrics.script_script_percent.map_or(u32::MAX, f32::to_bits),
     ]

@@ -8,6 +8,7 @@ pub(crate) mod build;
 pub(crate) mod clusters;
 pub mod engine;
 pub(crate) mod glyphs;
+pub mod line;
 pub(crate) mod lines;
 pub mod shaper;
 pub(crate) mod strut;
@@ -15,4 +16,5 @@ pub(crate) mod style;
 
 pub use crate::shape::brush::SlotBrush;
 pub use crate::shape::engine::ShapedLayout;
+pub use crate::shape::line::{LineRequest, ResolvedLineMetrics};
 pub use crate::shape::shaper::Shaper;

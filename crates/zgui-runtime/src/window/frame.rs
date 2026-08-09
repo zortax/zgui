@@ -1133,6 +1133,7 @@ impl Window {
                 scale: self.scale,
                 capabilities,
                 glyphs: &content,
+                glyph_placements: &content,
                 placements: Some(&placements),
                 highlights: self.carets.plan(),
                 replaced: &content,
