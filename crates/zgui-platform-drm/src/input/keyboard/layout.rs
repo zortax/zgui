@@ -18,14 +18,15 @@
 //!
 //! * **Characters the keymap holds and the console cannot report.** Outside `K_UNICODE` the kernel
 //!   substitutes a hole for every entry above its eight-bit types, so a German keymap read in
-//!   `K_XLATE` keeps its umlauts, which are Latin-1, and loses its euro sign.
+//!   `K_XLATE` — the ordinary mode — keeps its umlauts, which are Latin-1, and loses its euro
+//!   sign. Which mode a console is in reaches the line this reports at start-up.
 //! * **No name for a key that types nothing.** Escape, enter, the arrows and the function keys are
 //!   actions the console driver takes on itself rather than names, so each is named from the
 //!   position it sits at instead. The position table is exact, so the name is right for a standard
 //!   keyboard whatever the layout.
 //! * **No caps lock and no command modifier.** The kernel builds a map index out of eight modifier
 //!   bits. Caps lock sits outside them, as one more of the driver's own actions, and there is no
-//!   super key among the eight either, so a shortcut that names meta can never match.
+//!   super key among the eight either, so a shortcut that names meta can never match here.
 //!
 //! # The order of a reading and an update
 //!
@@ -491,27 +492,36 @@ impl Console {
             })
     }
 
-    /// Returns the bit this key holds down, when the keymap says it holds one.
+    /// Returns the modifier this key holds down, when the keymap says it holds one.
     ///
     /// Read from the unmodified map, because a modifier key is a modifier in every map a keymap
     /// defines and the unmodified one is the map every keymap has.
+    ///
+    /// The entry carries a bit *number* and a map index is a bit *mask*, so the two cross through
+    /// `Modifiers::from_bit`. It answers nothing for `KG_CAPSSHIFT`, whose mask is 256 and whose
+    /// map no `KDGKBENT` can ask for — a keymap that binds a key to it therefore has a key this
+    /// layout leaves alone.
     fn modifier(&self, key: Key) -> Option<zgui_evdev::console::Modifiers> {
         match self
             .console
             .entry(key, zgui_evdev::console::Modifiers::NONE)
         {
-            Ok(zgui_evdev::Entry::Modifier(bit)) => Some(
-                zgui_evdev::console::Modifiers::from_index(1_u8.checked_shl(u32::from(bit))?),
-            ),
+            Ok(Some(zgui_evdev::Entry::Modifier(bit))) => {
+                zgui_evdev::console::Modifiers::from_bit(bit)
+            }
             _ => None,
         }
     }
 
     /// What this key produces under `held`, when it produces text at all.
+    ///
+    /// A key code above 255 answers nothing, which is an ordinary answer rather than a failure: a
+    /// console keymap holds 256 entries and every code past them is outside the table.
     fn character(&self, key: Key, held: zgui_evdev::console::Modifiers) -> Option<char> {
         self.console
             .entry(key, held)
             .ok()
+            .flatten()
             .and_then(zgui_evdev::Entry::character)
             .filter(|character| is_typed(&character.to_string()))
     }
