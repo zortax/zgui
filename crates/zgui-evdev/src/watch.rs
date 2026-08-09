@@ -1,7 +1,7 @@
 //! Hearing about the devices that arrive while a program runs.
 //!
-//! [`discover`](crate::discover) reads `/dev/input` once. A keyboard plugged in afterwards puts a
-//! new node in that directory and nothing says so, so this watches the same directory and reports
+//! [`discover`](mod@crate::discover) reads `/dev/input` once. A keyboard plugged in afterwards puts
+//! a new node in that directory and nothing says so, so this watches the same directory and reports
 //! the event nodes that may now be openable. The watch sits beside the walk because it asks the
 //! same question a second way, and both apply the same rule about what an event node is called.
 //!

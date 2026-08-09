@@ -4,7 +4,7 @@
 //! displays, gives each one two buffers and a mode, and then turns: read the device, hand the
 //! frames that were asked for to the application, ask it how to wait, and wait.
 //!
-//! # The five ways a turn happens
+//! # The six ways a turn happens
 //!
 //! The list is exhaustive on purpose. A missing entry is an application that quietly stops
 //! answering one whole class of event.
@@ -19,11 +19,15 @@
 //!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
 //!    surface and a pointer event goes to the display the pointer is on — the display that decides
 //!    the focused surface.
-//! 4. **A surface asked to be drawn.** A request on a console is a flag on the surface and moves no
+//! 4. **Somebody plugged a device in.** The seat's watch on the device directory is one more
+//!    descriptor in the same set, and a node made there ends the wait. The device is opened,
+//!    grabbed and read from the next turn on. Nothing is dispatched for the arrival itself, beyond
+//!    a change in the held set where the device already had a modifier under a finger.
+//! 5. **A surface asked to be drawn.** A request on a console is a flag on the surface and moves no
 //!    descriptor, so the loop reads the flags — before it parks as well as after it wakes.
-//! 5. **A deadline arrived.** The wait ran to its end, and the moment is reported through
+//! 6. **A deadline arrived.** The wait ran to its end, and the moment is reported through
 //!    [`AppHandler::deadline_reached`]. It draws nothing by itself. What draws is the request the
-//!    application makes while it is being told, and entry 4 picks that up.
+//!    application makes while it is being told, and entry 5 picks that up.
 //!
 //! # What holds the device
 //!
@@ -409,8 +413,9 @@ fn release_cursor(cursor: Rc<RefCell<Cursor>>, device: &Device) {
 /// mean the same thing to the loop: the wait ended before its moment.
 ///
 /// The watch set is built once per wait, because it is not fixed. Every device the seat took is one
-/// more descriptor, and a device that stopped answering is dropped from the seat and leaves the set
-/// with it. A set that kept a closed descriptor would fail every later wait.
+/// more descriptor, a device plugged in adds one, and a device that stopped answering is dropped
+/// from the seat and leaves the set with it. A set that kept a closed descriptor would fail every
+/// later wait.
 ///
 /// # Errors
 ///
