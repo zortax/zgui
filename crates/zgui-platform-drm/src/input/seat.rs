@@ -761,6 +761,7 @@ impl Seat {
                                 points,
                                 &held,
                                 keys.modifiers(),
+                                taken.stamps,
                                 pointer,
                                 screens,
                             ));
@@ -792,6 +793,7 @@ impl Seat {
                     points,
                     &BTreeSet::new(),
                     keys.modifiers(),
+                    gone.stamps,
                     pointer,
                     screens,
                 ));
@@ -889,11 +891,21 @@ fn pointed(
 /// queue overflow.
 ///
 /// [`PointerAction::Cancelled`] rather than a release, because nobody let go. A control told about
-/// a release fires; a control told about a cancel gives up, which is what actually happened.
+/// a release fires; a control told about a cancel gives up, and giving up is what happened.
+///
+/// # A button this seat has not seen
+///
+/// Such a button is left alone, even where the kernel reports it held. [`Keys::resynchronise`] does
+/// the opposite for a key: one the kernel says is held and the seat has not seen is recorded down.
+/// The two are different on purpose. A key recorded down is fed to the layout and changes what the
+/// next key means, so a modifier missed after an overflow comes out in every letter afterwards. A
+/// button has no such state — nothing above was told it went down, and recording it here would
+/// deliver a release that no control has a press for.
 fn cancelled(
     points: &mut Pointing,
     held: &BTreeSet<u16>,
     modifiers: Modifiers,
+    stamps: Stamps,
     pointer: &Pointer,
     screens: &[Screen],
 ) -> Vec<Report> {
@@ -912,9 +924,13 @@ fn cancelled(
                     action: PointerAction::Cancelled,
                     event: pointer::event(at, Some(button)),
                     modifiers,
-                    // The moment this was noticed. What the kernel would have stamped the release
-                    // with is in a queue nothing will ever read.
-                    timestamp: Timestamp::ORIGIN,
+                    // Now, read through this device's own anchor. What the kernel would have
+                    // stamped the release with is in a queue nothing will ever read, and the
+                    // application's origin is not a substitute: it is hours before the press that
+                    // opened the interaction, so anything measuring an interval across the two —
+                    // a double-click window, a drag velocity, a gesture timeout — reads a negative
+                    // one.
+                    timestamp: stamps.at(monotonic()),
                 },
             )
         })
@@ -1011,7 +1027,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Stamps, Transition,
+        Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Span, Stamps, Transition,
         cancelled, focused, pointed, types_on,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
@@ -1642,19 +1658,67 @@ mod tests {
         assert_eq!(event.key.inserted_text(), None);
     }
 
+    /// A clock that says the application started `ago` in the past.
+    ///
+    /// This exists so the anchor's subtraction is a term worth subtracting. `SystemClock::new()`
+    /// takes its origin as it is built, so a test that builds one and anchors against it in the
+    /// next line subtracts about nothing — and cannot tell [`Stamps::anchored`]'s arithmetic from
+    /// `origin: monotonic()`, or from the same expression with its sign the other way round.
+    ///
+    /// In the frame loop that term is real and it is not small. The clock is built before the
+    /// application is asked for its surfaces, and that is where a program builds its interface and
+    /// opens its graphics device: on a machine that spends most of a second compiling shaders, a
+    /// dropped term stamps every key and every click most of a second out of step with the frames
+    /// they arrived in.
+    struct Aged {
+        /// When this clock says the application started.
+        origin: std::time::Instant,
+    }
+
+    impl Aged {
+        /// A clock whose origin is `ago` in the past.
+        fn started(ago: Duration) -> Self {
+            let now = std::time::Instant::now();
+            Self {
+                // A machine that has been up for less than `ago` has no such moment, and this is
+                // about the arithmetic rather than about the machine.
+                origin: now.checked_sub(ago).unwrap_or(now),
+            }
+        }
+    }
+
+    impl Clock for Aged {
+        fn now(&self) -> std::time::Instant {
+            std::time::Instant::now()
+        }
+
+        fn origin(&self) -> std::time::Instant {
+            self.origin
+        }
+    }
+
     #[test]
     fn the_anchor_puts_the_kernels_clock_and_the_loops_on_one_zero() {
         // The one piece of arithmetic that joins two clocks, and the only thing here that reads a
         // real one. An anchor with its sign inverted, or one taken against the wrong origin, lands
         // decades away rather than microseconds — and every stamp downstream is beside frame stamps
         // measured in seconds, where nothing could tell.
-        let clock = crate::clock::SystemClock::new();
+        //
+        // The clock is aged on purpose. See `Aged`: against a clock built in the line above, the
+        // term being subtracted is about zero and this assertion holds whether it is subtracted,
+        // added or dropped.
+        let clock = Aged::started(Duration::from_secs(5));
         let stamps = Stamps::anchored(&clock);
 
         let now = super::monotonic();
         let mapped = stamps.at(now).since_origin();
         let reads = clock.timestamp().since_origin();
 
+        assert!(
+            reads > Duration::from_secs(4),
+            "the clock says the application has been running for {reads:?}, which is the term the \
+             anchor has to subtract"
+        );
         assert!(
             mapped.abs_diff(reads) < Duration::from_millis(50),
             "the kernel's {now:?} became {mapped:?} where the loop reads {reads:?}"
@@ -2245,6 +2309,7 @@ mod tests {
             &mut points,
             &BTreeSet::new(),
             Modifiers::NONE,
+            Stamps::from_origin(SINCE),
             &pointer,
             &screens,
         );
@@ -2261,11 +2326,59 @@ mod tests {
                 &mut points,
                 &BTreeSet::new(),
                 Modifiers::NONE,
+                Stamps::from_origin(SINCE),
                 &pointer,
                 &screens
             )
             .is_empty(),
             "and it is ended once"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_interaction_is_stamped_when_it_was_noticed() {
+        // The press that opened the interaction is stamped by the kernel, and the cancel has to be
+        // comparable with it. The application's origin is hours earlier, so a control measuring an
+        // interval across the two — a double-click window, a drag velocity, a gesture timeout —
+        // reads a negative one and nothing downstream can tell.
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = mouse();
+        let pressed = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[record(SINCE, EventType::EV_KEY, Key::BTN_LEFT.raw(), 1)],
+        );
+        let opened = pressed[0]
+            .event
+            .timestamp()
+            .expect("a press carries a moment");
+
+        // The anchor the loop would hold, taken against a clock that started five seconds ago.
+        let clock = Aged::started(Duration::from_secs(5));
+        let stamps = Stamps::anchored(&clock);
+        let ended = cancelled(
+            &mut points,
+            &BTreeSet::new(),
+            Modifiers::NONE,
+            stamps,
+            &pointer,
+            &screens,
+        );
+
+        let closed = ended[0]
+            .event
+            .timestamp()
+            .expect("a cancel carries one too");
+        assert!(
+            closed > opened,
+            "the interaction ended at {closed:?}, after the press at {opened:?} that opened it"
+        );
+        assert!(
+            (closed - opened) < Duration::from_secs(60),
+            "and the interval between them is a moment rather than an age: {:?}",
+            closed - opened
         );
     }
 
@@ -2285,11 +2398,107 @@ mod tests {
             &mut points,
             &BTreeSet::from([Key::BTN_LEFT.raw()]),
             Modifiers::NONE,
+            Stamps::from_origin(SINCE),
             &pointer,
             &screens,
         );
 
         assert!(ended.is_empty(), "{ended:?}");
+    }
+
+    #[test]
+    fn an_absolute_device_puts_the_pointer_where_the_finger_is() {
+        // The other half of the pointer, and the half no machine here has. A touchscreen says
+        // where it is rather than how far it moved, so a backend that read only the relative axes
+        // would leave the pointer wherever it already was and land the press there — in the middle
+        // of the first display, whatever part of the glass was touched.
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = Pointing {
+            axes: Axes::Absolute {
+                x: Span {
+                    minimum: 0,
+                    maximum: 4095,
+                },
+                y: Span {
+                    minimum: 0,
+                    maximum: 4095,
+                },
+            },
+            wheel: HighResolution::default(),
+            down: BTreeSet::new(),
+        };
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[
+                record(SINCE, EventType::EV_ABS, Absolute::ABS_X.raw(), 0),
+                record(SINCE, EventType::EV_ABS, Absolute::ABS_Y.raw(), 4095),
+                record(SINCE, EventType::EV_KEY, Key::BTN_TOUCH.raw(), 1),
+            ],
+        );
+
+        assert_eq!(
+            did(&reports),
+            [
+                (Some(SurfaceId::new(1)), "Moved None at (0, 599)".to_owned()),
+                (
+                    Some(SurfaceId::new(1)),
+                    "Pressed Some(Primary) at (0, 599)".to_owned()
+                ),
+            ],
+            "the bottom left corner of the first display, which is where the finger was"
+        );
+    }
+
+    #[test]
+    fn an_absolute_device_can_reach_the_display_beside_the_first() {
+        // A tablet or a touchscreen states no display of its own — there is no session daemon here
+        // to bind one to an output — so it drives the whole arrangement. The cost is stated where
+        // `Pointer::moved_to` is written; what this pins is that the far end of the glass is the
+        // far end of the row rather than the far end of the first display.
+        let screens = screens();
+        let mut pointer = Pointer::centred(&screens);
+        let mut points = Pointing {
+            axes: Axes::Absolute {
+                x: Span {
+                    minimum: 0,
+                    maximum: 4095,
+                },
+                y: Span {
+                    minimum: 0,
+                    maximum: 4095,
+                },
+            },
+            wheel: HighResolution::default(),
+            down: BTreeSet::new(),
+        };
+
+        let reports = point(
+            &mut points,
+            &mut pointer,
+            &screens,
+            &[
+                record(SINCE, EventType::EV_ABS, Absolute::ABS_X.raw(), 4095),
+                record(SINCE, EventType::EV_ABS, Absolute::ABS_Y.raw(), 0),
+            ],
+        );
+
+        assert_eq!(
+            did(&reports),
+            [
+                (
+                    Some(SurfaceId::new(1)),
+                    "Left None at (400, 300)".to_owned()
+                ),
+                (
+                    Some(SurfaceId::new(2)),
+                    "Entered None at (799, 0)".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]
