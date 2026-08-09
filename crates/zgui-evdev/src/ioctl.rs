@@ -27,6 +27,14 @@
 //! Handing one to the wrong call is then a type error. `EVIOCGRAB` reads its argument *as* the
 //! value and branches on whether it is null, so a release written through [`issue`] would pass the
 //! address of a local — never null — and grab the device it was meant to give back.
+//!
+//! # The console's request numbers
+//!
+//! `KDGKBENT` and `KDGKBMODE` belong to the terminal driver rather than to an input device, and
+//! their numbers were assigned before `_IOC` existed. Each is a whole number in `kd.h` with no
+//! direction and no size in it. They still go to [`issue`] with a payload, because the kernel
+//! reaches that payload through the pointer exactly as the input requests do — what changes is
+//! that the size is a claim the row states rather than one `size_of` computes.
 
 // The table below is the kernel's interface. Every entry is a constant the headers define, every
 // entry is checked against the value those headers expand to by the test at the foot of this file,
@@ -221,6 +229,27 @@ macro_rules! no_payload {
     };
 }
 
+/// Names a console request, from the whole number `kd.h` holds under the same name.
+///
+/// The console's request numbers were assigned before `_IOC` existed, so a number here encodes
+/// neither a direction nor a size: `KDGKBENT` is `0x4B46`, and it says nothing about `struct
+/// kbentry`. The header holds that number, so the macro reads it instead of rebuilding it from a
+/// group and an index.
+///
+/// The payload is therefore a claim. [`Request<T>`] still holds every call site of one number to
+/// one `T`, and that much the compiler checks. *Which* `T` belongs to a
+/// number is read out of the kernel's `vt_ioctl` by whoever adds a row here; nothing checks that,
+/// and a wrong row would have the kernel write a payload's worth of bytes wherever it was pointed.
+macro_rules! console {
+    ($name:ident, $payload:ty) => {
+        pub(crate) const $name: Request<$payload> = Request {
+            opcode: sys::$name as Opcode,
+            name: stringify!($name),
+            payload: PhantomData,
+        };
+    };
+}
+
 read_only!(GET_VERSION, GROUP, 0x01, c_int);
 read_only!(GET_ID, GROUP, 0x02, sys::input_id);
 by_value!(GRAB, GROUP, 0x90);
@@ -237,6 +266,12 @@ by_value!(UINPUT_SET_EVENT_BIT, UINPUT, 100);
 by_value!(UINPUT_SET_KEY_BIT, UINPUT, 101);
 by_value!(UINPUT_SET_RELATIVE_BIT, UINPUT, 102);
 by_value!(UINPUT_SET_ABSOLUTE_BIT, UINPUT, 103);
+
+// One entry of the console's keymap, and the mode that says what an entry means. `KDGKBENT` reads
+// `kb_table` and `kb_index` out of the struct and writes `kb_value` back into it, so the payload
+// travels both ways through one pointer. `KDGKBMODE` writes one `int`.
+console!(KDGKBENT, sys::kbentry);
+console!(KDGKBMODE, c_int);
 
 /// Returns `EVIOCGNAME`, which answers the device's name into whatever buffer it is issued with.
 pub(crate) const fn name() -> ByteRequest {
@@ -509,6 +544,16 @@ mod tests {
         assert_eq!(GET_ID.opcode(), 0x8008_4502);
         assert_eq!(GRAB.opcode(), 0x4004_4590);
         assert_eq!(SET_CLOCK.opcode(), 0x4004_45a0);
+    }
+
+    #[test]
+    fn the_console_request_numbers_are_the_whole_numbers_the_header_holds() {
+        // Neither carries a direction or a size, because the console's numbers were assigned
+        // before `_IOC` existed. `_IO('K', 0x46)` reaches the same value: a request with no
+        // direction and no payload is `group << 8 | number`, which is the shape these already
+        // had. So the header holds each number whole and nothing computes it.
+        assert_eq!(KDGKBENT.opcode(), 0x4b46);
+        assert_eq!(KDGKBMODE.opcode(), 0x4b44);
     }
 
     #[test]
