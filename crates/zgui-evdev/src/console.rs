@@ -34,15 +34,25 @@
 //! A console keyboard is in one of the modes `kd.h` names, and [`Console::mode`] reports which.
 //! The mode decides which entries exist. In every mode except [`Mode::Unicode`] the kernel answers
 //! `K_HOLE` for each code point, so a German keymap read in [`Mode::Translate`] — the ordinary
-//! mode — keeps its umlauts, which are Latin-1, and loses its euro sign. In [`Mode::Raw`] and
-//! [`Mode::Off`] the console delivers nothing from the keymap at all, and what is read is the
-//! layout that *would* apply.
+//! mode — keeps its umlauts, which are Latin-1, and loses its euro sign.
+//!
+//! The keymap stays readable in [`Mode::Raw`] and [`Mode::Off`], where the console delivers nothing
+//! from it: what comes back is the layout that *would* apply. So a program that puts the console
+//! keyboard into `K_OFF` to keep keystrokes off the terminal still reads its layout here, minus the
+//! code points that mode holes out.
 //!
 //! # State
 //!
 //! Nothing here follows a key over time. Every [`Console::entry`] is one ioctl against the table
 //! as it stands, and a caller that wants the character a key press produces holds its own modifier
 //! state and asks for the map that state selects.
+//!
+//! # The screen
+//!
+//! [`Console::set_screen`] is the one thing in this module that writes. It is here because it uses
+//! the same descriptor and the same request table, and because a program that drives the display
+//! itself has to tell the console driver so. [`Screen`] says what each mode does and what neither
+//! does.
 
 use std::ffi::c_int;
 use std::path::{Path, PathBuf};
@@ -405,6 +415,80 @@ impl Mode {
     }
 }
 
+/// What the console driver draws on the screen.
+///
+/// `KDSETMODE` takes one of these. Which one a terminal is in decides whether the kernel's own
+/// console draws at all, and — through the framebuffer console — whether the kernel puts its own
+/// mode back on the display.
+///
+/// # The graphics mode
+///
+/// The console stops drawing. It is a gate in software: `vt_kdsetmode` records the mode, hides the
+/// cursor and stops its blink timer, and every later path in the
+/// console driver reads the mode and does nothing. Without it the kernel goes on writing text and
+/// a blinking cursor into the same screen a program is scanning out, so a message printed on
+/// another terminal appears over the picture.
+///
+/// # The text mode
+///
+/// Two things happen, and the second is the one worth knowing.
+///
+/// The console repaints from the text it holds. That is the screen as it was — the current
+/// `vc_rows` by `vc_cols` of it, plus anything written to the terminal in the meantime.
+///
+/// **And the framebuffer console re-applies its own display mode.** `fbcon` answers this mode by
+/// calling `fb_set_var` with `FB_ACTIVATE_KD_TEXT`, and on a machine whose framebuffer is DRM's own
+/// emulation that reaches `drm_fb_helper_set_par`, which commits the kernel's modeset *even while
+/// another client is DRM master*. The kernel carries that exception on purpose, because Xorg sets
+/// this mode before it drops master, and the comment in `drm_fb_helper_set_par` says so. So a
+/// program that took the display gets the console back by setting this, rather than by handing the
+/// device over.
+///
+/// ## What the repaint leaves out
+///
+/// **Anything that scrolled off.** The framebuffer console keeps no scrollback — the software
+/// scrollback it once had was removed from the kernel — so what returns is one screen.
+///
+/// **Anything the kernel printed while the console was in [`Screen::Graphics`].** `vt_console_print`
+/// reads the mode and returns before it writes, so those lines are in no buffer to repaint from.
+///
+/// ## The graphics mode has to have been taken first
+///
+/// `do_unblank_screen` returns at once unless something previously put this console into
+/// [`Screen::Graphics`], so setting this on a console that was already in text mode does nothing at
+/// all — no repaint and no modeset. A caller that failed to take the graphics mode has nothing to
+/// give back.
+///
+/// # Virtual-terminal management
+///
+/// Neither mode does any of it. Nothing here asks to be told about a terminal switch, nothing gives
+/// a device back when one happens, and nothing takes it back afterwards — those are `VT_SETMODE`
+/// with `VT_PROCESS`, a pair of signals, and usually a session daemon holding the devices. A
+/// program that sets [`Screen::Graphics`] and is switched away from keeps whatever it holds and
+/// goes on drawing into a screen nobody is looking at. Switching terminals under one of these modes
+/// is a separate piece of work, and setting the mode is no step towards it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    /// The console draws its text. `KD_TEXT`.
+    Text,
+    /// The console draws nothing, because something else owns the screen. `KD_GRAPHICS`.
+    Graphics,
+}
+
+impl Screen {
+    /// Returns the number `KDSETMODE` reads this as.
+    ///
+    /// `KD_TEXT0` and `KD_TEXT1` have no variant here. The header marks both obsolete and the
+    /// kernel folds each into `KD_TEXT` before it does anything with it, so a third way to spell
+    /// text would be a variant that could never mean anything of its own.
+    const fn raw(self) -> c_int {
+        match self {
+            Self::Text => sys::KD_TEXT as c_int,
+            Self::Graphics => sys::KD_GRAPHICS as c_int,
+        }
+    }
+}
+
 /// What a look for a console found.
 ///
 /// Absence is a value here. A machine where no path answered is one where the console keymap is
@@ -532,6 +616,36 @@ impl Console {
         let mut raw: c_int = 0;
         ioctl::issue(self.fd.as_fd(), ioctl::KDGKBMODE, &mut raw)?;
         Ok(Mode::from_raw(raw))
+    }
+
+    /// Puts the console's screen into `screen`.
+    ///
+    /// The one write in this module. [`Screen`] says what each mode does.
+    ///
+    /// The mode travels as the ioctl argument itself, so this reaches the kernel through the same
+    /// call `EVIOCGRAB` uses.
+    ///
+    /// # Permission
+    ///
+    /// The caller has to own this terminal or hold `CAP_SYS_TTY_CONFIG`. `vt_ioctl` compares the
+    /// terminal with the calling session's own before it takes a mode, so a program run on the
+    /// virtual console it is drawing to may set one and a program run over a network connection
+    /// may not unless it is root. The descriptor being read-only is no obstacle: the check is
+    /// about the terminal rather than about the open mode.
+    ///
+    /// **The console also has to be the one in front.** `vt_kdsetmode` records the mode on any
+    /// terminal and blanks or repaints only the foreground one, so a mode set on a terminal
+    /// somebody has switched away from is a mode that takes effect when they switch back. This
+    /// answers `Ok(())` either way, because the kernel does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when the kernel refuses. `EPERM` is the terminal belonging to
+    /// another session, and `ENOTTY` is a descriptor that is no virtual console — a
+    /// pseudo-terminal under a terminal emulator answers that, and so [`Console::open`] refuses
+    /// one before this can be called on it.
+    pub fn set_screen(&self, screen: Screen) -> Result<()> {
+        ioctl::issue_value(self.fd.as_fd(), ioctl::KDSETMODE, screen.raw())
     }
 
     /// Returns what the keymap holds for `key` under `modifiers`.
@@ -788,6 +902,18 @@ mod tests {
         // Every button is past the keymap too, and a backend funnelling one device's events
         // through `Console::entry` meets one on every mouse click.
         assert_eq!(index(Key::BTN_LEFT), None);
+    }
+
+    #[test]
+    fn the_two_screen_modes_are_the_numbers_the_header_names() {
+        // `KDSETMODE` reads the argument as the mode, so a wrong number here is a mode the kernel
+        // refuses — or, worse, one it takes: `KD_TEXT` is nought, the value an uninitialised
+        // variable reads as, so the graphics mode is the one worth pinning.
+        assert_eq!(Screen::Text.raw(), 0);
+        assert_eq!(Screen::Graphics.raw(), 1);
+        assert_eq!(Screen::Text.raw(), sys::KD_TEXT as c_int);
+        assert_eq!(Screen::Graphics.raw(), sys::KD_GRAPHICS as c_int);
+        assert_ne!(Screen::Text.raw(), Screen::Graphics.raw());
     }
 
     #[test]

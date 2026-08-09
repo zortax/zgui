@@ -66,7 +66,11 @@
 //! * **No session or virtual terminal management.** The frame loop takes DRM master and holds it
 //!   for as long as the program runs. Nothing hands the device back on a terminal switch, and
 //!   nothing asks a session daemon for it. So a program here needs a free virtual terminal, or
-//!   root, and fails to start while a compositor holds the master.
+//!   root, and fails to start while a compositor holds the master. What *is* here is the console's
+//!   own mode: the loop puts the terminal into graphics mode so the kernel's text console stops
+//!   drawing over the picture, and back into text mode on the way out so the console redraws. That
+//!   is two ioctls and no more — `console` says what the pair does and what it does not, and
+//!   pressing `Ctrl+Alt+F2` under a running program still leaves it holding the display.
 //!
 //! The last is visible in what the crate names: no session library.
 //!
@@ -126,6 +130,8 @@ pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod clock;
 #[cfg(target_os = "linux")]
+pub mod console;
+#[cfg(target_os = "linux")]
 pub mod cursor;
 #[cfg(target_os = "linux")]
 pub mod cx;
@@ -152,6 +158,8 @@ pub use crate::app::run;
 pub use crate::clipboard::ConsoleClipboard;
 #[cfg(target_os = "linux")]
 pub use crate::clock::SystemClock;
+#[cfg(target_os = "linux")]
+pub use crate::console::ConsoleScreen;
 #[cfg(target_os = "linux")]
 pub use crate::cursor::Cursor;
 #[cfg(target_os = "linux")]
