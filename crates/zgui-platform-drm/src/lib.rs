@@ -76,6 +76,8 @@ pub mod cx;
 #[cfg(target_os = "linux")]
 pub mod display;
 #[cfg(target_os = "linux")]
+pub mod input;
+#[cfg(target_os = "linux")]
 pub mod output;
 // How the loop waits. Private because nothing outside this crate parks this loop, and the model it
 // follows is stated in full in `zgui-platform-winit`'s own `park` module.
