@@ -26,9 +26,13 @@
 //!
 //! # Scope
 //!
-//! The keyboard and the pointer. What a cursor looks like is [`crate::cursor`], because a picture
-//! is no translation. A device plugged in while the program runs is later work: the set of devices
-//! is read once, so a mouse plugged in afterwards reaches nothing.
+//! The keyboard and the pointer, including the ones plugged in while the program runs. The set of
+//! devices is read at start-up and added to as devices arrive, and one that stops answering is
+//! dropped. What a cursor looks like is [`crate::cursor`], because a picture is no translation.
+//!
+//! A second pointer and a touch protocol are absent. Every device drives the one pointer, so two
+//! fingers on a touchscreen are one pointer that jumps between them. The crate documentation lists
+//! that beside the rest of what this backend does not have.
 
 pub mod keyboard;
 pub mod pointer;

@@ -4,6 +4,20 @@
 //! point with, takes each away from everything else, pushes the keys that were already down into
 //! the layout, and turns what the kernel reports into what a surface is told.
 //!
+//! # Arrivals and departures
+//!
+//! The set is not fixed. [`Seat::open`] watches the directory the nodes are in before it walks it,
+//! so a device that appears between the two is in one or the other. A node reported afterwards is
+//! opened and taken in the same read that reads the devices, and a device that answers a read with
+//! a failure is dropped in it.
+//!
+//! Both edges repair state as well as record it. A device that goes holds nothing, so
+//! [`Keys::resynchronise`] takes its keys off the layout and `cancelled` ends the interactions its
+//! buttons were holding open. Without them a modifier held while its keyboard was unplugged stays
+//! held for the rest of the program, and a control gripped by a vanished mouse never lets go. A
+//! device that arrives is asked what is held on it for the same reason, before anything it reports
+//! is believed.
+//!
 //! # One device with two jobs
 //!
 //! A device is opened once and read once, and what it is read *as* is two independent questions.
@@ -42,11 +56,12 @@
 //! its own module says which two directions the broad answer is wrong in.
 
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rustix::fd::{AsFd, BorrowedFd};
 use tracing::{info, warn};
-use zgui_evdev::{Absolute, Batch, Capabilities, Device, EventType, Key, Synchronisation};
+use zgui_evdev::{Absolute, Batch, Capabilities, Device, EventType, Key, Synchronisation, Watch};
 use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
 use zgui_vocab::{KeyState, Modifiers, PointerAction, Timestamp};
 
@@ -134,9 +149,10 @@ pub fn types_on(capabilities: &Capabilities) -> bool {
 
 /// Returns `true` if this code is one a person typed.
 ///
-/// A button belongs to a pointer. Everything else in the kernel's three key ranges is delivered,
-/// including the blocks it added behind the buttons: a keyboard with media keys sends those and a
-/// person pressed them.
+/// A button belongs to the pointer, which reads the same batch and takes it there instead — see
+/// [`pointer::button`]. Everything else in the kernel's three key ranges is delivered, including
+/// the blocks it added behind the buttons: a keyboard with media keys sends those and a person
+/// pressed them.
 fn typed(key: Key) -> bool {
     key.is_key()
 }
@@ -295,6 +311,22 @@ impl Stamps {
     /// Returns the anchor a caller states, for a test with no clock in it.
     pub const fn from_origin(origin: Duration) -> Self {
         Self::Monotonic { origin }
+    }
+
+    /// Returns these stamps as they read on a turn that is happening at `now`.
+    ///
+    /// A stream on the wall clock is stamped when the loop read it, and this is where that moment
+    /// is taken. One moment kept from when the device was taken would stamp every event that device
+    /// ever reports, so a key struck an hour in would arrive dated to start-up and every interval
+    /// measured across two of them would be zero.
+    ///
+    /// The kernel's own moments need no such thing: both clocks run at one rate, so the anchor
+    /// holds for as long as the program does.
+    pub const fn read_at(self, now: Timestamp) -> Self {
+        match self {
+            Self::Monotonic { origin } => Self::Monotonic { origin },
+            Self::Read(_) => Self::Read(now),
+        }
     }
 
     /// Returns the moment `at` is, in the contract's numbering.
@@ -568,6 +600,17 @@ pub struct Seat {
     /// to work them out from key events alone would believe none were held while every key event
     /// said otherwise.
     pending: Vec<SurfaceEvent>,
+    /// The anchor between the kernel's clock and the frame loop's, taken when this seat opened.
+    ///
+    /// Kept because a device taken later needs the same one, and because it is the only way back to
+    /// the loop's own numbering from inside a read: both clocks run at one rate, so an anchor taken
+    /// at start-up holds for as long as the program does.
+    anchored: Stamps,
+    /// The watch on the directory the devices come from, where one could be made.
+    ///
+    /// Nothing on a machine with no watch changes: the set of devices is then what it was at
+    /// start-up, the way this backend behaved before the watch existed.
+    watch: Option<Watch>,
 }
 
 impl Seat {
@@ -597,10 +640,29 @@ impl Seat {
             ),
         }
 
-        let anchored = Stamps::anchored(clock);
-        let mut keys = Keys::new(found.layout);
-        let mut devices = Vec::new();
-        let mut pending = Vec::new();
+        // Before the walk, and that ordering carries the whole guarantee. A device that arrives
+        // between the two is in the directory the walk reads or in a report this watch holds; a
+        // watch made afterwards has neither, and that device reaches nothing for the rest of the
+        // program.
+        let watch = match Watch::new() {
+            Ok(watch) => Some(watch),
+            Err(error) => {
+                warn!(
+                    target: "zgui::platform",
+                    "the device directory cannot be watched, so a keyboard or a mouse plugged in \
+                     while this runs reaches nothing: {error}"
+                );
+                None
+            }
+        };
+
+        let mut seat = Self {
+            devices: Vec::new(),
+            keys: Keys::new(found.layout),
+            pending: Vec::new(),
+            anchored: Stamps::anchored(clock),
+            watch,
+        };
         match zgui_evdev::discover() {
             Ok(discovery) => {
                 for skipped in &discovery.skipped {
@@ -610,51 +672,8 @@ impl Seat {
                     );
                 }
                 for device in discovery.opened {
-                    let Some(device) = take(device) else {
-                        continue;
-                    };
-                    // Asked rather than assumed. A driver that refused `EVIOCSCLOCKID` leaves this
-                    // device's stream on the wall clock, which shares no zero with the frame loop's
-                    // own reading, so its events are stamped when they are read instead.
-                    let stamps = if device.has_monotonic_timestamps() {
-                        anchored
-                    } else {
-                        warn!(
-                            target: "zgui::platform",
-                            "{} refused the monotonic clock, so what it reports is stamped when \
-                             the loop reads it rather than when it happened",
-                            device.path().display()
-                        );
-                        Stamps::Read(clock.timestamp())
-                    };
-                    let mut taken = Taken {
-                        types: types_on(device.capabilities()),
-                        points: pointing(&device),
-                        device,
-                        down: BTreeSet::new(),
-                        stamps,
-                    };
-                    // After the grab, so that nothing else can change what is held between the two.
-                    match taken.device.pressed_keys() {
-                        Ok(held) => {
-                            let held: BTreeSet<u16> = held.iter().map(Key::raw).collect();
-                            if let Some(points) = taken.points.as_mut() {
-                                // Buttons alone, and no event: what changed is what this process
-                                // knows. A button held now is recorded so that its release is the
-                                // one thing that is delivered.
-                                points.down =
-                                    held.iter().copied().filter(pressed_on_a_pointer).collect();
-                            }
-                            pending.extend(keys.resynchronise(&mut taken.down, &held));
-                        }
-                        Err(error) => warn!(
-                            target: "zgui::platform",
-                            "{} will not say what is held on it, so a modifier or a button held \
-                             now stays invisible until it is pressed again: {error}",
-                            taken.device.path().display()
-                        ),
-                    }
-                    devices.push(taken);
+                    let announced = seat.admit(device);
+                    seat.pending.extend(announced);
                 }
             }
             Err(error) => warn!(
@@ -662,29 +681,150 @@ impl Seat {
                 "no input device can be found on this machine: {error}"
             ),
         }
-        if !devices.iter().any(|taken| taken.types) {
+        if !seat.devices.iter().any(|taken| taken.types) {
             warn!(
                 target: "zgui::platform",
                 "no keyboard on this machine could be taken, so nothing can be typed into this \
                  program"
             );
         }
-        if !devices.iter().any(|taken| taken.points.is_some()) {
+        if !seat.devices.iter().any(|taken| taken.points.is_some()) {
             warn!(
                 target: "zgui::platform",
                 "no pointing device on this machine could be taken, so the cursor cannot be moved"
             );
         }
-        Self {
-            devices,
-            keys,
-            pending,
-        }
+        seat
     }
 
     /// Returns the descriptors the frame loop waits on beside the device and the wake channel.
+    ///
+    /// Every device this seat took, and the watch on the directory they came from. A node made in
+    /// that directory wakes the loop the way a key pressed does, because what has to happen next is
+    /// the same: read the descriptor and act on what it said.
     pub fn descriptors(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
-        self.devices.iter().map(|taken| taken.device.as_fd())
+        self.devices
+            .iter()
+            .map(|taken| taken.device.as_fd())
+            .chain(self.watch.iter().map(AsFd::as_fd))
+    }
+
+    /// Returns what the frame loop's clock reads now, through this seat's own anchor.
+    ///
+    /// The anchor came from the clock the loop runs on and the two run at one rate, so this is the
+    /// loop's own reading taken without the loop being here to ask.
+    fn now(&self) -> Timestamp {
+        self.anchored.at(monotonic())
+    }
+
+    /// Takes one device into this seat, and reports what was already held on it.
+    ///
+    /// A device nobody types on and nobody points with is left alone, and so is one the kernel
+    /// refuses to hand over. What can come back is a change in the held set and nothing else: a key
+    /// that is down now was pressed by nobody this process was listening to, so what changed is
+    /// what this process knows.
+    fn admit(&mut self, device: Device) -> Option<SurfaceEvent> {
+        let device = take(device)?;
+        // Asked rather than assumed. A driver that refused `EVIOCSCLOCKID` leaves this device's
+        // stream on the wall clock, which shares no zero with the frame loop's own reading, so its
+        // events are stamped when they are read instead.
+        let stamps = if device.has_monotonic_timestamps() {
+            self.anchored
+        } else {
+            warn!(
+                target: "zgui::platform",
+                "{} refused the monotonic clock, so what it reports is stamped when the loop reads \
+                 it rather than when it happened",
+                device.path().display()
+            );
+            Stamps::Read(self.now())
+        };
+        let mut taken = Taken {
+            types: types_on(device.capabilities()),
+            points: pointing(&device),
+            device,
+            down: BTreeSet::new(),
+            stamps,
+        };
+        // After the grab, so that nothing else can change what is held between the two.
+        let announced = match taken.device.pressed_keys() {
+            Ok(held) => {
+                let held: BTreeSet<u16> = held.iter().map(Key::raw).collect();
+                if let Some(points) = taken.points.as_mut() {
+                    // Buttons alone, and no event: what changed is what this process knows. A
+                    // button held now is recorded so that its release is the one thing that is
+                    // delivered.
+                    points.down = held.iter().copied().filter(pressed_on_a_pointer).collect();
+                }
+                self.keys.resynchronise(&mut taken.down, &held)
+            }
+            Err(error) => {
+                warn!(
+                    target: "zgui::platform",
+                    "{} will not say what is held on it, so a modifier or a button held now stays \
+                     invisible until it is pressed again: {error}",
+                    taken.device.path().display()
+                );
+                None
+            }
+        };
+        self.devices.push(taken);
+        announced
+    }
+
+    /// Takes every device that has arrived since the last read.
+    ///
+    /// **Call this after the devices that stopped answering have gone.** A node removed and made
+    /// again under the same name is a different device at the same path, and an arrival at a path
+    /// this seat still holds is refused — so the stale one has to be dropped first. [`Seat::read`]
+    /// is where that ordering is kept, by the author reading it rather than by any type here.
+    fn arrivals(&mut self) -> Vec<Report> {
+        let read = self.watch.as_ref().map(Watch::arrived);
+        let arrived = match read {
+            None => return Vec::new(),
+            Some(Ok(arrived)) => arrived,
+            // The same rule a device that stops answering follows, for the same reason: a
+            // descriptor that answers a failure and stays readable turns every later wait into a
+            // wait of no length, and a loop that kept one would spin for as long as it ran.
+            Some(Err(error)) => {
+                warn!(
+                    target: "zgui::platform",
+                    "the device directory can no longer be watched, so a keyboard or a mouse \
+                     plugged in from now on reaches nothing: {error}"
+                );
+                self.watch = None;
+                return Vec::new();
+            }
+        };
+
+        let held: Vec<&Path> = self
+            .devices
+            .iter()
+            .map(|taken| taken.device.path())
+            .collect();
+        let opening: Vec<PathBuf> = untaken(&held, &arrived);
+        opening
+            .iter()
+            .filter_map(|path| self.take_node(path))
+            .map(Report::focused)
+            .collect()
+    }
+
+    /// Opens the node at `path` and takes it, reporting what was already held on it.
+    fn take_node(&mut self, path: &Path) -> Option<SurfaceEvent> {
+        match Device::open(path) {
+            Ok(device) => self.admit(device),
+            // The ordinary answer for a node udev has not finished with, and the change that says
+            // it has finished is one more report the watch brings. So this is the first of two
+            // tries rather than a device lost.
+            Err(error) => {
+                info!(
+                    target: "zgui::platform",
+                    "{} cannot be read yet: {error}", path.display()
+                );
+                None
+            }
+        }
     }
 
     /// Reads every device and reports what a person did, moving `pointer` as they moved it.
@@ -703,10 +843,12 @@ impl Seat {
     /// failure costs a keyboard or a mouse that has to be plugged in again; a device kept costs the
     /// whole program.
     pub fn read(&mut self, pointer: &mut Pointer, screens: &[Screen]) -> Vec<Report> {
+        let now = self.now();
         let Self {
             devices,
             keys,
             pending,
+            ..
         } = self;
         let mut reports: Vec<Report> = std::mem::take(pending)
             .into_iter()
@@ -714,6 +856,8 @@ impl Seat {
             .collect();
         let mut lost = Vec::new();
         for (index, taken) in devices.iter_mut().enumerate() {
+            // Here, because here is where the loop reads it. See `Stamps::read_at`.
+            taken.stamps = taken.stamps.read_at(now);
             let batches = match taken.device.read() {
                 Ok(batches) => batches,
                 Err(error) => {
@@ -803,8 +947,33 @@ impl Seat {
                     .map(Report::focused),
             );
         }
+        // After the devices that stopped answering have gone. A node removed and made again under
+        // the same name is a different device at the same path, and an arrival at a path this seat
+        // still holds is refused — so a stale one left here would keep its own replacement out.
+        reports.extend(self.arrivals());
         reports
     }
+}
+
+/// Returns which of the nodes that arrived are ones to open.
+///
+/// A node the seat already holds is left alone, and it has to be: **one hotplug names the same node
+/// twice.** The kernel makes it and udev sets its ownership afterwards, and both are reports this
+/// backend acts on, because the first alone is too early to open the node. A second open is a
+/// second client on a device one client already grabbed, so the kernel refuses the grab and the
+/// device is reported as one that will not be handed over — a keyboard that works, logged as a
+/// keyboard that does not, with a descriptor in the poll set that carries nothing.
+///
+/// The path identifies a device here without being an identity: two identical keyboards report the
+/// same name and the same ids. It is enough because the kernel gives one node to one device at a
+/// time, and it is enough only while the seat holds no node that has already gone — which
+/// [`Seat::arrivals`] states and the caller keeps.
+fn untaken(held: &[&Path], arrived: &[PathBuf]) -> Vec<PathBuf> {
+    arrived
+        .iter()
+        .filter(|path| !held.contains(&path.as_path()))
+        .cloned()
+        .collect()
 }
 
 /// Returns `true` if this code is a button a pointer has.
@@ -1025,10 +1194,11 @@ mod tests {
     //! produces: a repeat, an overflow, a button on a keyboard node.
 
     use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
 
     use super::{
-        Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Span, Stamps, Transition,
-        cancelled, focused, pointed, types_on,
+        Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Seat, Span, Stamps,
+        Transition, cancelled, focused, pointed, types_on, untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
     use std::time::Duration;
@@ -1480,8 +1650,8 @@ mod tests {
 
     #[test]
     fn a_button_on_a_keyboard_node_is_not_a_key() {
-        // A keyboard with a trackpoint reports its buttons on the same node. A button belongs to a
-        // pointer, and the pointer is later work.
+        // A keyboard with a trackpoint reports its buttons on the same node. A button belongs to
+        // the pointer, which reads the same batch and takes it there instead.
         let (mut keys, layout, mut down) = keys();
 
         let events = translate(&mut keys, &mut down, &moved(SINCE, Key::BTN_LEFT, 1));
@@ -1640,6 +1810,27 @@ mod tests {
             Duration::ZERO
         );
         assert_eq!(stamps.at(SINCE).since_origin(), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_stream_on_the_wall_clock_is_stamped_afresh_on_every_read() {
+        // One moment kept from when the device was taken would stamp every event that device ever
+        // reports. A key struck an hour in would arrive dated to start-up, and a double-click
+        // window measured across two of them would read no interval at all.
+        let taken = Timestamp::from_origin(Duration::from_millis(10));
+        let later = Timestamp::from_origin(Duration::from_secs(3_600));
+
+        assert!(
+            matches!(Stamps::Read(taken).read_at(later), Stamps::Read(at) if at == later),
+            "the moment is the one this turn is happening at"
+        );
+        assert!(
+            matches!(
+                Stamps::from_origin(SINCE).read_at(later),
+                Stamps::Monotonic { origin } if origin == SINCE
+            ),
+            "and the kernel's own moments keep the anchor, which holds for the whole program"
+        );
     }
 
     #[test]
@@ -2515,6 +2706,124 @@ mod tests {
         );
 
         assert!(reports.is_empty(), "{reports:?}");
+    }
+
+    #[test]
+    fn a_node_this_seat_already_holds_is_taken_no_second_time() {
+        // One hotplug names the same node twice: the kernel makes it, udev sets its ownership, and
+        // this backend acts on both because the creation alone is too early to open it. A second
+        // open is a second client on a device one client already grabbed, so the kernel refuses the
+        // grab and a working keyboard is reported as one that will not be handed over.
+        let held = [Path::new("/dev/input/event4")];
+        let arrived = [
+            PathBuf::from("/dev/input/event4"),
+            PathBuf::from("/dev/input/event9"),
+        ];
+
+        assert_eq!(
+            untaken(&held, &arrived),
+            [PathBuf::from("/dev/input/event9")]
+        );
+    }
+
+    #[test]
+    fn a_node_made_again_under_a_name_this_seat_holds_waits_for_the_stale_one_to_go() {
+        // The same path with a different device behind it. While the seat still holds the
+        // descriptor that answers `ENODEV`, the arrival is refused — which is why `Seat::read`
+        // drops the devices that stopped answering before it takes the ones that arrived.
+        let arrived = [PathBuf::from("/dev/input/event4")];
+
+        assert!(untaken(&[Path::new("/dev/input/event4")], &arrived).is_empty());
+        assert_eq!(
+            untaken(&[], &arrived),
+            arrived,
+            "and once it has gone, the node that took its place is opened"
+        );
+    }
+
+    /// A directory a test makes nodes in, removed when it goes out of scope.
+    ///
+    /// Named after the test that asked for it, so two tests running at once do not share one.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        /// An empty directory of its own.
+        fn new(test: &str) -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("zgui-platform-drm-{}-{test}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("the directory is made");
+            Self(root)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A seat holding no device, watching `directory`.
+    ///
+    /// Built here rather than through [`Seat::open`], which grabs every device on the machine: a
+    /// test that called it would take the keyboard the developer is typing on. Every field is this
+    /// module's own, so what is exercised is the seat itself rather than a stand-in for it.
+    fn watching(directory: &Path) -> Seat {
+        Seat {
+            devices: Vec::new(),
+            keys: Keys::new(None),
+            pending: Vec::new(),
+            anchored: Stamps::from_origin(SINCE),
+            watch: zgui_evdev::Watch::new_in(directory).ok(),
+        }
+    }
+
+    #[test]
+    fn the_watch_is_one_more_descriptor_the_loop_waits_on() {
+        // The join that lets a device plugged in reach a program that is already running: the loop
+        // parks on this beside the devices, so a node made in the directory ends a wait. Left out
+        // of the set, the watch fills and nothing ever reads it.
+        let root = Scratch::new("the_watch_is_one_more_descriptor_the_loop_waits_on");
+        let seat = watching(&root.0);
+
+        assert_eq!(seat.descriptors().count(), 1);
+
+        let mut blind = watching(&root.0);
+        blind.watch = None;
+        assert_eq!(
+            blind.descriptors().count(),
+            0,
+            "and a machine whose kernel refused the watch waits on its devices alone"
+        );
+    }
+
+    #[test]
+    fn a_read_takes_the_nodes_that_arrived() {
+        // The other end of the same join. A report left in the queue is a device nothing takes, and
+        // a descriptor left readable turns every later wait into a wait of no length.
+        //
+        // An ordinary file stands in for the node. It draws the report a device node draws and it
+        // opens as no device, which is also what a node udev has not finished with does — so this
+        // asserts that a node that will not open costs the loop nothing.
+        let root = Scratch::new("a_read_takes_the_nodes_that_arrived");
+        let mut seat = watching(&root.0);
+        std::fs::write(root.0.join("event0"), []).expect("the node is made");
+
+        let reports = seat.read(&mut Pointer::centred(&[]), &[]);
+
+        assert!(
+            reports.is_empty(),
+            "an empty file is no device: {reports:?}"
+        );
+        assert!(
+            seat.watch
+                .as_ref()
+                .expect("the directory can be watched")
+                .arrived()
+                .expect("the reports read")
+                .is_empty(),
+            "and the read is what drained the watch"
+        );
     }
 
     #[test]
