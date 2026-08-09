@@ -1,4 +1,4 @@
-//! The kernel's input interface: devices, capabilities and event batches.
+//! The kernel's input interface: devices, capabilities, event batches and the console keymap.
 //!
 //! This is what libevdev is, written in Rust against the uapi headers. It links no C. Every call
 //! is an ioctl or a read on a file descriptor, issued through `rustix`'s `linux_raw` backend.
@@ -14,6 +14,13 @@
 //! hands out its descriptor through `AsFd` so a loop can park on it, and a read answers batches.
 //! The kernel groups everything that happened at one moment, and a reader that took a group apart
 //! would move a pointer twice for one movement.
+//!
+//! # Layout
+//!
+//! A device says which key moved. What a key *means* is a layout's answer, and `Console` reads the
+//! one the kernel's own console driver holds. That is the layout of last resort: a machine with
+//! libxkbcommon and its keyboard data has a better one, and this is what a machine with neither
+//! still has. `console` says plainly what it cannot express.
 //!
 //! # The re-exports
 //!
@@ -37,6 +44,8 @@
 #[cfg(target_os = "linux")]
 pub mod code;
 #[cfg(target_os = "linux")]
+pub mod console;
+#[cfg(target_os = "linux")]
 pub mod device;
 #[cfg(target_os = "linux")]
 pub mod discover;
@@ -51,6 +60,8 @@ mod sys;
 
 #[cfg(target_os = "linux")]
 pub use crate::code::{Absolute, Code, EventType, Key, Relative, Synchronisation};
+#[cfg(target_os = "linux")]
+pub use crate::console::{Console, Entry, Mode, Modifiers, Search};
 #[cfg(target_os = "linux")]
 pub use crate::device::{AxisRange, Bitmap, Capabilities, Device, Identity, Role, Roles};
 #[cfg(target_os = "linux")]
