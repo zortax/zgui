@@ -63,7 +63,7 @@ fn a_key_on_the_letter_row_produces_a_letter() {
 
     let letters: Vec<char> = LETTER_ROW
         .iter()
-        .filter_map(|key| console.entry(*key, Modifiers::NONE).ok())
+        .filter_map(|key| console.entry(*key, Modifiers::NONE).ok().flatten())
         .filter_map(Entry::character)
         .filter(|character| character.is_alphabetic())
         .collect();
@@ -89,7 +89,7 @@ fn holding_shift_changes_at_least_one_key() {
         .filter(|key| {
             let plain = console.entry(*key, Modifiers::NONE);
             let shifted = console.entry(*key, Modifiers::SHIFT);
-            matches!((plain, shifted), (Ok(plain), Ok(shifted)) if plain != shifted)
+            matches!((plain, shifted), (Ok(Some(plain)), Ok(Some(shifted))) if plain != shifted)
         })
         .count();
 
@@ -116,16 +116,72 @@ fn a_map_the_keymap_never_loaded_says_so_rather_than_reading_as_holes() {
         let modifiers = Modifiers::from_index(index);
         let absent = console
             .entry(Key::new(0), modifiers)
-            .expect("key code zero is in every keymap");
+            .expect("key code zero is in every keymap")
+            .expect("key code zero is inside a console keymap");
         if absent == Entry::NoSuchMap {
             let sampled = console
                 .entry(Key::KEY_A, modifiers)
-                .expect("KEY_A is in every keymap");
+                .expect("KEY_A is in every keymap")
+                .expect("KEY_A is inside a console keymap");
             assert_eq!(
                 sampled,
                 Entry::Hole,
                 "map {index} reports no map at key code zero, so every other key in it is a hole"
             );
         }
+    }
+}
+
+#[test]
+fn a_code_point_entry_reaches_a_caller_only_on_a_unicode_console() {
+    let Some(console) = console("a_code_point_entry_reaches_a_caller_only_on_a_unicode_console")
+    else {
+        return;
+    };
+    let mode = console.mode().expect("a console reports its mode");
+
+    // The claim this holds up is the kernel's, and it is the one the module is built around:
+    // `vt_kdgkbent` replaces every entry above the packed types with a hole unless the console is
+    // in `K_UNICODE`. Everything else about it is asserted off hardware; this needs a console,
+    // because it is a statement about what the kernel does.
+    //
+    // It is also what catches a decoding whose boundary is a type too low. On a kernel with a
+    // packed type past the ones this crate names, such an entry arrives in *every* mode, so a
+    // decoding that read it as a code point would report one here from a `K_XLATE` console.
+    let mut points = Vec::new();
+    for index in 0..=u8::MAX {
+        let modifiers = Modifiers::from_index(index);
+        let present = console
+            .entry(Key::new(0), modifiers)
+            .expect("key code zero is in every keymap")
+            .expect("key code zero is inside a console keymap");
+        if present == Entry::NoSuchMap {
+            continue;
+        }
+        for code in 0..=u16::from(u8::MAX) {
+            let entry = console
+                .entry(Key::new(code), modifiers)
+                .expect("a code inside the keymap reads")
+                .expect("a code inside the keymap has an index");
+            if let Entry::Unicode(point) = entry {
+                points.push((index, code, point));
+            }
+        }
+    }
+
+    println!("{:?} holds {} code point entries", mode, points.len());
+    if mode.keeps_unicode_entries() {
+        // A `us` keymap has none of them and a `de` keymap has its euro sign, so the count is a
+        // fact about this machine and stays a printed one.
+        for (index, code, point) in points.iter().take(8) {
+            println!("  map {index} key {code} is U+{point:04X}");
+        }
+    } else {
+        assert!(
+            points.is_empty(),
+            "the console is in {mode:?}, where the kernel reports a hole for every code point, \
+             so any that arrived came from a packed type read as one: {:?}",
+            &points[..points.len().min(8)]
+        );
     }
 }

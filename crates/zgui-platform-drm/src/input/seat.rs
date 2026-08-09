@@ -525,7 +525,7 @@ mod tests {
         Absolute, Bitmap, Capabilities, EventType, Key, Reader, Relative, Synchronisation,
     };
     use zgui_platform::{SurfaceEvent, SurfaceId};
-    use zgui_vocab::{KeyCode, KeyState, Modifiers, NamedKey, PhysicalKey};
+    use zgui_vocab::{EventKind, KeyCode, KeyState, Modifiers, NamedKey, PhysicalKey};
 
     /// A layout that records what it was told, and holds shift the way a real one would.
     ///
@@ -769,6 +769,36 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn what_comes_out_is_what_a_document_is_dispatched() {
+        // The last hop this crate can assert on its own. A runtime queues an event because
+        // `is_input` says so, and turns it into a document event through `to_dispatch`, which is
+        // the contract's own bridge between the two vocabularies — so an event that answers both
+        // is one that reaches a document.
+        let (mut keys, _) = keys();
+        let mut bytes = moved(SINCE, Key::KEY_A, 1);
+        bytes.extend(moved(SINCE, Key::KEY_A, 0));
+
+        let events = translate(&mut keys, &bytes);
+
+        let dispatched: Vec<_> = events
+            .iter()
+            .map(|event| {
+                assert!(event.is_input(), "{event:?} is what a person did");
+                let (kind, payload) = event
+                    .to_dispatch()
+                    .unwrap_or_else(|| panic!("{event:?} reaches a document"));
+                assert!(
+                    payload.matches(kind),
+                    "{event:?} carries a mismatched payload"
+                );
+                assert!(event.modifiers().is_some(), "and says what was held");
+                kind
+            })
+            .collect();
+        assert_eq!(dispatched, [EventKind::KeyDown, EventKind::KeyUp]);
     }
 
     #[test]
