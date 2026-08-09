@@ -141,8 +141,14 @@ fn Clock() -> impl IntoView {
             // Where the pointer is, as the document was told. This separates a pointer that does
             // not move from a cursor that does not follow one: the reading changes for the second
             // and stands still for the first.
+            // Written once and never again. A reading that follows the pointer damages text on
+            // every motion, and a frame here is a readback off the GPU, a copy into the buffer the
+            // display scans out of, and a flip — so a live reading paces the cursor by the slowest
+            // thing on the machine and measures itself rather than the pointer.
             on:pointer_move = move |ev| {
-                at.set(Some((ev.position.x.0, ev.position.y.0)));
+                if at.get_untracked().is_none() {
+                    at.set(Some((ev.position.x.0, ev.position.y.0)));
+                }
             },
             // Counted here rather than on the list, so that a turn is recorded wherever the pointer
             // was. A turn that arrives and scrolls nothing is a scroll that did not reach what it
@@ -229,11 +235,11 @@ fn Clock() -> impl IntoView {
             // mouse moves says the pointer never arrived; a reading that moves under a cursor that
             // does not says the pointer arrived and the plane was never told.
             label(class = "clock__note") {{move || {
-                let where_it_is = match at.get() {
-                    Some((x, y)) => format!("pointer {x:.0}, {y:.0}"),
+                let reached = match at.get() {
+                    Some((x, y)) => format!("pointer reached {x:.0}, {y:.0}"),
                     None => "pointer has not moved".to_owned(),
                 };
-                format!("{where_it_is} · wheel {:+.1} — ESC to leave", turned.get())
+                format!("{reached} · wheel {:+.1} — ESC to leave", turned.get())
             }}}
         }
     }
