@@ -476,6 +476,54 @@ mod tests {
         assert!(absolute(64).is_err(), "`ABS_MAX` is 63");
     }
 
+    #[test]
+    fn the_three_call_shapes_reach_a_live_kernel_object() {
+        // `/dev/uinput` is the one input device a program can make for itself, so it is how the
+        // table above is exercised against a kernel rather than against arithmetic. All three
+        // shapes are here: `UI_SET_EVBIT` passes the code *as* the argument, `UI_DEV_SETUP`
+        // passes a ninety-two byte structure by pointer, and `UI_DEV_CREATE` passes nothing.
+        //
+        // What it deliberately does not do is read the device back. The node the kernel makes
+        // belongs to `root:input`, so the process that created it usually cannot open it.
+        let node = rustix::fs::open(
+            "/dev/uinput",
+            rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        );
+        let Ok(node) = node else {
+            eprintln!(
+                "the_three_call_shapes_reach_a_live_kernel_object: /dev/uinput cannot be opened \
+                 on this machine, so nothing was asserted; load the module with `sudo modprobe \
+                 uinput` and grant write access to run it"
+            );
+            return;
+        };
+        let fd = rustix::fd::AsFd::as_fd(&node);
+
+        issue_value(fd, UINPUT_SET_EVENT_BIT, sys::EV_KEY as c_int)
+            .expect("a synthetic device may say it has keys");
+        issue_value(fd, UINPUT_SET_KEY_BIT, sys::KEY_A as c_int)
+            .expect("a synthetic device may say which key");
+
+        let mut setup = sys::uinput_setup {
+            id: sys::input_id {
+                bustype: sys::BUS_VIRTUAL as u16,
+                vendor: 0x1209,
+                product: 0x0001,
+                version: 1,
+            },
+            ff_effects_max: 0,
+            ..Default::default()
+        };
+        for (slot, byte) in setup.name.iter_mut().zip(b"zgui-evdev request table") {
+            *slot = *byte as core::ffi::c_char;
+        }
+        issue(fd, UINPUT_SETUP, &mut setup).expect("a device description is accepted");
+
+        issue(fd, UINPUT_CREATE, &mut ()).expect("the device is created");
+        issue(fd, UINPUT_DESTROY, &mut ()).expect("the device is destroyed");
+    }
+
     /// Compiles only if `request` may be issued with a payload of type `T`.
     fn assert_payload<T>(_: Request<T>) {}
 
