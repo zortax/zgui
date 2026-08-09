@@ -1,5 +1,6 @@
 //! One `/dev/input/eventN` node: what it is, what it can report, and what it reports.
 
+use std::ffi::c_int;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
@@ -357,6 +358,8 @@ pub struct Device {
     identity: Identity,
     /// Which codes it reports.
     capabilities: Capabilities,
+    /// Whether the kernel accepted the monotonic clock for this device's timestamps.
+    monotonic: bool,
     /// Whether this crate holds the device's grab.
     grabbed: bool,
     /// What turns reads into batches.
@@ -369,6 +372,10 @@ impl Device {
     /// The node is opened read-only: nothing here writes to a device, and a caller outside the
     /// `input` group is more likely to be allowed to read one than to open it for writing. It is
     /// opened non-blocking, so [`Device::read`] is a poll rather than a wait.
+    ///
+    /// The device is asked to timestamp on the monotonic clock. A kernel that refuses leaves the
+    /// stream on the real clock and answers this call the same way, and
+    /// [`Device::has_monotonic_timestamps`] says which clock this device is on.
     ///
     /// # Errors
     ///
@@ -386,6 +393,16 @@ impl Device {
             source: errno.into(),
         })?;
 
+        // `EVIOCSCLOCKID` arrived in 2.6.36 and a driver may still refuse it. Every later read of
+        // this device is timestamped on whichever clock is in force, so which one it is has to be
+        // recorded rather than assumed. See `Event::at`.
+        let monotonic = ioctl::issue(
+            fd.as_fd(),
+            ioctl::SET_CLOCK,
+            &mut c_int::try_from(sys::CLOCK_MONOTONIC).unwrap_or(1),
+        )
+        .is_ok();
+
         let name = read_name(fd.as_fd())?;
         let identity = read_identity(fd.as_fd())?;
         let capabilities = read_capabilities(fd.as_fd())?;
@@ -396,6 +413,7 @@ impl Device {
             name,
             identity,
             capabilities,
+            monotonic,
             grabbed: false,
             reader: Reader::new(),
         })
@@ -424,6 +442,16 @@ impl Device {
     /// Returns the jobs this device does.
     pub fn roles(&self) -> Roles {
         self.capabilities.roles()
+    }
+
+    /// Returns `true` if this device timestamps its events on the monotonic clock.
+    ///
+    /// Asked for when the device was opened. A kernel or a driver that refused leaves the stream
+    /// on `CLOCK_REALTIME`, where a clock step moves every later timestamp and can move one
+    /// backwards. A caller that measures an interval between events — a double click, a key
+    /// repeat — reads this before trusting one.
+    pub fn has_monotonic_timestamps(&self) -> bool {
+        self.monotonic
     }
 
     /// Returns the range and the current reading of one absolute axis.

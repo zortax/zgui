@@ -224,6 +224,10 @@ macro_rules! no_payload {
 read_only!(GET_VERSION, GROUP, 0x01, c_int);
 read_only!(GET_ID, GROUP, 0x02, sys::input_id);
 by_value!(GRAB, GROUP, 0x90);
+// `EVIOCSCLOCKID` reads its argument through the pointer — `copy_from_user` in `evdev_ioctl` —
+// where `EVIOCGRAB` beside it reads the argument itself. So it is an ordinary pointer request
+// with a `_IOW` number, and it goes to `issue`.
+write_only!(SET_CLOCK, GROUP, 0xa0, c_int);
 
 no_payload!(UINPUT_CREATE, UINPUT, 1);
 no_payload!(UINPUT_DESTROY, UINPUT, 2);
@@ -504,6 +508,7 @@ mod tests {
         assert_eq!(GET_VERSION.opcode(), 0x8004_4501);
         assert_eq!(GET_ID.opcode(), 0x8008_4502);
         assert_eq!(GRAB.opcode(), 0x4004_4590);
+        assert_eq!(SET_CLOCK.opcode(), 0x4004_45a0);
     }
 
     #[test]

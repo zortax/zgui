@@ -11,7 +11,13 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 /// The headers copied from the kernel, in the order they include each other.
-const HEADERS: [&str; 3] = ["input.h", "input-event-codes.h", "uinput.h"];
+const HEADERS: [&str; 5] = [
+    "input.h",
+    "input-event-codes.h",
+    "uinput.h",
+    "time.h",
+    "time_types.h",
+];
 
 fn main() {
     for header in HEADERS.iter().chain(&["wrapper.h"]) {
@@ -56,6 +62,10 @@ fn main() {
         .allowlist_var("BUS_.*")
         .allowlist_var("INPUT_PROP_.*")
         .allowlist_var("UINPUT_.*")
+        // The one value this crate needs from outside the input headers: `EVIOCSCLOCKID` takes a
+        // clock, and `linux/time.h` is where the kernel numbers them. Vendoring it keeps the rule
+        // that no value here is transcribed.
+        .allowlist_var("CLOCK_MONOTONIC")
         // The C comments carry indented prose, and rustdoc reads an indented block inside a doc
         // comment as Rust to compile. The headers stay the place to read about this interface.
         .generate_comments(false)
@@ -75,6 +85,30 @@ fn main() {
     bindings
         .write_to_file(out.join("uapi.rs"))
         .expect("the generated bindings are written");
+
+    clock(&include, &out);
+}
+
+/// Reads `linux/time.h` into `OUT_DIR/clock.rs`, on its own.
+///
+/// `EVIOCSCLOCKID` takes a clock, and `linux/time.h` is where the kernel numbers them. It cannot
+/// join the pass above: `input.h` includes the C library's `sys/time.h` for `struct timeval`, and
+/// the kernel's header defines `timeval`, `itimerval` and `timezone` itself, so a translation unit
+/// holding both does not compile. A second pass costs one more `include!` and keeps the rule that
+/// no value in this crate is transcribed.
+fn clock(include: &Path, out: &Path) {
+    let bindings = bindgen::Builder::default()
+        .header_contents("clock.h", "#include <linux/time.h>\n")
+        .clang_arg(format!("-I{}", include.display()))
+        .allowlist_var("CLOCK_MONOTONIC")
+        .generate_comments(false)
+        .use_core()
+        .generate()
+        .expect("the vendored time header parses");
+
+    bindings
+        .write_to_file(out.join("clock.rs"))
+        .expect("the generated clock constant is written");
 }
 
 /// Copies the vendored headers into `out/include/linux`, and reports the directory to search.

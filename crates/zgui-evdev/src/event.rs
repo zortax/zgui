@@ -35,9 +35,15 @@ const RECORDS: usize = 128;
 pub struct Event {
     /// When the kernel timestamped it.
     ///
-    /// The clock is `CLOCK_REALTIME` — the kernel's default for an evdev client — so this is time
-    /// since the epoch and it moves when the system clock is set. A caller that needs a monotonic
-    /// moment takes one when it wakes rather than reading this.
+    /// [`Device::open`](crate::Device::open) asks for the monotonic clock, so this is normally
+    /// time since the machine started and it only moves forward. A kernel or a driver may refuse
+    /// that, leaving the stream on `CLOCK_REALTIME` — time since the epoch, which a clock step
+    /// moves — and [`Device::has_monotonic_timestamps`](crate::Device::has_monotonic_timestamps)
+    /// is what says which one a device is on.
+    ///
+    /// Stamping the moment a loop wakes is not a substitute. A wake carries every event queued
+    /// since the last one, and one moment for all of them is what a double click and a key repeat
+    /// are measured against.
     pub at: Duration,
     /// Which vocabulary [`Event::code`] is drawn from.
     pub kind: EventType,
