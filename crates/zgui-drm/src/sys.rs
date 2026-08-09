@@ -40,6 +40,12 @@ mod tests {
 
     #[test]
     fn the_generated_structs_are_the_size_the_headers_say() {
+        // A request number is `_IOWR(type, nr, sizeof(struct))`, so a struct that came out the
+        // wrong size produces a *different request number*, and the kernel refuses that with
+        // `EINVAL` and no further explanation. These are the sizes read out of the headers on a
+        // 64-bit build, and they hold on 32-bit too: DRM declares its user pointers `__u64` for
+        // exactly that reason.
+        assert_eq!(size_of::<drm_gem_close>(), 8);
         assert_eq!(size_of::<drm_get_cap>(), 16);
         assert_eq!(size_of::<drm_set_client_cap>(), 16);
         assert_eq!(size_of::<drm_mode_card_res>(), 64);
@@ -60,6 +66,7 @@ mod tests {
         assert_eq!(size_of::<drm_prime_handle>(), 12);
         assert_eq!(size_of::<drm_mode_create_blob>(), 16);
         assert_eq!(size_of::<drm_mode_destroy_blob>(), 4);
+        assert_eq!(size_of::<drm_mode_get_blob>(), 16);
         assert_eq!(size_of::<drm_event>(), 8);
         assert_eq!(size_of::<drm_event_vblank>(), 32);
         assert_eq!(size_of::<drm_mode_modeinfo>(), 68);
