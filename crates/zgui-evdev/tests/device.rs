@@ -10,7 +10,7 @@ mod support;
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::AsFd;
-use zgui_evdev::code::Key;
+use zgui_evdev::{Device, EventType, Key};
 
 #[test]
 fn a_device_opens_and_says_what_it_is() {
@@ -58,7 +58,7 @@ fn a_device_reports_the_codes_behind_the_types_it_has() {
         let capabilities = device.capabilities();
         // The two maps are read against the type map, so a device that says it has keys and then
         // reports none of them is the case where the second request went wrong.
-        if capabilities.has(zgui_evdev::EventType::EV_KEY) {
+        if capabilities.has(EventType::EV_KEY) {
             with_keys += 1;
             assert!(
                 !capabilities.keys().is_empty(),
@@ -124,7 +124,7 @@ fn a_device_says_which_keys_are_held_down() {
     let devices = support::devices("a_device_says_which_keys_are_held_down");
     let with_keys: Vec<_> = devices
         .iter()
-        .filter(|device| device.capabilities().has(zgui_evdev::EventType::EV_KEY))
+        .filter(|device| device.capabilities().has(EventType::EV_KEY))
         .collect();
     if with_keys.is_empty() {
         eprintln!(
@@ -239,7 +239,7 @@ fn turn() -> std::sync::MutexGuard<'static, ()> {
 /// on the machine this was written on, which advertises `KEY_MACRO27` and its neighbours. What
 /// matters is narrower — whether the device has any key from the block a person types on, which is
 /// everything under `BTN_MISC`.
-fn grabbable(test: &str) -> Option<zgui_evdev::Device> {
+fn grabbable(test: &str) -> Option<Device> {
     let found = support::devices(test).into_iter().find(|device| {
         !device
             .capabilities()
@@ -277,7 +277,7 @@ fn dropping_a_device_gives_its_grab_back() {
     device.grab().expect("nothing else holds this device");
     drop(device);
 
-    let mut again = zgui_evdev::Device::open(&path).expect("the device opens again");
+    let mut again = Device::open(&path).expect("the device opens again");
     let regrabbed = again.grab();
     // The duplicate is held until here on purpose. Dropping it earlier would close the description
     // and release the grab whatever `Device::drop` did, which is the assertion this is making.
