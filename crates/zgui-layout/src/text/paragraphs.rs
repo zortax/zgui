@@ -4,7 +4,7 @@ use zgui_profile::{Counter, counter};
 use zgui_scene::{TextPaint as SceneTextPaint, TextPaintTable};
 use zgui_text::{
     BreakRequest, BrokenParagraph, Brush, ParagraphCache, ParagraphContent, ParagraphKey,
-    ParagraphShaper, ShapedGlyphs, ShapedRun, StrutMetrics,
+    ParagraphShaper, ShapedClusters, ShapedGlyphs, ShapedRun, StrutMetrics,
 };
 use zgui_text_style::{TextPaint, TextStyle};
 
@@ -130,7 +130,7 @@ impl<S: ParagraphShaper, R> ShapedGlyphs for Paragraphs<S, R> {
     }
 }
 
-impl<S: ParagraphShaper, R> zgui_text::ShapedClusters for Paragraphs<S, R> {
+impl<S: ParagraphShaper, R> ShapedClusters for Paragraphs<S, R> {
     fn visit_clusters(
         &self,
         paragraph: ParagraphKey,
@@ -176,15 +176,6 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
 
     fn strut(&mut self, style: &TextStyle) -> StrutMetrics {
         self.shaper.strut(style)
-    }
-
-    fn visit_clusters(
-        &self,
-        paragraph: ParagraphKey,
-        line: u16,
-        visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
-    ) {
-        zgui_text::ShapedClusters::visit_clusters(self, paragraph, line, visit);
     }
 
     fn paint_slot(&mut self, paint: &TextPaint) -> Brush {

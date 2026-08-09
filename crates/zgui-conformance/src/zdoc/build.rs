@@ -267,6 +267,17 @@ impl Replaced {
     }
 }
 
+/// This measurer shapes nothing, so it has no cluster to report.
+impl zgui_text::ShapedClusters for Replaced {
+    fn visit_clusters(
+        &self,
+        _paragraph: zgui_text::ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+    }
+}
+
 impl MeasureContent for Replaced {
     fn measure(&mut self, request: MeasureRequest<'_>) -> Measured {
         let (width, height) = self.sizes.get(&request.box_).copied().unwrap_or((0.0, 0.0));

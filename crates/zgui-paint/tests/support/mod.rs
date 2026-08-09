@@ -462,6 +462,16 @@ impl ReplacedContent for UnitSquare {
 /// a paint test wants, because a paint test that shaped a paragraph would be measuring the shaper.
 struct Measurer;
 
+impl zgui_text::ShapedClusters for Measurer {
+    fn visit_clusters(
+        &self,
+        _paragraph: ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+    }
+}
+
 impl MeasureContent for Measurer {
     fn measure(&mut self, request: MeasureRequest<'_>) -> Measured {
         Measured::sized(request.known.width.unwrap_or(32.0), 32.0)

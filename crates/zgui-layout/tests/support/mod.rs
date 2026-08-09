@@ -246,6 +246,17 @@ impl Images {
     }
 }
 
+/// This measurer shapes nothing, so it has no cluster to report.
+impl zgui_text::ShapedClusters for Images {
+    fn visit_clusters(
+        &self,
+        _paragraph: zgui_text::ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+    }
+}
+
 impl MeasureContent for Images {
     fn measure(&mut self, request: MeasureRequest<'_>) -> Measured {
         self.asks.push(Ask {

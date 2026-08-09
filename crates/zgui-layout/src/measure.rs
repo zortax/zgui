@@ -20,7 +20,7 @@ use zgui_css::ComputedStyle;
 use zgui_dom::side::BoxKey;
 use zgui_text::{
     BreakRequest, BrokenParagraph, Brush, ContentWidths, ParagraphContent, ParagraphKey,
-    StrutMetrics,
+    ShapedClusters, StrutMetrics,
 };
 use zgui_text_style::{TextPaint, TextStyle};
 
@@ -97,7 +97,17 @@ pub struct ShapedSummary {
 }
 
 /// Whoever can say how big a box's content is.
-pub trait MeasureContent {
+///
+/// # Why the cluster seam is a supertrait
+///
+/// `text-overflow` needs the boundary a line may be cut on, which is a cluster, so a measurer has
+/// to report cluster geometry as well as sizes. A defaulted method here would let a *forwarding*
+/// measurer inherit the empty answer a shaperless one gives, and nothing detects that: sizes stay
+/// right, the paragraph still paints, and only the cut moves to the line's start edge, so every
+/// clipped label draws its mark and none of its words.
+///
+/// [`ShapedClusters`] has no default answer, so a wrapper either forwards it or does not compile.
+pub trait MeasureContent: ShapedClusters {
     /// Measures one box's replaced content under the given constraints.
     fn measure(&mut self, request: MeasureRequest<'_>) -> Measured;
 
@@ -144,20 +154,6 @@ pub trait MeasureContent {
     /// against the colour, because the slot has to survive a theme change that rewrites what is in
     /// it — and two runs that merely computed to the same colour must not be re-coloured together.
     fn paint_slot(&mut self, paint: &TextPaint) -> Brush;
-
-    /// Where each selectable unit of one broken line sits.
-    ///
-    /// Asked for by `text-overflow`, which needs the boundary a line may be cut on: a cluster is
-    /// where a character begins, and the specification hides a character that would only partly
-    /// overflow rather than cutting through it. Nothing else in layout asks — geometry is decided
-    /// from the line boxes — so a measurer with no shaper behind it answers nothing and is right to.
-    fn visit_clusters(
-        &self,
-        _paragraph: ParagraphKey,
-        _line: u16,
-        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
-    ) {
-    }
 }
 
 /// A measurer that reports every box as empty and every paragraph as having no lines.
@@ -243,7 +239,18 @@ impl zgui_text::ShapedGlyphs for NoContent {
     }
 }
 
-impl zgui_text::ShapedClusters for NoContent {
+impl ShapedClusters for NoContent {
+    fn visit_clusters(
+        &self,
+        _paragraph: ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+    }
+}
+
+/// Nothing was shaped here, so there is no cluster to report.
+impl ShapedClusters for NaturalSize {
     fn visit_clusters(
         &self,
         _paragraph: ParagraphKey,

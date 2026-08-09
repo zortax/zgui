@@ -72,6 +72,17 @@ type Content = Paragraphs<MonoShaper, NoImages>;
 #[derive(Default)]
 pub struct NoImages;
 
+/// This measurer shapes nothing, so it has no cluster to report.
+impl zgui_text::ShapedClusters for NoImages {
+    fn visit_clusters(
+        &self,
+        _paragraph: zgui_text::ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+    }
+}
+
 impl zgui_layout::measure::MeasureContent for NoImages {
     fn measure(
         &mut self,
