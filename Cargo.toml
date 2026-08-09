@@ -156,16 +156,22 @@ smallvec = "1.15"
 rayon = "1.12"
 toml = "1.1"
 
-# --- the kernel's display interface: named only by zgui-drm ------------------------------------
+# --- the kernel's interfaces: named only by zgui-drm, zgui-evdev, zgui-platform-drm ------------
 # `default-features = false` states the feature list in full. `std` is the only default and it is
-# back in the list below; `use-libc` stays off, so rustix takes its `linux_raw` backend on Linux
-# and a call reaches the kernel without passing through libc. `mm` is the dumb buffer's mapping,
-# `event` is polling the device for flip completion.
+# back in the list below; what stays off is `use-libc`, so rustix takes its `linux_raw` backend on
+# Linux and a call reaches the kernel without passing through libc.
+#
+# `fs` opens a device node, reads back the flags it was opened with, and watches `/dev/input`
+# through inotify for a node that arrives later. `mm` maps a dumb buffer. `event` covers the
+# eventfd a wake channel is and the `poll` a frame loop parks in. `time` reads `CLOCK_MONOTONIC`,
+# to anchor the clock an input report is stamped against to the frame loop's own origin; without
+# it the two share no zero.
 rustix = { version = "1.1", default-features = false, features = [
     "std",
     "fs",
     "mm",
     "event",
+    "time",
 ] }
 # Reads the vendored uapi headers at build time, for `zgui-drm` and `zgui-evdev`. The alternative
 # is transcribing every struct by hand, where one field of the wrong width silently changes an
