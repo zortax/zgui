@@ -7,14 +7,20 @@ license.workspace = true
 # L2 — backends. Every dependency is inherited: `foo.workspace = true`.
 #
 # The keyboard layout, and nothing about this framework. It names no zgui crate, so it is a
-# library that happens to live here rather than a layer of the product: what depends on it is
-# `zgui-platform-drm`, one step along the same layer.
+# library that happens to live here rather than a layer of the product. It is written to be named
+# by `zgui-platform-drm`, one step along the same layer, and by nothing else.
 #
 # There is no target gate. libxkbcommon is opened at run time, so nothing here reaches an
 # operating system at build time and the crate compiles on any host. What it finds is a question
 # the machine that runs it answers.
 [dependencies]
 libloading.workspace = true
+
+# Proof that a context, a key state and a compose state stay on the thread that made them: two
+# fixtures send one to another thread, one shares one, and none of the three may compile. The type
+# system holds the guarantee already; these fixtures fail if it stops holding.
+[dev-dependencies]
+trybuild.workspace = true
 
 [lints]
 workspace = true

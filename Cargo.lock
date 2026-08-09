@@ -6522,6 +6522,7 @@ name = "zgui-xkb"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "trybuild",
 ]
 
 [[package]]
