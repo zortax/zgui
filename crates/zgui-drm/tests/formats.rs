@@ -53,14 +53,14 @@ fn every_format_a_plane_publishes_is_a_format_it_lists() {
             !published.formats().is_empty(),
             "plane {id} publishes {IN_FORMATS}, so it names at least one format"
         );
-        for format in published.formats() {
-            assert!(
-                plane.formats.contains(&format.0),
-                "plane {id} publishes {:#010x}, and lists {:#010x?}",
-                format.0,
-                plane.formats
-            );
-        }
+        // The kernel builds the blob's list out of the plane's own array, in that order, so the
+        // two are the same list. Asserting containment alone would accept a permutation, and a
+        // permutation is what a parser reading the format table at a shifted offset produces.
+        let publishes: Vec<u32> = published.formats().iter().map(|format| format.0).collect();
+        assert_eq!(
+            publishes, plane.formats,
+            "plane {id} publishes the list it states, in order"
+        );
         println!(
             "plane {id} lists {} formats and publishes {}",
             plane.formats.len(),
@@ -89,7 +89,6 @@ fn a_plane_that_publishes_layouts_names_one_for_a_format_it_takes() {
     };
 
     let mut publishing = 0;
-    let mut naming = 0;
     for id in planes {
         let Some(published) = device
             .plane_formats(id)
@@ -99,14 +98,35 @@ fn a_plane_that_publishes_layouts_names_one_for_a_format_it_takes() {
         };
         publishing += 1;
 
-        let named: usize = published
-            .formats()
-            .iter()
-            .map(|format| published.modifiers(*format).len())
-            .sum();
-        if named != 0 {
-            naming += 1;
+        let mut named = 0;
+        for format in published.formats() {
+            let layouts = published.modifiers(*format);
+            named += layouts.len();
+            // `parse` answers a set, and a driver naming one pair over two overlapping windows is
+            // the case that makes that worth checking against a real blob.
+            for (place, layout) in layouts.iter().enumerate() {
+                assert!(
+                    !layouts[..place].contains(layout),
+                    "plane {id} names {:#018x} once for {:#010x}, and holds {layouts:#018x?}",
+                    layout.0,
+                    format.0
+                );
+                assert!(
+                    published.supports(*format, *layout),
+                    "plane {id} supports every layout it names for {:#010x}",
+                    format.0
+                );
+            }
         }
+        // Per plane, so that one plane answering for the whole device cannot hide the rest. A
+        // plane publishing the property names a layout: the kernel builds the blob out of the
+        // modifier list a driver registered its plane with, and an empty one publishes nothing.
+        assert!(
+            named != 0,
+            "plane {id} publishes {IN_FORMATS} over {} formats, so it names a layout for one",
+            published.formats().len()
+        );
+
         // The pair a zero-copy scanout is built from, printed for whichever format the caller of
         // this crate will ask for. A plane that takes it in no layout at all says so here.
         println!(
@@ -126,15 +146,7 @@ fn a_plane_that_publishes_layouts_names_one_for_a_format_it_takes() {
             device.path().display(),
             support::DEVICE
         );
-        return;
     }
-    // A blob that parses and names no layout for any format is what a parser that read the
-    // bitmasks against the wrong formats produces, and it is also what an empty answer looks like.
-    // A driver publishing the property states at least one layout somewhere.
-    assert!(
-        naming != 0,
-        "a device publishing {IN_FORMATS} on {publishing} planes names a layout on one of them"
-    );
 }
 
 #[test]

@@ -67,6 +67,11 @@ mod tests {
         assert_eq!(size_of::<drm_mode_create_blob>(), 16);
         assert_eq!(size_of::<drm_mode_destroy_blob>(), 4);
         assert_eq!(size_of::<drm_mode_get_blob>(), 16);
+        // These two carry no request number. They are the layout of a property blob, and their
+        // sizes are what `format::FormatModifiers::parse` steps a table by: the header once, then
+        // one entry per modifier.
+        assert_eq!(size_of::<drm_format_modifier_blob>(), 24);
+        assert_eq!(size_of::<drm_format_modifier>(), 24);
         assert_eq!(size_of::<drm_event>(), 8);
         assert_eq!(size_of::<drm_event_vblank>(), 32);
         assert_eq!(size_of::<drm_mode_modeinfo>(), 68);

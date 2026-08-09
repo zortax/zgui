@@ -362,6 +362,71 @@ mod tests {
     }
 
     #[test]
+    fn the_ends_of_a_window_name_the_first_and_the_last_format_it_covers() {
+        // The window at 64 of the list above, read at both its ends: bit 0 names format 64 and bit
+        // 63 names format 127. Every other test pins those two places by what they do not hold, so
+        // this is the one that pins them by what they do.
+        let formats = formats(130);
+        let parsed = FormatModifiers::parse(&blob(
+            &formats,
+            &[Entry {
+                formats: (1 << 0) | (1 << 63),
+                offset: 64,
+                modifier: TILED.0,
+            }],
+        ))
+        .expect("a blob whose mask names both ends of its window parses");
+
+        assert_eq!(
+            parsed.modifiers(formats[63]),
+            &[],
+            "the format below the window is outside it"
+        );
+        assert_eq!(
+            parsed.modifiers(formats[64]),
+            &[TILED],
+            "bit 0 names the format the window starts at"
+        );
+        assert_eq!(
+            parsed.modifiers(formats[127]),
+            &[TILED],
+            "bit 63 names the format the window ends at"
+        );
+        assert_eq!(
+            parsed.modifiers(formats[128]),
+            &[],
+            "and the format past the end of the window is outside it"
+        );
+    }
+
+    #[test]
+    fn a_window_starting_off_a_multiple_of_sixty_four_adds_its_start_to_the_bit() {
+        // The start is added to the bit. Every window a driver states starts at a multiple of 64,
+        // where an implementation combining the two with a bitwise or agrees for every bit of the
+        // mask — so this states one that does not, and the two answers separate: bit 1 of a window
+        // starting at 3 is format 4, and an or would answer format 3.
+        let formats = formats(8);
+        let parsed = FormatModifiers::parse(&blob(
+            &formats,
+            &[Entry {
+                formats: 0b10,
+                offset: 3,
+                modifier: TILED.0,
+            }],
+        ))
+        .expect("a blob whose window starts off a multiple of 64 parses");
+
+        for (index, format) in formats.iter().enumerate() {
+            let covered: &[Modifier] = if index == 4 { &[TILED] } else { &[] };
+            assert_eq!(
+                parsed.modifiers(*format),
+                covered,
+                "format {index}, against bit 1 of a window starting at 3"
+            );
+        }
+    }
+
+    #[test]
     fn a_window_that_starts_at_the_head_of_the_list_reads_the_low_bits() {
         // The ordinary case, and the header's other example: under 65 formats, formats 0 and 2.
         let formats = formats(8);

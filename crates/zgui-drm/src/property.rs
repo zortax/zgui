@@ -149,6 +149,11 @@ impl Device {
     /// answer would hand back a buffer of zeros with nothing reported. This read asks again
     /// instead, as every other two-pass read in this crate does with a count that moved.
     ///
+    /// The header states none of that: `drm_mode_get_blob` in `drm_mode.h` carries no kernel-doc,
+    /// unlike the structures around it. It is `drm_mode_getblob_ioctl` in
+    /// `drivers/gpu/drm/drm_property.c` that copies only where the two lengths are equal, and
+    /// reports the blob's length either way.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Ioctl`] when the kernel refuses, which is how an id it does not know is

@@ -126,7 +126,8 @@ impl Device {
     /// answer names, and the image is then handed over as it stands.
     ///
     /// Answers `None` where the driver publishes no `IN_FORMATS` property. The property is
-    /// optional, and a driver that omits it states only its format list.
+    /// optional, and a driver that omits it states only its format list. A property whose value is
+    /// zero is read the same way, because zero names no blob.
     ///
     /// # Errors
     ///
