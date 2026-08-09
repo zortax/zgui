@@ -11,10 +11,45 @@ use crate::device::Device;
 use crate::error::{Error, Result};
 
 /// Where the kernel puts input devices.
-const DIRECTORY: &str = "/dev/input";
+pub(crate) const DIRECTORY: &str = "/dev/input";
 
 /// The prefix an event node's name has.
 const PREFIX: &str = "event";
+
+/// Returns the kernel's number for the node called `name`, where that name is an event node.
+///
+/// `/dev/input` also holds `mice`, `mouse0`, `js0`, `by-id` and `by-path`. `mouse0` is the one that
+/// matters: it starts with the prefix and is a different interface, so a rule written against the
+/// prefix alone would read a mouse through a protocol this crate has never heard of.
+///
+/// The number carries the kernel's own order, which the name does not: `event2` comes before
+/// `event10`, and sorting by name puts them the other way round.
+pub(crate) fn node_number(name: &str) -> Option<u32> {
+    name.strip_prefix(PREFIX)?.parse().ok()
+}
+
+/// Returns every event node in `directory` with its number, in the order the kernel numbers them.
+///
+/// # Errors
+///
+/// Returns [`Error::Open`] when the directory cannot be read.
+pub(crate) fn nodes_in(directory: &Path) -> Result<Vec<(u32, PathBuf)>> {
+    let entries = std::fs::read_dir(directory).map_err(|source| Error::Open {
+        path: directory.to_owned(),
+        source,
+    })?;
+
+    let mut nodes: Vec<(u32, PathBuf)> = entries
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let number = node_number(path.file_name()?.to_str()?)?;
+            Some((number, path))
+        })
+        .collect();
+    nodes.sort();
+    Ok(nodes)
+}
 
 /// A node that could not be opened, and why.
 #[derive(Debug)]
@@ -54,25 +89,7 @@ pub fn discover() -> Result<Discovery> {
 ///
 /// Returns [`Error::Open`] when the directory cannot be read.
 pub fn discover_in(directory: impl AsRef<Path>) -> Result<Discovery> {
-    let directory = directory.as_ref();
-    let entries = std::fs::read_dir(directory).map_err(|source| Error::Open {
-        path: directory.to_owned(),
-        source,
-    })?;
-
-    let mut nodes: Vec<(u32, PathBuf)> = entries
-        .filter_map(std::result::Result::ok)
-        .filter_map(|entry| {
-            let path = entry.path();
-            let number = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_prefix(PREFIX))
-                .and_then(|number| number.parse().ok())?;
-            Some((number, path))
-        })
-        .collect();
-    nodes.sort();
+    let nodes = nodes_in(directory.as_ref())?;
 
     let mut discovery = Discovery {
         opened: Vec::new(),

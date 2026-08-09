@@ -15,6 +15,13 @@
 //! The kernel groups everything that happened at one moment, and a reader that took a group apart
 //! would move a pointer twice for one movement.
 //!
+//! # Devices that arrive later
+//!
+//! `discover` reads the directory once. `Watch` asks the same directory a second way: it holds an
+//! inotify descriptor a loop parks on, and it names the nodes that arrive while the program runs.
+//! It watches the change of ownership as well as the creation, because udev sets a new node's owner
+//! after the kernel makes it.
+//!
 //! # Layout
 //!
 //! A device says which key moved. What a key *means* is a layout's answer, and `Console` reads the
@@ -57,6 +64,8 @@ pub mod event;
 mod ioctl;
 #[cfg(target_os = "linux")]
 mod sys;
+#[cfg(target_os = "linux")]
+pub mod watch;
 
 #[cfg(target_os = "linux")]
 pub use crate::code::{Absolute, Code, EventType, Key, Relative, Synchronisation};
@@ -70,3 +79,5 @@ pub use crate::discover::{Discovery, Skipped, discover, discover_in};
 pub use crate::error::{Error, Result};
 #[cfg(target_os = "linux")]
 pub use crate::event::{Batch, Event, Reader};
+#[cfg(target_os = "linux")]
+pub use crate::watch::Watch;

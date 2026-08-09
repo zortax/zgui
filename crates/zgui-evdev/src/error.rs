@@ -59,6 +59,17 @@ pub enum Error {
         /// Why it failed. `raw_os_error` is how the case above is recognised.
         source: std::io::Error,
     },
+    /// The watch on the device directory failed.
+    ///
+    /// The inotify object could not be made, the directory could not be watched, or a report could
+    /// not be read back out of it. A caller that gets one stops hearing about the devices that
+    /// arrive while it runs; every device it already holds goes on working.
+    Watch {
+        /// The directory that was being watched.
+        path: PathBuf,
+        /// Why it failed.
+        source: std::io::Error,
+    },
     /// The request could not be built, so nothing was asked.
     ///
     /// The crate refuses here: an event type past `EV_MAX` or an axis past `ABS_MAX`, whose request
@@ -73,6 +84,7 @@ impl fmt::Display for Error {
             Self::Open { path, source } => write!(f, "cannot open {}: {source}", path.display()),
             Self::Ioctl { request, source } => write!(f, "{request} failed: {source}"),
             Self::Read { source } => write!(f, "cannot read the event stream: {source}"),
+            Self::Watch { path, source } => write!(f, "cannot watch {}: {source}", path.display()),
             Self::Unusable(what) => write!(f, "{what}"),
         }
     }
@@ -81,9 +93,10 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Open { source, .. } | Self::Ioctl { source, .. } | Self::Read { source } => {
-                Some(source)
-            }
+            Self::Open { source, .. }
+            | Self::Ioctl { source, .. }
+            | Self::Read { source }
+            | Self::Watch { source, .. } => Some(source),
             Self::Unusable(_) => None,
         }
     }
