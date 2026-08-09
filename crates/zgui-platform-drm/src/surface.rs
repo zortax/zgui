@@ -24,6 +24,11 @@ use crate::output::Output;
 /// nothing, and each of those answers says which absence it comes from — a missing window manager,
 /// a missing compositor, or a part of this backend that is not written yet.
 ///
+/// Two of them answer with something, and both are values the frame loop collects: a redraw
+/// request, and the shape the pointer was asked to take. Neither can act where it is called — this
+/// type is `Send + Sync` and the loop's own state is not — so the value crosses and the loop
+/// carries it to the device.
+///
 /// # The handles it reports
 ///
 /// A KMS display has native handles and this reports them: the device descriptor as
