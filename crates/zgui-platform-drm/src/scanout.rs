@@ -22,6 +22,7 @@ use zgui_drm::{Device, Event};
 use zgui_platform::PlatformError;
 use zgui_render_wgpu::{Pixels, wgpu};
 
+use crate::cursor::Cursor;
 use crate::output::{Output, backend};
 
 /// How many buffers a display is driven from.
@@ -141,11 +142,15 @@ impl Scanout {
         Ok(scanout)
     }
 
-    /// Copies `pixels` into the back buffer and flips to it, reporting whether it went.
+    /// Copies `pixels` into the back buffer, draws `cursor` over it, and flips to it.
     ///
     /// Answers `false` when a flip is still on its way. The back buffer is the one still on the
     /// screen until the completion arrives, so writing into it would tear, and the caller's frame
     /// is declined rather than shown torn. [`Scanout::drain`] clears that.
+    ///
+    /// `cursor` draws nothing where the display has a plane to put a pointer on, so passing it
+    /// always keeps the decision in one place. It is drawn after the frame and before the flip,
+    /// because a pointer under the picture is a pointer nobody sees.
     ///
     /// The flip returns at once. What says the frame reached the screen is the completion event,
     /// which the loop reads off the device and hands back through [`Scanout::drain`].
@@ -159,6 +164,7 @@ impl Scanout {
         device: &Device,
         commit: &mut dyn Commit,
         pixels: &Pixels,
+        cursor: &Cursor,
     ) -> Result<bool, PlatformError> {
         if self.flipping {
             return Ok(false);
@@ -186,6 +192,7 @@ impl Scanout {
             destination_stride,
             height as usize,
         );
+        cursor.draw(bytes, destination_stride, width, height);
 
         commit
             .flip(device, self.pipe, self.framebuffers[back])
