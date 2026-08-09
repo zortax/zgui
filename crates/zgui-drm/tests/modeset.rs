@@ -23,13 +23,7 @@ use zgui_drm::buffer::DumbBuffer;
 use zgui_drm::commit::{Pipe, for_device};
 use zgui_drm::device::Interface;
 use zgui_drm::format::Format;
-use zgui_drm::property::ObjectKind;
 use zgui_drm::{Device, Event};
-
-/// What the kernel numbers `DRM_PLANE_TYPE_PRIMARY`.
-///
-/// Named here because `sys` is private: a test reaches this crate the way any other caller does.
-const PRIMARY: u64 = 1;
 
 /// The format both buffers are in.
 const FORMAT: Format = Format::XRGB8888;
@@ -88,12 +82,7 @@ fn set_a_mode_and_flip(test: &str, interface: Interface) {
 
     // Modesetting takes master, and a compositor holds it. Saying so is the honest outcome, and it
     // is what `cargo xtask ledger ignored` asks for in place of switching the test off.
-    if let Err(error) = device.become_master() {
-        eprintln!(
-            "{test}: cannot take DRM master on {}, so nothing was asserted: {error}\n\
-             run this from a free virtual terminal, or as root",
-            device.path().display()
-        );
+    if !support::master(test, &device) {
         return;
     }
     if !device.supports_dumb_buffers() {
@@ -124,7 +113,7 @@ fn set_a_mode_and_flip(test: &str, interface: Interface) {
         .expect("a modesetting device has a CRTC");
 
     let plane = if device.is_atomic() {
-        let Some(plane) = primary_plane(&device, CRTC_INDEX) else {
+        let Some(plane) = support::primary_plane(&device, CRTC_INDEX) else {
             eprintln!("{test}: CRTC {crtc} has no primary plane, so nothing was asserted");
             return;
         };
@@ -208,25 +197,6 @@ fn set_a_mode_and_flip(test: &str, interface: Interface) {
         .destroy_dumb_buffer(front)
         .expect("a dumb buffer is released");
     device.drop_master().expect("master is given up");
-}
-
-/// The primary plane that can drive the CRTC at `crtc_index`, where the device has one.
-///
-/// Two things make a plane the right one. Its possible-CRTC mask indexes the resource list, so the
-/// index selects the bit. Its `type` states what it is: a cursor or an overlay plane takes the same
-/// commit and puts no mode on the screen.
-fn primary_plane(device: &Device, crtc_index: usize) -> Option<u32> {
-    device.planes().ok()?.into_iter().find(|id| {
-        let Ok(plane) = device.plane(*id) else {
-            return false;
-        };
-        plane.possible_crtcs & (1_u32 << crtc_index) != 0
-            && device
-                .properties(*id, ObjectKind::Plane)
-                .ok()
-                .and_then(|properties| properties.value("type"))
-                == Some(PRIMARY)
-    })
 }
 
 /// Returns the first completion the device reports, or nothing once [`DEADLINE`] passes.
