@@ -182,14 +182,20 @@ fn drive(
             // would return at once.
             //
             // Which surface holds the keys is worked out every turn rather than once, because the
-            // answer moves as soon as there is a pointer to move it.
+            // answer moves as soon as there is a pointer to move it. Both edges are reported.
+            // Losing the keyboard settles a field being typed into and ends a composition, and a
+            // surface never told it lost them holds both open for ever.
             let claimed_ids: Vec<SurfaceId> =
                 surfaces[..claimed].iter().map(|drawn| drawn.id()).collect();
-            if let Some(id) = seat::focused(&claimed_ids)
-                && focused != Some(id)
-            {
-                focused = Some(id);
-                handler.surface_event(&cx, id, SurfaceEvent::Focused(true));
+            let holds_keys = seat::focused(&claimed_ids);
+            if holds_keys != focused {
+                if let Some(left) = focused {
+                    handler.surface_event(&cx, left, SurfaceEvent::Focused(false));
+                }
+                if let Some(gained) = holds_keys {
+                    handler.surface_event(&cx, gained, SurfaceEvent::Focused(true));
+                }
+                focused = holds_keys;
             }
             for event in seat.read() {
                 let Some(id) = focused else {

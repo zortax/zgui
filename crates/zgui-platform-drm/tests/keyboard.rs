@@ -13,6 +13,7 @@
 
 use zgui_evdev::Key;
 use zgui_platform_drm::input::keyboard::layout::{self, Layout};
+use zgui_platform_drm::input::seat;
 use zgui_vocab::{Modifiers, NamedKey};
 
 /// Returns a layout this machine has, or nothing with the reasons printed.
@@ -219,6 +220,55 @@ fn a_key_that_types_nothing_types_nothing() {
             None,
             "{key:?} arrived as {:?}",
             pressed.key
+        );
+    }
+}
+
+#[test]
+fn the_narrow_rule_refuses_a_device_udev_calls_a_keyboard() {
+    // Against the devices this machine actually has, because the rule exists for devices nobody
+    // writes down: a power button, a laptop's hotkey node, a gaming mouse with macro keys. Each is
+    // a keyboard under udev's `ID_INPUT_KEY`, and grabbing one takes a function away from the
+    // session with no way to get it back while the program runs.
+    let test = "the_narrow_rule_refuses_a_device_udev_calls_a_keyboard";
+    let found = match zgui_evdev::discover() {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("{test}: /dev/input cannot be read on this machine: {error}");
+            return;
+        }
+    };
+    if found.opened.is_empty() {
+        eprintln!(
+            "{test}: no input device on this machine can be opened, so nothing was asserted; add \
+             this user to the `input` group to run it"
+        );
+        return;
+    }
+
+    let mut narrowed = 0;
+    for device in &found.opened {
+        let types_on = seat::types_on(device.capabilities());
+        let udev = device.roles().contains(zgui_evdev::Role::Keyboard);
+        println!(
+            "{}: {:?} udev={udev} typed-on={types_on}",
+            device.path().display(),
+            device.name()
+        );
+        // The narrow rule is a subset of the broad one. A device this seat would take and udev
+        // would not is a device with a letter and no key at all, which is no device.
+        assert!(
+            !types_on || udev,
+            "{} is taken by a rule broader than udev's",
+            device.path().display()
+        );
+        narrowed += usize::from(udev && !types_on);
+    }
+
+    if narrowed == 0 {
+        eprintln!(
+            "{test}: every readable device here is either a real keyboard or not a keyboard at \
+             all, so the narrowing changed no answer on this machine"
         );
     }
 }
