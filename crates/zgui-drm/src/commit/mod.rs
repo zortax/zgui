@@ -86,7 +86,9 @@ pub trait Commit {
     /// [`Commit::modeset`] does. This is the commit that turns the cursor plane on, so it is the
     /// one a driver is most likely to refuse, and a refusal leaves the display as it was.
     ///
-    /// This blocks for as long as [`Commit::move_cursor`] does.
+    /// This blocks for up to two vertical blanks on the atomic interface, which
+    /// [`AtomicCommit::set_cursor`] sets out. A caller reaches it when the cursor's shape changes;
+    /// a motion event costs [`Commit::move_cursor`] instead.
     ///
     /// # Errors
     ///
@@ -114,32 +116,18 @@ pub trait Commit {
     /// moves a cursor the CRTC does not have. Nothing in this crate or in the kernel checks the
     /// rule, so a caller keeps it by reading this.
     ///
-    /// # Blocking, and what it costs a frame loop
+    /// # Both interfaces send `DRM_IOCTL_MODE_CURSOR2`
     ///
-    /// Both interfaces issue a blocking commit, because the kernel refuses a non-blocking one with
-    /// `EBUSY` while another is outstanding on the same CRTC, and a pointer moved per input event
-    /// would meet the frame loop's own flips constantly.
+    /// The kernel gives that request a shortcut the atomic ioctl has no way to ask for, so it is
+    /// the cheaper of the two per motion on an atomic device as well as on a legacy one.
+    /// [`AtomicCommit::move_cursor`] sets out which waits the shortcut skips, which one survives,
+    /// and what mixing the two interfaces on one plane costs.
     ///
-    /// The atomic path therefore waits twice: once for the outstanding flip to reach its vertical
-    /// blank, and once for its own. That is up to two refreshes, about 33 ms at 60 Hz. A frame loop
-    /// that reads flip completions, deadlines and input on one thread does none of the three for
-    /// that time, so a caller that owns such a loop moves the cursor once a frame, however many
-    /// motion events the frame collected.
-    ///
-    /// # What the legacy request would cost
-    ///
-    /// The kernel gives the legacy request a shortcut the atomic ioctl does not get.
-    /// `drm_atomic_helper_update_plane` marks an update of a CRTC's own cursor plane as a legacy
-    /// cursor update, and `drm_atomic_helper_wait_for_vblanks` returns at once for one. The atomic
-    /// ioctl sets no such flag, so it waits where `DRM_IOCTL_MODE_CURSOR2` does not. On a device
-    /// that serves both — which is every atomic device, as
-    /// [`legacy`](crate::commit::LegacyCommit) states — the legacy request is therefore likely to
-    /// be the cheaper one per motion, which would invert the choice made here.
-    ///
-    /// Nothing in this crate has measured it, because every test that touches a cursor needs DRM
-    /// master. A machine that has master can: the legacy path already runs on atomic drivers, so
-    /// the experiment costs one [`Interface::Legacy`](crate::device::Interface::Legacy) device
-    /// rather than a rewrite.
+    /// It can still wait. A move issued while a flip is outstanding on the same CRTC waits for
+    /// that flip, which is one refresh, and a driver that takes the asynchronous plane path waits
+    /// for nothing. A frame loop that reads flip completions, deadlines and input on one thread
+    /// does none of the three while it waits, so a caller that owns such a loop moves the cursor
+    /// once a turn, however many motion events the turn collected.
     ///
     /// # Errors
     ///

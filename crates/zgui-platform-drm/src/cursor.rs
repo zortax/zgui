@@ -35,11 +35,13 @@
 //!
 //! # The two ways a cursor reaches a screen
 //!
-//! **A plane.** The display engine composites the image, and moving it is two numbers, so a pointer
-//! costs one commit per motion and no frame at all. A real device on the atomic interface has such
-//! a plane, and so does every device on the legacy interface — the legacy request names the CRTC
-//! and reads no plane, so [`Device::cursor_plane`] answering `None` there says nothing about the
-//! hardware.
+//! **A plane.** The display engine composites the image, and moving it is two numbers, so a
+//! pointer costs one `DRM_IOCTL_MODE_CURSOR2` per motion and no frame at all. That request is the
+//! cheaper one on both interfaces: the kernel gives it a shortcut an atomic property commit has no
+//! way to ask for, and [`Commit::move_cursor`] sets that out. A real device on the atomic interface
+//! has such a plane, and so does every device on the legacy interface — the legacy request names
+//! the CRTC and reads no plane, so [`Device::cursor_plane`] answering `None` there says nothing
+//! about the hardware.
 //!
 //! **The frame.** A device that offers neither has the image drawn into the picture as it is
 //! copied for scanout, which costs a whole frame per motion. So the two paths differ in what the
@@ -610,8 +612,10 @@ impl Cursor {
 
     /// Records that what this cursor is has been asked for.
     ///
-    /// The plane path calls it for itself, where asking and showing are one thing: a cursor commit
-    /// blocks until the kernel has applied it.
+    /// The plane path calls it for itself, and what it records is what the kernel took: a cursor
+    /// request returns once the plane's state holds it, and the display engine shows it at the next
+    /// scanout without anything else being asked for. So a request that returned needs no second
+    /// one, which is the property this record is here for.
     ///
     /// The loop calls it for the fallback path, after it has asked the surface to be drawn — and
     /// there asking is not showing. Without it every later turn would ask again and a pointer that
@@ -656,9 +660,10 @@ impl Cursor {
     /// Puts what this cursor is on its plane.
     ///
     /// Answers at once on a display with no plane, and on one where the plane already holds what
-    /// is wanted. The loop calls it once a turn rather than once per motion, because a cursor
-    /// commit blocks for up to two refreshes and a loop that reads flips, deadlines and input on
-    /// one thread does none of the three while it waits.
+    /// is wanted. The loop calls it once a turn rather than once per motion: a move can still wait
+    /// for an outstanding flip, and a change of shape is a property commit that waits for up to
+    /// two refreshes — and a loop that reads flips, deadlines and input on one thread does none of
+    /// the three while it waits.
     ///
     /// **A refusal takes this display off the plane for the rest of the program**, and the pointer
     /// is drawn into its frames from then on. It has to: the loop asks again whenever the pointer

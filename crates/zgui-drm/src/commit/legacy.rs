@@ -5,13 +5,20 @@
 //! a mode is impossible from the commit that tried to set it, and waits on the graphics device
 //! before every flip.
 //!
-//! This path runs on ordinary modern hardware as well, because the legacy ioctls do not go away
-//! when a driver gains an atomic interface: the kernel implements them over its own atomic
-//! helpers. So a device opened with [`Interface::Legacy`](crate::device::Interface::Legacy) serves
-//! these requests, whatever the driver offers.
+//! This path is tested on ordinary modern hardware, because the legacy ioctls do not go away when
+//! a driver gains an atomic interface: the kernel implements them over its own atomic helpers. So
+//! a device opened with [`Interface::Legacy`](crate::device::Interface::Legacy) serves them, and
+//! the test suite drives the whole of this file that way.
 //!
-//! That leaves out a driver whose legacy path is native code under the ioctls. Almost nothing is
-//! any more, and this crate has no way to reach one.
+//! That leaves one thing untested: a driver whose legacy path is native code under the ioctls.
+//! Almost nothing is any more, and this crate has no way to test one.
+//!
+//! # One request here is issued on the atomic interface too
+//!
+//! [`moved`] is reached from both. Moving a cursor through this ioctl is cheaper than moving it
+//! through an atomic property commit, because the kernel gives its own shim a shortcut the atomic
+//! ioctl has no way to ask for. [`AtomicCommit::move_cursor`](crate::commit::AtomicCommit) is
+//! where that is set out, and it is the one place in this crate where the two interfaces meet.
 
 use crate::commit::{Commit, Pipe};
 use crate::cursor::{CursorImage, CursorPlane};
@@ -135,18 +142,7 @@ impl Commit for LegacyCommit {
     }
 
     fn move_cursor(&mut self, device: &Device, plane: CursorPlane, x: i32, y: i32) -> Result<()> {
-        // Without `DRM_MODE_CURSOR_BO` the kernel reads no buffer field and keeps the image the
-        // CRTC already has, which is what makes a move as cheap as it is.
-        cursor(
-            device,
-            sys::drm_mode_cursor2 {
-                flags: sys::DRM_MODE_CURSOR_MOVE,
-                crtc_id: plane.crtc,
-                x,
-                y,
-                ..Default::default()
-            },
-        )
+        moved(device, plane.crtc, x, y)
     }
 
     fn hide_cursor(&mut self, device: &Device, plane: CursorPlane) -> Result<()> {
@@ -197,6 +193,35 @@ fn layout(image: CursorImage) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Moves the cursor the CRTC `crtc` is showing to `x`, `y`.
+///
+/// Written out here, outside the trait implementation, because the atomic interface issues this
+/// same request. `drm_atomic_helper_update_plane` marks a change of a CRTC's own cursor plane as a
+/// legacy cursor update, and the kernel then skips two of the waits an atomic commit costs.
+/// [`AtomicCommit::move_cursor`](crate::commit::AtomicCommit) states the whole of that reasoning.
+///
+/// Without `DRM_MODE_CURSOR_BO` the kernel reads no buffer field and keeps the image the plane
+/// already has, so a move touches no buffer. It carries no stride and no format either, so the
+/// substitutions [`layout`] refuses an image over do not arise here.
+///
+/// # Errors
+///
+/// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses. A CRTC with no cursor
+/// plane of its own answers `EFAULT`: `drm_mode_cursor_common` falls through to its legacy branch,
+/// and an atomic driver registers no `cursor_move` callback there.
+pub(crate) fn moved(device: &Device, crtc: u32, x: i32, y: i32) -> Result<()> {
+    cursor(
+        device,
+        sys::drm_mode_cursor2 {
+            flags: sys::DRM_MODE_CURSOR_MOVE,
+            crtc_id: crtc,
+            x,
+            y,
+            ..Default::default()
+        },
+    )
 }
 
 /// Issues one cursor request.

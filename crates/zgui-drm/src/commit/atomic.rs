@@ -20,10 +20,10 @@
 //! valid once [`AtomicCommit::modeset`] has linked the plane to the CRTC. A flip on a plane linked
 //! to nothing puts no CRTC in the commit, which the header forbids.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
-use crate::commit::{Commit, Pipe};
+use crate::commit::{Commit, Pipe, legacy};
 use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
 use crate::error::{Error, Result};
@@ -129,6 +129,13 @@ pub struct AtomicCommit {
     /// A cursor commit names one object and at most ten properties, and it is issued as often as a
     /// pointer moves. Reusing the four vectors makes a move allocate nothing.
     scratch: Request,
+    /// The CRTCs whose cursor the legacy request refused to move.
+    ///
+    /// [`AtomicCommit::move_cursor`] tries the cheap request first and falls back to a property
+    /// commit when the kernel refuses it. A CRTC the driver registered no cursor plane on answers
+    /// every such request the same way, so the refusal is a fact about the CRTC. It is recorded
+    /// here and the cheap request is asked for once.
+    slow_moves: HashSet<u32>,
 }
 
 impl AtomicCommit {
@@ -235,18 +242,35 @@ impl AtomicCommit {
         self.scratch.clear();
         self.scratch.add(id, properties);
     }
+
+    /// Returns `true` while a cursor on `crtc` is still moved through the legacy request.
+    ///
+    /// True until that CRTC refuses one. [`AtomicCommit::move_cursor`] states what the two answers
+    /// cost and why the refusal is remembered per CRTC.
+    fn moves_quickly(&self, crtc: u32) -> bool {
+        !self.slow_moves.contains(&crtc)
+    }
+
+    /// Records that `crtc` refused the legacy request, so it is asked once.
+    fn refused_a_quick_move(&mut self, crtc: u32) {
+        self.slow_moves.insert(crtc);
+    }
 }
 
-/// The flags every cursor commit carries: it blocks, and it asks for no event.
+/// The flags every cursor property commit carries: it blocks, and it asks for no event.
 ///
-/// A cursor update on a live CRTC is a flip. The kernel refuses a non-blocking commit with `EBUSY`
-/// while another one is outstanding on that CRTC, and a pointer moved per input event would meet
-/// the frame loop's own flips constantly. A blocking commit waits for the outstanding one instead.
-/// Nothing waits on a cursor, so no event is asked for.
+/// `stall_checks` refuses a non-blocking commit with `EBUSY` while the previous commit on that
+/// CRTC has not completed, and a pointer moved per input event would meet the frame loop's own
+/// flips constantly. A blocking commit waits for the outstanding one instead. Nothing waits on a
+/// cursor, so no event is asked for.
 ///
-/// The waiting costs two vertical blanks: the commit waits for the outstanding flip to reach its
-/// blank, then its own `commit_tail` waits for the next. About 33 ms at 60 Hz.
-/// [`Commit::move_cursor`] states what that means for the thread that issues it.
+/// The waiting costs two vertical blanks. `commit_tail` waits for the outstanding commit in
+/// `drm_atomic_helper_wait_for_dependencies`, then `drm_atomic_helper_commit_tail` waits for the
+/// next blank in `drm_atomic_helper_wait_for_vblanks`. About 33 ms at 60 Hz.
+///
+/// So a motion does not use this. [`AtomicCommit::move_cursor`] issues the legacy request, which
+/// the kernel gives a shortcut past both waits. What is left on this path is putting an image on
+/// the plane and taking it off, which a caller reaches when the cursor's shape changes.
 const CURSOR_COMMIT: u32 = 0;
 
 impl Commit for AtomicCommit {
@@ -415,8 +439,64 @@ impl Commit for AtomicCommit {
         self.scratch.issue(device, CURSOR_COMMIT)
     }
 
+    /// Moves the cursor through `DRM_IOCTL_MODE_CURSOR2`, falling back to a property commit on a
+    /// CRTC that refuses one.
+    ///
+    /// # What the legacy request skips
+    ///
+    /// Both requests end in the same place. `drm_mode_cursor_universal` builds a plane update and
+    /// hands it to `drm_atomic_helper_update_plane`, so on an atomic driver the legacy request is
+    /// an atomic commit. They differ in one flag the legacy path can set and the atomic ioctl
+    /// cannot: `drm_atomic_helper_update_plane` sets `legacy_cursor_update` when the plane it is
+    /// given is the CRTC's own cursor plane, and `drm_mode_atomic_ioctl` sets it nowhere. Three
+    /// things follow from that flag, and each of them is a wait this path avoids:
+    ///
+    /// * `drm_atomic_helper_wait_for_vblanks` returns at once;
+    /// * `drm_atomic_helper_setup_commit` completes the CRTC's `flip_done` and records no commit
+    ///   in the state, so `drm_atomic_helper_wait_for_flip_done` skips that CRTC;
+    /// * `drm_atomic_helper_check` may promote the whole commit to `async_update`, where a driver
+    ///   with `atomic_async_check` and `atomic_async_update` programs the plane and returns.
+    ///
+    /// One wait survives. `drm_atomic_helper_wait_for_dependencies` reads no such flag, so a move
+    /// issued while a flip is outstanding on the same CRTC can still wait for that flip: one
+    /// vertical blank instead of two, and none at all on a driver that took the asynchronous path.
+    /// That is what this saves, and it is why a caller that owns a frame loop moves the cursor
+    /// once a turn.
+    ///
+    /// # Mixing the two interfaces
+    ///
+    /// The kernel's documentation of the plane `type` property, which lives in `drm_plane.c` and
+    /// in no vendored header, says a client must not drive a cursor plane through atomic commits
+    /// and through these ioctls at once. The reason it gives is that the kernel uses some cursor
+    /// planes implicitly in those ioctls. The divergence this crate can find is `crtc->cursor_x`
+    /// and `crtc->cursor_y`: the legacy path keeps them and an atomic commit does not write them.
+    /// A `DRM_MODE_CURSOR_BO` request that carries no `DRM_MODE_CURSOR_MOVE` reads them, so it
+    /// would put the image back where the last legacy request left it.
+    ///
+    /// Nothing here sends that request. [`AtomicCommit::set_cursor`] states the position as
+    /// `CRTC_X` and `CRTC_Y` in its own commit, and this request always carries `CURSOR_MOVE`,
+    /// which is the flag `drm_mode_cursor_universal` writes both shadow fields under. So the
+    /// sequence this crate issues has no reader of a field the other interface left stale.
+    ///
+    /// # The plane this cannot compare
+    ///
+    /// `drm_mode_cursor_universal` acts on `crtc->cursor`, the plane the driver registered as that
+    /// CRTC's cursor. [`CursorPlane::id`] is the plane this crate found by reading plane types. On
+    /// every driver this crate has met the two are one plane. Where they are not, the move reaches
+    /// the driver's plane, the image stays on the other one, and the ioctl reports success: a
+    /// cursor that stops moving with nothing logged. A refusal is caught below; this is not, and
+    /// no property names `crtc->cursor` to compare against.
     fn move_cursor(&mut self, device: &Device, plane: CursorPlane, x: i32, y: i32) -> Result<()> {
         let id = Self::cursor(plane)?;
+        if self.moves_quickly(plane.crtc) {
+            match legacy::moved(device, plane.crtc, x, y) {
+                Ok(()) => return Ok(()),
+                // A CRTC the driver registered no cursor plane on answers `EFAULT`, and it answers
+                // it for every later request as well. So the property commit takes over for that
+                // CRTC and the display keeps its cursor.
+                Err(_) => self.refused_a_quick_move(plane.crtc),
+            }
+        }
         // Only the position. The plane keeps the framebuffer and the rectangles `set_cursor` gave
         // it, and the CRTC is in the commit because `CRTC_ID` still links the plane to it — the
         // same rule the head of this module states for a flip. This commit asks for no event, so
@@ -552,6 +632,26 @@ mod tests {
         assert_eq!(signed(-64), u64::MAX - 63);
         assert_eq!(signed(i32::MIN), 0xffff_ffff_8000_0000);
         assert_eq!(signed(i32::MAX), 0x7fff_ffff);
+    }
+
+    #[test]
+    fn a_crtc_that_refused_the_cheap_cursor_move_is_never_asked_for_one_again() {
+        // The fallback is per CRTC and it is one way. A CRTC the driver registered no cursor plane
+        // on refuses every one of these requests, so a commit interface that asked again would
+        // issue one failing ioctl per pointer motion for the rest of the program — and it would
+        // pay for the property commit on top of it.
+        let mut commit = AtomicCommit::new();
+        assert!(commit.moves_quickly(31));
+        assert!(commit.moves_quickly(42));
+
+        commit.refused_a_quick_move(31);
+
+        assert!(!commit.moves_quickly(31));
+        assert!(
+            commit.moves_quickly(42),
+            "one CRTC refusing says nothing about the next, so the second display keeps the cheap \
+             request"
+        );
     }
 
     #[test]
