@@ -26,14 +26,18 @@
 //! asserts nothing, which is the shape `cargo xtask ledger ignored` prescribes for a test that
 //! cannot be switched off.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
 use zgui_drm::{Device, Error};
-use zgui_platform_drm::{Copied, EXTENSIONS, FORMAT, Handover, Imported, Output, Scanout};
+use zgui_platform_drm::{
+    Copied, Cursor, DrmDisplay, EXTENSIONS, FORMAT, Handover, Imported, Output, Scanout,
+};
 use zgui_render_wgpu::target::swapchain::Supplied;
 use zgui_render_wgpu::{Gpu, SharedGraphics, wgpu};
 
@@ -71,7 +75,10 @@ struct Machine {
     /// The graphics device the images are made on.
     gpu: Arc<Gpu>,
     /// The display device the buffers are imported into.
-    device: Device,
+    ///
+    /// Shared, because a [`DrmDisplay`] holds the device open for as long as anything draws to it
+    /// and a test that builds one still owns the device itself.
+    device: Arc<Device>,
     /// The display they are registered for.
     output: Output,
 }
@@ -125,7 +132,7 @@ fn machine(test: &str) -> Option<Machine> {
     Some(Machine {
         _graphics: graphics,
         gpu,
-        device,
+        device: Arc::new(device),
         output,
     })
 }
@@ -549,4 +556,92 @@ fn a_display_that_composites_no_pointer_keeps_the_copied_shape() {
         "a copied display names no buffer for a renderer to compose into"
     );
     scanout.release(&machine.device);
+}
+
+#[test]
+fn a_frame_that_drew_nothing_leaves_the_next_one_the_buffer_it_took_back() {
+    let test = "a_frame_that_drew_nothing_leaves_the_next_one_the_buffer_it_took_back";
+    let _guard = device_lock();
+    let Some(machine) = machine(test) else {
+        return;
+    };
+    let Some(scanout) = imported(test, &machine) else {
+        return;
+    };
+
+    // The display as whatever draws sees it: the images to compose into, and the two calls that
+    // bracket one frame.
+    let scanout = Rc::new(RefCell::new(scanout));
+    let display = DrmDisplay::new(
+        Arc::clone(&machine.device),
+        Rc::new(RefCell::new(commit::for_device(&machine.device))),
+        Rc::clone(&scanout),
+        Rc::new(RefCell::new(Cursor::new(
+            &machine.device,
+            &machine.output,
+            &mut Vec::new(),
+        ))),
+    );
+
+    let textures = display.textures();
+    assert_eq!(
+        textures.len(),
+        BUFFERS,
+        "a display on this shape hands out one texture per buffer"
+    );
+    assert_eq!(
+        Supplied::unusable(&textures),
+        None,
+        "the renderer refuses the textures this display hands it"
+    );
+
+    // A frame that drew nothing gives nothing over, so the buffer stays in this queue family and
+    // the frame after it is pointed at the same one. Taking it back again is what has to keep
+    // working: a buffer this side of the handover is acquired by doing nothing.
+    assert_eq!(
+        display.acquire().expect("a new display owes no barrier"),
+        Some(0),
+        "the first frame goes into the first buffer"
+    );
+    assert_eq!(
+        display
+            .acquire()
+            .expect("a buffer nothing gave over is taken back by doing nothing"),
+        Some(0),
+        "a frame that drew nothing left the buffer where the next one needs it"
+    );
+
+    // And a frame that did draw gives it over. A machine holding DRM master flips here and the
+    // frame after it goes to the next buffer; a machine without master is refused at the commit,
+    // which happens after the barrier has run — so the display engine holds the buffer either way
+    // and the acquire below is a barrier that really runs.
+    draw(&machine.gpu, &scanout.borrow().buffers()[0]);
+    let next = match display.present_drawn() {
+        Ok(true) => {
+            eprintln!("{test}: this process holds the device, so the frame reached the screen");
+            1
+        }
+        Ok(false) => panic!("nothing is outstanding in front of the first frame"),
+        Err(refused) => {
+            eprintln!(
+                "{test}: the barrier ran and the commit was refused, which is what a process that \
+                 is not DRM master gets: {refused}"
+            );
+            0
+        }
+    };
+    assert_eq!(
+        display
+            .acquire()
+            .expect("a buffer the display engine holds is taken back before the next frame"),
+        Some(next),
+        "the frame after a give-over draws into the buffer the display is not reading"
+    );
+
+    // The renderer goes first, because a scanout is released by value and the display names it.
+    drop(display);
+    Rc::try_unwrap(scanout)
+        .expect("nothing else holds this display's buffers")
+        .into_inner()
+        .release(&machine.device);
 }
