@@ -360,6 +360,17 @@ impl PaintCache {
         freed
     }
 
+    /// Notes every record's chunk into the scene again, for a renderer that lost its residence.
+    ///
+    /// A recovered device holds nothing: every replay would fall back to transient upload until
+    /// its fragment happened to encode again. Re-noting lets the next drawn frame make the whole
+    /// cache resident in one pass of uploads instead.
+    pub fn renote_chunks(&self, scene: &mut Scene) {
+        for record in self.records.values() {
+            scene.note_chunk_inserted(record.revision, Arc::clone(&record.prims));
+        }
+    }
+
     /// Drops every record, releasing everything each one held.
     ///
     /// For a caller whose scene tables and atlas survive the painter — a budget's forget. Where

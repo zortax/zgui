@@ -77,8 +77,26 @@ fn a_resident_chunk_replayed_in_place_uploads_no_primitive_bytes() {
     );
     assert!(
         second_bytes * 4 < first_bytes,
-        "a frame replaying a resident chunk uploads the remap and its tables, never the \
+        "a frame replaying a resident chunk uploads at most the remap and its tables, never the \
          primitives: {second_bytes} against {first_bytes}"
+    );
+    assert!(
+        second_bytes < (QUADS * 4) as u64,
+        "the resolved remap matched the first frame's — insertion and provenance land in one \
+         pass — so even the remap upload is skipped: {second_bytes}"
+    );
+
+    // Frame two again: the same painting once more. The resolved remap is the list the buffer
+    // already holds, so even the remap upload is skipped and the frame's bytes fall further.
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.replay_chunk(&chunk, Size::default(), 1);
+    scene.finish(&DamageSet::full());
+    let (steady_bytes, steady) = draw_bytes(&mut renderer, &scene);
+    assert_eq!(steady.max_difference(&first), 0);
+    assert!(
+        steady_bytes <= second_bytes,
+        "a steady frame never owes more than the one before it: {steady_bytes} against \
+         {second_bytes}"
     );
 
     // Frame three: the same chunk, replayed eight pixels down. The bytes differ from the

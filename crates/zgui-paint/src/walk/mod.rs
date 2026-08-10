@@ -310,6 +310,11 @@ impl Painter {
         self.cache.retire(keys, scene, owner);
     }
 
+    /// Notes every record's chunk into the scene again, for a renderer that lost its residence.
+    pub fn renote_chunks(&self, scene: &mut Scene) {
+        self.cache.renote_chunks(scene);
+    }
+
     /// Drops the coldest records until `bytes` chunk bytes have gone, and reports how many went.
     pub fn evict_cold_chunks(
         &mut self,

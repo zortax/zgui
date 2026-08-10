@@ -48,6 +48,8 @@ pub struct FrameBuffers {
     pub chunks: crate::buffer::persist::ChunkStore,
     /// The resolved remap of each instanced kind — arena slots in draw order, one per pipeline.
     pub remaps: [StorageBuffer; 6],
+    /// What each remap buffer holds, so an unchanged frame skips the upload entirely.
+    last_remaps: [Vec<u32>; 6],
     /// Bind groups whose resources are the stable frame side-table buffers.
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
     /// One bind group per instance and remap buffer allocation epoch.
@@ -81,6 +83,7 @@ impl FrameBuffers {
                 StorageBuffer::new(gpu, "zgui.remap.subpixel_sprites"),
                 StorageBuffer::new(gpu, "zgui.remap.color_sprites"),
             ],
+            last_remaps: Default::default(),
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::new(HashMap::new()),
             tables_released: false,
@@ -167,12 +170,15 @@ impl FrameBuffers {
             .chunks
             .upload_frame(gpu, &mut self.uploader, encoder, scene);
         for (lane, buffer) in self.remaps.iter_mut().enumerate() {
-            uploaded += buffer.upload(
-                gpu,
-                &mut self.uploader,
-                encoder,
-                self.chunks.resolved_remap(lane),
-            );
+            let resolved = self.chunks.resolved_remap(lane);
+            // A frame whose visible set and residence held still resolves to the same list — a
+            // blink, an animation elsewhere — and owes the buffer nothing.
+            if resolved == self.last_remaps[lane].as_slice() {
+                continue;
+            }
+            uploaded += buffer.upload(gpu, &mut self.uploader, encoder, resolved);
+            self.last_remaps[lane].clear();
+            self.last_remaps[lane].extend_from_slice(resolved);
         }
         uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
@@ -287,8 +293,9 @@ impl FrameBuffers {
         freed += self.spatial.shrink(gpu);
         self.tables_released = true;
         freed += self.chunks.release(gpu);
-        for remap in &mut self.remaps {
+        for (lane, remap) in self.remaps.iter_mut().enumerate() {
             freed += remap.shrink(gpu);
+            self.last_remaps[lane].clear();
         }
         freed += self.uploader.release_idle();
         *self.frame_bind.borrow_mut() = None;

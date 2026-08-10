@@ -364,6 +364,12 @@ impl Window {
             // stands until then.
             self.scene.clear_chunk_notes();
         }
+        if matches!(outcome, zgui_render::FrameOutcome::Recovered) {
+            // The renderer rebuilt its device and holds nothing resident. Re-noting every
+            // record's chunk lets the next frame restore residence in one pass of uploads,
+            // rather than serving each chunk transiently until its fragment encodes again.
+            self.painter.renote_chunks(&mut self.scene);
+        }
 
         // After the renderer, and before the arenas are recycled. After, because what a screen
         // reader is told about where a control is has to be where it was drawn rather than where
