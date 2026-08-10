@@ -65,16 +65,25 @@ fn image_box(window: &zgui_runtime::Window) -> Option<(f32, f32)> {
 
 /// Pumps the loop until the decode has landed and layout shows it, or fails loudly.
 ///
-/// The decode runs on a real thread, so the loop legitimately parks while it is in flight; what
-/// ends the wait is the completion's wake. The polling sleep is the test waiting on a thread it
-/// does not own, not the framework needing to be polled.
+/// The probe and the decode run on real threads, so the loop legitimately parks while either is
+/// in flight; what ends the wait is each completion's wake. Two conditions rather than one
+/// because they land separately: the *probe* is what sizes the box, and the *decode* is what
+/// fills the loader. The polling sleep is the test waiting on threads it does not own, not the
+/// framework needing to be polled.
 fn settle_until_shown(app: &mut Harness<Runtime>) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         app.settle(64);
         let shown = {
-            let window = &app.app_mut().windows_mut()[0];
-            image_box(window) == Some((2.0, 2.0))
+            let window = &mut app.app_mut().windows_mut()[0];
+            let sized = image_box(window) == Some((2.0, 2.0));
+            let decoded = window
+                .budget_report()
+                .line(CacheId::DecodedImages)
+                .report
+                .resident
+                > 0;
+            sized && decoded
         };
         if shown {
             return;

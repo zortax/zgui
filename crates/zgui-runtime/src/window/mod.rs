@@ -486,10 +486,16 @@ impl Window {
             ]),
         ));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
+        // The atlas may create textures as large as the device allows, so a photo the device can
+        // hold is cached whole rather than clamped to the smallest supported device's limit.
+        let atlas_limits = zgui_atlas::AtlasLimits {
+            max_texture_size: renderer.capabilities().max_texture_size,
+            ..zgui_atlas::AtlasLimits::default()
+        };
         // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
         let images = crate::images::ImageLoader::new(
             Arc::clone(&replaced_images),
-            (zgui_atlas::AtlasLimits::default().max_texture_size - 2).max(1) as u32,
+            (atlas_limits.max_texture_size - 2).max(1) as u32,
         );
         let sources = images.source_queue();
         dom.set_attribute_hook(Rc::new(move |node, name, value| {
@@ -591,9 +597,7 @@ impl Window {
             painter: Painter::new(),
             verify_replays: zgui_layout::invariants::enabled(),
             check_spatial_dependencies: zgui_scene::invariant::enabled(),
-            content: ContentCache::new(
-                zgui_atlas::AtlasLimits::default().with_soft_bytes(ATLAS_SOFT_BYTES),
-            ),
+            content: ContentCache::new(atlas_limits.with_soft_bytes(ATLAS_SOFT_BYTES)),
             replaced_surfaces,
             images,
             embed: Box::new(crate::embed::NoEmbeds),

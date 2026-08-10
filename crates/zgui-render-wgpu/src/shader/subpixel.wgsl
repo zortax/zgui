@@ -35,7 +35,7 @@ fn fs_subpixel_sprite(in: SpriteVarying) -> SubpixelOutput {
     let color = rgba_of(sprite.color);
     let straight = straight_rgb(color);
 
-    var sample = sample_atlas(in.texel).rgb;
+    var sample = sample_atlas(in.texel, sprite.tile, 0.0).rgb;
     if globals.text.z != 0.0 {
         // The display's subpixels run the other way round, so the coverage does too.
         sample = sample.bgr;

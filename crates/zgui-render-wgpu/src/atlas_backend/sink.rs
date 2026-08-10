@@ -23,8 +23,10 @@ pub struct AtlasTextures {
     gpu: Arc<Gpu>,
     /// Each texture, its view and the bind group that reads it.
     textures: BTreeMap<TextureId, Entry>,
-    /// The sampler every atlas is read through.
+    /// The sampler the glyph pools are read through.
     sampler: wgpu::Sampler,
+    /// The sampler the image pool is read through.
+    filtering_sampler: wgpu::Sampler,
     /// The layout the bind groups are built against.
     layout: wgpu::BindGroupLayout,
     /// Reusable staging storage for batched atlas writes.
@@ -49,8 +51,9 @@ struct Entry {
 impl AtlasTextures {
     /// An empty set of atlas textures on `gpu`, read through `layout`.
     pub fn new(gpu: Arc<Gpu>, layout: wgpu::BindGroupLayout) -> Self {
-        // Nearest filtering, because a tile is rasterised at the size it is drawn at: filtering
-        // would blur a glyph and, at a tile's edge, sample its neighbour.
+        // Nearest filtering for the glyph pools, because their tiles are rasterised at the size
+        // they are drawn at: filtering would blur a glyph and, at a tile's edge, sample its
+        // neighbour.
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zgui.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -61,10 +64,25 @@ impl AtlasTextures {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
+        // Trilinear filtering for the image pool, because its tiles are decoded at one size and
+        // drawn at whatever size layout produced: nearest would turn every stretch blocky and
+        // every shrink into shimmer. The shader clamps its sample to the tile's inner half-texel,
+        // which is what stops the filter reading a neighbouring tile.
+        let filtering_sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("zgui.atlas.sampler.filtering"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
         Self {
             gpu,
             textures: BTreeMap::new(),
             sampler,
+            filtering_sampler,
             layout,
             uploader: UploadBelt::default(),
             upload_encoder: None,
@@ -86,6 +104,21 @@ impl AtlasTextures {
     pub fn staging_bytes(&self) -> u64 {
         self.uploader.bytes()
     }
+
+    /// The belt's warm reusable staging bytes.
+    pub fn staging_warm_bytes(&self) -> u64 {
+        self.uploader.warm_bytes()
+    }
+
+    /// Staging bytes whose mapping round-trip is in flight.
+    pub fn staging_inflight_bytes(&self) -> u64 {
+        self.uploader.inflight_bytes()
+    }
+
+    /// Staging bytes in one-shot chunks still held for this frame's oversized transfers.
+    pub fn staging_oneshot_bytes(&self) -> u64 {
+        self.uploader.oneshot_bytes()
+    }
 }
 
 impl TextureSink for AtlasTextures {
@@ -95,6 +128,16 @@ impl TextureSink for AtlasTextures {
         size: Size<i32, Device>,
         format: TextureFormat,
     ) -> Result<(), SinkError> {
+        self.create_texture_with_mips(texture, size, format, 1)
+    }
+
+    fn create_texture_with_mips(
+        &mut self,
+        texture: TextureId,
+        size: Size<i32, Device>,
+        format: TextureFormat,
+        mip_levels: u32,
+    ) -> Result<(), SinkError> {
         let extent = wgpu::Extent3d {
             width: size.width.max(1) as u32,
             height: size.height.max(1) as u32,
@@ -103,7 +146,7 @@ impl TextureSink for AtlasTextures {
         let created = self.gpu.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("zgui.atlas"),
             size: extent,
-            mip_level_count: 1,
+            mip_level_count: mip_levels.max(1),
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu_format(format),
@@ -111,6 +154,10 @@ impl TextureSink for AtlasTextures {
             view_formats: &[],
         });
         let view = created.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = match texture.kind {
+            zgui_atlas::TextureKind::Image => &self.filtering_sampler,
+            _ => &self.sampler,
+        };
         let bind_group = self
             .gpu
             .device()
@@ -124,7 +171,7 @@ impl TextureSink for AtlasTextures {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        resource: wgpu::BindingResource::Sampler(sampler),
                     },
                 ],
             });
@@ -146,6 +193,17 @@ impl TextureSink for AtlasTextures {
         format: TextureFormat,
         bytes: &[u8],
     ) -> Result<(), SinkError> {
+        self.write_texture_mip(texture, 0, bounds, format, bytes)
+    }
+
+    fn write_texture_mip(
+        &mut self,
+        texture: TextureId,
+        mip: u32,
+        bounds: Rect<i32, Device>,
+        format: TextureFormat,
+        bytes: &[u8],
+    ) -> Result<(), SinkError> {
         let entry = self.textures.get(&texture).ok_or_else(|| {
             SinkError::new(format!("no atlas texture has been created for {texture:?}"))
         })?;
@@ -162,15 +220,22 @@ impl TextureSink for AtlasTextures {
                         label: Some("zgui.atlas.upload"),
                     })
             });
-            self.uploader
-                .write_texture(&self.gpu, encoder, &entry.texture, bounds, format, bytes);
+            self.uploader.write_texture(
+                &self.gpu,
+                encoder,
+                &entry.texture,
+                mip,
+                bounds,
+                format,
+                bytes,
+            );
             counter::bump(Counter::AtlasTextureWrites);
             return Ok(());
         }
         self.gpu.queue().write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &entry.texture,
-                mip_level: 0,
+                mip_level: mip,
                 origin: wgpu::Origin3d {
                     x: bounds.origin.x.max(0) as u32,
                     y: bounds.origin.y.max(0) as u32,
@@ -211,6 +276,8 @@ impl TextureSink for AtlasTextures {
         self.gpu.queue().submit([encoder.finish()]);
         counter::bump(Counter::AtlasUploadBatches);
         self.uploader.recall();
+        counter::set(Counter::StagingWarmBytes, self.uploader.warm_bytes());
+        counter::set(Counter::StagingOneShotBytes, self.uploader.oneshot_bytes());
     }
 
     fn destroy_texture(&mut self, texture: TextureId) {

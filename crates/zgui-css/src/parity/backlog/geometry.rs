@@ -24,8 +24,6 @@ crate::register_properties! {
     container_name => Support::Ignored(NOTE),
     container_type => Support::Ignored(NOTE),
     empty_cells => Support::Ignored(NOTE),
-    object_fit => Support::Ignored(NOTE),
-    object_position => Support::Ignored(NOTE),
     offset_path => Support::Ignored(NOTE),
     overflow_clip_margin => Support::Ignored(NOTE),
     position_area => Support::Ignored(NOTE),

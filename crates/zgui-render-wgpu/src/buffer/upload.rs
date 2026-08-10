@@ -18,6 +18,12 @@ struct Chunk {
     size: u64,
     offset: u64,
     last_used: u64,
+    /// Whether this chunk is released after its copies complete rather than recycled.
+    ///
+    /// Set on chunks allocated for oversized transfers. Rounding those to the next power of two
+    /// and keeping them warm would hold multi-megabyte mapped buffers for two seconds after one
+    /// image went by; a near-exact allocation that leaves with its frame holds nothing.
+    one_shot: bool,
 }
 
 impl Chunk {
@@ -35,10 +41,14 @@ pub struct UploadBelt {
     active: Vec<Chunk>,
     closed: Vec<Chunk>,
     free: Vec<Chunk>,
-    sender: mpsc::Sender<Chunk>,
-    receiver: mpsc::Receiver<Chunk>,
+    /// The mapping callbacks' way home: the chunk's size always, and the chunk itself when its
+    /// mapping succeeded. A failed mapping — a lost device — still reports its size, so the
+    /// in-flight total comes back down instead of leaking upward for the life of the belt.
+    sender: mpsc::Sender<(u64, Option<Chunk>)>,
+    receiver: mpsc::Receiver<(u64, Option<Chunk>)>,
     frame: u64,
     mapping_bytes: u64,
+    oneshot_bytes: u64,
     allocations: u32,
 }
 
@@ -65,6 +75,7 @@ impl Default for UploadBelt {
             receiver,
             frame: 0,
             mapping_bytes: 0,
+            oneshot_bytes: 0,
             allocations: 0,
         }
     }
@@ -75,6 +86,12 @@ impl UploadBelt {
     const MINIMUM: u64 = 256 * 1024;
     /// Free chunks beyond this age are a transient high-water mark rather than working set.
     const RETAIN_FRAMES: u64 = 120;
+    /// Requests of this size and up allocate a near-exact one-shot chunk.
+    ///
+    /// Ordinary UI frames stay far under it; what crosses it is an image or a scene burst, and
+    /// power-of-two rounding plus the retention period would turn one such transfer into
+    /// megabytes of mapped memory held for two seconds.
+    const ONE_SHOT: u64 = 1 << 20;
 
     /// Starts a frame, opportunistically reclaiming completed mappings without waiting for them.
     pub fn begin_frame(&mut self, gpu: &Gpu) {
@@ -136,20 +153,7 @@ impl UploadBelt {
         {
             self.free.swap_remove(index)
         } else {
-            self.allocations += 1;
-            counter::bump(Counter::UploadChunksAllocated);
-            let chunk_size = size.max(Self::MINIMUM).next_power_of_two();
-            Chunk {
-                buffer: gpu.device().create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("zgui.upload.chunk"),
-                    size: chunk_size,
-                    usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: true,
-                }),
-                size: chunk_size,
-                offset: 0,
-                last_used: self.frame,
-            }
+            self.allocate_chunk(gpu, size, "zgui.upload.chunk")
         };
         let offset = chunk
             .allocation(size, wgpu::MAP_ALIGNMENT)
@@ -167,12 +171,13 @@ impl UploadBelt {
         size
     }
 
-    /// Copies tightly packed texels into a texture through padded mapped rows.
+    /// Copies tightly packed texels into level `mip` of a texture through padded mapped rows.
     pub fn write_texture(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::Texture,
+        mip: u32,
         bounds: zgui_geom::Rect<i32, zgui_geom::Device>,
         format: zgui_atlas::TextureFormat,
         bytes: &[u8],
@@ -202,20 +207,7 @@ impl UploadBelt {
         {
             self.free.swap_remove(index)
         } else {
-            self.allocations += 1;
-            counter::bump(Counter::UploadChunksAllocated);
-            let chunk_size = size.max(Self::MINIMUM).next_power_of_two();
-            Chunk {
-                buffer: gpu.device().create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("zgui.texture-upload.chunk"),
-                    size: chunk_size,
-                    usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: true,
-                }),
-                size: chunk_size,
-                offset: 0,
-                last_used: self.frame,
-            }
+            self.allocate_chunk(gpu, size, "zgui.texture-upload.chunk")
         };
         let offset = chunk
             .allocation(size, alignment)
@@ -247,7 +239,7 @@ impl UploadBelt {
             },
             wgpu::TexelCopyTextureInfo {
                 texture: target,
-                mip_level: 0,
+                mip_level: mip,
                 origin: wgpu::Origin3d {
                     x: bounds.origin.x.max(0) as u32,
                     y: bounds.origin.y.max(0) as u32,
@@ -274,19 +266,30 @@ impl UploadBelt {
     }
 
     /// Schedules submitted chunks to become writable again. This never waits for the GPU.
+    ///
+    /// One-shot chunks are dropped here instead: the submitted copy holds its own reference, so
+    /// the memory goes back the moment the copy completes, with no mapping round-trip and no stay
+    /// in the warm pool.
     pub fn recall(&mut self) {
         self.receive();
         for chunk in self.closed.drain(..) {
+            if chunk.one_shot {
+                self.oneshot_bytes = self.oneshot_bytes.saturating_sub(chunk.size);
+                continue;
+            }
             self.mapping_bytes += chunk.size;
             let sender = self.sender.clone();
+            let size = chunk.size;
             chunk
                 .buffer
                 .clone()
                 .slice(..)
                 .map_async(wgpu::MapMode::Write, move |result| {
-                    if result.is_ok() {
-                        let _ = sender.send(chunk);
-                    }
+                    // The size travels even when the mapping failed — a lost device — so the
+                    // in-flight total always comes back down; the chunk itself only comes home
+                    // usable.
+                    let chunk = if result.is_ok() { Some(chunk) } else { None };
+                    let _ = sender.send((size, chunk));
                 });
         }
     }
@@ -307,6 +310,24 @@ impl UploadBelt {
             + self.mapping_bytes
     }
 
+    /// Mapped bytes waiting warm for reuse.
+    pub fn warm_bytes(&self) -> u64 {
+        self.free.iter().map(|chunk| chunk.size).sum()
+    }
+
+    /// Bytes in one-shot chunks the belt is still holding.
+    ///
+    /// Falls at [`UploadBelt::recall`], when the belt's reference is dropped; the device holds
+    /// its own until the submitted copy completes, so the physical release trails by that much.
+    pub fn oneshot_bytes(&self) -> u64 {
+        self.oneshot_bytes
+    }
+
+    /// Bytes whose mapping round-trip is in flight.
+    pub fn inflight_bytes(&self) -> u64 {
+        self.mapping_bytes + self.closed.iter().map(|chunk| chunk.size).sum::<u64>()
+    }
+
     /// Drops every completed mapped chunk after the idle grace period.
     pub fn release_idle(&mut self) -> u64 {
         self.receive();
@@ -318,10 +339,39 @@ impl UploadBelt {
 
     /// Receives only chunks whose mapping callback has already run.
     fn receive(&mut self) {
-        while let Ok(mut chunk) = self.receiver.try_recv() {
-            self.mapping_bytes = self.mapping_bytes.saturating_sub(chunk.size);
-            chunk.offset = 0;
-            self.free.push(chunk);
+        while let Ok((size, chunk)) = self.receiver.try_recv() {
+            self.mapping_bytes = self.mapping_bytes.saturating_sub(size);
+            if let Some(mut chunk) = chunk {
+                chunk.offset = 0;
+                self.free.push(chunk);
+            }
+        }
+    }
+
+    /// Allocates a fresh chunk for a request no existing chunk could hold.
+    fn allocate_chunk(&mut self, gpu: &Gpu, size: u64, label: &'static str) -> Chunk {
+        self.allocations += 1;
+        counter::bump(Counter::UploadChunksAllocated);
+        let one_shot = size >= Self::ONE_SHOT;
+        let chunk_size = if one_shot {
+            size.next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT.max(wgpu::MAP_ALIGNMENT))
+        } else {
+            size.max(Self::MINIMUM).next_power_of_two()
+        };
+        if one_shot {
+            self.oneshot_bytes += chunk_size;
+        }
+        Chunk {
+            buffer: gpu.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: chunk_size,
+                usage: wgpu::BufferUsages::MAP_WRITE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: true,
+            }),
+            size: chunk_size,
+            offset: 0,
+            last_used: self.frame,
+            one_shot,
         }
     }
 }

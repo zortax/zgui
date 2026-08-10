@@ -26,6 +26,8 @@ enum TextureOp {
         size: Size<i32, Device>,
         /// What its texels mean.
         format: TextureFormat,
+        /// How many levels of detail it carries; one for an ordinary atlas page.
+        mip_levels: u32,
     },
     /// Release `texture`.
     Destroy {
@@ -58,10 +60,22 @@ impl TextureQueue {
         size: Size<i32, Device>,
         format: TextureFormat,
     ) {
+        self.create_with_mips(texture, size, format, 1);
+    }
+
+    /// Records that `texture` is to be created with `mip_levels` levels of detail.
+    pub(crate) fn create_with_mips(
+        &mut self,
+        texture: TextureId,
+        size: Size<i32, Device>,
+        format: TextureFormat,
+        mip_levels: u32,
+    ) {
         self.ops.push(TextureOp::Create {
             texture,
             size,
             format,
+            mip_levels,
         });
     }
 
@@ -107,8 +121,11 @@ impl TextureQueue {
                     texture,
                     size,
                     format,
+                    mip_levels,
                 } => {
-                    if let Err(error) = sink.create_texture(texture, size, format) {
+                    if let Err(error) =
+                        sink.create_texture_with_mips(texture, size, format, mip_levels)
+                    {
                         failure = Some(error);
                         break;
                     }

@@ -17,6 +17,9 @@ zgui-ui-primitives = { path = "../zgui-ui-primitives", version = "0.1.0" }
 zgui-ui-tokens = { path = "../zgui-ui-tokens", version = "0.1.0" }
 
 [dev-dependencies]
+# Encoding the fixture pictures the scrolled-images fixture feeds through the real loader; the
+# framework decodes them back through `zgui-image`, which is the path under test.
+image.workspace = true
 zgui-testkit-view = { path = "../zgui-testkit-view", version = "0.1.0" }
 # Reading the computed tree back out of a live window, for fixtures that ask where a page's
 # scrollable size actually came from rather than only what it is.

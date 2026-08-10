@@ -29,6 +29,8 @@ pub use style::values::generics::position::PreferredRatio;
 
 /// The computed value of `box-sizing`.
 pub use style::computed_values::box_sizing::T as BoxSizingValue;
+/// The computed value of `object-fit`, which decides how replaced content meets its box.
+pub use style::computed_values::object_fit::T as ObjectFitValue;
 /// The computed value of `visibility`, whose `collapse` value removes a flex item's box.
 pub use style::computed_values::visibility::T as VisibilityValue;
 /// The computed value of `clear`.
@@ -37,6 +39,8 @@ pub use style::values::computed::Clear as ClearValue;
 pub use style::values::computed::Display as DisplayValue;
 /// The computed value of `overflow-x` and `overflow-y`.
 pub use style::values::computed::Overflow as OverflowValue;
+/// The computed value of `object-position`, placing fitted replaced content within its box.
+pub use style::values::computed::Position as ObjectPositionValue;
 /// The computed value of `position`.
 pub use style::values::computed::PositionProperty as PositionValue;
 /// The computed value of `float`.

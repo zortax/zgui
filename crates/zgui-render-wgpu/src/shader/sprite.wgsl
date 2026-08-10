@@ -15,11 +15,14 @@ struct Sprite {
     transform: u32,
 }
 
-// A full-colour sprite: an emoji, or a decoded image. Its texels are premultiplied.
+// A full-colour sprite: an emoji, or a decoded image. Its texels are premultiplied. The frame is
+// the rectangle the sprite is confined to and the radii are measured against; it equals the
+// bounds for everything except fitted replaced content.
 struct ColorSprite {
     order: u32,
     flags: u32,
     bounds: Bounds,
+    frame: Bounds,
     radii: Radii,
     tile: Tile,
     opacity: f32,
@@ -52,13 +55,26 @@ fn tile_texel(corner: vec2<f32>, tile: Tile) -> vec2<f32> {
     return rect.xy + corner * rect.zw;
 }
 
-// The atlas, sampled at a position given in texels.
-fn sample_atlas(texel: vec2<f32>) -> vec4<f32> {
+// The atlas, sampled at a position given in texels, at an explicit level of detail.
+//
+// The position is clamped to the tile's inner half-texel before it is normalised, so a filtering
+// sampler never reads a neighbouring tile: everything its kernel touches at the boundary is the
+// tile's own edge texel. Nearest sampling is unchanged by the clamp, because a position moved by
+// at most half a texel still rounds to the same texel.
+//
+// The level is explicit rather than implicit because the fragment stages that call this have
+// already branched on the clip by the time they sample, and implicit derivatives under nonuniform
+// control flow are undefined. Pools without mip chains clamp every level to zero, which is the
+// behaviour a single-level texture always had.
+fn sample_atlas(texel: vec2<f32>, tile: Tile, lod: f32) -> vec4<f32> {
+    let rect = tile_bounds(tile);
+    let inset = min(vec2<f32>(0.5), rect.zw * 0.5);
+    let clamped = clamp(texel, rect.xy + inset, rect.xy + rect.zw - inset);
     return textureSampleLevel(
         atlas,
         atlas_sampler,
-        texel / vec2<f32>(textureDimensions(atlas)),
-        0.0,
+        clamped / vec2<f32>(textureDimensions(atlas)),
+        lod,
     );
 }
 

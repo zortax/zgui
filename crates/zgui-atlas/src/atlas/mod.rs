@@ -18,6 +18,7 @@ use zgui_geom::{Device, Size};
 use crate::atlas::entry::Entry;
 use crate::atlas::pool::Pool;
 use crate::atlas::upload::PendingUpload;
+pub use crate::atlas::upload::UploadBytes;
 use crate::error::AtlasError;
 use crate::key::AtlasKey;
 use crate::sink::TextureSink;
@@ -209,8 +210,10 @@ impl Atlas {
     /// Where `key`'s content is, rasterising and uploading it first if it is not cached yet.
     ///
     /// `build` is called only on a miss, and must return exactly `size`'s worth of tightly packed
-    /// texels in the pool's format — top row first, no padding between rows. The bytes are queued
-    /// rather than written; [`Atlas::flush_uploads`] is what sends them.
+    /// texels in the pool's format — top row first, no padding between rows. It may return an owned
+    /// `Vec<u8>` or anything else that converts to [`UploadBytes`]; a producer that keeps the
+    /// texels cached returns a shared buffer and pays no copy. The bytes are queued rather than
+    /// written; [`Atlas::flush_uploads`] is what sends them.
     ///
     /// # Errors
     ///
@@ -222,11 +225,11 @@ impl Atlas {
     /// issuing one, so this is arithmetic over rectangles and a hash lookup — which is what lets a
     /// walk that rasterises on demand run with no device in reach. A refusal from the device
     /// arrives at [`Atlas::flush_uploads`] instead.
-    pub fn get_or_insert(
+    pub fn get_or_insert<B: Into<UploadBytes>>(
         &mut self,
         key: AtlasKey,
         size: Size<i32, Device>,
-        build: impl FnOnce() -> Vec<u8>,
+        build: impl FnOnce() -> B,
     ) -> Result<AtlasTile, AtlasError> {
         if let Some(tile) = self.get(key) {
             return Ok(tile);
@@ -236,7 +239,7 @@ impl Atlas {
         let (texture, tile_id, bounds) =
             self.pools[kind.index()].allocate(size, self.limits, &mut self.device)?;
 
-        let bytes = build();
+        let bytes: UploadBytes = build().into();
         let expected = kind
             .format()
             .bytes_for(size.width.max(0) as u32, size.height.max(0) as u32);
@@ -253,9 +256,84 @@ impl Atlas {
         self.pending.push(PendingUpload {
             texture,
             tile: tile_id,
+            mip: 0,
             bounds,
             bytes,
         });
+
+        let tile = AtlasTile {
+            texture,
+            tile: tile_id,
+            bounds,
+        };
+        let slot = self.insert_entry(Entry {
+            key,
+            tile,
+            size,
+            refs: 0,
+            generation: self.generation,
+        });
+        self.touch(slot);
+        Ok(tile)
+    }
+
+    /// Where `key`'s content is, giving it a texture of its own — with levels of detail — if it
+    /// is not cached yet.
+    ///
+    /// This is [`Atlas::get_or_insert`] for content too large to share a page: the texture is
+    /// created at exactly `size`, its single tile covers it, and `build` returns level zero
+    /// followed by each successive level of detail — every level half the previous one's extent,
+    /// rounded down and clamped to one, in the pool's format. Eviction, holds and byte accounting
+    /// treat the tile like any other.
+    ///
+    /// # Errors
+    ///
+    /// As [`Atlas::get_or_insert`], and [`AtlasError::WrongByteCount`] names the first level whose
+    /// bytes disagree with its extent.
+    pub fn insert_standalone<B: Into<UploadBytes>>(
+        &mut self,
+        key: AtlasKey,
+        size: Size<i32, Device>,
+        build: impl FnOnce() -> Vec<B>,
+    ) -> Result<AtlasTile, AtlasError> {
+        if let Some(tile) = self.get(key) {
+            return Ok(tile);
+        }
+
+        let kind = key.kind();
+        let levels: Vec<UploadBytes> = build().into_iter().map(Into::into).collect();
+        let mip_levels = (levels.len() as u32).max(1);
+        for (mip, bytes) in levels.iter().enumerate() {
+            let extent = mip_extent(size, mip as u32);
+            let expected = kind
+                .format()
+                .bytes_for(extent.width.max(0) as u32, extent.height.max(0) as u32);
+            if bytes.len() as u64 != expected {
+                return Err(AtlasError::WrongByteCount {
+                    size: extent,
+                    expected,
+                    actual: bytes.len() as u64,
+                });
+            }
+        }
+
+        let (texture, tile_id, bounds) = self.pools[kind.index()].allocate_exact(
+            size,
+            mip_levels,
+            self.limits,
+            &mut self.device,
+        )?;
+        for (mip, bytes) in levels.into_iter().enumerate() {
+            let extent = mip_extent(size, mip as u32);
+            self.pending_bytes += bytes.len() as u64;
+            self.pending.push(PendingUpload {
+                texture,
+                tile: tile_id,
+                mip: mip as u32,
+                bounds: zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent),
+                bytes,
+            });
+        }
 
         let tile = AtlasTile {
             texture,
@@ -318,11 +396,31 @@ impl Atlas {
         self.entries[slot as usize].map(|entry| entry.refs)
     }
 
+    /// Drops `key` unless something holds it, and reports whether it went.
+    ///
+    /// This is [`Atlas::remove`] for a caller that knows the content is unreachable — its owner
+    /// dropped the name — but cannot know whether a replayed range still draws from the tile. A
+    /// held tile stays where it is and eviction collects it once the holds are gone.
+    pub fn remove_if_unreferenced(&mut self, key: AtlasKey) -> bool {
+        let Some(&slot) = self.index.get(&key) else {
+            return false;
+        };
+        if self.entries[slot as usize]
+            .as_ref()
+            .is_some_and(|entry| !entry.is_unreferenced())
+        {
+            return false;
+        }
+        self.remove(key)
+    }
+
     /// Drops `key`, returning its space to the allocator it came from.
     ///
     /// Returns whether anything was there to drop. Any queued upload for the tile is discarded
     /// with it: the rectangle may be handed straight back out, and a stale write would land in
-    /// whatever content took its place.
+    /// whatever content took its place. Holds do **not** refuse this — removing held entries is
+    /// what a lost device has to do; a caller acting on its own initiative wants
+    /// [`Atlas::remove_if_unreferenced`].
     pub fn remove(&mut self, key: AtlasKey) -> bool {
         let Some(slot) = self.index.remove(&key) else {
             return false;
@@ -367,11 +465,12 @@ impl Atlas {
         let mut failure = None;
         for index in 0..self.pending.len() {
             let upload = &self.pending[index];
-            match sink.write_texture(
+            match sink.write_texture_mip(
                 upload.texture,
+                upload.mip,
                 upload.bounds,
                 upload.texture.format(),
-                &upload.bytes,
+                upload.bytes.as_slice(),
             ) {
                 Ok(()) => {
                     written += upload.bytes.len() as u64;
@@ -499,6 +598,11 @@ impl Atlas {
         });
         self.pending_bytes -= discarded;
     }
+}
+
+/// One level of detail's extent: half the previous per level, rounded down, never below one.
+fn mip_extent(size: Size<i32, Device>, mip: u32) -> Size<i32, Device> {
+    Size::new((size.width >> mip).max(1), (size.height >> mip).max(1))
 }
 
 /// How many bytes one entry's texels weigh, in the format of the pool it sits in.

@@ -175,7 +175,9 @@ pub fn structures(module: Module) -> Vec<Reflected> {
         Module::ColorSprite => reflected!(
             ColorSprite,
             "ColorSprite",
-            [order, flags, bounds, radii, tile, opacity, clip, transform]
+            [
+                order, flags, bounds, frame, radii, tile, opacity, clip, transform
+            ]
         ),
         Module::Composite => reflected!(
             crate::pipeline::composite::CompositeParams,

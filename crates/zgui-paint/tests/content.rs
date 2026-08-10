@@ -126,6 +126,144 @@ fn one_image_drawn_twice_is_one_tile() {
     assert_eq!(cache.report().tiles, 1);
 }
 
+/// A pool with no room evicts a cold generation and retries, rather than drawing nothing.
+#[test]
+fn a_full_pool_makes_room_for_a_new_picture_by_evicting_a_cold_one() {
+    let mut harness = Harness::new(tree(), CSS);
+    harness.compose(200.0, 100.0);
+
+    // One texture of 64 texels square per pool: a 48-square tile fills it past reuse, so a second
+    // 48-square picture has nowhere to go until the first is evicted.
+    let limits = AtlasLimits {
+        texture_size: 64,
+        max_texture_size: 64,
+        max_textures_per_pool: 1,
+        soft_bytes: None,
+    };
+    let mut cache = ContentCache::new(limits);
+    let id = harness.replaced_id("picture");
+    let size = Size::new(48u32, 48u32);
+    let texels = || {
+        std::sync::Arc::new(
+            (0..size.width * size.height)
+                .flat_map(|_| [255u8, 0, 0, 255])
+                .collect::<Vec<u8>>(),
+        )
+    };
+
+    cache
+        .set_image_shared(id, 1, size, texels())
+        .expect("well formed");
+    harness.paint_content(&mut cache, &NoRaster);
+    assert_eq!(cache.report().tiles, 1, "the first picture fills the pool");
+
+    cache
+        .set_image_shared(id, 2, size, texels())
+        .expect("well formed");
+    harness.paint_content(&mut cache, &NoRaster);
+
+    assert_eq!(
+        harness.scene().primitives.color_sprites.len(),
+        1,
+        "the new picture is drawn: a full pool is a reason to evict, never to draw nothing"
+    );
+    assert_eq!(
+        cache.report().tiles,
+        1,
+        "the cold picture went and the new one has its room"
+    );
+}
+
+/// After a flush, a shared attachment's texels are given back and the tile serves it; a tile
+/// that later goes missing is reported for a re-decode rather than drawn wrong or lost quietly.
+#[test]
+fn a_settled_attachment_is_served_by_its_tile_and_reported_when_the_tile_goes() {
+    let mut harness = Harness::new(tree(), CSS);
+    harness.compose(200.0, 100.0);
+
+    let mut cache = ContentCache::new(AtlasLimits::default());
+    let id = harness.replaced_id("picture");
+    let (size, texels) = image();
+    cache
+        .set_image_shared(id, 7, size, std::sync::Arc::new(texels))
+        .expect("well formed");
+
+    harness.paint_content(&mut cache, &NoRaster);
+    let mut sink = MemorySink::new();
+    cache.flush(&mut sink).expect("the in-memory sink accepts");
+    assert!(
+        cache.image_bytes() > 0,
+        "the texels are held until the flush settles"
+    );
+
+    cache.settle_uploaded(0);
+    assert_eq!(
+        cache.image_bytes(),
+        0,
+        "a flushed shared attachment holds no host bytes"
+    );
+
+    harness.paint_content(&mut cache, &NoRaster);
+    assert_eq!(
+        harness.scene().primitives.color_sprites.len(),
+        1,
+        "the tile alone serves the picture"
+    );
+    assert!(
+        cache.take_missing_images().is_empty(),
+        "nothing is missing while the tile is resident"
+    );
+
+    // Ordinary eviction cannot take a shown tile — the replay records hold it — so the way a
+    // tile actually disappears from under an uploaded attachment is a lost device. A fresh
+    // walk with no records is what re-emits and notices.
+    cache.clear();
+    let mut fresh = Harness::new(tree(), CSS);
+    fresh.compose(200.0, 100.0);
+    let id = fresh.replaced_id("picture");
+    cache.set_image_uploaded(id, 7, size);
+
+    fresh.paint_content(&mut cache, &NoRaster);
+    assert!(
+        fresh.scene().primitives.color_sprites.is_empty(),
+        "a picture whose tile is gone draws nothing this frame"
+    );
+    assert_eq!(
+        cache.take_missing_images(),
+        vec![id],
+        "and is reported exactly once for a re-decode"
+    );
+}
+
+/// Content attached with levels of detail gets a texture of exactly its own size.
+#[test]
+fn a_mipped_attachment_gets_a_standalone_texture_at_its_own_extent() {
+    let mut harness = Harness::new(tree(), CSS);
+    harness.compose(200.0, 100.0);
+
+    let mut cache = ContentCache::new(AtlasLimits::default());
+    let size = Size::new(600u32, 600u32);
+    let texels = std::sync::Arc::new(vec![9u8; (size.width * size.height * 4) as usize]);
+    let mips = vec![zgui_paint::MipLevel {
+        size: Size::new(300, 300),
+        texels: std::sync::Arc::new(vec![9u8; 300 * 300 * 4]),
+    }];
+    cache
+        .set_image_shared_mipped(harness.replaced_id("picture"), 7, size, size, texels, mips)
+        .expect("well formed");
+
+    harness.paint_content(&mut cache, &NoRaster);
+    let mut sink = MemorySink::new();
+    cache.flush(&mut sink).expect("the in-memory sink accepts");
+
+    use zgui_atlas::{TextureId, TextureKind};
+    assert_eq!(
+        sink.size_of(TextureId::new(TextureKind::Image, 0)),
+        Some(Size::new(600, 600)),
+        "the texture is the image, exactly, rather than a page grown to hold it"
+    );
+}
+
 /// Two nodes attached under one shared handle resolve to one tile of one shared buffer.
 #[test]
 fn two_nodes_sharing_a_handle_share_one_tile() {

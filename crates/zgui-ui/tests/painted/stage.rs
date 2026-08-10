@@ -250,6 +250,27 @@ impl Stage {
     ///
     /// A detent is carried to its destination over the frames that follow rather than landing in
     /// the one it arrived in, so the clock is run before anything is read back.
+    /// Delivers one wheel movement and runs exactly one frame, leaving any glide mid-flight.
+    ///
+    /// [`wheel`](Stage::wheel) settles the window afterwards, which is right for a fixture that
+    /// asks where a scroll *ends*. A fixture that asks what the window looked like *during* the
+    /// glide steps it frame by frame with this instead.
+    pub fn wheel_step(&mut self, lines: f32) {
+        self.harness.deliver_to_first(SurfaceEvent::Wheel {
+            event: zgui::vocab::WheelEvent {
+                id: zgui::vocab::PointerId::MOUSE,
+                kind: zgui::vocab::PointerKind::Mouse,
+                position: self.pointer,
+                delta: zgui::vocab::ScrollDelta::Lines { x: 0.0, y: lines },
+                phase: zgui::vocab::ScrollPhase::Discrete,
+            },
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        self.harness.advance(TICK);
+        self.harness.pump();
+    }
+
     pub fn wheel(&mut self, lines: f32) {
         self.deliver(SurfaceEvent::Wheel {
             event: zgui::vocab::WheelEvent {

@@ -3,7 +3,7 @@
 use bytemuck::{Pod, Zeroable};
 use zgui_atlas::AtlasTile;
 use zgui_color::Color;
-use zgui_geom::{Corners, Device, DevicePx, Rect, Vec2};
+use zgui_geom::{Corners, Device, DevicePx, Rect, Size, Vec2};
 
 use crate::id::{ClipId, DrawOrder};
 use crate::prim::layout::rect_of;
@@ -62,7 +62,7 @@ impl SpriteTile {
     /// The texture word of a sprite whose resource has not been placed.
     ///
     /// Out of the range any pool can produce: the low half is a texture index and the high half is a
-    /// pool number, and there are three pools.
+    /// pool number, and there are four pools.
     pub const UNRESOLVED: u32 = u32::MAX;
 
     /// The instance encoding of `tile`.
@@ -233,6 +233,13 @@ pub struct ColorSprite {
     pub flags: u32,
     /// Where the sprite lands on the surface, as `[x, y, width, height]`.
     pub bounds: [f32; 4],
+    /// The rectangle the sprite is confined to and the radii are measured against.
+    ///
+    /// Equal to `bounds` for everything except fitted replaced content. `object-fit` places the
+    /// picture at `bounds` — larger than the box for `cover`, smaller for `contain` — while the
+    /// box's own rectangle stays here, so the overflow is cut and the rounded corners follow the
+    /// box rather than the picture.
+    pub frame: [f32; 4],
     /// Elliptical corner radii clipping the sprite, two per corner, clockwise from the top left.
     pub radii: [f32; 8],
     /// The colour tile.
@@ -251,15 +258,17 @@ impl ColorSprite {
 
     /// A sprite reading `resource` into `bounds`, fully opaque and square-cornered.
     pub fn new(bounds: Rect<DevicePx, Device>, resource: impl Into<Resource>) -> Self {
+        let bounds = [
+            bounds.origin.x.0,
+            bounds.origin.y.0,
+            bounds.size.width.0,
+            bounds.size.height.0,
+        ];
         Self {
             order: 0,
             flags: 0,
-            bounds: [
-                bounds.origin.x.0,
-                bounds.origin.y.0,
-                bounds.size.width.0,
-                bounds.size.height.0,
-            ],
+            bounds,
+            frame: bounds,
             radii: [0.0; 8],
             tile: SpriteTile::for_resource(resource.into()),
             opacity: 1.0,
@@ -271,6 +280,17 @@ impl ColorSprite {
     /// The same sprite drawn through `clip`.
     pub fn clipped(mut self, clip: ClipId) -> Self {
         self.clip = clip.0;
+        self
+    }
+
+    /// The same sprite confined to `frame`, which is what fitted replaced content is drawn with.
+    pub fn framed(mut self, frame: Rect<DevicePx, Device>) -> Self {
+        self.frame = [
+            frame.origin.x.0,
+            frame.origin.y.0,
+            frame.size.width.0,
+            frame.size.height.0,
+        ];
         self
     }
 
@@ -291,7 +311,17 @@ impl ColorSprite {
 
     /// The rectangle this paints.
     pub fn ink(&self) -> Rect<DevicePx, Device> {
+        // What is drawn is the picture cut to its frame, so the ink is their intersection: a
+        // `cover` picture paints no further than its box, and a letterboxed one no further than
+        // itself.
         rect_of(self.bounds)
+            .intersection(rect_of(self.frame))
+            .unwrap_or_else(|| {
+                Rect::new(
+                    rect_of(self.bounds).origin,
+                    Size::new(DevicePx(0.0), DevicePx(0.0)),
+                )
+            })
     }
 
     /// The clip chain this draws through.

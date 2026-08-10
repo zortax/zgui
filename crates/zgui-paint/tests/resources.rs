@@ -195,7 +195,7 @@ fn a_tile_is_placed_before_anything_has_a_device() {
     let mut sink = MemorySink::new();
     cache.flush(&mut sink).expect("the sink accepts everything");
     assert_eq!(
-        sink.size_of(TextureId::new(TextureKind::Color, 0))
+        sink.size_of(TextureId::new(TextureKind::Image, 0))
             .map(|extent| extent.width > 0),
         Some(true),
         "the texture the tile was placed in exists once something has a device"

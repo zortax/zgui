@@ -106,6 +106,9 @@ impl Scene {
                         continue;
                     };
                     translate(&mut sprite.bounds, by);
+                    // The frame moves with the picture it confines, or a replayed `cover` is cut
+                    // against the rectangle its box moved away from.
+                    translate(&mut sprite.frame, by);
                     self.push_color_sprite(sprite);
                 }
                 PrimitiveKind::External => {

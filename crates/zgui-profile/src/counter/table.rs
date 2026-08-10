@@ -237,6 +237,19 @@ counters! {
     /// doing something worse than nothing.
     AtlasTilesEvicted => atlas_tiles_evicted, Group::BackendNeutral;
 
+    /// Images that could not enter the atlas, even after an eviction step made room.
+    ///
+    /// Each count is a picture a frame resolved and then drew nothing for. A nonzero total that
+    /// keeps growing means the colour pool is too small for the working set, or a single image is
+    /// larger than any texture the device may create.
+    ImageInsertFailed => image_insert_failed, Group::BackendNeutral;
+
+    /// Encoded bytes live `ImageBytes` registrations are holding.
+    ///
+    /// These sit beside the decoded texels and the tiles: an in-memory picture costs its encoded
+    /// form for as long as the application holds the handle, whatever the caches do.
+    EncodedImageBytes => encoded_image_bytes, Group::BackendNeutral;
+
     /// Atlas tiles a cached primitive range took ownership of when it was recorded.
     ///
     /// A range that is replayed rather than encoded draws its glyphs without looking any of them
@@ -274,6 +287,18 @@ counters! {
     /// Ordinarily non-zero only while the belt grows to its working set. A recurring value points
     /// directly at GPU backlog or a workload that repeatedly exceeds that working set.
     UploadChunksAllocated => upload_chunks_allocated, Group::RendererSpecific;
+
+    /// Mapped staging bytes the upload belt keeps warm for reuse.
+    ///
+    /// The belt's steady working set. A figure far above what ordinary frames write means a burst
+    /// grew the belt and the retention period has not yet let it go.
+    StagingWarmBytes => staging_warm_bytes, Group::RendererSpecific;
+
+    /// Staging bytes in one-shot chunks: oversized transfers that leave with their frame.
+    ///
+    /// Read as a high-water sign of image and scene bursts. It falls to zero on its own; a value
+    /// that persists means large uploads on every frame.
+    StagingOneShotBytes => staging_one_shot_bytes, Group::RendererSpecific;
 
     /// Frames the loop actually drew.
     ///

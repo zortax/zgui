@@ -222,6 +222,10 @@ impl Window {
         if self.images.settle(&self.document, &mut self.content) {
             self.request_frame();
         }
+        // The encoded bytes live `ImageBytes` handles hold, published where the loader has just
+        // dealt with everything else an image costs: a memory report reads all three figures —
+        // encoded, decoded, tiles — from one frame.
+        counter::set(Counter::EncodedImageBytes, zgui_image::registry_bytes());
 
         // Everything above this line is a stage that *produces* changes — events dispatched,
         // timers fired, the reactive graph flushed, commands carried out — and everything below it
@@ -279,6 +283,16 @@ impl Window {
                 self.damage.rects()
             )
         });
+        // After layout, because a picture's demand *is* its laid-out content box: this is the
+        // first moment the loader can know how many device pixels each image actually needs, and
+        // the decode it kicks is sized by the answer.
+        mark("f.image_demand");
+        if self
+            .images
+            .observe_demand(&self.layout.borrow(), self.scale)
+        {
+            self.request_frame();
+        }
         // After layout, because a surface that has just opened has only now got the boxes that
         // make the controls inside it reachable at all.
         mark("f.enter");
@@ -287,6 +301,23 @@ impl Window {
         self.dispatch_scroll(timestamp);
         mark("f.observe");
         self.deliver_observations();
+        // A second settle, for what the scroll and observation deliveries produced: both flush
+        // and relayout mid-frame precisely so a virtualised list renders this frame's rows, and
+        // rows born that way write their `src` after the first settle has run. Without this, each
+        // such row's first paint shows no picture — one blank frame per remount, which a fast
+        // glide turns into visible flicker. The demand pass runs again for the same reason: the
+        // decode for a fresh source is kicked this frame rather than next. The marks the settle
+        // files are consumed next frame; the pictures are drawn from this one.
+        mark("f.images_late");
+        if self.images.has_arrivals() && self.images.settle(&self.document, &mut self.content) {
+            self.request_frame();
+        }
+        if self
+            .images
+            .observe_demand(&self.layout.borrow(), self.scale)
+        {
+            self.request_frame();
+        }
         mark("f.rehit");
         self.rehit();
         mark("f.publish_brushes");
@@ -1254,10 +1285,31 @@ impl Window {
         // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
         self.scene.check_spatial_dependencies();
         mark("p.upload");
-        if let Err(error) = self.content.flush(self.renderer.texture_sink()) {
+        match self.content.flush(self.renderer.texture_sink()) {
+            // Every queued write reached the device, so a shared attachment's tile can stand in
+            // for its host texels from here on: the cache gives its copies back, and the loader
+            // gives back its own for every tile the cache vouches is resident. Small pictures
+            // keep theirs — the constant says why.
+            Ok(_) => {
+                self.content
+                    .settle_uploaded(crate::images::RETAIN_SMALL_BYTES);
+                let content = &self.content;
+                self.images
+                    .release_uploaded(|handle| content.image_tile_resident(handle));
+            }
             // A refused upload is not a reason to drop the frame: what did reach the device still
-            // draws, and the tiles that did not stay queued for the next one.
-            tracing::warn!(target: "zgui::paint", %error, "an atlas upload was refused");
+            // draws, and the tiles that did not stay queued for the next one — and every host
+            // copy is kept, which is the safe direction.
+            Err(error) => {
+                tracing::warn!(target: "zgui::paint", %error, "an atlas upload was refused");
+            }
+        }
+        // Uploaded pictures whose tiles this frame found gone — evicted, or lost with the device
+        // — have no host copy to re-upload from; the loader decodes them again from their
+        // sources, and the completion's wake brings the frame that shows them.
+        let missing = self.content.take_missing_images();
+        if !missing.is_empty() && self.images.redecode_missing(&missing) {
+            self.request_frame();
         }
         mark("p.budget");
         // After the walk and after the flush, and it can be nowhere else. Before the walk it would

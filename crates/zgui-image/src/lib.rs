@@ -22,6 +22,8 @@
 
 #![forbid(unsafe_code)]
 
+mod fused;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -80,7 +82,7 @@ pub enum DecodeError {
 /// [`DecodeError::Decode`] for bytes no linked codec accepts, [`DecodeError::Empty`] for an image
 /// with a zero axis.
 pub fn decode(bytes: &[u8], limits: Limits) -> Result<Decoded, DecodeError> {
-    finish(image::load_from_memory(bytes)?, limits)
+    fused::decode(bytes, limits.max_dimension)
 }
 
 /// Decodes the file at `path`, sniffing the format from its content rather than its name.
@@ -91,6 +93,114 @@ pub fn decode(bytes: &[u8], limits: Limits) -> Result<Decoded, DecodeError> {
 pub fn decode_file(path: &Path, limits: Limits) -> Result<Decoded, DecodeError> {
     let bytes = std::fs::read(path)?;
     decode(&bytes, limits)
+}
+
+/// Decodes `bytes`, downscaling until the long edge fits `target_long_edge`.
+///
+/// This is what a caller that knows the display size asks for: a photo shown as a thumbnail is
+/// decoded to the thumbnail, and the texels never cost the source's resolution. `limits` still
+/// caps the result, whatever the target says.
+///
+/// # Errors
+///
+/// As [`decode`].
+pub fn decode_scaled(
+    bytes: &[u8],
+    target_long_edge: u32,
+    limits: Limits,
+) -> Result<Decoded, DecodeError> {
+    fused::decode(bytes, target_long_edge.min(limits.max_dimension))
+}
+
+/// Decodes the file at `path`, downscaling until the long edge fits `target_long_edge`.
+///
+/// # Errors
+///
+/// [`DecodeError::Io`] when the file cannot be read; otherwise as [`decode_scaled`].
+pub fn decode_file_scaled(
+    path: &Path,
+    target_long_edge: u32,
+    limits: Limits,
+) -> Result<Decoded, DecodeError> {
+    let bytes = std::fs::read(path)?;
+    decode_scaled(&bytes, target_long_edge, limits)
+}
+
+/// Reads the pixel extent of `bytes` from its header, decoding no pixels.
+///
+/// This is how a loader learns an image's intrinsic size before deciding which resolution to
+/// decode: the header carries the extent, and the pixels can wait for a display size to exist.
+///
+/// # Errors
+///
+/// [`DecodeError::Decode`] for bytes no linked codec accepts, [`DecodeError::Empty`] for an image
+/// with a zero axis.
+pub fn probe(bytes: &[u8]) -> Result<Size<u32, Device>, DecodeError> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let (width, height) = reader.into_dimensions()?;
+    if width == 0 || height == 0 {
+        return Err(DecodeError::Empty);
+    }
+    Ok(Size::new(width, height))
+}
+
+/// Reads the pixel extent of the file at `path` from its header, decoding no pixels.
+///
+/// Only the header is read, so probing a large file costs almost nothing.
+///
+/// # Errors
+///
+/// [`DecodeError::Io`] when the file cannot be read; otherwise as [`probe`].
+pub fn probe_file(path: &Path) -> Result<Size<u32, Device>, DecodeError> {
+    let reader = image::ImageReader::open(path)?.with_guessed_format()?;
+    let (width, height) = reader.into_dimensions()?;
+    if width == 0 || height == 0 {
+        return Err(DecodeError::Empty);
+    }
+    Ok(Size::new(width, height))
+}
+
+/// Builds the levels of detail below `decoded`: each half the previous one's extent, down to one
+/// texel.
+///
+/// A 2×2 box filter on the premultiplied, gamma-encoded values. Premultiplied is what makes the
+/// average correct at soft edges; gamma-encoded is a deliberate match for the rest of the
+/// pipeline, which composites in gamma space throughout. Odd extents round down, and the lost row
+/// or column is folded in by clamping the sample to the edge.
+///
+/// Level zero is the input and is *not* in the result: the result is what a caller queues after
+/// it.
+pub fn mip_chain(decoded: &Decoded) -> Vec<Decoded> {
+    let mut levels = Vec::new();
+    let mut source = decoded.clone();
+    while source.size.width > 1 || source.size.height > 1 {
+        let width = (source.size.width / 2).max(1);
+        let height = (source.size.height / 2).max(1);
+        let mut texels = vec![0u8; (width * height * 4) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let mut sums = [0u32; 4];
+                for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                    let sx = (2 * x + dx).min(source.size.width - 1);
+                    let sy = (2 * y + dy).min(source.size.height - 1);
+                    let at = ((sy * source.size.width + sx) * 4) as usize;
+                    for (sum, &texel) in sums.iter_mut().zip(&source.texels[at..at + 4]) {
+                        *sum += u32::from(texel);
+                    }
+                }
+                let at = ((y * width + x) * 4) as usize;
+                for (out, sum) in texels[at..at + 4].iter_mut().zip(sums) {
+                    *out = ((sum + 2) / 4) as u8;
+                }
+            }
+        }
+        source = Decoded {
+            size: Size::new(width, height),
+            texels: Arc::new(texels),
+        };
+        levels.push(source.clone());
+    }
+    levels
 }
 
 /// In-memory image bytes, addressable through a `src` string.
@@ -155,6 +265,20 @@ impl Drop for Registration {
     }
 }
 
+/// How many encoded bytes the registry is holding, over every live [`ImageBytes`] handle.
+///
+/// These bytes are resident for as long as their handles live, beside whatever was decoded from
+/// them — which is why a memory report wants them as their own figure rather than folded into a
+/// decoded total.
+pub fn registry_bytes() -> u64 {
+    REGISTRY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .map(|registry| registry.values().map(|bytes| bytes.len() as u64).sum())
+        .unwrap_or(0)
+}
+
 /// Resolves a `zgui-bytes:` URL to the registered buffer, if the URL is one and the handle lives.
 ///
 /// `None` for any other string, which is how a loader asks "is this in-memory?" before treating
@@ -170,12 +294,12 @@ pub fn bytes_for_url(url: &str) -> Option<Arc<Vec<u8>>> {
 }
 
 /// Downscales, converts and premultiplies one decoded image.
-fn finish(decoded: image::DynamicImage, limits: Limits) -> Result<Decoded, DecodeError> {
+fn finish(decoded: image::DynamicImage, max_long_edge: u32) -> Result<Decoded, DecodeError> {
     let (width, height) = (decoded.width(), decoded.height());
     if width == 0 || height == 0 {
         return Err(DecodeError::Empty);
     }
-    let max = limits.max_dimension.max(1);
+    let max = max_long_edge.max(1);
     let decoded = if width > max || height > max {
         // Lanczos, because a downscale forced by a texture limit is permanent: the discarded
         // resolution is never coming back, so it is worth the best filter the codec crate has.
@@ -249,6 +373,45 @@ mod tests {
         );
     }
 
+    /// The fused path and the general path agree byte for byte, for every linked format.
+    ///
+    /// The two paths run the same decoder underneath, so equality is exact rather than within a
+    /// tolerance — including for JPEG, whose loss happens at encode time.
+    #[test]
+    fn the_fused_path_matches_the_general_path() {
+        let rgba: Vec<u8> = (0..8u32 * 4 * 4).map(|i| (i * 37 % 256) as u8).collect();
+        let rgb: Vec<u8> = (0..8u32 * 4 * 3).map(|i| (i * 53 % 256) as u8).collect();
+
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(&rgb, 8, 4, image::ExtendedColorType::Rgb8)
+            .expect("encodes");
+        let mut png_rgb = Vec::new();
+        PngEncoder::new(&mut png_rgb)
+            .write_image(&rgb, 8, 4, image::ExtendedColorType::Rgb8)
+            .expect("encodes");
+        let mut gif = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut gif)
+            .encode(&rgba, 8, 4, image::ExtendedColorType::Rgba8)
+            .expect("encodes");
+
+        for (name, bytes) in [
+            ("png rgba", png(8, 4, &rgba)),
+            ("png rgb", png_rgb),
+            ("jpeg", jpeg),
+            ("gif", gif),
+        ] {
+            let fused = decode(&bytes, Limits::default()).expect(name);
+            let general = finish(
+                image::load_from_memory(&bytes).expect(name),
+                Limits::default().max_dimension,
+            )
+            .expect(name);
+            assert_eq!(fused.size, general.size, "{name}: the extents agree");
+            assert_eq!(fused.texels, general.texels, "{name}: the texels agree");
+        }
+    }
+
     #[test]
     fn the_byte_count_matches_the_extent_the_cache_will_check() {
         let texels = vec![7u8; 5 * 3 * 4];
@@ -270,6 +433,73 @@ mod tests {
             "the downscale is proportional and the reported extent is the truth about the texels"
         );
         assert_eq!(decoded.texels.len(), 32 * 8 * 4);
+    }
+
+    #[test]
+    fn a_probe_reports_the_extent_and_decodes_nothing() {
+        let texels = vec![9u8; 64 * 16 * 4];
+        assert_eq!(
+            probe(&png(64, 16, &texels)).expect("probes"),
+            Size::new(64, 16)
+        );
+        assert!(matches!(
+            probe(b"not an image"),
+            Err(DecodeError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn a_scaled_decode_fits_the_target_and_never_upscales() {
+        let texels = vec![9u8; 64 * 16 * 4];
+        let bytes = png(64, 16, &texels);
+        let thumb = decode_scaled(&bytes, 32, Limits::default()).expect("decodes");
+        assert_eq!(
+            thumb.size,
+            Size::new(32, 8),
+            "the long edge fits the target"
+        );
+        let native = decode_scaled(&bytes, 4096, Limits::default()).expect("decodes");
+        assert_eq!(
+            native.size,
+            Size::new(64, 16),
+            "a target over the source changes nothing"
+        );
+        let capped = decode_scaled(&bytes, 4096, Limits { max_dimension: 16 }).expect("decodes");
+        assert_eq!(
+            capped.size,
+            Size::new(16, 4),
+            "the limit caps whatever the target says"
+        );
+    }
+
+    #[test]
+    fn a_mip_chain_halves_to_one_texel_and_averages_blocks() {
+        // A 4×2 image of two solid halves: black-ish left, white-ish right, opaque.
+        let mut texels = Vec::new();
+        for _row in 0..2 {
+            texels.extend([0u8, 0, 0, 255, 0, 0, 0, 255]);
+            texels.extend([200u8, 200, 200, 255, 200, 200, 200, 255]);
+        }
+        let base = Decoded {
+            size: Size::new(4, 2),
+            texels: Arc::new(texels),
+        };
+        let chain = mip_chain(&base);
+        assert_eq!(
+            chain.iter().map(|level| level.size).collect::<Vec<_>>(),
+            vec![Size::new(2, 1), Size::new(1, 1)],
+            "each level halves, rounding down, until one texel"
+        );
+        assert_eq!(
+            chain[0].texels.as_slice(),
+            &[0, 0, 0, 255, 200, 200, 200, 255],
+            "each texel is its 2×2 block's average"
+        );
+        assert_eq!(
+            chain[1].texels.as_slice(),
+            &[100, 100, 100, 255],
+            "and the last level is the average of everything"
+        );
     }
 
     #[test]
@@ -298,7 +528,7 @@ mod tests {
         // A 0x0 PNG cannot be encoded, so exercise the guard directly.
         let empty = image::DynamicImage::new_rgba8(0, 0);
         assert!(matches!(
-            finish(empty, Limits::default()),
+            finish(empty, Limits::default().max_dimension),
             Err(DecodeError::Empty)
         ));
     }

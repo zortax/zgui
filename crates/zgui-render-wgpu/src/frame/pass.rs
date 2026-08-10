@@ -468,7 +468,8 @@ fn decode_texture(packed: u32) -> zgui_atlas::TextureId {
     let kind = match packed >> 16 {
         0 => zgui_atlas::TextureKind::Mono,
         1 => zgui_atlas::TextureKind::Subpixel,
-        _ => zgui_atlas::TextureKind::Color,
+        2 => zgui_atlas::TextureKind::Color,
+        _ => zgui_atlas::TextureKind::Image,
     };
     zgui_atlas::TextureId::new(kind, packed & 0xffff)
 }

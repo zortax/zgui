@@ -72,7 +72,7 @@ pub mod sink;
 pub mod texture;
 pub mod tile;
 
-pub use crate::atlas::{Atlas, AtlasLimits, AtlasReport, Eviction};
+pub use crate::atlas::{Atlas, AtlasLimits, AtlasReport, Eviction, UploadBytes};
 pub use crate::error::AtlasError;
 pub use crate::key::AtlasKey;
 pub use crate::sink::{MemorySink, SinkError, TextureSink};

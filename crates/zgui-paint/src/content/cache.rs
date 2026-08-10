@@ -48,6 +48,17 @@ pub struct ContentCache {
     /// Monotonic and never reset, so two readings subtracted say whether anything drew a picture
     /// between two moments. In a cell because the walk that resolves them is an immutable reader.
     image_hits: Cell<u64>,
+    /// Content the atlas has refused, so the refusal is reported once rather than every frame.
+    ///
+    /// An entry leaves the moment its content is served again, so a refusal that clears — because
+    /// eviction made room, or the content changed — is reported again if it comes back.
+    image_failures: RefCell<rustc_hash::FxHashSet<AtlasKey>>,
+    /// Uploaded attachments a frame found without a tile: evicted, or lost with the device.
+    ///
+    /// In a cell because the walk that finds them is an immutable reader. Drained by
+    /// [`ContentCache::take_missing_images`], whose caller owns the sources and decodes them
+    /// again.
+    missing_images: RefCell<Vec<ReplacedId>>,
     /// Where each named raster is, for the sprites that were pushed naming one.
     ///
     /// Empty whenever every raster a frame drew was already placed as it was reached, which is what
@@ -65,6 +76,8 @@ impl ContentCache {
             vector_masks: VectorMaskCache::default(),
             images: FxHashMap::default(),
             image_hits: Cell::new(0),
+            image_failures: RefCell::new(rustc_hash::FxHashSet::default()),
+            missing_images: RefCell::new(Vec::new()),
             registry: ResourceRegistry::new(),
         }
     }
@@ -200,9 +213,99 @@ impl ContentCache {
         size: Size<u32, Device>,
         texels: std::sync::Arc<Vec<u8>>,
     ) -> Result<(), ImageError> {
-        let content = Content::shared(handle, size, texels)?;
+        let content = Content::shared(handle, size, size, texels, Vec::new())?;
         self.images.insert(id, content);
         Ok(())
+    }
+
+    /// As [`set_image_shared`](ContentCache::set_image_shared), with levels of detail and the
+    /// image's own extent.
+    ///
+    /// The levels give the image a texture of its own in the atlas, and minified sampling reads
+    /// them: this is what a photo larger than its box is attached with, so its shrink is filtered
+    /// through a mip chain rather than aliasing. Each level obeys the same texel contract and is
+    /// half the previous one's extent, rounded down. `natural` is the source's extent — which the
+    /// texels may be a decode-for-display downscale of — and is what `object-fit: none` draws at.
+    ///
+    /// # Errors
+    ///
+    /// [`ImageError::WrongByteCount`] when any level's buffer does not match its extent.
+    pub fn set_image_shared_mipped(
+        &mut self,
+        id: ReplacedId,
+        handle: u64,
+        size: Size<u32, Device>,
+        natural: Size<u32, Device>,
+        texels: std::sync::Arc<Vec<u8>>,
+        mips: Vec<crate::content::images::MipLevel>,
+    ) -> Result<(), ImageError> {
+        let content = Content::shared(handle, size, natural, texels, mips)?;
+        self.images.insert(id, content);
+        Ok(())
+    }
+
+    /// Attaches a replaced node to a shared tile that is already resident, carrying no texels.
+    ///
+    /// This is how a node joins a picture whose host copy has already been given back: the tile
+    /// serves it, and if the tile is ever gone the node is reported through
+    /// [`ContentCache::take_missing_images`] like any other uploaded attachment.
+    pub fn set_image_uploaded(&mut self, id: ReplacedId, handle: u64, natural: Size<u32, Device>) {
+        self.images
+            .insert(id, Content::uploaded_shared(handle, natural));
+    }
+
+    /// Whether the tile a loader's shared `handle` names is resident right now.
+    pub fn image_tile_resident(&self, handle: u64) -> bool {
+        self.atlas
+            .contains(crate::content::images::shared_key(handle))
+    }
+
+    /// Frees the tile a loader's shared `handle` names, unless a replayed range still holds it.
+    ///
+    /// For the loader dropping a source entry: the handle leaves with the entry, so nothing can
+    /// ever ask for the tile again, and waiting for eviction to notice would keep the memory for
+    /// no one. A held tile stays — a replay still draws from it — and eviction collects it when
+    /// the holds go.
+    pub fn remove_shared_tile(&mut self, handle: u64) -> bool {
+        self.atlas
+            .remove_if_unreferenced(crate::content::images::shared_key(handle))
+    }
+
+    /// Gives back the host texels of every shared attachment whose tile is resident.
+    ///
+    /// Call after a flush that returned `Ok`, which is what guarantees no queued write is still
+    /// on its way to a tile this trusts. Attachments holding `keep_below` bytes or fewer keep
+    /// their texels: a small picture's re-decode after a lost device costs more in latency than
+    /// its bytes cost in memory. Per-node attachments keep theirs whatever their size — they were
+    /// attached directly, and nothing can decode them again.
+    pub fn settle_uploaded(&mut self, keep_below: u64) {
+        let Self { images, atlas, .. } = self;
+        for content in images.values_mut() {
+            if !content.is_shared() {
+                continue;
+            }
+            let bytes = content.held_bytes();
+            if bytes == 0 || bytes <= keep_below {
+                continue;
+            }
+            let Content::Decoded { key, natural, .. } = content else {
+                continue;
+            };
+            if !atlas.contains(*key) {
+                continue;
+            }
+            *content = Content::Uploaded {
+                key: *key,
+                natural: *natural,
+            };
+        }
+    }
+
+    /// The uploaded attachments recent frames found without a tile, each at most once.
+    pub fn take_missing_images(&mut self) -> Vec<ReplacedId> {
+        let missing = std::mem::take(&mut *self.missing_images.borrow_mut());
+        let mut seen = rustc_hash::FxHashSet::default();
+        missing.into_iter().filter(|id| seen.insert(*id)).collect()
     }
 
     /// Attaches a texture this framework does not own to a replaced node.
@@ -253,6 +356,8 @@ impl ContentCache {
             raster,
             images: &self.images,
             image_hits: &self.image_hits,
+            image_failures: &self.image_failures,
+            missing_images: &self.missing_images,
             writing: RefCell::new(Rasterising {
                 glyphs: &mut self.glyphs,
                 atlas: &mut self.atlas,
@@ -343,6 +448,10 @@ pub struct FrameContent<'a> {
     /// Where a resolved picture is counted, so that a budget can tell a cache nothing draws from
     /// from one a picture on the screen is being served out of every frame.
     image_hits: &'a Cell<u64>,
+    /// Content the atlas has refused, so each refusal is reported once.
+    image_failures: &'a RefCell<rustc_hash::FxHashSet<AtlasKey>>,
+    /// Uploaded attachments this frame found without a tile.
+    missing_images: &'a RefCell<Vec<ReplacedId>>,
     /// The atlas, the glyph cache and their sink, behind a cell because emitting is an immutable
     /// walk.
     writing: RefCell<Rasterising<'a>>,
@@ -444,11 +553,54 @@ impl ReplacedSource for FrameContent<'_> {
         let content = self.images.get(&id)?;
         self.image_hits.set(self.image_hits.get() + 1);
         let mut writing = self.writing.borrow_mut();
-        let Rasterising { atlas, named, .. } = &mut *writing;
-        let (source, key) = crate::content::images::source_of(atlas, content)?;
-        // A picture is one tile where a line is fifty, and it is held for the same reason: a
-        // replayed range draws it without asking for it, so nothing else says it is still there.
+        let Rasterising {
+            glyphs,
+            atlas,
+            vector_masks,
+            named,
+        } = &mut *writing;
+        let mut resolved = crate::content::images::source_of(atlas, content);
+        if matches!(resolved, Err(zgui_atlas::AtlasError::OutOfSpace { .. })) {
+            // The pool is full of colder content. One eviction step spares everything this frame
+            // has drawn and everything anything holds, so a single retry is safe — and it is
+            // enough, because one step frees a whole generation.
+            let mut removed = Vec::new();
+            let freed = atlas.evict_least_recently_used_into(&mut removed);
+            glyphs.forget_tiles(&removed);
+            vector_masks.forget_tiles(&removed);
+            counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+            resolved = crate::content::images::source_of(atlas, content);
+        }
+        let (source, key) = match resolved {
+            Ok(Some(resolved)) => resolved,
+            // An uploaded entry whose tile is gone: nothing here can rebuild it, so the node is
+            // reported and its owner decodes it again.
+            Ok(None) => {
+                self.missing_images.borrow_mut().push(id);
+                return None;
+            }
+            Err(error) => {
+                let key = match content {
+                    Content::Decoded { key, .. } | Content::Uploaded { key, .. } => Some(*key),
+                    Content::External(_) => None,
+                };
+                if key.is_none_or(|key| self.image_failures.borrow_mut().insert(key)) {
+                    tracing::warn!(
+                        target: "zgui::paint",
+                        "content for {id:?} could not enter the atlas: {error}"
+                    );
+                }
+                counter::add(Counter::ImageInsertFailed, 1);
+                return None;
+            }
+        };
         if let Some(key) = key {
+            if !self.image_failures.borrow().is_empty() {
+                self.image_failures.borrow_mut().remove(&key);
+            }
+            // A picture is one tile where a line is fifty, and it is held for the same reason: a
+            // replayed range draws it without asking for it, so nothing else says it is still
+            // there.
             named.push(key);
         }
         Some(source)

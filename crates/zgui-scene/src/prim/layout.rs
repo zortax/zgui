@@ -161,17 +161,18 @@ assert_instance_layout!(
 
 assert_instance_layout!(
     ColorSprite,
-    size = 92,
+    size = 108,
     align = 4,
     fields = [
         order @ 0, 4;
         flags @ 4, 4;
         bounds @ 8, 16;
-        radii @ 24, 32;
-        tile @ 56, 24;
-        opacity @ 80, 4;
-        clip @ 84, 4;
-        transform @ 88, 4;
+        frame @ 24, 16;
+        radii @ 40, 32;
+        tile @ 72, 24;
+        opacity @ 96, 4;
+        clip @ 100, 4;
+        transform @ 104, 4;
     ],
 );
 
@@ -197,7 +198,7 @@ mod tests {
         assert_eq!(size_of::<Decoration>(), 56);
         assert_eq!(size_of::<MonoSprite>(), 72);
         assert_eq!(size_of::<SubpixelSprite>(), 72);
-        assert_eq!(size_of::<ColorSprite>(), 92);
+        assert_eq!(size_of::<ColorSprite>(), 108);
     }
 
     /// A subpixel sprite differs from a monochrome one only in which pipeline draws it, so the two

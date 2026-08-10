@@ -80,6 +80,37 @@ fn over_grey(renderer: &mut zgui_render_wgpu::WgpuRenderer, tile: AtlasTile) -> 
     (0..TILE).map(|x| pixels.rgba(x, TILE / 2)).collect()
 }
 
+/// A large upload's staging leaves with its frame instead of staying warm.
+///
+/// Ordinary uploads round up to a power of two and wait mapped for reuse, which is right for a
+/// steady trickle of glyphs and wrong for one multi-megabyte image: rounded up and retained, one
+/// 1024-square picture would hold megabytes of mapped memory for two seconds after it went by.
+#[test]
+fn an_oversized_upload_leaves_no_staging_behind() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let side = 1024i32;
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    for handle in 0..2u64 {
+        atlas
+            .get_or_insert(
+                AtlasKey::new(handle, TextureKind::Image),
+                Size::new(side, side),
+                || vec![9u8; (side * side * 4) as usize],
+            )
+            .expect("a fresh atlas has room");
+        atlas
+            .flush_uploads(renderer.atlas())
+            .expect("the device accepts the upload");
+        assert_eq!(
+            renderer.atlas().staging_bytes(),
+            0,
+            "a four-megabyte transfer keeps no staging chunk warm"
+        );
+    }
+}
+
 #[test]
 fn a_premultiplied_tile_composites_its_soft_edge_without_blooming() {
     let Some(mut renderer) = plain_renderer() else {

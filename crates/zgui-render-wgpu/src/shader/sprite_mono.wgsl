@@ -33,7 +33,7 @@ fn fs_mono_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
     let color = rgba_of(sprite.color);
-    let sample = sample_atlas(in.texel).r;
+    let sample = sample_atlas(in.texel, sprite.tile, 0.0).r;
     let coverage = correct_coverage(sample, straight_rgb(color), globals.text.x);
     return color * coverage * clip;
 }

@@ -27,6 +27,7 @@ pub fn packed(tile: SpriteTile) -> String {
         0 => "mono",
         1 => "subpixel",
         2 => "color",
+        3 => "image",
         _ => "<unknown>",
     };
     format!(
@@ -46,6 +47,7 @@ pub fn pool(kind: TextureKind) -> &'static str {
         TextureKind::Mono => "mono",
         TextureKind::Subpixel => "subpixel",
         TextureKind::Color => "color",
+        TextureKind::Image => "image",
     }
 }
 

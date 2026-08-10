@@ -33,6 +33,23 @@ pub trait TextureSink {
         format: TextureFormat,
     ) -> Result<(), SinkError>;
 
+    /// Creates `texture` with `mip_levels` levels of detail, level zero sized `size`.
+    ///
+    /// The default ignores the levels and creates the texture plain, which is correct for a sink
+    /// that only ever samples level zero — every level's write arrives through
+    /// [`TextureSink::write_texture_mip`], and the default there drops the ones such a sink has
+    /// nowhere to put.
+    fn create_texture_with_mips(
+        &mut self,
+        texture: TextureId,
+        size: Size<i32, Device>,
+        format: TextureFormat,
+        mip_levels: u32,
+    ) -> Result<(), SinkError> {
+        let _ = mip_levels;
+        self.create_texture(texture, size, format)
+    }
+
     /// Starts a group of texture writes.
     ///
     /// The default is deliberately empty. Device sinks may use the boundary to combine many
@@ -52,6 +69,25 @@ pub trait TextureSink {
         format: TextureFormat,
         bytes: &[u8],
     ) -> Result<(), SinkError>;
+
+    /// Writes `bytes` into `bounds` of `texture`'s level `mip`.
+    ///
+    /// `bounds` is in the coordinate space of that level. The default forwards level zero to
+    /// [`TextureSink::write_texture`] and accepts the rest without storing them, which is the
+    /// honest behaviour of a sink whose textures have one level.
+    fn write_texture_mip(
+        &mut self,
+        texture: TextureId,
+        mip: u32,
+        bounds: Rect<i32, Device>,
+        format: TextureFormat,
+        bytes: &[u8],
+    ) -> Result<(), SinkError> {
+        if mip == 0 {
+            return self.write_texture(texture, bounds, format, bytes);
+        }
+        Ok(())
+    }
 
     /// Finishes the group begun by [`TextureSink::begin_uploads`].
     fn finish_uploads(&mut self) {}
@@ -79,6 +115,16 @@ impl<S: TextureSink + ?Sized> TextureSink for &mut S {
         (**self).create_texture(texture, size, format)
     }
 
+    fn create_texture_with_mips(
+        &mut self,
+        texture: TextureId,
+        size: Size<i32, Device>,
+        format: TextureFormat,
+        mip_levels: u32,
+    ) -> Result<(), SinkError> {
+        (**self).create_texture_with_mips(texture, size, format, mip_levels)
+    }
+
     fn write_texture(
         &mut self,
         texture: TextureId,
@@ -87,6 +133,17 @@ impl<S: TextureSink + ?Sized> TextureSink for &mut S {
         bytes: &[u8],
     ) -> Result<(), SinkError> {
         (**self).write_texture(texture, bounds, format, bytes)
+    }
+
+    fn write_texture_mip(
+        &mut self,
+        texture: TextureId,
+        mip: u32,
+        bounds: Rect<i32, Device>,
+        format: TextureFormat,
+        bytes: &[u8],
+    ) -> Result<(), SinkError> {
+        (**self).write_texture_mip(texture, mip, bounds, format, bytes)
     }
 
     fn begin_uploads(&mut self) -> Result<(), SinkError> {

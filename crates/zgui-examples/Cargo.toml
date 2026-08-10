@@ -68,5 +68,9 @@ path = "../../examples/windows.rs"
 name = "csd"
 path = "../../examples/csd.rs"
 
+[[example]]
+name = "images"
+path = "../../examples/images.rs"
+
 [lints]
 workspace = true

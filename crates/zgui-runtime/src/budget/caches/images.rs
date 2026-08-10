@@ -17,10 +17,15 @@ use crate::images::ImageLoader;
 ///
 /// # What is pinned and what is not
 ///
-/// A source some live element shows is pinned: evicting it would blank a picture that is on the
-/// screen until a re-decode lands, which is a flicker no budget is entitled to cause. A source
-/// nothing shows — the history a scrolled gallery leaves behind — is the evictable part, and an
-/// entry is dropped whole because half a picture is nothing.
+/// What is pinned is the *attached variant* of every source a live element shows: evicting it
+/// would blank a picture that is on the screen until a re-decode lands, which is a flicker no
+/// budget is entitled to cause. Everything else — variants nothing is attached to, and the whole
+/// history a scrolled gallery leaves behind — is evictable.
+///
+/// At steady state the pinned figure trends toward zero of its own accord: once a large
+/// picture's upload has flushed, its tile stands in for its texels and the loader gives the host
+/// copy back. What this budget bounds is the transient — decodes on their way to the screen —
+/// plus retained small pictures and the orphaned history.
 ///
 /// [`forget`](Budgeted::forget) is stronger, as everywhere: it drops the shown ones too, and the
 /// loader re-decodes them from their sources on the next settle. The old caveat — that a
@@ -84,7 +89,7 @@ impl Budgeted for DecodedImagesBudget<'_> {
     }
 
     fn evict(&mut self, units: u64, _epoch: SceneEpoch) -> u64 {
-        self.loader.evict(units)
+        self.loader.evict(units, self.content)
     }
 
     fn forget(&mut self) {

@@ -31,7 +31,9 @@ fn a_miss_allocates_and_a_hit_does_not() {
         .get_or_insert(mono(1), square(8), || vec![1; 64])
         .unwrap();
     let second = atlas
-        .get_or_insert(mono(1), square(8), || panic!("build must not run on a hit"))
+        .get_or_insert(mono(1), square(8), || -> Vec<u8> {
+            panic!("build must not run on a hit")
+        })
         .unwrap();
     assert_eq!(first, second);
     assert_eq!(atlas.len(), 1);
@@ -49,6 +51,106 @@ fn uploads_are_deferred_until_they_are_flushed() {
     assert_eq!(atlas.flush_uploads(&mut sink).unwrap(), 16);
     assert_eq!(sink.writes(), 1);
     assert_eq!(atlas.report().pending_uploads, 0);
+}
+
+#[test]
+fn a_shared_payload_is_borrowed_for_the_queue_rather_than_copied() {
+    let (mut atlas, mut sink) = atlas();
+    let texels = std::sync::Arc::new(vec![9u8; 16]);
+    atlas
+        .get_or_insert(mono(1), square(4), || std::sync::Arc::clone(&texels))
+        .unwrap();
+    assert_eq!(
+        std::sync::Arc::strong_count(&texels),
+        2,
+        "the queue holds a reference, and a copy would hold none"
+    );
+
+    assert_eq!(atlas.flush_uploads(&mut sink).unwrap(), 16);
+    assert_eq!(
+        std::sync::Arc::strong_count(&texels),
+        1,
+        "the queue's reference goes with the write"
+    );
+}
+
+#[test]
+fn a_standalone_tile_is_its_whole_texture_and_returns_it_when_it_goes() {
+    let (mut atlas, mut sink) = atlas();
+    let key = AtlasKey::new(9, crate::TextureKind::Image);
+    let levels = || {
+        vec![
+            vec![1u8; 8 * 4 * 4],
+            vec![2u8; 4 * 2 * 4],
+            vec![3u8; 2 * 4],
+            vec![4u8; 4],
+        ]
+    };
+
+    let tile = atlas
+        .insert_standalone(key, Size::new(8, 4), levels)
+        .unwrap();
+    assert_eq!(
+        (tile.bounds.size.width, tile.bounds.size.height),
+        (8, 4),
+        "the tile is the image's own extent"
+    );
+    assert_eq!(
+        atlas.report().pending_uploads,
+        4,
+        "every level is queued as its own write"
+    );
+
+    atlas.flush_uploads(&mut sink).unwrap();
+    assert_eq!(
+        sink.size_of(tile.texture),
+        Some(Size::new(8, 4)),
+        "the texture is exactly the image, with no page slack"
+    );
+
+    let again = atlas.insert_standalone(key, Size::new(8, 4), || -> Vec<Vec<u8>> {
+        panic!("build must not run on a hit")
+    });
+    assert_eq!(again.unwrap(), tile);
+
+    assert!(atlas.remove(key));
+    assert!(
+        atlas.is_fully_reclaimed(),
+        "the one tile going returns the whole texture"
+    );
+}
+
+#[test]
+fn a_conditional_removal_defers_to_holds_where_an_unconditional_one_may_not() {
+    let (mut atlas, _sink) = atlas();
+    atlas
+        .get_or_insert(mono(1), square(4), || vec![0; 16])
+        .unwrap();
+    atlas.retain(mono(1));
+
+    assert!(
+        !atlas.remove_if_unreferenced(mono(1)),
+        "a replayed range still draws from the tile, so it stays"
+    );
+    assert!(atlas.contains(mono(1)));
+
+    atlas.release(mono(1));
+    assert!(atlas.remove_if_unreferenced(mono(1)), "unheld, it goes");
+    assert!(atlas.is_fully_reclaimed());
+}
+
+#[test]
+fn a_standalone_level_whose_bytes_disagree_with_its_extent_is_refused() {
+    let (mut atlas, _sink) = atlas();
+    let key = AtlasKey::new(9, crate::TextureKind::Image);
+    let refused = atlas.insert_standalone(key, Size::new(8, 4), || {
+        vec![vec![1u8; 8 * 4 * 4], vec![2u8; 3]]
+    });
+    assert!(
+        matches!(refused, Err(crate::AtlasError::WrongByteCount { .. })),
+        "level one is 4×2 and needs 32 bytes"
+    );
+    assert!(!atlas.contains(key), "a refused insert caches nothing");
 }
 
 #[test]

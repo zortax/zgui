@@ -133,6 +133,60 @@ impl Pool {
         ))
     }
 
+    /// Allocates a texture of exactly `size` whose single tile is the whole of it, recording its
+    /// creation with `mip_levels` levels of detail.
+    ///
+    /// This is what a large image gets instead of a shelf: the texture is the tile, so no glyph
+    /// page grows to the image's extent and the whole allocation is returned the moment the one
+    /// tile is deallocated. Deallocation, byte accounting and eviction treat it exactly like any
+    /// other tile.
+    pub(crate) fn allocate_exact(
+        &mut self,
+        size: Size<i32, Device>,
+        mip_levels: u32,
+        limits: AtlasLimits,
+        device: &mut TextureQueue,
+    ) -> Result<(TextureId, TileId, Rect<i32, Device>), AtlasError> {
+        if size.width <= 0 || size.height <= 0 {
+            return Err(AtlasError::OutOfSpace { requested: size });
+        }
+        if size.width > limits.max_texture_size || size.height > limits.max_texture_size {
+            return Err(AtlasError::TooLarge {
+                requested: size,
+                limit: limits.largest_tile(),
+            });
+        }
+        if self.live_textures() as u32 >= limits.max_textures_per_pool {
+            return Err(AtlasError::OutOfSpace { requested: size });
+        }
+        let index = self
+            .textures
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or(self.textures.len());
+        if index == self.textures.len() {
+            self.textures.push(None);
+        }
+        // The full-extent allocation happens before the creation is recorded, so a refusal from
+        // the allocator leaves no queued texture nothing tracks.
+        let mut allocator = BucketedAtlasAllocator::new(size2(size.width, size.height));
+        let allocation = allocator
+            .allocate(size2(size.width, size.height))
+            .ok_or(AtlasError::OutOfSpace { requested: size })?;
+        let id = TextureId::new(self.kind, index as u32);
+        device.create_with_mips(id, size, self.kind.format(), mip_levels);
+        self.textures[index] = Some(PoolTexture {
+            allocator,
+            size,
+            live: 1,
+        });
+        Ok((
+            id,
+            TileId(allocation.id.serialize()),
+            rect_of(allocation.rectangle, size),
+        ))
+    }
+
     /// Returns a tile's space, recording the texture's destruction when it holds nothing else.
     pub(crate) fn deallocate(
         &mut self,

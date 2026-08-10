@@ -28,7 +28,7 @@ use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_css::parity::Support;
 use zgui_css::values::color::{current, to_color};
-use zgui_css::values::size::VisibilityValue;
+use zgui_css::values::size::{ObjectFitValue, ObjectPositionValue, VisibilityValue};
 use zgui_css::{ComputedStyle, register_properties};
 
 pub use crate::lower::background::BackgroundStyle;
@@ -39,8 +39,10 @@ pub use crate::lower::outline::OutlinePaint;
 pub use crate::lower::shadow::ShadowSpec;
 
 register_properties! {
-    color      => Support::Implemented("zgui-paint::lower"),
-    visibility => Support::Implemented("zgui-paint::lower"),
+    color           => Support::Implemented("zgui-paint::lower"),
+    visibility      => Support::Implemented("zgui-paint::lower"),
+    object_fit      => Support::Implemented("zgui-paint::emit::replaced"),
+    object_position => Support::Implemented("zgui-paint::emit::replaced"),
 }
 
 /// Everything one computed style says about what it paints, with nothing geometric in it.
@@ -83,6 +85,14 @@ pub struct PaintStyle {
     pub clip_path: ClipShape,
     /// Whether the box's transform properties force it into a target of its own.
     pub transform_forces_group: bool,
+    /// How replaced content meets its content box: stretched, fitted, covering, or at its own
+    /// size.
+    pub object_fit: ObjectFitValue,
+    /// Where fitted replaced content sits within its box.
+    ///
+    /// Held as the computed pair rather than resolved numbers, because a percentage here is a
+    /// percentage of the box's leftover space — geometry, resolved where the content is emitted.
+    pub object_position: ObjectPositionValue,
 }
 
 impl PaintStyle {
@@ -136,6 +146,8 @@ pub fn lower(style: &ComputedStyle, scale: f32) -> PaintStyle {
         group: filter::of(style, scale),
         clip_path: clip::of(style),
         transform_forces_group: transform::forces_group(style),
+        object_fit: style.get_position().object_fit,
+        object_position: style.get_position().object_position.clone(),
     }
 }
 

@@ -29,10 +29,10 @@ not a backlog, so it is never added to what is left to do.
 | Property names the engine generates | 322 |
 | Distinct longhands behind them | 250 |
 | Classified | 250 |
-| Implemented | 176 |
-| Parsed and cascaded, not yet implemented | 74 |
+| Implemented | 178 |
+| Parsed and cascaded, not yet implemented | 72 |
 | Classified as unavailable from the engine | 0 |
-| Shown by probe to change what a frame produces | 157 |
+| Shown by probe to change what a frame produces | 159 |
 | Out of reach: defined by the engine for another target only | 172 |
 | Out of reach: register rows | 7 |
 | Not yet implemented: register rows | 0 |
@@ -305,8 +305,8 @@ it. It is not a plan.
 | `min-inline-size` | implemented | changes what a frame produces | zgui-layout::style::core |
 | `min-width` | implemented | changes what a frame produces | zgui-layout::style::core |
 | `mix-blend-mode` | implemented | changes what a frame produces | zgui-layout::fragment |
-| `object-fit` | unread | no observable change | no probe has shown it moving an edge, and no module reads it |
-| `object-position` | unread | no observable change | no probe has shown it moving an edge, and no module reads it |
+| `object-fit` | implemented | changes what a frame produces | zgui-paint::emit::replaced |
+| `object-position` | implemented | changes what a frame produces | zgui-paint::emit::replaced |
 | `offset-path` | unread | no observable change | no probe has shown it moving an edge, and no module reads it |
 | `opacity` | implemented | changes what a frame produces | zgui-layout::fragment |
 | `order` | implemented | changes what a frame produces | zgui-layout::style::flex |
