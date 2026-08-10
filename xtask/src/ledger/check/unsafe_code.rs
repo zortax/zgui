@@ -52,6 +52,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "loading libxkbcommon at run time, and every call made into it",
     ),
     (
+        "zgui-seat",
+        "loading libseat at run time, and every call made into it",
+    ),
+    (
         "zgui-platform-drm",
         "the two `borrow_raw` calls that report a surface's DRM handles, and the Vulkan calls that \
          make the images a display scans out of — every one of those is reached through wgpu's hal",
