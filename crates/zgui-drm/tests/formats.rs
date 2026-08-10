@@ -202,7 +202,16 @@ fn a_plane_that_publishes_no_layouts_is_answered_rather_than_refused() {
 /// A device opened without universal planes lists its overlay planes and hides the primary and
 /// cursor ones, and a device with no plane at all lists nothing. Neither says anything about this
 /// crate, so both are reported rather than asserted.
+///
+/// The card is asked first whether it has an atomic interface, because a short list has a third
+/// cause this crate owns. A card with the interface, over a device that hides the primary and
+/// cursor planes anyway, is this crate failing to ask for the capability. Every assertion below
+/// would still hold there, over the overlay planes alone.
 fn planes(test: &str, device: &Device) -> Option<Vec<u32>> {
+    if !support::atomic(test, device, "the planes it publishes layouts for") {
+        return None;
+    }
+
     let planes = device.planes().expect("a device enumerates its planes");
     if planes.is_empty() {
         eprintln!(

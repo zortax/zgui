@@ -35,14 +35,11 @@ fn a_device_states_a_cursor_size_a_caller_can_allocate() {
 
 #[test]
 fn a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for() {
-    let Some(device) = support::device(
-        "a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for",
-        Interface::Preferred,
-    ) else {
+    let test = "a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !device.is_atomic() {
-        eprintln!("this device has no universal planes, so it lists no cursor plane");
+    if !support::atomic(test, &device, "the cursor plane it hands out") {
         return;
     }
 
@@ -85,14 +82,11 @@ fn a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for
 
 #[test]
 fn a_cursor_plane_drives_only_the_crtcs_its_mask_names() {
-    let Some(device) = support::device(
-        "a_cursor_plane_drives_only_the_crtcs_its_mask_names",
-        Interface::Preferred,
-    ) else {
+    let test = "a_cursor_plane_drives_only_the_crtcs_its_mask_names";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !device.is_atomic() {
-        eprintln!("this device has no universal planes, so it lists no cursor plane");
+    if !support::atomic(test, &device, "the CRTCs a cursor plane names") {
         return;
     }
 
@@ -121,14 +115,11 @@ fn a_cursor_plane_drives_only_the_crtcs_its_mask_names() {
 
 #[test]
 fn a_cursor_plane_already_taken_is_never_handed_out_a_second_time() {
-    let Some(device) = support::device(
-        "a_cursor_plane_already_taken_is_never_handed_out_a_second_time",
-        Interface::Preferred,
-    ) else {
+    let test = "a_cursor_plane_already_taken_is_never_handed_out_a_second_time";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !device.is_atomic() {
-        eprintln!("this device has no universal planes, so it lists no cursor plane");
+    if !support::atomic(test, &device, "which cursor plane is handed out twice") {
         return;
     }
 
@@ -173,14 +164,11 @@ fn a_cursor_plane_already_taken_is_never_handed_out_a_second_time() {
 
 #[test]
 fn a_cursor_plane_names_every_property_an_atomic_cursor_commit_sets() {
-    let Some(device) = support::device(
-        "a_cursor_plane_names_every_property_an_atomic_cursor_commit_sets",
-        Interface::Preferred,
-    ) else {
+    let test = "a_cursor_plane_names_every_property_an_atomic_cursor_commit_sets";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !device.is_atomic() {
-        eprintln!("this device is not atomic, so it has no properties to name");
+    if !support::atomic(test, &device, "the properties an atomic cursor commit sets") {
         return;
     }
 

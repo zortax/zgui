@@ -12,6 +12,11 @@
 // its own subject needs. So a helper is dead code in the binaries that do not call it, which says
 // nothing about the workspace.
 #![allow(dead_code)]
+// `card` issues an ioctl of its own. The crate under test is on the unsafe ledger's allowlist for
+// its ioctls, and this is the same reason.
+#![allow(unsafe_code)]
+
+mod card;
 
 use std::path::PathBuf;
 
@@ -62,6 +67,43 @@ pub(crate) fn device(test: &str, interface: Interface) -> Option<Device> {
             None
         }
     }
+}
+
+/// Returns `true` if `device` may be asserted about as an atomic device, and holds it to that
+/// where it can.
+///
+/// Two decisions, over one question each. Whether the card has an atomic interface is asked of the
+/// kernel over a descriptor of this module's own: a card that refuses the capability is a machine
+/// without the subject, so `subject` is named on standard error and the caller returns. Whether
+/// `device` reports it is then an assertion, because a card that takes the capability and a device
+/// that says otherwise differ over one thing only — what the crate under test asked for.
+///
+/// Reading [`Device::is_atomic`] alone would collapse the two. It answers what the device recorded
+/// when it was built, so a change that stopped asking for the capability would turn every test
+/// that reads it into a test that skips.
+///
+/// # Panics
+///
+/// Panics when the card takes the atomic capability and `device` reports none.
+pub(crate) fn atomic(test: &str, device: &Device, subject: &str) -> bool {
+    if !card::takes_atomic(device.path()) {
+        eprintln!(
+            "{test}: {} takes no atomic client capability, so nothing was asserted about \
+             {subject}\n\
+             name a card whose driver has the atomic interface with {DEVICE}=/dev/dri/cardN, or \
+             add one with `sudo modprobe vkms`",
+            device.path().display()
+        );
+        return false;
+    }
+
+    assert!(
+        device.is_atomic(),
+        "{} takes the atomic client capability, so a device built over it for the preferred \
+         interface reports atomic",
+        device.path().display()
+    );
+    true
 }
 
 /// Takes DRM master, and reports what stands in the way and how to get past it.
