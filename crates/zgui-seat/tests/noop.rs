@@ -3,8 +3,16 @@
 //! `LIBSEAT_BACKEND=noop` is a seat that opens, enables at once, and asks nothing of the machine:
 //! no daemon, no root, and no terminal. So the open, the wait for the first enable, the name, the
 //! descriptor, the queue and the close are all reachable from an ordinary shell, and that is what
-//! this binary covers. What noop cannot reach is a disable and the enable that follows it, which
-//! need a session and a second terminal.
+//! this binary covers.
+//!
+//! # What noop leaves uncovered
+//!
+//! noop produces one change in the life of a seat, and the open consumes it. So no change of any
+//! kind arrives through `Seat::dispatch` here: a disable, the enable that follows it, the order of
+//! the two and a queue holding more than one entry are all outside what this backend can reach, and
+//! they need a session and a second terminal. What is covered of `dispatch` is that it reaches
+//! libseat and reports what libseat refused. A run on a machine with terminals covers what turns an
+//! arriving change into a `Change`.
 //!
 //! # Why this binary has its own `main`
 //!
@@ -25,9 +33,10 @@
 // unsafe calls, and both state what makes them sound where they are made.
 #![allow(unsafe_code)]
 
-use std::env;
+use std::ffi::c_int;
 use std::os::fd::AsRawFd;
 use std::time::Instant;
+use std::{env, fs};
 
 use zgui_seat::{ENABLE_WITHIN, Error, Seat};
 
@@ -51,16 +60,7 @@ fn main() {
     // which is after this returns.
     unsafe { env::set_var(BACKEND, "noop") };
 
-    if !INSTALLED_AS.into_iter().any(is_installed) {
-        eprintln!(
-            "noop: this machine has no libseat, so a seat was opened against nothing and none of \
-             the six checks ran. Install seatd, or run the suite from `nix develop`, which puts \
-             `libseat.so.1` on the library path."
-        );
-        return;
-    }
-
-    let checks: [(&str, fn()); 6] = [
+    let checks: [(&str, fn()); 7] = [
         (
             "a_seat_opens_and_enables_inside_the_bound",
             a_seat_opens_and_enables_inside_the_bound,
@@ -74,12 +74,26 @@ fn main() {
             "a_quiet_dispatch_answers_no_change",
             a_quiet_dispatch_answers_no_change,
         ),
+        (
+            "a_refused_dispatch_is_reported",
+            a_refused_dispatch_is_reported,
+        ),
         ("dropping_the_seat_closes_it", dropping_the_seat_closes_it),
         (
             "a_backend_nothing_has_is_refused",
             a_backend_nothing_has_is_refused,
         ),
     ];
+
+    if !INSTALLED_AS.into_iter().any(is_installed) {
+        eprintln!(
+            "noop: this machine has no libseat, so no seat was opened and none of the {} checks \
+             ran. Install seatd, or run the suite from `nix develop`, which puts `libseat.so.1` on \
+             the library path.",
+            checks.len()
+        );
+        return;
+    }
 
     for (name, check) in checks {
         println!("noop: {name}");
@@ -174,24 +188,76 @@ fn a_quiet_dispatch_answers_no_change() {
     }
 }
 
+/// A dispatch libseat refuses is answered as a refusal.
+///
+/// noop makes one thing visible about [`Seat::dispatch`]: that the call reaches libseat. A
+/// `dispatch` that answered an empty list and called nothing satisfies every other check in this
+/// file, because noop delivers no change after the open.
+///
+/// noop's dispatch polls the socket pair it made at the open, on every call and whatever the timeout
+/// is. Linux refuses a `poll` for more descriptors than [`DESCRIPTOR_LIMIT`] permits, so a limit of
+/// zero makes that poll fail with [`EINVAL`] and noop answers `-1`. The limit is put back before
+/// anything is asserted, because a process that may open no descriptor cannot report a failure
+/// either.
+fn a_refused_dispatch_is_reported() {
+    let mut seat = open();
+    let limit = descriptor_limit();
+
+    set_descriptor_limit(&Rlimit {
+        current: 0,
+        maximum: limit.maximum,
+    });
+    let answer = seat.dispatch();
+    set_descriptor_limit(&limit);
+
+    match answer.expect_err("`poll` was refused, so the dispatch that makes it failed") {
+        Error::Dispatch { errno } => assert_eq!(
+            errno, EINVAL,
+            "the number is the one `poll` answers for a descriptor limit it cannot meet"
+        ),
+        other => panic!("a dispatch that failed is reported as one: {other}"),
+    }
+}
+
 /// Dropping the seat gives its descriptors back.
 ///
 /// The noop backend's connection is one end of a socket pair it makes when the seat opens, and
-/// closing the seat closes it. The system hands out the lowest free number, so a second seat opened
-/// after the first is dropped is given the number the first one had. A seat that was never closed
-/// holds that number, and the second seat gets a higher one.
+/// `libseat_close_seat` closes both ends. So the number of descriptors this process holds rises
+/// across an open and is back where it started after the drop.
+///
+/// The count says so. The numbers the system hands out move whenever anything else opens a
+/// descriptor of its own, so the assertion is over how many this process holds.
 fn dropping_the_seat_closes_it() {
-    let first = open();
-    let descriptor = first.descriptor().as_raw_fd();
-    drop(first);
+    let before = open_descriptors();
 
-    let second = open();
+    let seat = open();
+    let held = open_descriptors();
+    assert!(
+        held > before,
+        "an open seat holds descriptors this process did not have: {before} before it, and {held} \
+         while it is open"
+    );
+
+    drop(seat);
 
     assert_eq!(
-        second.descriptor().as_raw_fd(),
-        descriptor,
-        "the first seat was closed, so its descriptor was free for the second one to be given"
+        open_descriptors(),
+        before,
+        "the seat was closed, so every descriptor it took went back"
     );
+}
+
+/// Returns how many descriptors this process holds.
+///
+/// `/proc/self/fd` carries one entry per descriptor, and reading it holds one of its own, so the
+/// answer is one higher than the number held. Every call here counts the same way and every
+/// comparison is between two of them.
+fn open_descriptors() -> usize {
+    fs::read_dir("/proc/self/fd")
+        .unwrap_or_else(|error| {
+            panic!("libseat runs on Linux, which has `/proc/self/fd` to count: {error}")
+        })
+        .count()
 }
 
 /// A backend that cannot be found is a refusal rather than a seat.
@@ -215,4 +281,66 @@ fn a_backend_nothing_has_is_refused() {
         }
         other => panic!("a refused seat is reported as one: {other}"),
     }
+}
+
+/// Linux's `RLIMIT_NOFILE`: how many descriptors this process may hold.
+///
+/// Written out, because the standard library carries no resource limits and this binary names no
+/// crate that does. `7` is the kernel's generic numbering, which every architecture this suite runs
+/// on uses. A few older ones number their limits their own way.
+const DESCRIPTOR_LIMIT: c_int = 7;
+
+/// `EINVAL`, the number `poll` answers for more descriptors than [`DESCRIPTOR_LIMIT`] permits.
+///
+/// The first thirty-four error numbers are the kernel's generic ones, which every architecture uses.
+const EINVAL: i32 = 22;
+
+/// The C library's `struct rlimit`.
+///
+/// `rlim_t` is eight bytes wide on the 64-bit targets this suite runs on.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Rlimit {
+    /// The limit in force. A process lowers this for itself and raises it again up to `maximum`.
+    current: u64,
+    /// The ceiling on `current`. Only a privileged process raises this one.
+    maximum: u64,
+}
+
+// The C library's own, which is where a resource limit is read and written. Both are declared here
+// for the same reason libseat's interface is declared by hand: what crosses is stated once, beside
+// the code that calls it.
+unsafe extern "C" {
+    /// `getrlimit(2)`. Writes the limit in force through the pointer, and answers `0` or `-1`.
+    fn getrlimit(resource: c_int, limit: *mut Rlimit) -> c_int;
+    /// `setrlimit(2)`. Puts the limit behind the pointer in force, and answers `0` or `-1`.
+    fn setrlimit(resource: c_int, limit: *const Rlimit) -> c_int;
+}
+
+/// Returns the descriptor limit this process holds.
+fn descriptor_limit() -> Rlimit {
+    let mut limit = Rlimit {
+        current: 0,
+        maximum: 0,
+    };
+
+    // SAFETY: `getrlimit` writes one `struct rlimit` through the pointer, and this is one, owned by
+    // this frame and live for the length of the call. The resource is a number the system defines.
+    let answer = unsafe { getrlimit(DESCRIPTOR_LIMIT, &raw mut limit) };
+
+    assert_eq!(answer, 0, "a process reads its own descriptor limit");
+    limit
+}
+
+/// Puts a descriptor limit in force.
+fn set_descriptor_limit(limit: &Rlimit) {
+    // SAFETY: `setrlimit` reads one `struct rlimit` through the pointer, and this is one, live for
+    // the length of the call. Lowering the limit in force, and raising it again up to the ceiling it
+    // came with, is what a process does for itself.
+    let answer = unsafe { setrlimit(DESCRIPTOR_LIMIT, limit) };
+
+    assert_eq!(
+        answer, 0,
+        "a process lowers its own descriptor limit and puts it back"
+    );
 }

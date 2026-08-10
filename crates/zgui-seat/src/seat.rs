@@ -188,8 +188,14 @@ impl Held {
     /// and builtin backends make the call from inside `libseat_open_seat`. The wait then dispatches,
     /// because the logind and noop backends set a flag during the open and make the call from the
     /// first dispatch. A caller that did one of the two works on half the machines.
+    ///
+    /// The first dispatch waits for nothing. Both of those backends make the call at the top of
+    /// their dispatch and then spend what is left of the timeout waiting for a message that has
+    /// already arrived, so a first step would cost its whole length on every open. Later dispatches
+    /// carry the step, which is what keeps the loop off the processor.
     fn wait_for_enable(&self) -> Result<()> {
         let started = Instant::now();
+        let mut timeout = NO_WAIT;
         loop {
             if self.shared().take_through_enable() {
                 return Ok(());
@@ -199,7 +205,8 @@ impl Held {
                     within: ENABLE_WITHIN,
                 });
             }
-            self.turn(STEP)?;
+            self.turn(timeout)?;
+            timeout = STEP;
         }
     }
 
@@ -240,6 +247,15 @@ impl Held {
     /// first enable without counting it, so a caller that read the count would decide a seat had
     /// said nothing while holding the call that said it. What the callbacks recorded is the answer.
     fn turn(&self, timeout: c_int) -> Result<()> {
+        // `-1` is libseat's "wait for as long as it takes". A seat holds the terminal, so a program
+        // that stops for ever inside this call leaves a terminal nobody can use, and nothing later
+        // reports it: no answer comes back and no assertion fires. Every caller here passes a
+        // bound, and this assertion states it.
+        debug_assert!(
+            timeout >= 0,
+            "libseat_dispatch waits without end on a negative timeout"
+        );
+
         // SAFETY: `handle` is the seat libseat gave back, and it is open until `Drop`. libseat runs
         // the listener from inside this call; the callbacks take their own borrow of the queue and
         // this function holds none.

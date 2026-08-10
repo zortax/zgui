@@ -6271,6 +6271,7 @@ name = "zgui-seat"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "trybuild",
 ]
 
 [[package]]
