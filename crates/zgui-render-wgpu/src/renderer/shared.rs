@@ -118,15 +118,23 @@ impl SharedGraphics {
     /// `extensions` names Vulkan device extensions, and they survive because they are stated here.
     /// A device extension can be enabled only while a device is created, and this opens devices
     /// from five places — the first surface, the first offscreen renderer,
-    /// [`SharedGraphics::open_gpu`], the replacement built after a device is lost, and the separate
-    /// device a surface the primary adapter cannot present to gets. All five read this one list, so
-    /// a program whose buffers depend on an extension keeps it across a device loss, keeps it on a
-    /// second monitor hung off another card, and cannot be handed an extension-free device by
-    /// asking in the wrong order.
+    /// [`SharedGraphics::open_gpu`], the replacement built after a device is lost, and the
+    /// separate device a surface the primary adapter cannot present to gets. All five read this
+    /// one list, so a program whose buffers depend on an extension keeps it across a device loss,
+    /// keeps it on a second monitor hung off another card, and cannot be handed an extension-free
+    /// device by asking in the wrong order.
     ///
     /// The list is all-or-nothing and a machine may refuse it. [`Gpu::vulkan_extensions`] on the
     /// device that opened says whether it was enabled, and a caller reads that instead of
     /// assuming: a console backend falls back to copying through the processor.
+    ///
+    /// ```
+    /// use zgui_render_wgpu::SharedGraphics;
+    ///
+    /// let graphics = SharedGraphics::with_extensions(vec![c"VK_EXT_image_drm_format_modifier"]);
+    ///
+    /// assert_eq!(graphics.extensions(), [c"VK_EXT_image_drm_format_modifier"]);
+    /// ```
     pub fn with_extensions(extensions: Vec<&'static CStr>) -> Self {
         Self::with_backends_and_extensions(adapter::requested_backends(), extensions)
     }
