@@ -145,7 +145,7 @@ impl Scene {
 }
 
 /// Moves an `[x, y, width, height]` field.
-fn translate(bounds: &mut [f32; 4], by: Size<DevicePx, Device>) {
+pub(super) fn translate(bounds: &mut [f32; 4], by: Size<DevicePx, Device>) {
     bounds[0] += by.width.0;
     bounds[1] += by.height.0;
 }

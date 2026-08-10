@@ -48,11 +48,11 @@
 //!
 //! # The invariant a replay depends on
 //!
-//! A replayed range carries *last frame's* clip, paint and transform indices. Those resolve because
-//! the side tables are kept across frames and an entry keeps its identity for as long as anything
-//! refers to it — so the recorded content hashes are checked, in debug builds, against what the
-//! indices resolve to now. A table rebuilt per frame would draw one fragment with another's paint,
-//! with no error anywhere, and this is what fails instead.
+//! A replayed chunk carries the clip, paint and transform indices of the frame it was encoded in.
+//! Those resolve because the side tables are kept across frames and an entry keeps its identity
+//! for as long as anything refers to it — so the recorded content hashes are checked, in debug
+//! builds, against what the indices resolve to now. A table rebuilt per frame would draw one
+//! fragment with another's paint, with no error anywhere, and this is what fails instead.
 
 pub mod hold;
 
@@ -63,7 +63,7 @@ use zgui_atlas::AtlasKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_layout::{FragKey, Fragment, FragmentKind};
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId};
 
 use crate::lower::cache::PaintStyleRef;
 use crate::walk::replay::hold::ResourceOwner;
@@ -139,8 +139,18 @@ pub struct Painted {
 /// What one fragment painted last time it was painted.
 #[derive(Clone, Debug)]
 pub struct Record {
-    /// The range of the scene's operation log the fragment's primitives occupied.
-    pub ops: Range<u32>,
+    /// The fragment's compiled painting, owned here.
+    ///
+    /// Owned rather than a range of the scene's log, because the log is cleared every frame: a
+    /// range names whatever occupies those positions now, and a record must stay replayable
+    /// however many frames pass between the encoding and the next visit.
+    pub prims: ChunkPrims,
+    /// Which encoding produced [`Record::prims`], distinct per encoding for the life of the cache.
+    ///
+    /// A consumer that mirrors chunks elsewhere — a persistent GPU copy — keys its residence on
+    /// the pair of the fragment and this, so a re-encoded chunk is a new identity rather than a
+    /// mutation it has to detect.
+    pub revision: u64,
     /// What the fragment was drawing when the range was recorded.
     pub kind: FragmentKind,
     /// How it was painted.
@@ -175,7 +185,10 @@ pub struct Record {
 /// nothing.
 #[derive(Clone, Debug)]
 pub struct Encoding<'a> {
-    /// The range of the scene's operation log the primitives occupied.
+    /// The range of this frame's operation log the primitives occupied.
+    ///
+    /// Read once, to copy the pushed primitives into the record's own chunk. The range itself is
+    /// not kept: the log is cleared every frame, and the chunk is what survives.
     pub ops: Range<u32>,
     /// Whether replaying the range would draw what the encoding drew.
     ///
@@ -221,6 +234,8 @@ pub struct PaintCache {
     records: FxHashMap<FragKey, Record>,
     /// Fragments seen this frame, so the rest can be dropped when the frame ends.
     seen: Vec<FragKey>,
+    /// The revision the next encoding is stamped with.
+    next_revision: u64,
 }
 
 impl PaintCache {
@@ -257,8 +272,11 @@ impl PaintCache {
 
     /// Drops the record of every fragment this frame did not visit, releasing what it held.
     ///
-    /// A fragment nobody visited is one that was culled or has ceased to exist, and a record for a
-    /// fragment that no longer exists would be replayed if its name were ever reused.
+    /// A fragment nobody visited is one that was culled or has ceased to exist. The records own
+    /// their primitives, so keeping them across unvisited frames is safe — this drop is retention
+    /// policy, kept until fragment-retirement events tell the cache which names are gone. A
+    /// destroyed fragment's key is generational, so a kept record can never be replayed for a
+    /// successor in its slot.
     pub fn end_frame(&mut self, owner: &dyn ResourceOwner) {
         if self.seen.len() == self.records.len() {
             return;
@@ -278,9 +296,8 @@ impl PaintCache {
     /// What `fragment` costs this frame, given the style it lowers to now.
     ///
     /// A record is replayable when the fragment is still drawing what it was drawing, the style,
-    /// the chain and the transform are the ones it was recorded with, the fragment is the same
-    /// size, and the recorded range is still inside the log the scene retained. Anything else is
-    /// encoded again.
+    /// the chain and the transform are the ones it was recorded with, and the fragment is the
+    /// same size. Anything else is encoded again.
     pub fn reuse(&self, scene: &Scene, fragment: &Fragment, painted: Painted) -> Reuse {
         let Some(record) = self.records.get(&fragment.key) else {
             return Reuse::Encode;
@@ -295,9 +312,6 @@ impl PaintCache {
             return Reuse::Encode;
         }
         if record.border_box.size != fragment.border_box.size {
-            return Reuse::Encode;
-        }
-        if record.ops.end as usize > scene.retained_ops() {
             return Reuse::Encode;
         }
         // A cut range may still stand in for a fragment that is *entirely* outside the clip, and
@@ -328,11 +342,9 @@ impl PaintCache {
         ))
     }
 
-    /// The range recorded for `fragment`, for a caller that has already decided to replay it.
-    pub fn reuse_range(&self, fragment: &Fragment) -> Option<Range<u32>> {
-        self.records
-            .get(&fragment.key)
-            .map(|record| record.ops.clone())
+    /// The chunk recorded for `fragment`, for a caller that has already decided to replay it.
+    pub fn prims(&self, fragment: FragKey) -> Option<&ChunkPrims> {
+        self.records.get(&fragment).map(|record| &record.prims)
     }
 
     /// Records what a fragment painted this frame, and counts it as encoded.
@@ -367,10 +379,21 @@ impl PaintCache {
             owner.retain(*key);
         }
         counter::add(Counter::RecordTilesRetained, held.len() as u64);
-        let replaced = self.records.insert(
+        // The replaced record's arrays become the new chunk's storage, so re-encoding a fragment
+        // allocates only where its painting grew. Its holds are released after the new ones are
+        // taken, so a fragment re-encoding the letters it already had never lets its own tiles
+        // reach a refcount of zero in between.
+        let (mut prims, replaced_resources) = match self.records.remove(&fragment.key) {
+            Some(replaced) => (replaced.prims, Some(replaced.resources)),
+            None => (ChunkPrims::default(), None),
+        };
+        scene.extract_chunk(ops, &mut prims);
+        self.next_revision += 1;
+        self.records.insert(
             fragment.key,
             Record {
-                ops,
+                prims,
+                revision: self.next_revision,
                 kind: fragment.kind,
                 painted,
                 whole,
@@ -379,8 +402,8 @@ impl PaintCache {
                 resources: held,
             },
         );
-        if let Some(record) = replaced {
-            release(owner, &record.resources);
+        if let Some(resources) = replaced_resources {
+            release(owner, &resources);
         }
     }
 
@@ -406,11 +429,10 @@ impl PaintCache {
     /// So the two are combined rather than replaced. It is self-healing rather than sticky: a
     /// record that is not whole is encoded again the moment its ink meets the clip, and *that*
     /// encoding is entitled to raise the bit because it measured the fragment's own painting.
-    pub fn replayed(&mut self, fragment: &Fragment, ops: Range<u32>, whole: bool) {
+    pub fn replayed(&mut self, fragment: &Fragment, whole: bool) {
         counter::bump(Counter::ChunksTranslated);
         self.seen.push(fragment.key);
         if let Some(record) = self.records.get_mut(&fragment.key) {
-            record.ops = ops;
             record.border_box = fragment.border_box;
             record.whole &= whole;
         }

@@ -589,16 +589,16 @@ impl Pass<'_, '_> {
         match self.painter.cache.reuse(self.scene, fragment, painted) {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
-                let record = self
+                let chunk = self
                     .painter
                     .cache
-                    .reuse_range(fragment)
-                    .expect("a replayable fragment has a recorded range");
-                let range = self.scene.replay(record, offset);
+                    .prims(fragment.key)
+                    .expect("a replayable fragment has a recorded chunk");
+                let range = self.scene.replay_chunk(chunk, offset);
                 let pushed = (range.end - range.start) as usize;
                 self.report.primitives += pushed;
                 let whole = self.scene.unreplayable() == unreplayable;
-                self.painter.cache.replayed(fragment, range, whole);
+                self.painter.cache.replayed(fragment, whole);
             }
             Reuse::Encode => {
                 let Some(mut style) = self.painter.styles.get(style_ref).cloned() else {
