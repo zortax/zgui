@@ -43,9 +43,9 @@
 //!   bound to the display it is stuck to.
 //! * **The displays are arranged by this backend rather than by the machine.** The kernel says
 //!   where none of them is, so the pointer crosses from one to the next left to right in the order
-//!   the connectors enumerated, which matches how the monitors sit on the desk only by chance.
-//!   There is nothing here to ask: a console has no desktop coordinate space, and every display
-//!   reports its position as the origin.
+//!   the connectors enumerated — which is not how the monitors sit on the desk unless it happens
+//!   to be. There is nothing here to ask: a console has no desktop coordinate space, and every
+//!   display reports its position as the origin.
 //! * **What a key types depends on which of three layout answers this machine gives.** With
 //!   libxkbcommon and its keyboard data, every level of every key is read, and dead keys and
 //!   compose sequences work. With the kernel's own console keymap instead, three things go: a
@@ -66,10 +66,12 @@
 //! * **No virtual terminal management.** A session daemon opens the card where the machine has one
 //!   — `session` is that half, and it lets a program here start from an ordinary login shell. What
 //!   is absent is the other half: the seat is taken and nothing is read back from it, so a program
-//!   that loses its devices to another terminal is told nothing and carries on drawing into
-//!   commits that fail. **Switching away from a running program is not handled and is not safe.**
-//!   A machine with no session daemon gets the older behaviour whole: the loop opens the card and
-//!   takes DRM master itself, which needs a free virtual terminal or root.
+//!   that loses its devices to another terminal is told nothing and carries on drawing into commits
+//!   that fail. **Switching away from a running program is not handled and is not safe.** A machine
+//!   with no libseat gets the older behaviour whole: the loop opens the card and takes DRM master
+//!   itself, which needs a free virtual terminal or root. A machine that has libseat and a seat
+//!   that never enables reaches the same path two seconds later, and holds `TakeControl` on its own
+//!   terminal — the console keyboard turned off with it — for that long.
 //! * **A held terminal is held until the process exits.** A daemon puts the terminal into
 //!   `KD_GRAPHICS` and turns the console keyboard off when it grants control, and gives both back
 //!   when the controlling process goes. So a seated program that stops answering leaves a machine
@@ -111,8 +113,8 @@
 //! draws, and this crate offers the things that step needs, all of them on `DrmDisplay` except the
 //! first: `FORMAT`, the texture a frame is composed into; `DrmDisplay::textures`, which hands out
 //! the buffers a renderer composes into and answers nothing on the copied shape, so it says which
-//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into
-//! the buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
+//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into the
+//! buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
 //! `DrmDisplay::present_drawn`, which bracket a frame drawn straight into a display's own buffer;
 //! and `Displays`, which says which display a surface is. The renderer that uses them lives in
 //! `zgui`, because a renderer is built by the runtime and a backend at this layer cannot name the
@@ -121,15 +123,16 @@
 //! # The loop
 //!
 //! `run` is the driver. It opens the session, takes the card from it, lights every display it
-//! finds, and then turns: read the completions, read what the input devices reported, draw the
-//! frames that were asked for, ask the application how to wait, and wait on the device, the wake
-//! channel and every input device together. `park` decides the waiting, and it is the same state
-//! machine the windowing backend parks with.
+//! finds, and then turns: read the completions, draw the frames that were asked for, ask the
+//! application how to wait, and wait on the device, the wake channel and every input device
+//! together. `park` decides the waiting, and it is the same state machine the windowing backend
+//! parks with.
 //!
-//! The console's own mode goes with the card on the direct path: the loop puts the terminal into
-//! graphics mode so the kernel's text console stops drawing over the picture, and back into text
-//! mode on the way out so the console redraws. That is two ioctls and no more, and a seated run
-//! makes neither — `console` says what the pair does and what it does not.
+//! The console's own mode goes with the card on the direct path: the session puts the terminal
+//! into graphics mode as it takes the card, so the kernel's text console stops drawing over the
+//! picture, and back into text mode as it hands the card back, so the console redraws. That is two
+//! ioctls and no more, and a seated run makes neither — `console` says what the pair does and what
+//! it does not.
 //!
 //! It also writes the displays it lit into the `Displays` it was given, for as long as it turns.
 //! That map and the renderer are one decision, so `App::run_drm` makes one map and hands it to

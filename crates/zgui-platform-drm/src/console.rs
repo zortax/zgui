@@ -13,17 +13,24 @@
 //!
 //! **When the program stops**, the screen stays dark. Handing DRM master back does not put the
 //! kernel's own picture up: `drm_drop_master` releases the master and restores nothing, and the
-//! restore the kernel does have runs when the *last* handle on the device closes. The console holds
-//! the text it had and repaints from it, re-applying its own display mode, when it is told the
-//! screen is its own again, and nothing else tells it.
+//! restore the kernel does have runs from `drm_lastclose`, when the last handle on the device
+//! closes. This program's own framebuffers are gone by then, because
+//! [`Scanout::release`](crate::scanout::Scanout::release) removes them on the way out, so nothing
+//! of its own is left on the screen either. The console holds the text it had and repaints from it,
+//! re-applying its own display mode, when it is told the screen is its own again, and nothing else
+//! tells it.
 //!
 //! # Where this backend stops
 //!
 //! At the mode. Switching away from a program that holds the display needs `VT_SETMODE` with
-//! `VT_PROCESS`, a pair of signals, DRM master handed back and taken again around each switch, and
-//! on an ordinary desktop a session daemon that owns the devices. This backend has none of that, so
-//! `Ctrl+Alt+F2` while a program on it runs leaves it holding the display. [`zgui_evdev::Screen`]
-//! states the same boundary from the other side.
+//! `VT_PROCESS`, a pair of signals, and DRM master handed back and taken again around each switch —
+//! or, on an ordinary desktop, a session daemon that owns the devices and does all of it.
+//! [`crate::session`] is where this backend asks such a daemon.
+//!
+//! **A seated run makes neither call here.** The daemon puts the terminal into graphics mode when
+//! it grants control, so this backend leaves the console alone. A **direct** run makes both calls
+//! and carries none of the rest, so `Ctrl+Alt+F2` while a direct run holds the display leaves it
+//! holding the display. [`zgui_evdev::Screen`] states the same boundary from the other side.
 
 use tracing::{info, warn};
 use zgui_evdev::{Console, Screen};
@@ -54,6 +61,9 @@ impl ConsoleScreen {
     /// the device fails at the master and returns, so it never blanks a console it was not going to
     /// draw on. [`Seat::open`](crate::input::seat::Seat::open) keeps the same ordering for the
     /// grab, for the same reason.
+    ///
+    /// [`Session::card`](crate::session::Session::card) calls this on the direct path alone, and
+    /// holds the answer until the master goes back.
     ///
     /// Nothing here fails. A console that cannot be found or will not take the mode leaves the
     /// program drawing under a console driver that is still drawing too. The refusal is reported
