@@ -69,8 +69,8 @@
 //!   root, and fails to start while a compositor holds the master. What *is* here is the console's
 //!   own mode: the loop puts the terminal into graphics mode so the kernel's text console stops
 //!   drawing over the picture, and back into text mode on the way out so the console redraws. That
-//!   is two ioctls and no more — `console` says what they do and what they do not, and pressing
-//!   `Ctrl+Alt+F2` under a running program still leaves it holding the display.
+//!   is two ioctls and no more — `console` says what the pair does and what it does not, and
+//!   pressing `Ctrl+Alt+F2` under a running program still leaves it holding the display.
 //!
 //! The last is visible in what the crate names: no session library.
 //!
@@ -100,12 +100,15 @@
 //! screen until there is a frame to replace it with.
 //!
 //! A window system presents for a caller; a console does not. So the last step belongs to whatever
-//! draws, and this crate offers the things that step needs: `FORMAT`, the texture a frame is
-//! composed into; `DrmDisplay::present`, which copies a composed frame into the buffer a display is
-//! about to scan out of and asks for the flip; `Scanout::acquire` and `Scanout::present_drawn`,
-//! which bracket a frame drawn straight into a display's own buffer; and `Displays`, which says
-//! which display a surface is. The renderer that uses them lives in `zgui`, because a renderer is
-//! built by the runtime and a backend at this layer cannot name the runtime.
+//! draws, and this crate offers the things that step needs, all of them on `DrmDisplay` except the
+//! first: `FORMAT`, the texture a frame is composed into; `DrmDisplay::textures`, which hands out
+//! the buffers a renderer composes into and answers nothing on the copied shape, so it says which
+//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into the
+//! buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
+//! `DrmDisplay::present_drawn`, which bracket a frame drawn straight into a display's own buffer;
+//! and `Displays`, which says which display a surface is. The renderer that uses them lives in
+//! `zgui`, because a renderer is built by the runtime and a backend at this layer cannot name the
+//! runtime.
 //!
 //! # The loop
 //!
@@ -117,6 +120,10 @@
 //! It also writes the displays it lit into the `Displays` it was given, for as long as it turns.
 //! That map and the renderer are one decision, so `App::run_drm` makes one map and hands it to
 //! both.
+//!
+//! `run` takes the graphics device beside the map, for the same reason and one more: the images a
+//! display scans out of belong to the device the renderer draws on, so that device is opened before
+//! the displays exist. A caller that has none hands in nothing and every display copies.
 //!
 //! # The handles a surface reports
 //!
