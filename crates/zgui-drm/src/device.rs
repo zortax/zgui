@@ -130,8 +130,9 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// The answer is `Ok` today. See [`Device::over_with`].
-    pub fn over(fd: OwnedFd, path: PathBuf) -> Result<Self> {
+    /// Returns [`Error::Unusable`] naming `path` when `fd` cannot be made non-blocking. Returns it
+    /// also when `fd` names something other than a DRM device.
+    pub fn over(fd: OwnedFd, path: impl AsRef<Path>) -> Result<Self> {
         Self::over_with(fd, path, Interface::Preferred)
     }
 
@@ -140,7 +141,7 @@ impl Device {
     /// `path` names the device for messages. This call does not open it, because the caller
     /// already holds the descriptor. A session daemon that opened the card and handed the
     /// descriptor over is the caller this exists for, and naming the device keeps its errors and
-    /// its logs reading the way [`Device::open_with`] makes them read.
+    /// its logs reading as they do for [`Device::open_with`].
     ///
     /// `interface` selects the client capabilities exactly as it does for [`Device::open_with`],
     /// and they apply to the descriptor the caller was handed. `DRM_IOCTL_SET_CLIENT_CAP` records
@@ -148,11 +149,24 @@ impl Device {
     /// received from a session daemon names the same description the daemon holds, so a capability
     /// set here applies to it, and the master the daemon granted is already visible through it.
     ///
+    /// `O_NONBLOCK` is raised on `fd`, because [`Device::poll_events`] answers at once only while
+    /// that flag is on. The flag belongs to the open file description as well, so the daemon's own
+    /// descriptor onto the card gets it too.
+    ///
+    /// `fd` is then checked to name a DRM device. A session hands out input devices over the same
+    /// interface it hands out cards, and a descriptor onto one of those would otherwise build a
+    /// device that reports as a legacy card and refuses every later call with an errno that names
+    /// nothing.
+    ///
     /// # Errors
     ///
-    /// The answer is `Ok` today. It is a [`Result`] so that a caller which chooses between this
-    /// and [`Device::open_with`] at run time handles one shape.
-    pub fn over_with(fd: OwnedFd, path: PathBuf, interface: Interface) -> Result<Self> {
+    /// Returns [`Error::Unusable`] naming `path` when `fd` cannot be made non-blocking. Returns it
+    /// also when `fd` names something other than a DRM device.
+    pub fn over_with(fd: OwnedFd, path: impl AsRef<Path>, interface: Interface) -> Result<Self> {
+        let path = path.as_ref().to_owned();
+        raise_non_blocking(fd.as_fd(), &path)?;
+        confirm_drm_device(fd.as_fd(), &path)?;
+
         Ok(Self::configured(fd, path, interface))
     }
 
@@ -286,7 +300,10 @@ impl Device {
 
     /// Becomes the device's master, which modesetting requires.
     ///
-    /// Master is held by the open file description, so dropping the [`Device`] gives it up.
+    /// Master is held by the open file description. So dropping the [`Device`] gives it up only
+    /// when the device holds the last descriptor onto that description. [`Device::open`] builds
+    /// such a device. A device built by [`Device::over`] holds a second name for a description the
+    /// session daemon keeps, and master stays there until the daemon closes its own descriptor.
     ///
     /// # Errors
     ///
@@ -306,6 +323,54 @@ impl Device {
     pub fn drop_master(&self) -> Result<()> {
         ioctl::issue(self.fd(), ioctl::DROP_MASTER, &mut ())
     }
+}
+
+/// Raises `O_NONBLOCK` on `fd`, keeping every other status flag it carries.
+///
+/// [`Device::open_with`] asks for the flag when it opens the device, and this is the same thing
+/// for a descriptor somebody else opened. `F_SETFL` writes the whole set of status flags, so
+/// `F_GETFL` reads them first.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming `path` when the kernel refuses either call.
+fn raise_non_blocking(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
+    let flags = rustix::fs::fcntl_getfl(fd).map_err(|errno| {
+        Error::Unusable(format!(
+            "cannot read the flags of the descriptor for {}: {errno}",
+            path.display()
+        ))
+    })?;
+
+    rustix::fs::fcntl_setfl(fd, flags | OFlags::NONBLOCK).map_err(|errno| {
+        Error::Unusable(format!(
+            "cannot make the descriptor for {} non-blocking: {errno}",
+            path.display()
+        ))
+    })
+}
+
+/// Confirms that `fd` names a DRM device.
+///
+/// The query is `DRM_CAP_TIMESTAMP_MONOTONIC`. The kernel answers it for every DRM device before
+/// it reads anything about the driver, so one ioctl is enough, and a caller with no master and no
+/// privilege still gets an answer. A descriptor onto anything else refuses the request number.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming `path` when the query is refused.
+fn confirm_drm_device(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
+    let mut request = sys::drm_get_cap {
+        capability: u64::from(sys::DRM_CAP_TIMESTAMP_MONOTONIC),
+        value: 0,
+    };
+
+    ioctl::issue(fd, ioctl::GET_CAP, &mut request).map_err(|error| {
+        Error::Unusable(format!(
+            "the descriptor for {} names something other than a DRM device: {error}",
+            path.display()
+        ))
+    })
 }
 
 /// The open descriptor, for a caller that needs the device as a file.

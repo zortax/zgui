@@ -32,6 +32,14 @@ const DUMB_BUFFER: u64 = 1;
 /// from a `cards` that answers nothing, and would report the second as the first.
 const DIRECTORY: &str = "/dev/dri";
 
+/// How long a poll of an idle device is given to answer.
+///
+/// A poll of a non-blocking descriptor answers in microseconds, and a poll of a blocking one waits
+/// for a flip nothing asked for. So this separates the two, and it is long enough that a loaded
+/// machine does not report the first as the second. It is a bound rather than an expectation:
+/// without it, a test that waited for ever would hang the suite instead of failing it.
+const POLL_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Returns the cards under [`DIRECTORY`], sorted, read without [`zgui_drm::cards`].
 ///
 /// Answers nothing where the machine has no card, and says so with the remedy.
@@ -522,10 +530,20 @@ fn a_device_over_a_descriptor_enumerates_what_the_card_it_names_enumerates() {
         .resources()
         .expect("the device over a descriptor enumerates");
 
+    // A card has CRTCs, so an empty comparison is a comparison of nothing: `drm_mode_getresources`
+    // answering zero of everything would satisfy every assertion below.
+    assert!(
+        !by_open.crtcs.is_empty(),
+        "a modesetting device has at least one CRTC to compare"
+    );
+
     // The framebuffer list is left out of this comparison because it is the one list that belongs
     // to the descriptor: the kernel answers `count_fbs` from the calling `drm_file`'s own
-    // framebuffers, and each open makes a new `drm_file`. The other three describe the card, so
-    // two descriptors onto one card answer them the same.
+    // framebuffers, and each open makes a new `drm_file`. Of the other three,
+    // `drm_mode_getresources` lists every encoder the card has, and filters the CRTCs and the
+    // connectors by the lease the calling `drm_file` holds — with the connectors filtered again by
+    // whether that file asked for writeback connectors. Neither descriptor here is a lessee, and
+    // this crate asks for the same client capabilities through both, so the three lists agree.
     assert_eq!(
         by_over.crtcs,
         by_open.crtcs,
@@ -562,6 +580,12 @@ fn a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets() 
     // enumeration needs no capability. This one reads whether the capabilities were set, and each
     // descriptor is its own open file description, so the one this crate opened says nothing about
     // the one it was handed.
+    //
+    // Asserted without asking first whether this card has an atomic interface. A guard on
+    // `opened.is_atomic()` reads the same code path this test is about, so a change that stopped
+    // setting the capability would switch the test off rather than fail it. The cost is that a
+    // driver with only the legacy interface reports a fact about the hardware here as a defect,
+    // and that trade is deliberate.
     assert!(
         over.is_atomic(),
         "the atomic client capability reached a descriptor this crate did not open. {} answers \
@@ -570,6 +594,168 @@ fn a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets() 
         path.display(),
         opened.is_atomic()
     );
+
+    // `is_atomic` is this crate's own bookkeeping. The kernel's answer is the property list: the
+    // properties a plane commit sets carry `DRM_MODE_PROP_ATOMIC`, and
+    // `drm_mode_object_get_properties` hides those from a `drm_file` that never took the atomic
+    // capability. So this reads the capability back out of the kernel that recorded it.
+    let planes = over
+        .planes()
+        .expect("an atomic device enumerates its planes");
+    let plane = *planes.first().expect("an atomic device has a plane");
+    let properties = over
+        .properties(plane, ObjectKind::Plane)
+        .expect("a plane's properties are readable");
+    for name in [
+        "FB_ID", "CRTC_ID", "CRTC_X", "CRTC_Y", "CRTC_W", "CRTC_H", "SRC_X", "SRC_Y", "SRC_W",
+        "SRC_H",
+    ] {
+        assert!(
+            properties.id(name).is_some(),
+            "plane {plane} names its {name} property, which the kernel shows only to a client \
+             that set the atomic capability, and has {:?}",
+            properties.names().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn a_device_over_a_descriptor_is_built_for_the_interface_its_caller_asked_for() {
+    let Some(opened) = support::device(
+        "a_device_over_a_descriptor_is_built_for_the_interface_its_caller_asked_for",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let path = opened.path().to_owned();
+
+    let preferred = zgui_drm::Device::over(descriptor(&path), path.clone())
+        .expect("a device is built over an open descriptor");
+    let legacy = zgui_drm::Device::over_with(descriptor(&path), path.clone(), Interface::Legacy)
+        .expect("a device is built over an open descriptor");
+
+    // Both devices are read, because the legacy assertion holds on its own for a card that has
+    // only the legacy interface. The pair is what says the argument was honoured. The atomic
+    // assertion is unconditional for the reason the capability test above gives.
+    assert!(
+        preferred.is_atomic(),
+        "the preferred interface takes the atomic capability over a descriptor onto {}",
+        path.display()
+    );
+    assert!(
+        !legacy.is_atomic(),
+        "asking for the legacy interface over a descriptor has to produce a legacy device"
+    );
+    assert!(
+        !zgui_drm::commit::for_device(&legacy).can_test(),
+        "the legacy interface cannot validate a configuration first"
+    );
+
+    // What the kernel recorded, rather than what this crate remembers. `ACTIVE` carries
+    // `DRM_MODE_PROP_ATOMIC`, so a `drm_file` that took the atomic capability is the only one
+    // shown it.
+    let resources = legacy.resources().expect("the device enumerates");
+    let crtc = *resources
+        .crtcs
+        .first()
+        .expect("a modesetting device has a CRTC");
+    let properties = legacy
+        .properties(crtc, ObjectKind::Crtc)
+        .expect("a CRTC's properties are readable");
+    assert!(
+        properties.id("ACTIVE").is_none(),
+        "CRTC {crtc} hides its atomic properties from a legacy client, and named {:?}",
+        properties.names().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_device_over_a_blocking_descriptor_polls_rather_than_waiting() {
+    let Some(opened) = support::device(
+        "a_device_over_a_blocking_descriptor_polls_rather_than_waiting",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let path = opened.path().to_owned();
+
+    // Opened without `O_NONBLOCK`, which is the descriptor a caller may hand over. The duplicate
+    // stays here, so what reached the shared open file description can be read after the fact.
+    let blocking = rustix::fs::open(&path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+        .unwrap_or_else(|error| panic!("a card that opened once opens again: {error}"));
+    let kept = blocking
+        .try_clone()
+        .expect("a descriptor onto an open card duplicates");
+    let over = zgui_drm::Device::over(blocking, path.clone())
+        .expect("a device is built over an open descriptor");
+
+    // The flag lives on the open file description rather than on the descriptor, so the copy the
+    // caller kept reports it too. A session daemon's own descriptor is another name for that same
+    // description, and this is what it sees.
+    let flags = rustix::fs::fcntl_getfl(&kept).expect("a descriptor reports its status flags");
+    assert!(
+        flags.contains(OFlags::NONBLOCK),
+        "the flag reached the description behind the descriptor that was handed over: {flags:?}"
+    );
+
+    // The observable behind that flag. Nothing was flipped on this device, so a blocking
+    // descriptor waits here for a completion nobody asked for — which at run time is a frame loop
+    // stopping dead with nothing printed. The bound makes that a failure rather than a suite that
+    // never finishes.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let answer = over
+            .poll_events()
+            .map(|events| events.len())
+            .map_err(|error| error.to_string());
+        // The receiver is gone when the bound expired, and there is nobody left to tell.
+        let _ = sender.send(answer);
+    });
+    let answer = receiver.recv_timeout(POLL_BOUND).unwrap_or_else(|_| {
+        panic!(
+            "polling {} is still waiting after {POLL_BOUND:?}, so the descriptor handed over \
+             stayed blocking",
+            path.display()
+        )
+    });
+
+    assert_eq!(
+        answer.expect("an empty queue is not a failure"),
+        0,
+        "a device nothing was asked of has nothing to report"
+    );
+}
+
+#[test]
+fn a_descriptor_that_names_no_drm_device_is_refused_rather_than_built_over() {
+    // A session hands out input devices over the interface it hands out cards over, so a
+    // descriptor onto something that is not a card is a mistake a caller can make. `/dev/null` is
+    // the one every machine has, and it refuses a DRM request number exactly as an evdev
+    // descriptor does.
+    let other = rustix::fs::open("/dev/null", OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+        .expect("/dev/null opens");
+    let named = PathBuf::from("/dev/dri/card-that-is-not-a-card");
+    let error = zgui_drm::Device::over(other, named.clone())
+        .expect_err("a descriptor onto something other than a DRM device is refused");
+    assert!(
+        matches!(error, zgui_drm::Error::Unusable(_)),
+        "the refusal says the answer cannot be used: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("card-that-is-not-a-card"),
+        "the refusal names the path its caller gave: {error}"
+    );
+
+    // The other direction, so that the check above is a check rather than a refusal of everything.
+    let Some(opened) = support::device(
+        "a_descriptor_that_names_no_drm_device_is_refused_rather_than_built_over",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let path = opened.path().to_owned();
+    zgui_drm::Device::over(descriptor(&path), path.clone())
+        .unwrap_or_else(|error| panic!("a descriptor onto {} is taken: {error}", path.display()));
 }
 
 #[test]
@@ -607,11 +793,13 @@ fn the_card_list_is_sorted_and_holds_the_card_under_test() {
         return;
     };
 
+    // `present` is sorted here, so this comparison carries the order as well as the contents. A
+    // machine with one card can hold only the contents: one entry is in order whatever `cards`
+    // does to it, and a listing whose order can be read needs a second card.
     let cards = zgui_drm::cards().expect("the card list is answered");
-    assert!(cards.is_sorted(), "the card list is sorted: {cards:?}");
     assert_eq!(
         cards, present,
-        "the card list holds every card under {DIRECTORY}"
+        "the card list holds every card under {DIRECTORY}, in order"
     );
 
     // The card these tests run against is one the list offers, so a caller that opens its devices
