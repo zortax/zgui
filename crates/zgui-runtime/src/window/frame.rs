@@ -359,6 +359,10 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
+            // The chunk notes were consumed by the same submission. A skipped frame keeps them
+            // for the next drawn one, and anything noted after this point — a budget eviction —
+            // stands until then.
+            self.scene.clear_chunk_notes();
         }
 
         // After the renderer, and before the arenas are recycled. After, because what a screen

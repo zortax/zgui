@@ -273,6 +273,9 @@ impl Renderer for WgpuRenderer {
             draw_calls += 1;
         }
         self.gpu.queue().submit([encoder.finish()]);
+        // Ties the frame's retired arena ranges to the submission just made, so they come back
+        // only once nothing in flight can read them.
+        self.buffers.chunks.submitted(&self.gpu);
         self.buffers.recall_uploads();
         zgui_profile::latency::mark("sub.out");
 

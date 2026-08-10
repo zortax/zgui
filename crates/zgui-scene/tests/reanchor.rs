@@ -75,7 +75,7 @@ fn a_gradient_carried_to_a_new_position_is_reanchored() {
     let (mut scene, recorded) = painted(true);
 
     scene.begin_frame(Size::new(320, 320));
-    let replayed = scene.replay_chunk(&recorded, down(24.0));
+    let replayed = scene.replay_chunk(&recorded, down(24.0), 0);
     scene.finish(&DamageSet::full());
 
     assert_eq!(replayed.len(), 2, "both boxes were carried forward");
@@ -102,13 +102,13 @@ fn a_document_whose_gradients_stand_still_reanchors_nothing() {
     // A document full of ramps, replayed exactly where it was.
     let (mut scene, recorded) = painted(true);
     scene.begin_frame(Size::new(320, 320));
-    scene.replay_chunk(&recorded, down(0.0));
+    scene.replay_chunk(&recorded, down(0.0), 0);
     scene.finish(&DamageSet::full());
 
     // And a document that moves, with no ramp in it to move.
     let (mut flat, recorded) = painted(false);
     flat.begin_frame(Size::new(320, 320));
-    flat.replay_chunk(&recorded, down(24.0));
+    flat.replay_chunk(&recorded, down(24.0), 0);
     flat.finish(&DamageSet::full());
 
     if !COUNTERS_ENABLED {
@@ -141,7 +141,7 @@ fn three_hundred_scroll_steps_intern_no_paint() {
             inherited,
             "step {step} opened with a longer paint table than the step before it"
         );
-        let range = scene.replay_chunk(&recorded, down(1.0));
+        let range = scene.replay_chunk(&recorded, down(1.0), 0);
         scene.extract_chunk(range, &mut scratch);
         core::mem::swap(&mut recorded, &mut scratch);
         scene.finish(&DamageSet::full());

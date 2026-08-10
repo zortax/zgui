@@ -62,6 +62,44 @@ impl TableHolds {
     }
 }
 
+/// Where one pushed instanced primitive came from, for a renderer that keeps chunks resident.
+///
+/// A primitive replayed in place out of a chunk carries the chunk's revision and its index in
+/// the chunk's own lane, so a renderer holding that chunk's bytes on the device can point a draw
+/// at them without any upload. Everything else — a fresh encoding not yet resident, a replay
+/// that applied an offset, an outline emitted outside any capture — is transient: this frame's
+/// bytes are its only source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChunkSlot {
+    /// The chunk the primitive came from, by revision — zero for transient content.
+    pub revision: u64,
+    /// Its index in the chunk's own lane for this kind.
+    pub index: u32,
+}
+
+impl ChunkSlot {
+    /// Content whose only source is this frame's arrays.
+    pub const TRANSIENT: Self = Self {
+        revision: 0,
+        index: 0,
+    };
+
+    /// Whether the primitive names a chunk at all.
+    pub fn is_transient(self) -> bool {
+        self.revision == 0
+    }
+}
+
+/// One chunk a renderer with persistent storage is told about this frame.
+#[derive(Clone, Debug)]
+pub struct ChunkUpload {
+    /// The chunk's identity: the revision its encoding was stamped with, unique for the cache's
+    /// life.
+    pub revision: u64,
+    /// The bytes, at the position the fragment was encoded at.
+    pub prims: std::sync::Arc<ChunkPrims>,
+}
+
 /// The primitives one encoding pushed, one array per kind, with the order they were pushed in.
 ///
 /// Each entry of [`ChunkPrims::ops`] carries an index into this chunk's own array for its kind,
@@ -179,6 +217,37 @@ impl ChunkPrims {
     }
 }
 
+impl Scene {
+    /// Overwrites the provenance of the primitive just pushed with its chunk source.
+    fn stamp_replayed(&mut self, kind: PrimitiveKind, source: u64, intra: u32) {
+        let lane = provenance_lane(kind);
+        if let Some(slot) = self.provenance[lane].last_mut() {
+            *slot = ChunkSlot {
+                revision: source,
+                index: intra,
+            };
+        }
+    }
+}
+
+/// The provenance lane one instanced kind's entries live in.
+fn provenance_lane(kind: PrimitiveKind) -> usize {
+    provenance_lane_of(kind).expect("only instanced kinds are stamped")
+}
+
+/// The provenance lane for `kind`, or `None` for a kind that has none.
+pub(crate) fn provenance_lane_of(kind: PrimitiveKind) -> Option<usize> {
+    Some(match kind {
+        PrimitiveKind::Quad => 0,
+        PrimitiveKind::Shadow => 1,
+        PrimitiveKind::Decoration => 2,
+        PrimitiveKind::MonoSprite => 3,
+        PrimitiveKind::SubpixelSprite => 4,
+        PrimitiveKind::ColorSprite => 5,
+        _ => return None,
+    })
+}
+
 /// Moves an `[x, y, width, height]` field.
 fn translate(bounds: &mut [f32; 4], by: Size<DevicePx, Device>) {
     bounds[0] += by.width.0;
@@ -218,6 +287,64 @@ impl Scene {
         self.capture
             .take()
             .expect("a chunk capture was opened before being taken")
+    }
+
+    /// Stamps every primitive pushed under the last capture with the chunk revision its encoding
+    /// was given.
+    ///
+    /// Called once per encoding, after the capture is taken and the revision exists. Until then
+    /// the pushed primitives read as transient, which is also what an unbound capture leaves
+    /// behind — a test that captures without encoding loses nothing.
+    pub fn bind_capture(&mut self, revision: u64) {
+        for (kind, at, intra) in self.capture_stamped.drain(..) {
+            let lane = &mut self.provenance[provenance_lane(kind)];
+            if let Some(slot) = lane.get_mut(at as usize) {
+                *slot = ChunkSlot {
+                    revision,
+                    index: intra,
+                };
+            }
+        }
+    }
+
+    /// Where each primitive of `kind`'s array came from, parallel to the array.
+    ///
+    /// Instanced kinds only; every other kind answers an empty slice.
+    pub fn provenance(&self, kind: PrimitiveKind) -> &[ChunkSlot] {
+        match provenance_lane_of(kind) {
+            Some(lane) => &self.provenance[lane],
+            None => &[],
+        }
+    }
+
+    /// Notes a chunk a renderer with persistent storage should hold, until the notes are cleared.
+    pub fn note_chunk_inserted(&mut self, revision: u64, prims: std::sync::Arc<ChunkPrims>) {
+        self.chunk_inserted.push(ChunkUpload { revision, prims });
+    }
+
+    /// Notes a chunk that ceased to exist, until the notes are cleared.
+    pub fn note_chunk_retired(&mut self, revision: u64) {
+        self.chunk_retired.push(revision);
+    }
+
+    /// The chunks noted since the notes were last cleared, in note order.
+    pub fn chunk_inserted(&self) -> &[ChunkUpload] {
+        &self.chunk_inserted
+    }
+
+    /// The revisions dropped since the notes were last cleared, in note order.
+    pub fn chunk_retired(&self) -> &[u64] {
+        &self.chunk_retired
+    }
+
+    /// Empties both chunk-note lists.
+    ///
+    /// The runtime calls this once a draw has consumed them — after the outcome retired the
+    /// frame's damage, so a skipped frame's notes stand for the next drawn one, and an eviction
+    /// after the draw lands in the notes the following draw consumes.
+    pub fn clear_chunk_notes(&mut self) {
+        self.chunk_inserted.clear();
+        self.chunk_retired.clear();
     }
 
     /// Copies the operations in `range` of this frame's log into `chunk`, re-based so every
@@ -292,8 +419,18 @@ impl Scene {
     /// vector item replays only where `by` is zero, because its curves are placed in device
     /// coordinates and shared with the rasteriser's encoding cache — translating them would mean
     /// copying the path. The caller encodes a moved drawing instead.
-    pub fn replay_chunk(&mut self, chunk: &ChunkPrims, by: Size<DevicePx, Device>) -> Range<u32> {
+    /// `source` is the chunk's revision, stamped as the provenance of every primitive pushed in
+    /// place — a renderer holding the chunk resident points those draws at its copy. Zero for a
+    /// chunk nobody tracks, and an offset replay stays transient: its bytes differ from the
+    /// resident copy by the translation.
+    pub fn replay_chunk(
+        &mut self,
+        chunk: &ChunkPrims,
+        by: Size<DevicePx, Device>,
+        source: u64,
+    ) -> Range<u32> {
         let start = self.ops.len() as u32;
+        let in_place = by.width.0 == 0.0 && by.height.0 == 0.0;
         for (position, op) in chunk.ops.iter().enumerate() {
             let index = op.index as usize;
             // Where this primitive's log entry will land, so the name it was originally pushed
@@ -310,7 +447,9 @@ impl Scene {
                     if quad.samples_its_paint() && (by.width.0 != 0.0 || by.height.0 != 0.0) {
                         counter::bump(Counter::PaintsReanchored);
                     }
-                    self.push_quad(quad);
+                    if self.push_quad(quad).is_some() && in_place && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::Quad, source, op.index);
+                    }
                 }
                 PrimitiveKind::Shadow => {
                     let Some(mut shadow) = chunk.shadows.get(index).copied() else {
@@ -318,28 +457,36 @@ impl Scene {
                     };
                     translate(&mut shadow.bounds, by);
                     translate(&mut shadow.element_bounds, by);
-                    self.push_shadow(shadow);
+                    if self.push_shadow(shadow).is_some() && in_place && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::Shadow, source, op.index);
+                    }
                 }
                 PrimitiveKind::Decoration => {
                     let Some(mut decoration) = chunk.decorations.get(index).copied() else {
                         continue;
                     };
                     translate(&mut decoration.bounds, by);
-                    self.push_decoration(decoration);
+                    if self.push_decoration(decoration).is_some() && in_place && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::Decoration, source, op.index);
+                    }
                 }
                 PrimitiveKind::MonoSprite => {
                     let Some(mut sprite) = chunk.mono_sprites.get(index).copied() else {
                         continue;
                     };
                     translate(&mut sprite.bounds, by);
-                    self.push_mono_sprite(sprite);
+                    if self.push_mono_sprite(sprite).is_some() && in_place && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::MonoSprite, source, op.index);
+                    }
                 }
                 PrimitiveKind::SubpixelSprite => {
                     let Some(mut sprite) = chunk.subpixel_sprites.get(index).copied() else {
                         continue;
                     };
                     translate(&mut sprite.bounds, by);
-                    self.push_subpixel_sprite(sprite);
+                    if self.push_subpixel_sprite(sprite).is_some() && in_place && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::SubpixelSprite, source, op.index);
+                    }
                 }
                 PrimitiveKind::ColorSprite => {
                     let Some(mut sprite) = chunk.color_sprites.get(index).copied() else {
@@ -349,7 +496,9 @@ impl Scene {
                     // The frame moves with the picture it confines, or a replayed `cover` is cut
                     // against the rectangle its box moved away from.
                     translate(&mut sprite.frame, by);
-                    self.push_color_sprite(sprite);
+                    if self.push_color_sprite(sprite).is_some() && in_place && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::ColorSprite, source, op.index);
+                    }
                 }
                 PrimitiveKind::External => {
                     let Some(mut external) = chunk.externals.get(index).copied() else {

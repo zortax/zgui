@@ -43,23 +43,10 @@ pub struct FrameBuffers {
     pub stops: StorageBuffer,
     /// The coordinate systems.
     pub spatial: StorageBuffer,
-    /// The rounded rectangles.
-    pub quads: StorageBuffer,
-    /// The shadows.
-    pub shadows: StorageBuffer,
-    /// The decoration lines.
-    pub decorations: StorageBuffer,
-    /// The single-channel coverage sprites.
-    pub mono_sprites: StorageBuffer,
-    /// The per-channel coverage sprites.
-    pub subpixel_sprites: StorageBuffer,
-    /// The full-colour sprites.
-    pub color_sprites: StorageBuffer,
-    /// The draw-order permutation of each instanced array, one list per pipeline.
-    ///
-    /// The arrays above keep push order; a draw's instance range is a range of its kind's remap
-    /// list, and the shader reads the array through it. Indexed by the same positions as
-    /// [`FrameBuffers::instances`].
+    /// The persistent chunk arenas the six instanced pipelines draw out of, and the residence
+    /// over them.
+    pub chunks: crate::buffer::persist::ChunkStore,
+    /// The resolved remap of each instanced kind — arena slots in draw order, one per pipeline.
     pub remaps: [StorageBuffer; 6],
     /// Bind groups whose resources are the stable frame side-table buffers.
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
@@ -85,12 +72,7 @@ impl FrameBuffers {
             paints: StorageBuffer::new(gpu, "zgui.paints"),
             stops: StorageBuffer::new(gpu, "zgui.stops"),
             spatial: StorageBuffer::new(gpu, "zgui.spatial"),
-            quads: StorageBuffer::new(gpu, "zgui.quads"),
-            shadows: StorageBuffer::new(gpu, "zgui.shadows"),
-            decorations: StorageBuffer::new(gpu, "zgui.decorations"),
-            mono_sprites: StorageBuffer::new(gpu, "zgui.mono_sprites"),
-            subpixel_sprites: StorageBuffer::new(gpu, "zgui.subpixel_sprites"),
-            color_sprites: StorageBuffer::new(gpu, "zgui.color_sprites"),
+            chunks: crate::buffer::persist::ChunkStore::new(gpu),
             remaps: [
                 StorageBuffer::new(gpu, "zgui.remap.quads"),
                 StorageBuffer::new(gpu, "zgui.remap.shadows"),
@@ -178,40 +160,19 @@ impl FrameBuffers {
             uploaded
         };
 
-        let primitives = &scene.primitives;
+        // The chunk delta and the frame's transient content go into the persistent arenas; the
+        // frame arrays themselves are never uploaded. What each draw reads is the resolved remap
+        // — arena slots in draw order — built beside the transient gathering.
         uploaded += self
-            .quads
-            .upload(gpu, &mut self.uploader, encoder, &primitives.quads);
-        uploaded += self
-            .shadows
-            .upload(gpu, &mut self.uploader, encoder, &primitives.shadows);
-        uploaded +=
-            self.decorations
-                .upload(gpu, &mut self.uploader, encoder, &primitives.decorations);
-        uploaded +=
-            self.mono_sprites
-                .upload(gpu, &mut self.uploader, encoder, &primitives.mono_sprites);
-        uploaded += self.subpixel_sprites.upload(
-            gpu,
-            &mut self.uploader,
-            encoder,
-            &primitives.subpixel_sprites,
-        );
-        uploaded +=
-            self.color_sprites
-                .upload(gpu, &mut self.uploader, encoder, &primitives.color_sprites);
-        for (kind, buffer) in [
-            zgui_scene::PrimitiveKind::Quad,
-            zgui_scene::PrimitiveKind::Shadow,
-            zgui_scene::PrimitiveKind::Decoration,
-            zgui_scene::PrimitiveKind::MonoSprite,
-            zgui_scene::PrimitiveKind::SubpixelSprite,
-            zgui_scene::PrimitiveKind::ColorSprite,
-        ]
-        .into_iter()
-        .zip(self.remaps.iter_mut())
-        {
-            uploaded += buffer.upload(gpu, &mut self.uploader, encoder, scene.remap(kind));
+            .chunks
+            .upload_frame(gpu, &mut self.uploader, encoder, scene);
+        for (lane, buffer) in self.remaps.iter_mut().enumerate() {
+            uploaded += buffer.upload(
+                gpu,
+                &mut self.uploader,
+                encoder,
+                self.chunks.resolved_remap(lane),
+            );
         }
         uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
@@ -289,22 +250,9 @@ impl FrameBuffers {
         }))
     }
 
-    /// The instance buffer a pipeline draws out of.
-    pub fn instances(&self, kind: PipelineKind) -> Option<&StorageBuffer> {
-        match kind {
-            PipelineKind::Quad => Some(&self.quads),
-            PipelineKind::Shadow => Some(&self.shadows),
-            PipelineKind::Decoration => Some(&self.decorations),
-            PipelineKind::MonoSprite => Some(&self.mono_sprites),
-            PipelineKind::SubpixelSprite => Some(&self.subpixel_sprites),
-            PipelineKind::ColorSprite => Some(&self.color_sprites),
-            _ => None,
-        }
-    }
-
-    /// The remap list a pipeline reads its instances through.
-    fn remap(&self, kind: PipelineKind) -> Option<&StorageBuffer> {
-        let at = match kind {
+    /// The arena lane a pipeline draws out of.
+    fn lane(kind: PipelineKind) -> Option<usize> {
+        Some(match kind {
             PipelineKind::Quad => 0,
             PipelineKind::Shadow => 1,
             PipelineKind::Decoration => 2,
@@ -312,8 +260,7 @@ impl FrameBuffers {
             PipelineKind::SubpixelSprite => 4,
             PipelineKind::ColorSprite => 5,
             _ => return None,
-        };
-        Some(&self.remaps[at])
+        })
     }
 
     /// How many bytes every buffer holds.
@@ -325,12 +272,7 @@ impl FrameBuffers {
             + self.paints.capacity()
             + self.stops.capacity()
             + self.spatial.capacity()
-            + self.quads.capacity()
-            + self.shadows.capacity()
-            + self.decorations.capacity()
-            + self.mono_sprites.capacity()
-            + self.subpixel_sprites.capacity()
-            + self.color_sprites.capacity()
+            + self.chunks.bytes()
             + self.remaps.iter().map(StorageBuffer::capacity).sum::<u64>()
             + self.uploader.bytes()
     }
@@ -344,12 +286,7 @@ impl FrameBuffers {
         freed += self.stops.shrink(gpu);
         freed += self.spatial.shrink(gpu);
         self.tables_released = true;
-        freed += self.quads.shrink(gpu);
-        freed += self.shadows.shrink(gpu);
-        freed += self.decorations.shrink(gpu);
-        freed += self.mono_sprites.shrink(gpu);
-        freed += self.subpixel_sprites.shrink(gpu);
-        freed += self.color_sprites.shrink(gpu);
+        freed += self.chunks.release(gpu);
         for remap in &mut self.remaps {
             freed += remap.shrink(gpu);
         }
@@ -414,9 +351,9 @@ impl FrameBuffers {
         layouts: &Layouts,
         kind: PipelineKind,
     ) -> Option<wgpu::BindGroup> {
-        let instances = self.instances(kind)?;
-        let remap = self.remap(kind)?;
-        let signature = [instances.generation(), remap.generation()];
+        let lane = Self::lane(kind)?;
+        let remap = &self.remaps[lane];
+        let signature = [self.chunks.generation(lane), remap.generation()];
         if let Some((held, bind)) = self.instance_binds.borrow().get(&kind)
             && *held == signature
         {
@@ -428,7 +365,7 @@ impl FrameBuffers {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: instances.binding(),
+                    resource: self.chunks.binding(lane),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

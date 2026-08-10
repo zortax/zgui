@@ -42,10 +42,12 @@
 pub mod hold;
 
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 use zgui_atlas::AtlasKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_layout::{FragKey, Fragment, FragmentKind};
 use zgui_profile::{Counter, counter};
+
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, TableHolds};
 
 use crate::lower::cache::PaintStyleRef;
@@ -138,8 +140,9 @@ pub struct Record {
     ///
     /// Owned rather than a range of the scene's log, because the log is cleared every frame: a
     /// range names whatever occupies those positions now, and a record must stay replayable
-    /// however many frames pass between the encoding and the next visit.
-    pub prims: ChunkPrims,
+    /// however many frames pass between the encoding and the next visit. Shared, because a
+    /// renderer keeping chunks resident holds the same bytes as its upload source.
+    pub prims: Arc<ChunkPrims>,
     /// Which encoding produced [`Record::prims`], distinct per encoding for the life of the cache.
     ///
     /// A consumer that mirrors chunks elsewhere — a persistent GPU copy — keys its residence on
@@ -318,6 +321,7 @@ impl PaintCache {
         record.prims.named_ids(holds);
         release_tables(scene, holds);
         release(owner, &record.resources);
+        scene.note_chunk_retired(record.revision);
     }
 
     /// Drops the coldest records until `bytes_to_free` chunk bytes have gone, and reports how
@@ -412,9 +416,12 @@ impl PaintCache {
         ))
     }
 
-    /// The chunk recorded for `fragment`, for a caller that has already decided to replay it.
-    pub fn prims(&self, fragment: FragKey) -> Option<&ChunkPrims> {
-        self.records.get(&fragment).map(|record| &record.prims)
+    /// The chunk recorded for `fragment` and its revision, for a caller that has already decided
+    /// to replay it.
+    pub fn chunk(&self, fragment: FragKey) -> Option<(u64, &Arc<ChunkPrims>)> {
+        self.records
+            .get(&fragment)
+            .map(|record| (record.revision, &record.prims))
     }
 
     /// Records what a fragment painted this frame, and counts it as encoded.
@@ -448,15 +455,21 @@ impl PaintCache {
         // re-encoding the letters it already had never lets its own tiles reach a refcount of
         // zero in between.
         let mut replaced_holds = TableHolds::default();
-        let (prims, replaced_resources) = match self.records.remove(&fragment.key) {
+        let replaced_resources = match self.records.remove(&fragment.key) {
             Some(replaced) => {
                 self.bytes = self.bytes.saturating_sub(replaced.prims.bytes());
                 replaced.prims.named_ids(&mut replaced_holds);
-                self.capture_scratch = replaced.prims;
-                (chunk, Some(replaced.resources))
+                scene.note_chunk_retired(replaced.revision);
+                // The replaced arrays are recycled as the next capture's storage where nothing
+                // else — a renderer holding the chunk resident — still shares them.
+                if let Ok(freed) = Arc::try_unwrap(replaced.prims) {
+                    self.capture_scratch = freed;
+                }
+                Some(replaced.resources)
             }
-            None => (chunk, None),
+            None => None,
         };
+        let prims = Arc::new(chunk);
         let mut holds = TableHolds::default();
         prims.named_ids(&mut holds);
         for clip in &holds.clips {
@@ -471,6 +484,8 @@ impl PaintCache {
         // is being replaced here and the sum only grows.
         self.selected_bytes += chunk_bytes;
         self.next_revision += 1;
+        scene.note_chunk_inserted(self.next_revision, Arc::clone(&prims));
+        scene.bind_capture(self.next_revision);
         self.records.insert(
             fragment.key,
             Record {

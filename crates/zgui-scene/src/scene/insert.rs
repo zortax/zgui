@@ -38,6 +38,20 @@ macro_rules! tee {
 }
 
 impl Scene {
+    /// Appends the provenance entry for an instanced primitive that just reached its array.
+    ///
+    /// Transient until something says otherwise: a replay in place overwrites it with the chunk
+    /// source, and an encoding's `bind_capture` overwrites it once the revision exists.
+    fn note_pushed(&mut self, kind: PrimitiveKind, array_index: usize, capture_intra: Option<u32>) {
+        let lane = crate::scene::chunk::provenance_lane_of(kind).expect("an instanced kind");
+        self.provenance[lane].push(crate::scene::chunk::ChunkSlot::TRANSIENT);
+        if let Some(intra) = capture_intra {
+            self.capture_stamped.push((kind, array_index as u32, intra));
+        }
+    }
+}
+
+impl Scene {
     /// Forces every primitive pushed until the matching [`Scene::pop_layer`] to take `order`.
     ///
     /// This is the escape hatch for content whose sequence is decided somewhere other than by
@@ -71,7 +85,16 @@ impl Scene {
         quad.order = order;
         let space = self.space_at(quad.transform);
         self.record(PrimitiveKind::Quad, self.primitives.quads.len(), space);
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.quads.len() as u32 - 1);
         self.primitives.quads.push(quad);
+        self.note_pushed(
+            PrimitiveKind::Quad,
+            self.primitives.quads.len() - 1,
+            capture_intra,
+        );
         Some(order)
     }
 
@@ -88,7 +111,16 @@ impl Scene {
         shadow.order = order;
         let space = self.space_at(shadow.transform);
         self.record(PrimitiveKind::Shadow, self.primitives.shadows.len(), space);
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.shadows.len() as u32 - 1);
         self.primitives.shadows.push(shadow);
+        self.note_pushed(
+            PrimitiveKind::Shadow,
+            self.primitives.shadows.len() - 1,
+            capture_intra,
+        );
         Some(order)
     }
 
@@ -110,7 +142,16 @@ impl Scene {
             self.primitives.decorations.len(),
             space,
         );
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.decorations.len() as u32 - 1);
         self.primitives.decorations.push(decoration);
+        self.note_pushed(
+            PrimitiveKind::Decoration,
+            self.primitives.decorations.len() - 1,
+            capture_intra,
+        );
         Some(order)
     }
 
@@ -137,7 +178,16 @@ impl Scene {
             self.primitives.mono_sprites.len(),
             sprite.tile,
         );
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.mono_sprites.len() as u32 - 1);
         self.primitives.mono_sprites.push(sprite);
+        self.note_pushed(
+            PrimitiveKind::MonoSprite,
+            self.primitives.mono_sprites.len() - 1,
+            capture_intra,
+        );
         Some(order)
     }
 
@@ -169,7 +219,16 @@ impl Scene {
             self.primitives.subpixel_sprites.len(),
             sprite.tile,
         );
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.subpixel_sprites.len() as u32 - 1);
         self.primitives.subpixel_sprites.push(sprite);
+        self.note_pushed(
+            PrimitiveKind::SubpixelSprite,
+            self.primitives.subpixel_sprites.len() - 1,
+            capture_intra,
+        );
         Some(order)
     }
 
@@ -195,7 +254,16 @@ impl Scene {
             self.primitives.color_sprites.len(),
             sprite.tile,
         );
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.color_sprites.len() as u32 - 1);
         self.primitives.color_sprites.push(sprite);
+        self.note_pushed(
+            PrimitiveKind::ColorSprite,
+            self.primitives.color_sprites.len() - 1,
+            capture_intra,
+        );
         Some(order)
     }
 

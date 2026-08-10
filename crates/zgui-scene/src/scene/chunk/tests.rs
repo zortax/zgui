@@ -44,7 +44,7 @@ fn an_extracted_chunk_replays_the_same_primitives_translated() {
     // Two frame boundaries: the chunk stays valid where a log range from two frames ago is gone.
     scene.begin_frame(Size::new(400, 400));
     scene.begin_frame(Size::new(400, 400));
-    let replayed = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(-8.0)));
+    let replayed = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(-8.0)), 0);
 
     assert_eq!(replayed.len(), 3);
     assert_eq!(scene.primitives.quads.len(), 2);
@@ -68,7 +68,7 @@ fn a_replayed_chunk_is_ordered_against_this_frames_neighbours() {
     scene.begin_frame(Size::new(400, 400));
     // Something new is drawn underneath before the replay, so the replayed quad steps above it.
     scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
-    scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)));
+    scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)), 0);
 
     assert_eq!(scene.primitives.quads[1].order, 2);
 }

@@ -151,6 +151,9 @@ counters! {
     /// Paint records the byte budget dropped, coldest first.
     ChunksEvicted => chunks_evicted, Group::BackendNeutral;
 
+    /// Bytes of chunk, transient and resolved-remap content copied into the persistent arenas.
+    ChunkBytesUploaded => chunk_bytes_uploaded, Group::RendererSpecific;
+
     /// Primitives added to the scene.
     PrimitivesEmitted => primitives_emitted, Group::BackendNeutral;
 
@@ -333,7 +336,10 @@ counters! {
     FragmentsLive => fragments_live, Group::Live;
 
     /// Bytes of compiled per-fragment paintings the paint cache is holding right now.
-    PaintChunkBytes => paint_chunk_bytes, Group::Live;
+    PaintChunkBytes => paint_chunk_bytes_live, Group::Live;
+
+    /// Chunks the renderer's persistent arenas hold right now.
+    ChunksResident => chunks_resident_live, Group::Live;
 
     /// Box slots the layout tree is holding right now, live and awaiting recycling.
     ///

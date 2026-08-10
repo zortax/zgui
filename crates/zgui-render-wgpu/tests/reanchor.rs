@@ -118,7 +118,7 @@ fn scrolled(arm: Arm) -> Scene {
     let interned = scene.paints.len();
 
     scene.begin_frame(Size::new(SIDE, SIDE));
-    let replayed = scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(STEP)));
+    let replayed = scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(STEP)), 0);
     assert_eq!(replayed.len(), 1, "the quad was replayed");
     assert_eq!(
         scene.paints.len(),

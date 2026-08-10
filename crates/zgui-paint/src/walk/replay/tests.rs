@@ -311,7 +311,8 @@ fn a_still_drawing_replays_its_vector_item_and_a_moved_one_is_encoded() {
         Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
         "a still drawing replays"
     );
-    let range = scene.replay_chunk(cache.prims(mark.key).expect("recorded"), Size::default());
+    let (source, chunk) = cache.chunk(mark.key).expect("recorded");
+    let range = scene.replay_chunk(chunk, Size::default(), source);
     assert_eq!(range.len(), 1, "and the replay re-emits the vector item");
     assert_eq!(scene.primitives.vectors.len(), 1);
 
@@ -374,7 +375,8 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
     let Reuse::Replay(offset) = reuse else {
         unreachable!()
     };
-    let range = scene.replay_chunk(cache.prims(arrived.key).expect("recorded"), offset);
+    let (source, chunk) = cache.chunk(arrived.key).expect("recorded");
+    let range = scene.replay_chunk(chunk, offset, source);
     assert_eq!(range.len(), 1, "the cull admits the arrived quad");
     assert_eq!(
         scene.primitives.quads[0].bounds[1], 100.0,
