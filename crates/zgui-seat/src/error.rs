@@ -47,7 +47,7 @@ impl fmt::Display for Error {
         match self {
             Self::Library { tried, reason } => write!(
                 f,
-                "libseat is not on this machine; tried {}: {reason}",
+                "libseat could not be opened; tried {}: {reason}",
                 tried.join(", ")
             ),
             Self::Symbol { name, reason } => write!(f, "libseat has no `{name}`: {reason}"),
@@ -65,6 +65,10 @@ mod tests {
 
     #[test]
     fn an_absent_library_names_every_soname_and_says_why() {
+        // A person reading this has to be able to check the machine against it, so the message
+        // carries the whole list rather than the last name tried. It says nothing about why the
+        // open failed beyond what the loader said: a present libseat with an absent libsystemd
+        // arrives here too.
         let error = Error::Library {
             tried: vec!["libseat.so.1".to_owned(), "libseat.so".to_owned()],
             reason: "cannot open shared object file".to_owned(),
@@ -72,7 +76,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "libseat is not on this machine; tried libseat.so.1, libseat.so: cannot open shared \
+            "libseat could not be opened; tried libseat.so.1, libseat.so: cannot open shared \
              object file"
         );
     }

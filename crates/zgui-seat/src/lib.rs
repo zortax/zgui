@@ -17,9 +17,9 @@
 //! [`Error::Library`], which a caller reads and answers. A console session answers it by opening
 //! the devices itself, and pays the privilege that costs.
 //!
-//! [`Library::load`] opens the shared object and resolves every symbol this crate calls.
-//! [`Library::symbols`] lends out the addresses, and the borrow holds the mapping open for as long
-//! as anything can reach into it.
+//! [`Library::load`] opens the shared object and resolves every symbol this crate calls. The
+//! addresses live inside [`Library`] and are reached through it, so the mapping stands for as long
+//! as anything can call one. The table itself is internal.
 //!
 //! # Portability
 //!
