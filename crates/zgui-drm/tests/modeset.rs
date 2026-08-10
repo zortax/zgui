@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use zgui_drm::buffer::DumbBuffer;
-use zgui_drm::commit::{Pipe, for_device};
+use zgui_drm::commit::{Pipe, for_device, waits_for_a_fence};
 use zgui_drm::device::Interface;
 use zgui_drm::format::Format;
 use zgui_drm::{Device, Event};
@@ -61,6 +61,42 @@ fn a_mode_is_set_and_a_buffer_flipped_through_the_legacy_interface() {
     set_a_mode_and_flip(
         "a_mode_is_set_and_a_buffer_flipped_through_the_legacy_interface",
         Interface::Legacy,
+    );
+}
+
+#[test]
+fn only_the_atomic_interface_can_be_told_to_wait_for_a_fence() {
+    let test = "only_the_atomic_interface_can_be_told_to_wait_for_a_fence";
+    // No master is taken here. Reading a plane's properties is a question, and the answer is what
+    // decides whether a caller that draws with a graphics device makes a sync file at all.
+    let Some(atomic) = support::device(test, Interface::Preferred) else {
+        return;
+    };
+    if !atomic.is_atomic() {
+        eprintln!("{test}: this device has no atomic interface, so nothing was asserted");
+        return;
+    }
+    let Some(plane) = support::primary_plane(&atomic, 0) else {
+        eprintln!("{test}: the first CRTC has no primary plane, so nothing was asserted");
+        return;
+    };
+
+    // The same plane through the same driver, asked twice. The answer differs because the
+    // interface differs and for no other reason: a fence reaches the kernel as a plane property,
+    // and the legacy interface commits none.
+    let Some(legacy) = support::device(test, Interface::Legacy) else {
+        return;
+    };
+    assert!(
+        !waits_for_a_fence(&legacy, plane).expect("a device on the legacy interface asks nothing"),
+        "a device that commits no plane property was said to carry a fence"
+    );
+
+    let carries = waits_for_a_fence(&atomic, plane).expect("a primary plane can be read");
+    eprintln!(
+        "{test}: plane {plane} on {} {} IN_FENCE_FD",
+        atomic.path().display(),
+        if carries { "carries" } else { "carries no" }
     );
 }
 
@@ -159,10 +195,12 @@ fn set_a_mode_and_flip(test: &str, interface: Interface) {
     );
 
     commit
-        .modeset(&device, pipe, &mode, shown)
+        // No fence: the buffers here are written by the processor, so the picture is already in
+        // them when the commit is issued.
+        .modeset(&device, pipe, &mode, shown, None)
         .expect("the device takes the mode");
     commit
-        .flip(&device, pipe, next)
+        .flip(&device, pipe, next, None)
         .expect("the device takes the flip");
 
     // The flip returned at once, and it has not happened until the device says so. Waiting for it

@@ -174,7 +174,7 @@ fn drive_a_cursor(test: &str, interface: Interface) {
 
     let mut commit = for_device(&device);
     commit
-        .modeset(&device, pipe(connector.id, crtc, plane), &mode, shown)
+        .modeset(&device, pipe(connector.id, crtc, plane), &mode, shown, None)
         .expect("the device takes the mode");
 
     // A cursor goes on somewhere inside the display, so that a driver clipping it against the CRTC

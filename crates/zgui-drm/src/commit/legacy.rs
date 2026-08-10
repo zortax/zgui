@@ -20,6 +20,8 @@
 //! ioctl has no way to ask for. [`AtomicCommit::move_cursor`](crate::commit::AtomicCommit) is
 //! where that is set out, and it is the one place in this crate where the two interfaces meet.
 
+use std::os::fd::BorrowedFd;
+
 use crate::commit::{Commit, Pipe};
 use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
@@ -64,7 +66,10 @@ impl Commit for LegacyCommit {
         pipe: Pipe,
         mode: &Mode,
         framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
     ) -> Result<()> {
+        refuse(fence)?;
+
         // The kernel takes a list of connectors to route to this CRTC. One display is one
         // connector, and the array has to outlive the call.
         let mut connectors = [pipe.connector];
@@ -86,7 +91,15 @@ impl Commit for LegacyCommit {
         ioctl::issue(device.fd(), ioctl::MODE_SETCRTC, &mut request)
     }
 
-    fn flip(&mut self, device: &Device, pipe: Pipe, framebuffer: Framebuffer) -> Result<()> {
+    fn flip(
+        &mut self,
+        device: &Device,
+        pipe: Pipe,
+        framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
+    ) -> Result<()> {
+        refuse(fence)?;
+
         let mut request = sys::drm_mode_crtc_page_flip {
             crtc_id: pipe.crtc,
             fb_id: framebuffer.id(),
@@ -159,6 +172,31 @@ impl Commit for LegacyCommit {
             },
         )
     }
+}
+
+/// Refuses a fence this interface has nowhere to put.
+///
+/// A fence reaches the kernel as a plane property, and this interface names no plane: `MODE_SETCRTC`
+/// and `MODE_PAGE_FLIP` carry a CRTC, a framebuffer and a flag word, and none of the three has room
+/// for a descriptor. So a caller that has a fence is told. A frame committed without the wait it
+/// asked for is one the display engine reads while the graphics device is still drawing it, and it
+/// reaches the screen half finished with every call reporting success.
+///
+/// [`waits_for_a_fence`](crate::commit::waits_for_a_fence) keeps a caller off this path: it answers
+/// `false` for every device on this interface, so a fence is never made in the first place.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] when there is a fence at all.
+fn refuse(fence: Option<BorrowedFd<'_>>) -> Result<()> {
+    if fence.is_some() {
+        return Err(Error::Unusable(
+            "the legacy interface commits no plane property, so it can carry no fence: a frame \
+             that has to wait for a graphics device has to be waited for before it is committed"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses an image this interface would read as something else.
@@ -239,6 +277,8 @@ mod tests {
 
     use super::*;
 
+    use std::os::fd::AsFd;
+
     use crate::format::Format;
 
     /// Returns an image the legacy interface reads the way it was written.
@@ -263,6 +303,20 @@ mod tests {
         // Answering a `u64` leaves room for a width no buffer could have, so it is compared at
         // its true size.
         assert_eq!(CursorImage::legacy_stride(u32::MAX), 17_179_869_180);
+    }
+
+    #[test]
+    fn a_fence_this_interface_cannot_carry_is_refused_rather_than_dropped() {
+        // Dropping it would commit the frame with no wait at all, and the display engine would
+        // read the buffer while the graphics device was still drawing into it. Every ioctl would
+        // report success and the screen would show a half-drawn frame.
+        let stdout = std::io::stdout();
+        let error = refuse(Some(stdout.as_fd())).expect_err("this interface carries no fence");
+        assert!(
+            matches!(&error, Error::Unusable(what) if what.contains("no fence")),
+            "the refusal says what this interface cannot do: {error}"
+        );
+        assert!(refuse(None).is_ok(), "and a commit without one is ordinary");
     }
 
     #[test]

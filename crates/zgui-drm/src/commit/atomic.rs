@@ -13,15 +13,16 @@
 //!
 //! # What a flip must name
 //!
-//! [`AtomicCommit::flip`] sets the plane's `FB_ID` and nothing else. It asks for
-//! `DRM_MODE_PAGE_FLIP_EVENT`, and the header states the rule under that flag: a CRTC is in a
-//! commit "if one of its properties is set, or if a property is set on a connector or plane linked
-//! via the CRTC_ID property to the CRTC", and "at least one CRTC must be included". So a flip is
-//! valid once [`AtomicCommit::modeset`] has linked the plane to the CRTC. A flip on a plane linked
-//! to nothing puts no CRTC in the commit, which the header forbids.
+//! [`AtomicCommit::flip`] sets the plane's `FB_ID`, and its `IN_FENCE_FD` where the caller handed
+//! one over. It asks for `DRM_MODE_PAGE_FLIP_EVENT`, and the header states the rule under that
+//! flag: a CRTC is in a commit "if one of its properties is set, or if a property is set on a
+//! connector or plane linked via the CRTC_ID property to the CRTC", and "at least one CRTC must be
+//! included". So a flip is valid once [`AtomicCommit::modeset`] has linked the plane to the CRTC.
+//! A flip on a plane linked to nothing puts no CRTC in the commit, which that rule rules out.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::os::fd::{AsRawFd, BorrowedFd};
 
 use crate::commit::{Commit, Pipe, legacy};
 use crate::cursor::{CursorImage, CursorPlane};
@@ -284,6 +285,7 @@ impl Commit for AtomicCommit {
         pipe: Pipe,
         mode: &Mode,
         framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
     ) -> Result<()> {
         // The timings travel as a blob, and `MODE_ID` names the blob. The one this replaces is
         // destroyed further down, once the commit succeeded.
@@ -303,25 +305,28 @@ impl Commit for AtomicCommit {
             ObjectKind::Connector,
             &[("CRTC_ID", u64::from(pipe.crtc))],
         )?;
-        let plane = self.resolve(
-            device,
-            pipe.plane,
-            ObjectKind::Plane,
-            &[
-                ("FB_ID", u64::from(framebuffer.id())),
-                ("CRTC_ID", u64::from(pipe.crtc)),
-                // The destination rectangle is in whole pixels.
-                ("CRTC_X", 0),
-                ("CRTC_Y", 0),
-                ("CRTC_W", u64::from(width)),
-                ("CRTC_H", u64::from(height)),
-                // The source rectangle is in 16.16 fixed point.
-                ("SRC_X", 0),
-                ("SRC_Y", 0),
-                ("SRC_W", fixed_16_16(width)),
-                ("SRC_H", fixed_16_16(height)),
-            ],
-        )?;
+        let mut wanted = vec![
+            ("FB_ID", u64::from(framebuffer.id())),
+            ("CRTC_ID", u64::from(pipe.crtc)),
+            // The destination rectangle is in whole pixels.
+            ("CRTC_X", 0),
+            ("CRTC_Y", 0),
+            ("CRTC_W", u64::from(width)),
+            ("CRTC_H", u64::from(height)),
+            // The source rectangle is in 16.16 fixed point.
+            ("SRC_X", 0),
+            ("SRC_Y", 0),
+            ("SRC_W", fixed_16_16(width)),
+            ("SRC_H", fixed_16_16(height)),
+        ];
+        // The first frame of a display arrives through the modeset, so this carries a fence for
+        // the same reason a flip does. The dry run below names it too. `sync_file_get_fence` takes
+        // a reference to the fence inside the file and leaves the file open, so the same
+        // descriptor goes across twice and is still the caller's afterwards.
+        if let Some(fence) = fence {
+            wanted.push(("IN_FENCE_FD", fenced(fence)));
+        }
+        let plane = self.resolve(device, pipe.plane, ObjectKind::Plane, &wanted)?;
 
         let mut request = Request::default();
         request.add(pipe.crtc, &crtc);
@@ -366,13 +371,21 @@ impl Commit for AtomicCommit {
         Ok(())
     }
 
-    fn flip(&mut self, device: &Device, pipe: Pipe, framebuffer: Framebuffer) -> Result<()> {
-        let plane = self.resolve(
-            device,
-            pipe.plane,
-            ObjectKind::Plane,
-            &[("FB_ID", u64::from(framebuffer.id()))],
-        )?;
+    fn flip(
+        &mut self,
+        device: &Device,
+        pipe: Pipe,
+        framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
+    ) -> Result<()> {
+        let mut wanted = vec![("FB_ID", u64::from(framebuffer.id()))];
+        // The fast path a caller drawing with a graphics device takes: the frame is committed while
+        // the device is still finishing it, and the kernel holds the flip back until this fence
+        // signals.
+        if let Some(fence) = fence {
+            wanted.push(("IN_FENCE_FD", fenced(fence)));
+        }
+        let plane = self.resolve(device, pipe.plane, ObjectKind::Plane, &wanted)?;
 
         let mut request = Request::default();
         request.add(pipe.plane, &plane);
@@ -546,6 +559,19 @@ const fn signed(pixels: i32) -> u64 {
     pixels as i64 as u64
 }
 
+/// Returns `fence` as the value the `IN_FENCE_FD` property takes.
+///
+/// `drm_mode_config.c` creates the property as a signed range from -1 to `INT_MAX`, where -1 is
+/// "no fence", so it travels the way a signed coordinate does: sign-extended to the whole 64 bits
+/// the kernel reads back.
+///
+/// Nothing here ever sends -1. A commit that carries no fence names the property not at all, and
+/// the kernel clears a plane's fence while it duplicates the state for the next commit, so a frame
+/// that asked for no wait does not inherit the last frame's.
+fn fenced(fence: BorrowedFd<'_>) -> u64 {
+    signed(fence.as_raw_fd())
+}
+
 /// Returns the bytes of `mode`, as the kernel's own structure.
 ///
 /// These go into the `MODE_ID` blob. The kernel copies them back out as a `drm_mode_modeinfo`, so
@@ -577,6 +603,8 @@ mod tests {
     //! describes.
 
     use super::*;
+
+    use std::os::fd::AsFd;
 
     #[test]
     fn a_commit_holds_one_count_per_object_and_the_properties_in_object_order() {
@@ -632,6 +660,20 @@ mod tests {
         assert_eq!(signed(-64), u64::MAX - 63);
         assert_eq!(signed(i32::MIN), 0xffff_ffff_8000_0000);
         assert_eq!(signed(i32::MAX), 0x7fff_ffff);
+    }
+
+    #[test]
+    fn a_fence_reaches_the_kernel_as_the_descriptor_number_it_is() {
+        // The property is a signed range, so the number is sign-extended the way a coordinate is.
+        // Every descriptor a process can hold is positive, so the number the kernel reads back is
+        // the number that was sent.
+        let stdout = std::io::stdout();
+        let fence = stdout.as_fd();
+        assert_eq!(fenced(fence), fence.as_raw_fd() as u64);
+        assert!(
+            fenced(fence) <= u64::from(u32::MAX),
+            "a descriptor number is positive, so nothing is sign-extended in practice"
+        );
     }
 
     #[test]
