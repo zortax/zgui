@@ -6,8 +6,9 @@
 //! Vulkan image created in a layout the display hardware understands, backed by memory that can
 //! leave the device, and handed to the kernel as a file descriptor.
 //!
-//! **This module makes the images.** Importing the descriptor, registering a framebuffer and
-//! flipping to it belong to the display side and are not here.
+//! **This module makes the images, and gives a drawn one to the display engine.** Importing the
+//! descriptor, registering a framebuffer and flipping to it belong to the display side and are in
+//! [`scanout`](crate::scanout).
 //!
 //! # What has to line up
 //!
@@ -46,9 +47,10 @@
 //! or a driver that refused a step. None of them stops the program, because the copied path answers
 //! every one of them, so each is a value the caller reads and logs.
 
-// Private, because everything either of them publishes is re-exported here and from the crate
-// root. A caller reaches `Plane` and `Offered` by one path each, and the split between the two
-// files is this module's own business.
+// Private, because everything any of them publishes is re-exported here. A caller reaches
+// `Plane`, `Offered` and `Release` by one path each, and the split between the three files is this
+// module's own business.
+mod barrier;
 mod image;
 mod modifier;
 
@@ -60,6 +62,7 @@ use ash::{ext, khr, vk};
 use zgui_drm::format::Modifier;
 use zgui_render_wgpu::{Gpu, wgpu};
 
+pub use crate::import::barrier::Release;
 pub use crate::import::image::Plane;
 pub use crate::import::modifier::Offered;
 
@@ -73,10 +76,10 @@ use crate::scanout::FORMAT;
 /// go. A device without them opens and draws exactly as it always did, and [`Imported::create`]
 /// answers [`Unsupported::Extension`] naming the one that is absent.
 ///
-/// wgpu-hal enables the last two on any physical device that has them, so on most machines the
-/// first is the only name this actually adds. Asking for all three is still what makes the
-/// requirement true rather than lucky.
-pub const EXTENSIONS: [&CStr; 3] = [
+/// wgpu-hal enables two of them by itself on any physical device that reports them:
+/// `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`. Asking for all four states
+/// the requirement instead of relying on that.
+pub const EXTENSIONS: [&CStr; 4] = [
     // The `DRM_FORMAT_MODIFIER_EXT` tiling, the candidate list an image is created from, and
     // reading back which layout the driver chose.
     c"VK_EXT_image_drm_format_modifier",
@@ -85,6 +88,10 @@ pub const EXTENSIONS: [&CStr; 3] = [
     // Saying that the descriptor is a dma-buf and not an opaque handle. The kernel can import a
     // dma-buf and nothing else here.
     c"VK_EXT_external_memory_dma_buf",
+    // `VK_QUEUE_FAMILY_FOREIGN_EXT`, which a drawn image is released to. That release makes the
+    // pixels the frame drew the pixels the display engine reads, and `Release` is the barrier that
+    // does it.
+    c"VK_EXT_queue_family_foreign",
 ];
 
 /// What a frame is composed into, as wgpu states it.
@@ -138,6 +145,12 @@ const LABEL: &str = "zgui.scanout";
 pub struct Imported {
     /// What the renderer composes into.
     texture: wgpu::Texture,
+    /// The image behind the texture, for the barrier that releases it to the display engine.
+    ///
+    /// wgpu owns it and destroys it, and a handle is a number: this is a second name for the same
+    /// image and no second claim on it. It is readable for exactly as long as this value lives, so
+    /// it never names an image wgpu has already destroyed.
+    image: vk::Image,
     /// The descriptor the kernel imports.
     dmabuf: OwnedFd,
     /// The layout the driver chose.
@@ -242,6 +255,15 @@ impl Imported {
     /// that kept the number instead of the borrow would name whatever the process opened next.
     pub fn dmabuf(&self) -> BorrowedFd<'_> {
         self.dmabuf.as_fd()
+    }
+
+    /// Returns the image behind the texture, for the barrier that releases it.
+    ///
+    /// Crate-private, because a handle to an image wgpu owns is of use to exactly one caller:
+    /// [`Release`], which records a barrier over it. Publishing it would let anything destroy an
+    /// image wgpu is still going to destroy.
+    pub(crate) fn image(&self) -> vk::Image {
+        self.image
     }
 
     /// Returns the layout the driver chose for this buffer.
@@ -494,6 +516,7 @@ fn wrap(
 
     Imported {
         texture,
+        image: handle,
         dmabuf: image.dmabuf,
         modifier: image.modifier,
         layouts: image.layouts,

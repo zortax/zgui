@@ -8,13 +8,12 @@
 //! Nothing here creates such an image. What is asserted is the contract around the list: it
 //! reaches every device this crate opens, a machine that cannot grant it still gets a working
 //! device, the device that replaces a lost one asks for the same list, and what a device enabled
-//! is read off the device instead of assumed. None of that depends on how long the list is. Of the
-//! five below, the console backend's own constant names three for the image itself; the other two
-//! are for the fence and the queue-family release that follow it.
+//! is read off the device instead of assumed. None of that depends on how long the list is, and
+//! the five below are the five the console backend's own constant holds.
 
 // Reading back the list a device was created with needs wgpu's hal, and reaching it is unsafe. It
-// is a test's own business: catching a device that reported an extension it does not have is why
-// this file exists — a claim checked only against the record that made it is no check at all.
+// is a test's own business, and catching a device that reported an extension it does not have is
+// why the file exists — a claim checked only against the record that made it is no check at all.
 #![allow(
     unsafe_code,
     reason = "the driver's own extension list is reached through wgpu's hal"
@@ -36,7 +35,9 @@ use zgui_scene::{Quad, Scene, SubpixelSprite};
 
 use support::{SIDE, device_lock, opaque, present, rect};
 
-/// The names the console path asks for, once the image, the fence and the release are all built.
+/// The names the console path asks for, in this file's own order: the image, the descriptor it is
+/// exported through, the dma-buf statement on that descriptor, the semaphore a finished frame
+/// signals, and the queue-family release that hands the image over.
 const DMA_BUF: [&CStr; 5] = [
     c"VK_EXT_image_drm_format_modifier",
     c"VK_KHR_external_memory_fd",
