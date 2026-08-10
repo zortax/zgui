@@ -69,8 +69,8 @@
 //!   root, and fails to start while a compositor holds the master. What *is* here is the console's
 //!   own mode: the loop puts the terminal into graphics mode so the kernel's text console stops
 //!   drawing over the picture, and back into text mode on the way out so the console redraws. That
-//!   is two ioctls and no more — `console` says what the pair does and what it does not, and
-//!   pressing `Ctrl+Alt+F2` under a running program still leaves it holding the display.
+//!   is two ioctls and no more — `console` says what they do and what they do not, and pressing
+//!   `Ctrl+Alt+F2` under a running program still leaves it holding the display.
 //!
 //! The last is visible in what the crate names: no session library.
 //!
@@ -85,8 +85,9 @@
 //!
 //! **Imported.** Three Vulkan images in a layout the display hardware can read, exported as
 //! dma-bufs and registered as framebuffers, that the renderer composes straight into. Neither the
-//! readback nor the copy happens at all. A frame ends with one barrier that gives the image to the
-//! display engine, and then the flip. `import` makes the images and records the barrier.
+//! readback nor the copy happens at all. A frame there is bracketed by two barriers — one takes the
+//! buffer back from the display engine before it is drawn into, one gives it over afterwards — and
+//! then the flip follows. `import` makes the images and records the barriers.
 //!
 //! Which shape a display takes is settled once, when it is set up, and written to the log with its
 //! reason. `Copied` names the four reasons: a display whose engine composites no pointer keeps the
@@ -101,8 +102,8 @@
 //! A window system presents for a caller; a console does not. So the last step belongs to whatever
 //! draws, and this crate offers the things that step needs: `FORMAT`, the texture a frame is
 //! composed into; `DrmDisplay::present`, which copies a composed frame into the buffer a display is
-//! about to scan out of and asks for the flip; `Scanout::slot` and `Scanout::present_drawn`, which
-//! are the same step for a display the renderer draws into directly; and `Displays`, which says
+//! about to scan out of and asks for the flip; `Scanout::acquire` and `Scanout::present_drawn`,
+//! which bracket a frame drawn straight into a display's own buffer; and `Displays`, which says
 //! which display a surface is. The renderer that uses them lives in `zgui`, because a renderer is
 //! built by the runtime and a backend at this layer cannot name the runtime.
 //!
@@ -190,7 +191,7 @@ pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
 pub use crate::display::{Displays, DrmDisplay};
 #[cfg(target_os = "linux")]
-pub use crate::import::{EXTENSIONS, Imported, Offered, Plane, Release, Unsupported};
+pub use crate::import::{EXTENSIONS, Handover, Imported, Offered, Plane, Unsupported};
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]

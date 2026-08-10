@@ -3,19 +3,24 @@
 //! Everything here is a fact about a real graphics driver and a real kernel, so none of it can be
 //! stood in for. Which layout the driver picks, whether the kernel will import that memory at all,
 //! whether it will take a framebuffer over it in that layout with those offsets, and whether the
-//! device finishes the barrier that hands the image over are four answers only the machine has.
+//! device finishes the barriers that pass the image back and forth are four answers only the
+//! machine has.
 //!
 //! # What runs here, and what cannot
 //!
 //! Nearly all of it. `PRIME_FD_TO_HANDLE` and `ADDFB2` need no DRM master, so every buffer is
 //! imported and every framebuffer is registered for real while a compositor is driving the screen.
-//! So is the barrier, which touches no display at all.
+//! So are both barriers, which touch no display at all.
 //!
 //! What cannot run is the modeset and the flip, which are the two ioctls that need master. A
 //! machine that has it runs them here too; a machine that does not gets as far as the commit and
 //! is told which step refused. That still asserts the ordering the frame depends on — the barrier
 //! runs and finishes **before** anything is committed — because a refusal naming the barrier and a
 //! refusal naming the commit are different messages.
+//!
+//! Running this under `VK_LAYER_KHRONOS_validation` checks the barriers themselves: the layer
+//! tracks every image's layout and which queue family owns it, so a half that states the wrong
+//! layout, the wrong family or a scope narrower than the frame is reported here and nowhere else.
 //!
 //! A machine with no display, no graphics device or no shared layout says so on standard error and
 //! asserts nothing, which is the shape `cargo xtask ledger ignored` prescribes for a test that
@@ -28,7 +33,7 @@ use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
 use zgui_drm::{Device, Error};
-use zgui_platform_drm::{Copied, EXTENSIONS, FORMAT, Imported, Output, Release, Scanout};
+use zgui_platform_drm::{Copied, EXTENSIONS, FORMAT, Handover, Imported, Output, Scanout};
 use zgui_render_wgpu::target::swapchain::Supplied;
 use zgui_render_wgpu::{Gpu, SharedGraphics, wgpu};
 
@@ -301,8 +306,11 @@ fn every_buffer_of_a_display_is_imported_and_registered_in_the_layout_the_driver
     assert_eq!(textures[0].height(), machine.output.mode.height());
 
     // Nothing has been drawn or flipped, so the first buffer is the one a renderer is pointed at.
+    // Acquiring it takes nothing back — the display engine has never been given it — which is the
+    // one case an acquire has to do nothing in.
+    let mut scanout = scanout;
     assert_eq!(
-        scanout.slot(),
+        scanout.acquire().expect("a new display owes no barrier"),
         Some(0),
         "the first frame goes into the first buffer, which the modeset then puts on the screen"
     );
@@ -360,8 +368,8 @@ fn a_released_display_gives_back_every_descriptor_and_can_be_built_again() {
 }
 
 #[test]
-fn the_barrier_that_gives_a_frame_to_the_display_finishes_inside_its_deadline() {
-    let test = "the_barrier_that_gives_a_frame_to_the_display_finishes_inside_its_deadline";
+fn the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline() {
+    let test = "the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline";
     let _guard = device_lock();
     let Some(machine) = machine(test) else {
         return;
@@ -389,45 +397,66 @@ fn the_barrier_that_gives_a_frame_to_the_display_finishes_inside_its_deadline() 
             return;
         }
     };
-    let mut release = Release::record(&machine.gpu, &buffers)
-        .expect("a device that exported the images can record a barrier over them");
+    let mut handover = Handover::record(&machine.gpu, &buffers)
+        .expect("a device that exported the images can record the barriers over them");
 
-    // The real sequence, one buffer at a time: the renderer records and submits a frame, and the
-    // barrier goes on the same queue straight afterwards. Nothing waits between the two — one
-    // queue starts its submissions in order, which is the whole reason a barrier-only command
-    // buffer is enough.
+    // The real sequence, twice round the set: acquire the buffer, record and submit the frame,
+    // give the buffer over. Nothing waits between the frame and the release — one queue starts its
+    // submissions in order, which is the whole reason a barrier-only command buffer is enough.
     //
-    // The wait inside the barrier is what covers both, and it carries a deadline. That is what
-    // makes a device that never completes the frame a failure with a reason rather than a test
-    // binary that stops: `Gpu::wait` would poll for ever, and an image bound to no memory produces
-    // exactly that.
-    for (slot, buffer) in buffers.iter().enumerate() {
-        draw(&machine.gpu, buffer);
-        release.submit(slot).unwrap_or_else(|refusal| {
-            panic!("the barrier over buffer {slot} did not finish: {refusal}")
-        });
-        eprintln!(
-            "{test}: buffer {slot} was drawn into and released to the display engine in {:#018x}",
-            buffer.modifier().0
-        );
+    // Twice round is what makes the acquire do anything. The first time round every buffer is
+    // fresh and the acquire is a no-op; the second time round each one is held by the display
+    // engine and a barrier really runs, which is the half a single pass would never reach.
+    //
+    // The wait inside each barrier carries a deadline. That is what makes a device that never
+    // completes the frame a failure with a reason rather than a test binary that stops: `Gpu::wait`
+    // would poll for ever, and an image bound to no memory produces exactly that.
+    for round in 0..2 {
+        for (slot, buffer) in buffers.iter().enumerate() {
+            handover.acquire(slot).unwrap_or_else(|refusal| {
+                panic!("buffer {slot} could not be taken back on round {round}: {refusal}")
+            });
+            draw(&machine.gpu, buffer);
+            handover.release(slot).unwrap_or_else(|refusal| {
+                panic!("buffer {slot} could not be given over on round {round}: {refusal}")
+            });
+            eprintln!(
+                "{test}: round {round}, buffer {slot} was taken back, drawn into and given to the \
+                 display engine in {:#018x}",
+                buffer.modifier().0
+            );
+        }
     }
 
     assert!(
         !machine.gpu.loss().is_lost(),
-        "the device was lost while releasing the buffers it made"
+        "the device was lost while passing the buffers it made back and forth"
     );
+
+    // A second release with no acquire between is what a caller that drew into a buffer the
+    // display engine still holds does, and it is refused by name. Without that the frame would be
+    // drawn over pixels the specification calls undefined, and every ioctl would report success.
+    let Err(refusal) = handover.release(0) else {
+        panic!("a buffer the display engine holds was given to it a second time");
+    };
+    eprintln!("{test}: a buffer given over twice is refused: {refusal}");
+    handover
+        .acquire(0)
+        .expect("and taking it back is what makes the next frame legal");
 
     // A slot no buffer sits at is refused by name rather than reaching the driver, which is where
     // a renderer told to draw into a set of another length would otherwise arrive.
-    let Err(refusal) = release.submit(BUFFERS) else {
-        panic!("a barrier was submitted for a buffer this set does not hold");
-    };
-    eprintln!("{test}: a slot past the end is refused: {refusal}");
+    for refusal in [handover.release(BUFFERS), handover.acquire(BUFFERS)] {
+        let Err(refusal) = refusal else {
+            panic!("a barrier was submitted for a buffer this set does not hold");
+        };
+        eprintln!("{test}: a slot past the end is refused: {refusal}");
+    }
 }
 
 #[test]
-fn a_frame_is_released_to_the_display_engine_before_anything_is_committed() {
-    let test = "a_frame_is_released_to_the_display_engine_before_anything_is_committed";
+fn a_frame_is_given_to_the_display_engine_before_anything_is_committed() {
+    let test = "a_frame_is_given_to_the_display_engine_before_anything_is_committed";
     let _guard = device_lock();
     let Some(machine) = machine(test) else {
         return;
@@ -438,7 +467,8 @@ fn a_frame_is_released_to_the_display_engine_before_anything_is_committed() {
     let mut commit = commit::for_device(&machine.device);
 
     let slot = scanout
-        .slot()
+        .acquire()
+        .expect("a new display owes no barrier")
         .expect("nothing is outstanding on a new display");
     draw(&machine.gpu, &scanout.buffers()[slot]);
 
@@ -452,10 +482,10 @@ fn a_frame_is_released_to_the_display_engine_before_anything_is_committed() {
         }
         Err(refused) => {
             let stated = refused.to_string();
-            for step in ["barrier", "releasing a frame", "slot"] {
+            for step in ["barrier", "a frame to the display", "slot"] {
                 assert!(
                     !stated.contains(step),
-                    "the frame was refused before the commit, by the release itself: {stated}"
+                    "the frame was refused before the commit, by the handover itself: {stated}"
                 );
             }
             eprintln!(
@@ -512,8 +542,9 @@ fn a_display_that_composites_no_pointer_keeps_the_copied_shape() {
         2,
         "the copied shape is two buffers"
     );
+    let mut scanout = scanout;
     assert_eq!(
-        scanout.slot(),
+        scanout.acquire().expect("a copied display owes no barrier"),
         None,
         "a copied display names no buffer for a renderer to compose into"
     );
