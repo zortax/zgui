@@ -38,7 +38,7 @@ impl Scene {
             ) {
                 continue;
             }
-            let Some(order) = self.order_at(op.kind, op.index as usize) else {
+            let Some(order) = self.order_of_op(*op) else {
                 continue;
             };
             if self.is_forced_order(order) {

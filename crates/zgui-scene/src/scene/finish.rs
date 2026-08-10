@@ -1,4 +1,4 @@
-//! Finishing a frame: sorting the arrays, remapping the log, and planning the vector passes.
+//! Finishing a frame: planning the vector passes and sorting the remap lists into draw order.
 
 use zgui_bits::DamageSet;
 use zgui_profile::{Counter, counter};
@@ -9,8 +9,8 @@ use crate::prim::PrimitiveKind;
 use crate::scene::Scene;
 
 impl Scene {
-    /// Finishes the frame: sorts the arrays into draw order and plans the vector passes against
-    /// `damage`.
+    /// Finishes the frame: plans the vector passes against `damage` and sorts the remap lists
+    /// into draw order.
     ///
     /// Uses the policy's own reading of the overlap rule. [`Scene::finish_with`] is the version
     /// that takes another, which exists so the readings can be compared rather than asserted.
@@ -20,87 +20,93 @@ impl Scene {
 
     /// Finishes the frame using a chosen reading of the vector-pass overlap rule.
     pub fn finish_with(&mut self, damage: &DamageSet, overlap: Overlap) {
-        // Before the sort, because the waiting list is indexed into the arrays as they were pushed
-        // and the sort is what moves them — and because the sort key's first component after draw
-        // order is the texture, which a placeholder does not have.
+        // Before the sort, because the waiting list is indexed into the arrays and the sort key's
+        // first component after draw order is the texture, which a placeholder does not have.
         self.refuse_unresolved();
-        self.sort_and_remap();
+        // Before the sort as well: the sweep is over the emission stream, and the log's indices
+        // are the arrays' own for the whole of the frame — nothing rewrites them.
         self.plan_vector_passes(damage, overlap);
+        self.sort_remap();
         self.finished = true;
-        // After the sort, because it is the sorted arrays a batch is taken out of and the sort is
-        // what the invariant licenses. Costs nothing at all unless the checks were asked for.
         self.check_order_overlap();
     }
 
-    /// Sorts every array by draw order and rewrites the log to match.
+    /// Sorts every remap list into draw order, leaving the arrays as they were pushed.
     ///
-    /// The log records where each primitive was *inserted*, and sorting moves it. Rewriting the log
-    /// rather than leaving it is what keeps a recorded range meaningful after the frame is
-    /// finished — which is the only state anything outside this crate sees.
-    fn sort_and_remap(&mut self) {
-        let quads = sort_by(&mut self.primitives.quads, |quad| (quad.order, 0, 0));
-        let shadows = sort_by(&mut self.primitives.shadows, |shadow| (shadow.order, 0, 0));
-        let decorations = sort_by(&mut self.primitives.decorations, |decoration| {
-            (decoration.order, 0, 0)
+    /// A primitive's position in its array is its identity for the frame — the log names it, and
+    /// a persistent copy of it elsewhere names it — so the ordering is a list of indices beside
+    /// the array rather than a move of the structs. A batch is a range of the sorted list, and a
+    /// consumer reads the array through it.
+    fn sort_remap(&mut self) {
+        sort_lane(&mut self.remap.quads, &self.primitives.quads, |quad| {
+            (quad.order, 0, 0)
         });
-        // Sprites break their tie by texture first and tile second. Two sprites at equal draw order
-        // are provably non-overlapping, so their sequence is free; spending it on clustering by
-        // texture is what lets a batch run until the texture genuinely changes.
-        let mono = sort_by(&mut self.primitives.mono_sprites, |sprite| {
-            let (texture, tile) = sprite.tile.sort_key();
-            (sprite.order, texture, tile)
-        });
-        let subpixel = sort_by(&mut self.primitives.subpixel_sprites, |sprite| {
-            let (texture, tile) = sprite.tile.sort_key();
-            (sprite.order, texture, tile)
-        });
-        let color = sort_by(&mut self.primitives.color_sprites, |sprite| {
-            let (texture, tile) = sprite.tile.sort_key();
-            (sprite.order, texture, tile)
-        });
-        let externals = sort_by(&mut self.primitives.externals, |external| {
-            (external.order, 0, 0)
-        });
-        let backdrops = sort_by(&mut self.primitives.backdrops, |backdrop| {
-            (backdrop.order, 0, 0)
-        });
+        sort_lane(
+            &mut self.remap.shadows,
+            &self.primitives.shadows,
+            |shadow| (shadow.order, 0, 0),
+        );
+        sort_lane(
+            &mut self.remap.decorations,
+            &self.primitives.decorations,
+            |decoration| (decoration.order, 0, 0),
+        );
+        // Sprites break their tie by texture first and tile second. Two sprites at equal draw
+        // order are provably non-overlapping, so their sequence is free; spending it on
+        // clustering by texture is what lets a batch run until the texture genuinely changes.
+        sort_lane(
+            &mut self.remap.mono_sprites,
+            &self.primitives.mono_sprites,
+            |sprite| {
+                let (texture, tile) = sprite.tile.sort_key();
+                (sprite.order, texture, tile)
+            },
+        );
+        sort_lane(
+            &mut self.remap.subpixel_sprites,
+            &self.primitives.subpixel_sprites,
+            |sprite| {
+                let (texture, tile) = sprite.tile.sort_key();
+                (sprite.order, texture, tile)
+            },
+        );
+        sort_lane(
+            &mut self.remap.color_sprites,
+            &self.primitives.color_sprites,
+            |sprite| {
+                let (texture, tile) = sprite.tile.sort_key();
+                (sprite.order, texture, tile)
+            },
+        );
+        sort_lane(
+            &mut self.remap.externals,
+            &self.primitives.externals,
+            |external| (external.order, 0, 0),
+        );
+        sort_lane(
+            &mut self.remap.backdrops,
+            &self.primitives.backdrops,
+            |backdrop| (backdrop.order, 0, 0),
+        );
         // A degenerate empty group has its start and end at the same order; the start has to come
         // first, or the pair is inverted and the target is composited before it exists.
-        let groups = sort_by(&mut self.primitives.groups, |group| {
+        sort_lane(&mut self.remap.groups, &self.primitives.groups, |group| {
             (group.order, u32::from(!group.is_start), 0)
         });
         // Vector items keep their emission order: the pass policy sweeps them in it, and their
-        // composites are ordered by the pass plan rather than by this array.
-
-        for op in &mut self.ops {
-            let mapping = match op.kind {
-                PrimitiveKind::Quad => &quads,
-                PrimitiveKind::Shadow => &shadows,
-                PrimitiveKind::Decoration => &decorations,
-                PrimitiveKind::MonoSprite => &mono,
-                PrimitiveKind::SubpixelSprite => &subpixel,
-                PrimitiveKind::ColorSprite => &color,
-                PrimitiveKind::External => &externals,
-                PrimitiveKind::Backdrop => &backdrops,
-                PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => &groups,
-                PrimitiveKind::Vector => continue,
-            };
-            op.index = mapping[op.index as usize];
-        }
+        // composites are ordered by the pass plan rather than by any array.
 
         self.index_markers();
     }
 
-    /// Records where each direction's markers ended up in the array they share.
+    /// Records where each direction's markers sit in the array they share, in draw order.
     ///
-    /// Built here because this is where the sort that decided those positions just ran, and read
-    /// by the batcher, which walks starts and ends as two streams and has to turn a cursor into
-    /// either one back into a position in the shared array.
+    /// Built from the sorted remap, and read by the batcher, which walks starts and ends as two
+    /// streams and has to turn a cursor into either one back into a position in the shared array.
     fn index_markers(&mut self) {
         self.markers.clear();
-        for (position, group) in self.primitives.groups.iter().enumerate() {
-            let position = position as u32;
-            if group.is_start {
+        for &position in &self.remap.groups {
+            if self.primitives.groups[position as usize].is_start {
                 self.markers.starts.push(position);
             } else {
                 self.markers.ends.push(position);
@@ -158,23 +164,9 @@ impl Scene {
     }
 }
 
-/// Sorts `values` by `key` and returns, for each old index, where the value ended up.
-fn sort_by<T, K: Fn(&T) -> (u32, u32, u32)>(values: &mut Vec<T>, key: K) -> Vec<u32> {
-    let mut order: Vec<u32> = (0..values.len() as u32).collect();
-    order.sort_by_key(|index| key(&values[*index as usize]));
-
-    let mut mapping = vec![0u32; values.len()];
-    for (position, old) in order.iter().enumerate() {
-        mapping[*old as usize] = position as u32;
-    }
-
-    let mut sorted: Vec<Option<T>> = values.drain(..).map(Some).collect();
-    for old in order {
-        values.push(
-            sorted[old as usize]
-                .take()
-                .expect("each index appears once in a permutation"),
-        );
-    }
-    mapping
+/// Fills `lane` with every index of `values`, sorted by `key`.
+fn sort_lane<T, K: Fn(&T) -> (u32, u32, u32)>(lane: &mut Vec<u32>, values: &[T], key: K) {
+    lane.clear();
+    lane.extend(0..values.len() as u32);
+    lane.sort_by_key(|index| key(&values[*index as usize]));
 }

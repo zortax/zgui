@@ -6,6 +6,9 @@
 // by the shared coverage function.
 
 @group(1) @binding(0) var<storage, read> sprites: array<Sprite>;
+// The draw-order permutation: the instance array keeps push order, and a draw's instance
+// range walks this list.
+@group(1) @binding(1) var<storage, read> remap: array<u32>;
 
 struct SubpixelOutput {
     @location(0) @blend_src(0) color: vec4<f32>,
@@ -17,14 +20,15 @@ fn vs_subpixel_sprite(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> SpriteVarying {
-    let sprite = sprites[instance];
+    let slot = remap[instance];
+    let sprite = sprites[slot];
     let corner = unit_corner(vertex);
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds);
     var out: SpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
     out.local = local;
     out.texel = tile_texel(corner, sprite.tile);
-    out.instance = instance;
+    out.instance = slot;
     return out;
 }
 

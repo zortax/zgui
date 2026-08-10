@@ -15,6 +15,9 @@ struct Decoration {
 }
 
 @group(1) @binding(0) var<storage, read> decorations: array<Decoration>;
+// The draw-order permutation: the instance array keeps push order, and a draw's instance
+// range walks this list.
+@group(1) @binding(1) var<storage, read> remap: array<u32>;
 
 const DECORATION_SOLID: u32 = 0u;
 const DECORATION_WAVY: u32 = 1u;
@@ -33,12 +36,13 @@ fn vs_decoration(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> DecorationVarying {
-    let decoration = decorations[instance];
+    let slot = remap[instance];
+    let decoration = decorations[slot];
     let local = inflated_corner(vertex, decoration.bounds);
     var out: DecorationVarying;
     out.position = to_clip_position(local, decoration.transform);
     out.local = local;
-    out.instance = instance;
+    out.instance = slot;
     return out;
 }
 

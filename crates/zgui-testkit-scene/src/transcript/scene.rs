@@ -3,7 +3,7 @@
 use core::fmt;
 
 use zgui_bits::DamageSet;
-use zgui_scene::{Batch, PlannedPass, Scene};
+use zgui_scene::{Batch, PlannedPass, PrimitiveKind, Scene};
 
 use crate::text::Writer;
 use crate::text::number::rect;
@@ -151,35 +151,52 @@ fn write_primitives(writer: &mut Writer, scene: &Scene) {
 /// One draw call's worth of primitives.
 fn write_batch(writer: &mut Writer, scene: &Scene, batch: &Batch) {
     let primitives = &scene.primitives;
+    // A ranged batch is a range of its kind's remap list, and the array is read through it —
+    // exactly as a renderer's shaders do.
     match batch {
         Batch::Quads(range) => {
-            for quad in &primitives.quads[range.clone()] {
-                writer.line(&primitive::quad(scene, quad));
+            for slot in &scene.remap(PrimitiveKind::Quad)[range.clone()] {
+                writer.line(&primitive::quad(scene, &primitives.quads[*slot as usize]));
             }
         }
         Batch::Shadows(range) => {
-            for shadow in &primitives.shadows[range.clone()] {
-                writer.line(&primitive::shadow(scene, shadow));
+            for slot in &scene.remap(PrimitiveKind::Shadow)[range.clone()] {
+                writer.line(&primitive::shadow(
+                    scene,
+                    &primitives.shadows[*slot as usize],
+                ));
             }
         }
         Batch::Decorations(range) => {
-            for decoration in &primitives.decorations[range.clone()] {
-                writer.line(&primitive::decoration(scene, decoration));
+            for slot in &scene.remap(PrimitiveKind::Decoration)[range.clone()] {
+                writer.line(&primitive::decoration(
+                    scene,
+                    &primitives.decorations[*slot as usize],
+                ));
             }
         }
         Batch::MonoSprites { range, .. } => {
-            for sprite in &primitives.mono_sprites[range.clone()] {
-                writer.line(&primitive::mono_sprite(scene, sprite));
+            for slot in &scene.remap(PrimitiveKind::MonoSprite)[range.clone()] {
+                writer.line(&primitive::mono_sprite(
+                    scene,
+                    &primitives.mono_sprites[*slot as usize],
+                ));
             }
         }
         Batch::SubpixelSprites { range, .. } => {
-            for sprite in &primitives.subpixel_sprites[range.clone()] {
-                writer.line(&primitive::subpixel_sprite(scene, sprite));
+            for slot in &scene.remap(PrimitiveKind::SubpixelSprite)[range.clone()] {
+                writer.line(&primitive::subpixel_sprite(
+                    scene,
+                    &primitives.subpixel_sprites[*slot as usize],
+                ));
             }
         }
         Batch::ColorSprites { range, .. } => {
-            for sprite in &primitives.color_sprites[range.clone()] {
-                writer.line(&primitive::color_sprite(scene, sprite));
+            for slot in &scene.remap(PrimitiveKind::ColorSprite)[range.clone()] {
+                writer.line(&primitive::color_sprite(
+                    scene,
+                    &primitives.color_sprites[*slot as usize],
+                ));
             }
         }
         Batch::External(index) => {

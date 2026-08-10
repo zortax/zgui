@@ -104,7 +104,7 @@ fn a_layer_forces_its_order_on_everything_inside_it() {
 }
 
 #[test]
-fn finishing_sorts_the_arrays_and_keeps_the_log_pointing_at_the_right_primitives() {
+fn finishing_sorts_the_remap_and_leaves_the_arrays_as_they_were_pushed() {
     let (mut scene, fill) = scene();
     // Pushed in an order that does not match their draw order: the second overlaps the first, and
     // the third is disjoint from both.
@@ -127,16 +127,17 @@ fn finishing_sorts_the_arrays_and_keeps_the_log_pointing_at_the_right_primitives
         .collect();
     assert_eq!(
         before, after,
-        "a recorded log entry must name the same primitive before and after the sort"
+        "a log entry names the same primitive for the whole of the frame: nothing moves the array"
     );
 
+    // The ordering lives in the remap list: reading the array through it yields draw order.
     let orders: Vec<_> = scene
-        .primitives
-        .quads
+        .remap(PrimitiveKind::Quad)
         .iter()
-        .map(|quad| quad.order)
+        .map(|slot| scene.primitives.quads[*slot as usize].order)
         .collect();
     assert!(orders.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert_eq!(orders.len(), 3);
 }
 
 #[test]

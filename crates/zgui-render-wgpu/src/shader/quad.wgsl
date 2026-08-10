@@ -25,6 +25,9 @@ struct Quad {
 }
 
 @group(1) @binding(0) var<storage, read> quads: array<Quad>;
+// The draw-order permutation: the instance array keeps push order, and a draw's instance
+// range walks this list.
+@group(1) @binding(1) var<storage, read> remap: array<u32>;
 
 const BORDER_SOLID: u32 = 0u;
 const BORDER_DASHED: u32 = 1u;
@@ -41,12 +44,13 @@ fn vs_quad(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> QuadVarying {
-    let quad = quads[instance];
+    let slot = remap[instance];
+    let quad = quads[slot];
     let local = inflated_corner(vertex, quad.bounds);
     var out: QuadVarying;
     out.position = to_clip_position(local, quad.transform);
     out.local = local;
-    out.instance = instance;
+    out.instance = slot;
     return out;
 }
 

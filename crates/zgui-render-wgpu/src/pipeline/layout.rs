@@ -52,7 +52,9 @@ impl Layouts {
             }),
             instances: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.instances"),
-                entries: &[storage(0)],
+                // The instances, and the remap list the shader reads them through: the array
+                // keeps push order, and the sorted list beside it is the draw order.
+                entries: &[storage(0), storage(1)],
             }),
             sampled: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.sampled"),

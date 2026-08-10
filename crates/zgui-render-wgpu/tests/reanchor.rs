@@ -106,18 +106,19 @@ fn repainted(arm: Arm) -> Scene {
 
 /// A scene drawing `arm` where it started, then replaying that frame [`STEP`] further down.
 ///
-/// The second frame emits no primitive of its own and interns no paint: it hands back the range the
+/// The second frame emits no primitive of its own and interns no paint: it replays the chunk the
 /// first frame recorded, which is exactly what a scrolled fragment costs.
 fn scrolled(arm: Arm) -> Scene {
     let mut scene = Scene::new();
     scene.begin_frame(Size::new(SIDE, SIDE));
     draw(&mut scene, arm, FIRST);
+    let mut recorded = zgui_scene::ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut recorded);
     scene.finish(&DamageSet::full());
-    let recorded = 0..scene.ops().len() as u32;
     let interned = scene.paints.len();
 
     scene.begin_frame(Size::new(SIDE, SIDE));
-    let replayed = scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(STEP)));
+    let replayed = scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(STEP)));
     assert_eq!(replayed.len(), 1, "the quad was replayed");
     assert_eq!(
         scene.paints.len(),

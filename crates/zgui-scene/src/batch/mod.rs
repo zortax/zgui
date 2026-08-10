@@ -14,8 +14,10 @@ type SortKey = (DrawOrder, PrimitiveKind);
 
 /// One draw call's worth of primitives.
 ///
-/// A batch is always a contiguous range of one of the scene's arrays, which is what makes it a
-/// memory copy into an instance buffer rather than a gather.
+/// A ranged batch is a contiguous range of its kind's *remap list* — see
+/// [`Scene::remap`](crate::Scene::remap) — and a consumer reads the array through it. The arrays
+/// themselves keep push order, so a primitive's position in one is stable for the frame however
+/// the ordering falls out. The one-at-a-time variants carry the array index directly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Batch {
     /// Rounded rectangles.

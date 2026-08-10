@@ -114,6 +114,8 @@ pub struct Scene {
     /// lookup for every primitive of every frame, and how a run is being checked is decided before
     /// the run.
     checking: bool,
+    /// The draw-order permutation of each sortable array — see [`Scene::remap`].
+    remap: Remap,
     /// The draw-order assigner.
     order: BoundsTree,
     /// The region each moving coordinate system declared it would visit.
@@ -146,6 +148,49 @@ pub struct Scene {
     /// Empty for a frame every one of whose rasters was already where it was going to be, which is
     /// the ordinary case and costs a pointer. See [`mod@resolve`].
     unresolved: Vec<Unresolved>,
+}
+
+/// The draw-order permutation of each sortable array, as indices into it.
+///
+/// The arrays keep the order primitives were pushed in — a batch is a range of one of these
+/// lists, and a consumer reads the array through it. Sorting a list of indices instead of the
+/// structs is what lets a primitive's position in its array outlive the frame's ordering, which
+/// is what persistent GPU storage needs.
+#[derive(Debug, Default)]
+pub(crate) struct Remap {
+    /// Rounded, bordered rectangles.
+    pub(crate) quads: Vec<u32>,
+    /// Box shadows.
+    pub(crate) shadows: Vec<u32>,
+    /// Text decoration lines.
+    pub(crate) decorations: Vec<u32>,
+    /// Single-channel coverage sprites.
+    pub(crate) mono_sprites: Vec<u32>,
+    /// Three-channel coverage sprites.
+    pub(crate) subpixel_sprites: Vec<u32>,
+    /// Full-colour sprites.
+    pub(crate) color_sprites: Vec<u32>,
+    /// Textures the renderer did not draw.
+    pub(crate) externals: Vec<u32>,
+    /// Filters over the composite beneath them.
+    pub(crate) backdrops: Vec<u32>,
+    /// Group start and end markers.
+    pub(crate) groups: Vec<u32>,
+}
+
+impl Remap {
+    /// Empties every list, keeping the allocations for the next frame.
+    fn clear(&mut self) {
+        self.quads.clear();
+        self.shadows.clear();
+        self.decorations.clear();
+        self.mono_sprites.clear();
+        self.subpixel_sprites.clear();
+        self.color_sprites.clear();
+        self.externals.clear();
+        self.backdrops.clear();
+        self.groups.clear();
+    }
 }
 
 /// Where each direction's markers sit in the array the two directions share.
@@ -193,6 +238,7 @@ impl Scene {
             spaces: Vec::new(),
             capture: None,
             checking: crate::invariant::enabled(),
+            remap: Remap::default(),
             order: BoundsTree::new(),
             travel: Travels::new(),
             layer_stack: Vec::new(),
@@ -229,6 +275,7 @@ impl Scene {
         self.primitives.clear();
         self.ops.clear();
         self.spaces.clear();
+        self.remap.clear();
         self.order.clear();
         self.layer_stack.clear();
         self.forced_orders.clear();
