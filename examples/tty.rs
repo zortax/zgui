@@ -369,10 +369,41 @@ const SHEET: &str = css!(
     }"
 );
 
+/// Sends the log to a file, because on this console standard error is the screen.
+///
+/// Temporary, and the reason this example names a second crate: the console takes the display
+/// over, so a message written to standard error lands on pixels the frame loop is about to
+/// overwrite. `ZGUI_TTY_LOG` names the file; the default suits a machine with a writable `/tmp`.
+///
+/// Every level is recorded. The decision a display makes between scanning out of the buffers the
+/// renderer draws into and copying each frame through the CPU is an `info!`, and it is the first
+/// thing to read here.
+fn log() {
+    let path = std::env::var("ZGUI_TTY_LOG").unwrap_or_else(|_| "/tmp/zgui-tty.log".to_owned());
+    let Ok(file) = std::fs::File::create(&path) else {
+        return;
+    };
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(std::sync::Mutex::new(file))
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .finish();
+    drop(tracing::subscriber::set_global_default(subscriber));
+}
+
 fn main() -> Result<(), zgui::Error> {
-    app()
+    log();
+    let described = app()
         .with_application_id("dev.zgui.Tty")
         .with_title("zgui on a console")
-        .with_stylesheet(SHEET)
-        .run_drm(|| view! { Clock() })
+        .with_stylesheet(SHEET);
+
+    // The same application in a window, for telling this backend's faults from the framework's.
+    // A behaviour that shows here and under a desktop belongs to `zgui`; one that shows only on
+    // the console belongs to the console backend. Temporary, and it is why `ZGUI_TTY_WINDOWED`
+    // has no documentation anywhere a person would look for it.
+    if std::env::var_os("ZGUI_TTY_WINDOWED").is_some() {
+        return described.run(|| view! { Clock() });
+    }
+    described.run_drm(|| view! { Clock() })
 }

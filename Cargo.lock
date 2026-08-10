@@ -5886,6 +5886,8 @@ dependencies = [
 name = "zgui-examples"
 version = "0.1.0"
 dependencies = [
+ "tracing",
+ "tracing-subscriber",
  "zgui",
  "zgui-devtools",
 ]
