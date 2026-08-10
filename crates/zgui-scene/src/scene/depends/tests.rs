@@ -80,7 +80,8 @@ fn a_replayed_primitive_whose_slot_changed_hands_is_reported() {
     let space = scene.spatial.space_of(viewport, card, moved(10.0));
     let drawn = quad(&mut scene, space);
     scene.push_quad(drawn).expect("inside the surface");
-    let recorded = 0..scene.ops().len() as u32;
+    let mut recorded = crate::scene::chunk::ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut recorded);
     assert_eq!(
         scene.spatial_faults(),
         Vec::new(),
@@ -101,7 +102,7 @@ fn a_replayed_primitive_whose_slot_changed_hands_is_reported() {
         "the slot came back, which is the whole premise",
     );
     assert_ne!(stranger, space);
-    scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
+    scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
 
     let faults = scene.spatial_faults();
     assert_eq!(faults.len(), 1, "{faults:?}");
@@ -125,7 +126,8 @@ fn a_replayed_primitive_whose_coordinate_system_merely_moved_is_not_reported() {
     let space = scene.spatial.space_of(viewport, card, moved(10.0));
     let drawn = quad(&mut scene, space);
     scene.push_quad(drawn).expect("inside the surface");
-    let recorded = 0..scene.ops().len() as u32;
+    let mut recorded = crate::scene::chunk::ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut recorded);
     scene.finish(&DamageSet::full());
 
     scene.begin_frame(viewport_size());
@@ -135,7 +137,7 @@ fn a_replayed_primitive_whose_coordinate_system_merely_moved_is_not_reported() {
         space,
         "a tick moves the matrix and keeps the name",
     );
-    scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
+    scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
 
     assert_eq!(scene.spatial_faults(), Vec::new());
 }
@@ -151,14 +153,15 @@ fn a_scene_that_is_not_recording_has_nothing_to_report() {
     let space = scene.spatial.space_of(viewport, card, moved(10.0));
     let drawn = quad(&mut scene, space);
     scene.push_quad(drawn).expect("inside the surface");
-    let recorded = 0..scene.ops().len() as u32;
+    let mut recorded = crate::scene::chunk::ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut recorded);
     scene.finish(&DamageSet::full());
     scene.spatial.release(card);
 
     scene.begin_frame(viewport_size());
     scene.spatial.recycle();
     scene.spatial.space_of(viewport, owner(3), moved(10.0));
-    scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
+    scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
 
     assert_eq!(scene.spatial_faults(), Vec::new());
 }
@@ -175,7 +178,8 @@ fn the_frame_loop_refuses_to_hand_a_faulty_display_list_to_a_renderer() {
     let space = scene.spatial.space_of(viewport, card, moved(10.0));
     let drawn = quad(&mut scene, space);
     scene.push_quad(drawn).expect("inside the surface");
-    let recorded = 0..scene.ops().len() as u32;
+    let mut recorded = crate::scene::chunk::ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut recorded);
     scene.finish(&DamageSet::full());
     scene.check_spatial_dependencies();
     scene.spatial.release(card);
@@ -183,7 +187,7 @@ fn the_frame_loop_refuses_to_hand_a_faulty_display_list_to_a_renderer() {
     scene.begin_frame(viewport_size());
     scene.spatial.recycle();
     scene.spatial.space_of(viewport, owner(3), moved(10.0));
-    scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
+    scene.replay_chunk(&recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
     scene.finish(&DamageSet::full());
     scene.check_spatial_dependencies();
 }

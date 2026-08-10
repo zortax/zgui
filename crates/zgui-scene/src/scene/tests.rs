@@ -168,63 +168,6 @@ fn batches_merge_by_order_and_break_where_another_kind_has_to_come_first() {
 }
 
 #[test]
-fn a_replayed_range_re_emits_the_same_primitives_translated() {
-    let (mut scene, fill) = scene();
-    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
-    scene.push_quad(Quad::filled(rect(0.0, 40.0, 20.0, 20.0), fill));
-    scene.push_decoration(Decoration::new(
-        rect(0.0, 30.0, 20.0, 2.0),
-        2.0,
-        Color::srgb(0.0, 0.0, 0.0, 1.0),
-        DecorationStyle::Solid,
-    ));
-    scene.finish(&DamageSet::full());
-    let recorded = 0..scene.ops().len() as u32;
-
-    scene.begin_frame(Size::new(400, 400));
-    assert_eq!(scene.retained_ops(), 3);
-    let replayed = scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(-8.0)));
-
-    assert_eq!(replayed.len(), 3);
-    assert_eq!(scene.primitives.quads.len(), 2);
-    assert_eq!(scene.primitives.decorations.len(), 1);
-    assert_eq!(scene.primitives.quads[0].bounds, [0.0, -8.0, 20.0, 20.0]);
-    assert_eq!(scene.primitives.quads[1].bounds, [0.0, 32.0, 20.0, 20.0]);
-    assert_eq!(
-        scene.primitives.decorations[0].bounds,
-        [0.0, 22.0, 20.0, 2.0]
-    );
-}
-
-#[test]
-fn a_replayed_range_is_ordered_against_this_frames_neighbours_not_last_frames() {
-    let (mut scene, fill) = scene();
-    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
-    scene.finish(&DamageSet::full());
-    let recorded = 0..1;
-
-    scene.begin_frame(Size::new(400, 400));
-    // Something new is drawn underneath before the replay, so the replayed quad must step above it.
-    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
-    scene.replay(recorded, Size::new(DevicePx(0.0), DevicePx(0.0)));
-
-    assert_eq!(scene.primitives.quads[1].order, 2);
-}
-
-#[test]
-fn a_range_from_a_frame_that_no_longer_exists_replays_nothing() {
-    let (mut scene, _) = scene();
-    scene.finish(&DamageSet::full());
-    scene.begin_frame(Size::new(400, 400));
-    assert!(
-        scene
-            .replay(0..99, Size::new(DevicePx(0.0), DevicePx(0.0)))
-            .is_empty()
-    );
-    assert!(scene.primitives.is_empty());
-}
-
-#[test]
 fn the_side_tables_survive_a_frame_boundary_but_the_primitives_do_not() {
     let (mut scene, _) = scene();
     let clip = scene.clips.only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));

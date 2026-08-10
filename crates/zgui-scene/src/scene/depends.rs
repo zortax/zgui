@@ -84,7 +84,6 @@ impl Scene {
         self.checking = record;
         if !record {
             self.spaces.clear();
-            self.retained_spaces.clear();
         }
     }
 

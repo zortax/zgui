@@ -13,7 +13,7 @@ use zgui_color::{Color, ColorSpace, GradientStop, HueInterpolation};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::counter::exclusive;
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
-use zgui_scene::{GradientKind, Paint, PaintRef, Quad, Scene};
+use zgui_scene::{ChunkPrims, GradientKind, Paint, PaintRef, Quad, Scene};
 
 /// A device rectangle.
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
@@ -47,11 +47,11 @@ fn ramp(scene: &mut Scene, top: f32) -> PaintRef {
     })
 }
 
-/// A first frame drawing one gradient-filled box and one flat one, and the range it recorded.
+/// A first frame drawing one gradient-filled box and one flat one, and the chunk it recorded.
 ///
 /// The flat box is not decoration: a solid colour is the same everywhere, so moving it re-anchors
 /// nothing, and a counter that could not tell the two apart would read two here.
-fn painted(gradients: bool) -> (Scene, core::ops::Range<u32>) {
+fn painted(gradients: bool) -> (Scene, ChunkPrims) {
     let mut scene = Scene::new();
     scene.begin_frame(Size::new(320, 320));
     let flat = PaintRef::solid(scene.paints.solid(Color::srgb(0.2, 0.2, 0.2, 1.0)));
@@ -62,8 +62,9 @@ fn painted(gradients: bool) -> (Scene, core::ops::Range<u32>) {
     };
     scene.push_quad(Quad::filled(rect(16.0, 16.0, 96.0, 64.0), fill));
     scene.push_quad(Quad::filled(rect(16.0, 96.0, 96.0, 64.0), flat));
+    let mut recorded = ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut recorded);
     scene.finish(&DamageSet::full());
-    let recorded = 0..scene.ops().len() as u32;
     (scene, recorded)
 }
 
@@ -74,7 +75,7 @@ fn a_gradient_carried_to_a_new_position_is_reanchored() {
     let (mut scene, recorded) = painted(true);
 
     scene.begin_frame(Size::new(320, 320));
-    let replayed = scene.replay(recorded, down(24.0));
+    let replayed = scene.replay_chunk(&recorded, down(24.0));
     scene.finish(&DamageSet::full());
 
     assert_eq!(replayed.len(), 2, "both boxes were carried forward");
@@ -101,13 +102,13 @@ fn a_document_whose_gradients_stand_still_reanchors_nothing() {
     // A document full of ramps, replayed exactly where it was.
     let (mut scene, recorded) = painted(true);
     scene.begin_frame(Size::new(320, 320));
-    scene.replay(recorded, down(0.0));
+    scene.replay_chunk(&recorded, down(0.0));
     scene.finish(&DamageSet::full());
 
     // And a document that moves, with no ramp in it to move.
     let (mut flat, recorded) = painted(false);
     flat.begin_frame(Size::new(320, 320));
-    flat.replay(recorded, down(24.0));
+    flat.replay_chunk(&recorded, down(24.0));
     flat.finish(&DamageSet::full());
 
     if !COUNTERS_ENABLED {
@@ -125,6 +126,7 @@ fn three_hundred_scroll_steps_intern_no_paint() {
     let _turn = exclusive();
     counter::reset();
     let (mut scene, mut recorded) = painted(true);
+    let mut scratch = ChunkPrims::default();
     let interned = scene.paints.len();
     // The count is published at the start of a frame, because what it answers is what the frame
     // inherited, so the first reading worth comparing is the one the first replayed frame opened
@@ -139,7 +141,9 @@ fn three_hundred_scroll_steps_intern_no_paint() {
             inherited,
             "step {step} opened with a longer paint table than the step before it"
         );
-        recorded = scene.replay(recorded, down(1.0));
+        let range = scene.replay_chunk(&recorded, down(1.0));
+        scene.extract_chunk(range, &mut scratch);
+        core::mem::swap(&mut recorded, &mut scratch);
         scene.finish(&DamageSet::full());
         assert_eq!(
             scene.paints.len(),

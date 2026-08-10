@@ -17,7 +17,6 @@ use crate::prim::{
     ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, Shadow, SubpixelSprite,
 };
 use crate::scene::Scene;
-use crate::scene::replay::translate;
 use crate::spatial::SpatialId;
 use crate::vector::VectorItem;
 
@@ -178,6 +177,12 @@ impl ChunkPrims {
         self.vectors.clear();
         self.spaces.clear();
     }
+}
+
+/// Moves an `[x, y, width, height]` field.
+fn translate(bounds: &mut [f32; 4], by: Size<DevicePx, Device>) {
+    bounds[0] += by.width.0;
+    bounds[1] += by.height.0;
 }
 
 /// Copies one primitive out of a frame array into a chunk array, and says where it landed.

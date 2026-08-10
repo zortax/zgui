@@ -8,7 +8,6 @@ pub mod insert;
 pub(crate) mod live;
 pub mod ordering;
 pub mod primitives;
-pub mod replay;
 pub mod resolve;
 
 #[cfg(test)]
@@ -109,12 +108,6 @@ pub struct Scene {
     /// the order assignment, so the capture is the pushing's complete content rather than what one
     /// position's clip admitted of it. See [`Scene::begin_chunk_capture`].
     capture: Option<crate::scene::chunk::ChunkPrims>,
-    /// The previous frame's primitives, kept so a range of its log can be replayed.
-    retained: Primitives,
-    /// The previous frame's log.
-    retained_ops: Vec<PaintOp>,
-    /// The previous frame's names, so a replayed range keeps the ones it was recorded with.
-    retained_spaces: Vec<Option<SpatialId>>,
     /// Whether the names are kept at all.
     ///
     /// Read once, when the scene is made, rather than per primitive: it is a word of storage and a
@@ -199,9 +192,6 @@ impl Scene {
             ops: Vec::new(),
             spaces: Vec::new(),
             capture: None,
-            retained: Primitives::default(),
-            retained_ops: Vec::new(),
-            retained_spaces: Vec::new(),
             checking: crate::invariant::enabled(),
             order: BoundsTree::new(),
             travel: Travels::new(),
@@ -216,17 +206,11 @@ impl Scene {
         }
     }
 
-    /// How many primitives have been pushed that replaying the log would not reproduce.
+    /// How many primitives have been pushed that the frame's log does not hold the whole of.
     ///
-    /// Two things are counted, because they are the same fact: a primitive the clip refused never
-    /// reached the log at all, and a vector item is in the log but is planned into a rasterisation
-    /// pass rather than re-emitted, so [`Scene::replay`] skips it. Either way the log is less than
-    /// what was drawn.
-    ///
-    /// The count runs across frames and never resets, so a caller reads it either side of the
-    /// pushing it is asking about and compares the two. Equal means the log holds the whole of what
-    /// that pushing drew, which is exactly the condition under which the range may stand in for the
-    /// drawing later.
+    /// A primitive the clip refused never reached the log at all, and a blanked unresolved sprite
+    /// left it holding a blank. A diagnostic: the count runs across frames and never resets, so a
+    /// caller reads it either side of a pushing and compares the two.
     pub fn unreplayable(&self) -> u64 {
         self.unreplayable
     }
@@ -238,14 +222,10 @@ impl Scene {
 
     /// Starts a frame over a surface of `viewport` device pixels.
     ///
-    /// The previous frame's primitives and log are retained rather than dropped, so that a fragment
-    /// that has not changed can be replayed out of them. The side tables are *not* cleared: their
-    /// ids have to keep resolving to the same content, or a replayed range would draw one fragment
-    /// with another fragment's paint.
+    /// The side tables are *not* cleared: a record's chunk carries their indices across frames,
+    /// and an id that stopped resolving to the same content would draw one fragment with another
+    /// fragment's paint.
     pub fn begin_frame(&mut self, viewport: Size<i32, Device>) {
-        core::mem::swap(&mut self.primitives, &mut self.retained);
-        core::mem::swap(&mut self.ops, &mut self.retained_ops);
-        core::mem::swap(&mut self.spaces, &mut self.retained_spaces);
         self.primitives.clear();
         self.ops.clear();
         self.spaces.clear();
@@ -269,9 +249,6 @@ impl Scene {
     }
 
     /// What was inserted this frame, in the order it was inserted.
-    ///
-    /// A fragment records the range of this log its primitives occupy, and replays that range next
-    /// frame when nothing about it changed.
     pub fn ops(&self) -> &[PaintOp] {
         &self.ops
     }
