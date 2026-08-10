@@ -190,6 +190,32 @@ fn copied<T: Clone>(source: &[T], index: usize, into: &mut Vec<T>) -> Option<u32
 }
 
 impl Scene {
+    /// Opens a chunk capture: until [`Scene::take_chunk_capture`], every pushed primitive is also
+    /// appended to the capture — before the clip cull and before the order assignment.
+    ///
+    /// That makes the capture the pushing's *complete* content: a fragment encoded at the edge of
+    /// a scroll port captures the whole of itself, and the cull decides what the frame gets at
+    /// every later selection rather than once at the encoding. Group markers are never captured —
+    /// their order comes from a barrier, and they are pass state rather than fragment state.
+    ///
+    /// `recycled` is emptied and used as the storage, so a caller that hands back what it took
+    /// last time allocates only where a painting grew.
+    pub fn begin_chunk_capture(&mut self, mut recycled: ChunkPrims) {
+        debug_assert!(
+            self.capture.is_none(),
+            "a chunk capture is already open: fragments are captured one at a time"
+        );
+        recycled.clear();
+        self.capture = Some(recycled);
+    }
+
+    /// Closes the capture opened by [`Scene::begin_chunk_capture`] and returns it.
+    pub fn take_chunk_capture(&mut self) -> ChunkPrims {
+        self.capture
+            .take()
+            .expect("a chunk capture was opened before being taken")
+    }
+
     /// Copies the operations in `range` of this frame's log into `chunk`, re-based so every
     /// entry indexes the chunk's own arrays.
     ///

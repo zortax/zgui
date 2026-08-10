@@ -204,8 +204,11 @@ fn a_shiftable_scroll_emits_the_band_and_not_the_port() {
         without > 100,
         "the unshifted run is the positive control and has to be expensive: {without}",
     );
+    // Two-thirds rather than half: the port run is a moving target. Complete-chunk replay made
+    // the unshifted port cheaper as well — edge rows replay instead of re-encoding through the
+    // cut-record path — so the band's margin over it narrowed while both runs improved.
     assert!(
-        with_shift * 2 < without,
+        with_shift * 3 < without * 2,
         "a scroll whose pixels can be moved must emit substantially less than one whose cannot: \
          {with_shift} against {without}",
     );
@@ -240,8 +243,10 @@ fn an_opaque_port_needs_nothing_of_what_is_behind_it() {
     let (opaque_over_gradient, _) = backed(200, "", false, true, "patterned");
     let (control, _) = backed(200, "", false, false, "patterned");
 
+    // Two-thirds rather than half, for the same reason as the band assertion above: the control
+    // run's port emission fell with complete-chunk replay.
     assert!(
-        opaque_over_gradient * 2 < control,
+        opaque_over_gradient * 3 < control * 2,
         "an opaque port hides the gradient, so what is behind it cannot reach the composite: \
          {opaque_over_gradient} against {control}",
     );

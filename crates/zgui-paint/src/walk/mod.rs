@@ -620,12 +620,6 @@ impl Pass<'_, '_> {
             alpha: self.alpha().to_bits(),
             highlights: self.highlight_signature(fragment),
         };
-        let start = self.scene.ops().len() as u32;
-        // What the log cannot reproduce is counted rather than inferred from the geometry, because
-        // the rectangle a cull tests is each primitive's own — a shadow's blurred reach, a glyph's
-        // outline — and a fragment's ink is the union of all of them. Asking the scene how much of
-        // this pushing its log will not replay is the same question, answered where it is known.
-        let unreplayable = self.scene.unreplayable();
         match self.painter.cache.reuse(self.scene, fragment, painted) {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
@@ -637,8 +631,7 @@ impl Pass<'_, '_> {
                 let range = self.scene.replay_chunk(chunk, offset);
                 let pushed = (range.end - range.start) as usize;
                 self.report.primitives += pushed;
-                let whole = self.scene.unreplayable() == unreplayable;
-                self.painter.cache.replayed(fragment, whole);
+                self.painter.cache.replayed(fragment);
             }
             Reuse::Encode => {
                 let Some(mut style) = self.painter.styles.get(style_ref).cloned() else {
@@ -654,7 +647,13 @@ impl Pass<'_, '_> {
                 // as long as this fragment lives.
                 self.named.clear();
                 self.input.resources.take_named(&mut self.named);
+                // Everything the emitters push between here and the take is the fragment's own,
+                // captured before the cull so the record is the painting and never one position's
+                // clipped part of it.
+                self.scene
+                    .begin_chunk_capture(self.painter.cache.take_capture_scratch());
                 let emitted = order::fragment_tracked(self.scene, fragment, &emission);
+                let chunk = self.scene.take_chunk_capture();
                 self.report.primitives += emitted.pushed;
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node
@@ -664,8 +663,6 @@ impl Pass<'_, '_> {
                         routes: emitted.vector_routes,
                     });
                 }
-                let end = self.scene.ops().len() as u32;
-                let whole = self.scene.unreplayable() == unreplayable;
                 self.named.clear();
                 self.input.resources.take_named(&mut self.named);
                 self.painter.cache.encoded(
@@ -673,8 +670,7 @@ impl Pass<'_, '_> {
                     fragment,
                     painted,
                     Encoding {
-                        ops: start..end,
-                        whole,
+                        chunk,
                         resources: &self.named,
                     },
                     self.input.resources,

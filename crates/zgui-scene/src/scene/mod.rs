@@ -103,6 +103,12 @@ pub struct Scene {
     /// carries only the *slot*, which is the one thing that cannot say whether the coordinate
     /// system it names is still the one it was drawn through — see [`mod@depends`].
     spaces: Vec<Option<SpatialId>>,
+    /// The chunk capture in progress, if a caller opened one.
+    ///
+    /// While open, every pushed primitive is also appended here — before the clip cull and before
+    /// the order assignment, so the capture is the pushing's complete content rather than what one
+    /// position's clip admitted of it. See [`Scene::begin_chunk_capture`].
+    capture: Option<crate::scene::chunk::ChunkPrims>,
     /// The previous frame's primitives, kept so a range of its log can be replayed.
     retained: Primitives,
     /// The previous frame's log.
@@ -192,6 +198,7 @@ impl Scene {
             spatial: SpatialTree::with_viewport(),
             ops: Vec::new(),
             spaces: Vec::new(),
+            capture: None,
             retained: Primitives::default(),
             retained_ops: Vec::new(),
             retained_spaces: Vec::new(),

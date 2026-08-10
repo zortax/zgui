@@ -64,8 +64,7 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
         &same,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -106,8 +105,7 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
         &first,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -136,8 +134,7 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
         &same,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -162,8 +159,7 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
         &same,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -196,8 +192,7 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
         &line,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -225,8 +220,7 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
         &before,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -251,8 +245,7 @@ fn a_drawing_is_encoded_however_still_it_stayed() {
         &mark,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -265,19 +258,16 @@ fn a_drawing_is_encoded_however_still_it_stayed() {
     );
 }
 
-/// A fragment whose painting the clip cut short is encoded again wherever it moves to.
+/// A chunk captured beyond the clip replays complete on arrival.
 ///
 /// This is the whole of a panel that scrolls into view from below. While it is outside the
-/// scroll port every primitive it offers is refused, so what it records is an empty range; the
-/// style, the clip, the transform and the size are all exactly what they were when it arrives
-/// inside the port, so without this the empty range is replayed and the panel never appears.
+/// scroll port every primitive it offers is refused by the frame — and captured anyway, because
+/// the capture happens before the cull. When the fragment arrives inside the port, the same
+/// chunk replays and the cull admits the part that has come into view.
 #[test]
-fn a_painting_the_clip_cut_short_is_encoded_again_where_the_fragment_paints() {
+fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
     let mut cache = PaintCache::new();
     let mut scene = scene();
-    // The port is re-entered on the second frame as a real walk re-enters it, because the clip
-    // tables are per-frame: a chain nobody pushed this frame resolves to nothing, and a
-    // fragment tested against nothing looks like a fragment that paints nowhere.
     let port = |scene: &mut Scene| crate::walk::replay::Painted {
         clip: scene.clips.only(zgui_scene::ClipLink::rect(Rect::new(
             Point::new(DevicePx(0.0), DevicePx(0.0)),
@@ -287,13 +277,21 @@ fn a_painting_the_clip_cut_short_is_encoded_again_where_the_fragment_paints() {
     };
     let inside = port(&mut scene);
     let hidden = fragment(0.0, 2000.0);
+    // The fragment paints one quad at its own position, refused by the port's clip down there.
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    let refused = scene.push_quad(
+        zgui_scene::Quad::filled(hidden.border_box, zgui_scene::PaintRef::NONE)
+            .clipped(inside.clip),
+    );
+    let chunk = scene.take_chunk_capture();
+    assert!(refused.is_none(), "the quad is outside the port");
+    assert_eq!(chunk.quads.len(), 1, "and captured regardless");
     cache.encoded(
         &mut scene,
         &hidden,
         inside,
         Encoding {
-            ops: 0..0,
-            whole: false,
+            chunk,
             resources: &[],
         },
         &NoResources,
@@ -301,16 +299,20 @@ fn a_painting_the_clip_cut_short_is_encoded_again_where_the_fragment_paints() {
     scene.begin_frame(Size::new(256, 256));
     let inside = port(&mut scene);
     let arrived = fragment(0.0, 100.0);
-    assert_eq!(
-        cache.reuse(&scene, &arrived, inside),
-        Reuse::Encode,
-        "the range was recorded outside the port and holds none of what the row paints in it"
-    );
-    // Still outside it, the same empty range is the whole of what the row paints there, so it
-    // stands: a list far longer than its port must not re-encode every row of it every frame.
+    let reuse = cache.reuse(&scene, &arrived, inside);
     assert_ne!(
-        cache.reuse(&scene, &fragment(0.0, 1900.0), inside),
-        Reuse::Encode
+        reuse,
+        Reuse::Encode,
+        "the chunk is the fragment's complete painting, so arriving at the port replays it"
+    );
+    let Reuse::Replay(offset) = reuse else {
+        unreachable!()
+    };
+    let range = scene.replay_chunk(cache.prims(arrived.key).expect("recorded"), offset);
+    assert_eq!(range.len(), 1, "the cull admits the arrived quad");
+    assert_eq!(
+        scene.primitives.quads[0].bounds[1], 100.0,
+        "at the position the fragment arrived at"
     );
 }
 
@@ -324,8 +326,7 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
         &away,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -355,8 +356,7 @@ fn a_retired_fragment_loses_its_record() {
         &gone,
         painted(0),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,
@@ -384,18 +384,17 @@ fn encode_one_quad(
     let paint = scene
         .paints
         .solid(zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0));
-    let start = scene.ops().len() as u32;
+    scene.begin_chunk_capture(cache.take_capture_scratch());
     scene.push_quad(
         zgui_scene::Quad::filled(rect, zgui_scene::PaintRef::solid(paint)).clipped(clip),
     );
-    let end = scene.ops().len() as u32;
+    let chunk = scene.take_chunk_capture();
     cache.encoded(
         scene,
         fragment,
         painted(0),
         Encoding {
-            ops: start..end,
-            whole: true,
+            chunk,
             resources: &[],
         },
         &NoResources,
@@ -488,8 +487,7 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
         &label,
         under(space),
         Encoding {
-            ops: 0..0,
-            whole: true,
+            chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
         },
         &NoResources,

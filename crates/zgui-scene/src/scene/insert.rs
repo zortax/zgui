@@ -13,6 +13,30 @@ use crate::scene::Scene;
 use crate::spatial::SpatialId;
 use crate::vector::VectorItem;
 
+/// Appends one primitive to the open chunk capture, before the cull and before the order.
+///
+/// The capture is the pushing's complete content, so it happens whether or not the cull refuses
+/// the primitive, and the captured copy carries no order — a replay derives one against the frame
+/// it lands in. The coordinate-system name is recorded beside it when the checks are on, exactly
+/// as [`Scene::record`] does for the frame's own log.
+macro_rules! tee {
+    ($self:ident, $kind:ident, $lane:ident, $space:expr, $prim:expr) => {
+        if $self.capture.is_some() {
+            // Both read before the capture is borrowed, because either would borrow the scene.
+            let space = $space;
+            let checking = $self.checking;
+            if let Some(capture) = &mut $self.capture {
+                let at = capture.$lane.len() as u32;
+                capture.ops.push(PaintOp::new(PrimitiveKind::$kind, at));
+                if checking {
+                    capture.spaces.push(space);
+                }
+                capture.$lane.push($prim);
+            }
+        }
+    };
+}
+
 impl Scene {
     /// Forces every primitive pushed until the matching [`Scene::pop_layer`] to take `order`.
     ///
@@ -42,6 +66,7 @@ impl Scene {
 
     /// Pushes a rounded rectangle, returning the order it took or `None` if it was culled.
     pub fn push_quad(&mut self, mut quad: Quad) -> Option<DrawOrder> {
+        tee!(self, Quad, quads, self.space_at(quad.transform), quad);
         let order = self.assign_order(quad.ink(), quad.clip_id(), quad.transform)?;
         quad.order = order;
         let space = self.space_at(quad.transform);
@@ -52,6 +77,13 @@ impl Scene {
 
     /// Pushes a box shadow, returning the order it took or `None` if it was culled.
     pub fn push_shadow(&mut self, mut shadow: Shadow) -> Option<DrawOrder> {
+        tee!(
+            self,
+            Shadow,
+            shadows,
+            self.space_at(shadow.transform),
+            shadow
+        );
         let order = self.assign_order(shadow.ink(), shadow.clip_id(), shadow.transform)?;
         shadow.order = order;
         let space = self.space_at(shadow.transform);
@@ -62,6 +94,13 @@ impl Scene {
 
     /// Pushes a text decoration line, returning the order it took or `None` if it was culled.
     pub fn push_decoration(&mut self, mut decoration: Decoration) -> Option<DrawOrder> {
+        tee!(
+            self,
+            Decoration,
+            decorations,
+            self.space_at(decoration.transform),
+            decoration
+        );
         let order =
             self.assign_order(decoration.ink(), decoration.clip_id(), decoration.transform)?;
         decoration.order = order;
@@ -78,6 +117,13 @@ impl Scene {
     /// Pushes a single-channel coverage sprite, returning the order it took or `None` if it was
     /// culled.
     pub fn push_mono_sprite(&mut self, mut sprite: MonoSprite) -> Option<DrawOrder> {
+        tee!(
+            self,
+            MonoSprite,
+            mono_sprites,
+            self.space_at(sprite.transform),
+            sprite
+        );
         let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
         sprite.order = order;
         let space = self.space_at(sprite.transform);
@@ -103,6 +149,13 @@ impl Scene {
     /// [`MonoSprite`] instead, because subpixel coverage against a transparent destination is
     /// meaningless.
     pub fn push_subpixel_sprite(&mut self, mut sprite: SubpixelSprite) -> Option<DrawOrder> {
+        tee!(
+            self,
+            SubpixelSprite,
+            subpixel_sprites,
+            self.space_at(sprite.transform),
+            sprite
+        );
         let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
         sprite.order = order;
         let space = self.space_at(sprite.transform);
@@ -122,6 +175,13 @@ impl Scene {
 
     /// Pushes a full-colour sprite, returning the order it took or `None` if it was culled.
     pub fn push_color_sprite(&mut self, mut sprite: ColorSprite) -> Option<DrawOrder> {
+        tee!(
+            self,
+            ColorSprite,
+            color_sprites,
+            self.space_at(sprite.transform),
+            sprite
+        );
         let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
         sprite.order = order;
         let space = self.space_at(sprite.transform);
@@ -146,6 +206,7 @@ impl Scene {
     /// the log out of step with what was drawn, which is what
     /// [`Scene::unreplayable`](Scene::unreplayable) counts.
     pub fn push_vector(&mut self, mut item: VectorItem) -> Option<DrawOrder> {
+        tee!(self, Vector, vectors, item.transform, item.clone());
         self.note_unreplayable();
         // The order and the cull read the ink measured in the subtree's own space, exactly as they
         // do for every other primitive: `item.ink` has the item's transform applied, and testing it
@@ -166,6 +227,13 @@ impl Scene {
 
     /// Pushes an external texture, returning the order it took or `None` if it was culled.
     pub fn push_external(&mut self, mut external: ExternalQuad) -> Option<DrawOrder> {
+        tee!(
+            self,
+            External,
+            externals,
+            Some(external.transform),
+            external
+        );
         let order = self.assign_order(external.ink(), external.clip, external.transform.index())?;
         external.order = order;
         let space = Some(external.transform);
@@ -180,6 +248,7 @@ impl Scene {
 
     /// Pushes a backdrop filter, returning the order it took or `None` if it was culled.
     pub fn push_backdrop(&mut self, mut backdrop: BackdropFilter) -> Option<DrawOrder> {
+        tee!(self, Backdrop, backdrops, None, backdrop.clone());
         let order =
             self.assign_order(backdrop.bounds, backdrop.clip, SpatialId::VIEWPORT.index())?;
         backdrop.order = order;
