@@ -65,6 +65,20 @@ fn drive_a_cursor(test: &str, interface: Interface) {
         return;
     };
 
+    // Each interface has to get the interface it asked for. Every branch below reads
+    // `is_atomic()`, so without this the two tests above are one test run twice and
+    // `DRM_IOCTL_MODE_CURSOR2` has no coverage anywhere. What the card answers is asked of the
+    // kernel, so the atomic half is an assertion rather than a reading of the code it is about.
+    if interface == Interface::Legacy {
+        assert!(
+            !device.is_atomic(),
+            "a device opened for the legacy interface drives the legacy path, which is the only \
+             coverage the legacy cursor request has"
+        );
+    } else if !support::atomic(test, &device, "the atomic half of this pair") {
+        return;
+    }
+
     // Modesetting takes master, and a compositor holds it. Saying so is the honest outcome, and it
     // is what `cargo xtask ledger ignored` asks for in place of switching the test off.
     if !support::master(test, &device) {

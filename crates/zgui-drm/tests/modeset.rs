@@ -72,8 +72,7 @@ fn only_the_atomic_interface_can_be_told_to_wait_for_a_fence() {
     let Some(atomic) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !atomic.is_atomic() {
-        eprintln!("{test}: this device has no atomic interface, so nothing was asserted");
+    if !support::atomic(test, &atomic, "which interface can be told to wait") {
         return;
     }
     let Some(plane) = support::primary_plane(&atomic, 0) else {
@@ -106,14 +105,19 @@ fn set_a_mode_and_flip(test: &str, interface: Interface) {
         return;
     };
 
-    // Asking for the legacy interface has to get the legacy interface. Without this the two tests
-    // above are one test run twice, and the legacy commit path has no coverage anywhere.
+    // Each interface has to get the interface it asked for. Without this the two tests above are
+    // one test run twice: a legacy device that reported atomic would take the atomic path here,
+    // and an atomic device that reported legacy would take the legacy one, and both would pass.
+    // What the card answers is asked of the kernel, so the atomic half is an assertion rather than
+    // a reading of the code it is about.
     if interface == Interface::Legacy {
         assert!(
             !device.is_atomic(),
             "a device opened for the legacy interface drives the legacy path, which is the only \
              coverage that path has"
         );
+    } else if !support::atomic(test, &device, "the atomic half of this pair") {
+        return;
     }
 
     // Modesetting takes master, and a compositor holds it. Saying so is the honest outcome, and it

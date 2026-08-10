@@ -207,14 +207,11 @@ fn every_connector_names_encoders_that_reach_a_crtc_in_the_list() {
 
 #[test]
 fn a_device_enumerates_planes_that_name_the_crtcs_they_can_drive() {
-    let Some(device) = support::device(
-        "a_device_enumerates_planes_that_name_the_crtcs_they_can_drive",
-        Interface::Preferred,
-    ) else {
+    let test = "a_device_enumerates_planes_that_name_the_crtcs_they_can_drive";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !device.is_atomic() {
-        eprintln!("this device has no universal planes, so nothing was asserted");
+    if !support::atomic(test, &device, "the planes it enumerates") {
         return;
     }
 
@@ -256,14 +253,11 @@ fn a_device_enumerates_planes_that_name_the_crtcs_they_can_drive() {
 
 #[test]
 fn an_atomic_device_names_the_properties_a_commit_is_built_from() {
-    let Some(device) = support::device(
-        "an_atomic_device_names_the_properties_a_commit_is_built_from",
-        Interface::Preferred,
-    ) else {
+    let test = "an_atomic_device_names_the_properties_a_commit_is_built_from";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !device.is_atomic() {
-        eprintln!("this device is not atomic, so it has no properties to name");
+    if !support::atomic(test, &device, "the properties a commit is built from") {
         return;
     }
 
@@ -465,14 +459,11 @@ fn an_absent_device_is_refused_rather_than_panicking() {
 
 #[test]
 fn the_commit_interface_is_the_one_the_device_was_opened_for() {
-    let Some(atomic) = support::device(
-        "the_commit_interface_is_the_one_the_device_was_opened_for",
-        Interface::Preferred,
-    ) else {
+    let test = "the_commit_interface_is_the_one_the_device_was_opened_for";
+    let Some(atomic) = support::device(test, Interface::Preferred) else {
         return;
     };
-    if !atomic.is_atomic() {
-        eprintln!("this device is not atomic, so there is only one interface to choose");
+    if !support::atomic(test, &atomic, "which commit interface a device is given") {
         return;
     }
     assert!(
@@ -566,10 +557,8 @@ fn a_device_over_a_descriptor_enumerates_what_the_card_it_names_enumerates() {
 
 #[test]
 fn a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets() {
-    let Some(opened) = support::device(
-        "a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets",
-        Interface::Preferred,
-    ) else {
+    let test = "a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets";
+    let Some(opened) = support::device(test, Interface::Preferred) else {
         return;
     };
     let path = opened.path().to_owned();
@@ -581,19 +570,12 @@ fn a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets() 
     // descriptor is its own open file description, so the one this crate opened says nothing about
     // the one it was handed.
     //
-    // Asserted without asking first whether this card has an atomic interface. A guard on
-    // `opened.is_atomic()` reads the same code path this test is about, so a change that stopped
-    // setting the capability would switch the test off rather than fail it. The cost is that a
-    // driver with only the legacy interface reports a fact about the hardware here as a defect,
-    // and that trade is deliberate.
-    assert!(
-        over.is_atomic(),
-        "the atomic client capability reached a descriptor this crate did not open. {} answers \
-         atomic={} when this crate opens it, and a card that refuses the capability reads false \
-         through both",
-        path.display(),
-        opened.is_atomic()
-    );
+    // Whether the card has an atomic interface is asked over a descriptor of the support module's
+    // own, so the guard reads the kernel rather than the code this test is about. A guard on
+    // `over.is_atomic()` would switch the test off exactly when it should fail.
+    if !support::atomic(test, &over, "the capabilities a descriptor carries") {
+        return;
+    }
 
     // `is_atomic` is this crate's own bookkeeping. The kernel's answer is the property list: the
     // properties a plane commit sets carry `DRM_MODE_PROP_ATOMIC`, and
@@ -621,10 +603,8 @@ fn a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets() 
 
 #[test]
 fn a_device_over_a_descriptor_is_built_for_the_interface_its_caller_asked_for() {
-    let Some(opened) = support::device(
-        "a_device_over_a_descriptor_is_built_for_the_interface_its_caller_asked_for",
-        Interface::Preferred,
-    ) else {
+    let test = "a_device_over_a_descriptor_is_built_for_the_interface_its_caller_asked_for";
+    let Some(opened) = support::device(test, Interface::Preferred) else {
         return;
     };
     let path = opened.path().to_owned();
@@ -635,13 +615,11 @@ fn a_device_over_a_descriptor_is_built_for_the_interface_its_caller_asked_for() 
         .expect("a device is built over an open descriptor");
 
     // Both devices are read, because the legacy assertion holds on its own for a card that has
-    // only the legacy interface. The pair is what says the argument was honoured. The atomic
-    // assertion is unconditional for the reason the capability test above gives.
-    assert!(
-        preferred.is_atomic(),
-        "the preferred interface takes the atomic capability over a descriptor onto {}",
-        path.display()
-    );
+    // only the legacy interface. The pair says the argument was honoured. The preferred half is
+    // asserted against what the card answers the support module, so a card with no atomic
+    // interface reports that here rather than reading as a defect; the legacy half holds on any
+    // card and runs either way.
+    support::atomic(test, &preferred, "the preferred half of that pair");
     assert!(
         !legacy.is_atomic(),
         "asking for the legacy interface over a descriptor has to produce a legacy device"
