@@ -41,13 +41,23 @@
 //! every one of those elements empty while nothing reported a fault.
 //!
 //! [`Renderer::draw`] is where the presentation happens, and it reports what happened in the
-//! contract's own vocabulary. A frame the display declined because a flip is still on its way is
-//! [`SkipReason::Timeout`]: asking again after one refresh interval is when the buffer is free. On
-//! the drawn path that answer comes *before* the frame is composed, because the acquire asks the
-//! question, and the work is never done rather than done and dropped. A readback, a handover or a
-//! flip that *failed* is [`SkipReason::Validation`], the nearest true statement the contract has:
-//! the frame was submitted and something below the renderer refused to present it. No variant names
-//! a kernel that refused a page flip.
+//! contract's own vocabulary. Which word an answer gets turns on whether the frame was composed
+//! before it arrived, because that decides whether the frame's damage is retired.
+//!
+//! The copied path composes first and offers the picture afterwards. A display that declines it
+//! because a flip is still on its way is [`SkipReason::Timeout`]: the work was submitted, the
+//! damage retires, and asking again after one refresh interval is when the buffer is free.
+//!
+//! The drawn path asks first, because the acquire says which buffer to compose into. Every answer
+//! that stops the frame there is [`SkipReason::Unacquired`], the one word the contract has for a
+//! frame that drew nothing and still owes its damage. A composed frame's word for it would retire
+//! the damage describing what changed, and the region would then hold the picture it had until
+//! something unrelated damaged it again.
+//!
+//! A readback, a handover or a flip that failed *after* the frame was composed is
+//! [`SkipReason::Validation`], the nearest true statement the contract has: the frame was submitted
+//! and something below the renderer refused to present it. No variant names a kernel that refused a
+//! page flip.
 
 use std::sync::Arc;
 
@@ -113,11 +123,7 @@ impl DrmRenderer {
         let inner = &mut self.inner;
         drawn_into_scanout(&self.display, |slot| {
             if !inner.present_into(slot) {
-                warn!(
-                    "this renderer was not built over the buffers this display hands out, so slot \
-                     {slot} named nothing and the frame would land wherever the last one did"
-                );
-                return FrameOutcome::Skipped(SkipReason::Validation);
+                return refused_slot(slot);
             }
             inner.draw(scene, damage)
         })
@@ -165,6 +171,20 @@ impl DrmRenderer {
     }
 }
 
+/// Logs a renderer that refused the buffer it was handed, and answers for the frame.
+///
+/// A pairing that went wrong rather than a moment: [`renderer`] gives [`Delivery::Drawn`] only to a
+/// renderer built over the textures this display handed out, so a refusal here says the two were
+/// paired some other way. The contract's answer is the same either way — the frame has nothing to
+/// compose into, it drew nothing, and the damage it was going to draw stays owed.
+fn refused_slot(slot: usize) -> FrameOutcome {
+    warn!(
+        "this renderer was not built over the buffers this display hands out, so slot {slot} named \
+         nothing and the frame would land wherever the last one did"
+    );
+    FrameOutcome::Skipped(SkipReason::Unacquired)
+}
+
 /// The two calls that bracket a frame drawn straight into a display's own buffer.
 ///
 /// [`DrmDisplay`] is the one implementation. The trait lets the order below be asserted with no
@@ -196,7 +216,10 @@ impl Bracket for DrmDisplay {
 ///
 /// # A frame that drew nothing
 ///
-/// A frame with no free buffer takes nothing back, so it owes nothing back.
+/// A frame with no free buffer takes nothing back, so it owes nothing back. It is
+/// [`SkipReason::Unacquired`], the answer that keeps the damage it was going to draw: the frame is
+/// held off in front of the work rather than composed and then dropped, so the next one has to
+/// draw everything this one would have.
 ///
 /// A buffer that *was* taken back and drawn into nothing is left where it is. Nothing is given
 /// over and nothing is committed, so the display keeps showing the frame it already has, and the
@@ -212,11 +235,15 @@ fn drawn_into_scanout(
         // Every buffer is either on the screen or named by a flip still on its way. Nothing was
         // taken back, so nothing is owed back, and the frame is held off before any work is done
         // rather than composed and then dropped. The contract asks again one refresh later, by
-        // which time the flip has completed.
-        Ok(None) => return FrameOutcome::Skipped(SkipReason::Timeout),
+        // which time the flip has completed, and carries this frame's damage there.
+        Ok(None) => return FrameOutcome::Skipped(SkipReason::Unacquired),
         Err(error) => {
             warn!("the buffer a frame would be drawn into could not be taken back: {error}");
-            return FrameOutcome::Skipped(SkipReason::Validation);
+            // The same answer as a busy display, for the same reason: this frame composed nothing,
+            // so what it was going to draw is still owed. Which of the two happened is in the line
+            // above, where a reader of a log needs it — the contract needs only that nothing was
+            // recorded.
+            return FrameOutcome::Skipped(SkipReason::Unacquired);
         }
     };
 
@@ -513,6 +540,21 @@ mod tests {
         }
     }
 
+    /// A display whose graphics device will not hand a buffer back at all.
+    struct Refusing;
+
+    impl Bracket for Refusing {
+        fn acquire(&self) -> Result<Option<usize>, PlatformError> {
+            Err(PlatformError::Backend(
+                "the device did not finish the barrier".to_owned(),
+            ))
+        }
+
+        fn present_drawn(&self) -> Result<bool, PlatformError> {
+            panic!("a frame nothing was drawn for was given to the display engine");
+        }
+    }
+
     #[test]
     fn a_frame_is_composed_between_the_two_calls_that_bracket_it() {
         // The order in full. The acquire makes the buffer safe to write and says which buffer that
@@ -559,19 +601,47 @@ mod tests {
 
     #[test]
     fn a_frame_with_no_free_buffer_is_never_composed() {
-        // The work is skipped before it is done rather than done and dropped. `Timeout` says so:
-        // the buffer is busy, and asking again one refresh later is when it is free.
+        // The work is skipped before it is done rather than done and dropped. `Unacquired` says
+        // so: nothing was composed, and asking again one refresh later is when a buffer is free.
         let display = Rotating::flipping();
 
         assert_eq!(
             display.frame(presented()),
-            FrameOutcome::Skipped(SkipReason::Timeout)
+            FrameOutcome::Skipped(SkipReason::Unacquired)
         );
 
         assert_eq!(
             display.steps(),
             ["acquire: no buffer is free"],
             "nothing was composed and nothing was given over"
+        );
+    }
+
+    #[test]
+    fn every_frame_this_path_holds_off_keeps_the_damage_it_never_drew() {
+        // The property the whole path turns on, asserted through the contract rather than through
+        // a variant name. Each of these three stops the frame in front of `Renderer::draw`, so the
+        // damage describing what changed is still owed. An outcome that retired it would leave no
+        // later frame any reason to draw that region: a progress bar that skips segments, a clock
+        // that stops while everything around it moves, and text that moved leaving a copy of itself
+        // where it was.
+        let busy = Rotating::flipping();
+        assert!(
+            !busy.frame(presented()).retires_damage(),
+            "a display with no free buffer composed nothing, so the frame's damage is still owed"
+        );
+
+        let refused = drawn_into_scanout(&Refusing, |_| {
+            panic!("a buffer the display engine still holds was composed into")
+        });
+        assert!(
+            !refused.retires_damage(),
+            "a buffer that could not be taken back left the frame with nothing to draw into"
+        );
+
+        assert!(
+            !refused_slot(0).retires_damage(),
+            "a renderer that would not take the buffer drew nothing into it"
         );
     }
 
@@ -639,27 +709,15 @@ mod tests {
 
     #[test]
     fn a_buffer_that_could_not_be_taken_back_composes_nothing() {
-        struct Refusing;
-
-        impl Bracket for Refusing {
-            fn acquire(&self) -> Result<Option<usize>, PlatformError> {
-                Err(PlatformError::Backend(
-                    "the device did not finish the barrier".to_owned(),
-                ))
-            }
-
-            fn present_drawn(&self) -> Result<bool, PlatformError> {
-                panic!("a frame nothing was drawn for was given to the display engine");
-            }
-        }
-
-        // `Validation` rather than `Timeout`: the buffer is not busy, the graphics device refused.
-        // Asking again one refresh later would refuse again.
+        // `Unacquired` again: the graphics device refused where the busy display had nothing to
+        // give, and both leave the frame in the same place — in front of the composition, with
+        // everything it was going to draw still owed. The warning above the answer is where the
+        // difference between the two is written down.
         assert_eq!(
             drawn_into_scanout(&Refusing, |_| panic!(
                 "a buffer the display engine still holds was composed into"
             )),
-            FrameOutcome::Skipped(SkipReason::Validation)
+            FrameOutcome::Skipped(SkipReason::Unacquired)
         );
     }
 
