@@ -25,8 +25,9 @@
 //!
 //! `zgui-drm` and `zgui-evdev` are gated on Linux, because every line of them is a call into the
 //! kernel. This one links nothing and resolves its symbols at run time, so a machine with no
-//! libseat and no session daemon still builds it. A build needs a unix host, because
-//! [`Seat::descriptor`] hands out a `BorrowedFd`, which the standard library has on unix.
+//! libseat and no session daemon still builds it. `Seat` hands out a descriptor to wait on, which
+//! the standard library has on unix and nowhere else, so that one module is `cfg(unix)`.
+//! [`Library`] and [`Error`] are portable, and a build on any host has them.
 //!
 //! # Backends
 //!
@@ -34,12 +35,17 @@
 //! it runs the terminals, seatd where a daemon listens on a socket, and a builtin backend that
 //! needs root. Whether any of them answers is settled the same way, so a caller reads what it got.
 //!
-//! # Using a seat
-//!
-//! [`Seat::open`] opens the library, opens the seat this session is on, and waits for it to become
-//! usable. [`Seat::descriptor`] is what a loop waits on, and [`Seat::dispatch`] answers a list of
-//! [`Change`]s. Dropping the seat closes it and gives the terminal back.
-
+// The section below is about `Seat`, and every link in it points at an item that is `cfg(unix)`.
+// The section therefore carries the same condition: off unix the items are absent, and a link to an
+// absent item fails a documentation build.
+#![cfg_attr(
+    unix,
+    doc = "# Using a seat",
+    doc = "",
+    doc = "[`Seat::open`] opens the library, opens the seat this session is on, and waits for it \
+           to become usable. [`Seat::descriptor`] is what a loop waits on, and [`Seat::dispatch`] \
+           answers a list of [`Change`]s. Dropping the seat closes it and gives the terminal back."
+)]
 #![deny(missing_docs)]
 // This crate is on the unsafe ledger's allowlist for one reason: libseat is opened at run time and
 // called through the addresses that come back, so every entry point is an FFI call through a
@@ -48,8 +54,10 @@
 
 pub mod error;
 pub mod library;
+#[cfg(unix)]
 pub mod seat;
 
 pub use crate::error::{Error, Result};
 pub use crate::library::Library;
+#[cfg(unix)]
 pub use crate::seat::{Change, ENABLE_WITHIN, Seat};
