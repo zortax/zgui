@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::{Error, Result};
 use crate::library::{Library, Libseat};
+use crate::seat::device::Token;
 use crate::seat::listener::{LISTENER, Shared};
 
 mod device;
@@ -130,8 +131,10 @@ impl Seat {
 
     /// Opens one device on this seat.
     ///
-    /// The seat opens the device and hands the descriptor over. This succeeds while the seat is
-    /// enabled, and for the device types the backend permits, which are DRM and evdev.
+    /// The seat opens the device and hands the descriptor over. Which devices it hands over is the
+    /// backend's own rule: seatd and logind take graphics cards and input devices and refuse the
+    /// rest, and the noop backend opens any path it is given. seatd also refuses every device while
+    /// the session is inactive.
     ///
     /// Every device is opened again after a [`Change::Enabled`]. A descriptor from before the
     /// disable can have been blocked or revoked, and an evdev one always has been.
@@ -146,6 +149,9 @@ impl Seat {
 
     /// Gives one device back, and closes its descriptor.
     ///
+    /// The device belongs to the seat that opened it. A seat given another seat's device refuses
+    /// it, because a device id belongs to the seat that answered it.
+    ///
     /// # Order
     ///
     /// libseat is told first and the descriptor is closed second. logind's backend keeps the
@@ -154,8 +160,9 @@ impl Seat {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::CloseDevice`] when libseat refused. The descriptor is closed either way,
-    /// because libseat closes none of them and this is the last owner.
+    /// Returns [`Error::CloseDevice`] when libseat refused, and [`Error::OtherSeat`] for a device
+    /// another seat opened. The descriptor is closed either way, because libseat closes none of
+    /// them and this is the last owner.
     pub fn close_device(&self, device: Device) -> Result<()> {
         // The call below borrows the device, so the descriptor is open for the whole of it. The
         // borrow holds that order: a body that closed the descriptor first has moved the device,
@@ -214,6 +221,8 @@ struct Held {
     handle: NonNull<Libseat>,
     /// The state the callbacks reach through, leaked at the open and reclaimed at the close.
     shared: NonNull<Shared>,
+    /// Which seat this is, which every device it opens carries.
+    token: Token,
 }
 
 impl Held {
@@ -247,6 +256,7 @@ impl Held {
             library,
             handle,
             shared,
+            token: Token::next(),
         })
     }
 
@@ -331,14 +341,29 @@ impl Held {
             )
         };
 
-        // Read once, here, because the answer is checked in two steps and this number belongs to
-        // the call above.
+        // Read once, here, because the answer is checked in two steps, the give-back below makes a
+        // call of its own, and this number belongs to the call above.
         let errno = errno();
 
         // A backend that answered an id and wrote no descriptor lands here as well. `OwnedFd` may
         // not hold `-1`, which is an invalid value for the type and is undefined the moment one
         // exists, so what libseat wrote is read rather than trusted.
         if id < 0 || descriptor < 0 {
+            if id >= 0 {
+                // libseat took the device and this call answers no `Device`, so this is the last
+                // place that holds the id. The device is given straight back.
+                //
+                // No backend reaches this. seatd, logind and noop each answer `-1` and write
+                // nothing through the pointer, so nothing here can make this branch run and no test
+                // covers it: deleting it, or the `descriptor < 0` half of the condition above,
+                // leaves the suite green.
+                //
+                // SAFETY: `handle` is the seat libseat gave back, and it is open until `Drop`. The
+                // id is the one the call above answered. The answer is dropped: this function
+                // already has a failure to report.
+                unsafe { (self.library.symbols().close_device)(self.handle.as_ptr(), id) };
+            }
+
             return Err(Error::OpenDevice {
                 path: path.to_owned(),
                 errno,
@@ -349,14 +374,23 @@ impl Held {
         // so nothing else owns it. It is not `-1`, which the branch above settled.
         let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
 
-        Ok(Device::new(id, descriptor))
+        Ok(Device::new(self.token, id, descriptor))
     }
 
     /// Tells libseat that one device is free.
     ///
     /// The device is borrowed, so its descriptor is open for the length of the call. logind's
     /// backend stats that descriptor to find which device to release.
+    ///
+    /// A device another seat opened is refused here. Its id is that seat's, and this seat numbers
+    /// its own devices, so the call would release one of these or none of them.
     fn close_device(&self, device: &Device) -> Result<()> {
+        if device.seat() != self.token {
+            return Err(Error::OtherSeat {
+                device: device.id(),
+            });
+        }
+
         // SAFETY: `handle` is the seat libseat gave back, and it is open until `Drop`. The id is
         // the one libseat answered for this device, and the descriptor behind it is open, because
         // the borrow above holds the device for the length of this call.
@@ -374,9 +408,10 @@ impl Held {
 
     /// Asks for a terminal.
     ///
-    /// The number crosses as a C `int`. A terminal number is never negative, so the public answer
-    /// takes a `u32`, and one that does not fit is refused here: a number that arrived truncated
-    /// would ask for a terminal nobody named.
+    /// The number crosses as a C `int`. A terminal number is never negative, so [`Seat::switch`]
+    /// takes a `u32`, and one wider than the `int` is refused here. Every such number crosses as a
+    /// negative one, which each backend refuses on its own, so what this adds is a refusal that
+    /// names the number and asks libseat nothing.
     fn switch(&self, terminal: u32) -> Result<()> {
         let session = c_int::try_from(terminal).map_err(|_| Error::Terminal { terminal })?;
 

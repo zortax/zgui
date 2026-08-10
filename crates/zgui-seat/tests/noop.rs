@@ -15,13 +15,17 @@
 //! arriving change into a `Change`.
 //!
 //! **A switch that switches.** noop answers `-1` for every session number, so what is covered below
-//! is that the refusal names the terminal that was asked for. A terminal that changes needs a
-//! session and a second terminal.
+//! is that the call reaches libseat and that the refusal names the terminal. A terminal that
+//! changes needs a session and a second terminal.
 //!
-//! **The order of the two calls in `Seat::close_device`.** noop's `close_device` reads nothing and
-//! closes nothing, so a version that closed the descriptor before it told libseat passes every
-//! check here. logind's backend stats that descriptor to find which device to release, and that is
-//! where the order becomes visible.
+//! **`libseat_close_device` being called at all, and before the descriptor closes.** noop's
+//! `close_device` is `return 0;`: it reads nothing, closes nothing and refuses nothing. So a
+//! `Seat::close_device` that told libseat after it closed the descriptor passes every check here,
+//! and so does one that told libseat nothing. The call releases the device with the session daemon,
+//! and logind stats the descriptor to find which device that is, so the order shows there. A call
+//! that never happened leaves the daemon holding one record per device. A program that closes and
+//! opens every input device on each terminal switch leaves one per device per switch. Both are read
+//! on hardware, by asking logind what the session still holds after several switches.
 //!
 //! **A device id apart from its descriptor.** noop answers the descriptor's own number as the id,
 //! as logind does, so code that gave libseat a descriptor where an id belongs works on both. The
@@ -46,12 +50,13 @@
 // unsafe calls, and both state what makes them sound where they are made.
 #![allow(unsafe_code)]
 
-use std::ffi::{OsStr, c_int};
-use std::os::fd::AsRawFd;
+use std::ffi::{OsStr, c_int, c_uint};
+use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::Instant;
-use std::{env, fs};
+use std::{env, fs, io};
 
 use zgui_seat::{ENABLE_WITHIN, Error, Seat};
 
@@ -85,7 +90,7 @@ fn main() {
     // which is after this returns.
     unsafe { env::set_var(BACKEND, "noop") };
 
-    let checks: [(&str, fn()); 15] = [
+    let checks: [(&str, fn()); 16] = [
         (
             "a_seat_opens_and_enables_inside_the_bound",
             a_seat_opens_and_enables_inside_the_bound,
@@ -129,6 +134,10 @@ fn main() {
             dropping_a_device_gives_its_descriptor_back,
         ),
         (
+            "a_device_from_another_seat_is_refused",
+            a_device_from_another_seat_is_refused,
+        ),
+        (
             "a_switch_reaches_libseat_and_this_backend_refuses_it",
             a_switch_reaches_libseat_and_this_backend_refuses_it,
         ),
@@ -170,6 +179,24 @@ fn is_installed(soname: &str) -> bool {
     // is libseat, which does no work of its own at load time, and below it sit the C library and
     // libsystemd. The handle is dropped straight away.
     unsafe { libloading::Library::new(soname) }.is_ok()
+}
+
+/// Opens libseat beside the handle the crate holds.
+///
+/// Both are one mapping. The loader answers the same object for the same name and counts the opens,
+/// so what is called through this reaches the library the seat was opened through, and the state
+/// libseat keeps for itself is the same state.
+///
+/// This is how a check asks libseat something the crate's own interface does not carry.
+fn libseat() -> libloading::Library {
+    for soname in INSTALLED_AS {
+        // SAFETY: the open [`is_installed`] makes, for the reason stated there.
+        if let Ok(library) = unsafe { libloading::Library::new(soname) } {
+            return library;
+        }
+    }
+
+    panic!("the checks run because libseat is installed, so it opens here as well")
 }
 
 /// Opens a seat, and panics with what refused it.
@@ -329,12 +356,6 @@ fn a_device_opens_and_goes_back_through_the_seat() {
         panic!("`{DEVICE}` is on every machine and noop opens it directly: {error}")
     });
 
-    assert!(
-        device.id() >= 0,
-        "libseat answered an id for the device: {}",
-        device.id()
-    );
-
     // Copying a descriptor is refused for one that is closed, so this says the number names
     // something open rather than merely being a plausible number.
     device
@@ -351,7 +372,6 @@ fn a_device_opens_and_goes_back_through_the_seat() {
 /// Which device is the first thing a person asks, so the path is asserted in the value and in the
 /// line a report prints.
 fn a_path_nothing_has_is_refused() {
-    println!("noop: a libseat log line about a device it could not open belongs to this check");
     let seat = open();
 
     let error = seat
@@ -394,11 +414,14 @@ fn a_path_holding_a_zero_byte_is_refused() {
     }
 }
 
-/// The same path twice gives two devices.
+/// The same path twice gives two devices, each with a descriptor of its own.
 ///
 /// A resume depends on this: every input device is closed and opened again on a terminal switch,
 /// and the descriptor that comes back has to be a new one. An `open` that answered the same
 /// descriptor twice would hand a revoked device back.
+///
+/// Two ids libseat knows apart is a different fact, and this backend cannot show it: noop answers
+/// the descriptor's own number as the id, so two ids here are two descriptors said again.
 fn the_same_path_twice_gives_two_devices() {
     let seat = open();
 
@@ -413,11 +436,6 @@ fn the_same_path_twice_gives_two_devices() {
         first.descriptor().as_raw_fd(),
         second.descriptor().as_raw_fd(),
         "two opens of one path are two descriptors"
-    );
-    assert_ne!(
-        first.id(),
-        second.id(),
-        "and two devices libseat knows apart"
     );
 
     seat.close_device(first)
@@ -485,19 +503,59 @@ fn dropping_a_device_gives_its_descriptor_back() {
     );
 }
 
+/// A device one seat opened is refused by another.
+///
+/// A device id belongs to the seat that answered it. So a seat handed another seat's device would
+/// release one of its own, or none, and on logind it would stat a descriptor it never took and ask
+/// the wrong session to release what that names, which leaves the device the other seat holds
+/// unreleasable. The seats are told apart here, before libseat is asked anything.
+///
+/// The descriptor goes back all the same, because the call takes the device and this is its last
+/// owner.
+fn a_device_from_another_seat_is_refused() {
+    let first = open();
+    let second = open();
+    let before = open_descriptors();
+
+    let device = first
+        .open_device(Path::new(DEVICE))
+        .unwrap_or_else(|error| panic!("`{DEVICE}` opens: {error}"));
+
+    match second
+        .close_device(device)
+        .expect_err("the second seat never opened this device")
+    {
+        Error::OtherSeat { .. } => {}
+        other => panic!("a device from another seat is reported as one: {other}"),
+    }
+
+    assert_eq!(
+        open_descriptors(),
+        before,
+        "the device was taken, so its descriptor went back"
+    );
+}
+
 /// The switch reaches libseat, and this backend refuses it.
 ///
 /// noop has no session to switch to and answers `-1` for every terminal, so a refusal is what is
-/// true here. It is still the only cover the call has, and what it asserts is that the refusal
-/// names the terminal that was asked for.
+/// true here. A refusal on its own says nothing about the call: a `switch` that never reached
+/// libseat and refused on its own answers the same value, and every assertion about that value
+/// holds for it.
 ///
-/// noop sets no `errno` on this path, so the number is not asserted.
+/// So libseat's own log is read. noop's `switch_session` writes one line to it before it answers,
+/// and [`while_libseat_reports`] collects that line. A line that arrived while the switch was being
+/// made says the call reached libseat. The words are libseat's own and are left unasserted; that
+/// there are words is the check.
+///
+/// noop sets no `errno` on this path, so the number is not asserted. The number a caller reads is
+/// whatever an earlier call left, and [`Error::Switch`] says so.
 fn a_switch_reaches_libseat_and_this_backend_refuses_it() {
-    println!("noop: a libseat log line about a switch it cannot make belongs to this check");
     let seat = open();
 
-    match seat
-        .switch(1)
+    let (answer, said) = while_libseat_reports(|| seat.switch(1));
+
+    match answer
         .expect_err("the noop backend has no session to switch to, and refuses every switch")
     {
         Error::Switch { terminal, .. } => {
@@ -508,13 +566,65 @@ fn a_switch_reaches_libseat_and_this_backend_refuses_it() {
         }
         other => panic!("a refused switch is reported as one: {other}"),
     }
+
+    assert!(
+        !said.is_empty(),
+        "libseat reported the switch it could not make, and that report is what says the call \
+         reached it"
+    );
+}
+
+/// Runs `work` with libseat's own log turned on, and answers what libseat wrote.
+///
+/// libseat reports what it refused through a log of its own. That log is silent until a caller asks
+/// for a level, and it goes to standard error, so both are taken over here for the length of the
+/// call. Nothing else writes to standard error inside it, so what comes back is libseat's.
+///
+/// The level and standard error are put back before anything is asserted, for the reason
+/// [`a_refused_dispatch_is_reported`] puts the descriptor limit back.
+fn while_libseat_reports<T>(work: impl FnOnce() -> T) -> (T, String) {
+    let library = libseat();
+
+    // SAFETY: `libseat_set_log_level` is declared in `libseat.h` as taking the log level and
+    // answering nothing. A C enum whose values fit in an `int` crosses as an `unsigned int`. The
+    // address points inside the library above, which is held until this function returns.
+    let set_log_level: libloading::Symbol<'_, unsafe extern "C" fn(c_uint)> =
+        unsafe { library.get(b"libseat_set_log_level") }
+            .unwrap_or_else(|error| panic!("libseat carries `libseat_set_log_level`: {error}"));
+
+    let (mut reader, writer) = io::pipe()
+        .unwrap_or_else(|error| panic!("a pipe is what libseat is read back through: {error}"));
+    let standard_error = io::stderr().as_raw_fd();
+    let saved = duplicate(standard_error);
+
+    point(standard_error, writer.as_raw_fd());
+    // SAFETY: as above.
+    unsafe { set_log_level(LOG_ERROR) };
+
+    let answer = work();
+
+    // SAFETY: as above.
+    unsafe { set_log_level(LOG_SILENT) };
+    point(standard_error, saved.as_raw_fd());
+
+    // The last copy of the writing end. Reading below stops where it is closed, so it is closed
+    // first.
+    drop(writer);
+
+    let mut said = String::new();
+    reader
+        .read_to_string(&mut said)
+        .unwrap_or_else(|error| panic!("the pipe is read to its end: {error}"));
+
+    (answer, said)
 }
 
 /// A terminal number wider than the C interface holds is refused before the call.
 ///
-/// libseat takes a session number as a C `int`. A `u32` that does not fit arrives there as a
-/// negative number, which every backend refuses — and one that fit a *different* terminal would
-/// switch to that one. So the number is checked here.
+/// libseat takes a session number as a C `int`. Every `u32` that does not fit arrives there as a
+/// negative number, and every backend refuses one, so the switch fails either way. What the check
+/// adds is where it fails: the number is named as the number that was asked for, and libseat is
+/// asked nothing.
 fn a_terminal_wider_than_the_interface_is_refused() {
     let seat = open();
 
@@ -534,8 +644,6 @@ fn a_terminal_wider_than_the_interface_is_refused() {
 /// This is the path a session that already has a controlling client takes, and it is where the
 /// state the callbacks reach through is given back although no callback ever ran.
 fn a_backend_nothing_has_is_refused() {
-    println!("noop: a libseat log line about a missing backend belongs to this check");
-
     // SAFETY: this binary has made no thread, so nothing reads the environment while it is written.
     // See the comment in `main`.
     unsafe { env::set_var(BACKEND, "there-is-no-such-backend") };
@@ -568,6 +676,50 @@ const EINVAL: i32 = 22;
 ///
 /// One of the same generic numbers. See [`EINVAL`].
 const ENOENT: i32 = 2;
+
+/// libseat's `LIBSEAT_LOG_LEVEL_SILENT`, which is where its log starts and where it is put back.
+const LOG_SILENT: c_uint = 0;
+
+/// libseat's `LIBSEAT_LOG_LEVEL_ERROR`, which is the level a refusal is reported at.
+const LOG_ERROR: c_uint = 1;
+
+// The C library's own, for taking standard error over while libseat writes to it. Declared here for
+// the same reason libseat's interface is declared by hand: what crosses is stated once, beside the
+// code that calls it.
+unsafe extern "C" {
+    /// `dup(2)`. Answers a second descriptor for what `descriptor` names, or `-1`.
+    fn dup(descriptor: c_int) -> c_int;
+    /// `dup2(2)`. Closes `number`, makes it name what `descriptor` names, and answers `number`, or
+    /// `-1`.
+    fn dup2(descriptor: c_int, number: c_int) -> c_int;
+}
+
+/// Returns a second descriptor for what `descriptor` names, owned here.
+fn duplicate(descriptor: c_int) -> OwnedFd {
+    // SAFETY: `dup` reads one open descriptor of this process and answers a new one for the same
+    // open file.
+    let answer = unsafe { dup(descriptor) };
+
+    assert!(answer >= 0, "a process copies its own descriptor");
+
+    // SAFETY: the system made this descriptor for this call and nothing else owns it. It is not
+    // `-1`, which the assertion above settled.
+    unsafe { OwnedFd::from_raw_fd(answer) }
+}
+
+/// Makes `number` name what `descriptor` names.
+///
+/// Whatever `number` named is closed by the call. Here it names standard error, and a copy of it is
+/// held for as long as it is pointed elsewhere.
+fn point(number: c_int, descriptor: c_int) {
+    // SAFETY: both are open descriptors of this process, and `dup2` reads two of those.
+    let answer = unsafe { dup2(descriptor, number) };
+
+    assert_eq!(
+        answer, number,
+        "a process points its own descriptor at another"
+    );
+}
 
 /// The C library's `struct rlimit`.
 ///
