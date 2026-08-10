@@ -231,30 +231,60 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
     assert_eq!(cache.reuse(&scene, &wider, painted(0),), Reuse::Encode);
 }
 
-/// A drawing paints one thing — a vector item — and a vector item is not in the operation log,
-/// so there is nothing for a replay to re-emit. Replaying one is a fragment that draws nothing
-/// into pixels the damage has already cleared.
+/// A drawing that stayed where it was replays, and the replay re-emits its vector item into the
+/// frame's pass planning. A drawing that moved is encoded: its curves are placed in device
+/// coordinates and shared by pointer with the rasteriser's encoding cache, so translating them
+/// would mean copying the path.
 #[test]
-fn a_drawing_is_encoded_however_still_it_stayed() {
+fn a_still_drawing_replays_its_vector_item_and_a_moved_one_is_encoded() {
+    use std::sync::Arc;
+
     let mut cache = PaintCache::new();
     let mut scene = scene();
     let mut mark = fragment(0.0, 0.0);
     mark.kind = FragmentKind::Vector;
+    let mut path = zgui_scene::kurbo::BezPath::new();
+    path.move_to((0.0, 0.0));
+    path.line_to((10.0, 10.0));
+    path.line_to((0.0, 10.0));
+    path.close_path();
+    let item = zgui_scene::VectorItem::filled(
+        zgui_scene::VectorId(1),
+        Arc::new(path),
+        zgui_scene::PaintRef::NONE,
+    );
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    scene.push_vector(item);
+    let chunk = scene.take_chunk_capture();
+    assert_eq!(chunk.vectors.len(), 1);
     cache.encoded(
         &mut scene,
         &mark,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            chunk,
             resources: &[],
         },
         &NoResources,
     );
     scene.begin_frame(Size::new(256, 256));
+
+    let reuse = cache.reuse(&scene, &mark, painted(0));
     assert_eq!(
-        cache.reuse(&scene, &mark, painted(0)),
+        reuse,
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
+        "a still drawing replays"
+    );
+    let range = scene.replay_chunk(cache.prims(mark.key).expect("recorded"), Size::default());
+    assert_eq!(range.len(), 1, "and the replay re-emits the vector item");
+    assert_eq!(scene.primitives.vectors.len(), 1);
+
+    let mut moved = fragment(0.0, 40.0);
+    moved.kind = FragmentKind::Vector;
+    assert_eq!(
+        cache.reuse(&scene, &moved, painted(0)),
         Reuse::Encode,
-        "a replayed drawing emits no vector item and the icon vanishes"
+        "a moved drawing is encoded at its new position"
     );
 }
 

@@ -21,20 +21,15 @@
 //! perfectly damaged rectangle. A counter going from `1` to `7` is the whole failure: same width,
 //! same line, same everything the geometry can see, and the old digit back on the screen.
 //!
-//! # Why a chunk with a vector item in it is not replayed where it paints
+//! # Why a chunk with a vector item in it replays only in place
 //!
 //! A record's chunk is captured at the pushes, before the clip cull, so it is the fragment's
 //! complete painting: a row arriving at the edge of a scroll port replays the whole of itself and
-//! the cull admits the part that has come into view. One thing a replay still cannot reproduce is
-//! a **vector item** — vector content is planned into rasterisation passes rather than re-emitted
-//! as instances, and the replay skips it. A line of text drawn as outlines rather than as
-//! coverage tiles — a display-size heading, a gradient-filled one — would therefore replay
-//! without its letters.
-//!
-//! [`Record::whole`] is the bit that answers it. A record that is not whole is encoded again
-//! everywhere the fragment paints anything — which is everywhere its ink reaches the clip.
-//! Outside the clip it may stand: a drawing far below a scroll port paints nothing wherever it is
-//! put, so replaying nothing is the whole of its painting there.
+//! the cull admits the part that has come into view. A **vector item** replays too — re-pushed
+//! into the frame's pass planning exactly as a fresh emission pushes it — with one restriction:
+//! only where the fragment has not moved. Its curves are placed in device coordinates and shared
+//! by pointer with the rasteriser's encoding cache, so translating them means copying the path,
+//! and a moved drawing is encoded at its new position instead.
 //!
 //! # The invariant a replay depends on
 //!
@@ -157,13 +152,6 @@ pub struct Record {
     pub painted: Painted,
     /// The border box it was painted at.
     pub border_box: Rect<DevicePx, Device>,
-    /// Whether replaying the chunk draws everything the fragment drew when it was recorded.
-    ///
-    /// The chunk is captured before the cull, so a refused primitive no longer cuts it — the one
-    /// thing a replay still cannot reproduce is a vector item, which is planned into a
-    /// rasterisation pass rather than re-emitted. False exactly when the chunk holds one, and
-    /// then the record may only stand in for the fragment where the fragment paints nothing.
-    pub whole: bool,
     /// What the clip resolved to when the range was recorded.
     pub clip_hash: Option<u64>,
     /// The frame this record was last selected in — encoded or replayed.
@@ -207,22 +195,6 @@ pub enum Reuse {
     /// The offset is zero for a fragment that did not move at all, which is the commonest case and
     /// is still a replay: what it saves is the encoding, not the movement.
     Replay(Size<DevicePx, Device>),
-}
-
-/// Whether a fragment of this kind paints anything a recorded range can carry.
-///
-/// Everything a replay re-emits comes out of the operation log, and vector items are not in it:
-/// they are planned into rasterisation passes out of a list the scene rebuilds from nothing every
-/// frame. A drawing paints *nothing but* a vector item, so replaying one re-emits an empty range —
-/// while the damage that reached the fragment has already cleared the pixels it drew last time.
-/// The icon vanishes, and because the following frames no longer damage the hole it stays vanished
-/// until something repaints the whole surface.
-///
-/// So a drawing is encoded every frame that reaches it. That costs a push per outline and no
-/// re-placing at all: the curves are memoised by node and the same shared allocation is handed
-/// back, which is what a rasteriser's encoding cache recognises.
-fn replayable(kind: FragmentKind) -> bool {
-    !matches!(kind, FragmentKind::Vector)
 }
 
 /// Every fragment's last painting, kept across frames.
@@ -412,9 +384,6 @@ impl PaintCache {
         if record.kind != fragment.kind {
             return Reuse::Encode;
         }
-        if !replayable(fragment.kind) {
-            return Reuse::Encode;
-        }
         if record.border_box.size != fragment.border_box.size {
             return Reuse::Encode;
         }
@@ -425,20 +394,11 @@ impl PaintCache {
         if record.clip_hash != scene.clips.content_hash(painted.clip) {
             return Reuse::Encode;
         }
-        // A vector-bearing record may still stand in for a fragment that is *entirely* outside
-        // the clip: a drawing below a scroll port paints nothing down there, however far it
-        // moves. What must not happen is replaying it — minus the curves the replay skips — the
-        // moment any part of the fragment reaches the clip.
-        //
-        // The *local* ink, against the clip as it was interned, because that is the comparison
-        // the insert cull makes: a primitive is culled on its own recorded bounds, which inside a
-        // transformed subtree are that subtree's coordinates, and the clip imposed there is
-        // measured in the same coordinates. The device-space ink would cross spaces with the clip
-        // and answer about pixels neither of them means.
-        if !record.whole
-            && fragment
-                .local_ink
-                .intersects(scene.clips.bounds(painted.clip))
+        // A drawing's curves are placed in device coordinates and shared with the rasteriser's
+        // encoding cache, so a chunk holding a vector item replays only in place — a moved
+        // drawing is encoded at its new position. Everything else in the chunk translates.
+        if !record.prims.vectors.is_empty()
+            && record.border_box.origin != fragment.border_box.origin
         {
             return Reuse::Encode;
         }
@@ -459,10 +419,6 @@ impl PaintCache {
 
     /// Records what a fragment painted this frame, and counts it as encoded.
     ///
-    /// `whole` says whether replaying the range would draw what the encoding drew. A caller
-    /// answers it by reading [`Scene::unreplayable`] either side of the encoding, because the scene
-    /// is the only place a refused primitive or a skipped one is known about.
-    ///
     /// The record takes one hold on each distinct key `encoding` names and gives back whatever the
     /// record it replaced was holding. The two happen in that order, so a fragment re-encoding the
     /// letters it already had never lets its own tiles reach a refcount of zero in between.
@@ -479,9 +435,6 @@ impl PaintCache {
         self.seen.push(fragment.key);
         self.selections += 1;
         let Encoding { chunk, resources } = encoding;
-        // A chunk is complete except for its vector items, which a replay skips until they are
-        // planned from the chunk. A chunk with none re-emits everything it captured.
-        let whole = chunk.vectors.is_empty();
         let mut held: Vec<AtlasKey> = resources.to_vec();
         held.sort_unstable();
         held.dedup();
@@ -525,7 +478,6 @@ impl PaintCache {
                 revision: self.next_revision,
                 kind: fragment.kind,
                 painted,
-                whole,
                 border_box: fragment.border_box,
                 clip_hash: scene.clips.content_hash(painted.clip),
                 last_selected: self.epoch,
@@ -540,9 +492,9 @@ impl PaintCache {
 
     /// Records that a fragment's chunk was replayed, and counts it as translated.
     ///
-    /// The replay changes nothing about the record's completeness: the chunk was captured before
-    /// the cull, so what a position's clip refuses of it is refused again at the next selection
-    /// rather than lost. [`Record::whole`] moves only at an encoding.
+    /// The replay changes nothing about the record: the chunk was captured before the cull, so
+    /// what a position's clip refuses of it is refused again at the next selection rather than
+    /// lost.
     pub fn replayed(&mut self, fragment: &Fragment) {
         counter::bump(Counter::ChunksTranslated);
         self.seen.push(fragment.key);

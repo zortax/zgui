@@ -575,13 +575,11 @@ fn a_drawing_with_no_view_box_is_drawn_in_css_pixels_from_its_content_box() {
 /// A drawing nothing changed about is still drawn on the frame after, and on every frame after
 /// that.
 ///
-/// This is the one thing the replay cache cannot do for a drawing. An unchanged fragment replays
-/// the range of the operation log its primitives occupied last frame — and a drawing's primitives
-/// are not in that log. A vector item is planned into a rasterisation pass instead, out of a list
-/// the scene rebuilds every frame, so a replayed range re-emits nothing at all for it while the
-/// damage that reached the fragment has already cleared its pixels. The icon disappears, and
-/// because the following frames no longer damage the hole it stays gone until something repaints
-/// the whole surface.
+/// The frames after the first replay the drawing's chunk, and the replay re-pushes its vector
+/// item into the pass planning the scene rebuilds every frame. A replay that skipped it would
+/// re-emit nothing while the damage that reached the fragment had already cleared its pixels:
+/// the icon disappears, and because the following frames no longer damage the hole it stays gone
+/// until something repaints the whole surface. This is the regression this test exists to catch.
 #[test]
 fn an_unchanged_drawing_is_drawn_again_on_every_frame_that_reaches_it() {
     let mut harness = Harness::new(tree(), CSS);

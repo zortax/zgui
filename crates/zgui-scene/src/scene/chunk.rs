@@ -66,8 +66,7 @@ impl TableHolds {
 /// The primitives one encoding pushed, one array per kind, with the order they were pushed in.
 ///
 /// Each entry of [`ChunkPrims::ops`] carries an index into this chunk's own array for its kind,
-/// so the chunk means the same thing on every frame it is replayed. Vector items have an array
-/// here for the capture that arrives with vector replay; until then it stays empty.
+/// so the chunk means the same thing on every frame it is replayed.
 #[derive(Clone, Debug, Default)]
 pub struct ChunkPrims {
     /// What was pushed, in order. Indices name positions in the arrays below.
@@ -282,10 +281,12 @@ impl Scene {
     /// Re-emits a chunk's operations, offset by `by`, and returns the range they occupy in this
     /// frame's log.
     ///
-    /// This is [`Scene::replay`] reading a caller-owned chunk instead of the previous frame's
-    /// log, and everything that holds there holds here: draw order is re-derived through the
-    /// ordinary push path, the paints travel in the instances and are re-anchored rather than
-    /// re-interned, and vector items are skipped.
+    /// Draw order is re-derived through the ordinary push path, the paints travel in the
+    /// instances and are re-anchored rather than re-interned, and a vector item is re-pushed into
+    /// this frame's pass planning exactly as a fresh emission pushes it. One restriction: a
+    /// vector item replays only where `by` is zero, because its curves are placed in device
+    /// coordinates and shared with the rasteriser's encoding cache — translating them would mean
+    /// copying the path. The caller encodes a moved drawing instead.
     pub fn replay_chunk(&mut self, chunk: &ChunkPrims, by: Size<DevicePx, Device>) -> Range<u32> {
         let start = self.ops.len() as u32;
         for (position, op) in chunk.ops.iter().enumerate() {
@@ -360,7 +361,21 @@ impl Scene {
                     backdrop.source = backdrop.source.translate(by);
                     self.push_backdrop(backdrop);
                 }
-                PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => {}
+                PrimitiveKind::Vector => {
+                    let Some(item) = chunk.vectors.get(index) else {
+                        continue;
+                    };
+                    debug_assert!(
+                        by.width.0 == 0.0 && by.height.0 == 0.0,
+                        "a moved drawing is encoded, never translated: the caller's reuse \
+                         decision guarantees a vector item only replays in place"
+                    );
+                    if by.width.0 != 0.0 || by.height.0 != 0.0 {
+                        continue;
+                    }
+                    self.push_vector(item.clone());
+                }
+                PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => {}
             }
             if self.checking && self.ops.len() > logged {
                 self.spaces[logged] = recorded;
