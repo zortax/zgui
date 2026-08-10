@@ -138,6 +138,16 @@ counters! {
     /// Cached primitive ranges reused by offsetting them rather than re-encoding them.
     ChunksTranslated => chunks_translated, Group::Skip { done: Counter::ChunksReencoded };
 
+    /// Paint records kept across a frame that did not visit their fragment.
+    ///
+    /// The retention owned chunks buy: a record survives culling, clean frames and invisibility,
+    /// and dies with its fragment. On a partial-damage frame this counts the document outside the
+    /// damage — records the old cache dropped and re-encoded on re-entry.
+    ChunksRetainedUnvisited => chunks_retained_unvisited, Group::BackendNeutral;
+
+    /// Fragment names handed to the paint cache as destroyed.
+    FragmentsRetired => fragments_retired, Group::BackendNeutral;
+
     /// Primitives added to the scene.
     PrimitivesEmitted => primitives_emitted, Group::BackendNeutral;
 

@@ -315,12 +315,44 @@ fn a_painting_the_clip_cut_short_is_encoded_again_where_the_fragment_paints() {
 }
 
 #[test]
-fn a_fragment_nobody_visited_loses_its_record() {
+fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
     let mut cache = PaintCache::new();
-    let scene = scene();
+    let mut scene = scene();
+    let away = fragment(0.0, 0.0);
     cache.encoded(
         &scene,
-        &fragment(0.0, 0.0),
+        &away,
+        painted(0),
+        Encoding {
+            ops: 0..0,
+            whole: true,
+            resources: &[],
+        },
+        &NoResources,
+    );
+    // Many frames pass in which nothing visits the fragment — scrolled out, culled, or simply
+    // outside every damage rectangle. The record owns its primitives, so it stands.
+    for _ in 0..3 {
+        cache.begin_frame();
+        cache.end_frame();
+        scene.begin_frame(Size::new(256, 256));
+    }
+    assert_eq!(cache.len(), 1);
+    assert_ne!(
+        cache.reuse(&scene, &away, painted(0)),
+        Reuse::Encode,
+        "a record kept across unvisited frames replays on return"
+    );
+}
+
+#[test]
+fn a_retired_fragment_loses_its_record() {
+    let mut cache = PaintCache::new();
+    let scene = scene();
+    let gone = fragment(0.0, 0.0);
+    cache.encoded(
+        &scene,
+        &gone,
         painted(0),
         Encoding {
             ops: 0..0,
@@ -330,13 +362,11 @@ fn a_fragment_nobody_visited_loses_its_record() {
         &NoResources,
     );
     assert_eq!(cache.len(), 1);
-    cache.begin_frame();
-    cache.end_frame(&NoResources);
-    assert_eq!(
-        cache.len(),
-        0,
-        "a record for a fragment that is gone would be replayed"
-    );
+    cache.retire(&[gone.key], &NoResources);
+    assert_eq!(cache.len(), 0);
+    // Retiring a name with no record is the ordinary case and costs nothing.
+    cache.retire(&[gone.key], &NoResources);
+    assert_eq!(cache.reuse(&scene, &gone, painted(0)), Reuse::Encode);
 }
 
 /// A coordinate system whose slot has been handed to an unrelated box is not the one a record was

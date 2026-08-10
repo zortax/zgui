@@ -1096,6 +1096,10 @@ impl Window {
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
         self.content.begin_frame();
+        // Every fragment destroyed since the last painted frame, drained here — after all of this
+        // frame's layout passes, before the emit walk — so the paint cache's records die exactly
+        // when their fragments do. The release itself waits for the content borrow below.
+        let retired = self.layout.borrow_mut().drain_retired_paint();
         // Read before the sink is borrowed, because what the device can do changes what is
         // *emitted* and not only how it is drawn.
         let capabilities = self.renderer.capabilities();
@@ -1141,6 +1145,9 @@ impl Window {
             let content = self
                 .content
                 .frame(&layout, &self.text, self.raster.as_ref());
+            if !retired.is_empty() {
+                self.painter.retire(&retired, &content);
+            }
             // The device pixel ratio and what the device can do are both properties of this
             // window, and both change what is emitted: the first decides where a snapped edge
             // lands, the second whether text may be antialiased per colour channel. Emitting at a

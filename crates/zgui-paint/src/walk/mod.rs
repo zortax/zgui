@@ -249,8 +249,9 @@ impl Painter {
 
     /// Discards everything held between frames.
     ///
-    /// A device that was lost, a scene that was rebuilt from nothing, a change of scale: any of them
-    /// makes a recorded range refer to a log that no longer exists.
+    /// Legal only beside emptying the caches the records hold into — a lost device, a forgotten
+    /// window. The records' atlas holds die with the atlas rather than being released one by one,
+    /// and the next frame must redraw the whole surface, because nothing recorded survives.
     pub fn reset(&mut self) {
         self.styles.clear();
         self.cache.clear();
@@ -291,8 +292,17 @@ impl Painter {
         };
         stacking::walk(input.store, root, &mut pass);
         let report = pass.report;
-        self.cache.end_frame(input.resources);
+        self.cache.end_frame();
         report
+    }
+
+    /// Drops the records of fragments the layout store destroyed, releasing what they held.
+    ///
+    /// Called once per painted frame, before [`Painter::emit`], with the drained retirement list.
+    /// This is the only thing that removes a record: a fragment's painting lives exactly as long
+    /// as the fragment.
+    pub fn retire(&mut self, keys: &[zgui_layout::FragKey], owner: &dyn ResourceOwner) {
+        self.cache.retire(keys, owner);
     }
 }
 

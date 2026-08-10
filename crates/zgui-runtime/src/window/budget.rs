@@ -132,6 +132,10 @@ impl Window {
     /// last frame it drew while holding nothing any of it came from.
     pub fn forget_caches(&mut self) {
         manager::forget_all(self);
+        // The paint records go with the atlas they hold tiles in. A record kept past this point
+        // would replay instances naming rectangles the atlas has already handed back — and its
+        // holds died with the atlas, so clearing is the only correct spelling here.
+        self.painter.reset();
         self.embed.content_forgotten();
         self.damage = zgui_bits::DamageSet::full();
         self.request_frame();

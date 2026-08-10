@@ -47,7 +47,7 @@ pub(crate) struct Outcome {
     pub(crate) document: String,
     /// Every banded number it reports.
     pub(crate) measurements: Vec<Measurement>,
-    /// The three counters the scene-rebuild question is decided on.
+    /// The counters the scene-rebuild question is decided on.
     pub(crate) counters: Escalation,
     /// What this scenario found that no band expresses.
     ///
@@ -77,6 +77,10 @@ pub(crate) struct Escalation {
     pub(crate) primitives_culled: u64,
     /// How many insertions the draw-order tree took.
     pub(crate) bounds_tree_inserts: u64,
+    /// How many recorded paintings were encoded from scratch.
+    pub(crate) chunks_reencoded: u64,
+    /// How many recorded paintings were replayed instead.
+    pub(crate) chunks_translated: u64,
 }
 
 /// The stray work a translation frame is not allowed to do.
@@ -96,6 +100,8 @@ pub(crate) fn counters(moved: &zgui_profile::Counters) -> Escalation {
         primitives_emitted: moved.primitives_emitted,
         primitives_culled: moved.primitives_culled,
         bounds_tree_inserts: moved.bounds_tree_inserts,
+        chunks_reencoded: moved.chunks_reencoded,
+        chunks_translated: moved.chunks_translated,
     }
 }
 
@@ -184,11 +190,13 @@ pub(crate) fn print(outcome: &Outcome) {
         println!("NOTE\t{}\t{note}", outcome.scenario);
     }
     println!(
-        "ESCALATION\t{}\t{}\t{}\t{}",
+        "ESCALATION\t{}\t{}\t{}\t{}\t{}\t{}",
         outcome.scenario,
         outcome.counters.primitives_emitted,
         outcome.counters.primitives_culled,
         outcome.counters.bounds_tree_inserts,
+        outcome.counters.chunks_reencoded,
+        outcome.counters.chunks_translated,
     );
     for measurement in &outcome.measurements {
         println!("  {measurement}");

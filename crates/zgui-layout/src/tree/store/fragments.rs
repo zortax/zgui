@@ -225,6 +225,7 @@ impl LayoutStore {
         for key in dropped {
             self.forget_read_extent(key);
             self.retired.push(key);
+            self.retired_paint.push(key);
             self.fragments.remove(key);
             if let Some(node) = node {
                 self.fragments_of_node
@@ -263,9 +264,20 @@ impl LayoutStore {
     /// Takes the fragments destroyed since the last call, leaving the list empty.
     ///
     /// Drained rather than read so that each destroyed name is handed out exactly once: a second
-    /// reader would unregister a name a third party has since reused.
+    /// reader would unregister a name a third party has since reused. The paint stage has a list
+    /// of the same names of its own — [`LayoutStore::drain_retired_paint`] — for the same reason.
     pub(crate) fn drain_retired(&mut self) -> Vec<FragKey> {
         core::mem::take(&mut self.retired)
+    }
+
+    /// Takes the fragments destroyed since the paint stage last asked, leaving the list empty.
+    ///
+    /// The paint cache keeps a record per fragment for as long as the fragment exists, so this is
+    /// what tells it a name is gone. Drained once per painted frame, before the emit walk; a frame
+    /// that never paints leaves the list to accumulate, which costs late release of what the
+    /// records hold and can never resurrect a name — fragment keys are generational.
+    pub fn drain_retired_paint(&mut self) -> Vec<FragKey> {
+        core::mem::take(&mut self.retired_paint)
     }
 
     /// Takes a fragment that is about to cease to exist out of the read-extent registry.

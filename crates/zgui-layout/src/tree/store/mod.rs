@@ -103,6 +103,14 @@ pub struct LayoutStore {
     /// a fragment is actually destroyed, is what lets that walk take the names out of the hit index
     /// whether or not it ever visited the box they belonged to.
     retired: Vec<FragKey>,
+    /// The fragments destroyed since the paint stage drained this list.
+    ///
+    /// The same names as [`LayoutStore::retired`], recorded twice because each drained list may
+    /// have exactly one consumer: the fragment diff drains `retired` into the hit index, and the
+    /// runtime drains this one into the paint cache, whose records live until the fragment does.
+    /// The two run at different times — the diff inside every layout pass, the paint drain once
+    /// before the emit walk — so a shared list would hand each name to whichever ran first.
+    retired_paint: Vec<FragKey>,
     /// The boxes taken out of the tree since the last pass drained this list.
     ///
     /// Recorded for the same reason the fragments are, and read by whoever holds something *named
@@ -156,6 +164,7 @@ impl LayoutStore {
             unused_paragraphs: Vec::new(),
             active_paragraphs: 0,
             retired: Vec::new(),
+            retired_paint: Vec::new(),
             retired_boxes: Vec::new(),
             read_extents: Vec::new(),
             flattenings: 0,

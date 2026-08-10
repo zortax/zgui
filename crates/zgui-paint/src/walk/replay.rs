@@ -282,27 +282,29 @@ impl PaintCache {
         self.seen.clear();
     }
 
-    /// Drops the record of every fragment this frame did not visit, releasing what it held.
+    /// Ends the frame, counting the records the frame kept without visiting their fragment.
     ///
-    /// A fragment nobody visited is one that was culled or has ceased to exist. The records own
-    /// their primitives, so keeping them across unvisited frames is safe — this drop is retention
-    /// policy, kept until fragment-retirement events tell the cache which names are gone. A
-    /// destroyed fragment's key is generational, so a kept record can never be replayed for a
-    /// successor in its slot.
-    pub fn end_frame(&mut self, owner: &dyn ResourceOwner) {
-        if self.seen.len() == self.records.len() {
-            return;
-        }
-        let seen: rustc_hash::FxHashSet<FragKey> = self.seen.iter().copied().collect();
-        let mut dropped = Vec::new();
-        self.records.retain(|key, record| {
-            if seen.contains(key) {
-                return true;
+    /// A record survives culling, clean frames and invisibility: it owns its primitives, and its
+    /// atlas and table indices stay valid because those caches release nothing a record holds. It
+    /// dies with its fragment, through [`PaintCache::retire`] — a destroyed fragment's key is
+    /// generational, so a kept record can never be replayed for a successor in its slot.
+    pub fn end_frame(&mut self) {
+        let unvisited = self.records.len().saturating_sub(self.seen.len());
+        counter::add(Counter::ChunksRetainedUnvisited, unvisited as u64);
+    }
+
+    /// Drops the records of fragments that ceased to exist, releasing what they held.
+    ///
+    /// `keys` is the layout store's account of every fragment destroyed since the last drain. A
+    /// key with no record is the ordinary case — most fragments die without ever being painted —
+    /// and costs one lookup.
+    pub fn retire(&mut self, keys: &[FragKey], owner: &dyn ResourceOwner) {
+        counter::add(Counter::FragmentsRetired, keys.len() as u64);
+        for key in keys {
+            if let Some(record) = self.records.remove(key) {
+                release(owner, &record.resources);
             }
-            dropped.append(&mut record.resources);
-            false
-        });
-        release(owner, &dropped);
+        }
     }
 
     /// What `fragment` costs this frame, given the style it lowers to now.
