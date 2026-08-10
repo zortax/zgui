@@ -49,6 +49,10 @@ impl Gpu {
     /// A GL adapter is asked for the downlevel limit set rather than its own, because its own is
     /// routinely more than a device created from it will grant.
     ///
+    /// # Errors
+    ///
+    /// Returns the message `request_device` refused with.
+    ///
     /// # Vulkan device extensions
     ///
     /// `extensions` names Vulkan device extensions to enable on top of the ones wgpu asks for. A
@@ -56,6 +60,11 @@ impl Gpu {
     /// them, and a device extension can be enabled only while the device is created, so the list
     /// has to arrive here. The empty slice is the ordinary request and takes the ordinary path,
     /// unchanged in every respect.
+    ///
+    /// Which names an exported image needs is the console backend's constant to state, and nothing
+    /// here counts them. wgpu-hal 29.0.4 enables `VK_KHR_external_memory_fd` and
+    /// `VK_EXT_external_memory_dma_buf` on any physical device that has them, so such a list adds
+    /// fewer names than it holds.
     ///
     /// The list is all-or-nothing. Where the adapter is Vulkan and its physical device has every
     /// name, the device is created through wgpu's hal with all of them enabled. Everything else —
@@ -66,10 +75,11 @@ impl Gpu {
     /// The list has to be **dependency-closed**: an extension that requires another one requires
     /// that name here too. Only the names given are checked against the physical device, and
     /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387` requires the list to hold every
-    /// extension a name in it requires. A driver that answers `VK_ERROR_EXTENSION_NOT_PRESENT`
-    /// reaches the same panic inside wgpu-hal that a missing name reaches. The names a dma-buf
-    /// image needs require core Vulkan 1.2 or one another: `VK_EXT_external_memory_dma_buf`
-    /// requires `VK_KHR_external_memory_fd`.
+    /// extension required by a name in it. A list that breaks the rule is undefined behaviour, and
+    /// a driver that answers `VK_ERROR_EXTENSION_NOT_PRESENT` reaches the same panic inside
+    /// wgpu-hal that a missing name reaches. In `vk.xml`, every name the console backend's
+    /// constant holds requires core Vulkan 1.2 or another name in that constant:
+    /// `VK_EXT_external_memory_dma_buf` requires `VK_KHR_external_memory_fd`.
     pub fn open(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
