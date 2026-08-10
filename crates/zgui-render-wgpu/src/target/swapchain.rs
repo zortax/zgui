@@ -71,9 +71,10 @@ impl Presentation {
     pub fn is_configured(&self) -> bool {
         match self {
             Self::Surface(surface) => surface.is_configured(),
-            // A texture is ready as soon as it exists, whoever created it: there is no swap chain
-            // to negotiate and nothing that waits for a device.
-            Self::Offscreen(_) | Self::Supplied(_) => true,
+            // A texture the renderer allocated is ready as soon as it exists: there is no swap
+            // chain to negotiate and nothing that waits for a device.
+            Self::Offscreen(_) => true,
+            Self::Supplied(supplied) => supplied.is_configured(),
         }
     }
 
@@ -82,30 +83,26 @@ impl Presentation {
     /// A surface's swap chain is not rebuilt here — [`Presentation::apply_pending`] does that, at
     /// the one point in a frame where the wait it costs overlaps work already done.
     ///
-    /// A supplied set is refused instead, because the renderer did not create those textures and
-    /// cannot create another. A display's mode holds still while a program runs, and the caller
-    /// that owns the buffers supplies a new set when it changes.
+    /// A supplied set is only told, because the renderer did not create those textures and cannot
+    /// create another. A display's mode holds still while a program runs, and the caller that owns
+    /// the buffers supplies a new set when it changes; until it does, the set and the target
+    /// disagree and [`Presentation::is_configured`] answers `false`.
     pub fn resize(&mut self, gpu: &Gpu, size: Size<i32, Device>) {
         match self {
             Self::Surface(surface) => surface.resize(size),
             Self::Offscreen(offscreen) => *offscreen = offscreen.resized(gpu, size),
-            Self::Supplied(supplied) => tracing::warn!(
-                width = size.width,
-                height = size.height,
-                supplied_width = supplied.size.width,
-                supplied_height = supplied.size.height,
-                "supplied textures cannot be resized; the caller supplies another set"
-            ),
+            Self::Supplied(supplied) => supplied.retarget(size),
         }
     }
 
     /// Rebuilds a surface's swap chain if one is owed.
-    ///
-    /// A texture owes nothing, supplied or standing in for a surface: nothing about either waits
-    /// for a device.
     pub fn apply_pending(&mut self, gpu: &Gpu) {
-        if let Self::Surface(surface) = self {
-            surface.apply(gpu);
+        match self {
+            Self::Surface(surface) => surface.apply(gpu),
+            // A texture owes nothing, supplied or standing in for a surface: nothing about either
+            // waits for a device. A supplied set that disagrees with the target is not waiting for
+            // this either — only the caller can end that, by supplying a set at the new extent.
+            Self::Offscreen(_) | Self::Supplied(_) => {}
         }
     }
 
@@ -146,8 +143,10 @@ impl Presentation {
 
     /// Notes that the surface asked to be reconfigured at the next opportunity.
     pub fn request_reconfigure(&mut self) {
-        if let Self::Surface(surface) = self {
-            surface.request_reconfigure();
+        match self {
+            Self::Surface(surface) => surface.request_reconfigure(),
+            // Only a swap chain has a configuration to rebuild.
+            Self::Offscreen(_) | Self::Supplied(_) => {}
         }
     }
 
@@ -162,8 +161,10 @@ impl Presentation {
 
     /// Marks the configuration as no longer describing the window.
     pub fn invalidate(&mut self) {
-        if let Self::Surface(surface) = self {
-            surface.invalidate();
+        match self {
+            Self::Surface(surface) => surface.invalidate(),
+            // Neither describes a window, so neither can stop describing one.
+            Self::Offscreen(_) | Self::Supplied(_) => {}
         }
     }
 }
@@ -282,57 +283,39 @@ pub struct Supplied {
     size: Size<i32, Device>,
     /// The formats derived from them.
     formats: Formats,
+    /// Whether the renderer was configured for an extent these textures do not have.
+    ///
+    /// The renderer cannot reallocate a supplied set, so this is a state a frame has to stop in
+    /// rather than one it can draw through. The copy that ends a frame covers the whole buffer
+    /// while reading a composed target of the other extent, which would put a correct corner, a
+    /// stretch and a black remainder on a screen, every frame, with nothing to say so.
+    diverged: bool,
 }
 
 impl Supplied {
-    /// A presentation over `textures`, of which the first is written next.
+    /// Creates a presentation over `textures`, of which the first is written next.
     ///
-    /// `size` is the extent the presentation reports, and it has to be the extent the textures
-    /// have. Every texture needs [`wgpu::TextureUsages::RENDER_ATTACHMENT`], because the copy that
-    /// ends a frame renders into a view of it, and `COPY_SRC` as well where a caller reads one
-    /// back.
-    ///
-    /// # Refusals
-    ///
-    /// Answers `None` for an empty set, for textures that disagree about their format or their
-    /// extent, and for a `size` that disagrees with them. One [`Formats`] and one extent are
-    /// derived for the whole set, so a set that disagrees would present the frames that land on
-    /// one texture correctly and corrupt the frames that land on another.
-    pub fn new(textures: Vec<wgpu::Texture>, size: Size<i32, Device>) -> Option<Self> {
+    /// The extent is the textures' own. Answers `None` when they cannot be presented to as one
+    /// set; [`Supplied::unusable`] says why, and this writes that reason to the log.
+    pub fn new(textures: Vec<wgpu::Texture>) -> Option<Self> {
+        if let Some(reason) = Self::unusable(&textures) {
+            tracing::error!(%reason, "the supplied textures were refused");
+            return None;
+        }
         let first = textures.first()?;
-        let format = first.format();
-        let extent = first.size();
-        let size = size.non_negative();
-        if extent.width != size.width as u32 || extent.height != size.height as u32 {
-            tracing::error!(
-                width = extent.width,
-                height = extent.height,
-                stated_width = size.width,
-                stated_height = size.height,
-                "the supplied textures are not the extent they were supplied at"
-            );
-            return None;
-        }
-        if let Some(odd) = textures
-            .iter()
-            .find(|texture| texture.format() != format || texture.size() != extent)
-        {
-            tracing::error!(
-                format = ?format,
-                odd_format = ?odd.format(),
-                extent = ?extent,
-                odd_extent = ?odd.size(),
-                "the supplied textures do not agree, so they cannot be presented to as one set"
-            );
-            return None;
-        }
+        let size = Size::new(first.width() as i32, first.height() as i32);
         // Derived from the textures themselves. The texture already answers its format, and a
         // second statement of it beside them is a way for the two to disagree.
         //
         // No mutable-format view is claimed, because a texture that exists cannot be given another
         // view format afterwards. An encoded texture therefore has its encode cancelled in the copy
         // that ends a frame, which asks nothing of the texture at all.
-        let formats = formats::choose(&[format], &[wgpu::CompositeAlphaMode::Opaque], true, false);
+        let formats = formats::choose(
+            &[first.format()],
+            &[wgpu::CompositeAlphaMode::Opaque],
+            true,
+            false,
+        );
         debug_assert!(
             formats.is_sound(),
             "an encoded supplied texture with nothing to cancel the encode: {formats:?}"
@@ -342,7 +325,86 @@ impl Supplied {
             selected: 0,
             size,
             formats,
+            diverged: false,
         })
+    }
+
+    /// Returns why `textures` cannot be presented to as one set, or `None` when they can.
+    ///
+    /// Every question here is answered by the handle itself, and every answer is otherwise fatal:
+    /// wgpu's default uncaptured-error handler panics, so a texture that cannot be a colour
+    /// attachment takes the program down inside the first frame's render pass. So the questions
+    /// are asked while the caller can still act on the answer.
+    ///
+    /// The set also has to agree with itself, because one [`Formats`] and one extent are derived
+    /// for all of it. A set that disagreed would present the frames landing on one texture
+    /// correctly and corrupt the frames landing on another.
+    ///
+    /// ```
+    /// use zgui_render_wgpu::target::swapchain::Supplied;
+    ///
+    /// // The one refusal that needs no device to reach: a set with nothing in it.
+    /// assert!(Supplied::unusable(&[]).is_some());
+    /// ```
+    pub fn unusable(textures: &[wgpu::Texture]) -> Option<String> {
+        let Some(first) = textures.first() else {
+            return Some("the set is empty, so it states no format and no extent".to_owned());
+        };
+        for (slot, texture) in textures.iter().enumerate() {
+            if !texture
+                .usage()
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+            {
+                return Some(format!(
+                    "texture {slot} is {:?} and a frame is copied into it, which needs \
+                     RENDER_ATTACHMENT",
+                    texture.usage()
+                ));
+            }
+            if texture.dimension() != wgpu::TextureDimension::D2 {
+                return Some(format!(
+                    "texture {slot} is {:?}; a frame is copied into a two-dimensional attachment",
+                    texture.dimension()
+                ));
+            }
+            if texture.mip_level_count() != 1 {
+                return Some(format!(
+                    "texture {slot} has {} mip levels; a frame is copied into one",
+                    texture.mip_level_count()
+                ));
+            }
+            if texture.sample_count() != 1 {
+                return Some(format!(
+                    "texture {slot} takes {} samples; the copy that ends a frame resolves nothing",
+                    texture.sample_count()
+                ));
+            }
+            if texture.depth_or_array_layers() != 1 {
+                return Some(format!(
+                    "texture {slot} has {} layers; a frame is copied into one",
+                    texture.depth_or_array_layers()
+                ));
+            }
+            if texture.format() != first.format() {
+                return Some(format!(
+                    "texture {slot} is {:?} where the first is {:?}; one set is presented in one \
+                     format",
+                    texture.format(),
+                    first.format()
+                ));
+            }
+            if texture.size() != first.size() {
+                return Some(format!(
+                    "texture {slot} is {}×{} where the first is {}×{}; one set is presented at one \
+                     extent",
+                    texture.width(),
+                    texture.height(),
+                    first.width(),
+                    first.height()
+                ));
+            }
+        }
+        None
     }
 
     /// Points at the texture the next frame is copied into.
@@ -351,17 +413,53 @@ impl Supplied {
     /// and never wraps, because a wrapped slot is a buffer the caller did not choose — and the
     /// caller is the only party that knows which buffers the display controller has finished with.
     /// Guessing one here would put a frame on a buffer for reasons of arithmetic.
+    #[must_use = "a refused slot leaves the frame going where it was already going"]
     pub fn select(&mut self, slot: usize) -> bool {
         if slot >= self.textures.len() {
             tracing::warn!(
                 slot,
                 supplied = self.textures.len(),
+                selected = self.selected,
                 "a slot outside the supplied textures was asked for, so the selection stands"
             );
             return false;
         }
         self.selected = slot;
         true
+    }
+
+    /// Records the extent the renderer was configured for.
+    ///
+    /// A supplied set cannot be reallocated, so a target of another extent puts the two out of
+    /// step rather than resizing anything. That is recorded rather than performed:
+    /// [`Supplied::is_configured`] answers `false` until the extents agree again, which stops
+    /// frames instead of stretching them across a buffer.
+    fn retarget(&mut self, size: Size<i32, Device>) {
+        let wanted = Size::new(size.width.max(1), size.height.max(1));
+        let diverged = wanted != self.size;
+        if diverged != self.diverged {
+            if diverged {
+                tracing::warn!(
+                    width = wanted.width,
+                    height = wanted.height,
+                    supplied_width = self.size.width,
+                    supplied_height = self.size.height,
+                    "the renderer was configured for an extent the supplied textures do not have; \
+                     frames stop until a set at that extent is supplied"
+                );
+            } else {
+                tracing::info!("the target agrees with the supplied textures again");
+            }
+        }
+        self.diverged = diverged;
+    }
+
+    /// Returns `true` while a frame may be copied into this set.
+    ///
+    /// `false` once the renderer has been configured for an extent these textures do not have. The
+    /// caller ends that by supplying a set at the new extent, or by configuring the target back.
+    pub fn is_configured(&self) -> bool {
+        !self.diverged
     }
 
     /// Returns which texture the next frame is copied into.
@@ -383,6 +481,14 @@ impl Supplied {
     /// Returns the texture the next frame is copied into, for a copy out of it.
     pub fn texture(&self) -> &wgpu::Texture {
         &self.textures[self.selected]
+    }
+
+    /// Returns the extent every texture in the set has.
+    ///
+    /// The textures' own, read off the first of them. A caller comparing this against what it
+    /// intends to present is comparing against the buffers themselves.
+    pub fn size(&self) -> Size<i32, Device> {
+        self.size
     }
 
     /// Returns the formats derived from the textures.
