@@ -1,15 +1,30 @@
 //! Refusals, and what each one carries.
 
 use std::fmt;
+use std::time::Duration;
 
 /// The result of a call into libseat.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// What a call into libseat refused with.
 ///
-/// The enumeration grows with the tasks that produce its cases: `cargo xtask ledger inert` fails a
-/// variant that is matched on and built nowhere, and it is right to. A case with a branch and no
-/// producer reads exactly like a working feature that is merely unused.
+/// Each case names what refused, and carries the `errno` the system left where there is one.
+///
+/// ```
+/// use zgui_seat::Error;
+///
+/// let refused = Error::Seat {
+///     call: "libseat_open_seat",
+///     errno: 16,
+/// };
+/// let message = refused.to_string();
+///
+/// assert!(message.contains("libseat_open_seat"));
+/// assert!(message.contains(&std::io::Error::from_raw_os_error(16).to_string()));
+/// ```
+// A case is added together with the code that builds it. `cargo xtask ledger inert` fails a variant
+// that is matched on and built nowhere, because such a case reads like a working feature that is
+// merely unused.
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum Error {
@@ -40,6 +55,34 @@ pub enum Error {
         /// What the loader said, or why the address it gave cannot be used.
         reason: String,
     },
+    /// libseat refused the seat.
+    ///
+    /// Every backend it was built with was tried and none opened one, or the one named by
+    /// `LIBSEAT_BACKEND` refused. A session that already has a controlling client is the ordinary
+    /// reason, and `errno` tells the reasons apart.
+    Seat {
+        /// The libseat call that refused.
+        call: &'static str,
+        /// `errno` at the refusal.
+        errno: i32,
+    },
+    /// The seat opened and never became usable.
+    ///
+    /// A backend can accept the call and hand back a seat it cannot enable: the builtin backend
+    /// with no terminal to take does exactly that. A seat that has not enabled inside the bound is
+    /// a seat this session did not get, and waiting longer answers nothing.
+    NeverEnabled {
+        /// How long the seat was waited for.
+        within: Duration,
+    },
+    /// libseat could not read its connection.
+    ///
+    /// Nothing more can be asked of the seat from here. A connection that failed carries no later
+    /// change, so the devices this session holds are unusable, and the seat is closed.
+    Dispatch {
+        /// `errno` at the failure.
+        errno: i32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -51,8 +94,24 @@ impl fmt::Display for Error {
                 tried.join(", ")
             ),
             Self::Symbol { name, reason } => write!(f, "libseat has no `{name}`: {reason}"),
+            Self::Seat { call, errno } => {
+                write!(f, "libseat refused the seat; `{call}`: {}", os(*errno))
+            }
+            Self::NeverEnabled { within } => write!(
+                f,
+                "the seat opened and did not enable within {within:?}, so it is a seat this \
+                 session did not get"
+            ),
+            Self::Dispatch { errno } => {
+                write!(f, "the seat could not be dispatched: {}", os(*errno))
+            }
         }
     }
+}
+
+/// Returns the system's description of one of its error numbers.
+fn os(errno: i32) -> std::io::Error {
+    std::io::Error::from_raw_os_error(errno)
 }
 
 impl std::error::Error for Error {}
@@ -78,6 +137,50 @@ mod tests {
             error.to_string(),
             "libseat could not be opened; tried libseat.so.1, libseat.so: cannot open shared \
              object file"
+        );
+    }
+
+    #[test]
+    fn a_refused_seat_names_the_call_and_the_number_the_system_gave() {
+        // The number tells a busy session from a missing daemon, and the call says where in the
+        // open it happened, so a person can read both out of the line.
+        let error = Error::Seat {
+            call: "libseat_open_seat",
+            errno: 16,
+        };
+
+        let message = error.to_string();
+        assert!(
+            message.starts_with("libseat refused the seat; `libseat_open_seat`: "),
+            "the call is named: {message}"
+        );
+        assert!(message.contains("16"), "and the number is there: {message}");
+    }
+
+    #[test]
+    fn a_seat_that_never_enabled_says_how_long_it_was_waited_for() {
+        let error = Error::NeverEnabled {
+            within: Duration::from_secs(2),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "the seat opened and did not enable within 2s, so it is a seat this session did not get"
+        );
+    }
+
+    #[test]
+    fn a_dispatch_failure_says_what_the_system_gave() {
+        let error = Error::Dispatch { errno: 107 };
+
+        let message = error.to_string();
+        assert!(
+            message.starts_with("the seat could not be dispatched: "),
+            "the failure is named: {message}"
+        );
+        assert!(
+            message.contains("107"),
+            "and the number is there: {message}"
         );
     }
 
