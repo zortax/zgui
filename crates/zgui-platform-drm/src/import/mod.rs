@@ -6,9 +6,9 @@
 //! Vulkan image created in a layout the display hardware understands, backed by memory that can
 //! leave the device, and handed to the kernel as a file descriptor.
 //!
-//! **This module makes the images, and gives a drawn one to the display engine.** Importing the
-//! descriptor, registering a framebuffer and flipping to it belong to the display side and are in
-//! [`scanout`](crate::scanout).
+//! **This module makes the images, gives a drawn one to the display engine, and takes it back.**
+//! Importing the descriptor, registering a framebuffer and flipping to it belong to the display
+//! side and are in [`scanout`](crate::scanout).
 //!
 //! # What has to line up
 //!
@@ -47,9 +47,9 @@
 //! or a driver that refused a step. None of them stops the program, because the copied path answers
 //! every one of them, so each is a value the caller reads and logs.
 
-// Private, because everything any of them publishes is re-exported here. A caller reaches
-// `Plane`, `Offered` and `Release` by one path each, and the split between the three files is this
-// module's own business.
+// Private, because everything any of them publishes is re-exported here and from the crate root.
+// A caller reaches `Plane`, `Offered` and `Handover` by one path each, and the split between
+// the three files is this module's own business.
 mod barrier;
 mod image;
 mod modifier;
@@ -62,7 +62,7 @@ use ash::{ext, khr, vk};
 use zgui_drm::format::Modifier;
 use zgui_render_wgpu::{Gpu, wgpu};
 
-pub use crate::import::barrier::Release;
+pub use crate::import::barrier::Handover;
 pub use crate::import::image::Plane;
 pub use crate::import::modifier::Offered;
 
@@ -88,9 +88,9 @@ pub const EXTENSIONS: [&CStr; 4] = [
     // Saying that the descriptor is a dma-buf and not an opaque handle. The kernel can import a
     // dma-buf and nothing else here.
     c"VK_EXT_external_memory_dma_buf",
-    // `VK_QUEUE_FAMILY_FOREIGN_EXT`, which a drawn image is released to. That release makes the
-    // pixels the frame drew the pixels the display engine reads, and `Release` is the barrier that
-    // does it.
+    // `VK_QUEUE_FAMILY_FOREIGN_EXT`, which a drawn image is handed to and taken back from. That
+    // handover makes the pixels the frame drew the pixels the display engine reads, and `Handover`
+    // is the pair of barriers that does it.
     c"VK_EXT_queue_family_foreign",
 ];
 
@@ -260,8 +260,8 @@ impl Imported {
     /// Returns the image behind the texture, for the barrier that releases it.
     ///
     /// Crate-private, because a handle to an image wgpu owns is of use to exactly one caller:
-    /// [`Release`], which records a barrier over it. Publishing it would let anything destroy an
-    /// image wgpu is still going to destroy.
+    /// [`Handover`], which records the barriers over it. Publishing it would let anything destroy
+    /// an image wgpu is still going to destroy.
     pub(crate) fn image(&self) -> vk::Image {
         self.image
     }

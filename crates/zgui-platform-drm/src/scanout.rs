@@ -14,8 +14,9 @@
 //!
 //! **The imported shape.** Three Vulkan images the renderer composes straight into, exported as
 //! dma-buf descriptors and registered as framebuffers in the layout the driver chose. Nothing is
-//! read back and nothing is copied. A frame ends with the barrier that gives the image to the
-//! display engine, and then the flip.
+//! read back and nothing is copied. A frame there is bracketed by the two barriers
+//! [`Handover`](crate::Handover) records: one takes the buffer back from the display engine before
+//! the frame is drawn, and one gives it over afterwards, and then the flip follows.
 //!
 //! An enum holds the two rather than a trait, for three reasons. There are exactly two and both
 //! live here, so nothing outside adds a third. [`Scanout::release`] takes itself by value, which a
@@ -58,7 +59,7 @@ use zgui_platform::PlatformError;
 use zgui_render_wgpu::{Gpu, Pixels, wgpu};
 
 use crate::cursor::Cursor;
-use crate::import::{Imported, Plane, Release, Unsupported};
+use crate::import::{Handover, Imported, Plane, Unsupported};
 use crate::output::{Output, backend};
 
 /// How many buffers the copied shape drives a display from.
@@ -138,11 +139,11 @@ pub struct Scanout {
 /// The buffers a display is driven from, in one of the two shapes.
 ///
 /// Private: which shape a display took is answered by [`Scanout::buffers`] and
-/// [`Scanout::slot`], and what a caller does about it is the same either way.
+/// [`Scanout::acquire`], and what a caller does about it is the same either way.
 #[derive(Debug)]
 #[expect(
     clippy::large_enum_variant,
-    reason = "the difference is a Vulkan dispatch table, which `Release` holds by value because \
+    reason = "the difference is a Vulkan dispatch table, which `Handover` holds by value because \
               that is what `ash::Device` is. There is one of these per display and it is moved \
               once, when the display is set up, so boxing it would buy an allocation and an \
               indirection on the frame path in exchange for nothing"
@@ -157,11 +158,11 @@ enum Buffers {
     },
     /// Images the renderer draws into, which the display engine reads where they lie.
     Imported {
-        /// The barrier that gives a drawn image to the display engine.
+        /// The pair of barriers that passes an image between the renderer and the display engine.
         ///
         /// Declared before the buffers so that it is dropped before them: it holds a raw device
         /// handle, which keeps nothing alive, and the buffers hold the textures that do.
-        release: Release,
+        handover: Handover,
         /// The images, in the order they were made.
         buffers: Vec<Imported>,
         /// The GEM handle each image's descriptor imported as, at the same index.
@@ -287,7 +288,7 @@ impl Scanout {
 
         let buffers =
             Imported::create(gpu, &layouts, width, height, IMPORTED).map_err(Copied::NoImages)?;
-        let release = Release::record(gpu, &buffers).map_err(Copied::NoImages)?;
+        let handover = Handover::record(gpu, &buffers).map_err(Copied::NoImages)?;
 
         // From here on the kernel holds handles and framebuffers of ours, so a refusal part way
         // through has to give them back. The guard does that, and taking it apart at the end
@@ -336,7 +337,7 @@ impl Scanout {
         Ok(Self::new(
             output,
             Buffers::Imported {
-                release,
+                handover,
                 buffers,
                 handles,
                 framebuffers,
@@ -368,20 +369,36 @@ impl Scanout {
         }
     }
 
-    /// The buffer the next frame is drawn into, while there is one.
+    /// Takes the buffer the next frame is drawn into back from the display engine, and names it.
     ///
-    /// The imported shape is what reads this: a renderer composing straight into a scanout buffer
-    /// has to be told which one **before** it draws, and `WgpuRenderer::present_into` is where the
-    /// answer goes. Nothing while a flip is on its way, because there the frame has to be held back
-    /// before it is drawn rather than declined after.
+    /// The imported shape calls this, and it is the **only** way to learn which buffer to draw
+    /// into: a renderer composing straight into a scanout buffer has to be told which one before it
+    /// draws, and taking that buffer back has to happen before it draws as well. Answering the two
+    /// together stops a caller doing one and forgetting the other. `WgpuRenderer::present_into` is
+    /// where the answer goes.
     ///
-    /// Nothing on the copied shape either. There a frame is composed into the renderer's own
-    /// target, so this would name a buffer no caller draws into.
-    pub fn slot(&self) -> Option<usize> {
-        match &self.buffers {
-            Buffers::Copied { .. } => None,
-            Buffers::Imported { .. } => (!self.flipping).then_some(self.back),
+    /// Answers nothing while a flip is on its way, so a frame is held back before it is drawn
+    /// rather than declined after. Nothing is taken back in that case.
+    ///
+    /// Answers nothing on the copied shape as well. There a frame is composed into the renderer's
+    /// own target, so this would name a buffer no caller draws into.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the graphics device refuses or does not finish the
+    /// barrier that takes the buffer back.
+    pub fn acquire(&mut self) -> Result<Option<usize>, PlatformError> {
+        let back = self.back;
+        let Buffers::Imported { handover, .. } = &mut self.buffers else {
+            return Ok(None);
+        };
+        if self.flipping {
+            return Ok(None);
         }
+        handover
+            .acquire(back)
+            .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
+        Ok(Some(back))
     }
 
     /// Copies `pixels` into the back buffer, draws `cursor` over it, and shows it.
@@ -460,26 +477,26 @@ impl Scanout {
 
     /// Gives the image the renderer just drew into to the display engine, and shows it.
     ///
-    /// The imported shape only. The frame is already in the buffer [`Scanout::slot`] named, so
+    /// The imported shape only. The frame is already in the buffer [`Scanout::acquire`] named, so
     /// nothing is copied here. What runs is the barrier that moves the image to
-    /// `VK_IMAGE_LAYOUT_GENERAL` and releases it to `VK_QUEUE_FAMILY_FOREIGN_EXT`, so what the
-    /// frame drew becomes what the display engine reads.
+    /// `VK_IMAGE_LAYOUT_GENERAL` and gives it to `VK_QUEUE_FAMILY_FOREIGN_EXT`, so what the frame
+    /// drew becomes what the display engine reads.
     ///
     /// The barrier is submitted on the queue the frame was submitted on and is therefore ordered
     /// after it, and this waits for it before it commits. The plane is handed no sync file, so
     /// there is nothing else that could tell the display to wait.
     ///
     /// Answers `false` when a flip is still on its way, which is the same answer
-    /// [`Scanout::slot`] gave before the frame was drawn. Nothing is submitted in that case.
+    /// [`Scanout::acquire`] gave before the frame was drawn. Nothing is submitted in that case.
     ///
     /// The pointer is not drawn: an imported display has one on a plane, and [`Scanout::imported`]
     /// refuses a display without one.
     ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::Backend`] when this display is driven from copied buffers, when the
-    /// graphics device refuses or does not finish the barrier, and when the driver refuses the mode
-    /// or the flip.
+    /// Returns [`PlatformError::Backend`] when this display is driven from copied buffers, when
+    /// the buffer was never taken back from the display engine, when the graphics device refuses
+    /// or does not finish the barrier, and when the driver refuses the mode or the flip.
     pub fn present_drawn(
         &mut self,
         device: &Device,
@@ -487,7 +504,7 @@ impl Scanout {
     ) -> Result<bool, PlatformError> {
         let back = self.back;
         let Buffers::Imported {
-            release,
+            handover,
             framebuffers,
             ..
         } = &mut self.buffers
@@ -502,8 +519,8 @@ impl Scanout {
             return Ok(false);
         }
 
-        release
-            .submit(back)
+        handover
+            .release(back)
             .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
 
         let framebuffer = framebuffers[back];
@@ -550,14 +567,14 @@ impl Scanout {
                 }
             }
             Buffers::Imported {
-                release,
+                handover,
                 buffers,
                 handles,
                 ..
             } => {
-                // The barrier first: it reaches the graphics device through a handle that keeps
+                // The barriers first: they reach the graphics device through a handle that keeps
                 // nothing alive, and the textures below are what keeps that device open.
-                drop(release);
+                drop(handover);
                 // One release per handle. The kernel counts no references for a GEM handle, and
                 // every image here is its own allocation, so every import answered with a handle
                 // of its own.
