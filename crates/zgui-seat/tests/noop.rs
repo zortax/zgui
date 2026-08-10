@@ -14,6 +14,19 @@
 //! libseat and reports what libseat refused. A run on a machine with terminals covers what turns an
 //! arriving change into a `Change`.
 //!
+//! **A switch that switches.** noop answers `-1` for every session number, so what is covered below
+//! is that the refusal names the terminal that was asked for. A terminal that changes needs a
+//! session and a second terminal.
+//!
+//! **The order of the two calls in `Seat::close_device`.** noop's `close_device` reads nothing and
+//! closes nothing, so a version that closed the descriptor before it told libseat passes every
+//! check here. logind's backend stats that descriptor to find which device to release, and that is
+//! where the order becomes visible.
+//!
+//! **A device id apart from its descriptor.** noop answers the descriptor's own number as the id,
+//! as logind does, so code that gave libseat a descriptor where an id belongs works on both. The
+//! seatd backend answers ids of its own, and that is where the two come apart.
+//!
 //! # Why this binary has its own `main`
 //!
 //! `harness = false`, because the backend is chosen through an environment variable. Writing one
@@ -33,8 +46,10 @@
 // unsafe calls, and both state what makes them sound where they are made.
 #![allow(unsafe_code)]
 
-use std::ffi::c_int;
+use std::ffi::{OsStr, c_int};
 use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::time::Instant;
 use std::{env, fs};
 
@@ -42,6 +57,16 @@ use zgui_seat::{ENABLE_WITHIN, Error, Seat};
 
 /// The variable libseat reads the backend name out of.
 const BACKEND: &str = "LIBSEAT_BACKEND";
+
+/// The device the checks below open.
+///
+/// noop opens a device with a plain `open(2)`, so any readable and writable path does. `/dev/null`
+/// is on every machine libseat runs on, it takes `O_RDWR`, and nothing this suite does can be
+/// affected by what is written to it.
+const DEVICE: &str = "/dev/null";
+
+/// A path no machine has.
+const ABSENT: &str = "/dev/zgui-there-is-no-such-device";
 
 /// The two names libseat is installed under, written out.
 ///
@@ -60,7 +85,7 @@ fn main() {
     // which is after this returns.
     unsafe { env::set_var(BACKEND, "noop") };
 
-    let checks: [(&str, fn()); 7] = [
+    let checks: [(&str, fn()); 15] = [
         (
             "a_seat_opens_and_enables_inside_the_bound",
             a_seat_opens_and_enables_inside_the_bound,
@@ -79,6 +104,38 @@ fn main() {
             a_refused_dispatch_is_reported,
         ),
         ("dropping_the_seat_closes_it", dropping_the_seat_closes_it),
+        (
+            "a_device_opens_and_goes_back_through_the_seat",
+            a_device_opens_and_goes_back_through_the_seat,
+        ),
+        (
+            "a_path_nothing_has_is_refused",
+            a_path_nothing_has_is_refused,
+        ),
+        (
+            "a_path_holding_a_zero_byte_is_refused",
+            a_path_holding_a_zero_byte_is_refused,
+        ),
+        (
+            "the_same_path_twice_gives_two_devices",
+            the_same_path_twice_gives_two_devices,
+        ),
+        (
+            "closing_a_device_gives_its_descriptor_back",
+            closing_a_device_gives_its_descriptor_back,
+        ),
+        (
+            "dropping_a_device_gives_its_descriptor_back",
+            dropping_a_device_gives_its_descriptor_back,
+        ),
+        (
+            "a_switch_reaches_libseat_and_this_backend_refuses_it",
+            a_switch_reaches_libseat_and_this_backend_refuses_it,
+        ),
+        (
+            "a_terminal_wider_than_the_interface_is_refused",
+            a_terminal_wider_than_the_interface_is_refused,
+        ),
         (
             "a_backend_nothing_has_is_refused",
             a_backend_nothing_has_is_refused,
@@ -260,6 +317,218 @@ fn open_descriptors() -> usize {
         .count()
 }
 
+/// A device opens through the seat, and the seat takes it back.
+///
+/// The seat is what opens the device on every backend, and noop opens it with a plain `open(2)`. So
+/// both halves are covered here: the id and the descriptor libseat answered, and the call that
+/// gives them back.
+fn a_device_opens_and_goes_back_through_the_seat() {
+    let seat = open();
+
+    let device = seat.open_device(Path::new(DEVICE)).unwrap_or_else(|error| {
+        panic!("`{DEVICE}` is on every machine and noop opens it directly: {error}")
+    });
+
+    assert!(
+        device.id() >= 0,
+        "libseat answered an id for the device: {}",
+        device.id()
+    );
+
+    // Copying a descriptor is refused for one that is closed, so this says the number names
+    // something open rather than merely being a plausible number.
+    device
+        .descriptor()
+        .try_clone_to_owned()
+        .unwrap_or_else(|error| panic!("the device's descriptor is open, so it copies: {error}"));
+
+    seat.close_device(device)
+        .unwrap_or_else(|error| panic!("a device this seat opened goes back to it: {error}"));
+}
+
+/// A path the machine does not have is refused, and the refusal names it.
+///
+/// Which device is the first thing a person asks, so the path is asserted in the value and in the
+/// line a report prints.
+fn a_path_nothing_has_is_refused() {
+    println!("noop: a libseat log line about a device it could not open belongs to this check");
+    let seat = open();
+
+    let error = seat
+        .open_device(Path::new(ABSENT))
+        .expect_err("no machine has this path, so no device opens");
+    let message = error.to_string();
+
+    match error {
+        Error::OpenDevice { path, errno } => {
+            assert_eq!(path, Path::new(ABSENT), "the refusal carries the path");
+            assert_eq!(
+                errno, ENOENT,
+                "and the number is the one `open` answers for a path that is not there"
+            );
+            assert!(
+                message.contains(ABSENT),
+                "and a person reads it out of the line: {message}"
+            );
+        }
+        other => panic!("a device that did not open is reported as one: {other}"),
+    }
+}
+
+/// A path holding a zero byte is refused before libseat is asked.
+///
+/// A C string ends at its first zero, so `/dev/nu\0ll` would arrive as `/dev/nu`. That path is
+/// absent on this machine and the open would fail for the wrong reason; on a machine that has one
+/// it would open a device nobody asked for.
+fn a_path_holding_a_zero_byte_is_refused() {
+    let seat = open();
+
+    let asked = Path::new(OsStr::from_bytes(b"/dev/nu\0ll"));
+    let error = seat
+        .open_device(asked)
+        .expect_err("a path with a zero byte in it cannot cross to C");
+
+    match error {
+        Error::DevicePath { path } => assert_eq!(path, asked, "the refusal carries the path"),
+        other => panic!("a path that cannot cross is reported as one: {other}"),
+    }
+}
+
+/// The same path twice gives two devices.
+///
+/// A resume depends on this: every input device is closed and opened again on a terminal switch,
+/// and the descriptor that comes back has to be a new one. An `open` that answered the same
+/// descriptor twice would hand a revoked device back.
+fn the_same_path_twice_gives_two_devices() {
+    let seat = open();
+
+    let first = seat
+        .open_device(Path::new(DEVICE))
+        .unwrap_or_else(|error| panic!("the first open answers a device: {error}"));
+    let second = seat
+        .open_device(Path::new(DEVICE))
+        .unwrap_or_else(|error| panic!("the second open answers a device: {error}"));
+
+    assert_ne!(
+        first.descriptor().as_raw_fd(),
+        second.descriptor().as_raw_fd(),
+        "two opens of one path are two descriptors"
+    );
+    assert_ne!(
+        first.id(),
+        second.id(),
+        "and two devices libseat knows apart"
+    );
+
+    seat.close_device(first)
+        .unwrap_or_else(|error| panic!("the first device goes back: {error}"));
+    seat.close_device(second)
+        .unwrap_or_else(|error| panic!("the second device goes back: {error}"));
+}
+
+/// Giving a device back closes its descriptor.
+///
+/// libseat closes no descriptor of its own, so this is the crate's own work and a `Device` that
+/// never closed would leak one per switch. The count says it happened, for the reason
+/// [`dropping_the_seat_closes_it`] counts.
+fn closing_a_device_gives_its_descriptor_back() {
+    let seat = open();
+    let before = open_descriptors();
+
+    let device = seat
+        .open_device(Path::new(DEVICE))
+        .unwrap_or_else(|error| panic!("`{DEVICE}` opens: {error}"));
+
+    let held = open_descriptors();
+    assert!(
+        held > before,
+        "an open device holds a descriptor this process did not have: {before} before it, and \
+         {held} while it is open"
+    );
+
+    seat.close_device(device)
+        .unwrap_or_else(|error| panic!("the device goes back: {error}"));
+
+    assert_eq!(
+        open_descriptors(),
+        before,
+        "the device went back, so its descriptor did"
+    );
+}
+
+/// Dropping a device closes its descriptor as well.
+///
+/// This is what a `Device` does about a device that was never given back through the seat: the
+/// descriptor goes, and the session daemon holds its record of the device until the seat closes.
+/// The record is invisible from here, and the descriptor is what is asserted.
+fn dropping_a_device_gives_its_descriptor_back() {
+    let seat = open();
+    let before = open_descriptors();
+
+    let device = seat
+        .open_device(Path::new(DEVICE))
+        .unwrap_or_else(|error| panic!("`{DEVICE}` opens: {error}"));
+
+    let held = open_descriptors();
+    assert!(
+        held > before,
+        "an open device holds a descriptor this process did not have: {before} before it, and \
+         {held} while it is open"
+    );
+
+    drop(device);
+
+    assert_eq!(
+        open_descriptors(),
+        before,
+        "the device was dropped, so its descriptor went back"
+    );
+}
+
+/// The switch reaches libseat, and this backend refuses it.
+///
+/// noop has no session to switch to and answers `-1` for every terminal, so a refusal is what is
+/// true here. It is still the only cover the call has, and what it asserts is that the refusal
+/// names the terminal that was asked for.
+///
+/// noop sets no `errno` on this path, so the number is not asserted.
+fn a_switch_reaches_libseat_and_this_backend_refuses_it() {
+    println!("noop: a libseat log line about a switch it cannot make belongs to this check");
+    let seat = open();
+
+    match seat
+        .switch(1)
+        .expect_err("the noop backend has no session to switch to, and refuses every switch")
+    {
+        Error::Switch { terminal, .. } => {
+            assert_eq!(
+                terminal, 1,
+                "the refusal names the terminal that was asked for"
+            );
+        }
+        other => panic!("a refused switch is reported as one: {other}"),
+    }
+}
+
+/// A terminal number wider than the C interface holds is refused before the call.
+///
+/// libseat takes a session number as a C `int`. A `u32` that does not fit arrives there as a
+/// negative number, which every backend refuses — and one that fit a *different* terminal would
+/// switch to that one. So the number is checked here.
+fn a_terminal_wider_than_the_interface_is_refused() {
+    let seat = open();
+
+    match seat
+        .switch(u32::MAX)
+        .expect_err("a C `int` does not hold this number")
+    {
+        Error::Terminal { terminal } => {
+            assert_eq!(terminal, u32::MAX, "the refusal names the number asked for");
+        }
+        other => panic!("a terminal that does not fit is reported as one: {other}"),
+    }
+}
+
 /// A backend that cannot be found is a refusal rather than a seat.
 ///
 /// This is the path a session that already has a controlling client takes, and it is where the
@@ -294,6 +563,11 @@ const DESCRIPTOR_LIMIT: c_int = 7;
 ///
 /// The first thirty-four error numbers are the kernel's generic ones, which every architecture uses.
 const EINVAL: i32 = 22;
+
+/// `ENOENT`, the number `open` answers for a path that is not there.
+///
+/// One of the same generic numbers. See [`EINVAL`].
+const ENOENT: i32 = 2;
 
 /// The C library's `struct rlimit`.
 ///

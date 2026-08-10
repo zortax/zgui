@@ -44,7 +44,12 @@
     doc = "",
     doc = "[`Seat::open`] opens the library, opens the seat this session is on, and waits for it \
            to become usable. [`Seat::descriptor`] is what a loop waits on, and [`Seat::dispatch`] \
-           answers a list of [`Change`]s. Dropping the seat closes it and gives the terminal back."
+           answers a list of [`Change`]s. Dropping the seat closes it and gives the terminal back.",
+    doc = "",
+    doc = "[`Seat::open_device`] asks the seat for a graphics card or an input device and answers \
+           a [`Device`], which owns the descriptor. [`Seat::close_device`] gives one back. \
+           [`Seat::switch`] asks for another terminal, from an active session and from an inactive \
+           one."
 )]
 #![deny(missing_docs)]
 // This crate is on the unsafe ledger's allowlist for one reason: libseat is opened at run time and
@@ -60,4 +65,4 @@ pub mod seat;
 pub use crate::error::{Error, Result};
 pub use crate::library::Library;
 #[cfg(unix)]
-pub use crate::seat::{Change, ENABLE_WITHIN, Seat};
+pub use crate::seat::{Change, Device, ENABLE_WITHIN, Seat};
