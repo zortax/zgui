@@ -85,6 +85,7 @@ mod tests {
         assert_eq!(DRM_CLIENT_CAP_UNIVERSAL_PLANES, 2);
         assert_eq!(DRM_CLIENT_CAP_ATOMIC, 3);
         assert_eq!(DRM_CAP_DUMB_BUFFER, 1);
+        assert_eq!(DRM_CAP_TIMESTAMP_MONOTONIC, 6);
         assert_eq!(DRM_CAP_ADDFB2_MODIFIERS, 16);
         assert_eq!(DRM_CAP_CURSOR_WIDTH, 8);
         assert_eq!(DRM_CAP_CURSOR_HEIGHT, 9);

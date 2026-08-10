@@ -35,8 +35,23 @@ const BUFFER: usize = 4096;
 impl Device {
     /// Reads whatever the device has to say, without waiting.
     ///
-    /// The device is opened non-blocking, so this returns an empty vector when nothing has
-    /// happened yet. A frame loop parks on the descriptor and calls this when it wakes.
+    /// Every descriptor a [`Device`] holds is non-blocking, so this returns an empty vector when
+    /// nothing has happened yet. A frame loop parks on the descriptor and calls this when it
+    /// wakes.
+    ///
+    /// A caller matches a completion against its own flip by the user data it passed:
+    ///
+    /// ```no_run
+    /// use zgui_drm::{Device, Event};
+    ///
+    /// let device = Device::open_first()?;
+    /// let frame = 0xf1a9_u64;
+    ///
+    /// let flipped = device.poll_events()?.into_iter().any(|event| {
+    ///     matches!(event, Event::FlipComplete { user_data, .. } if user_data == frame)
+    /// });
+    /// # Ok::<(), zgui_drm::Error>(())
+    /// ```
     ///
     /// # Errors
     ///
