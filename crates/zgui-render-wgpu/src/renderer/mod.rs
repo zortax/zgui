@@ -466,12 +466,13 @@ impl WgpuRenderer {
     ///
     /// Answers whether the slot was taken. A caller that owns the buffers a display controller
     /// scans out of calls this before every [`Renderer::draw`](zgui_render::Renderer::draw), so
-    /// that the frame lands on the buffer the hardware is not reading. A slot outside the set is
-    /// refused and leaves the selection alone, because the alternative is a frame drawn over a
-    /// buffer on screen.
+    /// that the frame lands on the buffer the hardware has finished with. A slot outside the set
+    /// is refused and leaves the selection alone, because a wrapped slot is a buffer the caller
+    /// did not choose and only the caller knows which buffers are free.
     ///
     /// The other two presentations have nothing to choose and answer `false`: a swap chain hands
     /// out its own image each frame, and a texture standing in for a surface is one texture.
+    #[must_use = "a refused slot leaves the frame going where it was already going"]
     pub fn present_into(&mut self, slot: usize) -> bool {
         match &mut self.presentation {
             Presentation::Supplied(supplied) => supplied.select(slot),
@@ -507,11 +508,15 @@ impl WgpuRenderer {
                 offscreen.formats().surface,
                 self.target.size,
             )),
+            // At the textures' own extent rather than the target's. A supplied set is never
+            // reallocated, so a target that has grown since would ask for a rectangle larger than
+            // the texture, which is a validation failure, and wgpu's default uncaptured-error
+            // handler panics on one.
             Presentation::Supplied(supplied) => Some(readback::read(
                 &self.gpu,
                 supplied.texture(),
                 supplied.formats().surface,
-                self.target.size,
+                supplied.size(),
             )),
             Presentation::Surface(_) => None,
         }

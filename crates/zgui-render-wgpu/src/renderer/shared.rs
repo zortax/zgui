@@ -259,12 +259,14 @@ impl SharedGraphics {
     /// The textures have to be created on this device first, through
     /// [`SharedGraphics::open_gpu`]. Nothing here can open one for them: a texture belongs to the
     /// device that created it, so a device opened at this point would be the wrong one for
-    /// everything handed in.
+    /// everything handed in. wgpu states no device on a texture handle, so the order is the only
+    /// thing that keeps the two together and this refuses rather than guessing.
     ///
     /// # Errors
     ///
-    /// Refuses where no device is open, and where the textures cannot be presented to as one set —
-    /// see [`Supplied::new`] for what that means.
+    /// Refuses where no device is open, where `target` and the textures state different extents,
+    /// and where the textures cannot be presented to as one set — see [`Supplied::unusable`] for
+    /// what that means. Each refusal names what was wrong.
     pub fn renderer_supplied(
         &self,
         target: RenderTarget,
@@ -277,13 +279,35 @@ impl SharedGraphics {
                  present into them: open it with SharedGraphics::open_gpu",
             ));
         };
-        let Some(supplied) = Supplied::new(textures, extent(target)) else {
+        // Asked here as well as inside `Supplied::new`, so that the reason reaches the caller: a
+        // set that is refused is a set the caller has to fix.
+        if let Some(reason) = Supplied::unusable(&textures) {
+            return Err(GpuUnavailable::new().rejected(state.gpu.describe(), reason));
+        }
+        let wanted = extent(target);
+        let Some(supplied) = Supplied::new(textures) else {
             return Err(GpuUnavailable::new().rejected(
                 state.gpu.describe(),
-                "the supplied textures cannot be presented to as one set: they have to agree about \
-                 their format and their extent, and there has to be at least one",
+                "the supplied textures cannot be presented to as one set",
             ));
         };
+        // The target and the textures are supplied separately and both describe the same screen.
+        // Where they disagree the copy that ends a frame would cover the whole buffer while
+        // reading a composed target of the other extent, which is a stretched frame nothing
+        // reports.
+        if supplied.size() != wanted {
+            return Err(GpuUnavailable::new().rejected(
+                state.gpu.describe(),
+                format!(
+                    "the target is {}×{} and the supplied textures are {}×{}; one screen has one \
+                     extent",
+                    wanted.width,
+                    wanted.height,
+                    supplied.size().width,
+                    supplied.size().height
+                ),
+            ));
+        }
         Ok(self.assemble(
             state,
             Presentation::Supplied(supplied),
