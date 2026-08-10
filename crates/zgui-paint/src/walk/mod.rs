@@ -299,10 +299,30 @@ impl Painter {
     /// Drops the records of fragments the layout store destroyed, releasing what they held.
     ///
     /// Called once per painted frame, before [`Painter::emit`], with the drained retirement list.
-    /// This is the only thing that removes a record: a fragment's painting lives exactly as long
-    /// as the fragment.
-    pub fn retire(&mut self, keys: &[zgui_layout::FragKey], owner: &dyn ResourceOwner) {
-        self.cache.retire(keys, owner);
+    /// Together with the budget's eviction this is what removes a record: a fragment's painting
+    /// lives as long as the fragment, or until memory pressure takes it as a clean miss.
+    pub fn retire(
+        &mut self,
+        keys: &[zgui_layout::FragKey],
+        scene: &mut Scene,
+        owner: &dyn ResourceOwner,
+    ) {
+        self.cache.retire(keys, scene, owner);
+    }
+
+    /// Drops the coldest records until `bytes` chunk bytes have gone, and reports how many went.
+    pub fn evict_cold_chunks(
+        &mut self,
+        bytes: u64,
+        scene: &mut Scene,
+        owner: &dyn ResourceOwner,
+    ) -> u64 {
+        self.cache.evict_cold(bytes, scene, owner)
+    }
+
+    /// Drops every record, releasing everything each one held into caches that survive.
+    pub fn clear_records(&mut self, scene: &mut Scene, owner: &dyn ResourceOwner) {
+        self.cache.clear_releasing(scene, owner);
     }
 }
 

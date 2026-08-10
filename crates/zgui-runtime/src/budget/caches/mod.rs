@@ -11,6 +11,7 @@
 //!
 //! | Cache | Unit | Level | Why that level |
 //! |---|---|---|---|
+//! | [`PaintChunksBudget`] | bytes | [`PAINT_CHUNK_BYTES`](crate::budget::limits::PAINT_CHUNK_BYTES) | records outlive visits, so nothing else bounds an unvirtualised document's paintings |
 //! | [`GlyphAtlasBudget`] | bytes | [`ATLAS_SOFT_BYTES`](crate::window::ATLAS_SOFT_BYTES) | several times a text-heavy document's glyphs, well under an unbounded atlas |
 //! | [`DecodedImagesBudget`] | bytes | [`DECODED_IMAGE_BYTES`](crate::budget::limits::DECODED_IMAGE_BYTES) | the loader can decode a named source again, so off-screen history is honestly freeable |
 //! | [`ParagraphShapingBudget`] | entries | [`SHAPED_PARAGRAPHS`](crate::budget::limits::SHAPED_PARAGRAPHS) | the largest document whose every element is live, with room |
@@ -22,6 +23,7 @@
 //! accounted for a megabyte of five hundred could not answer the one question anybody asks of it.
 
 pub mod atlas;
+pub mod chunks;
 pub mod device;
 pub mod images;
 pub mod shaping;
@@ -29,6 +31,7 @@ pub mod targets;
 pub mod vectors;
 
 pub use crate::budget::caches::atlas::GlyphAtlasBudget;
+pub use crate::budget::caches::chunks::PaintChunksBudget;
 pub use crate::budget::caches::device::DeviceMemoryBudget;
 pub use crate::budget::caches::images::DecodedImagesBudget;
 pub use crate::budget::caches::shaping::ParagraphShapingBudget;

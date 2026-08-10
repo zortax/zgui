@@ -148,6 +148,9 @@ counters! {
     /// Fragment names handed to the paint cache as destroyed.
     FragmentsRetired => fragments_retired, Group::BackendNeutral;
 
+    /// Paint records the byte budget dropped, coldest first.
+    ChunksEvicted => chunks_evicted, Group::BackendNeutral;
+
     /// Primitives added to the scene.
     PrimitivesEmitted => primitives_emitted, Group::BackendNeutral;
 
@@ -328,6 +331,9 @@ counters! {
 
     /// Fragments the layout tree is holding right now.
     FragmentsLive => fragments_live, Group::Live;
+
+    /// Bytes of compiled per-fragment paintings the paint cache is holding right now.
+    PaintChunkBytes => paint_chunk_bytes, Group::Live;
 
     /// Box slots the layout tree is holding right now, live and awaiting recycling.
     ///

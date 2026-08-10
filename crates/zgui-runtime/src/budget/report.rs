@@ -20,6 +20,8 @@ pub enum CacheId {
     VectorResources,
     /// The reusable targets the renderer composes isolated content in.
     RenderTargets,
+    /// The per-fragment paint records: each fragment's compiled painting, owned across frames.
+    PaintChunks,
     /// Everything else the renderer holds on the device: its pipelines, its swapchain, the target
     /// a frame is composed into, the vector scratch and the buffers a frame uploads through.
     DeviceMemory,
@@ -27,7 +29,11 @@ pub enum CacheId {
 
 impl CacheId {
     /// Every cache a window registers, in registration order.
-    pub const ALL: [Self; 6] = [
+    ///
+    /// The paint chunks come first on purpose: their forget releases atlas and table holds, so it
+    /// has to run while the caches those holds are in are still alive to be released into.
+    pub const ALL: [Self; 7] = [
+        Self::PaintChunks,
         Self::GlyphAtlas,
         Self::DecodedImages,
         Self::ParagraphShaping,
@@ -42,18 +48,20 @@ impl CacheId {
     /// Its position in [`CacheId::ALL`], which is also its slot in the manager's own bookkeeping.
     pub const fn index(self) -> usize {
         match self {
-            Self::GlyphAtlas => 0,
-            Self::DecodedImages => 1,
-            Self::ParagraphShaping => 2,
-            Self::VectorResources => 3,
-            Self::RenderTargets => 4,
-            Self::DeviceMemory => 5,
+            Self::PaintChunks => 0,
+            Self::GlyphAtlas => 1,
+            Self::DecodedImages => 2,
+            Self::ParagraphShaping => 3,
+            Self::VectorResources => 4,
+            Self::RenderTargets => 5,
+            Self::DeviceMemory => 6,
         }
     }
 
     /// A short name, for a report a person reads.
     pub const fn name(self) -> &'static str {
         match self {
+            Self::PaintChunks => "paint chunks",
             Self::GlyphAtlas => "glyph atlas",
             Self::DecodedImages => "decoded images",
             Self::ParagraphShaping => "paragraph shaping",

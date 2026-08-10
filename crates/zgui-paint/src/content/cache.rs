@@ -568,6 +568,35 @@ impl GlyphSource for FrameContent<'_> {
     }
 }
 
+/// The atlas as a record owner outside a frame — the release half of eviction and teardown.
+///
+/// A frame releases through [`FrameContent`]; a budget enforcing between frames has no frame to
+/// borrow, and this is the same atlas behind the same trait with nothing else attached.
+pub struct TileOwner<'a>(RefCell<&'a mut Atlas>);
+
+impl ContentCache {
+    /// The atlas as a record owner, for release paths that run outside a frame.
+    pub fn tile_owner(&mut self) -> TileOwner<'_> {
+        TileOwner(RefCell::new(&mut self.atlas))
+    }
+}
+
+impl ResourceOwner for TileOwner<'_> {
+    fn take_named(&self, _out: &mut Vec<AtlasKey>) {}
+
+    fn retain(&self, key: AtlasKey) {
+        self.0.borrow_mut().retain(key);
+    }
+
+    fn release(&self, key: AtlasKey) {
+        self.0.borrow_mut().release(key);
+    }
+
+    fn contains(&self, key: AtlasKey) -> bool {
+        self.0.borrow().contains(key)
+    }
+}
+
 impl ReplacedSource for FrameContent<'_> {
     fn revision(&self, id: ReplacedId) -> u64 {
         self.image_revisions.get(&id).copied().unwrap_or(0)

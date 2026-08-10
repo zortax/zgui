@@ -10,7 +10,9 @@ use zgui_geom::{Device, DevicePx, Size};
 use zgui_profile::{Counter, counter};
 
 use crate::group::BackdropFilter;
+use crate::id::{ClipId, PaintId};
 use crate::ops::PaintOp;
+use crate::paint::PaintRef;
 use crate::prim::{
     ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, Shadow, SubpixelSprite,
 };
@@ -18,6 +20,48 @@ use crate::scene::Scene;
 use crate::scene::replay::translate;
 use crate::spatial::SpatialId;
 use crate::vector::VectorItem;
+
+/// Every side-table entry a chunk's primitives name, distinct per table.
+///
+/// What a record holds against eviction for as long as it stands: a replayed primitive carries
+/// these indices and looks nothing up, so the tables must keep resolving them to what they meant
+/// at the encoding. Recomputed from the chunk at release rather than stored, so the two cannot
+/// disagree.
+#[derive(Debug, Default)]
+pub struct TableHolds {
+    /// The clip chains named, distinct.
+    pub clips: Vec<ClipId>,
+    /// The paint sources named, distinct.
+    pub paints: Vec<PaintId>,
+}
+
+impl TableHolds {
+    /// Empties both lists, keeping their allocations.
+    pub fn clear(&mut self) {
+        self.clips.clear();
+        self.paints.clear();
+    }
+
+    /// Notes one clip chain.
+    fn clip(&mut self, raw: u32) {
+        self.clips.push(ClipId(raw));
+    }
+
+    /// Notes one paint reference, if it names a table entry.
+    fn paint(&mut self, reference: PaintRef) {
+        if let Some(id) = reference.id() {
+            self.paints.push(id);
+        }
+    }
+
+    /// Sorts and deduplicates both lists, so each entry is held exactly once per record.
+    fn settle(&mut self) {
+        self.clips.sort_unstable();
+        self.clips.dedup();
+        self.paints.sort_unstable();
+        self.paints.dedup();
+    }
+}
 
 /// The primitives one encoding pushed, one array per kind, with the order they were pushed in.
 ///
@@ -76,6 +120,49 @@ impl ChunkPrims {
             + self.backdrops.capacity() * size_of::<BackdropFilter>()
             + self.vectors.capacity() * size_of::<VectorItem>()
             + self.spaces.capacity() * size_of::<Option<SpatialId>>()
+    }
+
+    /// Collects every side-table entry the chunk's primitives name into `holds`, distinct.
+    ///
+    /// Emptied first, so the answer is this chunk's and nobody's leftovers.
+    pub fn named_ids(&self, holds: &mut TableHolds) {
+        holds.clear();
+        for quad in &self.quads {
+            holds.clip(quad.clip);
+            holds.paint(quad.fill);
+            holds.paint(quad.stroke);
+        }
+        for shadow in &self.shadows {
+            holds.clip(shadow.clip);
+        }
+        for decoration in &self.decorations {
+            holds.clip(decoration.clip);
+        }
+        for sprite in &self.mono_sprites {
+            holds.clip(sprite.clip);
+        }
+        for sprite in &self.subpixel_sprites {
+            holds.clip(sprite.clip);
+        }
+        for sprite in &self.color_sprites {
+            holds.clip(sprite.clip);
+        }
+        for external in &self.externals {
+            holds.clips.push(external.clip);
+        }
+        for backdrop in &self.backdrops {
+            holds.clips.push(backdrop.clip);
+        }
+        for vector in &self.vectors {
+            holds.clips.push(vector.clip);
+            if let Some(fill) = vector.fill {
+                holds.paint(fill);
+            }
+            if let Some(stroke) = &vector.stroke {
+                holds.paint(stroke.paint);
+            }
+        }
+        holds.settle();
     }
 
     /// Empties every array, keeping the allocations for the next capture.

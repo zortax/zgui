@@ -60,7 +60,7 @@ pub mod walk;
 
 pub use crate::content::glyphs::OutlineGlyph;
 pub use crate::content::{
-    ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, VectorCache,
+    ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,
 };
 pub use crate::damage::accumulate::{Expansion, expand, vacated};

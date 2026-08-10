@@ -119,7 +119,7 @@ pub use crate::prim::{
     Resource, Shadow, SpriteTile, SubpixelSprite,
 };
 pub use crate::resource::{ResourceGeneration, ResourceKey, ResourceKind, ResourceRegistry};
-pub use crate::scene::{ChunkPrims, Scene, SpatialFault};
+pub use crate::scene::{ChunkPrims, Scene, SpatialFault, TableHolds};
 pub use crate::spatial::{
     Anchoring, OwnSpace, Placements, PropertyId, PropertyNode, PropertyOwner, PropertyTree,
     SPATIAL_DOMAIN, SpatialId, SpatialNode, SpatialTree,

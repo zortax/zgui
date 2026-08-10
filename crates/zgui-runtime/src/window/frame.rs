@@ -1146,7 +1146,7 @@ impl Window {
                 .content
                 .frame(&layout, &self.text, self.raster.as_ref());
             if !retired.is_empty() {
-                self.painter.retire(&retired, &content);
+                self.painter.retire(&retired, &mut self.scene, &content);
             }
             // The device pixel ratio and what the device can do are both properties of this
             // window, and both change what is emitted: the first decides where a snapped edge

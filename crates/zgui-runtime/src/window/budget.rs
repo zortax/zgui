@@ -11,8 +11,8 @@
 //! visited here is covered by them without anyone remembering to go and add it to a test.
 
 use crate::budget::caches::{
-    DecodedImagesBudget, DeviceMemoryBudget, GlyphAtlasBudget, ParagraphShapingBudget,
-    RenderTargetsBudget, VectorResourcesBudget,
+    DecodedImagesBudget, DeviceMemoryBudget, GlyphAtlasBudget, PaintChunksBudget,
+    ParagraphShapingBudget, RenderTargetsBudget, VectorResourcesBudget,
 };
 use crate::budget::manager::{self, Budgeted, CacheRegistry};
 use crate::budget::report::{BudgetReport, CacheId};
@@ -22,6 +22,16 @@ use crate::window::Window;
 impl CacheRegistry for Window {
     fn for_each(&mut self, visit: &mut dyn FnMut(&mut dyn Budgeted)) {
         let embed_memory = self.embed.memory();
+        // First, before the atlas: its forget releases atlas and table holds, which has to happen
+        // while the caches those holds are in still resolve them.
+        let chunk_bytes = self.budgets.limits().paint_chunk_bytes;
+        visit(&mut PaintChunksBudget::new(
+            &mut self.painter,
+            &mut self.scene,
+            &mut self.content,
+            chunk_bytes,
+            self.budgets.tracked(CacheId::PaintChunks),
+        ));
         visit(&mut GlyphAtlasBudget::new(
             &mut self.content,
             self.budgets.tracked(CacheId::GlyphAtlas),
@@ -131,11 +141,9 @@ impl Window {
     /// measurement again — a window left in that state and never woken would go on presenting the
     /// last frame it drew while holding nothing any of it came from.
     pub fn forget_caches(&mut self) {
+        // The registry's own order drops the paint records first, releasing their holds into the
+        // atlas and the tables before either is touched.
         manager::forget_all(self);
-        // The paint records go with the atlas they hold tiles in. A record kept past this point
-        // would replay instances naming rectangles the atlas has already handed back — and its
-        // holds died with the atlas, so clearing is the only correct spelling here.
-        self.painter.reset();
         self.embed.content_forgotten();
         self.damage = zgui_bits::DamageSet::full();
         self.request_frame();

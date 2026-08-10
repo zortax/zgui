@@ -27,7 +27,7 @@ use crate::place::band::Travels;
 use crate::scene::resolve::Unresolved;
 use crate::spatial::{SpatialId, SpatialTree};
 
-pub use crate::scene::chunk::ChunkPrims;
+pub use crate::scene::chunk::{ChunkPrims, TableHolds};
 pub use crate::scene::depends::SpatialFault;
 pub use crate::scene::ordering::OrderOverlap;
 pub use crate::scene::primitives::Primitives;

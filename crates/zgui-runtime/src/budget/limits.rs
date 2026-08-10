@@ -61,6 +61,16 @@ pub const DECODED_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 /// nodes.
 pub const PLACED_DRAWINGS: usize = 16_384;
 
+/// How many bytes of compiled per-fragment paintings a window holds before cold ones are dropped.
+///
+/// A record's chunk is a few hundred bytes per primitive it re-emits, so the level is far above
+/// both derivation workloads: the still table's live fragments come to single-digit megabytes,
+/// and the scroll list's ten thousand rows only hold records while their fragments live, which a
+/// virtualised list bounds to a screenful. What this bounds is a large unvirtualised document
+/// whose fragments never die — records now outlive visits, so nothing else bounds them. Evicting
+/// one is a clean miss: the next frame that reaches its fragment encodes it again.
+pub const PAINT_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
+
 /// The levels one window holds its entry-counted caches to.
 ///
 /// Settable rather than constant, for the same reason the atlas's level is: how much of the
@@ -75,6 +85,8 @@ pub struct CacheLimits {
     pub placed_drawings: usize,
     /// How many decoded-image bytes may be held for sources nothing shows.
     pub decoded_image_bytes: u64,
+    /// How many bytes of compiled per-fragment paintings may be held.
+    pub paint_chunk_bytes: u64,
 }
 
 impl Default for CacheLimits {
@@ -84,6 +96,7 @@ impl Default for CacheLimits {
             shaped_paragraphs: SHAPED_PARAGRAPHS,
             placed_drawings: PLACED_DRAWINGS,
             decoded_image_bytes: DECODED_IMAGE_BYTES,
+            paint_chunk_bytes: PAINT_CHUNK_BYTES,
         }
     }
 }

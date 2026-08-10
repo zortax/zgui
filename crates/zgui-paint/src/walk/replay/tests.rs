@@ -60,7 +60,7 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
     let mut scene = scene();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &same,
         painted(0),
         Encoding {
@@ -102,7 +102,7 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
     let mut scene = scene();
     let first = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &first,
         painted(0),
         Encoding {
@@ -132,7 +132,7 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
     let mut scene = scene();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &same,
         painted(0),
         Encoding {
@@ -158,7 +158,7 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
     let mut scene = scene();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &same,
         painted(0),
         Encoding {
@@ -192,7 +192,7 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
         line: 0,
     };
     cache.encoded(
-        &scene,
+        &mut scene,
         &line,
         painted(0),
         Encoding {
@@ -221,7 +221,7 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
     let mut scene = scene();
     let before = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &before,
         painted(0),
         Encoding {
@@ -247,7 +247,7 @@ fn a_drawing_is_encoded_however_still_it_stayed() {
     let mut mark = fragment(0.0, 0.0);
     mark.kind = FragmentKind::Vector;
     cache.encoded(
-        &scene,
+        &mut scene,
         &mark,
         painted(0),
         Encoding {
@@ -288,7 +288,7 @@ fn a_painting_the_clip_cut_short_is_encoded_again_where_the_fragment_paints() {
     let inside = port(&mut scene);
     let hidden = fragment(0.0, 2000.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &hidden,
         inside,
         Encoding {
@@ -320,7 +320,7 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
     let mut scene = scene();
     let away = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &away,
         painted(0),
         Encoding {
@@ -348,10 +348,10 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
 #[test]
 fn a_retired_fragment_loses_its_record() {
     let mut cache = PaintCache::new();
-    let scene = scene();
+    let mut scene = scene();
     let gone = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &gone,
         painted(0),
         Encoding {
@@ -362,11 +362,90 @@ fn a_retired_fragment_loses_its_record() {
         &NoResources,
     );
     assert_eq!(cache.len(), 1);
-    cache.retire(&[gone.key], &NoResources);
+    cache.retire(&[gone.key], &mut scene, &NoResources);
     assert_eq!(cache.len(), 0);
     // Retiring a name with no record is the ordinary case and costs nothing.
-    cache.retire(&[gone.key], &NoResources);
+    cache.retire(&[gone.key], &mut scene, &NoResources);
     assert_eq!(cache.reuse(&scene, &gone, painted(0)), Reuse::Encode);
+}
+
+/// Pushes one quad through an interned paint and a real clip, and encodes it into a record.
+fn encode_one_quad(
+    cache: &mut PaintCache,
+    scene: &mut Scene,
+    fragment: &Fragment,
+) -> (ClipId, zgui_scene::PaintId) {
+    use zgui_geom::Point;
+    let rect = zgui_geom::Rect::new(
+        Point::new(DevicePx(0.0), DevicePx(0.0)),
+        Size::new(DevicePx(10.0), DevicePx(10.0)),
+    );
+    let clip = scene.clips.only(zgui_scene::ClipLink::rect(rect));
+    let paint = scene
+        .paints
+        .solid(zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0));
+    let start = scene.ops().len() as u32;
+    scene.push_quad(
+        zgui_scene::Quad::filled(rect, zgui_scene::PaintRef::solid(paint)).clipped(clip),
+    );
+    let end = scene.ops().len() as u32;
+    cache.encoded(
+        scene,
+        fragment,
+        painted(0),
+        Encoding {
+            ops: start..end,
+            whole: true,
+            resources: &[],
+        },
+        &NoResources,
+    );
+    (clip, paint)
+}
+
+#[test]
+fn a_record_holds_its_table_entries_until_it_is_dropped() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let one = fragment(0.0, 0.0);
+    let (clip, paint) = encode_one_quad(&mut cache, &mut scene, &one);
+
+    assert_eq!(scene.clips.refs(clip), Some(1));
+    assert_eq!(scene.paints.refs(paint), Some(1));
+    assert!(cache.bytes() > 0);
+
+    // Re-encoding the same fragment retains before it releases, so the counts hold steady.
+    encode_one_quad(&mut cache, &mut scene, &one);
+    assert_eq!(scene.clips.refs(clip), Some(1));
+    assert_eq!(scene.paints.refs(paint), Some(1));
+
+    cache.retire(&[one.key], &mut scene, &NoResources);
+    assert_eq!(scene.clips.refs(clip), Some(0));
+    assert_eq!(scene.paints.refs(paint), Some(0));
+    assert_eq!(cache.bytes(), 0);
+}
+
+#[test]
+fn eviction_takes_only_cold_records_and_is_a_clean_miss() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let one = fragment(0.0, 0.0);
+    let (clip, paint) = encode_one_quad(&mut cache, &mut scene, &one);
+
+    // Selected this frame: the working set is never taken, however much was asked for.
+    assert_eq!(cache.evict_cold(u64::MAX, &mut scene, &NoResources), 0);
+    assert_eq!(cache.len(), 1);
+
+    // A frame later it is cold, and eviction takes it and releases what it held.
+    cache.begin_frame();
+    let freed = cache.evict_cold(u64::MAX, &mut scene, &NoResources);
+    assert!(freed > 0);
+    assert_eq!(cache.len(), 0);
+    assert_eq!(cache.bytes(), 0);
+    assert_eq!(scene.clips.refs(clip), Some(0));
+    assert_eq!(scene.paints.refs(paint), Some(0));
+    // The miss is clean: the next visit encodes again, and nothing else remembers the record.
+    assert_eq!(cache.reuse(&scene, &one, painted(0)), Reuse::Encode);
 }
 
 /// A coordinate system whose slot has been handed to an unrelated box is not the one a record was
@@ -405,7 +484,7 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
     // It survives the card: what goes away is the box above it.
     let label = fragment(0.0, 0.0);
     cache.encoded(
-        &scene,
+        &mut scene,
         &label,
         under(space),
         Encoding {
