@@ -169,8 +169,8 @@ symbols! {
         /// Opens a device and writes its descriptor through the pointer.
         ///
         /// This succeeds while the seat is active, and for the device types the backend permits,
-        /// which are DRM and evdev. An open device can still be revoked, such as where a session
-        /// switch is being forced.
+        /// such as DRM and evdev. Each backend has its own list. An open device can still be
+        /// revoked, such as where a session switch is being forced.
         ///
         /// The answer is the device id, which `libseat_close_device` takes. `-1` on failure, with
         /// `errno` set.

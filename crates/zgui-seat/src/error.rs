@@ -88,8 +88,10 @@ pub enum Error {
     /// libseat refused a device.
     ///
     /// The backend opens the device, so a path the machine does not have arrives here as well as a
-    /// device the seat may not hand over. The seat has to be enabled, and the backends permit DRM
-    /// and evdev devices alone.
+    /// device the seat may not hand over. Which devices a seat hands over is the backend's own
+    /// rule: seatd and logind take graphics cards and input devices and refuse the rest, and the
+    /// noop backend opens any path it is given. seatd also refuses every device while the session
+    /// is inactive.
     OpenDevice {
         /// The device that was asked for.
         path: PathBuf,
@@ -114,6 +116,15 @@ pub enum Error {
         /// `errno` at the refusal.
         errno: i32,
     },
+    /// A seat was given a device another seat opened.
+    ///
+    /// Every seat numbers its own devices, so the id names a device this seat never opened. The
+    /// seat is asked nothing, and the descriptor is closed. The seat that opened the device keeps
+    /// its record of it, and gives it back when it closes.
+    OtherSeat {
+        /// libseat's id for the device, which belongs to the seat that opened it.
+        device: c_int,
+    },
     /// libseat refused the switch.
     ///
     /// The session carries on unchanged. A backend with no terminals to switch between refuses
@@ -121,13 +132,18 @@ pub enum Error {
     Switch {
         /// The terminal that was asked for.
         terminal: u32,
-        /// `errno` at the refusal.
+        /// What `errno` held at the refusal.
+        ///
+        /// Some backends put a reason here and some put none. logind copies the D-Bus error into
+        /// `errno`, seatd copies what its connection failed with, and the noop backend writes
+        /// nothing, which leaves the number an earlier call left. libseat puts the reason it has
+        /// into its own log.
         errno: i32,
     },
     /// The terminal number is wider than libseat's interface holds.
     ///
-    /// A session number crosses as a C `int`. A number that does not fit would arrive as a
-    /// different one, so it is refused here and libseat is asked nothing.
+    /// A session number crosses as a C `int`. A number that does not fit crosses as a negative one,
+    /// which each backend refuses on its own, so it is refused here and libseat is asked nothing.
     Terminal {
         /// The terminal that was asked for.
         terminal: u32,
@@ -168,9 +184,14 @@ impl fmt::Display for Error {
                 "libseat refused to take device {device} back: {}",
                 os(*errno)
             ),
+            Self::OtherSeat { device } => write!(
+                f,
+                "device {device} was opened on another seat, so this seat released nothing"
+            ),
             Self::Switch { terminal, errno } => write!(
                 f,
-                "libseat refused the switch to terminal {terminal}: {}",
+                "libseat refused the switch to terminal {terminal}; `errno` held {}, which an \
+                 earlier call can have left",
                 os(*errno)
             ),
             Self::Terminal { terminal } => write!(
@@ -301,7 +322,12 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_switch_names_the_terminal() {
+    fn a_refused_switch_names_the_terminal_and_says_what_the_number_is_worth() {
+        // The number is the one thing here a person can read the wrong way. The noop backend sets
+        // no `errno` for a refused switch, so the line carries whatever the last call before it
+        // left — on this machine the `isatty` inside libseat's own logging, which reads as
+        // "Inappropriate ioctl for device" and explains nothing. So the line says where the number
+        // can come from.
         let error = Error::Switch {
             terminal: 1,
             errno: 19,
@@ -309,10 +335,24 @@ mod tests {
 
         let message = error.to_string();
         assert!(
-            message.starts_with("libseat refused the switch to terminal 1: "),
+            message.starts_with("libseat refused the switch to terminal 1;"),
             "the terminal is named: {message}"
         );
         assert!(message.contains("19"), "and the number is there: {message}");
+        assert!(
+            message.contains("earlier call"),
+            "and the number is not offered as the reason: {message}"
+        );
+    }
+
+    #[test]
+    fn a_device_from_another_seat_names_it_and_says_nothing_was_released() {
+        let error = Error::OtherSeat { device: 3 };
+
+        assert_eq!(
+            error.to_string(),
+            "device 3 was opened on another seat, so this seat released nothing"
+        );
     }
 
     #[test]
