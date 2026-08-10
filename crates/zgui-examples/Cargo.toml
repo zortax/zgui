@@ -19,6 +19,12 @@ publish = false
 [dependencies]
 zgui = { path = "../zgui", version = "0.1.0" }
 zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
+# Temporary, for diagnosing the console backend. The rule above holds for every other example: an
+# application names the umbrella crate and nothing else. `tty` is the exception because the console
+# it runs on has standard error pointed at the screen, so a log has to reach a file before anything
+# can be read at all. Both of these go once the console path is settled.
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 # What the console example needs. An application that runs on a bare Linux console asks the
