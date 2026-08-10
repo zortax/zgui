@@ -372,18 +372,31 @@ impl App {
     ///
     /// Lights every display that is plugged in, builds `view` into the first, and runs until the
     /// application stops. The picture goes to the screen through the kernel and through nothing
-    /// else: a mode on the display, two buffers, and a page flip per frame.
+    /// else: a mode on the display, the buffers that display scans out of, and a page flip per
+    /// frame.
     ///
     /// The console backend and the renderer that draws through it are installed together, because
     /// they are correct together and useless apart. The loop holds a display's buffers and says
-    /// which display a surface is; the renderer reads a composed frame back and puts it in one. An
-    /// application that installed one of them alone would draw frames that reach no screen. The map
-    /// between them is made here and given to both.
+    /// which display a surface is; the renderer puts a composed frame in one. An application that
+    /// installed one of them alone would draw frames that reach no screen. The map between them is
+    /// made here and given to both.
+    ///
+    /// # The graphics device
+    ///
+    /// Opened here, before the displays exist, and by this method rather than by the first frame. A
+    /// display can hand out the buffers it scans out of, so that a frame is composed straight into
+    /// one and nothing is read back or copied, and those buffers are images on the graphics device.
+    /// They have to exist before the renderer that composes into them, so the device has to exist
+    /// before the displays. One device is made here and given to the loop and to the renderer
+    /// factory, the same way one map is.
+    ///
+    /// A machine where no adapter opens, or whose driver will not grant the Vulkan device
+    /// extensions an exported image needs, still runs: every display keeps the copied path, where a
+    /// frame is read back and copied into a buffer the driver allocated.
     ///
     /// **This needs the device.** It takes DRM master and holds it for as long as it runs, so it
     /// needs a free virtual terminal or root, and it fails to start while a compositor holds the
-    /// device. There is no input yet either: an application here draws and animates, and a person
-    /// cannot touch it.
+    /// device.
     ///
     /// ```no_run
     /// use zgui::prelude::*;
@@ -404,9 +417,18 @@ impl App {
         V: IntoView,
     {
         let displays = zgui_platform_drm::Displays::new();
-        self.with_renderer(console::factory(displays.clone()))
+        // The extensions are asked for before the device is opened, because a device extension can
+        // be enabled only while a device is created. Every device this graphics opens reads the
+        // same list, so a device opened after a loss carries them too.
+        let graphics = zgui_render_wgpu::SharedGraphics::with_extensions(
+            zgui_platform_drm::EXTENSIONS.to_vec(),
+        );
+        // `None` is the copied path. A machine that cannot make these images is an ordinary
+        // machine rather than a failure to start.
+        let gpu = console::scanout_device(&graphics);
+        self.with_renderer(console::factory(graphics, displays.clone()))
             .run_on(
-                move |handler| zgui_platform_drm::run(handler, &displays),
+                move |handler| zgui_platform_drm::run(handler, &displays, gpu.as_deref()),
                 view,
             )
     }

@@ -1,8 +1,12 @@
 //! The frame loop: take the device, light the displays, and turn until the application stops.
 //!
 //! This is the backend's only driver. It opens the device, takes DRM master, discovers the
-//! displays, gives each one two buffers and a mode, and then turns: read the device, hand the
-//! frames that were asked for to the application, ask it how to wait, and wait.
+//! displays, gives each one its buffers, and then turns: read the device, hand the frames that were
+//! asked for to the application, ask it how to wait, and wait.
+//!
+//! Which shape those buffers take is settled here, once per display, and it needs the graphics
+//! device the renderer will draw on — so the caller opens that device first and hands it in. See
+//! [`run`].
 //!
 //! # The six ways a turn happens
 //!
@@ -70,6 +74,7 @@ use zgui_drm::commit;
 use zgui_platform::{
     AppHandler, Clock, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, Waker,
 };
+use zgui_render_wgpu::Gpu;
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
@@ -88,19 +93,30 @@ use crate::waker::EventfdWaker;
 /// Runs `handler` on the displays this machine's first usable device drives.
 ///
 /// Blocks until the application asks to finish. This is the driver `App::run_drm` hands to the
-/// framework, and the two belong together: a frame reaches a display only through a renderer that
-/// draws into this loop's scanouts.
+/// framework, and the two belong together: a frame reaches a display through a renderer that draws
+/// into this loop's scanouts, and through nothing else.
 ///
 /// `displays` is how that renderer finds them. The loop writes each display in under the surface it
 /// is seen as, for as long as it turns, so the caller makes the map, gives it to the renderer it
 /// installs, and gives the same one to this. A map nothing reads costs one allocation.
 ///
+/// `gpu` is the graphics device that renderer will draw on, and it decides how a frame reaches a
+/// screen. With one, every display that can take the imported shape gets images the renderer
+/// composes straight into. With `None`, every display keeps the copied shape — a machine with no
+/// usable graphics device and a machine whose driver refused the Vulkan device extensions both
+/// arrive here that way. The device has to be **the same one** the renderer draws on: the images
+/// belong to it, and a set made on another device is refused much later by the renderer.
+///
 /// # Errors
 ///
 /// Returns [`PlatformError::Backend`] when there is no device to open, when this process cannot
-/// become DRM master — which is what a compositor holding the device looks like — when a display
-/// refuses a buffer or a mode, and when the device stops answering while the loop runs.
-pub fn run(handler: Box<dyn AppHandler>, displays: &Displays) -> Result<(), PlatformError> {
+/// become DRM master — a compositor holding the device looks like that — when a display refuses a
+/// buffer or a mode, and when the device stops answering while the loop runs.
+pub fn run(
+    handler: Box<dyn AppHandler>,
+    displays: &Displays,
+    gpu: Option<&Gpu>,
+) -> Result<(), PlatformError> {
     let device = Arc::new(Device::open_first().map_err(backend)?);
     device.become_master().map_err(backend)?;
 
@@ -108,7 +124,7 @@ pub fn run(handler: Box<dyn AppHandler>, displays: &Displays) -> Result<(), Plat
     // returned and never blanks a console it was not going to draw on. See `crate::console`.
     let screen = ConsoleScreen::taken();
 
-    let outcome = drive(&device, handler, displays);
+    let outcome = drive(&device, handler, displays, gpu);
 
     // Both of these run whatever happened above, including an error return.
     //
@@ -129,6 +145,7 @@ fn drive(
     device: &Arc<Device>,
     mut handler: Box<dyn AppHandler>,
     displays: &Displays,
+    gpu: Option<&Gpu>,
 ) -> Result<(), PlatformError> {
     let outputs = Output::discover(device)?;
     let monitors = output::describe(&outputs);
@@ -138,28 +155,42 @@ fn drive(
     // would leak the blob of every mode it set when it went. The renderers share it, because a flip
     // is what they ask for.
     let commit = Rc::new(RefCell::new(commit::for_device(device)));
+
+    // One cursor per display, and a plane for each that the device can give one to. The list of
+    // planes already taken travels with it: a plane drives one CRTC at a time, so a second display
+    // given the first one's plane takes the first one's cursor away with nothing reported.
+    //
+    // Before the buffers, because whether the display engine composites the pointer decides which
+    // shape those buffers take: a display whose frames carry the pointer keeps the copied shape,
+    // since nothing can draw a pointer into a tiled image from the processor.
+    let mut taken = Vec::new();
+    let cursors: Vec<Rc<RefCell<Cursor>>> = outputs
+        .iter()
+        .map(|output| Rc::new(RefCell::new(Cursor::new(device, output, &mut taken))))
+        .collect();
+
     let mut scanouts: Vec<Rc<RefCell<Scanout>>> = Vec::with_capacity(outputs.len());
-    for output in &outputs {
-        let made = Scanout::copied(device, output, BGRA);
+    for (output, cursor) in outputs.iter().zip(&cursors) {
+        // Without a graphics device there is nothing to make images on, so every display copies.
+        let made = match gpu {
+            Some(gpu) => {
+                Scanout::for_display(device, output, gpu, cursor.borrow().on_a_plane(), BGRA)
+            }
+            None => Scanout::copied(device, output, BGRA),
+        };
         match made {
             Ok(scanout) => scanouts.push(Rc::new(RefCell::new(scanout))),
             Err(error) => {
                 for scanout in scanouts {
                     release(scanout, device);
                 }
+                for cursor in cursors {
+                    release_cursor(cursor, device);
+                }
                 return Err(error);
             }
         }
     }
-
-    // One cursor per display, and a plane for each that the device can give one to. The list of
-    // planes already taken travels with it: a plane drives one CRTC at a time, so a second display
-    // given the first one's plane takes the first one's cursor away with nothing reported.
-    let mut taken = Vec::new();
-    let cursors: Vec<Rc<RefCell<Cursor>>> = outputs
-        .iter()
-        .map(|output| Rc::new(RefCell::new(Cursor::new(device, output, &mut taken))))
-        .collect();
 
     let surfaces = surface::one_per_output(outputs, Arc::clone(device));
     let waker = Arc::new(EventfdWaker::new()?);
