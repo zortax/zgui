@@ -17,6 +17,6 @@ pub use crate::paragraph::broken::BrokenParagraph;
 pub use crate::paragraph::cache::{ParagraphCache, lay_out};
 pub use crate::paragraph::content::{ParagraphContent, StyledRun};
 pub use crate::paragraph::inline_box::{InlineBoxGeometry, InlineBoxPlacement};
-pub use crate::paragraph::key::{MaxAdvance, ParagraphKey, breaking_key};
+pub use crate::paragraph::key::{ContentKey, MaxAdvance, ParagraphKey, breaking_key};
 pub use crate::paragraph::shaped::{ContentWidths, Plan, ShapedParagraph};
 pub use crate::paragraph::shaper::ParagraphShaper;

@@ -196,9 +196,15 @@ fn a_vertical_align_restyle_against_a_warm_cache_moves_the_box() {
     );
 }
 
-/// An atomic inline resizing under a different constraint invalidates the break without re-shaping.
+/// An atomic inline resizing costs a shape of its own, and each width is held.
+///
+/// This is the one thing on a line that a width alone cannot re-break around. A shaped result
+/// carries the paragraph's [`ContentWidths`](zgui_text::ContentWidths), both of which count every
+/// box on the line — so one entry serving two box widths reports the first one's figures to the
+/// second, and a block sized by its content comes out the width of something else. The widths are
+/// therefore in the shaping key, and a width already shaped is still free.
 #[test]
-fn an_inline_box_resizing_costs_a_break_and_no_shape() {
+fn an_inline_box_resizing_costs_a_shape_of_its_own() {
     let _guard = counting();
     let mut scene = Scene::plain("a\u{fffc}b", TextStyle::initial());
     scene.boxes.push(InlineBoxGeometry {
@@ -214,9 +220,46 @@ fn an_inline_box_resizing_costs_a_break_and_no_shape() {
     scene.boxes[0].width = CssPx(60.0);
     let wide = scene.run(Some(CssPx(400.0)));
 
-    assert_eq!(scene.shaper.shapes, 1);
-    assert_eq!(scene.shaper.breaks, 2);
+    assert_eq!(scene.shaper.shapes, 2, "each width of the box is a shape");
     assert!(wide.geometry.lines[0].width.0 > narrow.geometry.lines[0].width.0);
+
+    scene.boxes[0].width = CssPx(20.0);
+    scene.run(Some(CssPx(400.0)));
+    assert_eq!(
+        scene.shaper.shapes, 2,
+        "and going back to one costs nothing"
+    );
+}
+
+/// Two contexts that flatten the same way but hold a box of a different width are two shapes.
+///
+/// The identifiers cannot tell them apart. An identifier is a position in one flattened form and
+/// starts again at zero in the next, so a block holding one atomic inline keys the same as every
+/// other block holding one atomic inline — including the ones nested inside it. Whichever shaped
+/// first would tell all the others how wide they are.
+#[test]
+fn two_contexts_holding_boxes_of_different_widths_do_not_share_a_shape() {
+    let mut narrow = Scene::plain("", TextStyle::initial());
+    narrow.boxes.push(InlineBoxGeometry {
+        id: 0,
+        offset: 0,
+        width: CssPx(14.0),
+        height: CssPx(14.0),
+        ascent: CssPx(14.0),
+        shift: CssPx::ZERO,
+    });
+    let mut wide = Scene::plain("", TextStyle::initial());
+    wide.boxes.push(InlineBoxGeometry {
+        width: CssPx(30.0),
+        height: CssPx(30.0),
+        ascent: CssPx(30.0),
+        ..narrow.boxes[0]
+    });
+
+    assert_ne!(
+        ParagraphKey::of(&narrow.content()),
+        ParagraphKey::of(&wide.content()),
+    );
 }
 
 /// A percentage indent resolves against the width being proposed, so two widths give two indents.

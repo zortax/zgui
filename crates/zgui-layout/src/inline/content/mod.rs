@@ -70,8 +70,9 @@ pub(crate) struct Item {
 /// resolved afresh on every measure call, because both can move while this stays valid.
 #[derive(Clone, Debug)]
 pub(crate) struct Generated {
-    /// The shaping key, computed at most once however many widths layout probes.
-    key: OnceLock<zgui_text::ParagraphKey>,
+    /// The part of the shaping key no measurement can move, computed at most once however many
+    /// widths layout probes.
+    key: OnceLock<zgui_text::ContentKey>,
     /// The string the shaper is handed.
     pub(crate) text: String,
     /// How to get from an offset in it back to the document.
@@ -97,14 +98,16 @@ pub(crate) struct Generated {
 }
 
 impl Generated {
-    /// The cache key for this flattened context.
+    /// The cache key for this flattened context, at the widths its boxes measure now.
     ///
-    /// Inline-box sizes deliberately do not enter a shaping key; only their stable identifiers and
-    /// offsets do. They may therefore vary between width probes while this answer remains valid.
+    /// Only the part the boxes cannot move is held: an identifier is a position in *this* flattened
+    /// form and starts again at zero in the next, so it says nothing about how wide the box behind
+    /// it came out. The widths are folded in per call, and a context whose atomic inline is a
+    /// different size is a different entry.
     pub(crate) fn key(&self, content: &zgui_text::ParagraphContent<'_>) -> zgui_text::ParagraphKey {
-        *self
-            .key
-            .get_or_init(|| zgui_text::ParagraphKey::of(content))
+        self.key
+            .get_or_init(|| zgui_text::ContentKey::of(content))
+            .with_boxes(content.boxes)
     }
 
     /// The item one of the shaper's inline boxes belongs to.

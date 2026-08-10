@@ -16,9 +16,12 @@ use crate::paragraph::recall::Recalled;
 /// How narrow and how wide a paragraph's content can be.
 ///
 /// The narrow figure is what it measures with a break taken at every opportunity; the wide figure
-/// is what it measures with none taken. Both are properties of the shaped glyphs alone, so they are
-/// computed once per shape and never again — which matters, because a layout engine asks for them
-/// on every intrinsic-sizing pass.
+/// is what it measures with none taken. Both are computed once per shape and never again — which
+/// matters, because a layout engine asks for them on every intrinsic-sizing pass.
+///
+/// Both count the atomic inlines on the line as well as the glyphs, so a shaped result holds these
+/// figures only for the widths those boxes had when it was taken. That is why the widths are part
+/// of the [`ParagraphKey`]: an entry reused at other widths would report the first ones.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ContentWidths {
     /// The narrowest the content can be.

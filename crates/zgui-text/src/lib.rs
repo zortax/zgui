@@ -92,9 +92,9 @@ pub use crate::glyph::{
 pub use crate::map::{Segment, SourcePos, TextMap};
 pub use crate::metrics::{FaceMetrics, FaceQuery, FixedMetrics, FontMetricsSource};
 pub use crate::paragraph::{
-    BreakRequest, BrokenParagraph, ContentWidths, InlineBoxGeometry, InlineBoxPlacement, LineBand,
-    LineBands, MaxAdvance, ParagraphCache, ParagraphContent, ParagraphKey, ParagraphShaper, Plan,
-    ShapedParagraph, StyledRun, breaking_key, lay_out,
+    BreakRequest, BrokenParagraph, ContentKey, ContentWidths, InlineBoxGeometry,
+    InlineBoxPlacement, LineBand, LineBands, MaxAdvance, ParagraphCache, ParagraphContent,
+    ParagraphKey, ParagraphShaper, Plan, ShapedParagraph, StyledRun, breaking_key, lay_out,
 };
 pub use crate::transform::{Language, Transformer};
 /// Which way the clusters of a run advance on the screen.

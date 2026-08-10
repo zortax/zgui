@@ -80,3 +80,43 @@ fn the_two_box_sizing_modes_agree_on_a_content_keyword() {
     );
     assert_eq!(widths(&border_box), widths(&content_box));
 }
+
+#[test]
+fn a_box_sized_by_an_atomic_inline_is_as_wide_as_that_box_and_not_as_its_contents() {
+    // The shape of a control beside a heading: a block holding one atomic inline, whose own line
+    // holds one atomic inline of another width. The two contexts flatten identically — no text, one
+    // box at offset zero — and an identifier is a position in one flattened form, so nothing in
+    // them but the widths tells them apart. Sharing one shaped result gives the outer block the
+    // inner mark's width, and every sibling on its row is then laid out around a box 16 too narrow.
+    let store = lay_out_fixture(
+        Element::new("root").children(vec![Element::new("wrap").children(vec![
+            Element::new("control").children(vec![
+                Element::new("mark").children(vec![Element::new("art")]),
+            ]),
+        ])]),
+        "root { display: flex; flex-direction: row; align-items: center; width: 400px }
+         wrap { display: block; flex: 0 0 auto }
+         control { display: inline-flex; align-items: center; width: 30px; height: 30px }
+         mark { display: block }
+         art { display: inline-block; width: 14px; height: 14px }",
+    );
+    let widths = widths(&store);
+    assert_eq!(widths[1], 30.0, "the block is as wide as the control in it");
+}
+
+#[test]
+fn a_max_content_box_holding_an_inline_block_asks_it_how_wide_it_wants_to_be() {
+    // The narrow answer and the wide one are two different questions about the same atomic inline,
+    // and the box around it is sized by the second. A shaped result that held the figures the first
+    // one produced would size this box to the longest word.
+    let store = lay_out_fixture(
+        Element::new("root").children(vec![
+            Element::new("wrap").children(vec![Element::new("inner").text("hello there")]),
+        ]),
+        "root { display: block; width: 400px }
+         wrap { display: block; width: max-content }
+         inner { display: inline-block }",
+    );
+    let widths = widths(&store);
+    assert_eq!(widths[1], 88.0, "the whole sentence, not its longest word");
+}

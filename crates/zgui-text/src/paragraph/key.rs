@@ -5,13 +5,14 @@ use zgui_text_style::{BreakingKey, Digest, ShapingKey};
 
 use crate::paragraph::break_request::BreakRequest;
 use crate::paragraph::content::ParagraphContent;
+use crate::paragraph::inline_box::InlineBoxGeometry;
 
 /// Identifies a shaped paragraph.
 ///
 /// It is the content, the *ordered* list of runs with their shaping keys, the atomic inlines'
-/// positions in the text, the paragraph's base direction and the device scale — everything a
-/// shaping pass reads. Two contexts with equal keys shape to the same glyphs, so one shaped result
-/// serves both.
+/// positions and widths, the paragraph's base direction and the device scale — everything a shaped
+/// result is a function of. Two contexts with equal keys shape to the same glyphs and measure the
+/// same, so one shaped result serves both.
 ///
 /// The run list is ordered and carries each run's extent, not only its style: moving a boundary
 /// between two runs changes which characters are shaped together, and a key that hashed only the
@@ -23,11 +24,34 @@ use crate::paragraph::content::ParagraphContent;
 /// collapsing leading white space does. Leaving the map out would serve the second paragraph the
 /// first one's provenance, putting every caret, selection and hit test in it at the wrong offset
 /// with nothing to report.
+///
+/// So is each atomic inline's width, for the same reason: an entry carries the
+/// [`ContentWidths`](crate::ContentWidths) it was shaped at, and every box on a line counts towards
+/// both of them. The identifiers alone cannot separate two contexts that hold a box of a different
+/// width, because an identifier is a position in one flattened form and starts again at zero in
+/// the next — so a heading beside a 30 wide control keys the same as the control's own line holding
+/// a 14 wide mark, and whichever shapes first tells the other how wide it is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ParagraphKey(pub u64);
 
 impl ParagraphKey {
     /// The key one context shapes under.
+    pub fn of(content: &ParagraphContent<'_>) -> Self {
+        ContentKey::of(content).with_boxes(content.boxes)
+    }
+}
+
+/// The part of a [`ParagraphKey`] that no measurement can move.
+///
+/// A layout engine flattens a context once and then asks it for a size at many widths, and an
+/// atomic inline on the line can come out at a different width under each of them. Hashing the
+/// whole string again for every one of those questions is work proportional to the text; hashing it
+/// once and folding the current widths in per question is work proportional to the boxes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ContentKey(pub u64);
+
+impl ContentKey {
+    /// Everything about `content` except how wide its atomic inlines currently measure.
     pub fn of(content: &ParagraphContent<'_>) -> Self {
         let mut digest = Digest::new();
         digest.push(content.text);
@@ -67,6 +91,24 @@ impl ParagraphKey {
             digest.push(segment.offset);
         }
         Self(digest.finish())
+    }
+
+    /// The whole key, at the widths `boxes` measure now.
+    ///
+    /// The heights are left out. They move where a line falls and how tall it is, which the
+    /// [breaking key](breaking_key) covers and every break re-reads — a `vertical-align` shift
+    /// therefore still reaches the output without costing a shape.
+    #[must_use]
+    pub fn with_boxes(self, boxes: &[InlineBoxGeometry]) -> ParagraphKey {
+        if boxes.is_empty() {
+            return ParagraphKey(self.0);
+        }
+        let mut digest = Digest::new();
+        digest.push(self.0);
+        for inline_box in boxes {
+            digest.push_length(inline_box.width);
+        }
+        ParagraphKey(digest.finish())
     }
 }
 
