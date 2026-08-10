@@ -291,3 +291,48 @@ fn a_link_in_a_scaled_space_scales_its_radii() {
     assert_eq!(resolved.rounded[0].rect, [20.0, 20.0, 100.0, 60.0]);
     assert_eq!(resolved.rounded[0].radii, [8.0; 8]);
 }
+
+/// The window's clip does not narrow a rectangle that is measured somewhere else.
+///
+/// A dialog placed with `left: 50%` and a transform of `translate(-50%, 0)` is laid out past the
+/// right edge of the window and drawn back inside it. Its own primitives are recorded in its own
+/// space, and the window's clip is recorded in the viewport's, so intersecting the two says the
+/// trailing edge of the panel — its close key, its scroll marks — is outside the window. The
+/// shader applies that link where it belongs; this reading leaves it out.
+#[test]
+fn a_link_in_another_space_narrows_nothing() {
+    use zgui_geom::{Corners, Matrix4};
+
+    use crate::spatial::{OwnSpace, PropertyOwner, SpatialTree};
+
+    let mut spaces = SpatialTree::with_viewport();
+    let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    let placed = Matrix4::translation(-450.0, 0.0, 0.0);
+    let panel = spaces.space_of(
+        spaces.viewport(),
+        owner,
+        OwnSpace::of(Some(placed), None, false),
+    );
+
+    let mut clips = ClipTable::rooted();
+    let window = clips.only(ClipLink::rect(rect(0.0, 0.0, 1600.0, 1000.0)));
+    let inside = clips.push(
+        window,
+        ClipLink::RoundedRect {
+            rect: rect(800.0, 40.0, 900.0, 600.0),
+            radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
+            space: panel,
+        },
+    );
+
+    assert_eq!(
+        clips.bounds_in(inside, panel.index()),
+        rect(800.0, 40.0, 900.0, 600.0),
+        "the panel's own clip is the only one measured where the panel's ink is",
+    );
+    assert_eq!(
+        clips.bounds_in(inside, SpatialId::VIEWPORT.index()),
+        rect(0.0, 0.0, 1600.0, 1000.0),
+        "and the window's is the only one measured where the page's ink is",
+    );
+}

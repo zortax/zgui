@@ -42,7 +42,7 @@ impl Scene {
 
     /// Pushes a rounded rectangle, returning the order it took or `None` if it was culled.
     pub fn push_quad(&mut self, mut quad: Quad) -> Option<DrawOrder> {
-        let order = self.assign_order(quad.ink(), quad.clip_id())?;
+        let order = self.assign_order(quad.ink(), quad.clip_id(), quad.transform)?;
         quad.order = order;
         let space = self.space_at(quad.transform);
         self.record(PrimitiveKind::Quad, self.primitives.quads.len(), space);
@@ -52,7 +52,7 @@ impl Scene {
 
     /// Pushes a box shadow, returning the order it took or `None` if it was culled.
     pub fn push_shadow(&mut self, mut shadow: Shadow) -> Option<DrawOrder> {
-        let order = self.assign_order(shadow.ink(), shadow.clip_id())?;
+        let order = self.assign_order(shadow.ink(), shadow.clip_id(), shadow.transform)?;
         shadow.order = order;
         let space = self.space_at(shadow.transform);
         self.record(PrimitiveKind::Shadow, self.primitives.shadows.len(), space);
@@ -62,7 +62,8 @@ impl Scene {
 
     /// Pushes a text decoration line, returning the order it took or `None` if it was culled.
     pub fn push_decoration(&mut self, mut decoration: Decoration) -> Option<DrawOrder> {
-        let order = self.assign_order(decoration.ink(), decoration.clip_id())?;
+        let order =
+            self.assign_order(decoration.ink(), decoration.clip_id(), decoration.transform)?;
         decoration.order = order;
         let space = self.space_at(decoration.transform);
         self.record(
@@ -77,7 +78,7 @@ impl Scene {
     /// Pushes a single-channel coverage sprite, returning the order it took or `None` if it was
     /// culled.
     pub fn push_mono_sprite(&mut self, mut sprite: MonoSprite) -> Option<DrawOrder> {
-        let order = self.assign_order(sprite.ink(), sprite.clip_id())?;
+        let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
         sprite.order = order;
         let space = self.space_at(sprite.transform);
         self.record(
@@ -102,7 +103,7 @@ impl Scene {
     /// [`MonoSprite`] instead, because subpixel coverage against a transparent destination is
     /// meaningless.
     pub fn push_subpixel_sprite(&mut self, mut sprite: SubpixelSprite) -> Option<DrawOrder> {
-        let order = self.assign_order(sprite.ink(), sprite.clip_id())?;
+        let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
         sprite.order = order;
         let space = self.space_at(sprite.transform);
         self.record(
@@ -121,7 +122,7 @@ impl Scene {
 
     /// Pushes a full-colour sprite, returning the order it took or `None` if it was culled.
     pub fn push_color_sprite(&mut self, mut sprite: ColorSprite) -> Option<DrawOrder> {
-        let order = self.assign_order(sprite.ink(), sprite.clip_id())?;
+        let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
         sprite.order = order;
         let space = self.space_at(sprite.transform);
         self.record(
@@ -151,7 +152,11 @@ impl Scene {
         // against neighbours recorded untransformed decides overlap in two different spaces at
         // once. A held placement showed the failure — the drawing ordered against nothing, painted
         // first, and covered by the surface drawn over it.
-        let order = self.assign_order(item.local_ink, item.clip)?;
+        let order = self.assign_order(
+            item.local_ink,
+            item.clip,
+            item.transform.unwrap_or(SpatialId::VIEWPORT).index(),
+        )?;
         item.order = order;
         let space = item.transform;
         self.record(PrimitiveKind::Vector, self.primitives.vectors.len(), space);
@@ -161,7 +166,7 @@ impl Scene {
 
     /// Pushes an external texture, returning the order it took or `None` if it was culled.
     pub fn push_external(&mut self, mut external: ExternalQuad) -> Option<DrawOrder> {
-        let order = self.assign_order(external.ink(), external.clip)?;
+        let order = self.assign_order(external.ink(), external.clip, external.transform.index())?;
         external.order = order;
         let space = Some(external.transform);
         self.record(
@@ -175,7 +180,8 @@ impl Scene {
 
     /// Pushes a backdrop filter, returning the order it took or `None` if it was culled.
     pub fn push_backdrop(&mut self, mut backdrop: BackdropFilter) -> Option<DrawOrder> {
-        let order = self.assign_order(backdrop.bounds, backdrop.clip)?;
+        let order =
+            self.assign_order(backdrop.bounds, backdrop.clip, SpatialId::VIEWPORT.index())?;
         backdrop.order = order;
         // A backdrop names no coordinate system: what it reads is a rectangle of the target as it
         // already stands, in the device's own coordinates.
@@ -229,8 +235,19 @@ impl Scene {
     /// subtree's space, and the clip imposed on it from inside the same subtree is measured there
     /// too. Resolving only one of them onto the device would cull a field's letters against a
     /// rectangle the transform moved out from under them.
-    fn assign_order(&mut self, ink: Rect<DevicePx, Device>, clip: ClipId) -> Option<DrawOrder> {
-        let admitted = self.clips.bounds(clip);
+    ///
+    /// `space` is the slot of the coordinate system the primitive draws under, and the cull reads
+    /// only the links of the chain that were measured in it. A link from anywhere else states its
+    /// rectangle in another system's coordinates — the window's clip against a panel the panel's
+    /// own transform moved — and is left to the shader, which resolves every link against the
+    /// frame's matrices. See [`ClipTable::bounds_in`](crate::ClipTable::bounds_in).
+    fn assign_order(
+        &mut self,
+        ink: Rect<DevicePx, Device>,
+        clip: ClipId,
+        space: u32,
+    ) -> Option<DrawOrder> {
+        let admitted = self.clips.bounds_in(clip, space);
         let Some(clipped) = ink.intersection(admitted) else {
             counter::bump(Counter::PrimitivesCulled);
             self.note_unreplayable();

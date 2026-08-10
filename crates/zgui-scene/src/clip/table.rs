@@ -202,6 +202,42 @@ impl ClipTable {
         )
     }
 
+    /// The rectangle `id` admits *of the coordinate system `space` names*.
+    ///
+    /// Only the links that measure their rectangle in `space` are intersected. A link measured
+    /// anywhere else states its rectangle in another system's coordinates, and a rectangle from one
+    /// system narrowed by a rectangle from another is a number about neither: a panel laid out past
+    /// the right edge of the window and moved back onto it by a transform of its own is inside the
+    /// window's clip and outside the rectangle that clip was interned as.
+    ///
+    /// So the links from elsewhere are left out here and applied where they can be — the shader
+    /// resolves every one of them through the frame's matrices. Leaving one out admits a primitive
+    /// that is still going to be clipped; intersecting it drops one that is on the screen.
+    ///
+    /// `space` is a slot rather than a whole [`SpatialId`], because a primitive carries only the
+    /// slot. Two occupants of one slot are one coordinate system as far as this is concerned, and
+    /// a name that has gone stale is [a different question](crate::scene::depends).
+    pub fn bounds_in(&self, id: ClipId, space: u32) -> Rect<DevicePx, Device> {
+        let mut aabb = ResolvedClip::unbounded().aabb;
+        let mut cursor = id;
+        while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
+            if let ClipLink::RoundedRect {
+                rect,
+                space: measured,
+                ..
+            } = link
+                && measured.index() == space
+            {
+                intersect(&mut aabb, *rect);
+            }
+            cursor = *parent;
+        }
+        Rect::new(
+            Point::new(DevicePx(aabb[0]), DevicePx(aabb[1])),
+            Size::new(DevicePx(aabb[2]), DevicePx(aabb[3])),
+        )
+    }
+
     /// The device pixels `id` admits, each link put where its coordinate system now is.
     ///
     /// The geometry reading of [`ClipTable::resolve_placed`], for a cull intersecting the clip

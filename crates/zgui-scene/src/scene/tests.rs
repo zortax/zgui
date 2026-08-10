@@ -262,3 +262,40 @@ fn the_log_records_every_kind_it_can_hold() {
     let kinds: Vec<_> = scene.ops().iter().map(|op| op.kind).collect();
     assert_eq!(kinds, vec![PrimitiveKind::Quad, PrimitiveKind::Decoration]);
 }
+
+/// A primitive drawn in a space of its own survives a clip that was measured in another one.
+///
+/// The failure this stands against is a whole control disappearing: a dialog laid out past the
+/// right edge of the window and moved back inside it by a transform, whose trailing keys are
+/// recorded beyond the window's clip rectangle and drawn well inside it. The cull is an
+/// optimisation and the shader is the authority, so a link from a space that has moved out from
+/// under the ink is left to the shader.
+#[test]
+fn a_clip_from_another_space_does_not_cull() {
+    use zgui_geom::Matrix4;
+
+    use crate::spatial::{OwnSpace, PropertyOwner};
+
+    let (mut scene, fill) = scene();
+    let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    let placed = Matrix4::translation(-450.0, 0.0, 0.0);
+    let viewport = scene.spatial.viewport();
+    let panel = scene
+        .spatial
+        .space_of(viewport, owner, OwnSpace::of(Some(placed), None, false));
+    let window = scene
+        .clips
+        .only(ClipLink::rect(rect(0.0, 0.0, 400.0, 400.0)));
+
+    // Laid out past the window's right edge, drawn 450 to the left of where it was laid out.
+    let key = rect(500.0, 40.0, 30.0, 30.0);
+    let mut quad = Quad::filled(key, fill).clipped(window);
+    quad.transform = panel.index();
+    let placed_key = scene.push_quad(quad);
+    // The control: the same rectangle drawn where it was laid out is outside the window and gone.
+    let left_behind = scene.push_quad(Quad::filled(key, fill).clipped(window));
+
+    assert!(placed_key.is_some(), "the key the transform brings back in");
+    assert!(left_behind.is_none(), "the one nothing moves");
+    assert_eq!(scene.primitives.quads.len(), 1);
+}
