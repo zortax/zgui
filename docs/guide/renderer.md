@@ -58,8 +58,14 @@ composed everything into its target and then failed to acquire a surface has sti
 target. Redrawing it would repeat work that has already happened.
 
 `FrameOutcome::retires_damage` is the authority. It inverts the naive rule: most skip reasons retire
-damage. `SkipReason::Unconfigured` and `SkipReason::DeviceUnavailable` retain damage because no work
-was recorded.
+damage. `SkipReason::Unconfigured`, `SkipReason::Unacquired` and `SkipReason::DeviceUnavailable`
+retain damage because no work was recorded.
+
+A renderer that has to be given the buffer it composes into — one drawing straight into what a
+display scans out of — asks for that buffer *before* it composes. A frame refused there recorded
+nothing, so it reports `Unacquired` and keeps its damage. `Timeout` is the same refusal met after
+composing, where the target does hold the frame's pixels. Report the one that matches where your
+renderer stopped.
 
 Three skip reasons also say *do not ask for another frame*: `Occluded`, `Undamaged`, and
 `DeviceUnavailable`. A platform event wakes an occluded window. A new frame cannot improve an
