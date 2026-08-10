@@ -76,25 +76,35 @@
 //!
 //! # How a frame reaches the screen
 //!
-//! `Scanout` owns two buffers per display and flips between them. A frame the renderer read back
-//! is copied into whichever is off screen, the flip is asked for, and the completion event says
-//! the frame arrived and the other buffer is free again. The copy chooses its fourcc from the
-//! channel order of the readback, so a frame is copied rather than swizzled pixel by pixel.
+//! `Scanout` owns one display's buffers and rotates through them, and it has two shapes.
+//!
+//! **Copied.** Two buffers the driver allocated. A frame the renderer read back is copied into
+//! whichever is off screen, the flip is asked for, and the completion event says the frame arrived
+//! and the other buffer is free again. The copy chooses its fourcc from the channel order of the
+//! readback, so a frame is copied rather than swizzled pixel by pixel.
+//!
+//! **Imported.** Three Vulkan images in a layout the display hardware can read, exported as
+//! dma-bufs and registered as framebuffers, that the renderer composes straight into. Neither the
+//! readback nor the copy happens at all. A frame ends with one barrier that gives the image to the
+//! display engine, and then the flip. `import` makes the images and records the barrier.
+//!
+//! Which shape a display takes is settled once, when it is set up, and written to the log with its
+//! reason. `Copied` names the four reasons: a display whose engine composites no pointer keeps the
+//! copied shape whatever else it could do, because a pointer is drawn into the frame by the
+//! processor and a tiled image is not something the processor can address.
+//!
+//! On both shapes the mode is set by the first present rather than when the buffers are made. The
+//! imported shape cannot set it any earlier — its images belong to a graphics device that exists
+//! only once the renderer has been built — and deferring it leaves the console's own text on the
+//! screen until there is a frame to replace it with.
 //!
 //! A window system presents for a caller; a console does not. So the last step belongs to whatever
-//! draws, and this crate offers the three things that step needs: `FORMAT`, the texture a frame is
+//! draws, and this crate offers the things that step needs: `FORMAT`, the texture a frame is
 //! composed into; `DrmDisplay::present`, which copies a composed frame into the buffer a display is
-//! about to scan out of and asks for the flip; and `Displays`, which says which display a surface
-//! is. The renderer that uses them lives in `zgui`, because a renderer is built by the runtime and
-//! a backend at this layer cannot name the runtime.
-//!
-//! # The buffers that need no copy
-//!
-//! `import` makes a different kind of buffer: a Vulkan image in a layout the display hardware can
-//! read, exported as a dma-buf, that the renderer composes straight into. That removes both the
-//! readback and the copy above. Nothing drives a display from one yet — the import, the framebuffer
-//! and the flip are the next step — and the copied path stays as the answer for every machine where
-//! this cannot be built, which `Unsupported` names the reason for.
+//! about to scan out of and asks for the flip; `Scanout::slot` and `Scanout::present_drawn`, which
+//! are the same step for a display the renderer draws into directly; and `Displays`, which says
+//! which display a surface is. The renderer that uses them lives in `zgui`, because a renderer is
+//! built by the runtime and a backend at this layer cannot name the runtime.
 //!
 //! # The loop
 //!
@@ -123,12 +133,13 @@
 // platform, and this workspace denies a broken one.
 
 #![deny(missing_docs)]
-// This crate is on the unsafe ledger's allowlist for two reasons. A surface hands out its native
-// handles, and `raw-window-handle`'s `borrow_raw` constructors are unsafe. And `import` creates the
-// images a display scans out of directly, which is Vulkan reached through wgpu's hal: every call
-// into a driver is unsafe, and so is handing the finished image back to wgpu. Every unsafe block
-// states what makes it sound. This backend still issues no ioctl of its own — `zgui-drm` owns every
-// one of them.
+// This crate is on the unsafe ledger's allowlist for two reasons outside its tests. A surface hands
+// out its native handles, and `raw-window-handle`'s `borrow_raw` constructors are unsafe. And
+// `import` creates the images a display scans out of directly and submits the barrier that gives a
+// drawn one to the display engine, which is Vulkan reached through wgpu's hal: every call into a
+// driver is unsafe, and so is handing the finished image back to wgpu. The tests hold a third: an
+// `ioctl` declared and called in `input/seat.rs`. Every unsafe block states what makes it sound.
+// This backend issues no ioctl of its own outside those tests.
 #![allow(unsafe_code)]
 
 // The kernel's display interface exists on Linux and nowhere else, so on any other platform this
@@ -179,11 +190,11 @@ pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
 pub use crate::display::{Displays, DrmDisplay};
 #[cfg(target_os = "linux")]
-pub use crate::import::{EXTENSIONS, Imported, Offered, Plane, Unsupported};
+pub use crate::import::{EXTENSIONS, Imported, Offered, Plane, Release, Unsupported};
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]
-pub use crate::scanout::{FORMAT, Scanout};
+pub use crate::scanout::{Copied, FORMAT, Scanout};
 #[cfg(target_os = "linux")]
 pub use crate::surface::DrmSurface;
 #[cfg(target_os = "linux")]

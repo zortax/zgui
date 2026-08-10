@@ -140,7 +140,7 @@ fn drive(
     let commit = Rc::new(RefCell::new(commit::for_device(device)));
     let mut scanouts: Vec<Rc<RefCell<Scanout>>> = Vec::with_capacity(outputs.len());
     for output in &outputs {
-        let made = Scanout::new(device, output, &mut **commit.borrow_mut(), BGRA);
+        let made = Scanout::copied(device, output, BGRA);
         match made {
             Ok(scanout) => scanouts.push(Rc::new(RefCell::new(scanout))),
             Err(error) => {

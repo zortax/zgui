@@ -1,9 +1,13 @@
 //! Putting a rendered frame on a real display: allocate, modeset, flip, wait for the completion.
 //!
-//! This is the one thing in this backend that no unit test can stand in for. A blit that steps the
-//! wrong stride, a fourcc whose channels are the other way round and a flip whose completion never
-//! arrives all pass every test that runs without hardware, and all three show up here as a picture
-//! that is wrong or a wait that times out.
+//! This is the copied path, which every machine has. It is the one thing in this backend that no
+//! unit test can stand in for: a blit that steps the wrong stride, a fourcc whose channels are the
+//! other way round and a flip whose completion never arrives all pass every test that runs without
+//! hardware, and all three show up here as a picture that is wrong or a wait that times out.
+//!
+//! The mode is set by the first present rather than when the buffers are made, so the order below
+//! is one modeset and then flips. `tests/imported.rs` is the other shape, which needs no master
+//! and therefore asserts a great deal more.
 //!
 //! It needs DRM master. A compositor holding the device is refused with `EPERM`, so this looks for
 //! master, says on standard error that it did not get it, and returns — the shape `cargo xtask
@@ -153,8 +157,8 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     // One commit for the device, the way the frame loop holds one: the modeset and every flip
     // after it go through the same object, so the mode blob it replaces is the one it destroys.
     let mut commit = commit::for_device(&device);
-    let mut scanout = Scanout::new(&device, output, &mut *commit, pixels.is_bgra())
-        .expect("the mode is set on this display");
+    let mut scanout = Scanout::copied(&device, output, pixels.is_bgra())
+        .expect("the driver allocates two buffers and registers both");
 
     // The pointer this display carries. It is placed here so that what reaches the screen is what
     // a person would be looking at, and it says which of the two paths this device took.
@@ -174,17 +178,25 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
             .expect("the driver takes an image on the cursor plane it offered");
     }
 
+    // The first present is the modeset. It carries no event: the call returning says the frame is
+    // up, so nothing is outstanding afterwards and the second frame is taken at once.
+    assert!(
+        scanout
+            .present(&device, &mut *commit, &pixels, &cursor)
+            .expect("the driver sets the mode on this display"),
+        "nothing is outstanding in front of the first frame"
+    );
     assert!(
         scanout
             .present(&device, &mut *commit, &pixels, &cursor)
             .expect("the driver accepts the first flip"),
-        "nothing is outstanding in front of the first frame"
+        "a modeset leaves no flip on its way, so the frame after it is flipped rather than declined"
     );
     assert!(
         !scanout
             .present(&device, &mut *commit, &pixels, &cursor)
             .expect("a refused frame is not an error"),
-        "a second frame before the completion is declined rather than written over the buffer \
+        "a third frame before the completion is declined rather than written over the buffer \
          that is still on screen"
     );
     assert!(
@@ -193,8 +205,9 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
         output.mode.refresh_rate_millihertz()
     );
 
-    // The buffer the first frame was written into is now the one on screen, and the other is free.
-    // A second frame proves the pair really rotates rather than the first one having worked once.
+    // The buffer the second frame was written into is now the one on screen, and the other is
+    // free. A third frame proves the pair really rotates rather than the first flip having worked
+    // once.
     assert!(
         scanout
             .present(&device, &mut *commit, &pixels, &cursor)
@@ -207,7 +220,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     );
 
     println!(
-        "two frames reached crtc {} and both flips completed",
+        "three frames reached crtc {}: one modeset and two flips, both completed",
         output.pipe.crtc
     );
     scanout.release(&device);
