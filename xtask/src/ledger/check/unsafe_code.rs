@@ -25,7 +25,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "zgui-geom",
         "plain-old-data impls for the types that cross to the GPU",
     ),
-    ("zgui-render-wgpu", "GPU resource handling"),
+    (
+        "zgui-render-wgpu",
+        "loading a pipeline cache from a stored blob, and creating a device through wgpu's hal so \
+         that it enables the Vulkan device extensions a caller asked for",
+    ),
     (
         "zgui-render-vector-vello",
         "creating a pipeline cache from a stored blob",

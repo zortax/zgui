@@ -1,5 +1,6 @@
 //! Opening a device, and refusing to guess when none of them works.
 
+use std::ffi::CStr;
 use std::sync::Arc;
 
 use zgui_geom::{Device, Size};
@@ -160,13 +161,19 @@ impl Builder {
     ///
     /// A tier is enumerated only when every tier before it has failed, so the backends kept as a
     /// fallback cost a machine that never needs them nothing at all.
+    ///
+    /// No Vulkan device extension is asked for here. A builder opens one device for one target and
+    /// rebuilds through a builder after a loss, so a list stated on it would reach one caller
+    /// only. The list belongs to
+    /// [`SharedGraphics::with_extensions`](crate::SharedGraphics::with_extensions), where every
+    /// device-opening path reads it, so a replacement device carries it too.
     fn open(
         self,
         target: RenderTarget,
         origin: Origin,
         present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let (gpu, presentation) = open_device(&self.instance, self.backends, present)?;
+        let (gpu, presentation) = open_device(&self.instance, self.backends, &[], present)?;
         Ok(WgpuRenderer::assemble(
             DeviceState::new(gpu),
             None,
@@ -192,9 +199,14 @@ impl Builder {
 ///
 /// Separate from [`Builder`] because opening a device and assembling a renderer are two things:
 /// [`SharedGraphics`](crate::SharedGraphics) opens one device and assembles many renderers on it.
+///
+/// `extensions` reaches every candidate, and a candidate that cannot enable the names opens all the
+/// same. So the adapter this accepts decides whether a caller gets the Vulkan device extensions it
+/// asked for. See [`Gpu::open`] for what the list does.
 pub(crate) fn open_device(
     instance: &wgpu::Instance,
     backends: wgpu::Backends,
+    extensions: &[&'static CStr],
     mut present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
 ) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
     let mut rejections: Vec<(String, String)> = Vec::new();
@@ -204,7 +216,7 @@ pub(crate) fn open_device(
         enumerated += candidates.len();
         for candidate in candidates {
             let name = adapter::describe(&candidate.get_info());
-            let gpu = match Gpu::open(instance.clone(), candidate) {
+            let gpu = match Gpu::open(instance.clone(), candidate, extensions) {
                 Ok(gpu) => Arc::new(gpu),
                 Err(reason) => {
                     rejections.push((name, reason));
