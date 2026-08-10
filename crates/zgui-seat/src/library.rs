@@ -22,9 +22,9 @@
 
 // The table below is libseat's interface rather than a list of this crate's call sites. Every row
 // is a symbol the header declares, every row is resolved together with the rest by `Library::load`
-// and checked against the real library by the test at the foot of this file, and no row is called
-// yet. Without this, declaring the interface in one piece would fail `-D warnings` until the last
-// caller was written.
+// and checked against the real library by the test at the foot of this file, and some rows are
+// called from nowhere yet. Without this, declaring the interface in one piece would fail
+// `-D warnings` until the last caller was written.
 #![allow(dead_code)]
 
 use std::ffi::{OsStr, c_char, c_int, c_uint, c_void};

@@ -16,5 +16,13 @@ license.workspace = true
 [dependencies]
 libloading.workspace = true
 
+# The backend is chosen through an environment variable, and writing one while another thread reads
+# the environment is a data race. A test harness runs its tests on several threads, so this target
+# has its own `main` and sets the variable before it makes anything.
+[[test]]
+name = "noop"
+path = "tests/noop.rs"
+harness = false
+
 [lints]
 workspace = true

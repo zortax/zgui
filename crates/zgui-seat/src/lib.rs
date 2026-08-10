@@ -17,20 +17,28 @@
 //! [`Error::Library`], which a caller reads and answers. A console session answers it by opening
 //! the devices itself, and pays the privilege that costs.
 //!
-//! [`Library::load`] opens the shared object and resolves every symbol this crate calls. The
-//! addresses live inside [`Library`] and are reached through it, so the mapping stands for as long
-//! as anything can call one. The table itself is internal.
+//! [`Library::load`] is that same open on its own, for a caller that wants to know whether libseat
+//! is here before it asks for a seat. The addresses live inside [`Library`] and are reached through
+//! it, so the mapping stands for as long as anything can call one. The table itself is internal.
 //!
 //! # Portability
 //!
 //! `zgui-drm` and `zgui-evdev` are gated on Linux, because every line of them is a call into the
-//! kernel. This one links nothing and resolves its symbols at run time, so it compiles on any host.
+//! kernel. This one links nothing and resolves its symbols at run time, so a machine with no
+//! libseat and no session daemon still builds it. A build needs a unix host, because
+//! [`Seat::descriptor`] hands out a `BorrowedFd`, which the standard library has on unix.
 //!
 //! # Backends
 //!
 //! libseat picks a backend when a seat is opened, and the machine settles which one: logind where
 //! it runs the terminals, seatd where a daemon listens on a socket, and a builtin backend that
 //! needs root. Whether any of them answers is settled the same way, so a caller reads what it got.
+//!
+//! # Using a seat
+//!
+//! [`Seat::open`] opens the library, opens the seat this session is on, and waits for it to become
+//! usable. [`Seat::descriptor`] is what a loop waits on, and [`Seat::dispatch`] answers a list of
+//! [`Change`]s. Dropping the seat closes it and gives the terminal back.
 
 #![deny(missing_docs)]
 // This crate is on the unsafe ledger's allowlist for one reason: libseat is opened at run time and
@@ -40,6 +48,8 @@
 
 pub mod error;
 pub mod library;
+pub mod seat;
 
 pub use crate::error::{Error, Result};
 pub use crate::library::Library;
+pub use crate::seat::{Change, ENABLE_WITHIN, Seat};
