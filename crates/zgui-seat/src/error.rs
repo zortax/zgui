@@ -1,6 +1,8 @@
 //! Refusals, and what each one carries.
 
+use std::ffi::c_int;
 use std::fmt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// The result of a call into libseat.
@@ -83,6 +85,53 @@ pub enum Error {
         /// `errno` at the failure.
         errno: i32,
     },
+    /// libseat refused a device.
+    ///
+    /// The backend opens the device, so a path the machine does not have arrives here as well as a
+    /// device the seat may not hand over. The seat has to be enabled, and the backends permit DRM
+    /// and evdev devices alone.
+    OpenDevice {
+        /// The device that was asked for.
+        path: PathBuf,
+        /// `errno` at the refusal.
+        errno: i32,
+    },
+    /// A device path holds a zero byte.
+    ///
+    /// A C string ends at its first zero, so such a path would arrive cut short and open a device
+    /// nobody asked for. It is refused here, and libseat is asked nothing.
+    DevicePath {
+        /// The path that was asked for.
+        path: PathBuf,
+    },
+    /// libseat refused to take a device back.
+    ///
+    /// The descriptor is closed either way. What is left is the session daemon's record of the
+    /// device, which it holds until the seat closes.
+    CloseDevice {
+        /// libseat's id for the device.
+        device: c_int,
+        /// `errno` at the refusal.
+        errno: i32,
+    },
+    /// libseat refused the switch.
+    ///
+    /// The session carries on unchanged. A backend with no terminals to switch between refuses
+    /// every switch, and the noop backend is one.
+    Switch {
+        /// The terminal that was asked for.
+        terminal: u32,
+        /// `errno` at the refusal.
+        errno: i32,
+    },
+    /// The terminal number is wider than libseat's interface holds.
+    ///
+    /// A session number crosses as a C `int`. A number that does not fit would arrive as a
+    /// different one, so it is refused here and libseat is asked nothing.
+    Terminal {
+        /// The terminal that was asked for.
+        terminal: u32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -105,6 +154,29 @@ impl fmt::Display for Error {
             Self::Dispatch { errno } => {
                 write!(f, "the seat could not be dispatched: {}", os(*errno))
             }
+            Self::OpenDevice { path, errno } => write!(
+                f,
+                "libseat refused the device `{}`: {}",
+                path.display(),
+                os(*errno)
+            ),
+            Self::DevicePath { path } => {
+                write!(f, "the device path `{}` holds a zero byte", path.display())
+            }
+            Self::CloseDevice { device, errno } => write!(
+                f,
+                "libseat refused to take device {device} back: {}",
+                os(*errno)
+            ),
+            Self::Switch { terminal, errno } => write!(
+                f,
+                "libseat refused the switch to terminal {terminal}: {}",
+                os(*errno)
+            ),
+            Self::Terminal { terminal } => write!(
+                f,
+                "terminal {terminal} is wider than libseat's session number holds"
+            ),
         }
     }
 }
@@ -181,6 +253,75 @@ mod tests {
         assert!(
             message.contains("107"),
             "and the number is there: {message}"
+        );
+    }
+
+    #[test]
+    fn a_refused_device_names_the_path_and_the_number_the_system_gave() {
+        // Which device is the first thing a person asks, so the path is in the line rather than in
+        // a field somebody has to go and read.
+        let error = Error::OpenDevice {
+            path: PathBuf::from("/dev/dri/card0"),
+            errno: 13,
+        };
+
+        let message = error.to_string();
+        assert!(
+            message.starts_with("libseat refused the device `/dev/dri/card0`: "),
+            "the device is named: {message}"
+        );
+        assert!(message.contains("13"), "and the number is there: {message}");
+    }
+
+    #[test]
+    fn a_path_with_a_zero_byte_says_what_is_wrong_with_it() {
+        let error = Error::DevicePath {
+            path: PathBuf::from("/dev/null"),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "the device path `/dev/null` holds a zero byte"
+        );
+    }
+
+    #[test]
+    fn a_device_that_did_not_go_back_names_its_id() {
+        let error = Error::CloseDevice {
+            device: 7,
+            errno: 22,
+        };
+
+        let message = error.to_string();
+        assert!(
+            message.starts_with("libseat refused to take device 7 back: "),
+            "the device is named: {message}"
+        );
+        assert!(message.contains("22"), "and the number is there: {message}");
+    }
+
+    #[test]
+    fn a_refused_switch_names_the_terminal() {
+        let error = Error::Switch {
+            terminal: 1,
+            errno: 19,
+        };
+
+        let message = error.to_string();
+        assert!(
+            message.starts_with("libseat refused the switch to terminal 1: "),
+            "the terminal is named: {message}"
+        );
+        assert!(message.contains("19"), "and the number is there: {message}");
+    }
+
+    #[test]
+    fn a_terminal_the_interface_cannot_hold_says_so() {
+        let error = Error::Terminal { terminal: u32::MAX };
+
+        assert_eq!(
+            error.to_string(),
+            "terminal 4294967295 is wider than libseat's session number holds"
         );
     }
 
