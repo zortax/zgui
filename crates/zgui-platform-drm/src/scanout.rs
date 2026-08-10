@@ -47,6 +47,7 @@
 //! fourcc the buffers are registered under comes from it.
 
 use std::fmt;
+use std::os::fd::BorrowedFd;
 
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
@@ -470,7 +471,8 @@ impl Scanout {
         cursor.draw(bytes, destination_stride, width, height);
 
         let framebuffer = framebuffers[back];
-        self.show(device, commit, framebuffer)?;
+        // No fence: the processor wrote the picture into this buffer, so it is already there.
+        self.show(device, commit, framebuffer, None)?;
         self.back = (back + 1) % COPIED;
         Ok(true)
     }
@@ -524,7 +526,9 @@ impl Scanout {
             .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
 
         let framebuffer = framebuffers[back];
-        self.show(device, commit, framebuffer)?;
+        // No fence yet: the barrier above is waited for here, so the frame is finished by the time
+        // this commits.
+        self.show(device, commit, framebuffer, None)?;
         self.back = (back + 1) % IMPORTED;
         Ok(true)
     }
@@ -604,7 +608,11 @@ impl Scanout {
         }
     }
 
-    /// Puts `framebuffer` on the screen, setting the mode the first time.
+    /// Puts `framebuffer` on the screen once `fence` signals, setting the mode the first time.
+    ///
+    /// `fence` is a sync file the display engine waits for before it reads the buffer, and both
+    /// halves carry it. The first frame of a display arrives through the modeset, so a fence left
+    /// out there would put the one frame the graphics device had not finished on the screen.
     ///
     /// A modeset carries no completion event — the call returning says the frame is up — so
     /// nothing is left outstanding by the first one and the second present is taken at once. A flip
@@ -614,15 +622,16 @@ impl Scanout {
         device: &Device,
         commit: &mut dyn Commit,
         framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
     ) -> Result<(), PlatformError> {
         if self.lit {
             commit
-                .flip(device, self.pipe, framebuffer)
+                .flip(device, self.pipe, framebuffer, fence)
                 .map_err(backend)?;
             self.flipping = true;
         } else {
             commit
-                .modeset(device, self.pipe, &self.mode, framebuffer)
+                .modeset(device, self.pipe, &self.mode, framebuffer, fence)
                 .map_err(backend)?;
             self.lit = true;
         }

@@ -15,10 +15,13 @@ mod legacy;
 pub use crate::commit::atomic::AtomicCommit;
 pub use crate::commit::legacy::LegacyCommit;
 
+use std::os::fd::BorrowedFd;
+
 use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
 use crate::error::Result;
 use crate::framebuffer::Framebuffer;
+use crate::property::ObjectKind;
 use crate::resources::Mode;
 
 /// One display: a connector, the CRTC driving it, and the plane it scans out from.
@@ -44,31 +47,63 @@ pub trait Commit {
     /// be ready for [`Commit::modeset`] to fail after it has already changed something.
     fn can_test(&self) -> bool;
 
-    /// Puts `pipe` into `mode`, scanning out `framebuffer`.
+    /// Puts `pipe` into `mode`, scanning out `framebuffer`, once `fence` has signalled.
+    ///
+    /// [`Commit::flip`] states what `fence` is and who closes it. A caller asks
+    /// [`waits_for_a_fence`] before it passes one.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the configuration,
-    /// and [`Error::Unusable`](crate::Error::Unusable) from the atomic interface when an object
-    /// lacks a property the commit needs.
+    /// and [`Error::Unusable`](crate::Error::Unusable) when this interface can carry no fence and
+    /// one was given.
     fn modeset(
         &mut self,
         device: &Device,
         pipe: Pipe,
         mode: &Mode,
         framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
     ) -> Result<()>;
 
-    /// Shows `framebuffer` on `pipe` at the next vertical blank.
+    /// Shows `framebuffer` on `pipe` at the next vertical blank, once `fence` has signalled.
     ///
-    /// Returns without waiting. Completion arrives as an event on the device, which Task 12's
-    /// reader picks up.
+    /// Returns without waiting. Completion arrives as an event on the device, which
+    /// [`Device::poll_events`] reads.
+    ///
+    /// # The fence
+    ///
+    /// `fence` is a sync file the framebuffer's own contents wait on: the display engine reads the
+    /// buffer once that fence signals. A caller that draws with a graphics device commits a frame
+    /// the device has not finished yet, and the kernel does the waiting on its own thread.
+    ///
+    /// `None` commits with no fence at all, and the buffer has to hold the finished picture
+    /// already.
+    ///
+    /// The descriptor stays the caller's. `drm_atomic_plane_set_property` reads the fence out of
+    /// the sync file with `sync_file_get_fence`, which takes a reference to the fence inside and
+    /// leaves the file open. It does that on a commit that succeeded and on one that was refused.
+    /// So a caller closes every fence it passes, and a caller that expected the kernel to take one
+    /// leaks a descriptor per frame.
+    ///
+    /// Only the atomic interface can carry one, and [`waits_for_a_fence`] is the question to ask.
+    /// The legacy interface refuses a fence it cannot carry: a frame committed without the wait it
+    /// asked for reaches the screen half drawn.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the flip, which is
-    /// what asking for a second flip before the first completed looks like.
-    fn flip(&mut self, device: &Device, pipe: Pipe, framebuffer: Framebuffer) -> Result<()>;
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the flip. Asking for
+    /// a second flip before the first completed is refused that way: the header states that a page
+    /// flip already pending answers `EBUSY`. Returns
+    /// [`Error::Unusable`](crate::Error::Unusable) when this interface can carry no fence and one
+    /// was given.
+    fn flip(
+        &mut self,
+        device: &Device,
+        pipe: Pipe,
+        framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
+    ) -> Result<()>;
 
     /// Puts `image` on `plane`, with its top left corner at `x`, `y` on the CRTC.
     ///
@@ -169,4 +204,47 @@ pub fn for_device(device: &Device) -> Box<dyn Commit> {
     } else {
         Box::new(LegacyCommit::new())
     }
+}
+
+/// Returns `true` when a commit on `device` can be told to wait for a fence before it shows
+/// `plane`.
+///
+/// Two things have to hold, and a caller cannot assume either. The device has to be on the atomic
+/// interface, because a fence reaches the kernel as a plane property and the legacy interface
+/// addresses no plane at all. And that plane has to carry `IN_FENCE_FD`, which is the property the
+/// fence is named by. A driver that registered none publishes none, and `drm_mode_atomic_ioctl`
+/// answers `ENOENT` for the whole commit when it meets a property id the object does not have.
+///
+/// Asked once per display, before anything is drawn. The answer decides which of two costs a frame
+/// pays: a caller that can pass a fence commits at once and lets the kernel wait for the graphics
+/// device, and a caller that cannot blocks on the device itself before it commits.
+///
+/// ```no_run
+/// use zgui_drm::Device;
+/// use zgui_drm::commit::waits_for_a_fence;
+/// use zgui_drm::device::Interface;
+///
+/// let device = Device::open_first_with(Interface::Legacy)?;
+///
+/// for plane in device.planes()? {
+///     assert!(
+///         !waits_for_a_fence(&device, plane)?,
+///         "the legacy interface names no plane, so it can name no fence",
+///     );
+/// }
+/// # Ok::<(), zgui_drm::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns whatever [`Device::properties`] failed with, which is a plane the kernel would not
+/// describe.
+pub fn waits_for_a_fence(device: &Device, plane: u32) -> Result<bool> {
+    if !device.is_atomic() {
+        return Ok(false);
+    }
+    Ok(device
+        .properties(plane, ObjectKind::Plane)?
+        .id("IN_FENCE_FD")
+        .is_some())
 }
