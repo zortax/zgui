@@ -28,6 +28,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
@@ -374,20 +375,27 @@ fn a_released_display_gives_back_every_descriptor_and_can_be_built_again() {
     again.release(&machine.device);
 }
 
-#[test]
-fn the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline() {
-    let test = "the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline";
-    let _guard = device_lock();
-    let Some(machine) = machine(test) else {
-        return;
-    };
+/// Returns a set of images and the barriers over them, or the reason this machine has none.
+///
+/// `takes_a_fence` is what a display answers when it is asked whether a commit on it can carry a
+/// sync file. Both answers are exercised here rather than only the one this machine gives, because
+/// the second is what every display on the legacy interface and every plane with no `IN_FENCE_FD`
+/// property gets.
+///
+/// The barriers come first in the pair so that they are dropped first. They reach the graphics
+/// device through a handle that keeps nothing alive, and the images hold the textures that do.
+fn recorded(
+    test: &str,
+    machine: &Machine,
+    takes_a_fence: bool,
+) -> Option<(Handover, Vec<Imported>)> {
     let scans = match published(&machine.device, machine.output.pipe.plane) {
         Ok(scans) if !scans.is_empty() => scans,
         _ => {
             eprintln!(
                 "{test}: this display publishes no layout for {FOURCC:?}, so nothing was asserted"
             );
-            return;
+            return None;
         }
     };
 
@@ -401,38 +409,69 @@ fn the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline() 
         Ok(buffers) => buffers,
         Err(refusal) => {
             eprintln!("{test}: no buffer can be exported here, so nothing was asserted: {refusal}");
-            return;
+            return None;
         }
     };
-    let mut handover = Handover::record(&machine.gpu, &buffers)
+    let handover = Handover::record(&machine.gpu, &buffers, takes_a_fence)
         .expect("a device that exported the images can record the barriers over them");
+    Some((handover, buffers))
+}
 
-    // The real sequence, twice round the set: acquire the buffer, record and submit the frame,
-    // give the buffer over. Nothing waits between the frame and the release — one queue starts its
-    // submissions in order, which is the whole reason a barrier-only command buffer is enough.
+/// Runs one frame per buffer: take it back, draw into it, give it over.
+///
+/// Returns what each frame signalled. This is the real sequence: nothing waits between the frame
+/// and the release, because one queue starts its submissions in order, and that is why a
+/// barrier-only command buffer is enough.
+fn round(
+    machine: &Machine,
+    buffers: &[Imported],
+    handover: &mut Handover,
+    round: usize,
+) -> Vec<Option<OwnedFd>> {
+    let mut fences = Vec::with_capacity(buffers.len());
+    for (slot, buffer) in buffers.iter().enumerate() {
+        handover.acquire(slot).unwrap_or_else(|refusal| {
+            panic!("buffer {slot} could not be taken back on round {round}: {refusal}")
+        });
+        draw(&machine.gpu, buffer);
+        let fence = handover.release(slot).unwrap_or_else(|refusal| {
+            panic!("buffer {slot} could not be given over on round {round}: {refusal}")
+        });
+        fences.push(fence);
+    }
+    fences
+}
+
+#[test]
+fn the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline() {
+    let test = "the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline";
+    let _guard = device_lock();
+    let Some(machine) = machine(test) else {
+        return;
+    };
+    // The shape with no fence in it, so every barrier here is something this thread waits for and
+    // therefore something the deadline covers.
+    let Some((mut handover, buffers)) = recorded(test, &machine, false) else {
+        return;
+    };
+
+    // Twice round, so that the acquire does something. The first time round every buffer is fresh
+    // and the acquire is a no-op; the second time round each one is held by the display engine and
+    // a barrier really runs, which is the half a single pass would never reach.
     //
-    // Twice round is what makes the acquire do anything. The first time round every buffer is
-    // fresh and the acquire is a no-op; the second time round each one is held by the display
-    // engine and a barrier really runs, which is the half a single pass would never reach.
-    //
-    // The wait inside each barrier carries a deadline. That is what makes a device that never
-    // completes the frame a failure with a reason rather than a test binary that stops: `Gpu::wait`
-    // would poll for ever, and an image bound to no memory produces exactly that.
-    for round in 0..2 {
-        for (slot, buffer) in buffers.iter().enumerate() {
-            handover.acquire(slot).unwrap_or_else(|refusal| {
-                panic!("buffer {slot} could not be taken back on round {round}: {refusal}")
-            });
-            draw(&machine.gpu, buffer);
-            handover.release(slot).unwrap_or_else(|refusal| {
-                panic!("buffer {slot} could not be given over on round {round}: {refusal}")
-            });
-            eprintln!(
-                "{test}: round {round}, buffer {slot} was taken back, drawn into and given to the \
-                 display engine in {:#018x}",
-                buffer.modifier().0
-            );
-        }
+    // Each wait carries a deadline, so a device that never completes the frame is a failure with a
+    // reason rather than a test binary that stops: `Gpu::wait` would poll for ever, and an image
+    // bound to no memory produces exactly that.
+    for pass in 0..2 {
+        let fences = round(&machine, &buffers, &mut handover, pass);
+        assert!(
+            fences.iter().all(Option::is_none),
+            "a display that can carry no fence was handed one anyway"
+        );
+        eprintln!(
+            "{test}: round {pass}, every buffer was taken back, drawn into and given to the \
+             display engine"
+        );
     }
 
     assert!(
@@ -453,12 +492,133 @@ fn the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline() 
 
     // A slot no buffer sits at is refused by name rather than reaching the driver, which is where
     // a renderer told to draw into a set of another length would otherwise arrive.
-    for refusal in [handover.release(BUFFERS), handover.acquire(BUFFERS)] {
-        let Err(refusal) = refusal else {
-            panic!("a barrier was submitted for a buffer this set does not hold");
-        };
-        eprintln!("{test}: a slot past the end is refused: {refusal}");
+    let Err(refusal) = handover.release(BUFFERS) else {
+        panic!("a barrier was submitted for a buffer this set does not hold");
+    };
+    eprintln!("{test}: a slot past the end is refused: {refusal}");
+    let Err(refusal) = handover.acquire(BUFFERS) else {
+        panic!("a barrier was submitted for a buffer this set does not hold");
+    };
+    eprintln!("{test}: a slot past the end is refused: {refusal}");
+}
+
+#[test]
+fn a_display_that_can_carry_no_fence_is_waited_for_before_it_is_committed() {
+    let test = "a_display_that_can_carry_no_fence_is_waited_for_before_it_is_committed";
+    let _guard = device_lock();
+    let Some(machine) = machine(test) else {
+        return;
+    };
+    // The unavailable case, made rather than reasoned about: a display on the legacy interface and
+    // a plane with no `IN_FENCE_FD` property both answer exactly this.
+    let Some((mut handover, buffers)) = recorded(test, &machine, false) else {
+        return;
+    };
+    assert_eq!(handover.waits(), 0, "nothing has been submitted yet");
+
+    // The first round acquires nothing — every buffer is fresh — so the waits it costs are the
+    // releases alone. That is the assertion that the acquire stopped waiting: a per-frame wait
+    // there would show up here as twice the number.
+    let fences = round(&machine, &buffers, &mut handover, 0);
+    assert!(
+        fences.iter().all(Option::is_none),
+        "a display that can carry no fence has nothing to hand the kernel"
+    );
+    assert_eq!(
+        handover.waits(),
+        BUFFERS,
+        "one wait per frame given over, and none for taking a buffer back"
+    );
+
+    // The second round acquires for real, because the display engine holds every buffer now.
+    let fences = round(&machine, &buffers, &mut handover, 1);
+    assert!(fences.iter().all(Option::is_none));
+    assert_eq!(
+        handover.waits(),
+        2 * BUFFERS,
+        "an acquire that really submits a barrier still waits for nothing"
+    );
+    eprintln!(
+        "{test}: {} frames cost {} waits",
+        2 * BUFFERS,
+        handover.waits()
+    );
+
+    // Teardown with barriers still running, which a frame that waits for nothing leaves behind.
+    // Dropping the set has to empty the queue before it destroys the pool, and the device has to
+    // be usable afterwards — a pool destroyed under a running command buffer is undefined, and
+    // what it looks like is the next set failing or the device going away.
+    drop(handover);
+    drop(buffers);
+    let Some((again, buffers)) = recorded(test, &machine, false) else {
+        panic!("the device that gave a set back can record another");
+    };
+    assert!(
+        !machine.gpu.loss().is_lost(),
+        "the device was lost while the barriers were given back"
+    );
+    drop(again);
+    drop(buffers);
+}
+
+#[test]
+fn a_released_frame_hands_the_kernel_a_sync_file_this_thread_never_waits_for() {
+    let test = "a_released_frame_hands_the_kernel_a_sync_file_this_thread_never_waits_for";
+    let _guard = device_lock();
+    let Some(machine) = machine(test) else {
+        return;
+    };
+    let Some((mut handover, buffers)) = recorded(test, &machine, true) else {
+        return;
+    };
+
+    let mut fences = round(&machine, &buffers, &mut handover, 0);
+    fences.extend(round(&machine, &buffers, &mut handover, 1));
+
+    // Whether this driver exports a sync file is a fact about the machine, so both answers are
+    // taken. What is asserted is that the two halves agree: a frame that answered a descriptor is
+    // one nothing here waited for, and a frame that answered none is one that was waited for.
+    if fences.iter().all(Option::is_none) {
+        assert_eq!(
+            handover.waits(),
+            fences.len(),
+            "a frame the kernel was given no fence for has to have been waited for here"
+        );
+        eprintln!(
+            "{test}: {} exports no sync file, so every frame was waited for here",
+            machine.gpu.describe()
+        );
+        return;
     }
+
+    assert_eq!(
+        handover.waits(),
+        0,
+        "a frame the kernel is handed a fence for is a frame this thread does not wait for"
+    );
+    for (frame, fence) in fences.iter().enumerate() {
+        let Some(fence) = fence else {
+            panic!("frame {frame} answered no sync file while the frames around it did");
+        };
+        // A real descriptor rather than a number. A driver that reported success and exported
+        // nothing would hand back something the kernel refuses at the far end of a commit, where
+        // the only symptom is a display that stops.
+        let stat = rustix::fs::fstat(fence).unwrap_or_else(|error| {
+            panic!("frame {frame} answered a descriptor that is not a file: {error}")
+        });
+        assert_ne!(stat.st_ino, 0, "frame {frame} answered an empty descriptor");
+        let named = std::fs::read_link(format!("/proc/self/fd/{}", fence.as_raw_fd()))
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|error| format!("<unreadable: {error}>"));
+        eprintln!("{test}: frame {frame} signalled {named}");
+    }
+
+    // Every descriptor closes here, as a caller does with one the kernel gave back.
+    drop(fences);
+    assert!(
+        !machine.gpu.loss().is_lost(),
+        "the device was lost while it was signalling the sync files"
+    );
 }
 
 #[test]
@@ -500,6 +660,77 @@ fn a_frame_is_given_to_the_display_engine_before_anything_is_committed() {
                  that is not DRM master gets: {stated}"
             );
         }
+    }
+
+    scanout.release(&machine.device);
+}
+
+#[test]
+fn a_commit_that_is_refused_keeps_no_descriptor_of_this_programs() {
+    let test = "a_commit_that_is_refused_keeps_no_descriptor_of_this_programs";
+    let _guard = device_lock();
+    let Some(machine) = machine(test) else {
+        return;
+    };
+    let Some(mut scanout) = imported(test, &machine) else {
+        return;
+    };
+    let mut commit = commit::for_device(&machine.device);
+    // Reported rather than asserted: whether a plane carries `IN_FENCE_FD` is a fact about a
+    // driver. It says whether the frames below make a descriptor at all, and the count afterwards
+    // is over those.
+    let carries = commit::waits_for_a_fence(&machine.device, machine.output.pipe.plane)
+        .expect("a plane this backend chose can be read");
+    eprintln!(
+        "{test}: plane {} {} a fence per frame",
+        machine.output.pipe.plane,
+        if carries { "carries" } else { "carries no" }
+    );
+
+    // The kernel reads the fence out of a sync file and gives the file back — `sync_file_get_fence`
+    // takes a reference to the fence inside and never closes the descriptor — so the descriptor is
+    // this program's to close on a commit that was refused and on one that succeeded alike. A
+    // caller that expected the kernel to take one leaks a descriptor a frame, which on a machine
+    // that is not DRM master is a descriptor per refused frame in a loop.
+    //
+    // The first frame is drawn before the count is taken, so that whatever the drivers open on the
+    // way to their first commit is already open.
+    let mut frame = |scanout: &mut Scanout| {
+        let Some(slot) = scanout.acquire().expect("a display owes no barrier") else {
+            panic!("nothing is outstanding, so a buffer is always named");
+        };
+        draw(&machine.gpu, &scanout.buffers()[slot]);
+        scanout.present_drawn(&machine.device, &mut *commit)
+    };
+    let first = frame(&mut scanout);
+    let Some(before) = descriptors() else {
+        eprintln!("{test}: /proc/self/fd cannot be read, so nothing was asserted");
+        scanout.release(&machine.device);
+        return;
+    };
+
+    let mut refused = 0;
+    for _ in 0..8 {
+        if frame(&mut scanout).is_err() {
+            refused += 1;
+        }
+        assert_eq!(
+            descriptors().expect("/proc/self/fd was readable a moment ago"),
+            before,
+            "a frame left a descriptor open"
+        );
+    }
+
+    match first {
+        Ok(_) => eprintln!(
+            "{test}: this process holds the device, so {} frames reached the screen and none of \
+             them left a descriptor behind",
+            8 - refused + 1
+        ),
+        Err(refusal) => eprintln!(
+            "{test}: {refused} of 8 frames were refused at the commit and none of them left a \
+             descriptor behind, which is what a process that is not DRM master gets: {refusal}"
+        ),
     }
 
     scanout.release(&machine.device);

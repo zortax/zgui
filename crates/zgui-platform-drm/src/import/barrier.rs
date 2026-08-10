@@ -24,27 +24,37 @@
 //! Both go on the queue wgpu submits frames on. `vkCmdPipelineBarrier`'s first synchronisation
 //! scope covers every command submitted to that queue before it that its source stages name, so a
 //! barrier-only command buffer submitted after the frame is ordered after the frame, and one
-//! submitted before it is ordered before it. No semaphore, no second queue, and nothing for the
-//! caller to hold.
+//! submitted before it is ordered before it. No second queue, and nothing for the caller to order
+//! for itself.
 //!
 //! # Recording
 //!
 //! Everything, once. Neither barrier for one image ever changes, so two command buffers per image
 //! are recorded while the set is made and submitted again per frame. A frame costs two
-//! `vkQueueSubmit` calls and two waits.
+//! `vkQueueSubmit` calls and, where the display can be handed a sync file, no wait at all.
 //!
-//! # The waits
+//! Every one of them is recorded for **simultaneous use**, because a frame no longer waits for the
+//! barriers of the frame three before it. Without that flag, resubmitting a command buffer whose
+//! last submission may still be running is undefined.
 //!
-//! [`Handover::release`] blocks until its barrier has run. The plane is handed no sync file, so
-//! nothing tells the display engine to wait for the frame, and the barrier has to have finished
-//! before the flip is committed.
+//! # Who waits for the graphics device
 //!
-//! [`Handover::acquire`] blocks for a smaller reason. Queue order alone puts its barrier ahead of
-//! the frame, which is all the frame needs. The wait says that every submission this type made has
-//! finished by the time the call returns, so [`Drop`] destroys the pool and the fence without
-//! asking whether anything is still running.
+//! The kernel, wherever it can. [`Handover::release`] signals a semaphore exported as a sync file
+//! and answers the descriptor, and the caller hands that to the atomic commit as the plane's
+//! `IN_FENCE_FD`. The commit then returns at once and the display engine reads the buffer when the
+//! frame is finished, so the thread that draws and reads input blocks on nothing.
 //!
-//! Both waits carry a deadline. A submission a driver never completes is a real failure on this
+//! This program, where it cannot. A driver that exports no sync file and a display on the legacy
+//! interface, which commits no plane property, both leave one place for the wait to happen: here,
+//! before the commit. [`Handover::waits`] counts how often that happened.
+//!
+//! [`Handover::acquire`] waits in neither case. Queue order alone puts its barrier ahead of the
+//! frame, which is all the frame needs: `vkCmdPipelineBarrier` names every command submitted to
+//! the queue before it. The wait that used to be here said that nothing this type had submitted
+//! was still running, and that is now said where it is needed. [`Drop`] submits one more barrier,
+//! which orders after everything, and waits for that.
+//!
+//! Every wait carries a deadline. A submission a driver never completes is a real failure on this
 //! path, and a wait with no deadline turns it into a program that stops and says nothing.
 //!
 //! # wgpu's own tracker
@@ -61,12 +71,14 @@
 //! every test still passes.
 
 use std::fmt;
+use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use ash::vk;
-use tracing::warn;
+use tracing::{info, warn};
 use zgui_render_wgpu::Gpu;
 
+use crate::import::fence::Signal;
 use crate::import::{Imported, Unsupported, vulkan};
 
 /// How long one barrier is given to finish before the device is called stuck.
@@ -74,6 +86,17 @@ use crate::import::{Imported, Unsupported, vulkan};
 /// A barrier over one image touches no memory, so two seconds is far past anything a working
 /// device takes. The deadline exists for the submission that never completes at all.
 const FINISHED: Duration = Duration::from_secs(2);
+
+/// The flag every command buffer here is recorded with.
+///
+/// A frame no longer waits for anything the frame three before it submitted, so a command buffer
+/// can be handed to the queue again while its last submission is still running. Vulkan allows that
+/// for a command buffer recorded with this flag, and a command buffer recorded without it must not
+/// be submitted while it is pending.
+///
+/// It costs a driver the right to assume one submission at a time of a buffer holding one barrier
+/// over one image.
+const REUSED: vk::CommandBufferUsageFlags = vk::CommandBufferUsageFlags::SIMULTANEOUS_USE;
 
 /// The part of a scanout image a barrier covers: the colour aspect, one level, one layer.
 ///
@@ -105,8 +128,8 @@ struct Sides {
 
 /// Moving a set of images between the renderer and the display engine.
 ///
-/// One of these per buffer set, holding the two recorded barriers of each buffer and which side of
-/// the handover it is on.
+/// One of these per buffer set, holding the two recorded barriers of each buffer, which side of the
+/// handover it is on, and the semaphore a released frame signals.
 ///
 /// # The order
 ///
@@ -117,13 +140,13 @@ struct Sides {
 ///
 /// # The device
 ///
-/// The [`Gpu`] this was recorded on has to outlive it. The pool, the command buffers and the fence
-/// are Vulkan objects this owns, reached through a device handle that keeps nothing alive, so a
-/// device dropped first leaves this destroying objects on a device that has gone. A
-/// [`Scanout`](crate::Scanout) holds this beside the textures of the same set, which keep the
-/// device open for as long as they exist, and gives this back first.
+/// The [`Gpu`] this was recorded on has to outlive it. The pool, the command buffers, the fence
+/// and the semaphore are Vulkan objects this owns, reached through a device handle that keeps
+/// nothing alive, so a device dropped first leaves this destroying objects on a device that has
+/// gone. A [`Scanout`](crate::Scanout) holds this beside the textures of the same set, which keep
+/// the device open for as long as they exist, and gives this back first.
 pub struct Handover {
-    /// The device the pool, the command buffers and the fence belong to.
+    /// The device the pool, the command buffers, the fence and the semaphore belong to.
     device: ash::Device,
     /// The queue the frames are submitted on, and therefore the one the barriers go on.
     queue: vk::Queue,
@@ -131,8 +154,21 @@ pub struct Handover {
     pool: vk::CommandPool,
     /// The two barriers of each buffer, at that buffer's own index.
     sides: Vec<Sides>,
+    /// A barrier over nothing, which orders after every command submitted before it.
+    ///
+    /// What a wait is put behind when there is no other command to attach one to. Submitting it
+    /// and waiting for its fence says that every earlier submission on this queue has finished.
+    /// [`Drop`] needs that, and a frame does not.
+    drain: vk::CommandBuffer,
     /// What a submission is waited on.
     fence: vk::Fence,
+    /// The semaphore a released frame signals, where the kernel can be handed a sync file for it.
+    ///
+    /// `None` on a display that can take no fence and on a driver that exports none. Either one
+    /// leaves the wait in [`Handover::release`].
+    signal: Option<Signal>,
+    /// How many times this blocked the calling thread on the graphics device.
+    waits: usize,
     /// Whether a submission was left running.
     ///
     /// A wait that ran out leaves the fence pending, and a fence that is pending may be neither
@@ -143,22 +179,34 @@ pub struct Handover {
 }
 
 impl Handover {
-    /// The two recorded barriers of every buffer of `buffers`, on the queue `gpu` draws with.
+    /// Records the two barriers of every buffer of `buffers`, on the queue `gpu` draws with.
     ///
     /// `buffers` has to be the set the renderer will draw into, created on `gpu`. A slot handed to
     /// [`Handover::acquire`] or [`Handover::release`] is a place in this list.
+    ///
+    /// `takes_a_fence` says whether the display this set is for can be committed with a sync file,
+    /// which [`waits_for_a_fence`](zgui_drm::commit::waits_for_a_fence) answers. It is half the
+    /// decision; the other half is whether this driver exports one at all, which is asked here. A
+    /// display that gets a yes to both waits for nothing on this thread. A no to either keeps the
+    /// wait, and which of the two it was is written to the log once.
     ///
     /// # Errors
     ///
     /// Returns [`Unsupported`] for the reasons [`Imported::create`] returns it, and
     /// [`Unsupported::Driver`] when the driver refuses the pool, the command buffers, the
-    /// recording or the fence. Whatever was made before a refusal is given back.
-    pub fn record(gpu: &Gpu, buffers: &[Imported]) -> Result<Self, Unsupported> {
-        // Two command buffers per image, and a set of none is not a set to record for.
+    /// recording, the fence or the semaphore. Whatever was made before a refusal is given back.
+    pub fn record(
+        gpu: &Gpu,
+        buffers: &[Imported],
+        takes_a_fence: bool,
+    ) -> Result<Self, Unsupported> {
+        // Two command buffers per image plus the one a teardown waits behind, and a set of no
+        // buffers is not a set to record for.
         let count = u32::try_from(buffers.len())
             .ok()
+            .filter(|count| *count > 0)
             .and_then(|count| count.checked_mul(2))
-            .filter(|count| *count > 0);
+            .and_then(|count| count.checked_add(1));
         let Some(count) = count else {
             return Err(Unsupported::Driver {
                 step: "recording the barriers that pass a frame to the display",
@@ -166,7 +214,7 @@ impl Handover {
             });
         };
 
-        vulkan(gpu, |_, device| {
+        vulkan(gpu, |adapter, device| {
             let raw = device.raw_device();
             let family = device.queue_family_index();
 
@@ -181,6 +229,7 @@ impl Handover {
                 device: raw,
                 pool,
                 fence: vk::Fence::null(),
+                signal: None,
             };
 
             let info = vk::CommandBufferAllocateInfo::default()
@@ -193,8 +242,13 @@ impl Handover {
             let commands = unsafe { raw.allocate_command_buffers(&info) }
                 .map_err(|error| refused("allocating the command buffers", error))?;
 
+            // Two per buffer in buffer order, and the drain at the end.
+            let (&drain, pairs) = commands.split_last().ok_or_else(|| Unsupported::Driver {
+                step: "recording the barriers that pass a frame to the display",
+                reason: "the driver allocated no command buffer at all".to_owned(),
+            })?;
             let mut sides = Vec::with_capacity(buffers.len());
-            for (pair, buffer) in commands.chunks_exact(2).zip(buffers) {
+            for (pair, buffer) in pairs.chunks_exact(2).zip(buffers) {
                 let (acquire, release) = (pair[0], pair[1]);
                 record(raw, acquire, buffer.image(), Half::Acquire { family })?;
                 record(raw, release, buffer.image(), Half::Release { family })?;
@@ -205,13 +259,38 @@ impl Handover {
                     foreign: false,
                 });
             }
+            empty(raw, drain)?;
 
             // SAFETY: the structure is Vulkan's own with its `sType` set, and it asks for an
             // unsignalled fence, which the first submission below is handed and signals.
             building.fence = unsafe { raw.create_fence(&vk::FenceCreateInfo::default(), None) }
                 .map_err(|error| refused("creating the fence a barrier is waited on", error))?;
 
-            let (pool, fence) = building.take();
+            // Both halves of the one decision, in the order their answers cost anything: a display
+            // that can carry no fence is asked nothing of the driver.
+            building.signal = if takes_a_fence {
+                Signal::create(
+                    adapter.shared_instance().raw_instance(),
+                    adapter.raw_physical_device(),
+                    raw,
+                )?
+            } else {
+                None
+            };
+            info!(
+                fenced = building.signal.is_some(),
+                display = takes_a_fence,
+                "the graphics device is waited for by {}",
+                if building.signal.is_some() {
+                    "the kernel, which is handed a sync file per frame"
+                } else if takes_a_fence {
+                    "this program, because the graphics driver exports no sync file"
+                } else {
+                    "this program, because this display can be committed with no fence"
+                }
+            );
+
+            let (pool, fence, signal) = building.take();
             Ok(Self {
                 // A handle and a table of function pointers. It keeps nothing alive, and the type
                 // documentation states that the caller answers for that.
@@ -219,18 +298,25 @@ impl Handover {
                 queue: device.raw_queue(),
                 pool,
                 sides,
+                drain,
                 fence,
+                signal,
+                waits: 0,
                 stuck: false,
             })
         })
     }
 
-    /// Takes the buffer at `slot` back from the display engine, and waits until it is back.
+    /// Takes the buffer at `slot` back from the display engine.
     ///
     /// Submitted before the frame that draws into that buffer is recorded, which makes wgpu's own
-    /// idea of the image true again: the buffer is back in `COLOR_ATTACHMENT_OPTIMAL` and back in
-    /// this queue family before wgpu records a barrier out of what it believes. A frame is then
-    /// free to load the buffer's old contents.
+    /// idea of the image true again: the buffer is back in `COLOR_ATTACHMENT_OPTIMAL`
+    /// and back in this queue family before wgpu records a barrier out of what it believes. A
+    /// frame is then free to load the buffer's old contents.
+    ///
+    /// **Nothing waits here.** The queue itself orders the barrier ahead of the frame, which is all
+    /// the frame needs. See the head of this module for what the wait that used to be here said,
+    /// and where that is said now.
     ///
     /// **Does nothing for a buffer the display engine does not hold**, which covers every buffer
     /// of a new set and every buffer acquired twice in a row. So a caller acquires before every
@@ -249,21 +335,32 @@ impl Handover {
             return Ok(());
         }
         let command = side.acquire;
-        self.run(command, step)?;
+        self.submit(command, &[], vk::Fence::null(), step)?;
         self.sides[slot].foreign = false;
         Ok(())
     }
 
-    /// Gives the buffer at `slot` to the display engine, and waits until it is there.
+    /// Gives the buffer at `slot` to the display engine, and says what to wait for it with.
     ///
-    /// Submitted after the renderer's own frame and on the same queue, which is what orders it
-    /// after that frame. The caller commits the flip once this returns.
+    /// Submitted after the renderer's own frame and on the same queue, which orders it after that
+    /// frame. The caller commits the flip once this returns.
+    ///
+    /// **The descriptor answered is a sync file the commit is handed as the plane's
+    /// `IN_FENCE_FD`**, and it is why this returns without waiting: the kernel holds the flip back
+    /// until the frame and this barrier have run. The caller closes it, on a commit that succeeded
+    /// and on one that was refused alike — [`Commit::flip`](zgui_drm::commit::Commit::flip) states
+    /// why.
+    ///
+    /// `None` says there is nothing for the kernel to wait on, because the frame is already
+    /// finished: this blocked until the barrier had run before it returned. Every display gets that
+    /// answer on a driver that exports no sync file, and so does one that can be committed with no
+    /// fence at all.
     ///
     /// **The buffer has to be in `COLOR_ATTACHMENT_OPTIMAL`**, which is the layout this states it
     /// starts from. Two things put it there and one of them has to have happened: a render pass
     /// wgpu recorded into it, or the [`Handover::acquire`] that took it back from the display
     /// engine. A buffer of a new set that nothing has drawn into is still `UNDEFINED`, and this
-    /// would describe it wrongly.
+    /// barrier would describe it wrongly.
     ///
     /// Nothing else may submit on this queue while this runs. Vulkan asks for that of every queue,
     /// and here it is kept by both submissions being made from the frame loop's own thread.
@@ -271,11 +368,11 @@ impl Handover {
     /// # Errors
     ///
     /// Returns [`Unsupported::Driver`] when `slot` names no buffer, when the display engine
-    /// already holds that buffer, when the driver refuses the submission, and when the barrier
-    /// does not finish inside its deadline. The last one is a device that is not completing work:
-    /// it is reported once and every later call is refused, because a fence that is still pending
-    /// may not be reused.
-    pub fn release(&mut self, slot: usize) -> Result<(), Unsupported> {
+    /// already holds that buffer, when the driver refuses the submission, and when a barrier does
+    /// not finish inside its deadline. The last one is a device that is not completing work: it is
+    /// reported once and every later call is refused, because a fence that is still pending may not
+    /// be reused.
+    pub fn release(&mut self, slot: usize) -> Result<Option<OwnedFd>, Unsupported> {
         let step = "giving a frame to the display";
         let Some(side) = self.sides.get(slot) else {
             return Err(self.no_such(slot, step));
@@ -290,13 +387,70 @@ impl Handover {
             });
         }
         let command = side.release;
-        self.run(command, step)?;
+
+        let Some(semaphore) = self.signal.as_ref().and_then(Signal::semaphore) else {
+            let fence = self.fence;
+            self.submit(command, &[], fence, step)?;
+            self.wait(step)?;
+            self.sides[slot].foreign = true;
+            return Ok(None);
+        };
+
+        self.submit(command, &[semaphore], vk::Fence::null(), step)?;
+        // The barrier is on its way whatever the export does next, so the buffer has changed sides
+        // before anything else can fail.
         self.sides[slot].foreign = true;
-        Ok(())
+
+        let exported = match &self.signal {
+            Some(signal) => signal.export(),
+            // The semaphore above came out of this very field and nothing between the two takes it
+            // away, so this arm is unreachable. It is written out instead of unwrapped, because a
+            // frame loop is the wrong place to find out that a `None` was possible after all.
+            None => Ok(None),
+        };
+        match exported {
+            Ok(fence) => Ok(fence),
+            Err(refusal) => {
+                // The semaphore now holds a signal nothing will consume, so nothing may signal it
+                // again. What is left is the wait this was meant to remove, and the frame still
+                // has to be finished before the caller commits it.
+                warn!(
+                    "the graphics driver would not export a sync file, so this program waits for \
+                     every frame from here on: {refusal}"
+                );
+                if let Some(signal) = self.signal.as_mut() {
+                    signal.refused();
+                }
+                self.empty_the_queue(step)?;
+                Ok(None)
+            }
+        }
     }
 
-    /// Submits one recorded barrier and waits for it, or says why it could not.
-    fn run(&mut self, command: vk::CommandBuffer, step: &'static str) -> Result<(), Unsupported> {
+    /// Returns how many times this blocked the calling thread on the graphics device.
+    ///
+    /// Zero for the whole life of a display the kernel waits for, because a sync file per frame
+    /// takes the wait off this thread. One per frame drawn on every other display, plus one for the
+    /// teardown that empties the queue.
+    ///
+    /// Published because it is the one part of the arrangement a caller can check instead of
+    /// believing it: a frame that still waits looks exactly like a frame that does not, until this
+    /// climbs.
+    pub fn waits(&self) -> usize {
+        self.waits
+    }
+
+    /// Submits one recorded command buffer, or says why the driver would not take it.
+    ///
+    /// `signal` is signalled when everything in the submission has run, and `fence` says nothing
+    /// when it is null. Nothing here waits.
+    fn submit(
+        &mut self,
+        command: vk::CommandBuffer,
+        signal: &[vk::Semaphore],
+        fence: vk::Fence,
+        step: &'static str,
+    ) -> Result<(), Unsupported> {
         if self.stuck {
             return Err(Unsupported::Driver {
                 step,
@@ -305,21 +459,37 @@ impl Handover {
         }
 
         let commands = [command];
-        let submit = vk::SubmitInfo::default().command_buffers(&commands);
-        // SAFETY: the command buffer was recorded once and every earlier submission of it was
-        // waited on, so it is not in use. The fence is unsignalled and not pending, for the same
-        // reason. Nothing else submits on this queue while this runs, which the caller answers
-        // for.
+        let submit = vk::SubmitInfo::default()
+            .command_buffers(&commands)
+            .signal_semaphores(signal);
+        // SAFETY: the command buffer was recorded for simultaneous use, so submitting it while an
+        // earlier submission of it is still running is allowed. `fence` is either null or this
+        // object's own, which is unsignalled and named by no other submission — every path that
+        // hands it over waits for it before it returns. The semaphore is unsignalled as well: the
+        // export that follows every signal of it moves the payload out, and a refused export stops
+        // it being signalled at all. Nothing else submits on this queue while this runs, which the
+        // caller answers for.
         unsafe {
             self.device
-                .queue_submit(self.queue, std::slice::from_ref(&submit), self.fence)
+                .queue_submit(self.queue, std::slice::from_ref(&submit), fence)
         }
-        .map_err(|error| refused(step, error))?;
+        .map_err(|error| refused(step, error))
+    }
 
+    /// Waits for the submission that was handed the fence, and readies the fence for the next one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unsupported::Driver`] when the submission does not finish inside [`FINISHED`] and
+    /// when the driver refuses the wait. Both leave the whole object refusing everything
+    /// afterwards, because a fence that is still pending may be neither reset nor reused nor
+    /// destroyed.
+    fn wait(&mut self, step: &'static str) -> Result<(), Unsupported> {
+        self.waits += 1;
         let fences = [self.fence];
         let deadline = u64::try_from(FINISHED.as_nanos()).unwrap_or(u64::MAX);
-        // SAFETY: the fence was created on this device and was just handed to the submission
-        // above, so it is a fence of this device that a submission will signal.
+        // SAFETY: the fence was created on this device and was just handed to a submission, so it
+        // is a fence of this device that a submission will signal.
         match unsafe { self.device.wait_for_fences(&fences, true, deadline) } {
             Ok(()) => {}
             Err(vk::Result::TIMEOUT) => {
@@ -344,6 +514,22 @@ impl Handover {
             .map_err(|error| refused("readying the fence for the next barrier", error))
     }
 
+    /// Waits until every submission this made has finished.
+    ///
+    /// The drain barrier names every command submitted to this queue before it, so it starts only
+    /// once all of them are done and the fence it carries says so. That is what a wait attaches to
+    /// when there is no other command to attach one to. A fence handed to a submission of its own
+    /// says nothing about the submissions before it.
+    ///
+    /// # Errors
+    ///
+    /// The ones [`Handover::wait`] returns.
+    fn empty_the_queue(&mut self, step: &'static str) -> Result<(), Unsupported> {
+        let (drain, fence) = (self.drain, self.fence);
+        self.submit(drain, &[], fence, step)?;
+        self.wait(step)
+    }
+
     /// Returns a refusal for a slot that names no buffer of this set.
     fn no_such(&self, slot: usize, step: &'static str) -> Unsupported {
         Unsupported::Driver {
@@ -358,22 +544,31 @@ impl Handover {
 
 impl Drop for Handover {
     fn drop(&mut self) {
+        // The one wait a frame no longer does, done here instead. A pool may not be destroyed
+        // while a command buffer allocated from it is still running, and a frame leaves its
+        // barriers running on purpose.
+        if !self.stuck {
+            drop(self.empty_the_queue("emptying the queue before the barriers are given back"));
+        }
         if self.stuck {
-            // Destroying a pool a submission is still running from, or a fence still pending, is
-            // undefined. The device is not finishing work, so there is nothing to wait for either:
-            // the objects are left where they are and the driver reclaims them when the process
-            // ends.
+            // Destroying a pool a submission is still running from, a fence still pending or a
+            // semaphore a submission still names is undefined. The device is not finishing work,
+            // so there is nothing to wait for either: the objects are left where they are and the
+            // driver reclaims them when the process ends.
             warn!(
-                "a barrier was left running on the graphics device, so the pool and the fence it \
-                 used stay allocated until this process ends"
+                "a barrier was left running on the graphics device, so the pool, the fence and \
+                 the semaphore it used stay allocated until this process ends"
             );
             return;
         }
-        // SAFETY: every submission this made was waited to completion before it returned, so
-        // nothing names the pool, its command buffers or the fence. Destroying the pool frees the
-        // command buffers with it. The device outlives this, which the type documentation states
-        // the caller answers for.
+        // SAFETY: the drain above finished, and it is ordered after every command submitted to
+        // this queue before it, so nothing names the pool, its command buffers, the fence or the
+        // semaphore. Destroying the pool frees the command buffers with it. The device outlives
+        // this, which the type documentation states the caller answers for.
         unsafe {
+            if let Some(signal) = &self.signal {
+                signal.destroy(&self.device);
+            }
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.pool, None);
         }
@@ -395,39 +590,48 @@ impl fmt::Debug for Handover {
                 "on the display",
                 &self.sides.iter().filter(|side| side.foreign).count(),
             )
+            .field("fenced", &self.signal.is_some())
+            .field("waits", &self.waits)
             .field("stuck", &self.stuck)
             .finish()
     }
 }
 
-/// The pool and the fence while the rest of the recording is still being made.
+/// The pool, the fence and the semaphore while the rest of the recording is still being made.
 ///
-/// Gives both back when it is dropped, so a driver that refuses a step half way through leaves the
-/// device as it was found. [`Recording::take`] is what a finished recording stops it with.
+/// Gives all three back when it is dropped, so a driver that refuses a step half way through leaves
+/// the device as it was found. [`Recording::take`] is what a finished recording stops it with.
 struct Recording<'a> {
-    /// The device both belong to.
+    /// The device all three belong to.
     device: &'a ash::Device,
     /// The pool, which owns every command buffer allocated from it.
     pool: vk::CommandPool,
     /// The fence, or null before it exists.
     fence: vk::Fence,
+    /// The semaphore a released frame signals, before it exists and where there is none.
+    signal: Option<Signal>,
 }
 
 impl Recording<'_> {
-    /// The pool and the fence, with this guard disarmed.
-    fn take(mut self) -> (vk::CommandPool, vk::Fence) {
+    /// Returns the pool, the fence and the semaphore, and disarms this guard.
+    fn take(mut self) -> (vk::CommandPool, vk::Fence, Option<Signal>) {
         let pool = std::mem::replace(&mut self.pool, vk::CommandPool::null());
         let fence = std::mem::replace(&mut self.fence, vk::Fence::null());
-        (pool, fence)
+        let signal = self.signal.take();
+        (pool, fence, signal)
     }
 }
 
 impl Drop for Recording<'_> {
     fn drop(&mut self) {
+        if let Some(signal) = &self.signal {
+            // SAFETY: the semaphore was created on this device and was never handed to a
+            // submission — it is created last, and a recording that reached a submission is one
+            // this guard was already disarmed for.
+            unsafe { signal.destroy(self.device) };
+        }
         if self.fence != vk::Fence::null() {
-            // SAFETY: the fence was created on this device and was never handed to a submission —
-            // it is created last, and a recording that reached a submission is one this guard was
-            // already disarmed for.
+            // SAFETY: as above, for the same reason.
             unsafe { self.device.destroy_fence(self.fence, None) };
         }
         if self.pool != vk::CommandPool::null() {
@@ -526,7 +730,7 @@ fn record(
     image: vk::Image,
     half: Half,
 ) -> Result<(), Unsupported> {
-    let begin = vk::CommandBufferBeginInfo::default();
+    let begin = vk::CommandBufferBeginInfo::default().flags(REUSED);
     // SAFETY: the command buffer was allocated from a pool nothing else records into, and it is
     // recorded once before anything submits it.
     unsafe { device.begin_command_buffer(command, &begin) }
@@ -553,6 +757,38 @@ fn record(
     // SAFETY: the command buffer was begun above and holds one barrier.
     unsafe { device.end_command_buffer(command) }
         .map_err(|error| refused("ending a barrier's command buffer", error))
+}
+
+/// Records a barrier over nothing into `command`, which orders after every earlier command.
+///
+/// A pipeline barrier naming no image and no buffer is an execution dependency and nothing else,
+/// and `ALL_COMMANDS` on its first side makes that dependency cover every command already submitted
+/// to the queue. So a fence handed to the submission that carries this signals only once all of
+/// them have finished. A fence handed to a submission of its own says no such thing.
+fn empty(device: &ash::Device, command: vk::CommandBuffer) -> Result<(), Unsupported> {
+    let begin = vk::CommandBufferBeginInfo::default().flags(REUSED);
+    // SAFETY: the command buffer was allocated from a pool nothing else records into, and it is
+    // recorded once before anything submits it.
+    unsafe { device.begin_command_buffer(command, &begin) }
+        .map_err(|error| refused("beginning the drain barrier's command buffer", error))?;
+
+    // SAFETY: the command buffer is recording, and a barrier with no memory barrier of any kind is
+    // an execution dependency the specification defines for every queue that takes graphics work.
+    unsafe {
+        device.cmd_pipeline_barrier(
+            command,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &[],
+        );
+    }
+
+    // SAFETY: the command buffer was begun above and holds one barrier.
+    unsafe { device.end_command_buffer(command) }
+        .map_err(|error| refused("ending the drain barrier's command buffer", error))
 }
 
 /// Returns a refusal naming the step the driver would not do, and what it answered.

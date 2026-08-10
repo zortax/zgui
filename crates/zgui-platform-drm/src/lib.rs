@@ -89,6 +89,13 @@
 //! buffer back from the display engine before it is drawn into, one gives it over afterwards — and
 //! then the flip follows. `import` makes the images and records the barriers.
 //!
+//! **Nothing on that path waits for the graphics device on this thread.** The barrier that gives a
+//! frame over signals a semaphore exported as a sync file, and the flip carries that descriptor as
+//! the plane's `IN_FENCE_FD`, so the kernel holds the frame back until the device has finished it.
+//! A display that can carry no fence — one on the legacy interface, one whose plane has no such
+//! property, or a graphics driver that exports no sync file — is waited for here instead, and that
+//! is what every frame used to cost.
+//!
 //! Which shape a display takes is settled once, when it is set up, and written to the log with its
 //! reason. `Copied` names the four reasons: a display whose engine composites no pointer keeps the
 //! copied shape whatever else it could do, because a pointer is drawn into the frame by the
