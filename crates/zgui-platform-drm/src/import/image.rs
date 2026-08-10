@@ -70,6 +70,16 @@ impl Plane {
         self.stride
     }
 
+    /// Returns a plane at `offset` whose rows are `stride` bytes apart.
+    ///
+    /// For the tests that state a layout instead of reading one back. What a framebuffer request
+    /// is filled from is worth checking with no device open, and the only other way to hold a
+    /// [`Plane`] is to have a driver answer one.
+    #[cfg(test)]
+    pub(crate) const fn of(offset: u32, stride: u32) -> Self {
+        Self { offset, stride }
+    }
+
     /// Returns the layout the driver answered, where every field of it fits a framebuffer request.
     ///
     /// Answers `None` for a layout that does not fit. A buffer of that shape exists — a very large
