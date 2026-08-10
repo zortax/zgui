@@ -16,7 +16,9 @@
 //! dma-buf descriptors and registered as framebuffers in the layout the driver chose. Nothing is
 //! read back and nothing is copied. A frame there is bracketed by the two barriers
 //! [`Handover`](crate::Handover) records: one takes the buffer back from the display engine before
-//! the frame is drawn, and one gives it over afterwards, and then the flip follows.
+//! the frame is drawn, and one gives it over afterwards, and then the flip follows. The flip
+//! carries a sync file for that second barrier where the display can be given one, so the kernel
+//! waits for the graphics device and the frame loop's own thread waits for nothing.
 //!
 //! An enum holds the two rather than a trait, for three reasons. There are exactly two and both
 //! live here, so nothing outside adds a third. [`Scanout::release`] takes itself by value, which a
@@ -47,11 +49,11 @@
 //! fourcc the buffers are registered under comes from it.
 
 use std::fmt;
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsFd, BorrowedFd};
 
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
-use zgui_drm::commit::{Commit, Pipe};
+use zgui_drm::commit::{Commit, Pipe, waits_for_a_fence};
 use zgui_drm::format::{Format, Modifier};
 use zgui_drm::framebuffer::Framebuffer;
 use zgui_drm::resources::Mode;
@@ -287,9 +289,22 @@ impl Scanout {
         let width = output.mode.width();
         let height = output.mode.height();
 
+        // Whether this display can be told to wait for the graphics device rather than this
+        // program waiting for it. A plane that cannot be read is answered as one that cannot, and
+        // not as a display that has to be copied: what it costs is the wait, and the display works
+        // either way.
+        let fenced = waits_for_a_fence(device, output.pipe.plane).unwrap_or_else(|error| {
+            warn!(
+                plane = output.pipe.plane,
+                "this plane's properties could not be read, so every frame for this display is \
+                 waited for before it is committed: {error}"
+            );
+            false
+        });
+
         let buffers =
             Imported::create(gpu, &layouts, width, height, IMPORTED).map_err(Copied::NoImages)?;
-        let handover = Handover::record(gpu, &buffers).map_err(Copied::NoImages)?;
+        let handover = Handover::record(gpu, &buffers, fenced).map_err(Copied::NoImages)?;
 
         // From here on the kernel holds handles and framebuffers of ours, so a refusal part way
         // through has to give them back. The guard does that, and taking it apart at the end
@@ -485,8 +500,14 @@ impl Scanout {
     /// drew becomes what the display engine reads.
     ///
     /// The barrier is submitted on the queue the frame was submitted on and is therefore ordered
-    /// after it, and this waits for it before it commits. The plane is handed no sync file, so
-    /// there is nothing else that could tell the display to wait.
+    /// after it. What waits for it is the **kernel**, wherever it can: the barrier signals a
+    /// semaphore exported as a sync file, the commit is handed that descriptor as the plane's
+    /// `IN_FENCE_FD`, and the display engine reads the buffer once it signals. So this returns
+    /// without blocking on the graphics device at all.
+    ///
+    /// Where the kernel cannot be told — a display on the legacy interface, a plane with no
+    /// `IN_FENCE_FD` property, a graphics driver that exports no sync file — this blocks until the
+    /// barrier has run and then commits, which is the only other place the wait can happen.
     ///
     /// Answers `false` when a flip is still on its way, which is the same answer
     /// [`Scanout::acquire`] gave before the frame was drawn. Nothing is submitted in that case.
@@ -521,14 +542,19 @@ impl Scanout {
             return Ok(false);
         }
 
-        handover
+        let fence = handover
             .release(back)
             .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
 
         let framebuffer = framebuffers[back];
-        // No fence yet: the barrier above is waited for here, so the frame is finished by the time
-        // this commits.
-        self.show(device, commit, framebuffer, None)?;
+        // The descriptor is this program's own for the whole of the commit and closes at the end
+        // of this call, whatever the kernel answered. `Commit::flip` states why: the kernel reads
+        // the fence out of the sync file and gives the file back, so a caller that expected it to
+        // be taken leaks one per frame — and a refused frame is exactly as often as a shown one on
+        // a machine that is not DRM master.
+        let shown = self.show(device, commit, framebuffer, fence.as_ref().map(AsFd::as_fd));
+        drop(fence);
+        shown?;
         self.back = (back + 1) % IMPORTED;
         Ok(true)
     }

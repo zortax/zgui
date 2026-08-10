@@ -2,13 +2,28 @@
 //!
 //! The copied path reads a frame back to system memory and copies it into a buffer the kernel
 //! holds: about eight megabytes each way on a 1920 by 1080 display. Neither copy happens when the
-//! renderer composes straight into memory the display engine already reads. That memory is a
-//! Vulkan image created in a layout the display hardware understands, backed by memory that can
-//! leave the device, and handed to the kernel as a file descriptor.
+//! renderer composes straight into memory the display engine already reads. That memory is a Vulkan
+//! image created in a layout the display hardware understands, backed by memory that can leave the
+//! device, and handed to the kernel as a file descriptor.
 //!
-//! **This module makes the images, gives a drawn one to the display engine, and takes it back.**
-//! Importing the descriptor, registering a framebuffer and flipping to it belong to the display
-//! side and are in [`scanout`](crate::scanout).
+//! **This module makes the images, gives a drawn one to the display engine, and answers the sync
+//! file the kernel waits for it with.** Importing the descriptor, registering a framebuffer and
+//! flipping to it belong to the display side and are in [`scanout`](crate::scanout).
+//!
+//! # The layout is a DRM format modifier
+//!
+//! A display controller reads memory in an arrangement it was given a code for. `OPTIMAL` tiling
+//! names no such arrangement, so an image here is created with `DRM_FORMAT_MODIFIER_EXT` tiling and
+//! the code the driver chose travels to the kernel with the framebuffer. A framebuffer registered
+//! under a code the memory is not in scans out as a scrambled picture, and no call reports it.
+//!
+//! # Where Vulkan is named
+//!
+//! Here. `ash` is named by this crate and by no other in the workspace, at the version wgpu-hal
+//! links. wgpu-hal re-exports nothing of it, so a `vk::Image` from a second copy of `ash` would be
+//! a different type with the same spelling and `texture_from_raw` would refuse the image. wgpu's
+//! own API has no word for a modifier, for exportable memory or for a descriptor, so everything up
+//! to the finished image is stated in Vulkan's own types and only the image reaches wgpu.
 //!
 //! # What has to line up
 //!
@@ -48,9 +63,10 @@
 //! every one of them, so each is a value the caller reads and logs.
 
 // Private, because everything any of them publishes is re-exported here and from the crate root.
-// A caller reaches `Plane`, `Offered` and `Handover` by one path each, and the split between
-// the three files is this module's own business.
+// A caller reaches `Plane`, `Offered` and `Handover` by one path each, and the split between the
+// four files is this module's own business.
 mod barrier;
+mod fence;
 mod image;
 mod modifier;
 
@@ -77,9 +93,9 @@ use crate::scanout::FORMAT;
 /// answers [`Unsupported::Extension`] naming the one that is absent.
 ///
 /// wgpu-hal enables two of them by itself on any physical device that reports them:
-/// `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`. Asking for all four states
-/// the requirement instead of relying on that.
-pub const EXTENSIONS: [&CStr; 4] = [
+/// `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`. Asking for all five is what
+/// states the requirement instead of relying on that.
+pub const EXTENSIONS: [&CStr; 5] = [
     // The `DRM_FORMAT_MODIFIER_EXT` tiling, the candidate list an image is created from, and
     // reading back which layout the driver chose.
     c"VK_EXT_image_drm_format_modifier",
@@ -92,6 +108,10 @@ pub const EXTENSIONS: [&CStr; 4] = [
     // handover makes the pixels the frame drew the pixels the display engine reads, and `Handover`
     // is the pair of barriers that does it.
     c"VK_EXT_queue_family_foreign",
+    // `vkGetSemaphoreFdKHR`, which turns a semaphore a finished frame signals into a sync file.
+    // The kernel is handed that descriptor and waits for the frame itself, so the thread that
+    // commits and reads input waits for nothing. `fence` is where it is asked for.
+    c"VK_KHR_external_semaphore_fd",
 ];
 
 /// What a frame is composed into, as wgpu states it.
@@ -387,9 +407,9 @@ impl std::error::Error for Unsupported {}
 /// exported image needs are on it. Everything past this point is Vulkan calls that assume both.
 ///
 /// The extension list read is the **device's own**, and not what the program asked for. wgpu-hal
-/// enables two of the three on any physical device that reports them, so a device that never asked
-/// can still carry them. A device that asked and whose driver refused reports the difference
-/// nowhere else.
+/// enables two of them on any physical device that reports them, so a device that never asked can
+/// still carry them. A device that asked and whose driver refused reports the difference nowhere
+/// else.
 fn vulkan<T>(
     gpu: &Gpu,
     with: impl FnOnce(&wgpu::hal::vulkan::Adapter, &wgpu::hal::vulkan::Device) -> Result<T, Unsupported>,
