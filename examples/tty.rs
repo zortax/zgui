@@ -1,15 +1,23 @@
 //! A clock on a bare Linux console: no display server, no compositor, no window.
 //!
-//! **This one needs the device.** The console backend takes DRM master and holds it, so it needs a
-//! free virtual terminal or root, and it refuses to start while a compositor is holding the card.
-//! Switch to a spare terminal with `Ctrl+Alt+F3`, log in, and run:
+//! **This one needs the device.** Switch to a spare terminal with `Ctrl+Alt+F3`, log in, and run:
 //!
 //! ```text
 //! cargo build -p zgui-examples --example tty --features drm
 //! ./target/debug/examples/tty
 //! ```
 //!
+//! Where a session daemon answers, it opens the card for this program and no privilege of its own
+//! is needed. Where none answers, the backend opens the card and takes DRM master itself, which
+//! needs root or a terminal nothing else holds. It refuses to start while a compositor holds the
+//! card.
+//!
 //! Every display that is plugged in is lit at its own preferred mode.
+//!
+//! **Switching away from it is not handled yet.** `Ctrl+Alt+F1` does nothing here: a session daemon
+//! turns the console keyboard off while it holds the devices, and a run with no daemon grabs every
+//! keyboard for itself. A switch made some other way takes the devices while this program goes on
+//! running.
 //!
 //! **Press Escape to stop it, and read the next paragraph before running it.** The backend takes
 //! the keyboard away from everything else, so `Ctrl+C` never reaches the terminal's line discipline

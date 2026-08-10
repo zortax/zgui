@@ -6024,6 +6024,7 @@ dependencies = [
  "zgui-render",
  "zgui-render-wgpu",
  "zgui-scene",
+ "zgui-seat",
  "zgui-vocab",
  "zgui-xkb",
 ]
