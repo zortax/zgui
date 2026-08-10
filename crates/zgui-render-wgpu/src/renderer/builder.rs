@@ -8,6 +8,7 @@ use zgui_render::{GpuUnavailable, RenderTarget};
 
 use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
+use crate::gpu::extensions;
 use crate::gpu::surface::ConfiguredSurface;
 use crate::renderer::shared::DeviceState;
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
@@ -185,9 +186,14 @@ impl Builder {
 /// Separate from [`Builder`] because opening a device and assembling a renderer are two things:
 /// [`SharedGraphics`](crate::SharedGraphics) opens one device and assembles many renderers on it.
 ///
-/// `extensions` reaches every candidate, and a candidate that cannot enable the names opens all the
-/// same. So the adapter this accepts decides whether a caller gets the Vulkan device extensions it
-/// asked for. See [`Gpu::open`] for what the list does.
+/// `extensions` decides the order candidates are tried in as well as what each one is asked for.
+/// An adapter whose physical device has every name is tried before one that lacks them, inside its
+/// own tier, and the order inside each group stands. Without that ordering the first adapter to
+/// open at all becomes the device for the rest of the process, and an adapter lacking the names
+/// still opens; a machine with one adapter that can hand out scanout buffers and one that cannot
+/// would then settle on whichever [`adapter::sort_key`] preferred. Where no adapter has them,
+/// every adapter is still tried and one of them opens. [`Gpu::open`] says what the list does to a
+/// device once an adapter is chosen.
 pub(crate) fn open_device(
     instance: &wgpu::Instance,
     backends: wgpu::Backends,
@@ -196,11 +202,32 @@ pub(crate) fn open_device(
 ) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
     let mut rejections: Vec<(String, String)> = Vec::new();
     let mut enumerated = 0usize;
+    // Adapters passed over for having the names and then being refused a device carrying them.
+    // Offered again at the end, where nothing else opened at all.
+    let mut deferred: Vec<wgpu::Adapter> = Vec::new();
+    // Whether a list was asked for at all. With none, every candidate is equal and the pairing
+    // below leaves the preference order exactly as `adapter::candidates` produced it.
+    let asked = !extensions.is_empty();
     for tier in adapter::tiers(backends) {
-        let candidates = adapter::candidates(instance, tier);
+        // Paired with what each one can grant, asked before any device exists. The `&&`
+        // short-circuits, so `granted_by` is never called where no list was asked for.
+        let mut candidates: Vec<(bool, wgpu::Adapter)> = adapter::candidates(instance, tier)
+            .into_iter()
+            .map(|candidate| {
+                (
+                    asked && extensions::granted_by(&candidate, extensions),
+                    candidate,
+                )
+            })
+            .collect();
         enumerated += candidates.len();
-        for candidate in candidates {
+        // Stable, so the existing preference survives inside each group.
+        candidates.sort_by_key(|(grants, _)| !grants);
+        for (grants, candidate) in candidates {
             let name = adapter::describe(&candidate.get_info());
+            // Kept only where it is about to be judged on the list, so the ordinary path clones
+            // nothing.
+            let again = grants.then(|| candidate.clone());
             let gpu = match Gpu::open(instance.clone(), candidate, extensions) {
                 Ok(gpu) => Arc::new(gpu),
                 Err(reason) => {
@@ -208,23 +235,78 @@ pub(crate) fn open_device(
                     continue;
                 }
             };
-            let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
-            let presentation = present(&gpu);
-            let validation = futures::executor::block_on(scope.pop());
-            match (presentation, validation) {
-                (Ok(presentation), None) => {
+            if grants && gpu.vulkan_extensions().is_empty() {
+                // Its physical device had every name and the driver refused a device carrying
+                // them. Passed over before `present` runs, so no surface is consumed and the next
+                // candidate can still be offered the one this candidate never saw.
+                rejections.push((
+                    name,
+                    "the adapter has the Vulkan device extensions asked for and the driver \
+                     refused a device carrying them"
+                        .to_owned(),
+                ));
+                deferred.extend(again);
+                continue;
+            }
+            match offer(&gpu, &mut present) {
+                Ok(presentation) => {
                     tracing::info!(adapter = %gpu.describe(), "graphics device opened");
                     return Ok((gpu, presentation));
                 }
-                (Ok(_), Some(error)) => rejections.push((name, error.to_string())),
-                (Err(reason), _) => rejections.push((name, reason)),
+                Err(reason) => rejections.push((name, reason)),
             }
         }
     }
+
+    // Nothing opened, and some adapter was passed over above for granting the list and then being
+    // refused a device carrying it. Those are offered again with the list no longer required. A
+    // device that copies each frame through the processor still draws, and a machine with one
+    // adapter and a driver that refuses the list would otherwise have no device at all.
+    for candidate in deferred {
+        let name = adapter::describe(&candidate.get_info());
+        let gpu = match Gpu::open(instance.clone(), candidate, &[]) {
+            Ok(gpu) => Arc::new(gpu),
+            Err(reason) => {
+                rejections.push((name, reason));
+                continue;
+            }
+        };
+        match offer(&gpu, &mut present) {
+            Ok(presentation) => {
+                tracing::warn!(
+                    adapter = %gpu.describe(),
+                    "graphics device opened without the Vulkan device extensions that were asked \
+                     for"
+                );
+                return Ok((gpu, presentation));
+            }
+            Err(reason) => rejections.push((name, reason)),
+        }
+    }
+
     if enumerated == 0 {
         tracing::warn!(backends = ?backends, "no graphics adapter was found");
     }
     Err(adapter::unavailable(rejections))
+}
+
+/// Offers `gpu` to `present`, and answers what came back or why nothing did.
+///
+/// Configuring a surface is the only way to find out whether an adapter can present to it, and a
+/// failure there raises a validation error instead of returning one. So the attempt runs inside an
+/// error scope, and both halves of the answer are read.
+fn offer(
+    gpu: &Arc<Gpu>,
+    present: &mut impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
+) -> Result<Presentation, String> {
+    let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
+    let presentation = present(gpu);
+    let validation = futures::executor::block_on(scope.pop());
+    match (presentation, validation) {
+        (Ok(presentation), None) => Ok(presentation),
+        (Ok(_), Some(error)) => Err(error.to_string()),
+        (Err(reason), _) => Err(reason),
+    }
 }
 
 /// The extent a target asks for, never smaller than one pixel.

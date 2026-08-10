@@ -6,6 +6,7 @@ use std::sync::Arc;
 use zgui_render::RenderCapabilities;
 
 use crate::gpu::adapter;
+use crate::gpu::extensions;
 use crate::gpu::loss::DeviceLoss;
 
 /// The optional features asked for when they are offered, and done without when they are not.
@@ -61,6 +62,14 @@ impl Gpu {
     /// a GL adapter, one missing name, a driver that refuses — opens the device the ordinary way
     /// and leaves [`Gpu::vulkan_extensions`] empty. A caller reads that method and does what it
     /// can do without them.
+    ///
+    /// The list has to be **dependency-closed**: an extension that requires another one requires
+    /// that name here too. Only the names given are checked against the physical device, and
+    /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387` requires the list to hold every
+    /// extension a name in it requires. A driver that answers `VK_ERROR_EXTENSION_NOT_PRESENT`
+    /// reaches the same panic inside wgpu-hal that a missing name reaches. The names a dma-buf
+    /// image needs require core Vulkan 1.2 or one another: `VK_EXT_external_memory_dma_buf`
+    /// requires `VK_KHR_external_memory_fd`.
     pub fn open(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
@@ -81,17 +90,22 @@ impl Gpu {
             required_limits: limits,
             ..Default::default()
         };
-        let (device, queue, extensions) =
-            match open_with_extensions(&adapter, extensions, &descriptor) {
-                Some((device, queue)) => (device, queue, extensions.to_vec()),
-                None => {
-                    let (device, queue) =
-                        futures::executor::block_on(adapter.request_device(&descriptor))
-                            .map_err(|error| error.to_string())?;
-                    (device, queue, Vec::new())
-                }
-            };
+        let (device, queue, extensions) = match extensions::open(&adapter, extensions, &descriptor)
+        {
+            Some(opened) => opened,
+            None => {
+                let (device, queue) =
+                    futures::executor::block_on(adapter.request_device(&descriptor))
+                        .map_err(|error| error.to_string())?;
+                (device, queue, Vec::new())
+            }
+        };
 
+        // Registered outside the match, so that a device from either arm has it. A device opened
+        // through the hal reports a loss the same way, and one with no watcher would go on drawing
+        // into a dead device with nothing to notice it. No test would see an arm that lost this:
+        // the suite injects a loss through `DeviceLoss::report`, because a real one cannot be
+        // provoked.
         let loss = Arc::new(DeviceLoss::new());
         let watcher = Arc::clone(&loss);
         device.set_device_lost_callback(move |reason, message| watcher.report(reason, &message));
@@ -136,9 +150,11 @@ impl Gpu {
         self.capabilities
     }
 
-    /// Returns the Vulkan device extensions enabled on this device beyond the ones wgpu asks for.
+    /// Returns the Vulkan device extensions enabled beyond the ones wgpu asks for.
     ///
-    /// Empty on four occasions: where nothing asked for any, where the adapter is not a Vulkan one,
+    /// The names that were asked for. wgpu-hal appends them to the list `vkCreateDevice` is given,
+    /// so a device that opened is a device that has them. Empty on four occasions: where nothing
+    /// asked for any, where the adapter is a GL one or the target has no Vulkan backend at all,
     /// where the physical device lacks a name that was asked for, and where the driver refused a
     /// device carrying them. So this is the answer to whether they were enabled, and it is an
     /// answer a caller has to read: an image created for an extension the device never enabled is
@@ -160,91 +176,6 @@ impl Gpu {
     /// Blocks until everything submitted has finished.
     pub fn wait(&self) {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
-    }
-}
-
-/// Opens a device with `extensions` enabled, or answers `None` where that cannot be done.
-///
-/// `None` is a report rather than a failure, and every one of its causes is ordinary. The fast
-/// path is Vulkan-only, because a DRM format modifier and a dma-buf export are Vulkan things:
-/// [`wgpu::Adapter::as_hal`] answers `None` on the GL backend, and the caller opens the device the
-/// ordinary way instead.
-///
-/// # Why the names are checked first
-///
-/// `vkCreateDevice` answers `VK_ERROR_EXTENSION_NOT_PRESENT` for a name the physical device does
-/// not have, and wgpu-hal turns that one result into a panic rather than an error. So a name is
-/// found to be missing here, before the driver ever sees it, which is also what makes the list
-/// all-or-nothing: a partly enabled set would leave a caller believing it had the rest.
-fn open_with_extensions(
-    adapter: &wgpu::Adapter,
-    extensions: &[&'static CStr],
-    descriptor: &wgpu::DeviceDescriptor<'_>,
-) -> Option<(wgpu::Device, wgpu::Queue)> {
-    if extensions.is_empty() {
-        return None;
-    }
-    // SAFETY: the guard is read from and dropped at the end of this function. Nothing reachable
-    // through it is destroyed here, and the device made from it below outlives it, which is what
-    // `as_hal` asks of a caller.
-    let hal = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }?;
-    let physical = hal.physical_device_capabilities();
-    if let Some(missing) = extensions
-        .iter()
-        .find(|name| !physical.supports_extension(name))
-    {
-        tracing::warn!(
-            adapter = %adapter::describe(&adapter.get_info()),
-            extension = ?missing,
-            "the physical device does not have a Vulkan device extension that was asked for"
-        );
-        return None;
-    }
-
-    // Adding names is the one change the callback is allowed to make, and `create_info` is
-    // documented to have its extension list overwritten, so the names go in the vector.
-    let callback: Box<wgpu::hal::vulkan::CreateDeviceCallback<'_>> = Box::new(move |args| {
-        for &name in extensions {
-            if !args.extensions.contains(&name) {
-                args.extensions.push(name);
-            }
-        }
-    });
-    // SAFETY: the features, limits and memory hints are the ones `request_device` would have
-    // passed, so this device is created with exactly what `descriptor` states. The callback only
-    // appends extension names, every one of which was found on the physical device above; it
-    // removes nothing, disables no feature, and touches no other field.
-    let opened = unsafe {
-        hal.open_with_callback(
-            descriptor.required_features,
-            &descriptor.required_limits,
-            &descriptor.memory_hints,
-            Some(callback),
-        )
-    };
-    let opened = match opened {
-        Ok(opened) => opened,
-        Err(error) => {
-            tracing::warn!(
-                adapter = %adapter::describe(&adapter.get_info()),
-                %error,
-                "a device with the Vulkan device extensions asked for was refused"
-            );
-            return None;
-        }
-    };
-    // SAFETY: `opened` was created from this adapter's own hal adapter, immediately above, and
-    // `descriptor.required_features` is the exact feature set it was created with.
-    match unsafe { adapter.create_device_from_hal(opened, descriptor) } {
-        Ok((device, queue)) => Some((device, queue)),
-        Err(error) => {
-            tracing::warn!(
-                adapter = %adapter::describe(&adapter.get_info()),
-                %error,
-                "a device created through the hal could not be adopted"
-            );
-            None
-        }
     }
 }
 

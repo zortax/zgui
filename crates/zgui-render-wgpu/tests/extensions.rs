@@ -8,19 +8,30 @@
 //! Nothing here creates such an image. What is asserted is the contract around the list: it
 //! reaches every device this crate opens, a machine that cannot grant it still gets a working
 //! device, the device that replaces a lost one asks for the same list, and what a device enabled
-//! is read off the device instead of assumed.
+//! is read off the device instead of assumed. None of that depends on how long the list is, and
+//! the five below are one such list.
+
+// Reading back the list a device was created with needs wgpu's hal, and reaching it is unsafe. It
+// is a test's own business: catching a device that reported an extension it does not have is why
+// this file exists — a claim checked only against the record that made it is no check at all.
+#![allow(
+    unsafe_code,
+    reason = "the driver's own extension list is reached through wgpu's hal"
+)]
 
 mod support;
 
 use std::ffi::CStr;
 use std::sync::Arc;
 
+use zgui_atlas::{Atlas, AtlasKey, AtlasLimits, TextureKind};
 use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{Scale, Size};
 use zgui_render::{FrameOutcome, RenderTarget, Renderer};
+use zgui_render_wgpu::gpu::adapter;
 use zgui_render_wgpu::{Gpu, SharedGraphics, WgpuRenderer, wgpu};
-use zgui_scene::{Quad, Scene};
+use zgui_scene::{Quad, Scene, SubpixelSprite};
 
 use support::{SIDE, device_lock, opaque, present, rect};
 
@@ -87,6 +98,24 @@ fn filled(colour: Color) -> Scene {
     ));
     scene.finish(&DamageSet::full());
     scene
+}
+
+/// Returns the Vulkan device extensions the device was created with, read off the hal device.
+///
+/// Independent of this crate's own record of what it asked for: the list here is wgpu-hal's, and
+/// it is the one `vkCreateDevice` was given. `None` where the device is not a Vulkan one.
+#[cfg(vulkan_hal)]
+fn enabled_on(gpu: &Gpu) -> Option<Vec<&'static CStr>> {
+    // SAFETY: the guard is read through and dropped. Nothing here destroys the device or anything
+    // reachable from it, which is all `as_hal` asks of a caller.
+    let hal = unsafe { gpu.device().as_hal::<wgpu::hal::api::Vulkan>() }?;
+    Some(hal.enabled_device_extensions().to_vec())
+}
+
+/// The same, on a target whose wgpu has no Vulkan backend to read one off.
+#[cfg(not(vulkan_hal))]
+fn enabled_on(_gpu: &Gpu) -> Option<Vec<&'static CStr>> {
+    None
 }
 
 /// Returns whether `gpu` enabled any of them, and says on the run's output where it did not.
@@ -221,6 +250,178 @@ fn an_empty_list_opens_the_device_it_always_did() {
         present(&mut renderer, &filled(opaque(0, 255, 0))).rgba(SIDE / 2, SIDE / 2),
         [0, 255, 0, 255]
     );
+}
+
+#[test]
+fn the_hal_path_adds_the_list_to_the_device_and_nothing_else() {
+    let _device = device_lock();
+    // The ordinary path's device, read off the driver and then released, so this machine holds one
+    // device at a time exactly as a program does.
+    let Some(ordinary) = ({
+        let graphics = SharedGraphics::new();
+        open(&graphics).and_then(|gpu| enabled_on(&gpu))
+    }) else {
+        eprintln!("skipped: no Vulkan device to read an extension list off");
+        return;
+    };
+
+    let graphics = SharedGraphics::with_extensions(DMA_BUF.to_vec());
+    let Some(gpu) = open(&graphics) else {
+        return;
+    };
+    if !granted(&gpu) {
+        return;
+    }
+    let extended = enabled_on(&gpu).expect("a device that enabled them is a Vulkan device");
+
+    // wgpu-hal's own list, read off the device.
+    for name in DMA_BUF {
+        assert!(
+            extended.contains(&name),
+            "{name:?} was reported as enabled and is not on the device: {extended:?}"
+        );
+    }
+    // And the device is the ordinary one plus that list and nothing else. wgpu-hal derives the
+    // rest of the extension list from the feature set it is handed, so a hal path that derived one
+    // of its own — the adapter's whole set instead of the descriptor's — moves names into or out
+    // of this list. Nothing in wgpu's own API can see that: `Device::features` is read back off
+    // the descriptor and never off the device, so a device opened with the wrong features still
+    // reports the right ones.
+    let lost: Vec<&CStr> = ordinary
+        .iter()
+        .copied()
+        .filter(|name| !extended.contains(name))
+        .collect();
+    assert!(
+        lost.is_empty(),
+        "the hal path opened a device without {lost:?}, which the ordinary path enables"
+    );
+    let uninvited: Vec<&CStr> = extended
+        .iter()
+        .copied()
+        .filter(|name| !ordinary.contains(name) && !DMA_BUF.contains(name))
+        .collect();
+    assert!(
+        uninvited.is_empty(),
+        "the hal path put {uninvited:?} on the device, which nothing asked for"
+    );
+
+    // Two of the five are already on the ordinary device: wgpu-hal enables
+    // `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` on any physical device that
+    // has them. So the names this adds are the rest, and the callback skips a name the list
+    // already holds.
+    let added: Vec<&CStr> = DMA_BUF
+        .iter()
+        .copied()
+        .filter(|name| !ordinary.contains(name))
+        .collect();
+    eprintln!(
+        "reported: the ordinary device already had {} of the five; this added {added:?}",
+        DMA_BUF.len() - added.len()
+    );
+}
+
+/// The tile's side, in texels.
+const TILE: i32 = 16;
+
+/// Returns a tile whose three channels carry different coverage, as per-channel text does.
+fn subpixel_ramp() -> Vec<u8> {
+    let mut bytes = Vec::with_capacity((TILE * TILE * 4) as usize);
+    for _ in 0..TILE {
+        for x in 0..TILE {
+            let base = (255 * x / (TILE - 1)) as u8;
+            bytes.extend_from_slice(&[base, base.saturating_add(40), base.saturating_add(80), 255]);
+        }
+    }
+    bytes
+}
+
+#[test]
+fn a_device_opened_through_the_hal_still_blends_against_a_second_colour_output() {
+    let _device = device_lock();
+    let graphics = SharedGraphics::with_extensions(DMA_BUF.to_vec());
+    let Some(mut renderer) = renderer(&graphics) else {
+        return;
+    };
+    if !granted(renderer.gpu()) {
+        return;
+    }
+    if !renderer.capabilities().subpixel_text {
+        eprintln!("reported: this device has no dual-source blending to exercise");
+        return;
+    }
+
+    // Dual-source blending is a `VkPhysicalDeviceFeatures` bit, enabled from the feature set the
+    // device was created with. wgpu reports a device's features off the descriptor, so asking the
+    // device answers the descriptor and proves nothing; this draws with it instead. It is a floor:
+    // a driver that enforces the bit fails here when the hal path opens with a feature set of its
+    // own, and NVIDIA 595.84 was measured not to enforce it.
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    let tile = atlas
+        .get_or_insert(
+            AtlasKey::new(1, TextureKind::Subpixel),
+            Size::new(TILE, TILE),
+            subpixel_ramp,
+        )
+        .expect("one small tile fits in a fresh atlas");
+    atlas
+        .flush_uploads(renderer.atlas())
+        .expect("the device accepts the upload");
+
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let white = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        white,
+    ));
+    scene.push_subpixel_sprite(SubpixelSprite::new(
+        rect(0.0, 0.0, TILE as f32, TILE as f32),
+        tile,
+        opaque(0, 0, 0),
+    ));
+    scene.finish(&DamageSet::full());
+    let pixels = present(&mut renderer, &scene);
+
+    let sample = pixels.rgba(TILE / 2, TILE / 2);
+    assert!(
+        sample[0] != sample[2],
+        "the hal device claims per-channel coverage and drew {sample:?}"
+    );
+}
+
+#[test]
+fn an_adapter_that_grants_the_list_is_preferred_over_one_that_does_not() {
+    let _device = device_lock();
+    let graphics = SharedGraphics::with_extensions(DMA_BUF.to_vec());
+    let Some(gpu) = open(&graphics) else {
+        return;
+    };
+    if granted(&gpu) {
+        // The loop found one, which is the property. Nothing further to prove here.
+        return;
+    }
+
+    // It settled for a device without them, so no adapter can have had them — the candidate loop
+    // accepts the first adapter that opens and presents, and an adapter lacking the names still
+    // opens. Every adapter is opened on its own here and asked. A machine where one of them says
+    // yes is a machine where the loop chose the wrong one and copies every frame through the
+    // processor for the rest of the process, with one log line to say so.
+    let instance = graphics.instance().clone();
+    for tier in adapter::tiers(graphics.backends()) {
+        for candidate in adapter::candidates(&instance, tier) {
+            let name = adapter::describe(&candidate.get_info());
+            match Gpu::open(instance.clone(), candidate, &DMA_BUF) {
+                Ok(other) => assert!(
+                    other.vulkan_extensions().is_empty(),
+                    "{name} grants the list and the candidate loop settled for a device without it"
+                ),
+                Err(reason) => eprintln!("    {name}: {reason}"),
+            }
+        }
+    }
 }
 
 #[test]
