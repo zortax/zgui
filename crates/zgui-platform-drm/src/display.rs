@@ -12,9 +12,20 @@
 //! # The state the two halves share
 //!
 //! A [`Scanout`] is written by two callers at different moments. The loop clears its outstanding
-//! flip when the device reports a completion; the renderer copies a frame into its back buffer and
-//! asks for the next flip. Both run on the loop's thread, one at a time, so the buffers are held
-//! through [`Rc`] and [`RefCell`] rather than through a lock.
+//! flip when the device reports a completion; the renderer puts a frame in the back buffer and asks
+//! for the next flip. Both run on the loop's thread, one at a time, so the buffers are held through
+//! [`Rc`] and [`RefCell`] rather than through a lock.
+//!
+//! # The two ways a frame arrives
+//!
+//! A display carries both, and which one it is on is settled when its buffers are made.
+//!
+//! [`DrmDisplay::present`] takes the pixels of a frame that was read back, which is the copied
+//! shape. [`DrmDisplay::acquire`] and [`DrmDisplay::present_drawn`] bracket a frame composed
+//! straight into the display's own buffer, which is the imported shape.
+//!
+//! [`DrmDisplay::textures`] tells the two apart, and a renderer asks once rather than per frame: a
+//! display answering with images is one whose frames are drawn into it.
 //!
 //! Every display on one device shares one commit, for the reason the loop holds one at all: an
 //! atomic commit caches each object's properties and destroys the mode blob it replaces, so a
@@ -27,7 +38,7 @@ use std::sync::Arc;
 use zgui_drm::Device;
 use zgui_drm::commit::Commit;
 use zgui_platform::{PlatformError, SurfaceId};
-use zgui_render_wgpu::Pixels;
+use zgui_render_wgpu::{Pixels, wgpu};
 
 use crate::cursor::Cursor;
 use crate::scanout::Scanout;
@@ -150,6 +161,70 @@ impl DrmDisplay {
             pixels,
             &self.cursor.borrow(),
         )
+    }
+
+    /// Returns the images this display's own frames are composed into, in the order a slot names
+    /// them.
+    ///
+    /// What `SharedGraphics::renderer_supplied` is given. An empty list says this display is on the
+    /// copied shape, where a frame is composed into the renderer's own target and copied in
+    /// afterwards.
+    ///
+    /// Asked once, when the renderer for this display is built. It is the question that decides
+    /// which of the two ways a frame reaches this display, so a caller takes it once rather than
+    /// per frame — the shape is settled when the buffers are made and never moves.
+    ///
+    /// Cloning a texture handle costs one reference count, and the buffer lives until every clone
+    /// has gone.
+    pub fn textures(&self) -> Vec<wgpu::Texture> {
+        self.scanout
+            .borrow()
+            .buffers()
+            .iter()
+            .map(|buffer| buffer.texture().clone())
+            .collect()
+    }
+
+    /// Takes the buffer the next frame is drawn into back from the display engine, and names it.
+    ///
+    /// [`Scanout::acquire`]'s own answer, and the **only** way to learn which buffer to draw into.
+    /// It runs before the frame is composed: the renderer is pointed at the answer, and the buffer
+    /// has to come back from the display engine before anything writes into it.
+    ///
+    /// Answers nothing while a flip is on its way. The frame is held back there before it is
+    /// drawn, so nothing is taken back and nothing is owed back. Answers nothing on the copied
+    /// shape as well, where no caller draws into a scanout buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the graphics device refuses or does not finish the
+    /// barrier that takes the buffer back.
+    pub fn acquire(&self) -> Result<Option<usize>, PlatformError> {
+        self.scanout.borrow_mut().acquire()
+    }
+
+    /// Gives the buffer the frame was drawn into to the display engine, and flips to it.
+    ///
+    /// [`Scanout::present_drawn`]'s own answer. It runs after the frame is submitted, and only for
+    /// a frame that was drawn: a buffer given over holds whatever is in it, so giving over a frame
+    /// that drew nothing puts a picture from three frames ago on the screen.
+    ///
+    /// Answers `false` while a flip is still on its way, which is the answer [`DrmDisplay::acquire`]
+    /// already gave before the frame was drawn.
+    ///
+    /// The pointer is not drawn: a display on this shape has one on a plane, which is the condition
+    /// [`Scanout::imported`] chose it under.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when this display is on the copied shape, when the buffer
+    /// was never taken back, when the graphics device refuses or does not finish the barrier, and
+    /// when the driver refuses the mode or the flip.
+    pub fn present_drawn(&self) -> Result<bool, PlatformError> {
+        let mut commit = self.commit.borrow_mut();
+        self.scanout
+            .borrow_mut()
+            .present_drawn(&self.device, &mut **commit)
     }
 }
 
