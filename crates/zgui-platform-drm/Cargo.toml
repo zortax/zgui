@@ -17,6 +17,12 @@ license.workspace = true
 # that method as a no-op: no assistive technology is connected to a console, so the closure is
 # never run and no tree is built. The name is here for the signature.
 accesskit.workspace = true
+# Vulkan, for the buffers a display scans out of directly. An image with a DRM format modifier,
+# backed by exportable memory and handed to the kernel as a dma-buf, is described entirely in
+# Vulkan's own types: wgpu's API has no word for a modifier, for exportable memory or for a
+# descriptor. `import/` builds the image and hands it to wgpu through its hal at the end. This
+# crate is the only one that names ash, and the version is the one wgpu-hal links.
+ash.workspace = true
 # A surface reports the native handles a KMS display has: the device descriptor and the primary
 # plane. This is the same name the platform contract itself carries. The two `borrow_raw` calls in
 # `surface.rs` that build the handles are one of the two reasons outside its tests that this crate
