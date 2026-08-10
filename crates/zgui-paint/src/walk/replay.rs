@@ -95,6 +95,18 @@ pub struct Painted {
     /// place, so this is the one field that turns "the implementation says it changed" into a
     /// cache miss — and its absence into a replay.
     pub custom: u64,
+    /// The revision of the outside content the fragment draws, and zero for every other kind.
+    ///
+    /// A replaced fragment names its node and a drawing fragment names its curves' source; both
+    /// names stay put while what they resolve to changes. For a record dropped at the end of
+    /// every unvisited frame the box rebuild that accompanies such a change was protection
+    /// enough; a record kept across frames needs the change in its own signature.
+    pub content: u64,
+    /// The bits of the device scale the fragment was encoded at.
+    ///
+    /// The lowered style already moves on rescale — the style cache is invalidated wholesale —
+    /// so this is the local statement of that invariant rather than the only guard.
+    pub scale: u32,
     /// A fingerprint of the text decorations in force over it.
     ///
     /// Those come from the boxes *above* the fragment rather than from its own style, so nothing
@@ -312,6 +324,13 @@ impl PaintCache {
             return Reuse::Encode;
         }
         if record.border_box.size != fragment.border_box.size {
+            return Reuse::Encode;
+        }
+        // The chain must still resolve to the content it was recorded against. Interned clip ids
+        // are content-stable today, so this only misses once table eviction can reassign a slot —
+        // at which point a miss here is what keeps the replay from drawing through another
+        // fragment's chain.
+        if record.clip_hash != scene.clips.content_hash(painted.clip) {
             return Reuse::Encode;
         }
         // A cut range may still stand in for a fragment that is *entirely* outside the clip, and

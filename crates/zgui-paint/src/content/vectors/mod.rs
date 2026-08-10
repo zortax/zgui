@@ -50,6 +50,15 @@ pub trait VectorSource {
     /// Called once per drawing fragment the damage reaches. An implementation that parses on every
     /// call is correct and slow; the one this framework installs memoises by node.
     fn drawing(&self, node: NodeKey, placement: Placement) -> Option<Drawing>;
+
+    /// A fingerprint of what `node` draws, moved whenever the drawing's source data changes.
+    ///
+    /// Read into the paint record's signature. A drawing fragment names its node and nothing
+    /// about the curves, so this is what makes a swapped icon a cache miss for a record kept
+    /// across frames. A source whose drawings never change may leave the default.
+    fn revision(&self, _node: NodeKey) -> u64 {
+        0
+    }
 }
 
 /// The box a drawing is being fitted to, and at what ratio.

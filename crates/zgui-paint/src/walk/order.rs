@@ -33,6 +33,15 @@ use crate::lower::PaintStyle;
 pub trait ReplacedSource {
     /// Where the content named by `id` lives, or nothing if it has not been decoded yet.
     fn source(&self, id: zgui_dom::host::ReplacedId) -> Option<Source>;
+
+    /// The revision of the content named by `id`, moved every time content is attached to it.
+    ///
+    /// Read into the paint record's signature: the identifier is the node's own name and stays
+    /// put while its pixels change, so this is what makes a re-attachment a cache miss for a
+    /// record kept across frames. A source whose content never changes may leave the default.
+    fn revision(&self, _id: zgui_dom::host::ReplacedId) -> u64 {
+        0
+    }
 }
 
 /// A replaced-content source with nothing in it.

@@ -43,6 +43,11 @@ pub struct ContentCache {
     vector_masks: VectorMaskCache,
     /// What is attached to each replaced node.
     images: FxHashMap<ReplacedId, Content>,
+    /// How many times each replaced node's attachment has changed.
+    ///
+    /// Read into the paint record's signature, so a record kept across frames notices new pixels
+    /// under an unchanged name. An id that was never attached reads zero.
+    image_revisions: FxHashMap<ReplacedId, u64>,
     /// How many times a frame has resolved a replaced node to the content held for it.
     ///
     /// Monotonic and never reset, so two readings subtracted say whether anything drew a picture
@@ -75,6 +80,7 @@ impl ContentCache {
             glyphs: GlyphCache::default(),
             vector_masks: VectorMaskCache::default(),
             images: FxHashMap::default(),
+            image_revisions: FxHashMap::default(),
             image_hits: Cell::new(0),
             image_failures: RefCell::new(rustc_hash::FxHashSet::default()),
             missing_images: RefCell::new(Vec::new()),
@@ -191,6 +197,7 @@ impl ContentCache {
     ) -> Result<(), ImageError> {
         let content = Content::decoded(id, size, texels)?;
         self.images.insert(id, content);
+        self.note_image_change(id);
         Ok(())
     }
 
@@ -215,6 +222,7 @@ impl ContentCache {
     ) -> Result<(), ImageError> {
         let content = Content::shared(handle, size, size, texels, Vec::new())?;
         self.images.insert(id, content);
+        self.note_image_change(id);
         Ok(())
     }
 
@@ -241,6 +249,7 @@ impl ContentCache {
     ) -> Result<(), ImageError> {
         let content = Content::shared(handle, size, natural, texels, mips)?;
         self.images.insert(id, content);
+        self.note_image_change(id);
         Ok(())
     }
 
@@ -252,6 +261,7 @@ impl ContentCache {
     pub fn set_image_uploaded(&mut self, id: ReplacedId, handle: u64, natural: Size<u32, Device>) {
         self.images
             .insert(id, Content::uploaded_shared(handle, natural));
+        self.note_image_change(id);
     }
 
     /// Whether the tile a loader's shared `handle` names is resident right now.
@@ -311,11 +321,18 @@ impl ContentCache {
     /// Attaches a texture this framework does not own to a replaced node.
     pub fn set_external(&mut self, id: ReplacedId, texture: ExternalTextureId) {
         self.images.insert(id, Content::External(texture));
+        self.note_image_change(id);
     }
 
     /// Detaches whatever was attached to a replaced node.
     pub fn remove_image(&mut self, id: ReplacedId) {
         self.images.remove(&id);
+        self.note_image_change(id);
+    }
+
+    /// Moves a node's attachment revision, so a paint record kept across frames misses.
+    fn note_image_change(&mut self, id: ReplacedId) {
+        *self.image_revisions.entry(id).or_insert(0) += 1;
     }
 
     /// Borrows everything one emit walk needs into a source of glyphs and of replaced content.
@@ -355,6 +372,7 @@ impl ContentCache {
             shaped,
             raster,
             images: &self.images,
+            image_revisions: &self.image_revisions,
             image_hits: &self.image_hits,
             image_failures: &self.image_failures,
             missing_images: &self.missing_images,
@@ -445,6 +463,8 @@ pub struct FrameContent<'a> {
     raster: &'a dyn GlyphRaster,
     /// What is attached to each replaced node.
     images: &'a FxHashMap<ReplacedId, Content>,
+    /// How many times each replaced node's attachment has changed.
+    image_revisions: &'a FxHashMap<ReplacedId, u64>,
     /// Where a resolved picture is counted, so that a budget can tell a cache nothing draws from
     /// from one a picture on the screen is being served out of every frame.
     image_hits: &'a Cell<u64>,
@@ -549,6 +569,10 @@ impl GlyphSource for FrameContent<'_> {
 }
 
 impl ReplacedSource for FrameContent<'_> {
+    fn revision(&self, id: ReplacedId) -> u64 {
+        self.image_revisions.get(&id).copied().unwrap_or(0)
+    }
+
     fn source(&self, id: ReplacedId) -> Option<Source> {
         let content = self.images.get(&id)?;
         self.image_hits.set(self.image_hits.get() + 1);

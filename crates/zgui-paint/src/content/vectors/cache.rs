@@ -208,6 +208,29 @@ pub struct Vectors<'a> {
 }
 
 impl VectorSource for Vectors<'_> {
+    /// A fingerprint of the drawing's source data: the canvas revision, the document text, or the
+    /// path notation, together with the view box every one of them is fitted through.
+    ///
+    /// Hashed from the document on every call rather than memoised, because it is asked before
+    /// the cache entry for the drawing exists and an icon's notation is small.
+    fn revision(&self, node: NodeKey) -> u64 {
+        let store = self.document.store();
+        let mut hash = zgui_scene::ContentHash::new();
+        if let Some(view_box) = zgui_dom::side::drawing::view_box(store, node) {
+            hash = hash.f32s(&view_box);
+        }
+        if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
+            return hash.u32(1).u32(token).u32(revision).finish();
+        }
+        if let Some(source) = zgui_dom::side::drawing::document(store, node) {
+            return hash.u32(2).bytes(source.as_bytes()).finish();
+        }
+        if let Some(data) = zgui_dom::side::drawing::path_data(store, node) {
+            return hash.u32(3).bytes(data.as_bytes()).finish();
+        }
+        0
+    }
+
     /// A canvas wins over a document, and a document over path notation, when an element
     /// carries more than one.
     ///

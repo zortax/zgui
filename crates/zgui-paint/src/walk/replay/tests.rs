@@ -42,12 +42,41 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         // straight into the window carries.
         transform_hash: zgui_scene::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
         custom: 0,
+        content: 0,
+        scale: 1.0f32.to_bits(),
         decorations: 0,
         text_fill: 0,
         anim: 0,
         alpha: 1.0f32.to_bits(),
         highlights: 0,
     }
+}
+
+#[test]
+fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
+    // A replaced fragment names its node and a drawing names its curves' source, and both names
+    // stay put while what they resolve to changes. The revision is the only field that moves.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &scene,
+        &same,
+        painted(0),
+        Encoding {
+            ops: 0..0,
+            whole: true,
+            resources: &[],
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let swapped = crate::walk::replay::Painted {
+        content: 1,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, swapped), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0)), Reuse::Encode);
 }
 
 /// A scene with one frame's worth of retained operations.

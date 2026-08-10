@@ -574,6 +574,16 @@ impl Pass<'_, '_> {
                     .map_or(0, |(token, _, _)| self.input.custom.revision(token)),
                 _ => 0,
             },
+            content: match fragment.kind {
+                zgui_layout::FragmentKind::Replaced { content } => {
+                    self.input.replaced.revision(content)
+                }
+                zgui_layout::FragmentKind::Vector => fragment
+                    .node
+                    .map_or(0, |node| self.input.vectors.revision(node)),
+                _ => 0,
+            },
+            scale: self.input.scale.to_bits(),
             decorations: decorate::signature(&decorations),
             text_fill: fill::signature(text_fill.as_ref()),
             anim,
