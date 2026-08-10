@@ -8,10 +8,10 @@
 //! It also says what the contract knows about each of those displays, because a [`MonitorInfo`] is
 //! read out of an output's mode and nothing else.
 
-use tracing::warn;
+use tracing::{info, warn};
 use zgui_drm::commit::Pipe;
 use zgui_drm::property::ObjectKind;
-use zgui_drm::resources::Mode;
+use zgui_drm::resources::{Connector, Mode};
 use zgui_drm::{Device, Error};
 use zgui_geom::{DevicePx, Point, Size};
 use zgui_platform::{MonitorInfo, PlatformError};
@@ -74,6 +74,7 @@ impl Output {
         let resources = device.resources().map_err(backend)?;
         let existing = crtc_mask(resources.crtcs.len());
         let mut primary = primary_planes(device)?;
+        let wanted = wanted_connectors();
         let mut claimed = 0;
         let mut outputs = Vec::new();
 
@@ -85,6 +86,15 @@ impl Output {
             let Some(&mode) = connector.preferred_mode() else {
                 continue;
             };
+            if let Some(wanted) = &wanted
+                && !wanted.contains(&connector_id)
+            {
+                info!(
+                    connector = connector_id,
+                    "{CONNECTORS} does not name this display, so it keeps what is on it"
+                );
+                continue;
+            }
 
             // Any encoder the connector names can carry it, so the CRTCs it can be driven by are
             // the union of what those encoders reach.
@@ -93,7 +103,14 @@ impl Output {
                 reachable |= device.encoder(encoder_id).map_err(backend)?.possible_crtcs;
             }
 
-            let Some(index) = choose(reachable & existing, claimed) else {
+            // The CRTC the kernel already has this display on comes first. Moving a display off it
+            // risks a commit the kernel refuses whole: `drm_atomic_helper_check_modeset` answers
+            // `EINVAL` where a CRTC's `enable` and the connectors named on it disagree. A display
+            // that meets that is refused every frame and never lit. It is also the routing the
+            // screens on the desk are arranged around.
+            let attached = attached_crtc(device, &connector, &resources.crtcs)?
+                .filter(|index| reachable & existing & !claimed & (1 << index) != 0);
+            let Some(index) = attached.or_else(|| choose(reachable & existing, claimed)) else {
                 warn!(
                     connector = connector_id,
                     "every CRTC this connector can use is taken, so it stays dark"
@@ -105,6 +122,15 @@ impl Output {
             // The mask was cut to the CRTCs the device lists, so the index names one of them.
             let crtc = resources.crtcs[index as usize];
             let plane = take_plane(&mut primary, device.is_atomic(), index, crtc)?;
+            // Named here because a person choosing a display needs the number to put in
+            // `ZGUI_DRM_CONNECTORS`, and the extent is how they tell one screen from another.
+            info!(
+                connector = connector_id,
+                crtc,
+                width = mode.width(),
+                height = mode.height(),
+                "driving this display"
+            );
             outputs.push(Self {
                 pipe: Pipe {
                     connector: connector_id,
@@ -117,6 +143,56 @@ impl Output {
         }
         Ok(outputs)
     }
+}
+
+/// Returns where in `crtcs` the CRTC this connector is already being driven by sits.
+///
+/// A connector names the encoder it is attached to, and an encoder names the CRTC it drives, so a
+/// display that the kernel's own console has lit answers both. Answers nothing for a connector
+/// nothing is driving, and for a CRTC the device does not list.
+///
+/// # Errors
+///
+/// Returns [`PlatformError::Backend`] when the device refuses to describe the encoder.
+fn attached_crtc(
+    device: &Device,
+    connector: &Connector,
+    crtcs: &[u32],
+) -> Result<Option<u32>, PlatformError> {
+    let Some(encoder) = connector.encoder else {
+        return Ok(None);
+    };
+    let Some(crtc) = device.encoder(encoder).map_err(backend)?.crtc else {
+        return Ok(None);
+    };
+    let index = crtcs
+        .iter()
+        .position(|listed| *listed == crtc)
+        .and_then(|index| u32::try_from(index).ok());
+    Ok(index)
+}
+
+/// The variable that names which displays to drive.
+pub const CONNECTORS: &str = "ZGUI_DRM_CONNECTORS";
+
+/// Returns the connectors [`CONNECTORS`] names, or nothing when it names none.
+///
+/// A machine drives every display that is plugged in by default, which suits a kiosk. This covers
+/// the other case: one screen of several, chosen by the person at the keyboard. The value is a
+/// comma-separated list of the connector numbers `discover` logs, so `ZGUI_DRM_CONNECTORS=131`
+/// drives that display alone and leaves the rest holding whatever is on them.
+///
+/// A word that is not a number contributes nothing, and a value naming no connector this machine
+/// has leaves the program with no display — which is a visible failure, and better than quietly
+/// driving a screen the caller asked to leave alone.
+fn wanted_connectors() -> Option<Vec<u32>> {
+    let value = std::env::var(CONNECTORS).ok()?;
+    Some(
+        value
+            .split(',')
+            .filter_map(|word| word.trim().parse().ok())
+            .collect(),
+    )
 }
 
 /// Returns the index of the first CRTC an encoder can drive that nothing has claimed.
