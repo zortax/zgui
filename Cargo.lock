@@ -6267,6 +6267,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-seat"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "zgui-style"
 version = "0.1.0"
 dependencies = [
