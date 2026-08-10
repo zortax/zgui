@@ -179,7 +179,7 @@ pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
 pub use crate::display::{Displays, DrmDisplay};
 #[cfg(target_os = "linux")]
-pub use crate::import::{Imported, Unsupported};
+pub use crate::import::{EXTENSIONS, Imported, Offered, Plane, Unsupported};
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]

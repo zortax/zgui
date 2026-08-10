@@ -20,8 +20,9 @@
 //!   is created in. The two disagreeing exchanges every frame's red and blue.
 //! * **The usage.** A supplied presentation copies each frame into the texture through a render
 //!   pass, so the image is a colour attachment and the descriptor handed to wgpu says the same.
-//!   The three spellings of that one decision sit beside each other in [`USAGE`], [`HAL_USAGE`]
-//!   and [`IMAGE_USAGE`].
+//!   Four spellings of that one decision sit beside each other in `USAGE`, `HAL_USAGE`,
+//!   `IMAGE_USAGE` and `IMAGE_FEATURES`. wgpu checks none of them against the image, so any two
+//!   of them disagreeing is undefined behaviour that reports success.
 //!
 //! # Who destroys what
 //!
@@ -45,8 +46,11 @@
 //! or a driver that refused a step. None of them stops the program, because the copied path answers
 //! every one of them, so each is a value the caller reads and logs.
 
-pub mod image;
-pub mod modifier;
+// Private, because everything either of them publishes is re-exported here and from the crate
+// root. A caller reaches `Plane` and `Offered` by one path each, and the split between the two
+// files is this module's own business.
+mod image;
+mod modifier;
 
 use std::ffi::CStr;
 use std::fmt;
@@ -86,25 +90,37 @@ pub const EXTENSIONS: [&CStr; 3] = [
 /// What a frame is composed into, as wgpu states it.
 ///
 /// A supplied presentation refuses a texture without this, because a frame reaches the texture
-/// through a render pass. Nothing else is asked for: every usage narrows the layouts a driver
-/// offers, and a scanout buffer is written by the graphics device and read by the display engine
-/// and by nothing else.
-pub const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT;
+/// through a render pass. Nothing else is asked for, and that is a rule in both directions.
+/// Asking for less would have the renderer refuse the texture. Asking for more is worse: wgpu
+/// validates none of this against the image it is handed, so a texture advertising
+/// `TEXTURE_BINDING` over an image created without `SAMPLED` is accepted, is reported as working,
+/// and is undefined the first time anything reads it.
+const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT;
 
 /// The same decision, as wgpu's hal states it.
 ///
-/// wgpu derives this from [`USAGE`] for a texture it creates itself. A texture created from a raw
-/// image carries it in the descriptor instead, so the two are written out together here — they
-/// describe one image, and a pair that disagreed would leave wgpu recording barriers for a usage
-/// the image was never created with.
-pub const HAL_USAGE: wgpu::TextureUses = wgpu::TextureUses::COLOR_TARGET;
+/// wgpu 29.0.4 reads none of it. `texture_from_raw` takes the label, the format and the copy extent
+/// out of the hal descriptor and reads neither the usage nor the memory flags nor the view formats,
+/// and wgpu-core maps [`USAGE`] itself for the barriers it records. So this is stated for two
+/// reasons: the descriptor has the field, and a field that says something untrue is a trap for
+/// whoever reads it next. A wgpu that starts reading it finds it already right.
+const HAL_USAGE: wgpu::TextureUses = wgpu::TextureUses::COLOR_TARGET;
 
 /// The same decision again, as Vulkan states it.
 ///
-/// This is what the image is created with and what the layouts were gathered for: a layout is
+/// This is what the image is created with and what the layouts were asked about: a layout is
 /// renderable for one usage and refused for another, so asking about one usage and creating with
 /// another would offer layouts the driver then rejects.
-pub const IMAGE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::COLOR_ATTACHMENT;
+const IMAGE_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::COLOR_ATTACHMENT;
+
+/// What a layout has to be able to do to hold an image of [`IMAGE_USAGE`].
+///
+/// The fourth spelling of the one decision, and the one that keeps a layout out. A driver publishes
+/// what each layout supports for a format, and a layout without this cannot be drawn into whatever
+/// else it can do. It travels beside [`IMAGE_USAGE`] because the two are one statement: a usage
+/// added to that constant without its feature here would be asked of the driver in one place and
+/// left unchecked in the other.
+const IMAGE_FEATURES: vk::FormatFeatureFlags = vk::FormatFeatureFlags::COLOR_ATTACHMENT;
 
 /// The Vulkan format [`FORMAT`] is.
 ///
@@ -179,12 +195,27 @@ impl Imported {
         })
     }
 
-    /// The layouts this device can render into and export, and this display can scan out.
+    /// Returns the layouts this device can render into and export, and this display can scan out.
     ///
     /// What [`Imported::create`] chooses from, answered on its own so that a caller can say in a
     /// log what the two ends agreed on before it allocates anything. The list is what
     /// `VkImageDrmFormatModifierListCreateInfoEXT` is given, and it states no preference: the
     /// driver picks, and [`Imported::modifier`] is what it picked.
+    ///
+    /// ```no_run
+    /// use zgui_drm::format::Modifier;
+    /// use zgui_platform_drm::{EXTENSIONS, Imported};
+    /// use zgui_render_wgpu::SharedGraphics;
+    ///
+    /// let graphics = SharedGraphics::with_extensions(EXTENSIONS.to_vec());
+    /// let gpu = graphics.open_gpu().expect("a graphics device");
+    ///
+    /// // What the display plane published, as a scanout reads it back from the card.
+    /// let scanout = [Modifier::LINEAR];
+    /// let shared = Imported::layouts_shared_with(&gpu, &scanout).expect("a shared layout");
+    ///
+    /// assert!(shared.iter().all(|offered| scanout.contains(&offered.modifier)));
+    /// ```
     ///
     /// # Errors
     ///
@@ -229,10 +260,28 @@ impl Imported {
 
 /// Why a buffer a display can scan out of directly could not be made here.
 ///
-/// Every one of these is an ordinary fact about a machine rather than a fault, and the caller
-/// answers all four the same way: keep the copied path. They are told apart because the remedies
-/// differ — a missing extension is a program that asked for the wrong thing, and no shared layout
-/// is hardware that cannot do this at all.
+/// Every one of these states an ordinary fact about a machine, and the caller answers all four the
+/// same way: keep the copied path. They are told apart because the remedies differ. A missing
+/// extension is a program that asked for the wrong thing, and no shared layout is hardware that
+/// cannot do this at all.
+///
+/// ```
+/// use zgui_drm::format::Modifier;
+/// use zgui_platform_drm::{Offered, Unsupported};
+///
+/// let refused = Unsupported::NoSharedLayout {
+///     vulkan: vec![Offered {
+///         modifier: Modifier::LINEAR,
+///         planes: 1,
+///     }],
+///     scanout: vec![Modifier(0x0300_0000_0060_6014)],
+/// };
+///
+/// // A layout is written in hexadecimal, one word wide, wherever a caller logs one.
+/// let stated = refused.to_string();
+/// assert!(stated.contains("0x0000000000000000"), "{stated}");
+/// assert!(stated.contains("0x0300000000606014"), "{stated}");
+/// ```
 #[derive(Debug)]
 pub enum Unsupported {
     /// The graphics device is on another backend, and only Vulkan can export an image here.
@@ -352,6 +401,7 @@ fn negotiate(
         adapter.raw_physical_device(),
         VK_FORMAT,
         IMAGE_USAGE,
+        IMAGE_FEATURES,
     );
     let candidates = modifier::intersect(&offered, scanout);
     if candidates.is_empty() {
@@ -454,26 +504,36 @@ fn wrap(
 mod tests {
     //! The four spellings of one usage, which no device is needed to compare.
 
-    use super::{HAL_USAGE, IMAGE_USAGE, USAGE, VK_FORMAT};
+    use super::{HAL_USAGE, IMAGE_FEATURES, IMAGE_USAGE, USAGE, VK_FORMAT};
     use crate::scanout::FORMAT;
     use zgui_render_wgpu::wgpu;
 
     #[test]
     fn the_usage_a_supplied_presentation_requires_is_the_usage_the_image_is_created_with() {
-        // Each of the three is read by a different layer, and nothing at run time compares them: a
-        // texture that is not a colour attachment is refused by the renderer, and an image that is
-        // not one fails inside the first render pass with an error naming neither.
-        assert!(
-            USAGE.contains(wgpu::TextureUsages::RENDER_ATTACHMENT),
-            "a supplied presentation refuses a texture a frame cannot be drawn into"
+        // Equality in all four, and not containment. Each is read by a different layer and nothing
+        // at run time compares them, so the failure is silent in both directions. Too little and
+        // the renderer refuses the texture, which at least says so. Too much and wgpu accepts a
+        // texture claiming what the image cannot do — `create_texture_from_hal` validates no usage
+        // at all — and the first shader that samples it reads whatever is there.
+        assert_eq!(
+            USAGE,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+            "a frame is drawn into this texture, and nothing else is ever done with it"
         );
-        assert!(
-            HAL_USAGE.contains(wgpu::TextureUses::COLOR_TARGET),
-            "wgpu records the image's barriers from this"
+        assert_eq!(
+            HAL_USAGE,
+            wgpu::TextureUses::COLOR_TARGET,
+            "the hal descriptor says the same about the same image"
         );
-        assert!(
-            IMAGE_USAGE.contains(ash::vk::ImageUsageFlags::COLOR_ATTACHMENT),
+        assert_eq!(
+            IMAGE_USAGE,
+            ash::vk::ImageUsageFlags::COLOR_ATTACHMENT,
             "and the driver creates the image from this"
+        );
+        assert_eq!(
+            IMAGE_FEATURES,
+            ash::vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+            "and a layout is kept only where it can do exactly that"
         );
     }
 

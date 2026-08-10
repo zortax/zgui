@@ -350,16 +350,24 @@ fn chosen(handles: &Handles<'_>, raw: vk::Image) -> Result<Modifier, Unsupported
 }
 
 /// Returns where each of the image's `planes` memory planes starts, and how long its rows are.
+///
+/// A count outside one to four is refused at both ends. Too many names an aspect Vulkan does not
+/// define. None at all is worse: it describes an image whose pixels live nowhere, and it would
+/// otherwise pass every later step with an empty layout list and no refusal anywhere.
 fn layouts(handles: &Handles<'_>, raw: vk::Image, planes: u32) -> Result<Vec<Plane>, Unsupported> {
+    let refuse = || Unsupported::Driver {
+        step: "reading the image's memory planes",
+        reason: format!(
+            "the layout claims {planes} memory planes, and Vulkan defines 1 to {}",
+            ASPECTS.len()
+        ),
+    };
     let planes = usize::try_from(planes).unwrap_or(usize::MAX);
+    if planes == 0 {
+        return Err(refuse());
+    }
     let Some(aspects) = ASPECTS.get(..planes) else {
-        return Err(Unsupported::Driver {
-            step: "reading the image's memory planes",
-            reason: format!(
-                "the layout claims {planes} memory planes, and Vulkan defines {}",
-                ASPECTS.len()
-            ),
-        });
+        return Err(refuse());
     };
 
     aspects
