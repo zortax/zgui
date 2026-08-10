@@ -14,13 +14,14 @@
 //! for one thing only: which layouts its primary plane can scan out.
 
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use zgui_drm::Device;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
-use zgui_platform_drm::Output;
-use zgui_platform_drm::import::{EXTENSIONS, Imported, Offered, Unsupported};
+use zgui_platform_drm::{EXTENSIONS, FORMAT, Imported, Offered, Output, Unsupported};
 use zgui_render_wgpu::target::swapchain::Supplied;
 use zgui_render_wgpu::{Gpu, SharedGraphics, wgpu};
 
@@ -32,6 +33,14 @@ const BUFFERS: usize = 3;
 
 /// The extent used where no display states one.
 const EXTENT: (u32, u32) = (1920, 1080);
+
+/// How long one clear of one buffer is given before the device is called stuck.
+///
+/// Clearing a 1920x1080 image is measured in tens of microseconds, so this is five orders of
+/// magnitude of slack. It exists for the case where the submission never completes at all, which
+/// is what an image bound to no memory produces: the wait would otherwise never return, and a
+/// wedged run says far less than a failure with a reason.
+const DRAWN: Duration = Duration::from_secs(20);
 
 /// A layout code under a vendor byte nobody was given.
 ///
@@ -162,6 +171,44 @@ fn codes(offered: &[Offered]) -> Vec<Modifier> {
     offered.iter().map(|entry| entry.modifier).collect()
 }
 
+/// Clears one buffer through a render pass and waits for the device to finish.
+///
+/// The whole of what a frame does to the image, minus the drawing: the image becomes a colour
+/// attachment, wgpu records the barrier out of `UNDEFINED`, and the queue runs it.
+fn clear(gpu: &Gpu, buffer: &Imported) {
+    let view = buffer
+        .texture()
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = gpu
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("zgui.import.clear"),
+        });
+    drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("zgui.import.clear"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.0,
+                    g: 0.47,
+                    b: 0.78,
+                    a: 1.0,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        multiview_mask: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    }));
+    gpu.queue().submit([encoder.finish()]);
+    gpu.wait();
+}
+
 /// Returns `layouts` as the hexadecimal a modifier is written in everywhere else.
 ///
 /// The derived spelling is decimal, and a modifier read in decimal says nothing at all: the vendor
@@ -286,16 +333,103 @@ fn every_buffer_of_a_set_is_its_own_image_and_its_own_descriptor() {
             }
         };
 
-    // A set the display rotates through is a set of distinct buffers. Two slots sharing one image
-    // would tear on every flip, and nothing further along could see that they were the same.
+    // Three descriptors, each naming a file of its own. `(st_dev, st_ino)` identifies the dma-buf
+    // *file* rather than the allocation behind it — two exports of one allocation are two inodes
+    // on this driver — so what this catches is a set built by duplicating one descriptor rather
+    // than by exporting each buffer. The images being distinct is the export call being made once
+    // per image, which the loop above does.
     let mut seen = HashSet::new();
     for (slot, buffer) in buffers.iter().enumerate() {
         let stat = rustix::fs::fstat(buffer.dmabuf()).expect("the descriptor is a file");
         assert!(
             seen.insert((stat.st_dev, stat.st_ino)),
-            "buffer {slot} exported the same memory an earlier one did"
+            "buffer {slot} carries a descriptor an earlier one already carried"
         );
     }
+}
+
+#[test]
+fn a_frame_drawn_into_a_buffer_reaches_the_device() {
+    let test = "a_frame_drawn_into_a_buffer_reaches_the_device";
+    let _guard = device_lock();
+    let Some((_graphics, gpu)) = opened(test) else {
+        return;
+    };
+    let screen = screen(test, &gpu);
+
+    let buffers =
+        match Imported::create(&gpu, &screen.layouts, screen.width, screen.height, BUFFERS) {
+            Ok(buffers) => buffers,
+            Err(refusal) => {
+                eprintln!(
+                    "{test}: no buffer can be exported here, so nothing was asserted: {refusal}"
+                );
+                return;
+            }
+        };
+
+    // Every other test here reads what the driver *said*. This one makes the driver use what it
+    // made. A render pass that clears is the smallest thing that binds the image as a colour
+    // attachment, records the barrier out of `UNDEFINED`, submits, and finishes.
+    //
+    // What it proves: the image has memory behind it, the layout the driver chose can hold a
+    // colour attachment, and the descriptor wgpu was handed describes an image wgpu can use. An
+    // image bound to nothing gets no further than this — measured, and the device stops answering
+    // rather than reporting anything, which is why the wait below has a deadline.
+    //
+    // What it does not prove: which pixels landed. Reading them back would need `COPY_SRC` on the
+    // texture, and every usage added here has to be added to the Vulkan image as well or wgpu
+    // reports success over an image that cannot do it. The frame a person can see arrives with the
+    // flip, one milestone along.
+    //
+    // The clears run on a thread of their own so that the wait can be given up on. `Gpu::wait`
+    // polls the device with no deadline, and a submission the hardware will never finish is
+    // therefore a test binary that hangs until whatever runs it gives up — which reads as a build
+    // that stopped rather than as a defect with a name.
+    let (finished, arrived) = mpsc::channel();
+    let worker = {
+        let gpu = Arc::clone(&gpu);
+        thread::Builder::new()
+            .name("zgui.import.clear".to_owned())
+            .spawn(move || {
+                for (slot, buffer) in buffers.iter().enumerate() {
+                    clear(&gpu, buffer);
+                    if finished.send(slot).is_err() {
+                        return;
+                    }
+                }
+            })
+            .expect("a thread can be started")
+    };
+
+    for slot in 0..BUFFERS {
+        match arrived.recv_timeout(DRAWN) {
+            Ok(done) => {
+                eprintln!("{test}: buffer {done} was cleared and the submission completed");
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+                "clearing buffer {slot} did not finish inside {DRAWN:?}, so the device is still \
+                 working on a frame it cannot complete: the image has no memory behind it, or the \
+                 layout the driver chose cannot hold a colour attachment"
+            ),
+            // The thread ended before it reported. Joining re-raises whatever it panicked with,
+            // which is the real reason and is more use than anything this could invent.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                worker
+                    .join()
+                    .expect("the thread that cleared the buffers ended without reporting");
+                panic!("the clears ended after {slot} of {BUFFERS} with nothing to say");
+            }
+        }
+    }
+    worker
+        .join()
+        .expect("the thread that cleared the buffers panicked");
+
+    assert!(
+        !gpu.loss().is_lost(),
+        "the device was lost while drawing into the buffers it made"
+    );
 }
 
 #[test]
@@ -332,7 +466,7 @@ fn the_texture_is_one_a_supplied_presentation_takes() {
     );
 
     let first = &textures[0];
-    assert_eq!(first.format(), zgui_platform_drm::FORMAT);
+    assert_eq!(first.format(), FORMAT);
     assert_eq!(first.width(), screen.width);
     assert_eq!(first.height(), screen.height);
 }
@@ -460,17 +594,17 @@ fn a_released_set_gives_back_every_descriptor_it_held() {
     );
     drop(buffers);
 
-    // The descriptors close with the set. The image and its memory go the same way — wgpu runs the
-    // callback that destroys them while it destroys the texture, which the same drop reaches — so
-    // this is what says the whole buffer was released rather than only the part a test can count.
+    // The descriptors close with the set, and that is all this measures. One descriptor held per
+    // buffer per mode change is a program that runs out of them on a laptop lid, so it is worth
+    // measuring on its own. The image and its memory are released by the same drop, through the
+    // callback wgpu runs while it destroys the texture, and a count of open files cannot see that.
     assert_eq!(
         descriptors().expect("/proc/self/fd was readable a moment ago"),
         before,
         "a released set left descriptors open"
     );
 
-    // And the device still hands out another set afterwards, which a device leaking an allocation
-    // per buffer would stop doing.
+    // And the device still hands out another set afterwards.
     let again = make().expect("the device that released a set can make another");
     assert_eq!(again.len(), BUFFERS);
 }

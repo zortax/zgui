@@ -39,18 +39,22 @@ pub struct Offered {
 /// Returns the layouts this physical device can render `format` into and export as a dma-buf.
 ///
 /// Two questions per layout, because a driver answers them separately. The format's own list says
-/// which layouts exist and what each one can be used for, and that is where a layout that cannot
-/// be a colour attachment is dropped. `vkGetPhysicalDeviceImageFormatProperties2` then says
-/// whether an image of `usage` in that layout is possible at all, and whether its memory can leave
-/// the device. A layout that is renderable and not exportable would produce an image nothing can
-/// scan out of.
+/// which layouts exist and what each one can be used for, and that is where a layout lacking
+/// `features` is dropped. `vkGetPhysicalDeviceImageFormatProperties2` then says whether an image
+/// of `usage` in that layout is possible at all, and whether its memory can leave the device. A
+/// layout that is renderable and not exportable would produce an image nothing can scan out of.
+///
+/// `usage` and `features` describe one image and have to agree. `features` is what a layout must
+/// be able to do; `usage` is what the image will be created with. They are separate parameters
+/// because Vulkan states them in two vocabularies, and the caller holds both halves side by side.
 ///
 /// # What one driver answers
 ///
 /// A layout carrying no `COLOR_ATTACHMENT` is a layout nothing can be drawn into, and the linear
-/// layout is one of them. NVIDIA 595.84 lists `B8G8R8A8_UNORM` linear as sampleable, blittable and
-/// copyable, and not as a colour attachment. Its six tiled layouts carry all three. So this answers
-/// six of that driver's seven, and linear is the one that goes.
+/// layout is one of them. NVIDIA 595.84 publishes seven layouts for `B8G8R8A8_UNORM`: six
+/// block-linear ones carrying `COLOR_ATTACHMENT`, and the linear one, which carries sampling,
+/// storage, blit and transfer and no colour attachment. So this answers six of that driver's seven,
+/// and linear is the one that goes.
 ///
 /// The same driver answers `vkGetPhysicalDeviceImageFormatProperties2` for linear with
 /// `COLOR_ATTACHMENT` usage as though the image were possible. So the second question passes a
@@ -67,14 +71,11 @@ pub(crate) fn offered(
     physical: vk::PhysicalDevice,
     format: vk::Format,
     usage: vk::ImageUsageFlags,
+    features: vk::FormatFeatureFlags,
 ) -> Vec<Offered> {
     listed(instance, physical, format)
         .into_iter()
-        .filter(|entry| {
-            entry
-                .drm_format_modifier_tiling_features
-                .contains(vk::FormatFeatureFlags::COLOR_ATTACHMENT)
-        })
+        .filter(|entry| entry.drm_format_modifier_tiling_features.contains(features))
         .filter(|entry| exportable(instance, physical, format, usage, entry.drm_format_modifier))
         .map(|entry| Offered {
             modifier: Modifier(entry.drm_format_modifier),
@@ -181,14 +182,101 @@ fn exportable(
 
 #[cfg(test)]
 mod tests {
-    //! The intersection, which needs no device.
+    //! The intersection, which needs no device, and the filter, which does.
     //!
-    //! This is the decision that puts a frame on a screen or leaves it black: a layout named by
-    //! only one of the two sides describes memory the other cannot read, and a display handed one
-    //! shows a scrambled picture or nothing at all.
+    //! The intersection decides whether a frame reaches the screen at all: a layout named by only
+    //! one of the two sides describes memory the other cannot read, and a display handed one shows
+    //! a scrambled picture or nothing.
+    //!
+    //! The filter before it is checked here and not in `tests/`, because the check is that two
+    //! answers from one driver agree and both of them are this module's own. Reaching them from
+    //! outside would mean publishing a driver's raw format list, and `ash`'s types with it, so that
+    //! a test could read what the code beside it already has.
 
-    use super::{Offered, intersect};
+    use super::{Offered, intersect, listed, offered};
+    use crate::import::{IMAGE_FEATURES, IMAGE_USAGE, VK_FORMAT, vulkan};
     use zgui_drm::format::Modifier;
+    use zgui_render_wgpu::{Gpu, SharedGraphics};
+
+    /// Returns a device that enabled what an exported image needs, or `None`.
+    ///
+    /// The graphics is answered beside the device because it owns the instance the device came
+    /// from. A machine with neither says so and asserts nothing, which is the shape `cargo xtask
+    /// ledger ignored` prescribes.
+    fn opened(test: &str) -> Option<(SharedGraphics, std::sync::Arc<Gpu>)> {
+        let graphics = SharedGraphics::with_extensions(crate::import::EXTENSIONS.to_vec());
+        match graphics.open_gpu() {
+            Ok(gpu) => Some((graphics, gpu)),
+            Err(failure) => {
+                eprintln!("{test}: no usable graphics device, so nothing was asserted: {failure}");
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn every_layout_offered_is_one_the_driver_said_can_be_drawn_into() {
+        // The filter as a whole, which a deletion would take away. A predicate tested on its own
+        // survives that: the offered list simply grows by the layouts the driver cannot draw into,
+        // every later step still answers, and an image comes out in a layout whose own format entry
+        // says nothing can be drawn into it.
+        let test = "every_layout_offered_is_one_the_driver_said_can_be_drawn_into";
+        let Some((_graphics, gpu)) = opened(test) else {
+            return;
+        };
+
+        let asked = vulkan(&gpu, |adapter, _| {
+            let instance = adapter.shared_instance().raw_instance();
+            let physical = adapter.raw_physical_device();
+            Ok((
+                listed(instance, physical, VK_FORMAT),
+                offered(instance, physical, VK_FORMAT, IMAGE_USAGE, IMAGE_FEATURES),
+            ))
+        });
+        let Ok((published, kept)) = asked else {
+            eprintln!("{test}: this device exports no image, so nothing was asserted");
+            return;
+        };
+
+        for entry in &kept {
+            let Some(raw) = published
+                .iter()
+                .find(|listed| listed.drm_format_modifier == entry.modifier.0)
+            else {
+                panic!(
+                    "{:#018x} was offered and the driver never published it",
+                    entry.modifier.0
+                );
+            };
+            assert!(
+                raw.drm_format_modifier_tiling_features
+                    .contains(IMAGE_FEATURES),
+                "{:#018x} was offered and the driver says it supports {:?}",
+                entry.modifier.0,
+                raw.drm_format_modifier_tiling_features
+            );
+            assert_eq!(
+                entry.planes, raw.drm_format_modifier_plane_count,
+                "{:#018x} was offered with a plane count the driver did not give it",
+                entry.modifier.0
+            );
+        }
+
+        // Whether this machine can tell the two apart at all. A driver that can draw into
+        // everything it publishes leaves the assertion above vacuous, and a run that says so is
+        // worth more than a green line that means nothing.
+        assert!(
+            kept.len() <= published.len(),
+            "more layouts were offered than the driver published"
+        );
+        let refused = published.len() - kept.len();
+        eprintln!(
+            "{test}: the driver published {} layout(s) for this format and offers {}; {refused} \
+             were dropped",
+            published.len(),
+            kept.len()
+        );
+    }
 
     /// Three of the six NVIDIA block-linear layouts this machine publishes for this format.
     ///
