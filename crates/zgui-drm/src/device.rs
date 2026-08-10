@@ -27,12 +27,50 @@ pub enum Interface {
     Legacy,
 }
 
+/// Returns the `card*` devices under `/dev/dri`, sorted by path.
+///
+/// [`Device::open_first_with`] walks this list. A caller that opens its devices through a session
+/// daemon walks the same list, so both reach the cards in one order.
+///
+/// A directory that holds no card answers an empty list.
+///
+/// ```
+/// use zgui_drm::cards;
+///
+/// // A machine with no `/dev/dri` at all refuses, and the empty list stands in for it here.
+/// let cards = cards().unwrap_or_default();
+///
+/// assert!(cards.is_sorted());
+/// assert!(cards.iter().all(|card| card.starts_with("/dev/dri")));
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Open`] naming the directory when it cannot be read.
+pub fn cards() -> Result<Vec<PathBuf>> {
+    let mut cards: Vec<PathBuf> = std::fs::read_dir(DIRECTORY)
+        .map_err(|source| Error::Open {
+            path: PathBuf::from(DIRECTORY),
+            source,
+        })?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("card"))
+        })
+        .collect();
+    cards.sort();
+    Ok(cards)
+}
+
 /// An open display device.
 #[derive(Debug)]
 pub struct Device {
     /// The open descriptor.
     fd: OwnedFd,
-    /// Where it was opened from, for messages.
+    /// Which device this is, for messages.
     path: PathBuf,
     /// Whether the kernel accepted the atomic client capability.
     atomic: bool,
@@ -82,6 +120,47 @@ impl Device {
             source: errno.into(),
         })?;
 
+        Ok(Self::configured(fd, path, interface))
+    }
+
+    /// Builds a device over `fd`, preferring the atomic interface.
+    ///
+    /// `path` names the device for messages. This call does not open it. See
+    /// [`Device::over_with`] for what reaches the descriptor and why.
+    ///
+    /// # Errors
+    ///
+    /// The answer is `Ok` today. See [`Device::over_with`].
+    pub fn over(fd: OwnedFd, path: PathBuf) -> Result<Self> {
+        Self::over_with(fd, path, Interface::Preferred)
+    }
+
+    /// Builds a device over `fd`, through `interface`.
+    ///
+    /// `path` names the device for messages. This call does not open it, because the caller
+    /// already holds the descriptor. A session daemon that opened the card and handed the
+    /// descriptor over is the caller this exists for, and naming the device keeps its errors and
+    /// its logs reading the way [`Device::open_with`] makes them read.
+    ///
+    /// `interface` selects the client capabilities exactly as it does for [`Device::open_with`],
+    /// and they apply to the descriptor the caller was handed. `DRM_IOCTL_SET_CLIENT_CAP` records
+    /// on the kernel's `drm_file`, which belongs to the open file description. A descriptor
+    /// received from a session daemon names the same description the daemon holds, so a capability
+    /// set here applies to it, and the master the daemon granted is already visible through it.
+    ///
+    /// # Errors
+    ///
+    /// The answer is `Ok` today. It is a [`Result`] so that a caller which chooses between this
+    /// and [`Device::open_with`] at run time handles one shape.
+    pub fn over_with(fd: OwnedFd, path: PathBuf, interface: Interface) -> Result<Self> {
+        Ok(Self::configured(fd, path, interface))
+    }
+
+    /// Builds the device over an open descriptor and applies what `interface` asks for.
+    ///
+    /// [`Device::open_with`] and [`Device::over_with`] both end here, so a descriptor this crate
+    /// opened and a descriptor handed to it are set up the same way.
+    fn configured(fd: OwnedFd, path: PathBuf, interface: Interface) -> Self {
         let mut device = Self {
             fd,
             path,
@@ -109,7 +188,7 @@ impl Device {
                     .is_ok();
         }
 
-        Ok(device)
+        device
     }
 
     /// Opens the first device under `/dev/dri` that can be opened, preferring atomic.
@@ -129,20 +208,7 @@ impl Device {
     /// Returns [`Error::Open`] with why the last candidate refused, or naming the directory when
     /// it holds no `card*` entry at all.
     pub fn open_first_with(interface: Interface) -> Result<Self> {
-        let mut cards: Vec<PathBuf> = std::fs::read_dir(DIRECTORY)
-            .map_err(|source| Error::Open {
-                path: PathBuf::from(DIRECTORY),
-                source,
-            })?
-            .filter_map(std::result::Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("card"))
-            })
-            .collect();
-        cards.sort();
+        let cards = cards()?;
 
         let mut refused = None;
         for card in &cards {
@@ -170,7 +236,10 @@ impl Device {
         self.atomic
     }
 
-    /// Returns where this device was opened from.
+    /// Returns which device this is.
+    ///
+    /// [`Device::open`] answers the path it opened. [`Device::over`] answers the path its caller
+    /// named.
     pub fn path(&self) -> &Path {
         &self.path
     }

@@ -1,7 +1,21 @@
-//! Opening a real device.
+//! Opening a real device, and building one over a descriptor somebody else opened.
+//!
+//! Everything here needs a card this user may open, so every test looks for one first. Which card
+//! it gets is `support`'s answer, and it is read off the machine — see that module for why the
+//! search may not go through this crate.
+//!
+//! Most of what is asserted is that a call *answers*, rather than what it answers: the answer is a
+//! fact about the hardware, and the call working is a fact about this crate. Where a value is held
+//! to a shape, that shape is one the kernel guarantees: an object id is never zero, a possible-CRTC
+//! mask indexes the resource list, and a connected connector reports a mode with an extent and a
+//! rate.
 
 mod support;
 
+use std::path::{Path, PathBuf};
+
+use rustix::fd::OwnedFd;
+use rustix::fs::{Mode, OFlags};
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
 use zgui_drm::property::ObjectKind;
@@ -10,6 +24,53 @@ use zgui_drm::property::ObjectKind;
 ///
 /// Named here because `sys` is private: a test reaches this crate the way any other caller does.
 const DUMB_BUFFER: u64 = 1;
+
+/// Where the kernel puts display devices.
+///
+/// Named here because [`zgui_drm::cards`] is what answers this directory's contents. A test that
+/// learned what the machine has through that function could not tell a directory holding no card
+/// from a `cards` that answers nothing, and would report the second as the first.
+const DIRECTORY: &str = "/dev/dri";
+
+/// Returns the cards under [`DIRECTORY`], sorted, read without [`zgui_drm::cards`].
+///
+/// Answers nothing where the machine has no card, and says so with the remedy.
+fn cards_present(test: &str) -> Option<Vec<PathBuf>> {
+    let mut cards: Vec<PathBuf> = std::fs::read_dir(DIRECTORY)
+        .map_err(|error| eprintln!("{test}: {DIRECTORY} cannot be read: {error}"))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("card"))
+        })
+        .collect();
+    cards.sort();
+
+    if cards.is_empty() {
+        eprintln!(
+            "{test}: {DIRECTORY} holds no card, so nothing was asserted\n\
+             load the virtual driver with `sudo modprobe vkms` to run it"
+        );
+        return None;
+    }
+    Some(cards)
+}
+
+/// Returns a descriptor onto `path`, opened with the flags this crate opens a card with.
+///
+/// [`zgui_drm::Device::over`] is given a descriptor its caller opened, so the tests open their own
+/// rather than reaching into a device this crate built.
+fn descriptor(path: &Path) -> OwnedFd {
+    rustix::fs::open(
+        path,
+        OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .unwrap_or_else(|error| panic!("a card that opened once opens again: {error}"))
+}
 
 #[test]
 fn a_device_opens_and_answers_what_it_can_do() {
@@ -441,5 +502,126 @@ fn an_idle_device_reports_no_events_rather_than_blocking() {
     assert!(
         events.is_empty(),
         "a device nothing was asked of has nothing to report: {events:?}"
+    );
+}
+
+#[test]
+fn a_device_over_a_descriptor_enumerates_what_the_card_it_names_enumerates() {
+    let Some(opened) = support::device(
+        "a_device_over_a_descriptor_enumerates_what_the_card_it_names_enumerates",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let path = opened.path().to_owned();
+    let over = zgui_drm::Device::over(descriptor(&path), path.clone())
+        .expect("a device is built over an open descriptor");
+
+    let by_open = opened.resources().expect("the opened device enumerates");
+    let by_over = over
+        .resources()
+        .expect("the device over a descriptor enumerates");
+
+    // The framebuffer list is left out of this comparison because it is the one list that belongs
+    // to the descriptor: the kernel answers `count_fbs` from the calling `drm_file`'s own
+    // framebuffers, and each open makes a new `drm_file`. The other three describe the card, so
+    // two descriptors onto one card answer them the same.
+    assert_eq!(
+        by_over.crtcs,
+        by_open.crtcs,
+        "two descriptors onto {} list one set of CRTCs",
+        path.display()
+    );
+    assert_eq!(
+        by_over.connectors,
+        by_open.connectors,
+        "two descriptors onto {} list one set of connectors",
+        path.display()
+    );
+    assert_eq!(
+        by_over.encoders,
+        by_open.encoders,
+        "two descriptors onto {} list one set of encoders",
+        path.display()
+    );
+}
+
+#[test]
+fn a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets() {
+    let Some(opened) = support::device(
+        "a_device_over_a_descriptor_carries_the_client_capabilities_this_crate_sets",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let path = opened.path().to_owned();
+    let over = zgui_drm::Device::over(descriptor(&path), path.clone())
+        .expect("a device is built over an open descriptor");
+
+    // Every assertion above holds on a device that asked the kernel for nothing, because
+    // enumeration needs no capability. This one reads whether the capabilities were set, and each
+    // descriptor is its own open file description, so the one this crate opened says nothing about
+    // the one it was handed.
+    assert!(
+        over.is_atomic(),
+        "the atomic client capability reached a descriptor this crate did not open. {} answers \
+         atomic={} when this crate opens it, and a card that refuses the capability reads false \
+         through both",
+        path.display(),
+        opened.is_atomic()
+    );
+}
+
+#[test]
+fn a_device_over_a_descriptor_answers_the_path_its_caller_named() {
+    let Some(opened) = support::device(
+        "a_device_over_a_descriptor_answers_the_path_its_caller_named",
+        Interface::Preferred,
+    ) else {
+        return;
+    };
+    let path = opened.path().to_owned();
+
+    // A name nothing can open, over a descriptor that drives a card. The path is carried for
+    // messages, and this says so: a call that opened it would be refused here.
+    let named = PathBuf::from("/dev/dri/card-the-session-named");
+    let over = zgui_drm::Device::over(descriptor(&path), named.clone())
+        .expect("a device is built over an open descriptor");
+
+    assert_eq!(
+        over.path(),
+        named,
+        "the device answers the name it was given"
+    );
+    assert!(
+        over.resources().is_ok(),
+        "the descriptor drives {}, whatever the device is called",
+        path.display()
+    );
+}
+
+#[test]
+fn the_card_list_is_sorted_and_holds_the_card_under_test() {
+    let test = "the_card_list_is_sorted_and_holds_the_card_under_test";
+    let Some(present) = cards_present(test) else {
+        return;
+    };
+
+    let cards = zgui_drm::cards().expect("the card list is answered");
+    assert!(cards.is_sorted(), "the card list is sorted: {cards:?}");
+    assert_eq!(
+        cards, present,
+        "the card list holds every card under {DIRECTORY}"
+    );
+
+    // The card these tests run against is one the list offers, so a caller that opens its devices
+    // through a session daemon reaches the same card by walking it.
+    let Some(device) = support::device(test, Interface::Preferred) else {
+        return;
+    };
+    assert!(
+        cards.iter().any(|card| card == device.path()),
+        "the list holds {}, which is the card under test: {cards:?}",
+        device.path().display()
     );
 }
