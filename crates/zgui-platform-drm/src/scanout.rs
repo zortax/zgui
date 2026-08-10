@@ -15,7 +15,7 @@
 //! **The imported shape.** Three Vulkan images the renderer composes straight into, exported as
 //! dma-buf descriptors and registered as framebuffers in the layout the driver chose. Nothing is
 //! read back and nothing is copied. A frame there is bracketed by the two barriers
-//! [`Handover`](crate::Handover) records: one takes the buffer back from the display engine before
+//! [`Handover`] records: one takes the buffer back from the display engine before
 //! the frame is drawn, and one gives it over afterwards, and then the flip follows. The flip
 //! carries a sync file for that second barrier where the display can be given one, so the kernel
 //! waits for the graphics device and the frame loop's own thread waits for nothing.

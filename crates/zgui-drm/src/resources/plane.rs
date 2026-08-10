@@ -53,10 +53,29 @@ impl Plane {
 impl Device {
     /// Returns the plane ids this device has.
     ///
+    /// A device opened for the legacy interface lists only its overlay planes. The kernel exposes
+    /// primary and cursor planes to a client that set `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, which
+    /// [`Interface::Preferred`](crate::device::Interface::Preferred) asks for.
+    ///
+    /// ```no_run
+    /// use zgui_drm::Device;
+    ///
+    /// let device = Device::open_first()?;
+    ///
+    /// for id in device.planes()? {
+    ///     assert_eq!(
+    ///         device.plane(id)?.id,
+    ///         id,
+    ///         "every id this listed names a plane the device will describe",
+    ///     );
+    /// }
+    /// # Ok::<(), zgui_drm::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses, and
-    /// [`Error::Unusable`](crate::Error::Unusable) when the count kept moving.
+    /// Returns [`Error::Ioctl`] when the kernel refuses, and
+    /// [`Error::Unusable`] when the count kept moving.
     pub fn planes(&self) -> Result<Vec<u32>> {
         stabilise(
             || "the device's plane count changed on every attempt to read it".to_owned(),
@@ -83,8 +102,8 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses, and
-    /// [`Error::Unusable`](crate::Error::Unusable) when the count kept moving.
+    /// Returns [`Error::Ioctl`] when the kernel refuses, and
+    /// [`Error::Unusable`] when the count kept moving.
     pub fn plane(&self, id: u32) -> Result<Plane> {
         stabilise(
             || format!("plane {id} changed under every attempt to read it"),
@@ -126,13 +145,14 @@ impl Device {
     /// answer names, and the image is then handed over as it stands.
     ///
     /// Answers `None` where the driver publishes no `IN_FORMATS` property. The property is
-    /// optional, and a driver that omits it states only its format list. A property whose value is
+    /// optional: the kernel documents it as the one that says a plane supports buffers with
+    /// modifiers, so a driver that omits it states only its format list. A property whose value is
     /// zero is read the same way, because zero names no blob.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses a read,
-    /// [`Error::Unusable`](crate::Error::Unusable) when a count kept moving under one, and the
+    /// Returns [`Error::Ioctl`] when the kernel refuses a read,
+    /// [`Error::Unusable`] when a count kept moving under one, and the
     /// same when the property is there and the blob behind it is one this crate cannot read.
     pub fn plane_formats(&self, id: u32) -> Result<Option<FormatModifiers>> {
         let properties = self.properties(id, ObjectKind::Plane)?;
