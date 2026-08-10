@@ -56,7 +56,7 @@ mod sys;
 #[cfg(target_os = "linux")]
 pub use crate::commit::Commit;
 #[cfg(target_os = "linux")]
-pub use crate::device::Device;
+pub use crate::device::{Device, cards};
 #[cfg(target_os = "linux")]
 pub use crate::error::{Error, Result};
 #[cfg(target_os = "linux")]
