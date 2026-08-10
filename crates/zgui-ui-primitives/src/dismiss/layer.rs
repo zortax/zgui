@@ -69,7 +69,7 @@ impl DismissReason {
 ///                 layer = OverlayLayer::Popover,
 ///                 on_dismiss = UnsyncCallback::new(move |_reason: DismissReason| open.set(false))
 ///             ) {
-///                 surface(class = "menu") {"items"}
+///                 box(class = "menu") {"items"}
 ///             }
 ///         }
 ///     }

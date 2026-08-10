@@ -19,7 +19,7 @@ fn Surface(
 ) -> impl IntoView {
     let presence = use_presence();
     view! {
-        surface(
+        box(
             class = "popover",
             node_ref = element_ref,
             attr:data-state = move || presence.map(|presence| presence.state_name().to_owned())

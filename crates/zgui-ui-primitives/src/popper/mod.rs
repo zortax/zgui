@@ -81,7 +81,7 @@ pub use crate::popper::solve::{PopperOptions, Solution, WindowRect, solve};
 ///             control(node_ref = trigger) {"hover me"}
 ///             Portal {
 ///                 Popper(anchor = trigger, placement = Placement::TOP) {
-///                     surface(class = "tooltip") {"Bold"}
+///                     box(class = "tooltip") {"Bold"}
 ///                 }
 ///             }
 ///         }

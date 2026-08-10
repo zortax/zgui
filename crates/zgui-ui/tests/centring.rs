@@ -54,7 +54,7 @@ const SHEET: &str = ":root {
                          font-family: sans-serif;
                      }
                      .page { padding: 24px; gap: 16px; align-items: flex-start }
-                     surface.zui-dialog { background-color: #ff00ff; color: #ffffff }";
+                     box.zui-dialog { background-color: #ff00ff; color: #ffffff }";
 
 /// The same page, with the surface's *transform* slowed right down and its opacity left in the
 /// tokens' own hurry.
@@ -62,7 +62,7 @@ const SHEET: &str = ":root {
 /// This is what makes an entrance readable at all. At the library's own timing the two finish
 /// together, so every frame in which the panel is solid enough to find is a frame in which it has
 /// already almost stopped moving; slowing one and not the other separates them.
-const SLOW: &str = "surface.zui-dialog {
+const SLOW: &str = "box.zui-dialog {
                         transition: opacity 60ms linear, transform 1200ms linear;
                     }";
 

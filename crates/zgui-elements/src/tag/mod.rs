@@ -33,6 +33,13 @@
 //!
 //! The layout column is what the framework's own style sheet says. It is CSS, so it is overridable
 //! like any other declaration: `column { flex-direction: row }` works and means what it says.
+//!
+//! # The two replaced names
+//!
+//! [`image()`] and [`surface()`] hold content the document does not own, so their boxes are sized
+//! from that content and anything written inside one is never laid out. Every other name lays out
+//! its children. A raised region — a card, a sheet, a menu's body — is a `box` a style sheet gives
+//! a border, a fill and a shadow to.
 
 mod markers;
 

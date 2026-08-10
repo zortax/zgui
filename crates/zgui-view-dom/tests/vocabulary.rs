@@ -109,6 +109,37 @@ fn every_intrinsic_element_builds_a_real_node_and_takes_its_layout_default_from_
     window.window.unmount();
 }
 
+/// Which names are born replaced, over the whole vocabulary at once.
+///
+/// A replaced element holds content the document does not own, so its box is sized from that
+/// content and layout never reaches its children. Naming a container here empties it in a way
+/// nothing else can see: the frame is styled and painted at the size the sheet gives it, the
+/// children are in the tree, the accessibility tree reads them — and the window shows an empty
+/// box. Two components of the library above shipped in that state.
+///
+/// So the list is pinned by name and read off the flag the document actually carries. A name that
+/// joins it is an edit here as well as in the backend.
+#[test]
+fn only_the_names_whose_content_comes_from_outside_are_born_replaced() {
+    use zgui_view::Dom;
+
+    let window = Window::open();
+    let mut replaced: Vec<&str> = Vec::new();
+    for name in zgui_elements::names() {
+        let node = window.backend.create_element(name);
+        let index = window.backend.index_of(node);
+        if window.document.borrow().node(index).replaced_id().is_some() {
+            replaced.push(name.as_str());
+        }
+    }
+    replaced.sort_unstable();
+    assert_eq!(
+        replaced,
+        ["image", "surface"],
+        "a container that is born replaced draws its own frame and none of its children"
+    );
+}
+
 /// The vocabulary and the sheet are two lists of the same names, and nothing else compares them.
 ///
 /// The comparison is against the sheet's *selectors*, not against its text. Half the vocabulary

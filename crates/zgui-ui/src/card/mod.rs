@@ -67,8 +67,11 @@ pub fn Card(
         .class_toggle(zgui::view::ClassName::new("zui-card"), true)
         .a11y_from(A11yBinding::new(Role::Group));
 
+    // A `box`: what raises a card is the border, the fill and the shadow the sheet gives it. The
+    // `surface` element is replaced content — pixels another renderer produces — so a card built
+    // on one draws its frame and none of its pieces.
     view! {
-        surface(class = CardStyle::CLASS, {..own}, {..attrs}, class = class) {
+        box(class = CardStyle::CLASS, {..own}, {..attrs}, class = class) {
             {children.into_view_once()}
         }
     }

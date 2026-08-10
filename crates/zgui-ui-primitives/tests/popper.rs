@@ -26,7 +26,7 @@ fn Anchored(
         box {
             control(node_ref = anchor) {"open"}
             Popper(anchor = anchor, element_ref = positioner, placement = placement, flip = flip) {
-                surface(class = "menu") {"contents"}
+                box(class = "menu") {"contents"}
             }
         }
     }

@@ -60,7 +60,7 @@
 //!                         on_dismiss = UnsyncCallback::new(move |_: DismissReason| open.set(false))
 //!                     ) {
 //!                         Popper(anchor = trigger) {
-//!                             surface(class = "popover", node_ref = surface) {"contents"}
+//!                             box(class = "popover", node_ref = surface) {"contents"}
 //!                         }
 //!                     }
 //!                 }

@@ -111,8 +111,11 @@ pub fn Alert(
     let mark =
         mark.map(|mark| AnyView::new(view! { Icon(icon = mark, class = "zui-alert__icon") }));
 
+    // A `box`: the fill and the edge an alert sits on are the sheet's. The `surface` element is
+    // replaced content — pixels another renderer produces — so an alert built on one draws its
+    // frame and neither the mark nor the writing.
     view! {
-        surface(class = AlertStyle::CLASS, {..own}, {..attrs}, class = class) {
+        box(class = AlertStyle::CLASS, {..own}, {..attrs}, class = class) {
             {mark}
             {children.into_view_once()}
         }

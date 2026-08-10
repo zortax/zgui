@@ -47,8 +47,8 @@ const SHEET: &str = ":root {
                          overflow: auto;
                      }
                      .page { padding: 24px; gap: 16px; align-items: flex-start }
-                     surface.zui-dialog { background-color: #1b3f8f; color: #ffffff }
-                     surface.zui-select__list { background-color: #f2c200; color: #101010 }
+                     box.zui-dialog { background-color: #1b3f8f; color: #ffffff }
+                     box.zui-select__list { background-color: #f2c200; color: #101010 }
                      .filler { height: 220px; width: 320px }
                      .stack { height: 260px; width: 460px }
                      .card {

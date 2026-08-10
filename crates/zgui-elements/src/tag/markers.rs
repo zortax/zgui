@@ -61,6 +61,9 @@ elements! {
     Label = label, "label";
 
     /// A picture, sized by what it is a picture of.
+    ///
+    /// Replaced content: the picture arrives from outside the document, and anything written
+    /// inside the element is never laid out.
     Image = image, "image";
 
     /// Shapes, drawn from paths.
@@ -72,7 +75,9 @@ elements! {
     /// Content larger than the space there is for it, which the user can move through.
     Scroll = scroll, "scroll";
 
-    /// Pixels something outside the document produced.
+    /// Shapes the application draws and mutates, kept as a retained scene of its own.
+    ///
+    /// Unstyled it is 300×150, because a canvas nobody sized and nobody can see reads as broken.
     Canvas = canvas, "canvas";
 
     /// Text the user changes.
@@ -84,7 +89,12 @@ elements! {
     /// Something the user operates: a button, a switch, a slider's thumb.
     Control = control, "control";
 
-    /// A raised region: a card, a sheet, a menu's body.
+    /// Pixels another renderer produces, on a texture of zgui's own graphics device.
+    ///
+    /// Replaced content, exactly as [`image`](crate::image) is: the box is styled, sized, clipped
+    /// and composited like any other, and what fills it is named by the producer it is given.
+    /// Anything written inside the element is never laid out. A card, a sheet or a menu's body is
+    /// a [`box`](Box_) a style sheet raises.
     Surface = surface, "surface";
 
     /// The space between two things, which takes whatever is left over.
