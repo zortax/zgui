@@ -13,14 +13,15 @@
 // own subject needs. So a helper is dead code in the binaries that do not call it, which says
 // nothing about the workspace.
 #![allow(dead_code)]
-// The loader and two resource limits are reached through the C library, which the crate under test
-// is on the unsafe ledger's allowlist for its own reasons. Every block below states what makes it
-// sound.
+// The loader, two resource limits and one system call the C library carries no wrapper for are
+// reached through that library, which the crate under test is on the unsafe ledger's allowlist for
+// its own reasons. Every block below states what makes it sound.
 #![allow(unsafe_code)]
 
-use std::ffi::{CString, c_char, c_int, c_void};
+use std::ffi::{CString, c_char, c_int, c_long, c_void};
 use std::fs;
-use std::path::PathBuf;
+use std::os::fd::{AsRawFd, RawFd};
+use std::path::{Path, PathBuf};
 
 /// The two names libseat is installed under, written out.
 ///
@@ -60,30 +61,121 @@ pub(crate) fn libseat_is_installed() -> bool {
 
 /// Runs `work` in a process that can open no file at all.
 ///
-/// This is how a library is put out of reach without touching the machine. `dlopen` opens the
-/// shared object it is asked for, so a process whose descriptor limit is zero resolves no soname:
-/// the loader answers "too many open files" for every name, and a caller sees what it would see on
-/// a machine where the library was never installed.
+/// This is how a seat is put out of reach without touching the machine. Every step towards one
+/// opens something: `dlopen` opens the shared object it is asked for, and libseat's noop backend
+/// makes a `socketpair` for the seat it answers. A process whose descriptor limit is zero gets
+/// "too many open files" from whichever of them it reaches first, which is a failure the caller has
+/// to answer for.
 ///
 /// The limit is put back before anything is asserted, because a process that may open no descriptor
 /// cannot report a failure either.
 ///
 /// # A library that is already mapped
 ///
-/// The loader answers a name it has already mapped out of its own list and opens nothing. So this
-/// puts a library out of reach for a process that has never reached it, and a binary that uses it
-/// runs the subject before it probes for anything.
+/// The loader answers a name it has already mapped out of its own list and opens nothing. glibc
+/// unmaps a shared object when the last handle on it closes, so a process there reaches the loader
+/// again; musl unmaps nothing, and a process that links libseat directly has it mapped from the
+/// start. So a binary that needs the library out of reach runs its subject before it probes for
+/// anything.
 pub(crate) fn while_nothing_opens<T>(work: impl FnOnce() -> T) -> T {
+    while_the_limit_is(0, work)
+}
+
+/// Runs `work` with `current` as this process's descriptor limit.
+///
+/// The limit is what the kernel refuses a new descriptor against: it allocates the lowest free
+/// number below the limit, and answers "too many open files" where there is none. So a limit one
+/// above [`lowest_free_descriptor`] leaves room for exactly one more descriptor, which is how a
+/// second call that asks for one is made to fail while the first succeeds.
+///
+/// The limit is put back before `work`'s answer is looked at, for the reason
+/// [`while_nothing_opens`] states.
+pub(crate) fn while_the_limit_is<T>(current: u64, work: impl FnOnce() -> T) -> T {
     let limit = descriptor_limit();
 
     set_descriptor_limit(&Rlimit {
-        current: 0,
+        current,
         maximum: limit.maximum,
     });
     let answer = work();
     set_descriptor_limit(&limit);
 
     answer
+}
+
+/// Returns the lowest descriptor number this process has free.
+///
+/// Asked by opening one and closing it again. The kernel hands out the lowest free number, so the
+/// number it answered is that number, and it is free again by the time this returns.
+pub(crate) fn lowest_free_descriptor() -> u64 {
+    let file = fs::File::open("/dev/null")
+        .unwrap_or_else(|error| panic!("every Linux machine has `/dev/null` to open: {error}"));
+    let number = file.as_raw_fd();
+    drop(file);
+
+    u64::try_from(number).unwrap_or_else(|_| panic!("a descriptor number is never negative"))
+}
+
+/// Returns the descriptors this process holds that name `path`.
+///
+/// `/proc/self/fd` carries one symbolic link per descriptor, and each one reads back as what that
+/// descriptor names. So this finds a descriptor by the path it was opened on, including one that
+/// somebody else opened and handed over.
+pub(crate) fn descriptors_naming(path: &Path) -> Vec<RawFd> {
+    let mut found: Vec<RawFd> = fs::read_dir("/proc/self/fd")
+        .unwrap_or_else(|error| {
+            panic!("this backend runs on Linux, which has `/proc/self/fd` to read: {error}")
+        })
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| fs::read_link(entry.path()).is_ok_and(|named| named == path))
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok())
+        })
+        .collect();
+    found.sort_unstable();
+    found
+}
+
+/// Returns `true` if `first` and `second` name one open file description.
+///
+/// This is the fact a duplicate exists for, and the one thing `/proc` cannot show: a descriptor
+/// copied with `F_DUPFD_CLOEXEC` and a second `open(2)` of the same path read back as the same link
+/// and are reported with the same position and the same flags, while the kernel holds DRM master,
+/// the client capabilities and the status flags on the description behind them.
+///
+/// `kcmp(2)` with `KCMP_FILE` asks. The kernel compares the `struct file` behind each number and
+/// answers an ordering, so zero is one description under two names.
+///
+/// `None` where this machine cannot answer: an architecture whose call number is not written out
+/// below, or a kernel built without `CONFIG_CHECKPOINT_RESTORE`, which refuses the call. A caller
+/// reports that and asserts nothing.
+pub(crate) fn one_open_file_description(first: RawFd, second: RawFd) -> Option<bool> {
+    let number = KCMP?;
+    // A process id is a 32-bit number the kernel keeps well inside its own limit, so it crosses as
+    // a `long` on every architecture, including the ones where a `long` is the narrower of the two.
+    let process = std::process::id() as c_long;
+
+    // SAFETY: `syscall` passes the numbers below to the kernel, which reads two process ids, a
+    // comparison and two descriptor numbers. `kcmp` reads nothing through a pointer and writes
+    // nothing back, so every argument is an integer and the return value is the only result.
+    let answer = unsafe {
+        syscall(
+            number,
+            process,
+            process,
+            KCMP_FILE,
+            c_long::from(first),
+            c_long::from(second),
+        )
+    };
+
+    if answer < 0 {
+        return None;
+    }
+    Some(answer == 0)
 }
 
 /// Returns the `card*` devices under `/dev/dri` this process can open for itself, sorted by path.
@@ -128,6 +220,34 @@ pub(crate) fn open_descriptors() -> usize {
             panic!("this backend runs on Linux, which has `/proc/self/fd` to count: {error}")
         })
         .count()
+}
+
+/// `kcmp(2)`'s comparison for "these two descriptors", which is the only one asked for here.
+const KCMP_FILE: c_long = 0;
+
+/// `kcmp(2)`'s system call number on this architecture.
+///
+/// Linux numbers its calls per architecture and the C library exports no wrapper for this one, so
+/// the number is written out. `x86_64` is 312, and the generic table every architecture added since
+/// `aarch64` uses puts it at 272. An architecture outside both answers nothing, and the caller
+/// reports that it could not ask.
+const KCMP: Option<c_long> = if cfg!(target_arch = "x86_64") {
+    Some(312)
+} else if cfg!(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
+)) {
+    Some(272)
+} else {
+    None
+};
+
+// The C library's own, for a call it carries no wrapper for. Declared here for the reason the
+// loader's two are.
+unsafe extern "C" {
+    /// `syscall(2)`. Takes the call number and passes the rest to the kernel.
+    fn syscall(number: c_long, ...) -> c_long;
 }
 
 /// `RTLD_LAZY`, which resolves a symbol when it is first called.

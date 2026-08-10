@@ -39,10 +39,12 @@
 //!
 //! # Order against DRM master
 //!
-//! The frame loop takes master first and fails to start while a compositor holds it. That ordering
-//! is the interlock: a run on a busy machine cannot take the keyboard from the desktop, because it
-//! never reaches the point where it would ask for one. [`Seat::open`] being called from the loop
-//! after `become_master` keeps it, and nothing else does.
+//! The frame loop takes the card first and fails to start while a compositor holds it: a direct
+//! run stops at `become_master`, and a seated one stops there too, because a seat that a daemon
+//! refuses or never enables is a run that falls back to the direct shape. That ordering is the
+//! interlock: a run on a busy machine cannot take the keyboard from the desktop, because it never
+//! reaches the point where it would ask for one. [`Seat::open`] being called from the loop after
+//! the card keeps it, and nothing else does.
 //!
 //! # Which devices are keyboards
 //!

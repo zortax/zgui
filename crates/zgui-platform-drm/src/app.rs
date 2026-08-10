@@ -1,8 +1,8 @@
 //! The frame loop: take the device, light the displays, and turn until the application stops.
 //!
-//! The driver, and the only one this backend has. It opens the device, takes DRM master, discovers
-//! the displays, gives each one its buffers, and then turns: read the device, hand the frames that
-//! were asked for to the application, ask it how to wait, and wait.
+//! This is the backend's only driver. It opens the device, takes DRM master, discovers the
+//! displays, gives each one its buffers, and then turns: read the device, hand the frames that were
+//! asked for to the application, ask it how to wait, and wait.
 //!
 //! Which shape those buffers take is settled here, once per display, and it needs the graphics
 //! device the renderer will draw on — so the caller opens that device first and hands it in. See
@@ -14,15 +14,15 @@
 //! answering one whole class of event.
 //!
 //! 1. **A display finished a flip.** The device becomes readable, the completion is read, and the
-//!    buffer the display had before the flip is free for the next frame.
+//!    buffer the display had before it is free for the next frame.
 //! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
 //!    which is the second descriptor the wait watches, and arrives as a
 //!    [`WakeReason`](zgui_platform::WakeReason).
 //! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable,
 //!    and every device the seat took is one more descriptor the wait watches — so the watch set is
 //!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
-//!    surface, and a pointer event goes to the display the pointer is on — which is the display
-//!    that decides the focused surface.
+//!    surface and a pointer event goes to the display the pointer is on — the display that decides
+//!    the focused surface.
 //! 4. **Somebody plugged a device in.** The seat's watch on the device directory is one more
 //!    descriptor in the same set, and a node made there ends the wait. The device is opened,
 //!    grabbed and read from the next turn on. Nothing is dispatched for the arrival itself, beyond
@@ -39,8 +39,11 @@
 //! and it has two shapes: a session daemon opens the card and hands it over, which needs no
 //! privilege at all, or this process opens it and takes DRM master, which needs root or a free
 //! virtual terminal. A run started inside a desktop's own session gets the second shape, because a
-//! session that already has a controlling client is refused the seat, and DRM master is what
-//! refuses the run there.
+//! session that already has a controlling client is refused the seat, and DRM master refuses the
+//! run there.
+//!
+//! The session also gives everything back — the console, the master and every device the seat
+//! opened — so this loop opens one, holds it for longer than the card, and pairs nothing up itself.
 //!
 //! **Nothing hands the device back on a terminal switch.** The seat is taken and nothing is read
 //! from it, so a session that loses its devices to another terminal carries on drawing into commits
@@ -53,9 +56,9 @@
 //! when the program stops. [`crate::console`] is that pair of calls and says where their scope
 //! ends: it is two ioctls, and it is not terminal switching.
 //!
-//! A seated run does neither. A session daemon puts the terminal into graphics mode when it grants
-//! control, so the screen is already this program's, and
-//! [`Session::takes_the_console`](crate::session::Session::takes_the_console) is what says so.
+//! Both calls belong to [`crate::session`], because the session takes the card: a direct run takes
+//! the screen along with the master and gives the two back together. A seated run makes neither
+//! call, because the session daemon put the terminal into graphics mode when it granted control.
 //!
 //! # What holds the keyboard and the mouse
 //!
@@ -67,10 +70,17 @@
 //! for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds
 //! no way out has to be killed from another terminal.
 //!
-//! The interlock is weaker on the seated path, and knowingly so. A daemon hands a card to a session
-//! that is not the active one, and nothing here asks which session is active — so a seated run
-//! started from a terminal nobody is looking at reaches the grab, where the same run started
-//! directly would have stopped at the master.
+//! The interlock holds on the seated path too, by a longer route. logind reads whether the session
+//! is active before it grants control and reports an inactive one as disabled on the first
+//! dispatch, so a seat opened from a terminal nobody is looking at never enables,
+//! [`Session::open`] answers the direct shape, and the direct shape stops at the master. seatd and
+//! libseat's builtin backend agree; noop is the one backend where an inactive session cannot arise.
+//!
+//! What that route costs is worth stating. Such a run **cannot start at all**, and it spends
+//! [`zgui_seat::ENABLE_WITHIN`] holding `TakeControl` on its own terminal — `K_OFF` and
+//! `KD_GRAPHICS`, so the console keyboard there stops answering — before it gives up. A seat that
+//! opens inactive becoming a session that is seated and waiting for its terminal is the milestone
+//! that follows this one.
 //!
 //! # What moves the cursor
 //!
@@ -96,7 +106,6 @@ use zgui_render_wgpu::Gpu;
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
-use crate::console::ConsoleScreen;
 use crate::cursor::Cursor;
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
@@ -167,39 +176,16 @@ pub fn run(
     displays: &Displays,
     gpu: Option<&Gpu>,
 ) -> Result<(), PlatformError> {
-    // Declared before the device, so that it is dropped after it. A seated session lends the card's
-    // descriptor to the device below and keeps the seat's own, and giving that one back is what
-    // releases the daemon's record of the card.
+    // The session is what took the card, so it is what gives back everything the card cost: the
+    // console's screen, the master a direct run took, and every device the seat opened. That
+    // happens whatever the loop below did, including an error return and a panic.
     let mut session = Session::open();
-    let device = Arc::new(session.card()?);
+    let device = session.card()?;
 
-    // After the device, so that a run on a machine where a compositor holds it has already returned
-    // and never blanks a console it was not going to draw on. See `crate::console`.
-    //
-    // A seated session leaves the console alone: the daemon put the terminal into graphics mode
-    // when it granted control, and a console this run may not open would report a warning that is
-    // false.
-    let screen = session.takes_the_console().then(ConsoleScreen::taken);
-
-    let outcome = drive(&device, handler, displays, gpu);
-
-    // Both of these run whatever happened above, including an error return.
-    //
-    // The console first. Telling it the screen is its own is what puts the kernel's own picture
-    // back — handing the device over does not — and it is the order Xorg established and the
-    // kernel carries an exception for.
-    if let Some(screen) = screen {
-        screen.restore();
-    }
-    // A process that kept master would leave the console with no way to draw for anybody else
-    // until it exits. Only what this process took: a seated run holds a duplicate of the daemon's
-    // own descriptor, and master sits on the open file description behind both.
-    if session.takes_the_master()
-        && let Err(error) = device.drop_master()
-    {
-        warn!("the device could not be handed back before this process exits: {error}");
-    }
-    outcome
+    // The two names on the card go in this order: `device` is the loop's, and it is dropped at the
+    // end of this function, and `session` — which holds the other one, and the master taken over
+    // it — after it.
+    drive(&device, handler, displays, gpu)
 }
 
 /// Runs everything between taking the device and giving it back.

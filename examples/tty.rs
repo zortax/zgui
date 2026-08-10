@@ -14,17 +14,18 @@
 //!
 //! Every display that is plugged in is lit at its own preferred mode.
 //!
-//! **Switching away from it is not handled yet.** `Ctrl+Alt+F1` does nothing here: a session daemon
-//! turns the console keyboard off while it holds the devices, and a run with no daemon grabs every
-//! keyboard for itself. A switch made some other way takes the devices while this program goes on
-//! running.
+//! **`Ctrl+Alt+Fn` asks for another terminal where a session daemon answers.** A run holds the
+//! keyboard, so the chord reaches this program rather than the console driver, and the program asks
+//! the daemon for the terminal it names. The devices go on the way out and are opened again on the
+//! way back. A run with no daemon owns no terminal, so the ask is refused and the reason is logged
+//! once; switch such a run from elsewhere, with `chvt` over a network connection.
 //!
 //! **Press Escape to stop it, and read the next paragraph before running it.** The backend takes
 //! the keyboard away from everything else, so `Ctrl+C` never reaches the terminal's line discipline
 //! and raises no `SIGINT`. The backend binds no key of its own — which key leaves a program is the
 //! program's decision, and one chosen by a backend is one taken away from every application that
-//! wanted it for something else — so an application on a console has to bind one, and `Clock` binds
-//! Escape. A build of this without that binding has to be killed from another terminal.
+//! wanted it for something else — so an application on a console has to bind one, and `Clock`
+//! binds Escape. A build of this without that binding has to be killed from another terminal.
 //!
 //! What it is worth reading for:
 //!
