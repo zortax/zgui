@@ -8,8 +8,9 @@
 //! Nothing here creates such an image. What is asserted is the contract around the list: it
 //! reaches every device this crate opens, a machine that cannot grant it still gets a working
 //! device, the device that replaces a lost one asks for the same list, and what a device enabled
-//! is read off the device instead of assumed. None of that depends on how long the list is, and
-//! the five below are one such list.
+//! is read off the device instead of assumed. None of that depends on how long the list is. Of the
+//! five below, the console backend's own constant names three for the image itself; the other two
+//! are for the fence and the queue-family release that follow it.
 
 // Reading back the list a device was created with needs wgpu's hal, and reaching it is unsafe. It
 // is a test's own business: catching a device that reported an extension it does not have is why
@@ -35,7 +36,7 @@ use zgui_scene::{Quad, Scene, SubpixelSprite};
 
 use support::{SIDE, device_lock, opaque, present, rect};
 
-/// The names asked for where a Vulkan image with a DRM format modifier becomes a dma-buf.
+/// The names the console path asks for, once the image, the fence and the release are all built.
 const DMA_BUF: [&CStr; 5] = [
     c"VK_EXT_image_drm_format_modifier",
     c"VK_KHR_external_memory_fd",
@@ -186,7 +187,7 @@ fn one_absent_name_costs_the_whole_list() {
 }
 
 #[test]
-fn the_five_a_scanout_buffer_needs_are_enabled_where_the_driver_has_them() {
+fn the_names_a_scanout_buffer_needs_are_enabled_where_the_driver_has_them() {
     let _device = device_lock();
     let graphics = SharedGraphics::with_extensions(DMA_BUF.to_vec());
     let Some(gpu) = open(&graphics) else {
@@ -199,7 +200,7 @@ fn the_five_a_scanout_buffer_needs_are_enabled_where_the_driver_has_them() {
     assert_eq!(
         gpu.vulkan_extensions(),
         DMA_BUF.as_slice(),
-        "the list is all-or-nothing, so a device reports all five or none"
+        "the list is all-or-nothing, so a device reports every name or none"
     );
     assert_eq!(
         gpu.adapter().get_info().backend,
@@ -306,7 +307,7 @@ fn the_hal_path_adds_the_list_to_the_device_and_nothing_else() {
         "the hal path put {uninvited:?} on the device, which nothing asked for"
     );
 
-    // Two of the five are already on the ordinary device: wgpu-hal enables
+    // Two of them are already on the ordinary device: wgpu-hal enables
     // `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf` on any physical device that
     // has them. So the names this adds are the rest, and the callback skips a name the list
     // already holds.
@@ -316,7 +317,7 @@ fn the_hal_path_adds_the_list_to_the_device_and_nothing_else() {
         .filter(|name| !ordinary.contains(name))
         .collect();
     eprintln!(
-        "reported: the ordinary device already had {} of the five; this added {added:?}",
+        "reported: the ordinary device already had {} of them; this added {added:?}",
         DMA_BUF.len() - added.len()
     );
 }
