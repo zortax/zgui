@@ -119,6 +119,42 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
     );
 }
 
+/// The chunk's bytes are at the position the fragment was encoded at, so a movement's offsets
+/// accumulate against that origin. Measuring each replay from the one before it — which is what
+/// updating the record's border box on replay would do — translates encode-time bytes by one step
+/// of a movement that has taken several, and the fragment is drawn where it was two frames ago.
+#[test]
+fn a_fragment_moved_twice_replays_with_the_whole_distance() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let first = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &first,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let step_one = fragment(0.0, 10.0);
+    assert_eq!(
+        cache.reuse(&scene, &step_one, painted(0)),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(10.0)))
+    );
+    cache.replayed(&step_one);
+
+    scene.begin_frame(Size::new(256, 256));
+    let step_two = fragment(0.0, 20.0);
+    assert_eq!(
+        cache.reuse(&scene, &step_two, painted(0)),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(20.0))),
+        "the offset is measured from the encoding, so two steps of ten accumulate to twenty"
+    );
+}
+
 #[test]
 fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
     // An ancestor's opacity is folded into a descendant's colours rather than composited

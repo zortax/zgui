@@ -500,7 +500,11 @@ impl PaintCache {
         self.seen.push(fragment.key);
         self.selections += 1;
         if let Some(record) = self.records.get_mut(&fragment.key) {
-            record.border_box = fragment.border_box;
+            // The border box is deliberately NOT updated to the fragment's position. The chunk's
+            // bytes are at the position the fragment was *encoded* at, so the offset a later
+            // replay applies must be measured from there — an offset measured from the last
+            // selection would translate encode-time bytes by one step of a movement that has
+            // accumulated several.
             if record.last_selected != self.epoch {
                 record.last_selected = self.epoch;
                 self.selected_bytes += record.prims.bytes();
