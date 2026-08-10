@@ -88,6 +88,14 @@
 //! is. The renderer that uses them lives in `zgui`, because a renderer is built by the runtime and
 //! a backend at this layer cannot name the runtime.
 //!
+//! # The buffers that need no copy
+//!
+//! `import` makes a different kind of buffer: a Vulkan image in a layout the display hardware can
+//! read, exported as a dma-buf, that the renderer composes straight into. That removes both the
+//! readback and the copy above. Nothing drives a display from one yet — the import, the framebuffer
+//! and the flip are the next step — and the copied path stays as the answer for every machine where
+//! this cannot be built, which `Unsupported` names the reason for.
+//!
 //! # The loop
 //!
 //! `run` is the driver. It opens the device, takes master, lights every display it finds, and then
@@ -115,10 +123,12 @@
 // platform, and this workspace denies a broken one.
 
 #![deny(missing_docs)]
-// This crate is on the unsafe ledger's allowlist for exactly one reason: a surface hands out its
-// native handles, and `raw-window-handle`'s `borrow_raw` constructors are unsafe. Every unsafe
-// block states what makes it sound. This backend still issues no ioctl of its own — `zgui-drm`
-// owns every one of them.
+// This crate is on the unsafe ledger's allowlist for two reasons. A surface hands out its native
+// handles, and `raw-window-handle`'s `borrow_raw` constructors are unsafe. And `import` creates the
+// images a display scans out of directly, which is Vulkan reached through wgpu's hal: every call
+// into a driver is unsafe, and so is handing the finished image back to wgpu. Every unsafe block
+// states what makes it sound. This backend still issues no ioctl of its own — `zgui-drm` owns every
+// one of them.
 #![allow(unsafe_code)]
 
 // The kernel's display interface exists on Linux and nowhere else, so on any other platform this
@@ -137,6 +147,8 @@ pub mod cursor;
 pub mod cx;
 #[cfg(target_os = "linux")]
 pub mod display;
+#[cfg(target_os = "linux")]
+pub mod import;
 #[cfg(target_os = "linux")]
 pub mod input;
 #[cfg(target_os = "linux")]
@@ -166,6 +178,8 @@ pub use crate::cursor::Cursor;
 pub use crate::cx::DrmCx;
 #[cfg(target_os = "linux")]
 pub use crate::display::{Displays, DrmDisplay};
+#[cfg(target_os = "linux")]
+pub use crate::import::{Imported, Unsupported};
 #[cfg(target_os = "linux")]
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]
