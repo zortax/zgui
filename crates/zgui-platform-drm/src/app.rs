@@ -1,8 +1,8 @@
 //! The frame loop: take the device, light the displays, and turn until the application stops.
 //!
-//! This is the backend's only driver. It opens the device, takes DRM master, discovers the
-//! displays, gives each one its buffers, and then turns: read the device, hand the frames that were
-//! asked for to the application, ask it how to wait, and wait.
+//! The driver, and the only one this backend has. It opens the device, takes DRM master, discovers
+//! the displays, gives each one its buffers, and then turns: read the device, hand the frames that
+//! were asked for to the application, ask it how to wait, and wait.
 //!
 //! Which shape those buffers take is settled here, once per display, and it needs the graphics
 //! device the renderer will draw on — so the caller opens that device first and hands it in. See
@@ -14,15 +14,15 @@
 //! answering one whole class of event.
 //!
 //! 1. **A display finished a flip.** The device becomes readable, the completion is read, and the
-//!    buffer the display had before it is free for the next frame.
+//!    buffer the display had before the flip is free for the next frame.
 //! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
 //!    which is the second descriptor the wait watches, and arrives as a
 //!    [`WakeReason`](zgui_platform::WakeReason).
 //! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable,
 //!    and every device the seat took is one more descriptor the wait watches — so the watch set is
 //!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
-//!    surface and a pointer event goes to the display the pointer is on — the display that decides
-//!    the focused surface.
+//!    surface, and a pointer event goes to the display the pointer is on — which is the display
+//!    that decides the focused surface.
 //! 4. **Somebody plugged a device in.** The seat's watch on the device directory is one more
 //!    descriptor in the same set, and a node made there ends the wait. The device is opened,
 //!    grabbed and read from the next turn on. Nothing is dispatched for the arrival itself, beyond
@@ -35,24 +35,42 @@
 //!
 //! # What holds the device
 //!
-//! One process, for as long as the loop runs. Nothing hands the device back on a terminal switch
-//! and nothing asks a session daemon for it, so this needs a free virtual terminal or root and
-//! fails to start while a compositor holds the device.
+//! One process, for as long as the loop runs. [`crate::session`] is where the device comes from,
+//! and it has two shapes: a session daemon opens the card and hands it over, which needs no
+//! privilege at all, or this process opens it and takes DRM master, which needs root or a free
+//! virtual terminal. A run started inside a desktop's own session gets the second shape, because a
+//! session that already has a controlling client is refused the seat, and DRM master is what
+//! refuses the run there.
+//!
+//! **Nothing hands the device back on a terminal switch.** The seat is taken and nothing is read
+//! from it, so a session that loses its devices to another terminal carries on drawing into commits
+//! that fail. [`crate::session`] states what that costs.
 //!
 //! # What holds the screen
 //!
-//! The console is put into graphics mode after the master is taken and back into text mode before
+//! The console is put into graphics mode after the device is taken and back into text mode before
 //! it is given up, so the kernel's own text console stops drawing over the picture and redraws
 //! when the program stops. [`crate::console`] is that pair of calls and says where their scope
 //! ends: it is two ioctls, and it is not terminal switching.
 //!
+//! A seated run does neither. A session daemon puts the terminal into graphics mode when it grants
+//! control, so the screen is already this program's, and
+//! [`Session::takes_the_console`](crate::session::Session::takes_the_console) is what says so.
+//!
 //! # What holds the keyboard and the mouse
 //!
-//! The same process, and it takes both **after** DRM master. That ordering is the safety
-//! interlock: a run on a busy machine fails at the master and never reaches the grab, so it cannot
-//! take either away from the desktop that is using them. See [`crate::input::seat`] for what the
-//! grab gives and for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an
-//! application that binds no way out has to be killed from another terminal.
+//! The same process, and it takes both **after** the device. That ordering is the safety interlock:
+//! a direct run on a busy machine fails at DRM master and never reaches the grab, so it cannot take
+//! either away from the desktop that is using them. A machine where a compositor holds the devices
+//! reaches that refusal, because a session that already has a controlling client is refused the
+//! seat and falls back to the direct shape. See [`crate::input::seat`] for what the grab gives and
+//! for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds
+//! no way out has to be killed from another terminal.
+//!
+//! The interlock is weaker on the seated path, and knowingly so. A daemon hands a card to a session
+//! that is not the active one, and nothing here asks which session is active — so a seated run
+//! started from a terminal nobody is looking at reaches the grab, where the same run started
+//! directly would have stopped at the master.
 //!
 //! # What moves the cursor
 //!
@@ -87,6 +105,7 @@ use crate::input::seat::{self, Seat};
 use crate::output::{self, Output, backend};
 use crate::park::{Park, Parked, timeout};
 use crate::scanout::{BGRA, Scanout};
+use crate::session::Session;
 use crate::surface;
 use crate::waker::EventfdWaker;
 
@@ -107,9 +126,40 @@ use crate::waker::EventfdWaker;
 /// arrive here that way. The device has to be **the same one** the renderer draws on: the images
 /// belong to it, and a set made on another device is refused much later by the renderer.
 ///
+/// ```no_run
+/// use zgui_platform::{
+///     AppHandler, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
+/// };
+/// use zgui_platform_drm::{Displays, run};
+///
+/// struct Console;
+///
+/// impl AppHandler for Console {
+///     fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
+///         cx.create_surface(&SurfaceAttributes::new("console"))
+///             .expect("a console hands out a display it already has");
+///
+///         assert_eq!(
+///             cx.surfaces().len(),
+///             1,
+///             "the loop draws the displays that were claimed, and no others"
+///         );
+///     }
+///
+///     fn surface_event(&mut self, _cx: &dyn PlatformCx, _on: SurfaceId, _event: SurfaceEvent) {}
+///
+///     fn wake(&mut self, _cx: &dyn PlatformCx, _reason: WakeReason) {}
+/// }
+///
+/// // One map. The renderer reads it, and this loop writes into it for as long as it turns.
+/// let displays = Displays::new();
+/// run(Box::new(Console), &displays, None)?;
+/// # Ok::<(), zgui_platform::PlatformError>(())
+/// ```
+///
 /// # Errors
 ///
-/// Returns [`PlatformError::Backend`] when there is no device to open, when this process cannot
+/// Returns [`PlatformError::Backend`] when there is no device to open, when a direct run cannot
 /// become DRM master — a compositor holding the device looks like that — when a display refuses a
 /// buffer or a mode, and when the device stops answering while the loop runs.
 pub fn run(
@@ -117,12 +167,19 @@ pub fn run(
     displays: &Displays,
     gpu: Option<&Gpu>,
 ) -> Result<(), PlatformError> {
-    let device = Arc::new(Device::open_first().map_err(backend)?);
-    device.become_master().map_err(backend)?;
+    // Declared before the device, so that it is dropped after it. A seated session lends the card's
+    // descriptor to the device below and keeps the seat's own, and giving that one back is what
+    // releases the daemon's record of the card.
+    let mut session = Session::open();
+    let device = Arc::new(session.card()?);
 
-    // After the master, so that a run on a machine where a compositor holds the device has already
-    // returned and never blanks a console it was not going to draw on. See `crate::console`.
-    let screen = ConsoleScreen::taken();
+    // After the device, so that a run on a machine where a compositor holds it has already returned
+    // and never blanks a console it was not going to draw on. See `crate::console`.
+    //
+    // A seated session leaves the console alone: the daemon put the terminal into graphics mode
+    // when it granted control, and a console this run may not open would report a warning that is
+    // false.
+    let screen = session.takes_the_console().then(ConsoleScreen::taken);
 
     let outcome = drive(&device, handler, displays, gpu);
 
@@ -131,10 +188,15 @@ pub fn run(
     // The console first. Telling it the screen is its own is what puts the kernel's own picture
     // back — handing the device over does not — and it is the order Xorg established and the
     // kernel carries an exception for.
-    screen.restore();
+    if let Some(screen) = screen {
+        screen.restore();
+    }
     // A process that kept master would leave the console with no way to draw for anybody else
-    // until it exits.
-    if let Err(error) = device.drop_master() {
+    // until it exits. Only what this process took: a seated run holds a duplicate of the daemon's
+    // own descriptor, and master sits on the open file description behind both.
+    if session.takes_the_master()
+        && let Err(error) = device.drop_master()
+    {
         warn!("the device could not be handed back before this process exits: {error}");
     }
     outcome

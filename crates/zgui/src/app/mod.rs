@@ -394,9 +394,15 @@ impl App {
     /// extensions an exported image needs, still runs: every display keeps the copied path, where a
     /// frame is read back and copied into a buffer the driver allocated.
     ///
-    /// **This needs the device.** It takes DRM master and holds it for as long as it runs, so it
-    /// needs a free virtual terminal or root, and it fails to start while a compositor holds the
-    /// device.
+    /// **This needs the device.** Where a session daemon answers, it opens the card for this
+    /// program and no privilege of its own is needed. Where none answers, this process opens the
+    /// card and takes DRM master, which needs a free virtual terminal or root. It fails to start
+    /// while a compositor holds the device.
+    ///
+    /// # Switching terminal
+    ///
+    /// A run holds the keyboard, so `Ctrl+Alt+Fn` reaches this program rather than the console
+    /// driver, and nothing here acts on it. Switching away from a running program is not handled.
     ///
     /// ```no_run
     /// use zgui::prelude::*;

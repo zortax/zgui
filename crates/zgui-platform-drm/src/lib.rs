@@ -43,9 +43,9 @@
 //!   bound to the display it is stuck to.
 //! * **The displays are arranged by this backend rather than by the machine.** The kernel says
 //!   where none of them is, so the pointer crosses from one to the next left to right in the order
-//!   the connectors enumerated — which is not how the monitors sit on the desk unless it happens
-//!   to be. There is nothing here to ask: a console has no desktop coordinate space, and every
-//!   display reports its position as the origin.
+//!   the connectors enumerated, which matches how the monitors sit on the desk only by chance.
+//!   There is nothing here to ask: a console has no desktop coordinate space, and every display
+//!   reports its position as the origin.
 //! * **What a key types depends on which of three layout answers this machine gives.** With
 //!   libxkbcommon and its keyboard data, every level of every key is read, and dead keys and
 //!   compose sequences work. With the kernel's own console keymap instead, three things go: a
@@ -63,16 +63,17 @@
 //!   already kept inside the union of the displays, so both are close. The contract offers no
 //!   method that asks for either, and a pointer event carries a position and no movement, so
 //!   neither is declared. `cx` is where that decision is written down.
-//! * **No session or virtual terminal management.** The frame loop takes DRM master and holds it
-//!   for as long as the program runs. Nothing hands the device back on a terminal switch, and
-//!   nothing asks a session daemon for it. So a program here needs a free virtual terminal, or
-//!   root, and fails to start while a compositor holds the master. What *is* here is the console's
-//!   own mode: the loop puts the terminal into graphics mode so the kernel's text console stops
-//!   drawing over the picture, and back into text mode on the way out so the console redraws. That
-//!   is two ioctls and no more — `console` says what the pair does and what it does not, and
-//!   pressing `Ctrl+Alt+F2` under a running program still leaves it holding the display.
-//!
-//! The last is visible in what the crate names: no session library.
+//! * **No virtual terminal management.** A session daemon opens the card where the machine has one
+//!   — `session` is that half, and it lets a program here start from an ordinary login shell. What
+//!   is absent is the other half: the seat is taken and nothing is read back from it, so a program
+//!   that loses its devices to another terminal is told nothing and carries on drawing into
+//!   commits that fail. **Switching away from a running program is not handled and is not safe.**
+//!   A machine with no session daemon gets the older behaviour whole: the loop opens the card and
+//!   takes DRM master itself, which needs a free virtual terminal or root.
+//! * **A held terminal is held until the process exits.** A daemon puts the terminal into
+//!   `KD_GRAPHICS` and turns the console keyboard off when it grants control, and gives both back
+//!   when the controlling process goes. So a seated program that stops answering leaves a machine
+//!   that draws nothing and answers no key, and `Ctrl+Alt+F2` does not recover it.
 //!
 //! # How a frame reaches the screen
 //!
@@ -110,8 +111,8 @@
 //! draws, and this crate offers the things that step needs, all of them on `DrmDisplay` except the
 //! first: `FORMAT`, the texture a frame is composed into; `DrmDisplay::textures`, which hands out
 //! the buffers a renderer composes into and answers nothing on the copied shape, so it says which
-//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into the
-//! buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
+//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into
+//! the buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
 //! `DrmDisplay::present_drawn`, which bracket a frame drawn straight into a display's own buffer;
 //! and `Displays`, which says which display a surface is. The renderer that uses them lives in
 //! `zgui`, because a renderer is built by the runtime and a backend at this layer cannot name the
@@ -119,10 +120,16 @@
 //!
 //! # The loop
 //!
-//! `run` is the driver. It opens the device, takes master, lights every display it finds, and then
-//! turns: read the completions, draw the frames that were asked for, ask the application how to
-//! wait, and wait on the device, the wake channel and every input device together. `park` decides
-//! the waiting, and it is the same state machine the windowing backend parks with.
+//! `run` is the driver. It opens the session, takes the card from it, lights every display it
+//! finds, and then turns: read the completions, read what the input devices reported, draw the
+//! frames that were asked for, ask the application how to wait, and wait on the device, the wake
+//! channel and every input device together. `park` decides the waiting, and it is the same state
+//! machine the windowing backend parks with.
+//!
+//! The console's own mode goes with the card on the direct path: the loop puts the terminal into
+//! graphics mode so the kernel's text console stops drawing over the picture, and back into text
+//! mode on the way out so the console redraws. That is two ioctls and no more, and a seated run
+//! makes neither — `console` says what the pair does and what it does not.
 //!
 //! It also writes the displays it lit into the `Displays` it was given, for as long as it turns.
 //! That map and the renderer are one decision, so `App::run_drm` makes one map and hands it to
@@ -186,6 +193,8 @@ mod park;
 #[cfg(target_os = "linux")]
 pub mod scanout;
 #[cfg(target_os = "linux")]
+pub mod session;
+#[cfg(target_os = "linux")]
 pub mod surface;
 #[cfg(target_os = "linux")]
 pub mod waker;
@@ -210,6 +219,8 @@ pub use crate::import::{EXTENSIONS, Handover, Imported, Offered, Plane, Unsuppor
 pub use crate::output::Output;
 #[cfg(target_os = "linux")]
 pub use crate::scanout::{Copied, FORMAT, Scanout};
+#[cfg(target_os = "linux")]
+pub use crate::session::Session;
 #[cfg(target_os = "linux")]
 pub use crate::surface::DrmSurface;
 #[cfg(target_os = "linux")]
