@@ -47,6 +47,11 @@ zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 # is a click, whether a palm on the pad is anything. It reads the devices the seat hands over and
 # opens none itself. It is one step along the same layer, and this crate is the only one that names
 # it.
+zgui-libinput = { path = "../zgui-libinput", version = "0.1.0" }
+# The session daemon, asked through libseat: the seat this run is on, and the devices it hands
+# over. logind and seatd set DRM master on a card before they answer the client, so a console
+# program that asks either one starts from an ordinary login shell rather than from root. It is one
+# step along the same layer, and this crate is the only one that names it.
 zgui-seat = { path = "../zgui-seat", version = "0.1.0" }
 # The event vocabulary a key press is narrowed into: the three readings of one press, where the
 # key sits, and which modifiers were held. `zgui-platform-winit` names it from this layer for the
