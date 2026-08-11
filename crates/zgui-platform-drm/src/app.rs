@@ -62,13 +62,15 @@
 //!
 //! # What holds the keyboard and the mouse
 //!
-//! The same process, and it takes both **after** the device. That ordering is the safety interlock:
-//! a direct run on a busy machine fails at DRM master and never reaches the grab, so it cannot take
-//! either away from the desktop that is using them. A machine where a compositor holds the devices
-//! reaches that refusal, because a session that already has a controlling client is refused the
-//! seat and falls back to the direct shape. See [`crate::input::seat`] for what the grab gives and
-//! for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds
-//! no way out has to be killed from another terminal.
+//! The same process, and it takes both **after** the device. [`crate::session`] is where each one
+//! comes from, the way the card does: a seated run is handed every input device by the daemon, and
+//! a direct run opens the node itself. That ordering is the safety interlock: a direct run on a
+//! busy machine fails at DRM master and never reaches the grab, so it cannot take either away from
+//! the desktop that is using them. A machine where a compositor holds the devices reaches that
+//! refusal, because a session that already has a controlling client is refused the seat and falls
+//! back to the direct shape. See [`crate::input::seat`] for what the grab gives and for the one
+//! thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds no way out
+//! has to be killed from another terminal.
 //!
 //! The interlock holds on the seated path too, by a longer route. logind reads whether the session
 //! is active before it grants control and reports an inactive one as disabled on the first
@@ -185,12 +187,13 @@ pub fn run(
     // The two names on the card go in this order: `device` is the loop's, and it is dropped at the
     // end of this function, and `session` — which holds the other one, and the master taken over
     // it — after it.
-    drive(&device, handler, displays, gpu)
+    drive(&device, &mut session, handler, displays, gpu)
 }
 
 /// Runs everything between taking the device and giving it back.
 fn drive(
     device: &Arc<Device>,
+    session: &mut Session,
     mut handler: Box<dyn AppHandler>,
     displays: &Displays,
     gpu: Option<&Gpu>,
@@ -280,8 +283,14 @@ fn drive(
 
     // After the master, and only here. A run on a machine where a compositor holds the device has
     // already returned above, so it never reaches the grab and cannot take the keyboard from the
-    // desktop that is using it.
-    let mut seat = Seat::open(&*clock);
+    // desktop that is using it. The devices coming from the session leave that route as it was:
+    // `run` asks for the card first, and a seated run whose seat was refused or never enabled has
+    // already fallen back to the direct shape and failed there.
+    //
+    // What the session adds is a second gate on the seated path. Every device below is opened
+    // through it, so which of them this run may have is the daemon's answer rather than this
+    // process's permission.
+    let mut seat = Seat::open(session, &*clock);
     // Which surface the keys reach, and whether it has been told it has them.
     let mut focused: Option<SurfaceId> = None;
     // Where the pointer is. It starts in the middle of the first display the application claimed,
@@ -343,7 +352,7 @@ fn drive(
             // reading is what moves the pointer and the pointer is what decides the focus. Worked
             // out first, a key struck in the same turn as a crossing goes to the display the
             // pointer has just left.
-            let reports = seat.read(&mut pointer, &screens);
+            let reports = seat.read(session, &mut pointer, &screens);
             let holds_keys =
                 seat::focused(&claimed_ids, pointer.on(&screens).map(|screen| screen.id));
             if holds_keys != focused {

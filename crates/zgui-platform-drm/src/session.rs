@@ -8,15 +8,16 @@
 //!
 //! [`Session::open`] answers one of two shapes, and it never fails.
 //!
-//! **Seated.** libseat opened a seat and the seat enabled. [`Session::card`] asks the daemon for
-//! the card, and the console is already in graphics mode. logind and seatd set DRM master on a card
-//! before they answer the client, so a card from either arrives with master on it; libseat's noop
-//! backend opens the path with a plain `open(2)` and grants none of it.
+//! **Seated.** libseat opened a seat and the seat enabled. [`Session::card`] and
+//! [`Session::open_input`] ask the daemon for the card and for each input device, and the console
+//! is already in graphics mode. logind and seatd set DRM master on a card before they answer the
+//! client, so a card from either arrives with master on it; libseat's noop backend opens the path
+//! with a plain `open(2)` and grants none of it.
 //!
-//! **Direct.** This process opens the card, takes master itself, and puts the console into graphics
-//! mode. It is the answer where libseat is absent, where the seat was refused, and where a seat
-//! opened and never enabled. This path needs root or a free virtual terminal, and it is allowed to
-//! be worse.
+//! **Direct.** This process opens the card and each input device, takes master itself, and puts the
+//! console into graphics mode. It is the answer where libseat is absent, where the seat was
+//! refused, and where a seat opened and never enabled. This path needs root or a free virtual
+//! terminal, and it is allowed to be worse.
 //!
 //! **The fallback is free only where libseat is absent.** A machine that has the library and a seat
 //! that never enables pays [`zgui_seat::ENABLE_WITHIN`] waiting for an enable that is never coming.
@@ -31,7 +32,7 @@
 //! is used: one dropped while the card is still being drawn on restores the console and hands the
 //! master back under a live descriptor.
 //!
-//! # Switching away
+//! # Switching away is not handled yet
 //!
 //! A seated run takes the seat and reads nothing back from it. [`zgui_seat::Seat::dispatch`] is
 //! called by nothing here, so a session that loses its devices to another terminal is a session
@@ -44,7 +45,7 @@
 //! controlling process **exits**, so a seated program that stops answering leaves a machine that
 //! draws nothing and answers no key until it is killed from elsewhere.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tracing::{info, warn};
@@ -88,12 +89,22 @@ enum Shape {
     Seated {
         /// The seat every device is asked for, and given back to.
         seat: zgui_seat::Seat,
-        /// Every device the seat opened for this session.
+        /// Every device the seat opened for the card.
         ///
         /// A [`zgui_seat::Device`] owns the descriptor libseat wrote, so it has to outlive
         /// everything built over that descriptor. Holding it here keeps it alive, and it is why
         /// [`Session::card`] takes `&mut self`.
         held: Vec<zgui_seat::Device>,
+        /// Every device the seat opened for input, under the path it was opened at.
+        ///
+        /// Apart from the card, because the two have different lives. The card is taken once and
+        /// kept for the whole run; an input device goes back on its own when this session lets go
+        /// of it, and all of them go back together when the terminal does.
+        ///
+        /// The path is what names one of them, because that is what a caller holds:
+        /// [`zgui_seat::Device`] carries libseat's id, which is the seat's own numbering and
+        /// reaches nothing outside `zgui-seat`.
+        inputs: Vec<(PathBuf, zgui_seat::Device)>,
     },
     /// This process opens the devices itself, and takes what they need.
     Direct,
@@ -176,6 +187,7 @@ impl Session {
                     shape: Shape::Seated {
                         seat,
                         held: Vec::new(),
+                        inputs: Vec::new(),
                     },
                     took: None,
                 }
@@ -269,13 +281,81 @@ impl Session {
         }
 
         let taken = match &mut self.shape {
-            Shape::Seated { seat, held } => Taken::seated(seated_card(seat, held, cards)?),
+            Shape::Seated { seat, held, .. } => Taken::seated(seated_card(seat, held, cards)?),
             Shape::Direct => Taken::direct(direct_card(cards)?),
         };
         let card = Arc::clone(&taken.card);
         self.took = Some(taken);
 
         Ok(card)
+    }
+
+    /// Opens the input device at `path`.
+    ///
+    /// **Seated.** The seat opens the node, and the device is built over a duplicate of the
+    /// descriptor it handed over, exactly as the card is. The seat's own device is kept by this
+    /// session, because [`Session::close_input`] is the only thing that may give it back.
+    ///
+    /// **Direct.** This process opens the node itself, which needs the node's own group.
+    ///
+    /// Every refusal names the path it was asked for, because a caller opens these one at a time
+    /// and reports each on its own.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the node cannot be opened, and when the descriptor
+    /// that came back names something other than an evdev node. Neither is unusual: on the seated
+    /// path a daemon decides which devices this session may have, and on the direct path most
+    /// nodes belong to a group.
+    pub fn open_input(&mut self, path: &Path) -> Result<zgui_evdev::Device, PlatformError> {
+        match &mut self.shape {
+            Shape::Seated { seat, inputs, .. } => seated_input(seat, inputs, path),
+            Shape::Direct => zgui_evdev::Device::open(path).map_err(|error| backend_error(&error)),
+        }
+    }
+
+    /// Gives the input device at `path` back to the seat.
+    ///
+    /// A caller that lets go of a device calls this, because dropping the [`zgui_evdev::Device`]
+    /// closes a descriptor and tells the daemon nothing: its record of the device stands until the
+    /// seat closes, and a second open of the same path meets it. So a node this seat declined, and
+    /// a device that stopped answering, come back here.
+    ///
+    /// A path this session holds no device at is nothing to answer for, which is every path on the
+    /// direct shape.
+    ///
+    /// # Dropping the caller's own device first
+    ///
+    /// A [`zgui_evdev::Device`] built by [`Session::open_input`] holds a duplicate of the seat's
+    /// descriptor, so the two name one open file description. A caller that still held one here
+    /// would keep that description — and the grab on it — alive after the daemon released the
+    /// device, and the next open of the same node would then be refused the grab.
+    pub fn close_input(&mut self, path: &Path) {
+        let Shape::Seated { seat, inputs, .. } = &mut self.shape else {
+            return;
+        };
+        let Some(at) = inputs.iter().position(|(held, _)| held == path) else {
+            return;
+        };
+        let (_, device) = inputs.remove(at);
+        give_back(seat, device);
+    }
+
+    /// Gives every input device this session opened back to the seat.
+    ///
+    /// All of them at once, because that is what a session that loses its terminal has to do.
+    /// `EVIOCREVOKE` cannot be undone, so a descriptor another session took is dead: what comes back
+    /// is a set of devices opened again.
+    ///
+    /// The same rule [`Session::close_input`] states holds here: the caller drops its own devices
+    /// first.
+    pub fn close_every_input(&mut self) {
+        let Shape::Seated { seat, inputs, .. } = &mut self.shape else {
+            return;
+        };
+        for (_, device) in std::mem::take(inputs) {
+            give_back(seat, device);
+        }
     }
 
     /// Returns `true` if the devices come from a session daemon.
@@ -286,6 +366,19 @@ impl Session {
     pub fn is_seated(&self) -> bool {
         matches!(self.shape, Shape::Seated { .. })
     }
+
+    /// Returns the direct shape, asked for by name.
+    ///
+    /// [`Session::open`] reads the machine, and on the seated path that takes the terminal. A unit
+    /// test needs neither, so it is given this: the shape a machine with no libseat answers, built
+    /// without asking libseat anything.
+    #[cfg(test)]
+    pub(crate) fn direct() -> Self {
+        Self {
+            shape: Shape::Direct,
+            took: None,
+        }
+    }
 }
 
 /// Gives back everything this run took, in the order the machine needs it back in.
@@ -294,18 +387,20 @@ impl Session {
 /// back — handing the device over does not — and it is the order Xorg established and the kernel
 /// carries an exception for.
 ///
-/// **Then the master**, and only if this process took it. A process that kept master would leave
-/// the console with no way to draw for anybody else until it exits.
+/// **Then the master**, and only if this process took it. A process that kept master
+/// would leave the console with no way to draw for anybody else until it exits.
 ///
 /// **Then the card.** A caller that has let go of its own name on it closes the descriptor here,
 /// which is while the seat's own device is still open.
 ///
-/// **Then every device**, through the seat that opened it. `libseat_close_seat` releases the
-/// devices as well — logind's `ReleaseControl` frees every session device it holds, closes its own
-/// descriptor onto each and restores the terminal — so this loop releases each device at a moment
-/// this session chooses, over the same route a session that stays open gives a device back on. What
-/// survives either way is this process's own descriptor, which goes when the device goes. The seat
-/// itself is closed by its own `Drop` after this body.
+/// **Then every device** this session still holds — the card's, and every input device a caller did
+/// not already give back through [`Session::close_input`] — through the seat that opened it.
+/// `libseat_close_seat` releases the devices as well — logind's `ReleaseControl` frees every
+/// session device it holds, closes its own descriptor onto each and restores the terminal — so this
+/// loop is what releases each device at a moment this session chooses, over the same route a
+/// session that stays open gives a device back on. What survives either way is this process's own
+/// descriptor, which goes when the device goes. The seat itself is closed by its own `Drop` after
+/// this body.
 impl Drop for Session {
     fn drop(&mut self) {
         if let Some(taken) = self.took.take() {
@@ -323,10 +418,11 @@ impl Drop for Session {
             drop(taken.card);
         }
 
-        let Shape::Seated { seat, held } = &mut self.shape else {
+        let Shape::Seated { seat, held, inputs } = &mut self.shape else {
             return;
         };
-        for device in std::mem::take(held) {
+        let inputs = std::mem::take(inputs).into_iter().map(|(_, device)| device);
+        for device in std::mem::take(held).into_iter().chain(inputs) {
             give_back(seat, device);
         }
     }
@@ -384,6 +480,56 @@ fn seated_card(
     }
 
     Err(opened_nothing("the seat", &refused))
+}
+
+/// Asks the seat for one input device, and keeps the device it answered.
+///
+/// The same handover the card gets, and for the same reason: the seat lends its descriptor and
+/// surrenders it to nobody, so what `zgui-evdev` is given is a duplicate and the seat's own device
+/// stays with the session. Both name one open file description, so the grab this process takes on
+/// the duplicate is the grab the daemon's descriptor carries.
+///
+/// A node the seat opened and `zgui-evdev` refused goes straight back. A seat hands out graphics
+/// cards over the same call, and a backend that opens any path it is given hands out anything else
+/// as well.
+fn seated_input(
+    seat: &zgui_seat::Seat,
+    inputs: &mut Vec<(PathBuf, zgui_seat::Device)>,
+    path: &Path,
+) -> Result<zgui_evdev::Device, PlatformError> {
+    let device = seat
+        .open_device(path)
+        .map_err(|error| backend_error(&error))?;
+
+    let duplicate = match device.descriptor().try_clone_to_owned() {
+        Ok(duplicate) => duplicate,
+        Err(error) => {
+            give_back(seat, device);
+            return Err(PlatformError::Backend(format!(
+                "the descriptor the seat opened {} on cannot be copied: {error}",
+                path.display()
+            )));
+        }
+    };
+
+    match zgui_evdev::Device::over(duplicate, path) {
+        Ok(input) => {
+            inputs.push((path.to_owned(), device));
+            Ok(input)
+        }
+        Err(error) => {
+            give_back(seat, device);
+            Err(backend_error(&error))
+        }
+    }
+}
+
+/// Returns what a device that refused reads as, for a caller above this backend.
+///
+/// The message is the refusal's own. Every one of them names the path it was asked for, so nothing
+/// here adds it a second time.
+fn backend_error(error: &dyn std::fmt::Display) -> PlatformError {
+    PlatformError::Backend(error.to_string())
 }
 
 /// Opens the first card this process can, and takes DRM master on it.

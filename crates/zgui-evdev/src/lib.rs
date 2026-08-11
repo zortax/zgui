@@ -15,6 +15,10 @@
 //! The kernel groups everything that happened at one moment, and a reader that took a group apart
 //! would move a pointer twice for one movement.
 //!
+//! `nodes` is that walk without the opening: it answers the paths, for a caller whose descriptors
+//! come from somewhere else. A session daemon opens an input device and hands the descriptor over,
+//! and `Device::over` builds a device on one.
+//!
 //! # Devices that arrive later
 //!
 //! `discover` reads the directory once. `Watch` asks the same directory a second way: it holds an
@@ -74,7 +78,7 @@ pub use crate::console::{Console, Entry, Mode, Modifiers, Screen, Search};
 #[cfg(target_os = "linux")]
 pub use crate::device::{AxisRange, Bitmap, Capabilities, Device, Identity, Role, Roles};
 #[cfg(target_os = "linux")]
-pub use crate::discover::{Discovery, Skipped, discover, discover_in};
+pub use crate::discover::{Discovery, Skipped, discover, discover_in, nodes, nodes_in};
 #[cfg(target_os = "linux")]
 pub use crate::error::{Error, Result};
 #[cfg(target_os = "linux")]

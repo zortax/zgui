@@ -416,6 +416,49 @@ impl Device {
             source: errno.into(),
         })?;
 
+        Self::described(fd, path)
+    }
+
+    /// Builds a device over `fd` and reads what it is.
+    ///
+    /// `path` names the device for messages. This call does not open it, because the caller
+    /// already holds the descriptor. A session daemon that opened the node and handed the
+    /// descriptor over is the caller this exists for, and naming the device keeps its messages
+    /// reading the way [`Device::open`] makes them read.
+    ///
+    /// `O_NONBLOCK` is raised on `fd`, because [`Device::read`] answers at once only while that
+    /// flag is on. logind and seatd both open with it, and neither says so anywhere a program may
+    /// rely on, so it is asked for here. The flag belongs to the open file description, so the
+    /// daemon's own descriptor onto the node gets it too.
+    ///
+    /// `fd` is then checked to name an evdev node. A session hands out graphics cards over the
+    /// same call it hands out input devices, and a descriptor onto one of those would otherwise
+    /// build a device with no name, no capabilities and no job.
+    ///
+    /// # The open mode
+    ///
+    /// [`Device::open`] asks for `O_RDONLY`, and logind hands over `O_RDWR`. Every call this crate
+    /// makes on a device is an ioctl or a read, and both are answered on either mode, so what a
+    /// device does is the same on both. Nothing here writes to a node.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unusable`] naming `path` when `fd` cannot be made non-blocking, and when
+    /// `fd` names something other than an evdev node. Returns [`Error::Ioctl`] when the node
+    /// answers and will not say what it is.
+    pub fn over(fd: OwnedFd, path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_owned();
+        raise_non_blocking(fd.as_fd(), &path)?;
+        confirm_input_device(fd.as_fd(), &path)?;
+
+        Self::described(fd, path)
+    }
+
+    /// Asks an open descriptor what device it is, and builds it.
+    ///
+    /// [`Device::open`] and [`Device::over`] both end here, so a descriptor this crate opened and a
+    /// descriptor handed to it are read the same way.
+    fn described(fd: OwnedFd, path: PathBuf) -> Result<Self> {
         // `EVIOCSCLOCKID` arrived in 2.6.36 and a driver may still refuse it. Every later read of
         // this device is timestamped on whichever clock is in force, so which one it is has to be
         // recorded rather than assumed. See `Event::at`.
@@ -442,7 +485,10 @@ impl Device {
         })
     }
 
-    /// Returns where this device was opened from.
+    /// Returns which device this is.
+    ///
+    /// [`Device::open`] answers the path it opened. [`Device::over`] answers the path its caller
+    /// named.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -593,6 +639,51 @@ impl AsFd for Device {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.fd.as_fd()
     }
+}
+
+/// Raises `O_NONBLOCK` on `fd`, keeping every other status flag it carries.
+///
+/// [`Device::open`] asks for the flag when it opens the node, and this is the same thing for a
+/// descriptor somebody else opened. `F_SETFL` writes the whole set of status flags, so `F_GETFL`
+/// reads them first.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming `path` when the kernel refuses either call.
+fn raise_non_blocking(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
+    let flags = rustix::fs::fcntl_getfl(fd).map_err(|errno| {
+        Error::Unusable(format!(
+            "cannot read the flags of the descriptor for {}: {errno}",
+            path.display()
+        ))
+    })?;
+
+    rustix::fs::fcntl_setfl(fd, flags | OFlags::NONBLOCK).map_err(|errno| {
+        Error::Unusable(format!(
+            "cannot make the descriptor for {} non-blocking: {errno}",
+            path.display()
+        ))
+    })
+}
+
+/// Confirms that `fd` names an evdev node.
+///
+/// The request is `EVIOCGVERSION`. The input driver answers it for every device before it reads
+/// anything about the hardware, so one ioctl is enough and a caller with no privilege still gets an
+/// answer. A descriptor onto anything else refuses the request number.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming `path` when the query is refused.
+fn confirm_input_device(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
+    let mut version: c_int = 0;
+
+    ioctl::issue(fd, ioctl::GET_VERSION, &mut version).map_err(|error| {
+        Error::Unusable(format!(
+            "the descriptor for {} names something other than an input device: {error}",
+            path.display()
+        ))
+    })
 }
 
 /// Asks the device what it calls itself.
