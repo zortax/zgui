@@ -8,11 +8,12 @@
 //!
 //! [`Session::open`] answers one of two shapes, and it never fails.
 //!
-//! **Seated.** libseat opened a seat, and the seat said whether it holds the terminal.
-//! [`Session::card`] and [`Session::open_input`] ask the daemon for the card and for each input
-//! device, and the console is already in graphics mode. logind and seatd set DRM master on a card
-//! before they answer the client, so a card from either arrives with master on it; libseat's noop
-//! backend opens the path with a plain `open(2)` and grants none of it.
+//! **Seated.** libseat opened a seat, which either enabled or reported itself inactive because
+//! another terminal is the live one. [`Session::card`] and [`Session::open_input`] ask the daemon
+//! for the card and for each input device, and the console is already in graphics mode. logind and
+//! seatd set DRM master on a card before they answer the client, so a card from either arrives
+//! with master on it; libseat's noop backend opens the path with a plain `open(2)` and grants none
+//! of it.
 //!
 //! **Direct.** This process opens the card and each input device, takes master itself, and puts the
 //! console into graphics mode. It is the answer where libseat is absent, where the seat was
@@ -42,8 +43,8 @@
 //!
 //! There is no window on the way out. logind moves the terminal, drops DRM master and revokes every
 //! evdev descriptor **before** it reports the change, so a suspend catches up with what has already
-//! happened. A resume opens every input device again, because `EVIOCREVOKE` cannot be undone, and
-//! sets every mode again, because another session has put its own on the CRTC.
+//! happened. A resume opens every input device again, because a revoked evdev descriptor cannot be
+//! recovered, and sets every mode again, because another session has put its own on the CRTC.
 //!
 //! A run started on a terminal that is not the live one is the same machinery from the other end.
 //! The seat opens, its devices are another session's, and the loop waits: [`zgui_seat::Seat`]
@@ -53,9 +54,10 @@
 //! Taking the seat also takes the terminal. logind puts the terminal into `K_OFF` and
 //! `KD_GRAPHICS` when it grants control, so the console keyboard stops answering for as long as the
 //! seat is held, and a key that asks for another terminal reaches this program rather than the
-//! console driver. logind gives the terminal back when the controlling process **exits**, so a
-//! seated program that stops answering leaves a machine that draws nothing and answers no key until
-//! it is killed from elsewhere.
+//! console driver. So this program is what asks: the layout reads `Ctrl+Alt+Fn` as the terminal it
+//! is, and `Session::switch` carries that to the daemon. logind gives the terminal back when the
+//! controlling process **exits**, so a seated program that stops answering leaves a machine that
+//! draws nothing and answers no key until it is killed from elsewhere.
 
 pub(crate) mod presence;
 
@@ -103,12 +105,13 @@ pub struct Session {
     asked: Vec<Asked>,
 }
 
-/// One input call a caller made on a session, recorded while the tests run.
+/// One call a caller made on a session, recorded while the tests run.
 ///
-/// [`crate::input::seat::Seat`] is the only caller of the three input calls in a running program,
-/// and every one of them costs a device the daemon holds a record of. On the direct shape two of
-/// them do nothing at all, so a test on that shape can assert what a seated run *would* be asked
-/// for and in which order. Each call records itself before it reads the shape, so what the seat
+/// Three of them are the input calls, and [`crate::input::seat::Seat`] is the only caller of those
+/// in a running program: each one costs a device the daemon holds a record of. The fourth is the
+/// terminal a key asked for, which the frame loop makes. On the direct shape three of the four do
+/// nothing at all or refuse, so a test on that shape can assert what a seated run *would* be asked
+/// for and in which order. Each call records itself before it reads the shape, so what a caller
 /// asked for is visible with no seat, no daemon and no terminal.
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +122,8 @@ pub(crate) enum Asked {
     Close(PathBuf),
     /// [`Session::close_every_input`].
     CloseEvery,
+    /// [`Session::switch`], with the terminal it was asked for.
+    Switch(u32),
 }
 
 /// The two shapes, and what each one holds.
@@ -146,7 +151,13 @@ enum Shape {
         inputs: Vec<(PathBuf, zgui_seat::Device)>,
     },
     /// This process opens the devices itself, and takes what they need.
-    Direct,
+    Direct {
+        /// Whether a terminal has already been asked for and refused.
+        ///
+        /// Every switch on this shape is refused for the one reason, and a person who presses the
+        /// chord presses it again. So the reason is stated once. See [`Session::switch`].
+        refused_a_switch: bool,
+    },
 }
 
 /// One card, and everything taken along with it.
@@ -258,7 +269,9 @@ impl Session {
                      {error}"
                 );
                 Self {
-                    shape: Shape::Direct,
+                    shape: Shape::Direct {
+                        refused_a_switch: false,
+                    },
                     took: None,
                     #[cfg(test)]
                     asked: Vec::new(),
@@ -342,7 +355,7 @@ impl Session {
 
         let taken = match &mut self.shape {
             Shape::Seated { seat, held, .. } => Taken::seated(seated_card(seat, held, cards)?),
-            Shape::Direct => Taken::direct(direct_card(cards)?),
+            Shape::Direct { .. } => Taken::direct(direct_card(cards)?),
         };
         let card = Arc::clone(&taken.card);
         self.took = Some(taken);
@@ -381,7 +394,9 @@ impl Session {
 
         match &mut self.shape {
             Shape::Seated { seat, inputs, .. } => seated_input(seat, inputs, path),
-            Shape::Direct => zgui_evdev::Device::open(path).map_err(|error| backend_error(&error)),
+            Shape::Direct { .. } => {
+                zgui_evdev::Device::open(path).map_err(|error| backend_error(&error))
+            }
         }
     }
 
@@ -452,7 +467,7 @@ impl Session {
     pub(crate) fn descriptor(&self) -> Option<BorrowedFd<'_>> {
         match &self.shape {
             Shape::Seated { seat, .. } => Some(seat.descriptor()),
-            Shape::Direct => None,
+            Shape::Direct { .. } => None,
         }
     }
 
@@ -478,7 +493,48 @@ impl Session {
                      neither use nor be told about: {error}"
                 ))
             }),
-            Shape::Direct => Ok(Vec::new()),
+            Shape::Direct { .. } => Ok(Vec::new()),
+        }
+    }
+
+    /// Asks for another terminal.
+    ///
+    /// A key is what asks for this. Both keyboard layouts say which terminal a chord asks for, so
+    /// `Ctrl+Alt+F2` arrives as a reading carrying the number and the key that carried it reaches
+    /// no surface.
+    ///
+    /// **Seated.** The daemon owns the terminal and moves it. This answers as soon as the request
+    /// goes out, and the terminal moving arrives later as a change the daemon sends — which the loop
+    /// reads as a suspend.
+    ///
+    /// **Direct.** Nothing here owns a terminal, so this run cannot move one. The refusal is
+    /// reported once, because every switch on this shape fails for the same reason and a person who
+    /// presses the chord presses it again — a line for each would fill the log of a run that can
+    /// never answer differently.
+    pub(crate) fn switch(&mut self, terminal: u32) {
+        #[cfg(test)]
+        self.asked.push(Asked::Switch(terminal));
+
+        match &mut self.shape {
+            Shape::Seated { seat, .. } => {
+                if let Err(error) = seat.switch(terminal) {
+                    warn!(
+                        target: "zgui::platform",
+                        "the session daemon was asked for terminal {terminal} and refused: {error}"
+                    );
+                }
+            }
+            Shape::Direct { refused_a_switch } => {
+                if !std::mem::replace(refused_a_switch, true) {
+                    warn!(
+                        target: "zgui::platform",
+                        "this run opened its devices itself, so no session daemon owns the terminal \
+                         and a key cannot move it: terminal {terminal} was asked for and refused, \
+                         and every later ask is refused without a word. Switch from elsewhere, such \
+                         as `chvt` over a network connection"
+                    );
+                }
+            }
         }
     }
 
@@ -490,7 +546,9 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn direct() -> Self {
         Self {
-            shape: Shape::Direct,
+            shape: Shape::Direct {
+                refused_a_switch: false,
+            },
             took: None,
             asked: Vec::new(),
         }
