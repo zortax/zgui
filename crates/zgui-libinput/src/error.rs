@@ -52,6 +52,24 @@ pub enum Error {
         /// What the loader said, or why the address it gave cannot be used.
         reason: String,
     },
+    /// libinput would not make a context.
+    ///
+    /// The call that makes one takes an interface and nothing else, so this is libinput failing to
+    /// allocate. It puts its own reason in its log.
+    Context,
+    /// The context has no descriptor to wait on.
+    ///
+    /// `libinput_get_fd` answered `-1`. A context without a descriptor is unusable: a caller has
+    /// nothing to poll and has to spin.
+    Descriptor,
+    /// libinput could not read what its devices reported.
+    ///
+    /// The devices are unusable from here. libinput reports the reason as a negative `errno` from
+    /// the read it made.
+    Dispatch {
+        /// `errno` at the failure.
+        errno: i32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -63,8 +81,26 @@ impl fmt::Display for Error {
                 tried.join(", ")
             ),
             Self::Symbol { name, reason } => write!(f, "libinput has no `{name}`: {reason}"),
+            Self::Context => write!(
+                f,
+                "libinput would not make a context; it puts the reason in its own log"
+            ),
+            Self::Descriptor => write!(
+                f,
+                "the context has no descriptor to wait on, so nothing can wait for its devices"
+            ),
+            Self::Dispatch { errno } => write!(
+                f,
+                "libinput could not read what its devices reported: {}",
+                os(*errno)
+            ),
         }
     }
+}
+
+/// Returns what the operating system calls one of its error numbers.
+fn os(errno: i32) -> std::io::Error {
+    std::io::Error::from_raw_os_error(errno)
 }
 
 impl std::error::Error for Error {}
