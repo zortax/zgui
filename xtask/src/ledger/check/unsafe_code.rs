@@ -56,6 +56,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "loading libseat at run time, and every call made into it",
     ),
     (
+        "zgui-libinput",
+        "loading libinput at run time, and every call made into it",
+    ),
+    (
         "zgui-platform-drm",
         "the two `borrow_raw` calls that report a surface's DRM handles, and the Vulkan calls that \
          make the images a display scans out of — every one of those is reached through wgpu's hal",
