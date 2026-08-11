@@ -25,11 +25,6 @@
 //! because a modifier held before this process was listening is in the kernel's map and in no
 //! event. The repair on this path is the one that runs when a device **goes**.
 
-// Nothing reaches this module yet: `Seat` still has one source, and the milestone that gives it a
-// second one constructs this. The allow comes off there. It is scoped to this module rather than
-// turned off in the manifest, so the rest of the crate keeps reporting what it does not use.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::fd::BorrowedFd;
 use std::path::Path;
@@ -42,7 +37,7 @@ use zgui_vocab::{PointerAction, ScrollDelta};
 
 use crate::input::lent::{Held, Lent};
 use crate::input::pointer::{self, Motion, Pointer, Screen};
-use crate::input::seat::{Down, Keys, Report, Stamps, Transition, ask, cancelled, moved};
+use crate::input::seat::{Down, Keys, Opened, Report, Stamps, Transition, ask, cancelled, moved};
 use crate::session::Session;
 
 /// How many of libinput's wheel steps make one detent.
@@ -76,6 +71,8 @@ pub(crate) struct Through {
     held: Vec<Held>,
     /// What each device it reports needs remembered.
     devices: BTreeMap<DeviceId, Reading>,
+    /// How many nodes the last add could not read yet, which the session answers.
+    waiting: usize,
 }
 
 impl Through {
@@ -85,6 +82,7 @@ impl Through {
             context,
             held: Vec::new(),
             devices: BTreeMap::new(),
+            waiting: 0,
         }
     }
 
@@ -100,9 +98,26 @@ impl Through {
     ///
     /// A node already held, one that is not an evdev node, and one this process may not open are
     /// each refused. The device itself arrives in the next read.
-    pub(crate) fn add(&mut self, session: &mut Session, path: &Path) -> bool {
-        let Self { context, held, .. } = self;
-        context.add(&mut Lent::new(session, held), path)
+    pub(crate) fn add(&mut self, session: &mut Session, path: &Path) -> Opened {
+        let Self {
+            context,
+            held,
+            waiting,
+            ..
+        } = self;
+        *waiting = 0;
+        let taken = context.add(&mut Lent::new(session, held, waiting), path);
+        Opened {
+            // Nothing is announced here: libinput reads what a device already holds when it opens
+            // one. The other source reads that state itself and says so.
+            announced: None,
+            not_yet: !taken && *waiting > 0,
+        }
+    }
+
+    /// Returns every node this source is reading.
+    pub(crate) fn held(&self) -> Vec<&Path> {
+        self.held.iter().map(Held::path).collect()
     }
 
     /// Returns `true` if this source is already reading the device at `path`.
@@ -115,8 +130,13 @@ impl Through {
     /// Each one is reported gone in the same read that follows, so what a caller believes each was
     /// holding is repaired through the one path rather than a second one written for this.
     pub(crate) fn let_go(&mut self, session: &mut Session) {
-        let Self { context, held, .. } = self;
-        context.suspend(&mut Lent::new(session, held));
+        let Self {
+            context,
+            held,
+            waiting,
+            ..
+        } = self;
+        context.suspend(&mut Lent::new(session, held, waiting));
     }
 
     /// Opens every node again, on the way back from a terminal switch.
@@ -124,8 +144,13 @@ impl Through {
     /// libinput asks for each path it remembers, through the session, so a node that no longer
     /// opens is forgotten and the same path can arrive again later.
     pub(crate) fn take_again(&mut self, session: &mut Session) {
-        let Self { context, held, .. } = self;
-        if let Err(error) = context.resume(&mut Lent::new(session, held)) {
+        let Self {
+            context,
+            held,
+            waiting,
+            ..
+        } = self;
+        if let Err(error) = context.resume(&mut Lent::new(session, held, waiting)) {
             warn!(
                 target: "zgui::platform",
                 "the input devices could not be opened again after the terminal came back: {error}"
@@ -149,9 +174,10 @@ impl Through {
             context,
             held,
             devices,
+            waiting,
         } = self;
 
-        if let Err(error) = context.dispatch(&mut Lent::new(session, held)) {
+        if let Err(error) = context.dispatch(&mut Lent::new(session, held, waiting)) {
             warn!(
                 target: "zgui::platform",
                 "the input devices could not be read, so nothing they did is known: {error}"
@@ -163,7 +189,15 @@ impl Through {
         let mut terminal = None;
         while let Some(event) = context.next_event() {
             match event {
-                Event::DeviceAdded(device) => arrived(devices, &device),
+                Event::DeviceAdded(device) => {
+                    if context.tap_to_click(device.id()) {
+                        info!(
+                            target: "zgui::platform",
+                            "{} taps to click", device.path().display()
+                        );
+                    }
+                    arrived(devices, &device);
+                }
                 Event::DeviceRemoved(device) => {
                     reports.extend(went(devices, &device, keys, pointer, screens, stamps));
                 }

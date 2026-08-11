@@ -109,6 +109,7 @@ use crate::input::keyboard;
 use crate::input::keyboard::layout::{Layout, Reading};
 use crate::input::keyboard::{code, layout};
 use crate::input::pointer::{self, Axes, Pointer, Screen, Span};
+use crate::input::through::Through;
 use crate::input::wheel::{self, HighResolution};
 use crate::session::{Session, Switched, Unopened};
 
@@ -882,14 +883,14 @@ struct Pointing {
 
 /// What one node of the device directory amounted to.
 #[derive(Debug)]
-struct Opened {
+pub(crate) struct Opened {
     /// What was already held on the device, where one was taken.
-    announced: Option<SurfaceEvent>,
+    pub(crate) announced: Option<SurfaceEvent>,
     /// Whether the node is an input device this session cannot read yet.
     ///
     /// See [`Unopened::NotYet`]. It is counted rather than reported, because a session waiting for
     /// its terminal answers this for every node on the machine.
-    not_yet: bool,
+    pub(crate) not_yet: bool,
 }
 
 impl Opened {
@@ -948,7 +949,7 @@ impl Found {
 }
 
 /// One device this seat took.
-struct Taken {
+pub(crate) struct Taken {
     /// The device, grabbed for as long as this lives.
     device: Device,
     /// Which of its keys this seat believes are down, and which of them it swallowed.
@@ -961,10 +962,29 @@ struct Taken {
     points: Option<Pointing>,
 }
 
+/// Where a seat's reports come from.
+///
+/// The two differ in one thing: who decides what a device did. The kernel's own stream is read and
+/// decided here, and libinput is handed the nodes and reports what it decided. Everything above the
+/// device is the same either way, so this is a field rather than a second seat.
+pub(crate) enum Stream {
+    /// The kernel's own stream, read device by device and decided here.
+    ///
+    /// Each device is grabbed for as long as it is held. No acceleration, no touchpad behaviour,
+    /// and this tree's own answer to which device is a keyboard — the degraded source, allowed to
+    /// be worse, and the only one on a machine with no libinput.
+    Kernel(Vec<Taken>),
+    /// libinput, which is given the nodes and reports what it decided about them.
+    ///
+    /// Boxed, because it is much the larger of the two and every `Seat` would otherwise be the
+    /// size of it whichever source the machine answered for.
+    Libinput(Box<Through>),
+}
+
 /// Every device on this machine a person works with, taken.
 pub struct Seat {
-    /// The devices, each grabbed for as long as this lives.
-    devices: Vec<Taken>,
+    /// Where the reports come from.
+    source: Stream,
     /// The layout and the translation over it.
     keys: Keys,
     /// What this seat has to say before it has read anything.
@@ -993,20 +1013,48 @@ pub struct Seat {
 }
 
 impl Seat {
+    /// Returns the devices this seat reads itself, which is none of them on the other source.
+    fn taken(&self) -> &[Taken] {
+        match &self.source {
+            Stream::Kernel(devices) => devices,
+            Stream::Libinput(_) => &[],
+        }
+    }
+
+    /// Returns the same, to be changed. Nothing comes back on the other source, which holds no
+    /// device of its own.
+    fn taken_mut(&mut self) -> Option<&mut Vec<Taken>> {
+        match &mut self.source {
+            Stream::Kernel(devices) => Some(devices),
+            Stream::Libinput(_) => None,
+        }
+    }
+
     /// Opens every device the session hands over, takes each one, finds a layout, and starts
     /// watching for the devices that arrive afterwards.
     ///
     /// **Call this after DRM master has been taken.** The grab comes after the card, and that
     /// ordering is the safety interlock: a run on a busy machine fails at the card, so it never
     /// reaches the point where it would take the keyboard from the desktop. The module
-    /// documentation states the rest.
+    /// documentation states the rest of it.
     ///
     /// Nothing here fails. A machine with no readable device and no layout is a console that draws
     /// and cannot be typed into, the way this backend was before this existed, and every refusal is
     /// reported through the crate's log rather than turned into an error the frame loop would have
     /// to decide about.
+    ///
+    /// ```no_run
+    /// use zgui_platform_drm::input::seat::Seat;
+    /// use zgui_platform_drm::{Session, SystemClock};
+    ///
+    /// let mut session = Session::open();
+    /// // The frame loop takes the card through `session` before this line.
+    /// let seat = Seat::open(&mut session, &SystemClock::new());
+    ///
+    /// assert!(seat.descriptors().count() >= 1, "the watch alone is one descriptor");
+    /// ```
     pub fn open(session: &mut Session, clock: &dyn Clock) -> Self {
-        Self::open_in(session, clock, Path::new(zgui_evdev::DIRECTORY))
+        Self::over(session, clock, Path::new(zgui_evdev::DIRECTORY), chosen())
     }
 
     /// Takes every device in `directory`.
@@ -1016,7 +1064,22 @@ impl Seat {
     /// devices it chose: a walk of the real one grabs every keyboard on the machine, and a grab
     /// lasts for as long as the seat does. It is reachable across the crate because the frame
     /// loop's own tests need a seat that holds nothing and takes nothing.
+    #[cfg(test)]
     pub(crate) fn open_in(session: &mut Session, clock: &dyn Clock, directory: &Path) -> Self {
+        Self::over(session, clock, directory, Stream::Kernel(Vec::new()))
+    }
+
+    /// Takes every device in `directory`, over a source the caller chose.
+    ///
+    /// [`Seat::open`] is this over the source the machine answers for. [`Seat::open_in`] is this
+    /// over the kernel's own stream, because a test that asked the machine would read whatever that
+    /// machine has installed and assert about a different source on each one.
+    pub(crate) fn over(
+        session: &mut Session,
+        clock: &dyn Clock,
+        directory: &Path,
+        source: Stream,
+    ) -> Self {
         let found = layout::find();
         info!(
             target: "zgui::platform",
@@ -1055,7 +1118,7 @@ impl Seat {
         };
 
         let mut seat = Self {
-            devices: Vec::new(),
+            source,
             keys: Keys::new(found.layout),
             pending: Vec::new(),
             anchored: Stamps::anchored(clock),
@@ -1114,8 +1177,8 @@ impl Seat {
     fn report(&self, waiting: usize) {
         match Found::of(
             waiting,
-            self.devices.iter().any(|taken| taken.types),
-            self.devices.iter().any(|taken| taken.points.is_some()),
+            self.taken().iter().any(|taken| taken.types),
+            self.taken().iter().any(|taken| taken.points.is_some()),
         ) {
             Found::Waiting(nodes) => info!(
                 target: "zgui::platform",
@@ -1148,9 +1211,14 @@ impl Seat {
     /// that directory wakes the loop the way a key pressed does, because what has to happen next is
     /// the same: read the descriptor and act on what it said.
     pub fn descriptors(&self) -> impl Iterator<Item = BorrowedFd<'_>> {
-        self.devices
-            .iter()
-            .map(|taken| taken.device.as_fd())
+        let devices: Vec<BorrowedFd<'_>> = match &self.source {
+            Stream::Kernel(devices) => devices.iter().map(|taken| taken.device.as_fd()).collect(),
+            // One, rather than one for each device: libinput reads every device it holds and
+            // reports through this.
+            Stream::Libinput(through) => vec![through.descriptor()],
+        };
+        devices
+            .into_iter()
             .chain(self.watch.iter().map(AsFd::as_fd))
     }
 
@@ -1213,7 +1281,12 @@ impl Seat {
                 None
             }
         };
-        self.devices.push(taken);
+        let Some(devices) = self.taken_mut() else {
+            // Unreachable: `admit` is the kernel source's own path for a device it opened, and the
+            // other source opens none of its own.
+            return None;
+        };
+        devices.push(taken);
         announced
     }
 
@@ -1242,11 +1315,10 @@ impl Seat {
             }
         };
 
-        let held: Vec<&Path> = self
-            .devices
-            .iter()
-            .map(|taken| taken.device.path())
-            .collect();
+        let held: Vec<&Path> = match &self.source {
+            Stream::Kernel(devices) => devices.iter().map(|taken| taken.device.path()).collect(),
+            Stream::Libinput(through) => through.held(),
+        };
         let opening: Vec<PathBuf> = untaken(&held, &arrived);
         opening
             .iter()
@@ -1274,6 +1346,9 @@ impl Seat {
     /// accelerometer — and each one the seat declines is a device the daemon opened. Dropping it
     /// closes the descriptor and leaves the record, so the session is told here.
     fn take_node(&mut self, session: &mut Session, path: &Path) -> Opened {
+        if let Stream::Libinput(through) = &mut self.source {
+            return through.add(session, path);
+        }
         let device = match session.open_input(path) {
             Ok(device) => device,
             Err(Unopened::NotYet(_)) => return Opened::NOT_YET,
@@ -1298,7 +1373,10 @@ impl Seat {
     /// The path identifies a device here, for the reason [`untaken`] states: the kernel gives one
     /// node to one device at a time.
     fn holds(&self, path: &Path) -> bool {
-        self.devices.iter().any(|taken| taken.device.path() == path)
+        match &self.source {
+            Stream::Kernel(devices) => devices.iter().any(|taken| taken.device.path() == path),
+            Stream::Libinput(through) => through.holds(path),
+        }
     }
 
     /// Reads every device and reports what a person did, moving `pointer` as they moved it.
@@ -1329,8 +1407,9 @@ impl Seat {
         screens: &[Screen],
     ) -> Heard {
         let now = self.now();
+        let anchored = self.anchored.read_at(now);
         let Self {
-            devices,
+            source,
             keys,
             pending,
             ..
@@ -1340,6 +1419,20 @@ impl Seat {
             .map(Report::focused)
             .collect();
         let mut terminal = None;
+
+        let devices = match source {
+            Stream::Kernel(devices) => devices,
+            Stream::Libinput(through) => {
+                let (read, asked) = through.read(session, keys, pointer, screens, anchored);
+                reports.extend(read);
+                ask(&mut terminal, asked);
+                // The watch is the same on both sources, and a node plugged in while this runs
+                // arrives through it.
+                reports.extend(self.arrivals(session));
+                return Heard { reports, terminal };
+            }
+        };
+
         let mut lost = Vec::new();
         for (index, taken) in devices.iter_mut().enumerate() {
             // Here, because here is where the loop reads it. See `Stamps::read_at`.
@@ -1455,7 +1548,16 @@ impl Seat {
         screens: &[Screen],
     ) -> Vec<Report> {
         let mut reports = Vec::new();
-        for mut gone in std::mem::take(&mut self.devices) {
+        if let Stream::Libinput(through) = &mut self.source {
+            through.let_go(session);
+            // Every device is reported gone in the read that follows, which is where what each one
+            // was holding is repaired — the same path a device that stops answering takes.
+            return Vec::new();
+        }
+        let Some(held) = self.taken_mut() else {
+            return Vec::new();
+        };
+        for mut gone in std::mem::take(held) {
             reports.extend(let_go_of(&mut gone, &mut self.keys, pointer, screens));
         }
         // After the loop above, which is where the last descriptor onto each device closed. The
@@ -1502,6 +1604,13 @@ impl Seat {
     /// the same walk [`Seat::open`] pays for at start-up, once per terminal switch, which is a
     /// person's own action.
     pub fn take_again(&mut self, session: &mut Session) -> Vec<Report> {
+        if let Stream::Libinput(through) = &mut self.source {
+            // libinput asks for every path it remembers, so this is the walk. A node that arrived
+            // while the session was away is taken by the watch in the read that follows, and one
+            // that no longer opens is forgotten there.
+            through.take_again(session);
+            return Vec::new();
+        }
         self.walk(session)
             .into_iter()
             .map(Report::focused)
@@ -1561,6 +1670,33 @@ fn untaken(held: &[&Path], arrived: &[PathBuf]) -> Vec<PathBuf> {
         .filter(|path| !held.contains(&path.as_path()))
         .cloned()
         .collect()
+}
+
+/// Chooses the source this machine answers for, and reports it once.
+///
+/// libinput where it loads and a context can be made, and the kernel's own stream where it cannot.
+/// The fallback is allowed to be worse, and the line says so: no acceleration, no touchpad
+/// behaviour, and this tree's own answer to which device is a keyboard.
+fn chosen() -> Stream {
+    match zgui_libinput::Context::open() {
+        Ok(context) => {
+            info!(
+                target: "zgui::platform",
+                "input is read through libinput, so a pointer accelerates and a touchpad behaves \
+                 like one"
+            );
+            Stream::Libinput(Box::new(Through::new(context)))
+        }
+        Err(error) => {
+            info!(
+                target: "zgui::platform",
+                "input is read from the kernel directly, because libinput is not here: a pointer \
+                 moves exactly as far as its device reports and a touchpad is a mouse with a stiff \
+                 button ({error})"
+            );
+            Stream::Kernel(Vec::new())
+        }
+    }
 }
 
 /// Returns `true` if this code is a button a pointer has.
@@ -1822,8 +1958,8 @@ mod tests {
 
     use super::{
         Axes, Down, Found, Heard, HighResolution, Keys, Planes, Pointer, Pointing, Report, Screen,
-        Seat, Session, Span, Stamps, Transition, Translated, ask, cancelled, focused, pointed,
-        types_on, untaken,
+        Seat, Session, Span, Stamps, Stream, Transition, Translated, ask, cancelled, focused,
+        pointed, types_on, untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
     use crate::session::{Asked, Record};
@@ -2363,6 +2499,41 @@ mod tests {
             down.swallowed.is_empty(),
             "the key came up, so nothing about it is remembered: {:?}",
             down.swallowed
+        );
+    }
+
+    #[test]
+    fn a_seat_over_libinput_holds_no_device_of_its_own_and_waits_on_one_descriptor() {
+        // The other source opens each node itself and waits on all of them. This one hands the
+        // nodes to libinput, which reads every device it holds and reports through one descriptor —
+        // so a loop that chained the devices' own would wait on nothing at all here.
+        let Ok(context) = zgui_libinput::Context::open() else {
+            eprintln!(
+                "a_seat_over_libinput_holds_no_device_of_its_own: this machine has no libinput, so \
+                 nothing about that source was checked. Run the suite from `nix develop`, which \
+                 puts `libinput.so.10` on the library path."
+            );
+            return;
+        };
+
+        let root = Scratch::new("a_seat_over_libinput_holds_no_device_of_its_own");
+        let mut session = Session::direct();
+        let seat = Seat::over(
+            &mut session,
+            &Aged::started(Duration::from_secs(1)),
+            &root.0,
+            Stream::Libinput(Box::new(crate::input::through::Through::new(context))),
+        );
+
+        assert!(
+            seat.taken().is_empty(),
+            "this source opens no device of its own"
+        );
+        // libinput's descriptor and the watch on the directory.
+        assert_eq!(
+            seat.descriptors().count(),
+            2,
+            "one descriptor for every device, and the watch"
         );
     }
 
@@ -3838,7 +4009,7 @@ mod tests {
     /// module's own, so what is exercised is the seat itself rather than a stand-in for it.
     fn watching(directory: &Path) -> Seat {
         Seat {
-            devices: Vec::new(),
+            source: Stream::Kernel(Vec::new()),
             keys: Keys::new(None),
             pending: Vec::new(),
             anchored: Stamps::from_origin(SINCE),
@@ -4208,7 +4379,11 @@ mod tests {
                 "round {round}: and nothing was held on the device that came back: {back:?}"
             );
 
-            let taken = seat.devices.first_mut().expect("the one device is here");
+            let taken = seat
+                .taken_mut()
+                .expect("this seat reads the kernel itself")
+                .first_mut()
+                .expect("the one device is here");
             assert!(
                 taken.device.is_grabbed(),
                 "round {round}: the device was taken again rather than only opened"
@@ -4261,10 +4436,10 @@ mod tests {
         let mut seat = watching(&root.0);
 
         // The directory is empty, which stands for a walk that could take nothing.
-        assert!(seat.devices.is_empty());
+        assert!(seat.taken().is_empty());
         assert!(seat.take_again(&mut session).is_empty());
         assert!(
-            seat.devices.is_empty(),
+            seat.taken().is_empty(),
             "there was nothing in the directory to take"
         );
 
@@ -4347,7 +4522,7 @@ mod tests {
             seat.holds(&path),
             "the node the kernel publishes as a mouse is one this seat takes"
         );
-        revoke(seat.devices[0].device.as_fd());
+        revoke(seat.taken()[0].device.as_fd());
 
         let read = seat.read(&mut session, &mut Pointer::centred(&[]), &[]);
 
@@ -4404,7 +4579,7 @@ mod tests {
              numbers them"
         );
         assert_eq!(
-            seat.devices.len(),
+            seat.taken().len(),
             1,
             "the one node that is a device was taken, and the empty file was left"
         );
