@@ -12,7 +12,7 @@
 //!
 //! # The cascade
 //!
-//! Three sources, and the first that states a layout answers with every name it states:
+//! Four sources, and the first that states a layout answers with every name it states:
 //!
 //! 1. **The environment** ([`Origin::Environment`]). libxkbcommon's own convention, and what a
 //!    session manager sets. Only `XKB_DEFAULT_LAYOUT` is looked at, and only to see whether the
@@ -20,7 +20,11 @@
 //!    variables itself and one this module has never heard of keeps working.
 //! 2. **`/etc/vconsole.conf`** ([`Origin::VirtualConsole`]), which states `XKBLAYOUT`, `XKBMODEL`,
 //!    `XKBVARIANT` and `XKBOPTIONS`. This is systemd's canonical place for them.
-//! 3. **`/etc/X11/xorg.conf.d/00-keyboard.conf`** ([`Origin::Xorg`]), which `systemd-localed`
+//! 3. **`/etc/default/keyboard`** ([`Origin::Debian`]), which states the same four names.
+//!    `keyboard(5)` describes it, and it is where Debian, Ubuntu and their derivatives keep what
+//!    the machine's keyboard is. Those machines are the largest family of Linux desktops and most
+//!    of them hold no `/etc/vconsole.conf` at all.
+//! 4. **`/etc/X11/xorg.conf.d/00-keyboard.conf`** ([`Origin::Xorg`]), which `systemd-localed`
 //!    writes when a person runs `localectl set-x11-keymap`.
 //!
 //! A machine that states none of them is [`Origin::Nowhere`], and
@@ -32,13 +36,28 @@
 //! Every name the answer leaves unset is still libxkbcommon's to fill in, so `XKB_DEFAULT_MODEL`
 //! set beside a layout stated in a file reaches the keymap.
 //!
+//! # Why the files sit in that order
+//!
+//! **The generated file is last on every machine.** `00-keyboard.conf` is written by a tool, and
+//! each of the three sources above it is what a person sets. A machine whose settings were changed
+//! once through `localectl` and again by hand holds a stale `00-keyboard.conf`, and the file the
+//! person edited is the answer.
+//!
+//! **The two `KEY=value` files belong to different families**, and one machine rarely holds both:
+//! `/etc/vconsole.conf` is systemd's and `/etc/default/keyboard` is `console-setup`'s. So the order
+//! between them settles one machine — a Debian machine somebody ran `localectl` on, because
+//! `localectl` writes an `XKBLAYOUT` into `/etc/vconsole.conf` there. That statement came after the
+//! one the installer wrote into `/etc/default/keyboard`, so `/etc/vconsole.conf` answers first.
+//!
 //! # How much of each file is read
 //!
-//! Both are read for a handful of names. `/etc/vconsole.conf` is `KEY=value` lines, which is all
-//! systemd writes there. `00-keyboard.conf` is read for its `Option "XkbLayout" "de"` lines and
-//! for nothing else — no section, no `MatchIsKeyboard`, no include — because the file this reads is
-//! the small fixed one `systemd-localed` writes. A machine whose X server is configured by hand
-//! can hold anything in that directory, and what this reads there is one file that a program wrote.
+//! Each is read for a handful of names. `/etc/vconsole.conf` and `/etc/default/keyboard` are both
+//! `KEY=value` lines, which is all systemd writes into the first and all a shell needs of the
+//! second, so one reader serves both. `00-keyboard.conf` is read for its `Option "XkbLayout" "de"`
+//! lines and for nothing else — no section, no `MatchIsKeyboard`, no include — because the file
+//! this reads is the small fixed one `systemd-localed` writes. A machine whose X server is
+//! configured by hand can hold anything in that directory, and what this reads there is one file
+//! that a program wrote.
 //!
 //! # The console keymap name
 //!
@@ -54,6 +73,9 @@ use zgui_xkb::RuleNames;
 
 /// systemd's canonical place for what a machine's keyboard is.
 const VCONSOLE: &str = "/etc/vconsole.conf";
+
+/// Where Debian and its derivatives keep it. See `keyboard(5)`.
+const DEBIAN_KEYBOARD: &str = "/etc/default/keyboard";
 
 /// The file `systemd-localed` writes the X11 keyboard settings into.
 const XORG_KEYBOARD: &str = "/etc/X11/xorg.conf.d/00-keyboard.conf";
@@ -71,6 +93,8 @@ pub(crate) enum Origin {
     Environment,
     /// `/etc/vconsole.conf`.
     VirtualConsole,
+    /// `/etc/default/keyboard`.
+    Debian,
     /// `/etc/X11/xorg.conf.d/00-keyboard.conf`.
     Xorg,
     /// Nothing. The names are libxkbcommon's own, which is `us`.
@@ -83,6 +107,7 @@ impl fmt::Display for Origin {
         let source = match self {
             Self::Environment => "XKB_DEFAULT_LAYOUT and its siblings",
             Self::VirtualConsole => VCONSOLE,
+            Self::Debian => DEBIAN_KEYBOARD,
             Self::Xorg => XORG_KEYBOARD,
             Self::Nowhere => "nothing on this machine",
         };
@@ -121,19 +146,22 @@ pub(crate) struct Machine {
     pub(crate) environment: Option<String>,
     /// What `/etc/vconsole.conf` holds.
     pub(crate) vconsole: Option<String>,
+    /// What `/etc/default/keyboard` holds.
+    pub(crate) debian: Option<String>,
     /// What `/etc/X11/xorg.conf.d/00-keyboard.conf` holds.
     pub(crate) xorg: Option<String>,
 }
 
 impl Machine {
-    /// Reads the environment and both files.
+    /// Reads the environment and all three files.
     ///
     /// A file this process cannot read states nothing, which is the ordinary answer on a machine
-    /// that has neither of them.
+    /// that has none of them.
     pub(crate) fn read() -> Self {
         Self {
             environment: std::env::var(LAYOUT_VARIABLE).ok(),
             vconsole: std::fs::read_to_string(VCONSOLE).ok(),
+            debian: std::fs::read_to_string(DEBIAN_KEYBOARD).ok(),
             xorg: std::fs::read_to_string(XORG_KEYBOARD).ok(),
         }
     }
@@ -156,10 +184,16 @@ pub(crate) fn of(machine: &Machine) -> Asked {
             from: Origin::Environment,
         };
     }
-    if let Some(names) = machine.vconsole.as_deref().and_then(vconsole) {
+    if let Some(names) = machine.vconsole.as_deref().and_then(xkb_variables) {
         return Asked {
             names,
             from: Origin::VirtualConsole,
+        };
+    }
+    if let Some(names) = machine.debian.as_deref().and_then(xkb_variables) {
+        return Asked {
+            names,
+            from: Origin::Debian,
         };
     }
     if let Some(names) = machine.xorg.as_deref().and_then(xorg) {
@@ -188,11 +222,14 @@ pub(crate) fn reads_the_console_first(from: Origin) -> bool {
     matches!(from, Origin::Nowhere)
 }
 
-/// The names `/etc/vconsole.conf` states, where it states a layout.
+/// Returns the names a `KEY=value` file states, where it states a layout.
 ///
-/// `rules` is left unset, because neither file names a rules file and libxkbcommon's own answer for
+/// `/etc/vconsole.conf` and `/etc/default/keyboard` both state these four names, so one reader
+/// serves both.
+///
+/// `rules` is left unset, because no file here names a rules file and libxkbcommon's own answer for
 /// it — `evdev` — is the one every Linux machine uses.
-fn vconsole(text: &str) -> Option<RuleNames> {
+fn xkb_variables(text: &str) -> Option<RuleNames> {
     let layout = variable(text, "XKBLAYOUT")?;
     Some(RuleNames {
         rules: None,
@@ -311,6 +348,22 @@ mod tests {
     /// the ordinary shape of this file.
     const VCONSOLE_HERE: &str = "KEYMAP=de-latin1\n";
 
+    /// What `/etc/default/keyboard` holds on a Debian machine.
+    ///
+    /// Written by `dpkg-reconfigure keyboard-configuration`, down to the header, the blank lines
+    /// and `BACKSPACE` — which nothing here reads, because it says what the backspace key sends
+    /// rather than which keyboard this is.
+    const DEBIAN_HERE: &str = "# KEYBOARD CONFIGURATION FILE\n\
+        \n\
+        # Consult the keyboard(5) manual page.\n\
+        \n\
+        XKBMODEL=\"pc105\"\n\
+        XKBLAYOUT=\"de\"\n\
+        XKBVARIANT=\"nodeadkeys\"\n\
+        XKBOPTIONS=\"terminate:ctrl_alt_bksp\"\n\
+        \n\
+        BACKSPACE=\"guess\"\n";
+
     /// What `/etc/X11/xorg.conf.d/00-keyboard.conf` holds on that machine.
     ///
     /// Written by `systemd-localed`, down to the two-space indent and the line of trailing
@@ -327,6 +380,14 @@ mod tests {
     fn vconsole(text: &str) -> Machine {
         Machine {
             vconsole: Some(text.to_owned()),
+            ..Machine::default()
+        }
+    }
+
+    /// A machine whose `/etc/default/keyboard` holds `text`.
+    fn debian(text: &str) -> Machine {
+        Machine {
+            debian: Some(text.to_owned()),
             ..Machine::default()
         }
     }
@@ -348,6 +409,7 @@ mod tests {
         let machine = Machine {
             environment: Some("fr".to_owned()),
             vconsole: Some("XKBLAYOUT=gb\n".to_owned()),
+            debian: Some(DEBIAN_HERE.to_owned()),
             xorg: Some(xorg_stating("de")),
         };
 
@@ -397,6 +459,62 @@ mod tests {
     }
 
     #[test]
+    fn a_debian_machine_states_its_keyboard_where_debian_keeps_it() {
+        // `/etc/default/keyboard` as `dpkg-reconfigure keyboard-configuration` writes it, and
+        // nothing else on the machine. That is the ordinary Debian and Ubuntu desktop: no
+        // `XKB_DEFAULT_*`, no `/etc/vconsole.conf`, and every xkb name in this one file.
+        let asked = of(&debian(DEBIAN_HERE));
+
+        assert_eq!(asked.from, Origin::Debian);
+        assert_eq!(
+            asked.names,
+            RuleNames {
+                rules: None,
+                model: Some("pc105".to_owned()),
+                layout: Some("de".to_owned()),
+                variant: Some("nodeadkeys".to_owned()),
+                options: Some("terminate:ctrl_alt_bksp".to_owned()),
+            },
+            "each of the four names reaches the field it belongs to, and `BACKSPACE` reaches none"
+        );
+    }
+
+    #[test]
+    fn the_debian_file_answers_before_the_xorg_file() {
+        // The file a person edits wins over the one a tool wrote. A Debian machine whose settings
+        // were changed once through `localectl` and again through `dpkg-reconfigure` holds a
+        // `00-keyboard.conf` from the first, and the keyboard it has is what the second states.
+        let machine = Machine {
+            debian: Some(DEBIAN_HERE.to_owned()),
+            xorg: Some(xorg_stating("gb")),
+            ..Machine::default()
+        };
+
+        let asked = of(&machine);
+
+        assert_eq!(asked.from, Origin::Debian);
+        assert_eq!(layout(&asked), Some("de"));
+    }
+
+    #[test]
+    fn the_virtual_console_answers_before_the_debian_file() {
+        // One machine rarely holds both. The one that does is a Debian machine somebody ran
+        // `localectl` on, because `localectl` writes an `XKBLAYOUT` into `/etc/vconsole.conf`
+        // there — and that is the later statement, because the installer wrote the other one.
+        let machine = Machine {
+            vconsole: Some("XKBLAYOUT=gb\n".to_owned()),
+            debian: Some(DEBIAN_HERE.to_owned()),
+            xorg: Some(xorg_stating("fr")),
+            ..Machine::default()
+        };
+
+        let asked = of(&machine);
+
+        assert_eq!(asked.from, Origin::VirtualConsole);
+        assert_eq!(layout(&asked), Some("gb"));
+    }
+
+    #[test]
     fn every_name_the_virtual_console_states_reaches_the_field_it_belongs_to() {
         // Four names of the same type. A pair that swapped would compile a keymap that works and
         // types the wrong letters.
@@ -424,6 +542,7 @@ mod tests {
         let machine = Machine {
             environment: None,
             vconsole: Some(VCONSOLE_HERE.to_owned()),
+            debian: None,
             xorg: Some(XORG_HERE.to_owned()),
         };
 
@@ -563,6 +682,10 @@ mod tests {
                 ..Machine::default()
             },
             Machine {
+                debian: Some("XKBLAYOUT='de\n".to_owned()),
+                ..Machine::default()
+            },
+            Machine {
                 xorg: Some(
                     "Section \"InputClass\"\n  Option \"XkbLayout\" \"de\nEndSection\n".to_owned(),
                 ),
@@ -608,7 +731,12 @@ mod tests {
         // so that machine reads the kernel. A machine that states a keyboard keeps libxkbcommon,
         // which carries dead keys, caps lock and every character past Latin-1.
         assert!(reads_the_console_first(Origin::Nowhere));
-        for from in [Origin::Environment, Origin::VirtualConsole, Origin::Xorg] {
+        for from in [
+            Origin::Environment,
+            Origin::VirtualConsole,
+            Origin::Debian,
+            Origin::Xorg,
+        ] {
             assert!(!reads_the_console_first(from), "{from:?}");
         }
     }
@@ -630,6 +758,12 @@ mod tests {
             "{stated}"
         );
         assert!(stated.contains("layout=de"), "{stated}");
+        assert!(
+            of(&debian(DEBIAN_HERE))
+                .to_string()
+                .contains("/etc/default/keyboard"),
+            "and a Debian machine is sent to the file Debian keeps it in"
+        );
         assert!(
             of(&Machine::default())
                 .to_string()

@@ -17,9 +17,10 @@
 //! so `´` then `e` inserts `é`.
 //!
 //! **Which keyboard the machine has is read from the machine.** A console session has no session
-//! manager to state it, so `XKB_DEFAULT_LAYOUT` and its siblings, `/etc/vconsole.conf` and
-//! `/etc/X11/xorg.conf.d/00-keyboard.conf` are read in that order, and the first that states a
-//! layout answers. A machine that states none of them is read from the kernel's console keymap,
+//! manager to state it, so `XKB_DEFAULT_LAYOUT` and its siblings, `/etc/vconsole.conf`,
+//! `/etc/default/keyboard` and `/etc/X11/xorg.conf.d/00-keyboard.conf` are read in that order, and
+//! the first that states a layout answers. A machine that states none of them is read from the
+//! kernel's console keymap,
 //! which is the table its terminal is already typing with — libxkbcommon's own answer there is
 //! `us`. The source that answered is part of the line stated at start-up.
 //!
@@ -100,12 +101,11 @@
 //! buffer back from the display engine before it is drawn into, one gives it over afterwards — and
 //! then the flip follows. `import` makes the images and records the barriers.
 //!
-//! **What the third buffer is for.** One image is on the screen and one is in the flip, which
-//! leaves one to draw into — so a frame asked for while a flip is on its way starts at once. The
-//! kernel takes one page flip per CRTC, so a frame that finishes inside that window is held and
-//! committed by the completion, with its own fence and in its own buffer. `scanout::rotation` holds
-//! that decision, and it is written apart from the card so that it can be asserted with no
-//! hardware.
+//! **What the third buffer is for.** One image is on the screen and one is in the flip, which leaves
+//! one to draw into — so a frame asked for while a flip is on its way starts at once. The kernel
+//! takes one page flip per CRTC, so a frame that finishes inside that window is held and committed
+//! by the completion, with its own fence and in its own buffer. `scanout::rotation` holds that
+//! decision, and it is written apart from the card so that it can be asserted with no hardware.
 //!
 //! **Nothing on that path waits for the graphics device on this thread.** The barrier that gives a
 //! frame over signals a semaphore exported as a sync file, and the flip carries that descriptor as
@@ -128,8 +128,8 @@
 //! draws, and this crate offers the things that step needs, all of them on `DrmDisplay` except the
 //! first: `FORMAT`, the texture a frame is composed into; `DrmDisplay::textures`, which hands out
 //! the buffers a renderer composes into and answers nothing on the copied shape, so it says which
-//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into the
-//! buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
+//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into
+//! the buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
 //! `DrmDisplay::present_drawn`, which bracket a frame drawn straight into a display's own buffer;
 //! and `Displays`, which says which display a surface is. The renderer that uses them lives in
 //! `zgui`, because a renderer is built by the runtime and a backend at this layer cannot name the
@@ -162,8 +162,8 @@
 //! The console's own mode goes with the card on the direct path: the session puts the terminal
 //! into graphics mode as it takes the card, so the kernel's text console stops drawing over the
 //! picture, and back into text mode as it hands the card back, so the console redraws. That is two
-//! ioctls and no more, and a seated run makes neither — `console` says what the pair does and what
-//! it does not.
+//! ioctls and no more. A seated run makes neither, because the daemon has already put the terminal
+//! into graphics mode — `console` says what the pair does and what it does not.
 //!
 //! It also writes the displays it lit into the `Displays` it was given, for as long as it turns.
 //! That map and the renderer are one decision, so `App::run_drm` makes one map and hands it to
