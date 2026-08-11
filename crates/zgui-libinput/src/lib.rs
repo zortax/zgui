@@ -42,8 +42,12 @@
 // resolved symbol. Every unsafe block states what makes it sound.
 #![allow(unsafe_code)]
 
+#[cfg(unix)]
+pub mod context;
 pub mod error;
 pub mod library;
 
+#[cfg(unix)]
+pub use crate::context::{Context, Files};
 pub use crate::error::{Error, Result};
 pub use crate::library::Library;

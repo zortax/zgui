@@ -499,6 +499,26 @@ fn resolve<T: Copy>(handle: &libloading::Library, name: &'static str) -> Result<
     })
 }
 
+/// The two names libinput is installed under, written out.
+///
+/// Held apart from [`SONAMES`] on purpose. The tests check that constant against this one, and ask
+/// the machine about this one, so a wrong `SONAMES` cannot report that the machine has no libinput
+/// and skip its own test.
+#[cfg(test)]
+pub(crate) const INSTALLED_AS: [&str; 2] = ["libinput.so.10", "libinput.so"];
+
+/// Returns `true` when one soname opens on this machine.
+///
+/// The loader is asked directly, around [`Library`]. This is the precondition of the tests that
+/// need a real libinput, and a test that asked the subject whether its own precondition holds would
+/// skip itself exactly when the subject broke.
+#[cfg(test)]
+pub(crate) fn is_on_this_machine(soname: &str) -> bool {
+    // SAFETY: the call `dlopen` above makes, on the same kind of name, and the handle is dropped
+    // straight away. See that function for what makes opening these objects sound.
+    unsafe { libloading::Library::new(soname) }.is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     //! What the loader answers, absent and present.
@@ -514,29 +534,11 @@ mod tests {
 
     use super::*;
 
-    /// The two names libinput is installed under, written out.
-    ///
-    /// Deliberately apart from [`SONAMES`]. This is what the tests below check that constant
-    /// against, and what they ask the machine about, so a wrong `SONAMES` cannot decide that the
-    /// machine has no libinput and send its own test into the silent arm.
-    const INSTALLED_AS: [&str; 2] = ["libinput.so.10", "libinput.so"];
-
     /// How many symbols the table has.
     ///
     /// Written out for the same reason as the sonames: a count taken from the table agrees with
     /// the table whatever the table says, including a row that was dropped in a merge.
     const ROWS: usize = 38;
-
-    /// Whether one soname opens on this machine, asked of the loader directly.
-    ///
-    /// This goes around [`Library`] on purpose. It is the precondition of the tests below, and a
-    /// test that asked the subject whether its own precondition holds would skip itself exactly
-    /// when the subject broke.
-    fn is_on_this_machine(soname: &str) -> bool {
-        // SAFETY: the call `dlopen` above makes, on the same kind of name, and the handle is
-        // dropped straight away. See that function for what makes opening these objects sound.
-        unsafe { libloading::Library::new(soname) }.is_ok()
-    }
 
     #[test]
     fn a_soname_nothing_has_is_an_error_rather_than_a_panic() {
