@@ -33,6 +33,13 @@
 //! give-back runs before every resume, including the one where the loop read both changes in one
 //! turn and gave nothing back: [`Seat::take_again`] states why.
 //!
+//! # Terminal switches
+//!
+//! A grabbed keyboard is the only place `Ctrl+Alt+F2` reaches, because the daemon turns the console
+//! keyboard off when it grants control. Both layouts read that chord as the terminal it asks for,
+//! so [`Seat::read`] answers the terminal beside the reports and the loop asks the session for it.
+//! The key that asked reaches no surface — [`Keys::batch`] states why.
+//!
 //! # One device with two jobs
 //!
 //! A device is opened once and read once, and what it is read *as* is two independent questions.
@@ -240,6 +247,45 @@ impl Report {
         Self {
             surface: Some(surface),
             event,
+        }
+    }
+}
+
+/// What one read of the devices produced.
+///
+/// The two halves travel apart because they go to different places. The reports reach the
+/// surfaces. The terminal reaches the session, because a key that asks for one is the session's the
+/// way a key that toggles caps lock is the console driver's — and that key produces no report of
+/// its own.
+#[derive(Debug)]
+pub struct Read {
+    /// What people did, for the surfaces each belongs to.
+    pub reports: Vec<Report>,
+    /// The terminal a key asked for, where a key asked for one.
+    ///
+    /// The last one asked for, when a read carried more than one. That is what a person asked for
+    /// last, and a switch overrides whatever was asked for before it anyway.
+    pub terminal: Option<u32>,
+}
+
+/// What one batch from one keyboard amounted to.
+///
+/// [`Read`] over one device's key events, and it is apart from it for the same reason: the events
+/// are the surfaces' and the terminal is the session's.
+#[derive(Debug)]
+pub struct Translated {
+    /// What the surfaces are told.
+    pub events: Vec<SurfaceEvent>,
+    /// The terminal a key in this batch asked for.
+    pub terminal: Option<u32>,
+}
+
+impl Translated {
+    /// Creates the answer a batch that produced nothing at all gives.
+    const fn nothing() -> Self {
+        Self {
+            events: Vec::new(),
+            terminal: None,
         }
     }
 }
@@ -476,22 +522,42 @@ impl Keys {
     /// `stamps` is how this device's moments are read. It belongs to the device rather than to the
     /// seat because the choice does: a driver may refuse the monotonic clock for one device and
     /// accept it for the next.
-    pub fn batch(
-        &mut self,
-        down: &mut BTreeSet<u16>,
-        batch: &Batch,
-        stamps: Stamps,
-    ) -> Vec<SurfaceEvent> {
+    ///
+    /// # A key that asks for a terminal reaches no surface
+    ///
+    /// The layout is what says a key asks for one, and both layouts already do — `Ctrl+Alt+F1` is
+    /// its own keysym under libxkbcommon and a `KT_CONS` entry in a console keymap, so it has never
+    /// produced `F1`. Such a key is answered here as the terminal and as no event: it belongs to
+    /// the session, the way a key that toggles caps lock belongs to the console driver, and an
+    /// application that was told about it as well would act on a chord that is already taking the
+    /// screen away.
+    ///
+    /// **Only a press asks.** A repeat asks for nothing, so a chord held down asks once rather than
+    /// thirty times a second. Every transition of such a key still reaches no surface, so an
+    /// application is never told about half of one.
+    ///
+    /// The transition is recorded either way. A key the layout was never told about would leave the
+    /// count of a modifier held over the chord wrong for the rest of the run.
+    pub fn batch(&mut self, down: &mut BTreeSet<u16>, batch: &Batch, stamps: Stamps) -> Translated {
         if dropped(batch) {
-            return Vec::new();
+            return Translated::nothing();
         }
         let mut events = Vec::new();
+        let mut terminal = None;
         for event in &batch.events {
             let Some(key) = event.key().filter(|key| typed(*key)) else {
                 continue;
             };
             let transition = Transition::of(event.value);
             let reading = self.read(down, key, transition);
+            if let Some(asked) = reading.terminal {
+                // No modifier is read here, because no key that asks for a terminal is a modifier:
+                // one keymap entry holds one meaning, and this one holds the terminal.
+                if transition == Transition::Pressed {
+                    terminal = Some(asked);
+                }
+                continue;
+            }
             let (state, repeat) = match transition {
                 Transition::Pressed => (KeyState::Pressed, false),
                 Transition::Repeated => (KeyState::Pressed, true),
@@ -522,7 +588,7 @@ impl Keys {
                 timestamp: stamps.at(event.at),
             });
         }
-        events
+        Translated { events, terminal }
     }
 
     /// Reads the layout for one transition, and records the transition where there is one.
@@ -543,10 +609,12 @@ impl Keys {
         };
         let Some(layout) = self.layout.as_mut() else {
             // No layout at all. The position still crosses, so a binding written against where the
-            // key sits keeps working.
+            // key sits keeps working. No terminal either: which chord asks for one is a layout's
+            // answer, and a machine with no layout has none to give.
             return Reading {
                 key: zgui_vocab::Key::Unidentified,
                 without_modifiers: zgui_vocab::Key::Unidentified,
+                terminal: None,
             };
         };
         match transition {
@@ -926,12 +994,15 @@ impl Seat {
     /// at the speed of the processor for as long as it ran. A device dropped over a passing failure
     /// costs a keyboard or a mouse that has to be plugged in again; a device kept costs the whole
     /// program.
+    ///
+    /// A key that asked for a terminal comes back beside the reports rather than among them. See
+    /// [`Read`], and [`Keys::batch`] for why such a key reaches no surface.
     pub fn read(
         &mut self,
         session: &mut Session,
         pointer: &mut Pointer,
         screens: &[Screen],
-    ) -> Vec<Report> {
+    ) -> Read {
         let now = self.now();
         let Self {
             devices,
@@ -943,6 +1014,7 @@ impl Seat {
             .into_iter()
             .map(Report::focused)
             .collect();
+        let mut terminal = None;
         let mut lost = Vec::new();
         for (index, taken) in devices.iter_mut().enumerate() {
             // Here, because here is where the loop reads it. See `Stamps::read_at`.
@@ -963,11 +1035,10 @@ impl Seat {
             for batch in &batches {
                 resynchronise |= dropped(batch);
                 if taken.types {
-                    reports.extend(
-                        keys.batch(&mut taken.down, batch, taken.stamps)
-                            .into_iter()
-                            .map(Report::focused),
-                    );
+                    let translated = keys.batch(&mut taken.down, batch, taken.stamps);
+                    // The newest ask wins, which is the one a person made last.
+                    terminal = translated.terminal.or(terminal);
+                    reports.extend(translated.events.into_iter().map(Report::focused));
                 }
                 // The same rule the keyboard follows: a batch the kernel dropped part of is the
                 // tail of an update whose beginning no longer exists, so a button in it was
@@ -1030,7 +1101,7 @@ impl Seat {
         // the same name is a different device at the same path, and an arrival at a path this seat
         // still holds is refused — so a stale one left here would keep its own replacement out.
         reports.extend(self.arrivals(session));
-        reports
+        Read { reports, terminal }
     }
 
     /// Gives every device back to the session, and reports what each one was holding.
@@ -1394,7 +1465,7 @@ mod tests {
 
     use super::{
         Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Seat, Session, Span, Stamps,
-        Transition, cancelled, focused, pointed, types_on, untaken,
+        Transition, Translated, cancelled, focused, pointed, types_on, untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
     use crate::session::Asked;
@@ -1425,26 +1496,42 @@ mod tests {
 
     impl Recording {
         /// What this stub says a key means, with shift applied where it matters.
+        ///
+        /// `KEY_F1` asks for terminal 1, and that is what both real layouts answer for
+        /// `Ctrl+Alt+F1`. Which modifiers reach that answer is each layout's own business — level
+        /// five of a `CTRL+ALT` key type under xkb, the map those two bits select in a console
+        /// keymap — so this answers it on the key alone, and the tests below drive the translation
+        /// over it.
         fn reading_of(&self, key: Key) -> Reading {
             let (upper, lower) = match key {
                 Key::KEY_A => ("A", "a"),
                 Key::KEY_SPACE => (" ", " "),
+                Key::KEY_F1 => {
+                    return Reading {
+                        key: zgui_vocab::Key::Named(NamedKey::F1),
+                        without_modifiers: zgui_vocab::Key::Named(NamedKey::F1),
+                        terminal: Some(1),
+                    };
+                }
                 Key::KEY_LEFTSHIFT => {
                     return Reading {
                         key: zgui_vocab::Key::Named(NamedKey::Shift),
                         without_modifiers: zgui_vocab::Key::Named(NamedKey::Shift),
+                        terminal: None,
                     };
                 }
                 _ => {
                     return Reading {
                         key: zgui_vocab::Key::Unidentified,
                         without_modifiers: zgui_vocab::Key::Unidentified,
+                        terminal: None,
                     };
                 }
             };
             Reading {
                 key: zgui_vocab::Key::character(if self.shift > 0 { upper } else { lower }),
                 without_modifiers: zgui_vocab::Key::character(lower),
+                terminal: None,
             }
         }
     }
@@ -1609,13 +1696,21 @@ mod tests {
 
     /// What a stream of bytes from one keyboard turns into, through the whole translation.
     fn translate(keys: &mut Keys, down: &mut BTreeSet<u16>, bytes: &[u8]) -> Vec<SurfaceEvent> {
+        translated(keys, down, bytes).events
+    }
+
+    /// The same, with the terminal a key in it asked for.
+    fn translated(keys: &mut Keys, down: &mut BTreeSet<u16>, bytes: &[u8]) -> Translated {
         let mut reader = Reader::new();
         let batches = reader.feed(bytes);
         let mut events = Vec::new();
+        let mut terminal = None;
         for batch in &batches {
-            events.append(&mut keys.batch(down, batch, Stamps::from_origin(SINCE)));
+            let mut answered = keys.batch(down, batch, Stamps::from_origin(SINCE));
+            terminal = answered.terminal.or(terminal);
+            events.append(&mut answered.events);
         }
-        events
+        Translated { events, terminal }
     }
 
     /// The key events among what came out, as the fields a test asserts on.
@@ -1713,6 +1808,78 @@ mod tests {
             })
             .collect();
         assert_eq!(dispatched, [EventKind::KeyDown, EventKind::KeyUp]);
+    }
+
+    #[test]
+    fn a_key_that_asks_for_a_terminal_is_answered_as_one_and_reaches_no_surface() {
+        // The first half of the switch. A key that asks for a terminal belongs to the session, the
+        // way a key that toggles caps lock belongs to the console driver — and an application told
+        // about it as well would act on a chord that is already taking the screen away.
+        let (mut keys, _, mut down) = keys();
+
+        let asked = translated(&mut keys, &mut down, &moved(SINCE, Key::KEY_F1, 1));
+        let ordinary = translated(&mut keys, &mut down, &moved(SINCE, Key::KEY_A, 1));
+
+        assert_eq!(asked.terminal, Some(1), "the terminal the layout read");
+        assert!(
+            presses(&asked.events).is_empty(),
+            "and nothing was dispatched for it: {:?}",
+            asked.events
+        );
+        assert_eq!(
+            ordinary.terminal, None,
+            "an ordinary key asks for no terminal"
+        );
+        assert_eq!(
+            presses(&ordinary.events).len(),
+            1,
+            "and reaches the surface: {:?}",
+            ordinary.events
+        );
+    }
+
+    #[test]
+    fn a_chord_held_down_asks_for_its_terminal_once() {
+        // The kernel repeats a held key thirty times a second, and a switch asked for on each of
+        // them is thirty requests to the session daemon for one press of one chord. The release is
+        // no ask either, and neither of them reaches a surface: an application told about the
+        // release alone would have half a chord.
+        let (mut keys, _, mut down) = keys();
+        let mut bytes = moved(SINCE, Key::KEY_F1, 1);
+        for _ in 0..8 {
+            bytes.extend(moved(SINCE, Key::KEY_F1, 2));
+        }
+        bytes.extend(moved(SINCE, Key::KEY_F1, 0));
+        let mut reader = Reader::new();
+        let batches = reader.feed(&bytes);
+
+        // One answer per batch, so that a repeat that asked again is visible. Folding them would
+        // read the same as asking once.
+        let asked: Vec<Translated> = batches
+            .iter()
+            .map(|batch| keys.batch(&mut down, batch, Stamps::from_origin(SINCE)))
+            .collect();
+
+        let terminals: Vec<Option<u32>> = asked.iter().map(|answer| answer.terminal).collect();
+        assert_eq!(
+            terminals.first(),
+            Some(&Some(1)),
+            "the press asked: {terminals:?}"
+        );
+        assert!(
+            terminals[1..].iter().all(Option::is_none),
+            "and every repeat after it, and the release, asked for nothing: {terminals:?}"
+        );
+        assert!(
+            asked
+                .iter()
+                .all(|answer| presses(&answer.events).is_empty()),
+            "no transition of it reached a surface"
+        );
+        assert!(
+            down.is_empty(),
+            "and the key came up on the way, so the layout's count is where it started"
+        );
     }
 
     #[test]
@@ -3007,11 +3174,12 @@ mod tests {
         let mut seat = watching(&root.0);
         std::fs::write(root.0.join("event0"), []).expect("the node is made");
 
-        let reports = seat.read(&mut Session::direct(), &mut Pointer::centred(&[]), &[]);
+        let read = seat.read(&mut Session::direct(), &mut Pointer::centred(&[]), &[]);
 
         assert!(
-            reports.is_empty(),
-            "an empty file is no device: {reports:?}"
+            read.reports.is_empty(),
+            "an empty file is no device: {:?}",
+            read.reports
         );
         assert!(
             seat.watch
@@ -3473,12 +3641,13 @@ mod tests {
         );
         revoke(seat.devices[0].device.as_fd());
 
-        let reports = seat.read(&mut session, &mut Pointer::centred(&[]), &[]);
+        let read = seat.read(&mut session, &mut Pointer::centred(&[]), &[]);
 
         assert!(
             !seat.holds(&path),
             "a device that answers a read with a failure is dropped rather than polled again: \
-             {reports:?}"
+             {:?}",
+            read.reports
         );
         assert_eq!(
             descriptors_naming(&path),

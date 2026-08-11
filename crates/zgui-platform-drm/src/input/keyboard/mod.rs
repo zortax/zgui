@@ -16,6 +16,7 @@
 pub(crate) mod code;
 pub mod layout;
 pub(crate) mod modifiers;
+pub(crate) mod terminal;
 
 use zgui_vocab::{KeyCode, KeyEvent, KeyLocation, PhysicalKey};
 

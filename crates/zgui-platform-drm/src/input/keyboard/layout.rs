@@ -28,6 +28,12 @@
 //!   bits. Caps lock sits outside them, as one more of the driver's own actions, and there is no
 //!   super key among the eight either, so a shortcut that names meta can never match here.
 //!
+//! # The terminal a key asks for
+//!
+//! Both sources bind `Ctrl+Alt+Fn` themselves, so a chord that asks for another terminal arrives
+//! here as a reading. [`Reading::terminal`] carries it, and the `terminal` module beside this one
+//! is where each source's answer becomes the number a person says.
+//!
 //! # The order of a reading and an update
 //!
 //! For a press the keysym is read *before* the state is told about the press, because a press
@@ -50,7 +56,7 @@ use std::str::FromStr;
 use zgui_evdev::Key;
 use zgui_vocab::{Modifiers, NamedKey, PhysicalKey};
 
-use crate::input::keyboard::{code, modifiers};
+use crate::input::keyboard::{code, modifiers, terminal};
 
 /// Which source a keyboard's layout came from.
 #[non_exhaustive]
@@ -74,6 +80,13 @@ pub struct Reading {
     ///
     /// This is what keeps a shortcut on its key when a modifier would have remapped it.
     pub without_modifiers: zgui_vocab::Key,
+    /// The terminal this key asks for, where it asks for one.
+    ///
+    /// A key that asks for a terminal belongs to the session, the way a key that toggles caps lock
+    /// belongs to the console driver. Both layouts hold the answer already — `Ctrl+Alt+F1` is a
+    /// keysym of its own under libxkbcommon and a `KT_CONS` entry in a console keymap — and the two
+    /// count differently, so both cross to the number a person says: `Ctrl+Alt+F1` is terminal 1.
+    pub terminal: Option<u32>,
 }
 
 /// A keyboard layout: what each key means, and which modifiers are held.
@@ -581,6 +594,18 @@ impl Xkb {
             zgui_vocab::Key::Other(name.into())
         })
     }
+
+    /// The terminal this keysym asks for, where it asks for one.
+    ///
+    /// Read off the keysym the modifiers selected, because that is the level the chord reaches:
+    /// `XF86Switch_VT_1` sits on level five of a `CTRL+ALT` key type, and level zero of the same
+    /// key is `F1`.
+    fn terminal(&self, sym: zgui_xkb::Keysym) -> Option<u32> {
+        self.context
+            .keysym_name(sym)
+            .as_deref()
+            .and_then(terminal::from_keysym)
+    }
 }
 
 impl Layout for Xkb {
@@ -606,6 +631,7 @@ impl Layout for Xkb {
                 .composed(press.sym)
                 .unwrap_or_else(|| self.named(press.sym, press.text.as_deref())),
             without_modifiers,
+            terminal: self.terminal(press.sym),
         }
     }
 
@@ -617,9 +643,11 @@ impl Layout for Xkb {
     /// desktop too.
     fn reading(&self, key: Key) -> Reading {
         let code = zgui_xkb::Keycode::from_evdev(key.raw());
+        let sym = self.state.sym(code);
         Reading {
-            key: self.named(self.state.sym(code), self.state.text(code).as_deref()),
+            key: self.named(sym, self.state.text(code).as_deref()),
             without_modifiers: self.printed(code),
+            terminal: self.terminal(sym),
         }
     }
 
@@ -713,15 +741,19 @@ impl Console {
         }
     }
 
-    /// What this key produces under `held`, when it produces text at all.
+    /// Returns what the keymap holds for this key under `held`.
     ///
     /// A key code above 255 answers nothing, which is an ordinary answer rather than a failure: a
-    /// console keymap holds 256 entries and every code past them is outside the table.
-    fn character(&self, key: Key, held: zgui_evdev::console::Modifiers) -> Option<char> {
-        self.console
-            .entry(key, held)
-            .ok()
-            .flatten()
+    /// console keymap holds 256 entries and every code past them is outside the table. A console
+    /// that has stopped answering answers nothing here too, which reads as a keyboard with no
+    /// layout.
+    fn entry(&self, key: Key, held: zgui_evdev::console::Modifiers) -> Option<zgui_evdev::Entry> {
+        self.console.entry(key, held).ok().flatten()
+    }
+
+    /// Returns the character an entry produces, where a document can hold it.
+    fn character(entry: Option<zgui_evdev::Entry>) -> Option<char> {
+        entry
             .and_then(zgui_evdev::Entry::character)
             .filter(|character| is_typed(&character.to_string()))
     }
@@ -736,14 +768,20 @@ impl Console {
     }
 
     /// Returns what this key means now, and what it means with nothing held.
+    ///
+    /// The entry under what is held is read once and asked both questions, because the terminal a
+    /// key asks for is one more thing that entry says: `Ctrl+Alt+F1` is a `KT_CONS` entry in the
+    /// map the two modifiers select, and the same key in the unmodified map is a function key.
     fn read(&self, key: Key) -> Reading {
         let at = code::physical(key);
+        let held = self.entry(key, self.mask());
         Reading {
-            key: Self::key_of(self.character(key, self.mask()), at),
+            key: Self::key_of(Self::character(held), at),
             without_modifiers: Self::key_of(
-                self.character(key, zgui_evdev::console::Modifiers::NONE),
+                Self::character(self.entry(key, zgui_evdev::console::Modifiers::NONE)),
                 at,
             ),
+            terminal: held.and_then(terminal::from_entry),
         }
     }
 
@@ -818,6 +856,7 @@ mod tests {
         ACCENTS, RENAMED, Sequence, Xkb, accent, character, is_typed, named_key, typed_key,
     };
     use crate::input::keyboard::layout::Layout;
+    use crate::input::keyboard::terminal;
     // `Key` in this module is the vocabulary's. A kernel key code is `Code`, so the two cannot
     // be confused where both appear in one line.
     use zgui_evdev::Key as Code;
@@ -895,6 +934,46 @@ mod tests {
         assert!(
             wrong.is_empty(),
             "{} row(s) can never match:\n{}",
+            wrong.len(),
+            wrong.join("\n")
+        );
+    }
+
+    #[test]
+    fn every_terminal_keysym_is_named_the_way_the_switch_reads_it() {
+        // A press is looked up under whatever `keysym_name` answers, and `xkeyboard-config` builds
+        // its keymaps from the alias. So the two spellings meet here, and a reader that held the
+        // wrong one of them takes `Ctrl+Alt+Fn` to the application as a key nobody bound — which
+        // reads as a machine that cannot leave the program at all.
+        let test = "every_terminal_keysym_is_named_the_way_the_switch_reads_it";
+        let Some(context) = library(test) else {
+            return;
+        };
+
+        let mut wrong = Vec::new();
+        for asked in 1..=12u32 {
+            // The spelling `xkeyboard-config` writes, which is what a keymap is compiled from.
+            let name = format!("XF86_Switch_VT_{asked}");
+            let Some(sym) = context.keysym_from_name(&name) else {
+                wrong.push(format!("`{name}` is no keysym at all"));
+                continue;
+            };
+            let Some(canonical) = context.keysym_name(sym) else {
+                wrong.push(format!("`{name}` has no name to look up"));
+                continue;
+            };
+            let read = terminal::from_keysym(&canonical);
+            if read != Some(asked) {
+                wrong.push(format!(
+                    "`{name}` is named `{canonical}`, which reads as {read:?} rather than terminal \
+                     {asked}"
+                ));
+            }
+        }
+
+        assert!(
+            wrong.is_empty(),
+            "{} terminal(s) can never be asked for:\n{}",
             wrong.len(),
             wrong.join("\n")
         );
@@ -1052,6 +1131,31 @@ mod tests {
             after.key.inserted_text().is_some(),
             "the key after a sequence that led nowhere still types: {:?}",
             after.key
+        );
+    }
+
+    #[test]
+    fn the_chord_a_layout_binds_reads_as_the_terminal_it_asks_for() {
+        // The switch, over real keyboard data. `symbols/pc` includes `srvr_ctrl(fkey2vt)`, which
+        // puts `XF86Switch_VT_1` on level five of a `CTRL+ALT` key type — so the chord is the
+        // layout's own and this reads what the layout answered. A layout is asked for by name
+        // because which one a machine is set to is not something a test may choose.
+        let test = "the_chord_a_layout_binds_reads_as_the_terminal_it_asks_for";
+        let Some(mut layout) = layout_named(test, "us") else {
+            return;
+        };
+
+        let plain = layout.press(Code::KEY_F1);
+        layout.release(Code::KEY_F1);
+        layout.press(Code::KEY_LEFTCTRL);
+        layout.press(Code::KEY_LEFTALT);
+        let chord = layout.press(Code::KEY_F1);
+
+        assert_eq!(plain.terminal, None, "`F1` on its own asks for no terminal");
+        assert_eq!(
+            chord.terminal,
+            Some(1),
+            "`Ctrl+Alt+F1` asks for terminal 1: {chord:?}"
         );
     }
 

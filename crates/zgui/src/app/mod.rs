@@ -441,7 +441,11 @@ impl App {
     /// # Switching terminal
     ///
     /// A run holds the keyboard, so `Ctrl+Alt+Fn` reaches this program rather than the console
-    /// driver, and nothing here acts on it. Switching away from a running program is not handled.
+    /// driver. Where a session daemon answers, the chord asks that daemon for the terminal: the
+    /// devices go on the way out, they are opened again on the way back, and every display is set
+    /// to its mode again. Where none answers, no daemon owns the terminal, so the ask is refused
+    /// and the reason reported once. A switch made from elsewhere, such as `chvt`, leaves such a
+    /// run holding the display.
     ///
     /// ```no_run
     /// use zgui::prelude::*;
