@@ -865,6 +865,10 @@ impl Seat {
     /// loop's own tests need a seat that holds nothing and takes nothing.
     pub(crate) fn open_in(session: &mut Session, clock: &dyn Clock, directory: &Path) -> Self {
         let found = layout::find();
+        info!(
+            target: "zgui::platform",
+            "this machine's keyboard is {}", found.stated
+        );
         for refusal in &found.refused {
             info!(target: "zgui::platform", "no layout from {refusal}");
         }

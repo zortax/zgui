@@ -37,7 +37,7 @@ pub(crate) fn context(test: &str) -> Option<Context> {
     }
 }
 
-/// Returns a keymap compiled from the names this machine is set to, or nothing.
+/// Returns a keymap compiled from the names libxkbcommon reads for itself, or nothing.
 ///
 /// The context goes out of scope with the keymap still in hand, which is the arrangement this
 /// crate promises: a keymap takes its own reference on the context it was compiled through, so
