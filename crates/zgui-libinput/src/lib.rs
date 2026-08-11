@@ -44,10 +44,14 @@
 
 #[cfg(unix)]
 pub mod context;
+pub mod device;
 pub mod error;
+pub mod event;
 pub mod library;
 
 #[cfg(unix)]
 pub use crate::context::{Context, Files};
+pub use crate::device::{Capabilities, Capability, Device, DeviceId};
 pub use crate::error::{Error, Result};
+pub use crate::event::Event;
 pub use crate::library::Library;

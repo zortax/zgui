@@ -46,10 +46,19 @@ pub trait Files {
     ///
     /// `flags` is what libinput would have opened with. Answering with a **narrower access mode**
     /// is allowed: a read-only descriptor is accepted, and gives up the writes libinput makes to a
-    /// device.
+    /// device, which are its lights.
     ///
-    /// libinput puts the refusal in its own log and takes no other decision from it, so a caller
-    /// with no number to give can answer any of them.
+    /// # Non-blocking descriptors
+    ///
+    /// libinput reads the descriptor directly, on the thread that calls
+    /// [`Context::dispatch`](super::Context), and it reads until the device has nothing more to
+    /// say. A descriptor without `O_NONBLOCK` therefore holds that thread inside libinput for the
+    /// rest of the run: no event is reported, and the program is still running. `flags` already
+    /// carries the bit, so an implementation that passes `flags` through to the open has nothing
+    /// else to do.
+    ///
+    /// libinput puts a refusal in its own log and takes no other decision from it, so a caller with
+    /// no number to give can answer any of them.
     ///
     /// # Errors
     ///
