@@ -62,6 +62,11 @@ pub enum Error {
     /// `libinput_get_fd` answered `-1`. A context without a descriptor is unusable: a caller has
     /// nothing to poll and has to spin.
     Descriptor,
+    /// libinput could not open its devices again after a suspend.
+    ///
+    /// libinput reports the reason in its own log alone. The devices are gone from here, and the
+    /// paths are still remembered, so another resume can be asked for.
+    Resume,
     /// libinput could not read what its devices reported.
     ///
     /// The devices are unusable from here. libinput reports the reason as a negative `errno` from
@@ -88,6 +93,10 @@ impl fmt::Display for Error {
             Self::Descriptor => write!(
                 f,
                 "the context has no descriptor to wait on, so nothing can wait for its devices"
+            ),
+            Self::Resume => write!(
+                f,
+                "libinput could not open its devices again; it puts the reason in its own log"
             ),
             Self::Dispatch { errno } => write!(
                 f,
