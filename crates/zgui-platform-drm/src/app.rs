@@ -1,8 +1,8 @@
 //! The frame loop: take the device, light the displays, and turn until the application stops.
 //!
-//! This is the backend's only driver. It opens the device, takes DRM master, discovers the
-//! displays, gives each one its buffers, and then turns: read the device, hand the frames that were
-//! asked for to the application, ask it how to wait, and wait.
+//! The driver, and the only one this backend has. It opens the device, takes DRM master, discovers
+//! the displays, gives each one its buffers, and then turns: read the device, hand the frames that
+//! were asked for to the application, ask it how to wait, and wait.
 //!
 //! Which shape those buffers take is settled here, once per display, and it needs the graphics
 //! device the renderer will draw on — so the caller opens that device first and hands it in. See
@@ -13,18 +13,21 @@
 //! The list is exhaustive on purpose. A missing entry is an application that quietly stops
 //! answering one whole class of event.
 //!
-//! 1. **A display finished a flip.** The device becomes readable, the completion is read, and the
-//!    buffer the display had before it is free for the next frame.
+//! 1. **A display finished a flip.** The device becomes readable, the completion is read, the
+//!    buffer the display had before it is free for the next frame, and a frame that finished while
+//!    the flip was on its way is committed. The kernel takes one page flip per CRTC, so the
+//!    completion is the moment the frame waiting behind it becomes legal.
 //! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
 //!    which is the second descriptor the wait watches, and arrives as a
 //!    [`WakeReason`](zgui_platform::WakeReason).
 //! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable,
 //!    and every device the seat took is one more descriptor the wait watches — so the watch set is
 //!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
-//!    surface and a pointer event goes to the display the pointer is on — the display that decides
-//!    the focused surface. **A key that asks for a terminal goes to the session instead**, and to
-//!    nothing else: `Ctrl+Alt+F2` is a keysym of its own under libxkbcommon and a `KT_CONS` entry
-//!    in a console keymap, so the layout reads it as terminal 2 and `switch` asks for it.
+//!    surface, and a pointer event goes to the display the pointer is on — which is the display
+//!    that decides the focused surface. **A key that asks for a terminal goes to the session
+//!    instead**, and to nothing else: `Ctrl+Alt+F2` is a keysym of its own under libxkbcommon and a
+//!    `KT_CONS` entry in a console keymap, so the layout reads it as terminal 2 and `switch` asks
+//!    for it.
 //! 4. **Somebody plugged a device in.** The seat's watch on the device directory is one more
 //!    descriptor in the same set, and a node made there ends the wait. The device is opened,
 //!    grabbed and read from the next turn on. Nothing is dispatched for the arrival itself, beyond
@@ -46,17 +49,18 @@
 //! and it has two shapes: a session daemon opens the card and hands it over, which needs no
 //! privilege at all, or this process opens it and takes DRM master, which needs root or a free
 //! virtual terminal. A run started inside a desktop's own session gets the second shape, because a
-//! session that already has a controlling client is refused the seat, and DRM master refuses the
-//! run there.
+//! session that already has a controlling client is refused the seat, and DRM master is what
+//! refuses the run there.
 //!
-//! The session also gives everything back — the console, the master and every device the seat
-//! opened — so this loop opens one, holds it for longer than the card, and pairs nothing up itself.
+//! The session is also what gives everything back — the console, the master and every device the
+//! seat opened — so this loop opens one, holds it for longer than the card, and pairs nothing up
+//! itself.
 //!
 //! # Going away, and coming back
 //!
 //! A seated run gives its devices up when a person switches to another terminal. The
-//! `session::presence` module turns a turn's worth of changes into one answer, and this loop
-//! carries that answer out.
+//! `session::presence` module is what a turn's worth of changes becomes, and this loop is what
+//! carries the answer out.
 //!
 //! **Going away.** Every claimed surface is told it is occluded, every input device goes back
 //! through the seat, the surface that held the keyboard is told it lost it, and nothing is
@@ -65,10 +69,10 @@
 //! read.
 //!
 //! **Coming back.** Whatever the seat still holds goes back and every input device is opened again,
-//! every display is put back into its mode with the buffer it last presented, every cursor goes
-//! back on its plane, and every surface is asked for a frame and told it is visible again. The
-//! buffers are this process's own and still hold the last frame, so the picture is back at the
-//! commit rather than at the frame after it.
+//! every display is put back into its mode with the newest frame it drew, every cursor goes back on
+//! its plane, and every surface is asked for a frame and told it is visible again. The buffers are
+//! this process's own and still hold that frame, so the picture is back at the commit rather than
+//! at the frame after it.
 //!
 //! The give-back on the way back is there for the turn that read a disable and an enable together.
 //! That turn is one resume over a seat that never gave anything up, and `resume` below sets it out.
@@ -91,19 +95,19 @@
 //!
 //! The same process, and it takes both **after** the device. [`crate::session`] is where each one
 //! comes from, the way the card does: a seated run is handed every input device by the daemon, and
-//! a direct run opens the node itself. That ordering is the safety interlock: a direct run on a
-//! busy machine fails at DRM master and never reaches the grab, so it cannot take either away from
-//! the desktop that is using them. A machine where a compositor holds the devices reaches that
-//! refusal, because a session that already has a controlling client is refused the seat and falls
-//! back to the direct shape. See [`crate::input::seat`] for what the grab gives and for the one
-//! thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds no way out
-//! has to be killed from another terminal.
+//! a direct run opens the node itself. That ordering is the safety interlock:
+//! a direct run on a busy machine fails at DRM master and never reaches the grab, so it cannot take
+//! either away from the desktop that is using them. A machine where a compositor holds the devices
+//! reaches that refusal, because a session that already has a controlling client is refused the
+//! seat and falls back to the direct shape. See [`crate::input::seat`] for what the grab gives and
+//! for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds
+//! no way out has to be killed from another terminal.
 //!
 //! The interlock holds on the seated path too, and there it is the daemon's own. A run started on a
 //! terminal that is not the live one gets a seat that is open and waiting: logind hands over every
 //! evdev node it has already revoked, so the walk below takes none of them and this run grabs
 //! nothing at all while another session is on the screen. What it may have arrives with the enable,
-//! when a person switches to this terminal.
+//! which is a person switching to this terminal.
 //!
 //! # What moves the cursor
 //!
@@ -379,12 +383,31 @@ fn drive(
 
             // One read carries the completions of every display that finished, so every scanout is
             // shown the same slice and each keeps the one that names its own CRTC.
+            //
+            // A display commits here as well as reads: a frame that finished while a flip was on
+            // its way is put up by the completion of that flip, because the kernel takes one page
+            // flip per CRTC. So it runs while this session holds its devices and never while
+            // another one has the screen — where a commit is refused and the resume puts every
+            // display back anyway.
             let events = match device.poll_events() {
                 Ok(events) => events,
                 Err(error) => break 'running Err(backend(error)),
             };
-            for scanout in &scanouts {
-                scanout.borrow_mut().drain(&events);
+            if presence.is_active() {
+                for scanout in &scanouts {
+                    let mut committing = commit.borrow_mut();
+                    if let Err(error) =
+                        scanout
+                            .borrow_mut()
+                            .drain(device, &mut **committing, &events)
+                    {
+                        warn!(
+                            target: "zgui::platform",
+                            "the frame a display was holding could not be put on the screen, so it \
+                             stays dark until the frame after this one: {error}"
+                        );
+                    }
+                }
             }
 
             // Only the displays the application claimed. A display nothing asked for is left out of
@@ -750,7 +773,7 @@ fn resume(
 ///
 /// The half of a resume that needs the card. The session that had the screen set its own mode on
 /// every CRTC and put its own image on every plane, so neither is carried across: the mode is set
-/// again with the buffer this display last presented, and the cursor is written rather than moved.
+/// again with the newest frame this display drew, and the cursor is written rather than moved.
 ///
 /// A refusal is reported and the display carries on. Every one of them is repaired by the frame the
 /// resume asked for, one refresh later.

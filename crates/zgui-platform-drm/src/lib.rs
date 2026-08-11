@@ -93,6 +93,13 @@
 //! buffer back from the display engine before it is drawn into, one gives it over afterwards — and
 //! then the flip follows. `import` makes the images and records the barriers.
 //!
+//! **What the third buffer is for.** One image is on the screen and one is in the flip, which
+//! leaves one to draw into — so a frame asked for while a flip is on its way starts at once. The
+//! kernel takes one page flip per CRTC, so a frame that finishes inside that window is held and
+//! committed by the completion, with its own fence and in its own buffer. `scanout::rotation` holds
+//! that decision, and it is written apart from the card so that it can be asserted with no
+//! hardware.
+//!
 //! **Nothing on that path waits for the graphics device on this thread.** The barrier that gives a
 //! frame over signals a semaphore exported as a sync file, and the flip carries that descriptor as
 //! the plane's `IN_FENCE_FD`, so the kernel holds the frame back until the device has finished it.

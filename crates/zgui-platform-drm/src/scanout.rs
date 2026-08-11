@@ -2,8 +2,19 @@
 //!
 //! A display scans out of one buffer while the next frame is written into another, and a flip
 //! swaps which is which at the vertical blank. [`Scanout`] owns that rotation for one output: the
-//! buffers, the framebuffers the kernel knows them by, which one is off screen, whether a flip is
-//! still on its way, and whether the mode has been set at all.
+//! buffers, the framebuffers the kernel knows them by, what each buffer is doing, and whether the
+//! mode has been set at all.
+//!
+//! # Which buffer a frame goes into
+//!
+//! `rotation` holds that decision, and it holds it apart from the card so that it can be asserted
+//! with no hardware. What is left here is the driving: the barriers, the copy, the commit and the
+//! fence.
+//!
+//! One thing follows from it that reaches every caller. A frame that finishes while a flip is still
+//! on its way is **held** — the kernel takes one page flip per CRTC — and it goes to the driver
+//! when the completion arrives, in its own buffer and with its own fence. [`Scanout::drain`] is
+//! where that happens, and it commits for that reason.
 //!
 //! # Two shapes
 //!
@@ -20,11 +31,11 @@
 //! carries a sync file for that second barrier where the display can be given one, so the kernel
 //! waits for the graphics device and the frame loop's own thread waits for nothing.
 //!
-//! An enum holds the two rather than a trait, for three reasons. There are exactly two and both
-//! live here, so nothing outside adds a third. [`Scanout::release`] takes itself by value, which a
-//! trait object states only through `Box<Self>`. And the two are presented to differently — one
-//! takes the pixels of a frame and the other takes none, because the frame is already in the
-//! buffer — so there is no one method for a trait to hold.
+//! An enum holds the two, for three reasons. There are exactly two and both live here, so nothing
+//! outside adds a third. [`Scanout::release`] takes itself by value, which a trait object states
+//! only through `Box<Self>`. And the two are presented to differently — one takes the pixels of a
+//! frame and the other takes none, because the frame is already in the buffer — so there is no one
+//! method for a trait to hold.
 //!
 //! # The mode is set by the first present
 //!
@@ -41,8 +52,8 @@
 //!
 //! [`Scanout::restore`] is the other place a mode is set. A person who switches terminal gives the
 //! CRTC to another session, which sets its own mode on it, so this one has to set its own again on
-//! the way back. The buffers are this process's own and still hold the frame that was on the
-//! screen, so the picture returns at that commit rather than at the frame after it.
+//! the way back. The buffers are this process's own and still hold the frame that was on the screen,
+//! so the picture returns at that commit rather than at the frame after it.
 //!
 //! # The pointer decides the shape
 //!
@@ -55,8 +66,10 @@
 //! because this is where it is read: a renderer drawing for this backend composes into it, and the
 //! fourcc the buffers are registered under comes from it.
 
+pub(crate) mod rotation;
+
 use std::fmt;
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::{AsFd, OwnedFd};
 
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
@@ -71,20 +84,28 @@ use zgui_render_wgpu::{Gpu, Pixels, wgpu};
 use crate::cursor::Cursor;
 use crate::import::{Handover, Imported, Plane, Unsupported};
 use crate::output::{Output, backend};
+use crate::scanout::rotation::{Ready, Rotation};
 
 /// How many buffers the copied shape drives a display from.
 ///
-/// Two: one on the screen while the other is written. One would tear, and a third would add
-/// latency this shape has no use for — the frame is composed into the renderer's own target and
-/// copied in afterwards, so a frame that arrives while a flip is outstanding is declined having
-/// cost nothing but the copy it never made.
+/// Two: one on the screen while the other is written. One would tear.
+///
+/// With two, a flip on its way leaves no buffer free, so a frame that arrives inside that window is
+/// declined before the copy is made. That falls out of the same rule that holds a frame on three
+/// buffers: there is one fewer buffer for the rule to reach. A third buffer would give this shape
+/// the latency the imported one has, for eight megabytes and a whole-frame copy the display may
+/// never read.
 const COPIED: usize = 2;
 
 /// How many buffers the imported shape drives a display from.
 ///
-/// Three. Here the renderer draws **into** the scanout buffer, so the buffer it is given has to be
-/// neither the one on the screen nor the one an outstanding flip names, and the rotation keeps one
-/// free.
+/// Three, and the third one is needed rather than spare. Here the renderer draws **into** the
+/// scanout buffer, so the buffer it is given has to be neither the one on the screen nor the one an
+/// outstanding flip names. With two buffers those are both of them, and a display would draw
+/// nothing for as long as a flip was on its way.
+///
+/// So a frame here starts as soon as it is asked for, and waits for the vertical blank only to be
+/// committed. `rotation` is where that is worked out.
 const IMPORTED: usize = 3;
 
 /// How many bytes one pixel takes, in the readback and in the buffer alike.
@@ -135,21 +156,13 @@ pub struct Scanout {
     mode: Mode,
     /// The buffers, in one of the two shapes.
     buffers: Buffers,
-    /// Which buffer is off the screen, and therefore the one a frame goes into.
-    back: usize,
-    /// Whether a flip was asked for and has not yet reported back.
+    /// What each buffer is doing, and therefore which one a frame goes into.
     ///
-    /// While this holds, the buffer at `back` is the one still on the screen, so writing into it
-    /// would tear.
-    flipping: bool,
+    /// It also holds the frame that is waiting for an outstanding flip, and the fence that frame is
+    /// committed with. `rotation` is where every decision it takes is set out.
+    rotation: Rotation<OwnedFd>,
     /// Whether the mode has been set. The first present sets it.
     lit: bool,
-    /// The framebuffer that was last put on the screen, once one has been.
-    ///
-    /// What [`Scanout::restore`] puts back. The buffer behind it is this process's own GEM object
-    /// and holds the frame that was on the screen when another session took it, so a display comes
-    /// back with its picture at the commit rather than at the frame after it.
-    shown: Option<Framebuffer>,
 }
 
 /// The buffers a display is driven from, in one of the two shapes.
@@ -406,8 +419,13 @@ impl Scanout {
     /// together stops a caller doing one and forgetting the other. `WgpuRenderer::present_into` is
     /// where the answer goes.
     ///
-    /// Answers nothing while a flip is on its way, so a frame is held back before it is drawn
-    /// rather than declined after. Nothing is taken back in that case.
+    /// A flip on its way leaves a buffer free here, and that is what three buffers are for: one is
+    /// on the screen, one is in the flip, and this answers the third. So a frame that arrives while
+    /// a flip is outstanding is drawn at once rather than waiting for the vertical blank to begin.
+    ///
+    /// Answers nothing when every buffer is the display's, which is the buffer on the screen, the
+    /// buffer the outstanding flip names, and a buffer holding a finished frame that waits for that
+    /// flip. Nothing is taken back in that case, so nothing is owed back.
     ///
     /// Answers nothing on the copied shape as well. There a frame is composed into the renderer's
     /// own target, so this would name a buffer no caller draws into.
@@ -417,17 +435,16 @@ impl Scanout {
     /// Returns [`PlatformError::Backend`] when the graphics device refuses or does not finish the
     /// barrier that takes the buffer back.
     pub fn acquire(&mut self) -> Result<Option<usize>, PlatformError> {
-        let back = self.back;
         let Buffers::Imported { handover, .. } = &mut self.buffers else {
             return Ok(None);
         };
-        if self.flipping {
+        let Some(slot) = self.rotation.drawing() else {
             return Ok(None);
-        }
+        };
         handover
-            .acquire(back)
+            .acquire(slot)
             .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
-        Ok(Some(back))
+        Ok(Some(slot))
     }
 
     /// Copies `pixels` into the back buffer, draws `cursor` over it, and shows it.
@@ -435,9 +452,10 @@ impl Scanout {
     /// The copied shape only. An imported display is presented to with
     /// [`Scanout::present_drawn`], because there the frame is already in the buffer.
     ///
-    /// Answers `false` when a flip is still on its way. The back buffer is the one still on the
-    /// screen until the completion arrives, so writing into it would tear, and the caller's frame
-    /// is declined rather than shown torn. [`Scanout::drain`] clears that.
+    /// Answers `false` when no buffer is free, which on two buffers is a flip still on its way:
+    /// one buffer is on the screen and the other is in the flip, so writing into either would tear
+    /// and the caller's frame is declined rather than shown torn. [`Scanout::drain`] frees one
+    /// again.
     ///
     /// `cursor` draws nothing where the display has a plane to put a pointer on, so passing it
     /// always keeps the decision in one place. It is drawn after the frame and before the flip,
@@ -459,24 +477,19 @@ impl Scanout {
         pixels: &Pixels,
         cursor: &Cursor,
     ) -> Result<bool, PlatformError> {
-        let back = self.back;
-        let Buffers::Copied {
-            buffers,
-            framebuffers,
-        } = &mut self.buffers
-        else {
+        let Buffers::Copied { buffers, .. } = &mut self.buffers else {
             return Err(PlatformError::Backend(
                 "this display is driven from buffers the renderer draws into, so a frame reaches \
                  it through Scanout::present_drawn rather than through a copy"
                     .to_owned(),
             ));
         };
-        if self.flipping {
+        let Some(slot) = self.rotation.drawing() else {
             return Ok(false);
-        }
+        };
 
-        let width = buffers[back].width();
-        let height = buffers[back].height();
+        let width = buffers[slot].width();
+        let height = buffers[slot].height();
         let size = pixels.size();
         if u32::try_from(size.width) != Ok(width) || u32::try_from(size.height) != Ok(height) {
             return Err(PlatformError::Backend(format!(
@@ -486,9 +499,9 @@ impl Scanout {
         }
 
         // The driver rounds a row up, so the two strides differ and each side steps by its own.
-        let destination_stride = buffers[back].stride() as usize;
+        let destination_stride = buffers[slot].stride() as usize;
         let source_stride = width as usize * BYTES_PER_PIXEL;
-        let bytes = buffers[back].bytes(device).map_err(backend)?;
+        let bytes = buffers[slot].bytes(device).map_err(backend)?;
         blit(
             pixels.bytes(),
             source_stride,
@@ -498,10 +511,14 @@ impl Scanout {
         );
         cursor.draw(bytes, destination_stride, width, height);
 
-        let framebuffer = framebuffers[back];
         // No fence: the processor wrote the picture into this buffer, so it is already there.
-        self.show(device, commit, framebuffer, None)?;
-        self.back = (back + 1) % COPIED;
+        let Some(ready) = self.rotation.finished(slot, None) else {
+            // Two buffers reach this on none of their paths: a held frame, the buffer on the screen
+            // and the buffer in the flip are three. A shape with more would hold the frame here and
+            // `Scanout::drain` would put it up, which is why nothing is refused.
+            return Ok(true);
+        };
+        self.show(device, commit, ready)?;
         Ok(true)
     }
 
@@ -522,8 +539,14 @@ impl Scanout {
     /// `IN_FENCE_FD` property, a graphics driver that exports no sync file — this blocks until the
     /// barrier has run and then commits, which is the only other place the wait can happen.
     ///
-    /// Answers `false` when a flip is still on its way, which is the same answer
-    /// [`Scanout::acquire`] gave before the frame was drawn. Nothing is submitted in that case.
+    /// **A frame that finishes while a flip is on its way is held rather than declined.** The
+    /// kernel takes one page flip per CRTC, so it cannot be committed yet; it goes to the driver
+    /// when the completion arrives, in the buffer it was drawn into and with the fence its own
+    /// drawing signals. [`Scanout::drain`] puts it up. Either way this answers `true`: the frame's
+    /// work is done and it reaches the screen.
+    ///
+    /// Answers `false` for a display no frame was drawn on, which is one whose
+    /// [`Scanout::acquire`] answered nothing. Nothing is submitted in that case.
     ///
     /// The pointer is not drawn: an imported display has one on a plane, and [`Scanout::imported`]
     /// refuses a display without one.
@@ -538,49 +561,60 @@ impl Scanout {
         device: &Device,
         commit: &mut dyn Commit,
     ) -> Result<bool, PlatformError> {
-        let back = self.back;
-        let Buffers::Imported {
-            handover,
-            framebuffers,
-            ..
-        } = &mut self.buffers
-        else {
+        let Buffers::Imported { handover, .. } = &mut self.buffers else {
             return Err(PlatformError::Backend(
                 "this display is driven from buffers the processor writes, so a frame reaches it \
                  through Scanout::present rather than by being drawn into it"
                     .to_owned(),
             ));
         };
-        if self.flipping {
+        let Some(slot) = self.rotation.drawn() else {
             return Ok(false);
-        }
+        };
 
         let fence = handover
-            .release(back)
+            .release(slot)
             .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
 
-        let framebuffer = framebuffers[back];
-        // The descriptor is this program's own for the whole of the commit and closes at the end
-        // of this call, whatever the kernel answered. `Commit::flip` states why: the kernel reads
-        // the fence out of the sync file and gives the file back, so a caller that expected it to
-        // be taken leaks one per frame — and a refused frame is exactly as often as a shown one on
-        // a machine that is not DRM master.
-        let shown = self.show(device, commit, framebuffer, fence.as_ref().map(AsFd::as_fd));
-        drop(fence);
-        shown?;
-        self.back = (back + 1) % IMPORTED;
+        let Some(ready) = self.rotation.finished(slot, fence) else {
+            return Ok(true);
+        };
+        self.show(device, commit, ready)?;
         Ok(true)
     }
 
-    /// Clears the outstanding flip when `events` says this display's flip finished.
+    /// Reads this display's completion out of `events`, and shows the frame that waited for it.
     ///
     /// The loop reads the device once and hands every scanout the same slice, because one read
     /// carries the completions of every CRTC that finished. An event naming another CRTC is
     /// another display's, and this leaves it alone.
-    pub fn drain(&mut self, events: &[Event]) {
-        if completed(events, self.pipe.crtc) {
-            self.flipping = false;
+    ///
+    /// The buffer the flip named is the one the display reads from now, and the buffer it was
+    /// reading is free. **A frame held while that flip was on its way is committed here**, with its
+    /// own fence, and this is the only place it can be: the kernel takes one page flip per CRTC, so
+    /// the next one becomes legal when the completion arrives.
+    ///
+    /// So this takes the device the display is on and the commit every flip on that device goes
+    /// through. A caller with neither has nothing this can do.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the driver refuses the held frame's flip. The buffer
+    /// is left where the next frame draws over it, so a display recovers at the frame after this
+    /// one.
+    pub fn drain(
+        &mut self,
+        device: &Device,
+        commit: &mut dyn Commit,
+        events: &[Event],
+    ) -> Result<(), PlatformError> {
+        if !completed(events, self.pipe.crtc) {
+            return Ok(());
         }
+        let Some(ready) = self.rotation.completed() else {
+            return Ok(());
+        };
+        self.show(device, commit, ready)
     }
 
     /// Gives the framebuffers and the buffers back.
@@ -635,49 +669,74 @@ impl Scanout {
 
     /// Creates a scanout for `output` holding `buffers`, with nothing on the screen yet.
     fn new(output: &Output, buffers: Buffers) -> Self {
+        // Nothing is on the screen, so every buffer is free: the first frame goes into the first of
+        // them and the modeset puts that one up.
+        let rotation = Rotation::new(match &buffers {
+            Buffers::Copied { buffers, .. } => buffers.len(),
+            Buffers::Imported { buffers, .. } => buffers.len(),
+        });
         Self {
             pipe: output.pipe,
             mode: output.mode,
             buffers,
-            // Nothing is on the screen, so the first frame goes into the first buffer and the
-            // modeset is what puts that one up.
-            back: 0,
-            flipping: false,
+            rotation,
             lit: false,
-            shown: None,
         }
     }
 
-    /// Puts `framebuffer` on the screen once `fence` signals, setting the mode the first time.
+    /// Returns the framebuffer the kernel knows the buffer at `slot` by.
     ///
-    /// `fence` is a sync file the display engine waits for before it reads the buffer, and both
-    /// halves carry it. The first frame of a display arrives through the modeset, so a fence left
-    /// out there would put the one frame the graphics device had not finished on the screen.
+    /// `slot` is one the rotation answered, so it names a buffer of this display.
+    fn framebuffer(&self, slot: usize) -> Framebuffer {
+        match &self.buffers {
+            Buffers::Copied { framebuffers, .. } => framebuffers[slot],
+            Buffers::Imported { framebuffers, .. } => framebuffers[slot],
+        }
+    }
+
+    /// Puts the frame `ready` names on the screen, setting the mode the first time.
+    ///
+    /// `ready` carries the buffer and the sync file the display engine waits for before it reads
+    /// that buffer, so a frame reaches the driver with its own fence and never with the one of
+    /// whatever flipped last. Both halves carry it: the first frame of a display arrives through
+    /// the modeset, so a fence left out there would put the one frame the graphics device had not
+    /// finished on the screen.
+    ///
+    /// **The descriptor closes here**, on a commit the driver took and on one it refused alike.
+    /// [`Commit::flip`] states why: the kernel reads the fence out of the sync file and gives the
+    /// file back, so a caller that expected it to be taken leaks one per frame — and a refused
+    /// frame is exactly as often as a shown one on a machine that is not DRM master.
     ///
     /// A modeset carries no completion event — the call returning says the frame is up — so
     /// nothing is left outstanding by the first one and the second present is taken at once. A flip
-    /// is the other way round, and `flipping` holds the next frame off until the device reports it.
+    /// is the other way round, and the rotation holds the next frame off until the device reports
+    /// it.
     fn show(
         &mut self,
         device: &Device,
         commit: &mut dyn Commit,
-        framebuffer: Framebuffer,
-        fence: Option<BorrowedFd<'_>>,
+        ready: Ready<OwnedFd>,
     ) -> Result<(), PlatformError> {
-        if self.lit {
-            commit
-                .flip(device, self.pipe, framebuffer, fence)
-                .map_err(backend)?;
-            self.flipping = true;
+        let slot = ready.slot;
+        let framebuffer = self.framebuffer(slot);
+        let fence = ready.fence.as_ref().map(AsFd::as_fd);
+        let flipping = self.lit;
+        let taken = if flipping {
+            commit.flip(device, self.pipe, framebuffer, fence)
         } else {
-            commit
-                .modeset(device, self.pipe, &self.mode, framebuffer, fence)
-                .map_err(backend)?;
+            commit.modeset(device, self.pipe, &self.mode, framebuffer, fence)
+        };
+        drop(ready.fence);
+        taken.map_err(backend)?;
+
+        // After the commit, so that what the rotation records is a frame the driver took. A refusal
+        // leaves the buffer where the next frame draws over it.
+        if flipping {
+            self.rotation.flipped(slot);
+        } else {
             self.lit = true;
+            self.rotation.shown(slot);
         }
-        // After the commit, so that what this names is a framebuffer the driver took. A refusal
-        // leaves the record naming whatever really is on the screen.
-        self.shown = Some(framebuffer);
         Ok(())
     }
 
@@ -691,6 +750,10 @@ impl Scanout {
     /// Answers whether anything was put back. A display that never presented has nothing: nothing
     /// is committed for it, and the first present after this sets the mode with the buffer it would
     /// have used at start-up. That is a run started on a terminal nobody was looking at.
+    ///
+    /// **A frame that was held goes up rather than the last one committed**, with its own fence. It
+    /// is the newest picture this program drew and its buffer still holds it, so putting the one
+    /// before it up would show a picture this program has already replaced.
     ///
     /// **Any flip from before is forgotten.** Its completion is not coming — the frame it named was
     /// on a CRTC another session then took — and a display that kept waiting for one would decline
@@ -706,13 +769,12 @@ impl Scanout {
         device: &Device,
         commit: &mut dyn Commit,
     ) -> Result<bool, PlatformError> {
-        let Some(framebuffer) = self.shown else {
+        let Some(ready) = self.rotation.restores() else {
             return Ok(false);
         };
-        self.flipping = false;
         self.lit = false;
 
-        self.show(device, commit, framebuffer, None)?;
+        self.show(device, commit, ready)?;
         Ok(true)
     }
 }

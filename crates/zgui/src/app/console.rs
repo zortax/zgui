@@ -194,7 +194,11 @@ trait Bracket {
     /// Takes the buffer the next frame goes into back from the display engine, and names it.
     fn acquire(&self) -> Result<Option<usize>, PlatformError>;
 
-    /// Gives the buffer the frame was drawn into to the display engine, and flips to it.
+    /// Gives the buffer the frame was drawn into to the display engine, and shows it.
+    ///
+    /// A display with a flip still on its way holds the frame and shows it when the completion
+    /// arrives, because the kernel takes one page flip per CRTC. Either way the frame reaches the
+    /// screen, which `true` says.
     fn present_drawn(&self) -> Result<bool, PlatformError>;
 }
 
@@ -218,24 +222,31 @@ impl Bracket for DrmDisplay {
 ///
 /// A frame with no free buffer takes nothing back, so it owes nothing back. It is
 /// [`SkipReason::Unacquired`], the answer that keeps the damage it was going to draw: the frame is
-/// held off in front of the work rather than composed and then dropped, so the next one has to
-/// draw everything this one would have.
+/// held off in front of the work rather than composed and then dropped, so the next one has to draw
+/// everything this one would have.
 ///
-/// A buffer that *was* taken back and drawn into nothing is left where it is. Nothing is given
-/// over and nothing is committed, so the display keeps showing the frame it already has, and the
-/// acquire before the next frame names the same buffer and finds it on this side of the handover
-/// already. That covers a slot the renderer would not take, a set that no longer matches the
-/// target, a device that could not be rebuilt, and a frame that damaged nothing.
+/// A display with three buffers has one free while a flip is on its way, so it answers this frame
+/// rather than making it wait for the vertical blank. What is left is the frame that arrives while
+/// a *finished* frame is already waiting for that flip: there the display holds one frame, and this
+/// one keeps its damage and asks again.
+///
+/// A buffer that *was* taken back and drawn into nothing is left where it is. Nothing is given over
+/// and nothing is committed, so the display keeps showing the frame it already has, and the acquire
+/// before the next frame names the same buffer and finds it on this side of the handover already.
+/// That covers a slot the renderer would not take, a set that no longer matches the target, a
+/// device that could not be rebuilt, and a frame that damaged nothing.
 fn drawn_into_scanout(
     display: &dyn Bracket,
     compose: impl FnOnce(usize) -> FrameOutcome,
 ) -> FrameOutcome {
     let slot = match display.acquire() {
         Ok(Some(slot)) => slot,
-        // Every buffer is either on the screen or named by a flip still on its way. Nothing was
-        // taken back, so nothing is owed back, and the frame is held off before any work is done
-        // rather than composed and then dropped. The contract asks again one refresh later, by
-        // which time the flip has completed, and carries this frame's damage there.
+        // Every buffer is the display's: one on the screen, one named by the flip still on its
+        // way, and one holding a finished frame waiting for that flip. Nothing was taken back, so
+        // nothing is owed back, and the frame is held off before any work is done rather than
+        // composed and then dropped. The contract asks again one refresh later, by which time the
+        // completion has committed the frame that was waiting and freed a buffer, and it carries
+        // this frame's damage there.
         Ok(None) => return FrameOutcome::Skipped(SkipReason::Unacquired),
         Err(error) => {
             warn!("the buffer a frame would be drawn into could not be taken back: {error}");
@@ -253,10 +264,13 @@ fn drawn_into_scanout(
     }
 
     match display.present_drawn() {
+        // The frame reached the display engine. It goes on the screen at the next vertical blank,
+        // either as the flip this asked for or as the frame the outstanding flip's completion
+        // commits — which is the display's business rather than this frame's.
         Ok(true) => drawn,
-        // The acquire above answered, so the buffer was free when the frame started. A flip that
-        // arrived in between is the display declining it, and the contract paces the next attempt
-        // at one refresh interval.
+        // The acquire above answered, so the display had a buffer for this frame. Answering that it
+        // has none now is a display that lost track of it in between, and the contract paces the
+        // next attempt at one refresh interval.
         Ok(false) => FrameOutcome::Skipped(SkipReason::Timeout),
         Err(error) => {
             warn!("a frame could not be given to its display: {error}");
