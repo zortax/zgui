@@ -102,7 +102,7 @@ use rustix::fd::{AsFd, BorrowedFd};
 use tracing::{info, warn};
 use zgui_evdev::{Absolute, Batch, Capabilities, Device, EventType, Key, Synchronisation, Watch};
 use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
-use zgui_vocab::{KeyState, Modifiers, PointerAction, Timestamp};
+use zgui_vocab::{KeyState, Modifiers, PointerAction, ScrollDelta, Timestamp};
 
 use crate::cursor::Planes;
 use crate::input::keyboard;
@@ -1584,6 +1584,29 @@ fn pointed(
 ) -> Vec<Report> {
     let motion = pointer::batch(points.axes, &mut points.down, batch);
     let turned = wheel::delta(batch, points.wheel);
+    moved(
+        &motion,
+        turned,
+        stamps.at(batch.at),
+        modifiers,
+        pointer,
+        screens,
+    )
+}
+
+/// Translates an update that has already been read, and moves the pointer with it.
+///
+/// [`pointed`] is this over one batch of the kernel's own stream. A source that reports a movement
+/// already accelerated and a scroll already in its own unit calls this instead: what a pointer does
+/// with an update is the same question however the update was read, and it is answered once.
+fn moved(
+    motion: &pointer::Motion,
+    turned: Option<ScrollDelta>,
+    timestamp: Timestamp,
+    modifiers: Modifiers,
+    pointer: &mut Pointer,
+    screens: &[Screen],
+) -> Vec<Report> {
     if motion.is_empty() && turned.is_none() {
         return Vec::new();
     }
@@ -1600,9 +1623,8 @@ fn pointed(
         return Vec::new();
     };
 
-    let timestamp = stamps.at(batch.at);
     let mut reports = Vec::new();
-    let moved = |action, button, surface, at| {
+    let report = |action, button, surface, at| {
         Report::on(
             surface,
             SurfaceEvent::Pointer {
@@ -1615,16 +1637,18 @@ fn pointed(
     };
     match before {
         Some((left, was)) if left != surface => {
-            reports.push(moved(PointerAction::Left, None, left, was));
-            reports.push(moved(PointerAction::Entered, None, surface, at));
+            reports.push(report(PointerAction::Left, None, left, was));
+            reports.push(report(PointerAction::Entered, None, surface, at));
         }
-        Some((_, was)) if was != at => reports.push(moved(PointerAction::Moved, None, surface, at)),
+        Some((_, was)) if was != at => {
+            reports.push(report(PointerAction::Moved, None, surface, at));
+        }
         // The pointer stayed where it was. A button or a wheel turn in this batch is still
         // reported below, at the place the pointer is.
         _ => {}
     }
-    for (button, action) in motion.buttons {
-        reports.push(moved(action, Some(button), surface, at));
+    for (button, action) in &motion.buttons {
+        reports.push(report(*action, Some(*button), surface, at));
     }
     if let Some(delta) = turned {
         reports.push(Report::on(
