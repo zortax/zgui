@@ -496,6 +496,27 @@ enum Plan {
     Set(CursorStyle, i32, i32),
 }
 
+/// What this cursor last asked the screen for.
+///
+/// Three states rather than two, because "nothing is up there" and "what is up there is another
+/// program's" ask for different things. A plane holding nothing and wanting nothing is finished; a
+/// plane another session has had and wants nothing has to be cleared, or that session's pointer
+/// stays on this display for as long as the program runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// Nothing has been asked for, so no image of this program's is up.
+    ///
+    /// Which is where a cursor starts, and where a hide leaves it.
+    Nothing,
+    /// This style, at this corner, was asked for.
+    For(CursorStyle, (i32, i32)),
+    /// Another session has had the screen, so what is up is unknown.
+    ///
+    /// [`Cursor::forget_the_plane`] puts a cursor here, and everything is asked for again from it:
+    /// an image where one is wanted, and a hide where none is.
+    Unknown,
+}
+
 /// The cursor on one display.
 ///
 /// Both halves of this backend read it. The frame loop decides what it looks like and where it is;
@@ -518,13 +539,13 @@ pub struct Cursor {
     style: CursorStyle,
     /// Where the pointer is on this display, in device pixels, while it is on this one.
     at: Option<(i32, i32)>,
-    /// The style and corner this cursor was last *asked* to take, so that nothing is asked twice.
+    /// What this cursor was last *asked* to take, so that nothing is asked twice.
     ///
     /// Asked rather than shown, and the two differ on one of the two paths. A commit blocks until
     /// the kernel has applied it, so on a plane this is what is on the screen. On the fallback it
     /// is a frame that was requested and may not arrive: [`Cursor::asked_for`] says which of the
     /// two ways that happens repairs itself.
-    asked: Option<(CursorStyle, (i32, i32))>,
+    asked: Asked,
 }
 
 impl Cursor {
@@ -579,7 +600,7 @@ impl Cursor {
             image: Image::of(CursorStyle::default()),
             style: CursorStyle::default(),
             at: None,
-            asked: None,
+            asked: Asked::Nothing,
         }
     }
 
@@ -606,8 +627,16 @@ impl Cursor {
     }
 
     /// Returns `true` if what was last asked for is no longer what this cursor is.
+    ///
+    /// A cursor that has forgotten the plane has always changed, whatever it wants. What is up
+    /// there belongs to another program, so even a display the pointer is on no part of has
+    /// something to do about it.
     pub fn changed(&self) -> bool {
-        self.wanted() != self.asked
+        match self.asked {
+            Asked::Unknown => true,
+            Asked::Nothing => self.wanted().is_some(),
+            Asked::For(style, at) => self.wanted() != Some((style, at)),
+        }
     }
 
     /// Records that what this cursor is has been asked for.
@@ -629,7 +658,9 @@ impl Cursor {
     ///   one motion behind until anything else moves it — while every click still lands where the
     ///   pointer really is, because the position an event carries is never this record.
     pub fn asked_for(&mut self) {
-        self.asked = self.wanted();
+        self.asked = self
+            .wanted()
+            .map_or(Asked::Nothing, |(style, at)| Asked::For(style, at));
     }
 
     /// Forgets what the plane is holding, because another session has had it.
@@ -640,10 +671,16 @@ impl Cursor {
     /// keeps whatever image the plane already holds, and the pointer would come back as another
     /// program's shape or as nothing at all.
     ///
+    /// **A display the pointer is on no part of is the half that costs a screen.** Such a cursor
+    /// wants nothing, so a record cleared to "nothing is up there" would plan nothing and the image
+    /// the other session left would stay on the plane for the rest of the run — a second pointer,
+    /// on a display this program never draws one on. So the record says *unknown* instead, and a
+    /// display that wants no cursor asks for the plane to be cleared.
+    ///
     /// A display on the fallback is covered by the same call: the record there is a frame that was
     /// asked for, and the frame that carried the pointer is one another session drew over.
     pub fn forget_the_plane(&mut self) {
-        self.asked = None;
+        self.asked = Asked::Unknown;
     }
 
     /// Returns what putting this cursor on its plane would take, or nothing where it would take
@@ -657,6 +694,10 @@ impl Cursor {
     ///
     /// Keyed on the style rather than on the picture. Two styles that fall back to the same shape
     /// therefore cost one image commit where a move would have done, which is the safe direction.
+    ///
+    /// A cursor that has forgotten its plane plans an image where one is wanted and a
+    /// [`Plan::Hide`] where none is. See [`Cursor::forget_the_plane`] for what the second one is
+    /// worth.
     fn plan(&self) -> Option<Plan> {
         if !self.changed() {
             return None;
@@ -664,7 +705,7 @@ impl Cursor {
         let Some((style, (x, y))) = self.wanted() else {
             return Some(Plan::Hide);
         };
-        if self.asked.is_some_and(|(was, _)| was == style) {
+        if matches!(self.asked, Asked::For(was, _) if was == style) {
             Some(Plan::Move(x, y))
         } else {
             Some(Plan::Set(style, x, y))
@@ -714,7 +755,7 @@ impl Cursor {
             // into every later frame are two pointers on one screen. The plane may hold nothing —
             // a refused `set_cursor` puts nothing there — and hiding nothing is not an error.
             drop(commit.hide_cursor(device, self.plane));
-            self.asked = None;
+            self.asked = Asked::Nothing;
             return Err(error);
         }
         self.asked_for();
@@ -885,7 +926,7 @@ mod tests {
     //! needs a device, a plane or DRM master.
 
     use super::{
-        BYTES_PER_PIXEL, Cursor, Image, Plan, Shape, Turn, drawn, legible, reserved, turned,
+        Asked, BYTES_PER_PIXEL, Cursor, Image, Plan, Shape, Turn, drawn, legible, reserved, turned,
     };
     use zgui_drm::cursor::CursorPlane;
     use zgui_drm::{Device, commit};
@@ -907,7 +948,7 @@ mod tests {
             image: Image::of(style),
             style,
             at: None,
-            asked: None,
+            asked: Asked::Nothing,
         }
     }
 
@@ -1371,6 +1412,61 @@ mod tests {
         );
         cursor.asked_for();
         assert_eq!(cursor.plan(), None, "then there is nothing left to do");
+    }
+
+    #[test]
+    fn a_plane_another_session_has_had_is_written_again_rather_than_moved() {
+        // What a resume does before it commits. The record says the arrow is already up there at
+        // this very corner, and it is worth nothing: the session that owned the screen in between
+        // put its own image on the plane. A cursor that kept the record would plan a move, which
+        // keeps whatever the plane holds, and this program's pointer would come back as another
+        // program's shape — with every ioctl reporting success.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(Some((10, 10)));
+        cursor.asked_for();
+        assert_eq!(cursor.plan(), None, "this cursor believes it is already up");
+
+        cursor.forget_the_plane();
+
+        assert_eq!(
+            cursor.plan(),
+            Some(Plan::Set(CursorStyle::Default, 9, 9)),
+            "so the image goes on the plane again, at the corner it was already at"
+        );
+    }
+
+    #[test]
+    fn a_plane_another_session_has_had_is_cleared_where_no_pointer_is_wanted() {
+        // A display the pointer is on no part of wants no cursor, so a record cleared to "nothing
+        // is up there" plans nothing — and the image the other session left stays on the plane for
+        // the rest of the run. That is a second pointer, sitting still, on a display this program
+        // never draws one on.
+        //
+        // The same shape covers a display whose pointer has not been placed yet, which is every
+        // display of a run that started on a terminal nobody was looking at.
+        let mut cursor = fallback(CursorStyle::Default);
+        cursor.hardware = true;
+        cursor.place(None);
+        assert_eq!(
+            cursor.plan(),
+            None,
+            "a display with no pointer on it asks for nothing in the ordinary course"
+        );
+
+        cursor.forget_the_plane();
+
+        assert_eq!(
+            cursor.plan(),
+            Some(Plan::Hide),
+            "and after another session has had the plane, clearing it is what is left to do"
+        );
+        cursor.asked_for();
+        assert_eq!(
+            cursor.plan(),
+            None,
+            "once, so the loop asks the driver for nothing every turn afterwards"
+        );
     }
 
     #[test]

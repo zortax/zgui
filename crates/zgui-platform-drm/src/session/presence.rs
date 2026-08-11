@@ -9,7 +9,8 @@
 //!
 //! One turn can carry any number of changes, because a person can switch terminal twice while a
 //! loop is inside one wait. What matters is where the queue leaves the session, and whether the
-//! devices moved on the way — so a pair inside one turn is one thing to do rather than two.
+//! devices moved on the way. **A switch away and a switch back can both be read in one turn**, and
+//! that pair is one thing to do.
 //!
 //! Four rules cover every queue, and each one is a way a loop that folded the queue naively would
 //! be wrong:
@@ -17,7 +18,8 @@
 //! * **Two enables in a row are one resume.** Reopening the input devices twice would leave the
 //!   daemon holding a record this run has no way to give back.
 //! * **A disable and an enable inside one turn are one resume.** There is no window between them:
-//!   by the time the loop reads either, the terminal has already moved twice.
+//!   by the time the loop reads either, the terminal has already moved twice. The seat still holds
+//!   every device on that path, and the kernel has revoked all of them.
 //! * **An enable while the session is already active is nothing at all.** A resume there would
 //!   close every input device to open it again, and put a mode back that is already up.
 //! * **A disable while the session is already inactive is nothing.** There is nothing left to give
@@ -43,6 +45,18 @@ pub(crate) enum Transition {
     /// surfaces are told they are visible. Nothing is carried across the switch: `EVIOCREVOKE`
     /// cannot be undone, so an evdev descriptor from before the suspend stays dead, and another
     /// session has set its own mode on every CRTC.
+    ///
+    /// # What the seat holds on each of the two turns
+    ///
+    /// A turn that reads an enable after a suspend holds no input device: the suspend gave every
+    /// one of them back. A turn that reads a disable and an enable together still holds all of
+    /// them, each revoked, because there was no turn in between to give them back in.
+    ///
+    /// One variant covers both, because the loop's answer is the same: give back whatever is held
+    /// and then open every device again. A give-back over an empty list asks the daemon for
+    /// nothing, and a device still held here is a revoked descriptor, so the give-back is right on
+    /// both turns. Two variants would put that choice back in a caller, which is where it was
+    /// wrong.
     Resume,
 }
 
@@ -94,7 +108,8 @@ impl Presence {
             (true, false) => Some(Transition::Suspend),
             (false, true) => Some(Transition::Resume),
             // The devices went and came back inside one turn. Nothing was given back and nothing
-            // was told, so the way to hold them again is the resume, once.
+            // was told, so what puts this session back is the resume, once — and it runs with
+            // every device still held and every one of them revoked.
             (true, true) => changes
                 .contains(&Change::Disabled)
                 .then_some(Transition::Resume),
@@ -187,7 +202,8 @@ mod tests {
     fn a_disable_and_an_enable_inside_one_turn_are_a_resume() {
         // A person who switched away and back while the loop was inside one wait. There is no
         // window between the two — the devices were gone before the disable could be read — so
-        // what the loop has to do is the second half, once.
+        // what the loop has to do is the resume, once. The seat still holds every device on this
+        // path, which is why a resume gives back before it opens: see `crate::app::resume`.
         let mut presence = Presence::holding();
 
         assert_eq!(
