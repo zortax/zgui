@@ -1,0 +1,19 @@
+[package]
+name = "zgui-libinput"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# Input policy, and nothing about this framework. It names no zgui crate, so it is a library that
+# happens to live here rather than a layer of the product. It is written to be named by
+# `zgui-platform-drm`, one step along the same layer, and by nothing else.
+#
+# The crate compiles on any host. libinput is opened at run time, so nothing here reaches an
+# operating system at build time. What a run finds is a question the machine that runs it answers.
+[dependencies]
+libloading.workspace = true
+
+[lints]
+workspace = true

@@ -125,15 +125,16 @@ const LEDGER: &[(&str, &[&str])] = &[
     // than failing to compile, and no test would find it.
     ("bindgen", &["zgui-drm", "zgui-evdev"]),
     // Resolving symbols out of a shared object at run time. The rule is one crate per library
-    // opened, because a `dlopen` appears in no manifest, in no lock file and on no link line: what
-    // a build needs and what a run needs stop being the same list, and the only record left is the
-    // crate that opens the object. So each library acquired this way has exactly one place that
-    // names its soname and one place that says what a run needs, and a second crate reaching into
-    // a library another crate already opened is a second such place for the same dependency.
-    // Two libraries are opened this way, and both on purpose: libxkbcommon by `zgui-xkb`, because a
-    // console session has to start where neither the library nor its data files exist, and libseat
-    // by `zgui-seat`, because it has to start where no session daemon answers.
-    ("libloading", &["zgui-xkb", "zgui-seat"]),
+    // opened. A `dlopen` appears in no manifest, in no lock file and on no link line, so what a
+    // build needs and what a run needs stop being the same list, and the crate that opens the
+    // object is the only record left. Each library opened this way therefore has exactly one place
+    // that names its soname and one place that states what a run needs, and a second crate reaching
+    // into a library another crate already opened is a second such place for one dependency.
+    // Three libraries are opened this way. `zgui-xkb` opens libxkbcommon, because a console session
+    // has to start where neither the library nor its data files exist. `zgui-seat` opens libseat,
+    // because it has to start where no session daemon answers. `zgui-libinput` opens libinput,
+    // because it has to start where that library is absent and read the devices itself.
+    ("libloading", &["zgui-xkb", "zgui-seat", "zgui-libinput"]),
     (
         "accesskit",
         &[

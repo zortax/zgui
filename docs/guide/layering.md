@@ -1,6 +1,6 @@
 # The layering rules
 
-zgui has fifty-eight crates under `crates/`. Fifty-seven are in the layered product graph. The
+zgui has fifty-nine crates under `crates/`. Fifty-eight are in the layered product graph. The
 unpublished `probe` crate is a compile canary for the pinned external engines and is not in a layer.
 The graph must follow a machine-checked rule. This document gives that rule.
 

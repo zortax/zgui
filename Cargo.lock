@@ -5965,6 +5965,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-libinput"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "zgui-paint"
 version = "0.1.0"
 dependencies = [
