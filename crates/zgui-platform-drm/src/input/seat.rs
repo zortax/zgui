@@ -37,8 +37,9 @@
 //!
 //! A grabbed keyboard is the only place `Ctrl+Alt+F2` reaches, because the daemon turns the console
 //! keyboard off when it grants control. Both layouts read that chord as the terminal it asks for,
-//! so [`Seat::read`] answers the terminal beside the reports and the loop asks the session for it.
-//! The key that asked reaches no surface — [`Keys::batch`] states why.
+//! so [`Seat::read`] answers the terminal beside the reports, and [`Heard::answered`] hands it to
+//! the session. The reports leave through that same call, so a turn that delivered them asked for
+//! the terminal. The key that asked reaches no surface — [`Keys::batch`] states why.
 //!
 //! # One device with two jobs
 //!
@@ -257,20 +258,38 @@ impl Report {
 /// surfaces. The terminal reaches the session, because a key that asks for one is the session's the
 /// way a key that toggles caps lock is the console driver's — and that key produces no report of
 /// its own.
+///
+/// **The reports leave through [`Heard::answered`] and through no other route.** Both halves belong
+/// to the same turn: the session has to be asked while this run still holds its devices, and a
+/// caller that could take the reports on their own could drop the ask and leave a chord that does
+/// nothing anybody can see.
 #[derive(Debug)]
-pub struct Read {
+pub struct Heard {
     /// What people did, for the surfaces each belongs to.
-    pub reports: Vec<Report>,
+    reports: Vec<Report>,
     /// The terminal a key asked for, where a key asked for one.
     ///
     /// The last one asked for, when a read carried more than one. That is what a person asked for
     /// last, and a switch overrides whatever was asked for before it anyway.
-    pub terminal: Option<u32>,
+    terminal: Option<u32>,
+}
+
+impl Heard {
+    /// Asks `session` for the terminal a key asked for, and answers with the reports.
+    ///
+    /// A read where nobody pressed the chord asks for nothing. A session asked every turn would
+    /// switch terminal on its own.
+    pub fn answered(self, session: &mut Session) -> Vec<Report> {
+        if let Some(terminal) = self.terminal {
+            session.switch(terminal);
+        }
+        self.reports
+    }
 }
 
 /// What one batch from one keyboard amounted to.
 ///
-/// [`Read`] over one device's key events, and it is apart from it for the same reason: the events
+/// [`Heard`] over one device's key events, and it is apart from it for the same reason: the events
 /// are the surfaces' and the terminal is the session's.
 #[derive(Debug)]
 pub struct Translated {
@@ -287,6 +306,20 @@ impl Translated {
             events: Vec::new(),
             terminal: None,
         }
+    }
+}
+
+/// Records the terminal a key asked for, where it asked for one.
+///
+/// **The last ask wins.** A person can press two chords inside one turn, and the second is the one
+/// they asked for — a fold that kept the first would send them somewhere they had already left.
+///
+/// An ask of nothing leaves the answer where it is, so a chord followed by a hundred ordinary keys
+/// still answers the chord. The two arguments have different types, so a caller cannot write them
+/// the wrong way round.
+fn ask(answered: &mut Option<u32>, asked: Option<u32>) {
+    if asked.is_some() {
+        *answered = asked;
     }
 }
 
@@ -436,14 +469,71 @@ fn dropped(batch: &Batch) -> bool {
     })
 }
 
+/// What one key event amounted to.
+///
+/// The reading is the layout's answer. Whether it moved is the device's own: a transition it had
+/// already made is one the layout was told nothing about, and the two travel together so that a
+/// caller cannot read one without the other.
+#[derive(Debug)]
+struct Struck {
+    /// What the layout answered for the key.
+    reading: Reading,
+    /// Whether this event moved the key, as this device's own belief says.
+    moved: bool,
+}
+
+/// What one device believes about its own keys.
+///
+/// One of these per keyboard, for the reason [`Keys`] states: a set shared between two of them
+/// repairs one and leaves the other holding a key nothing is on.
+#[derive(Debug, Default)]
+pub struct Down {
+    /// The codes this device has down.
+    keys: BTreeSet<u16>,
+    /// The codes whose press asked for a terminal, so reached no surface.
+    ///
+    /// A key stays here until it comes up, and every transition of it in between reaches no surface
+    /// either. The press decides, because the terminal sits on the level the modifiers select: with
+    /// control let go of first, the release of the same key reads as an ordinary `F1`, and would
+    /// tell an application about half a chord. See [`Keys::key`].
+    swallowed: BTreeSet<u16>,
+}
+
+impl Down {
+    /// Returns `true` if this key's press reached no surface.
+    fn swallows(&self, key: Key) -> bool {
+        self.swallowed.contains(&key.raw())
+    }
+
+    /// Remembers that this key reached no surface, until it comes up.
+    fn swallow(&mut self, key: Key) {
+        self.swallowed.insert(key.raw());
+    }
+
+    /// Records the transition, and returns `true` if this device's belief moved.
+    ///
+    /// A press of a key it already holds moves nothing, and so does a release of one it does not
+    /// hold. A repeat is no transition at all.
+    fn record(&mut self, key: Key, transition: Transition) -> bool {
+        match transition {
+            Transition::Pressed => self.keys.insert(key.raw()),
+            Transition::Released => {
+                self.swallowed.remove(&key.raw());
+                self.keys.remove(&key.raw())
+            }
+            Transition::Repeated => false,
+        }
+    }
+}
+
 /// The layout, what it last reported held, and what a batch of events means.
 ///
-/// The whole translation, and it holds no device, so every part of it can be exercised over bytes
-/// written by hand.
+/// This is the whole translation and it holds no device, which is what lets every part of it be
+/// exercised over bytes written by hand.
 ///
-/// # One set of held keys per device
+/// # Which keys are down belongs to the device rather than to this
 ///
-/// Every method here takes the calling device's own `down` set. One layout serves every keyboard
+/// Every method here takes the calling device's own [`Down`]. One layout serves every keyboard
 /// this seat holds, and libxkbcommon counts a modifier's transitions — so shift held on two
 /// keyboards is two transitions and needs two releases. A set shared between them would hold one
 /// code, repair one, and leave the count stuck at one with nothing holding the key.
@@ -482,7 +572,8 @@ impl Keys {
     /// * **The kernel dropped part of an update.** Its rule is to discard everything up to the next
     ///   `SYN_REPORT` — which [`Keys::batch`] does by answering with nothing — and then to ask the
     ///   device what its state is now.
-    /// * **A device stopped answering.** `held` is then empty, because a device that is gone holds
+    /// * **A device is gone.** Either it answered a read with a failure, or it was given back so
+    ///   that it can be opened again. `held` is then empty, because a device that is gone holds
     ///   nothing. The releases the kernel queued for it are never read, so without this a modifier
     ///   held while it was unplugged stays held for the rest of the process, and every later key
     ///   struck on another keyboard comes out shifted with no way back.
@@ -491,29 +582,43 @@ impl Keys {
     /// seen is recorded down with no reading taken. Neither is a key press, because nobody pressed
     /// anything: what changed is what this process knows, so what comes back is at most a change in
     /// the held set.
-    pub fn resynchronise(
-        &mut self,
-        down: &mut BTreeSet<u16>,
-        held: &BTreeSet<u16>,
-    ) -> Option<SurfaceEvent> {
+    ///
+    /// **A key the repair recorded reaches no surface where it asks for a terminal.** A chord held
+    /// through a terminal switch is held while the devices are opened again, and its release is the
+    /// first thing this process hears about it — so the layout is asked what each recorded key means
+    /// now, and one that asks for a terminal is swallowed the way a press of it would have been.
+    pub fn resynchronise(&mut self, down: &mut Down, held: &BTreeSet<u16>) -> Option<SurfaceEvent> {
         let held: BTreeSet<u16> = held
             .iter()
             .copied()
             .filter(|code| typed(Key::new(*code)))
             .collect();
+        let recorded: Vec<u16> = held.difference(&down.keys).copied().collect();
         if let Some(layout) = self.layout.as_mut() {
-            for code in down.difference(&held) {
+            for code in down.keys.difference(&held) {
                 layout.release(Key::new(*code));
             }
-            for code in held.difference(down) {
+            for code in &recorded {
                 layout.hold(Key::new(*code));
             }
         }
-        *down = held;
+        down.keys = held;
+        // A key that is no longer down is no longer swallowed, whichever way it left.
+        down.swallowed.retain(|code| down.keys.contains(code));
+        // After every hold, because what a key means is read under the modifiers the repair has
+        // just recorded.
+        if let Some(layout) = self.layout.as_ref() {
+            for code in recorded {
+                let key = Key::new(code);
+                if layout.reading(key).terminal.is_some() {
+                    down.swallowed.insert(code);
+                }
+            }
+        }
         self.announce()
     }
 
-    /// What one batch from one device amounts to.
+    /// Translates one batch from one device.
     ///
     /// A batch is one coherent update, and a key event in it is a press, a release or a repeat.
     /// Everything else the batch carries — a relative axis, a scan code, a button — belongs to work
@@ -523,22 +628,12 @@ impl Keys {
     /// seat because the choice does: a driver may refuse the monotonic clock for one device and
     /// accept it for the next.
     ///
-    /// # A key that asks for a terminal reaches no surface
+    /// A batch that carries a `SYN_DROPPED` is answered with nothing. The caller then asks the
+    /// device what it holds now, and [`Keys::resynchronise`] is the repair.
     ///
-    /// The layout is what says a key asks for one, and both layouts already do — `Ctrl+Alt+F1` is
-    /// its own keysym under libxkbcommon and a `KT_CONS` entry in a console keymap, so it has never
-    /// produced `F1`. Such a key is answered here as the terminal and as no event: it belongs to
-    /// the session, the way a key that toggles caps lock belongs to the console driver, and an
-    /// application that was told about it as well would act on a chord that is already taking the
-    /// screen away.
-    ///
-    /// **Only a press asks.** A repeat asks for nothing, so a chord held down asks once rather than
-    /// thirty times a second. Every transition of such a key still reaches no surface, so an
-    /// application is never told about half of one.
-    ///
-    /// The transition is recorded either way. A key the layout was never told about would leave the
-    /// count of a modifier held over the chord wrong for the rest of the run.
-    pub fn batch(&mut self, down: &mut BTreeSet<u16>, batch: &Batch, stamps: Stamps) -> Translated {
+    /// Every key in the batch goes through [`Keys::key`], which states what a key that asks for a
+    /// terminal does. The terminal this answers with is the last one a key in the batch asked for.
+    pub fn batch(&mut self, down: &mut Down, batch: &Batch, stamps: Stamps) -> Translated {
         if dropped(batch) {
             return Translated::nothing();
         }
@@ -549,13 +644,20 @@ impl Keys {
                 continue;
             };
             let transition = Transition::of(event.value);
-            let reading = self.read(down, key, transition);
-            if let Some(asked) = reading.terminal {
+            // Read before the transition is recorded, because a release is what takes the key out
+            // of the swallowed set.
+            let swallowed = down.swallows(key);
+            let Struck { reading, moved } = self.read(down, key, transition);
+            if transition == Transition::Pressed && reading.terminal.is_some() {
+                down.swallow(key);
                 // No modifier is read here, because no key that asks for a terminal is a modifier:
                 // one keymap entry holds one meaning, and this one holds the terminal.
-                if transition == Transition::Pressed {
-                    terminal = Some(asked);
+                if moved {
+                    ask(&mut terminal, reading.terminal);
                 }
+                continue;
+            }
+            if swallowed {
                 continue;
             }
             let (state, repeat) = match transition {
@@ -593,31 +695,32 @@ impl Keys {
 
     /// Reads the layout for one transition, and records the transition where there is one.
     ///
-    /// The device's own `down` set decides whether the layout is told at all. A press of a key that
+    /// The device's own [`Down`] decides whether the layout is told at all. A press of a key that
     /// device already has down records nothing, and a release of one it does not have down records
-    /// nothing either — so the layout's count follows the keyboard rather than the stream.
+    /// nothing either — so the layout's count follows the keyboard rather than the stream. Whether
+    /// it moved is answered as well, because a transition the layout was told nothing about is a
+    /// transition nobody made: [`Keys::key`] asks for no terminal on one.
     ///
     /// The press case is reachable on any machine: `zgui_evdev::Device::open` starts the kernel
     /// queuing events to this client, and the grab and the read of `EVIOCGKEY` happen after it, so
     /// a key struck in between arrives through the map *and* through the stream. Counted twice, it
     /// needs two releases and gets one.
-    fn read(&mut self, down: &mut BTreeSet<u16>, key: Key, transition: Transition) -> Reading {
-        let moved = match transition {
-            Transition::Pressed => down.insert(key.raw()),
-            Transition::Released => down.remove(&key.raw()),
-            Transition::Repeated => false,
-        };
+    fn read(&mut self, down: &mut Down, key: Key, transition: Transition) -> Struck {
+        let moved = down.record(key, transition);
         let Some(layout) = self.layout.as_mut() else {
             // No layout at all. The position still crosses, so a binding written against where the
             // key sits keeps working. No terminal either: which chord asks for one is a layout's
             // answer, and a machine with no layout has none to give.
-            return Reading {
-                key: zgui_vocab::Key::Unidentified,
-                without_modifiers: zgui_vocab::Key::Unidentified,
-                terminal: None,
+            return Struck {
+                reading: Reading {
+                    key: zgui_vocab::Key::Unidentified,
+                    without_modifiers: zgui_vocab::Key::Unidentified,
+                    terminal: None,
+                },
+                moved,
             };
         };
-        match transition {
+        let reading = match transition {
             // One call, which reads before it records so that a latched modifier is spent by the
             // key that consumed it rather than by the key before.
             Transition::Pressed if moved => layout.press(key),
@@ -629,7 +732,8 @@ impl Keys {
             // A repeat is no transition at all, and so is a transition this device had already
             // made.
             _ => layout.reading(key),
-        }
+        };
+        Struck { reading, moved }
     }
 
     /// Returns a change in the held set, when it moved.
@@ -667,8 +771,8 @@ struct Pointing {
 struct Taken {
     /// The device, grabbed for as long as this lives.
     device: Device,
-    /// Which of its keys this seat believes are down.
-    down: BTreeSet<u16>,
+    /// Which of its keys this seat believes are down, and which of them it swallowed.
+    down: Down,
     /// How its moments are read.
     stamps: Stamps,
     /// Whether a person types on it.
@@ -872,7 +976,7 @@ impl Seat {
             types: types_on(device.capabilities()),
             points: pointing(&device),
             device,
-            down: BTreeSet::new(),
+            down: Down::default(),
             stamps,
         };
         // After the grab, so that nothing else can change what is held between the two.
@@ -996,13 +1100,13 @@ impl Seat {
     /// program.
     ///
     /// A key that asked for a terminal comes back beside the reports rather than among them. See
-    /// [`Read`], and [`Keys::batch`] for why such a key reaches no surface.
+    /// [`Heard`], and [`Keys::key`] for why such a key reaches no surface.
     pub fn read(
         &mut self,
         session: &mut Session,
         pointer: &mut Pointer,
         screens: &[Screen],
-    ) -> Read {
+    ) -> Heard {
         let now = self.now();
         let Self {
             devices,
@@ -1036,8 +1140,7 @@ impl Seat {
                 resynchronise |= dropped(batch);
                 if taken.types {
                     let translated = keys.batch(&mut taken.down, batch, taken.stamps);
-                    // The newest ask wins, which is the one a person made last.
-                    terminal = translated.terminal.or(terminal);
+                    ask(&mut terminal, translated.terminal);
                     reports.extend(translated.events.into_iter().map(Report::focused));
                 }
                 // The same rule the keyboard follows: a batch the kernel dropped part of is the
@@ -1101,7 +1204,7 @@ impl Seat {
         // the same name is a different device at the same path, and an arrival at a path this seat
         // still holds is refused — so a stale one left here would keep its own replacement out.
         reports.extend(self.arrivals(session));
-        Read { reports, terminal }
+        Heard { reports, terminal }
     }
 
     /// Gives every device back to the session, and reports what each one was holding.
@@ -1464,8 +1567,8 @@ mod tests {
     use rustix::ioctl::{Opcode, opcode};
 
     use super::{
-        Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Seat, Session, Span, Stamps,
-        Transition, Translated, cancelled, focused, pointed, types_on, untaken,
+        Axes, Down, Heard, HighResolution, Keys, Pointer, Pointing, Report, Screen, Seat, Session,
+        Span, Stamps, Transition, Translated, ask, cancelled, focused, pointed, types_on, untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
     use crate::session::Asked;
@@ -1653,12 +1756,12 @@ mod tests {
     ///
     /// The down set is the device's rather than the seat's, so a test that wants two keyboards
     /// keeps two of them over one `Keys`.
-    fn keys() -> (Keys, Shared, BTreeSet<u16>) {
+    fn keys() -> (Keys, Shared, Down) {
         let shared = Shared::default();
         (
             Keys::new(Some(Box::new(shared.clone()))),
             shared,
-            BTreeSet::new(),
+            Down::default(),
         )
     }
 
@@ -1695,19 +1798,19 @@ mod tests {
     }
 
     /// What a stream of bytes from one keyboard turns into, through the whole translation.
-    fn translate(keys: &mut Keys, down: &mut BTreeSet<u16>, bytes: &[u8]) -> Vec<SurfaceEvent> {
+    fn translate(keys: &mut Keys, down: &mut Down, bytes: &[u8]) -> Vec<SurfaceEvent> {
         translated(keys, down, bytes).events
     }
 
     /// The same, with the terminal a key in it asked for.
-    fn translated(keys: &mut Keys, down: &mut BTreeSet<u16>, bytes: &[u8]) -> Translated {
+    fn translated(keys: &mut Keys, down: &mut Down, bytes: &[u8]) -> Translated {
         let mut reader = Reader::new();
         let batches = reader.feed(bytes);
         let mut events = Vec::new();
         let mut terminal = None;
         for batch in &batches {
             let mut answered = keys.batch(down, batch, Stamps::from_origin(SINCE));
-            terminal = answered.terminal.or(terminal);
+            ask(&mut terminal, answered.terminal);
             events.append(&mut answered.events);
         }
         Translated { events, terminal }
@@ -1877,8 +1980,235 @@ mod tests {
             "no transition of it reached a surface"
         );
         assert!(
-            down.is_empty(),
+            down.keys.is_empty(),
             "and the key came up on the way, so the layout's count is where it started"
+        );
+    }
+
+    /// A layout whose `F1` and `F2` ask for a terminal only while control is down.
+    ///
+    /// Both real layouts read the terminal off the level the modifiers select, and [`Recording`]
+    /// answers on the key alone — so a chord taken apart cannot be driven through that one.
+    #[derive(Debug, Default)]
+    struct Chorded {
+        /// How many times control was recorded down, less the times it was recorded up.
+        control: i32,
+    }
+
+    impl Layout for Chorded {
+        fn source(&self) -> Source {
+            Source::Xkb
+        }
+
+        fn describe(&self) -> String {
+            "a layout whose terminal sits under control".to_owned()
+        }
+
+        fn press(&mut self, key: Key) -> Reading {
+            let reading = self.reading(key);
+            if key == Key::KEY_LEFTCTRL {
+                self.control += 1;
+            }
+            reading
+        }
+
+        fn reading(&self, key: Key) -> Reading {
+            let asked = match key {
+                Key::KEY_F1 => Some(1),
+                Key::KEY_F2 => Some(2),
+                _ => None,
+            };
+            let named = match key {
+                Key::KEY_F1 => zgui_vocab::Key::Named(NamedKey::F1),
+                Key::KEY_F2 => zgui_vocab::Key::Named(NamedKey::F2),
+                Key::KEY_LEFTCTRL => zgui_vocab::Key::Named(NamedKey::Control),
+                _ => zgui_vocab::Key::Unidentified,
+            };
+            Reading {
+                key: named.clone(),
+                without_modifiers: named,
+                terminal: asked.filter(|_| self.control > 0),
+            }
+        }
+
+        fn release(&mut self, key: Key) {
+            if key == Key::KEY_LEFTCTRL {
+                self.control -= 1;
+            }
+        }
+
+        fn hold(&mut self, key: Key) {
+            if key == Key::KEY_LEFTCTRL {
+                self.control += 1;
+            }
+        }
+
+        fn modifiers(&self) -> Modifiers {
+            Modifiers::NONE
+        }
+    }
+
+    /// One keyboard over a layout whose terminal sits under control.
+    fn chorded() -> (Keys, Down) {
+        (
+            Keys::new(Some(Box::new(Chorded::default()))),
+            Down::default(),
+        )
+    }
+
+    #[test]
+    fn a_press_this_device_had_already_made_asks_for_no_terminal() {
+        // Reachable on any machine, and every resume opens every device again: `Device::open`
+        // starts the kernel queuing events to this client before `EVIOCGKEY` is read, so a chord
+        // held across the switch arrives through the map *and* through the stream. The layout is
+        // told nothing about the second one, so nobody pressed it — and a switch asked for on it
+        // would take the screen away again the moment it came back.
+        let (mut keys, _, mut down) = keys();
+        down.keys.insert(Key::KEY_F1.raw());
+
+        let again = translated(&mut keys, &mut down, &moved(SINCE, Key::KEY_F1, 1));
+
+        assert_eq!(
+            again.terminal, None,
+            "the device already held the key: {again:?}"
+        );
+        assert!(
+            presses(&again.events).is_empty(),
+            "and it reached no surface either: {:?}",
+            again.events
+        );
+    }
+
+    #[test]
+    fn a_chord_taken_apart_first_reaches_no_surface_at_all() {
+        // The press decides, and this is why it has to. The terminal sits on the level the
+        // modifiers select, so letting go of control before the key turns the release back into
+        // an ordinary `F1` — and an application that reads key releases would be told about half of
+        // a chord it never heard the beginning of.
+        let (mut keys, mut down) = chorded();
+
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTCTRL, 1));
+        let chord = translated(&mut keys, &mut down, &moved(SINCE, Key::KEY_F1, 1));
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTCTRL, 0));
+        let up = translated(&mut keys, &mut down, &moved(SINCE, Key::KEY_F1, 0));
+
+        assert_eq!(chord.terminal, Some(1), "the press asked for terminal 1");
+        assert!(
+            presses(&chord.events).is_empty(),
+            "and reached no surface: {:?}",
+            chord.events
+        );
+        assert!(
+            presses(&up.events).is_empty(),
+            "the release reached none either: {:?}",
+            up.events
+        );
+        assert_eq!(up.terminal, None, "and asked for nothing");
+        assert!(
+            down.swallowed.is_empty(),
+            "the key came up, so nothing about it is remembered: {:?}",
+            down.swallowed
+        );
+    }
+
+    #[test]
+    fn a_chord_held_while_the_devices_were_opened_again_reaches_no_surface() {
+        // The same edge on the resume. Every resume opens every device again and asks each what is
+        // held on it, so a chord held across the switch is a key this process never saw pressed and
+        // whose release is the first thing it hears about it.
+        let (mut keys, mut down) = chorded();
+        let held = BTreeSet::from([Key::KEY_LEFTCTRL.raw(), Key::KEY_F1.raw()]);
+
+        keys.resynchronise(&mut down, &held);
+        let up = translated(&mut keys, &mut down, &moved(SINCE, Key::KEY_F1, 0));
+
+        assert!(
+            presses(&up.events).is_empty(),
+            "the release of a key that asks for a terminal reaches no surface: {:?}",
+            up.events
+        );
+    }
+
+    #[test]
+    fn the_last_terminal_asked_for_in_one_batch_is_the_one_answered() {
+        // A read carries one terminal and a person can press two chords inside one turn. The last
+        // one is the one they asked for, and a fold that kept the first would send them somewhere
+        // they had already left.
+        let (mut keys, mut down) = chorded();
+        translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTCTRL, 1));
+        // One batch holding both, so what is asserted is the fold inside `Keys::batch` rather than
+        // the one the helper does over batches.
+        let mut bytes = record(SINCE, EventType::EV_KEY, Key::KEY_F1.raw(), 1);
+        bytes.extend(record(SINCE, EventType::EV_KEY, Key::KEY_F2.raw(), 1));
+        bytes.extend(record(
+            SINCE,
+            EventType::EV_SYN,
+            Synchronisation::SYN_REPORT.raw(),
+            0,
+        ));
+
+        let asked = translated(&mut keys, &mut down, &bytes);
+
+        assert_eq!(asked.terminal, Some(2), "the second chord is the answer");
+    }
+
+    #[test]
+    fn the_newest_ask_is_the_one_a_read_answers_with() {
+        // The rule both folds run: the one inside a batch, and the one `Seat::read` runs over every
+        // batch of every device. An ask of nothing is an ordinary key, and one that cleared the
+        // answer would lose a chord pressed earlier in the same turn.
+        let mut answered = None;
+
+        ask(&mut answered, Some(2));
+        assert_eq!(answered, Some(2));
+        ask(&mut answered, None);
+        assert_eq!(
+            answered,
+            Some(2),
+            "an ordinary key leaves the ask where it is"
+        );
+        ask(&mut answered, Some(5));
+        assert_eq!(
+            answered,
+            Some(5),
+            "and the last chord is what was asked for"
+        );
+    }
+
+    #[test]
+    fn the_terminal_a_key_asked_for_is_what_the_session_is_asked_for() {
+        // The other half of the switch, and the join the frame loop cannot drop: the reports leave
+        // through this call, so a turn that delivered them made the ask. A read where nobody pressed
+        // the chord asks for nothing — a session asked every turn would switch terminal on its own.
+        let mut session = Session::direct();
+        let quiet = Heard {
+            reports: Vec::new(),
+            terminal: None,
+        };
+        let asked = Heard {
+            reports: vec![Report::focused(SurfaceEvent::Focused(true))],
+            terminal: Some(2),
+        };
+
+        assert!(quiet.answered(&mut session).is_empty());
+        assert!(
+            session.asked().is_empty(),
+            "a read where no key asked for a terminal asks for none: {:?}",
+            session.asked()
+        );
+
+        let reports = asked.answered(&mut session);
+
+        assert_eq!(
+            session.asked(),
+            [Asked::Switch(2), Asked::Refused],
+            "the terminal a key asked for is the one the session is asked for, and this run owns \
+             none"
+        );
+        assert_eq!(
+            reports.len(),
+            1,
+            "and the reports came out of the same call: {reports:?}"
         );
     }
 
@@ -2145,7 +2475,7 @@ mod tests {
         // The kernel timestamps when the key moved. A loop that stamped when it woke would give
         // every event in one wake the same moment, and a double click and a key repeat are
         // measured against the difference between two of them.
-        let (mut keys, mut down) = (Keys::new(None), BTreeSet::new());
+        let (mut keys, mut down) = (Keys::new(None), Down::default());
         let mut bytes = moved(SINCE + Duration::from_millis(250), Key::KEY_A, 1);
         bytes.extend(moved(SINCE + Duration::from_millis(400), Key::KEY_A, 0));
 
@@ -2201,7 +2531,7 @@ mod tests {
     fn a_seat_with_no_layout_still_reports_where_the_key_was() {
         // A machine with neither libxkbcommon nor a readable console. The position is the kernel's
         // own and needs no layout, so a binding written against where a key sits keeps working.
-        let (mut keys, mut down) = (Keys::new(None), BTreeSet::new());
+        let (mut keys, mut down) = (Keys::new(None), Down::default());
 
         let events = translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_A, 1));
 
@@ -2329,7 +2659,7 @@ mod tests {
         // repair the count never returns to zero, and every letter typed on the built-in keyboard
         // comes out shifted for the rest of the process with no way back.
         let (mut keys, _, mut external) = keys();
-        let mut internal = BTreeSet::new();
+        let mut internal = Down::default();
         translate(
             &mut keys,
             &mut external,
@@ -2359,7 +2689,7 @@ mod tests {
         // would hold one code, and letting go of one keyboard would stop reporting shift while the
         // other was still held down.
         let (mut keys, _, mut first) = keys();
-        let mut second = BTreeSet::new();
+        let mut second = Down::default();
 
         translate(&mut keys, &mut first, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));
         translate(&mut keys, &mut second, &moved(SINCE, Key::KEY_LEFTSHIFT, 1));

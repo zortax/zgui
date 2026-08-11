@@ -419,7 +419,7 @@ fn drive(
                 // moves the pointer, and the pointer decides the focus. Worked out first, a key
                 // struck in the same turn as a crossing goes to the display the pointer has just
                 // left.
-                let read = seat.read(session, &mut pointer, &screens);
+                let heard = seat.read(session, &mut pointer, &screens);
                 let holds_keys =
                     seat::focused(&claimed_ids, pointer.on(&screens).map(|screen| screen.id));
                 if holds_keys != focused {
@@ -434,11 +434,11 @@ fn drive(
                 // A resume's own reports first: they say what is held on the devices it opened, and
                 // a key struck since then is read against that.
                 deliver(&mut *handler, &cx, resumed, focused);
-                deliver(&mut *handler, &cx, read.reports, focused);
                 // Here, and inside this block. The session holds its devices for the whole of it,
-                // so a terminal is asked for while this run owns one — and a key that asked reaches
-                // no surface, so the delivery above carried nothing for it.
-                switch(session, read.terminal);
+                // so a terminal is asked for while this run owns one. `Heard::answered` is what asks
+                // and what hands the reports over, so the two cannot come apart — and a key that
+                // asked reaches no surface, so what is delivered below carries nothing for it.
+                deliver(&mut *handler, &cx, heard.answered(session), focused);
                 if cx.is_exiting() {
                     break;
                 }
@@ -572,24 +572,6 @@ fn deliver(
             continue;
         };
         handler.surface_event(cx, id, report.event);
-    }
-}
-
-/// Asks the session for the terminal a key asked for.
-///
-/// One step of the turn, and the whole of what happens for such a key: the layout reads
-/// `Ctrl+Alt+F2` as terminal 2 — both layouts bind that chord themselves — and the key reaches no
-/// surface, so nothing else in the turn hears about it.
-///
-/// A seated run reaches the daemon, which moves the terminal and reports the change on a later
-/// turn. A direct run is refused, because nothing there owns a terminal, and it says so once.
-///
-/// The loop calls this while the session holds its devices. A switch asked for from an inactive
-/// session is what brings a seated run back, and this is the other kind: a key read on a terminal
-/// this run is looking at.
-fn switch(session: &mut Session, terminal: Option<u32>) {
-    if let Some(terminal) = terminal {
-        session.switch(terminal);
     }
 }
 
@@ -880,8 +862,11 @@ mod tests {
     //! card that discovered its display. [`Scanout::restore`] clearing an outstanding flip is
     //! covered by `tests/scanout.rs`, which needs DRM master and a monitor. The transitions
     //! themselves are [`Presence`](crate::session::presence::Presence), which is pure and carries
-    //! its own tests. What is left over — a real switch, a real modeset, the picture coming back —
-    //! is the hardware run.
+    //! its own tests. The terminal a key asked for is
+    //! [`Heard::answered`](crate::input::seat::Heard::answered), where the ask and the reports are
+    //! one call — the turn above cannot deliver a report without making the ask, so there is
+    //! nothing here for a test to hold up. What is left over — a real switch, a real modeset, the
+    //! picture coming back — is the hardware run.
 
     use std::os::fd::{AsFd, AsRawFd};
     use std::path::{Path, PathBuf};
@@ -890,7 +875,7 @@ mod tests {
 
     use super::{
         Arc, Clock, ConsoleClipboard, DrmCx, EventfdWaker, Pointer, Seat, Session, SurfaceEvent,
-        SurfaceId, SystemClock, Waker, owes_a_turn, resume, suspend, switch, watched,
+        SurfaceId, SystemClock, Waker, owes_a_turn, resume, suspend, watched,
     };
     use crate::session::Asked;
 
@@ -1040,29 +1025,6 @@ mod tests {
             ),
             "so the surface that held it was told, once: {:?}",
             handler.told
-        );
-    }
-
-    #[test]
-    fn the_terminal_a_key_asked_for_reaches_the_session_and_nothing_else_does() {
-        // The other half of the switch. The layout reads `Ctrl+Alt+F2` as terminal 2 and the seat
-        // hands that number up beside the reports, so this is where it becomes a request. A turn
-        // where nobody pressed the chord asks for nothing: a session asked every turn would switch
-        // terminal on its own.
-        let mut session = Session::direct();
-
-        switch(&mut session, None);
-        assert!(
-            session.asked().is_empty(),
-            "a turn where no key asked for a terminal asks for none: {:?}",
-            session.asked()
-        );
-
-        switch(&mut session, Some(2));
-        assert_eq!(
-            session.asked(),
-            [Asked::Switch(2)],
-            "and the terminal a key asked for is the one the session is asked for"
         );
     }
 

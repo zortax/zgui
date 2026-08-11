@@ -595,16 +595,17 @@ impl Xkb {
         })
     }
 
-    /// The terminal this keysym asks for, where it asks for one.
+    /// Returns the terminal this keysym asks for, where it asks for one.
     ///
     /// Read off the keysym the modifiers selected, because that is the level the chord reaches:
     /// `XF86Switch_VT_1` sits on level five of a `CTRL+ALT` key type, and level zero of the same
     /// key is `F1`.
-    fn terminal(&self, sym: zgui_xkb::Keysym) -> Option<u32> {
-        self.context
-            .keysym_name(sym)
-            .as_deref()
-            .and_then(terminal::from_keysym)
+    ///
+    /// The keysym's *value* is what answers. Naming one costs a call into libxkbcommon and a string
+    /// on every key event, and thirty of each a second while a key repeats — and one keysym has two
+    /// names, which [`terminal::from_keysym`] states.
+    fn terminal(sym: zgui_xkb::Keysym) -> Option<u32> {
+        terminal::from_keysym(sym.raw())
     }
 }
 
@@ -631,7 +632,7 @@ impl Layout for Xkb {
                 .composed(press.sym)
                 .unwrap_or_else(|| self.named(press.sym, press.text.as_deref())),
             without_modifiers,
-            terminal: self.terminal(press.sym),
+            terminal: Self::terminal(press.sym),
         }
     }
 
@@ -647,7 +648,7 @@ impl Layout for Xkb {
         Reading {
             key: self.named(sym, self.state.text(code).as_deref()),
             without_modifiers: self.printed(code),
-            terminal: self.terminal(sym),
+            terminal: Self::terminal(sym),
         }
     }
 
@@ -853,7 +854,7 @@ mod tests {
     use std::str::FromStr;
 
     use super::{
-        ACCENTS, RENAMED, Sequence, Xkb, accent, character, is_typed, named_key, typed_key,
+        ACCENTS, Console, RENAMED, Sequence, Xkb, accent, character, is_typed, named_key, typed_key,
     };
     use crate::input::keyboard::layout::Layout;
     use crate::input::keyboard::terminal;
@@ -940,34 +941,35 @@ mod tests {
     }
 
     #[test]
-    fn every_terminal_keysym_is_named_the_way_the_switch_reads_it() {
-        // A press is looked up under whatever `keysym_name` answers, and `xkeyboard-config` builds
-        // its keymaps from the alias. So the two spellings meet here, and a reader that held the
-        // wrong one of them takes `Ctrl+Alt+Fn` to the application as a key nobody bound — which
-        // reads as a machine that cannot leave the program at all.
-        let test = "every_terminal_keysym_is_named_the_way_the_switch_reads_it";
+    fn every_terminal_keysym_carries_the_value_the_switch_reads_it_by() {
+        // The switch matches the keysym by value, so this is what holds the twelve numbers against
+        // the twelve names. Both spellings are asked for: `keysym_name` answers one and
+        // `xkeyboard-config` builds its keymaps from the other, and both have to name the same
+        // number. A table that moved under either would take `Ctrl+Alt+Fn` to the application as a
+        // key nobody bound, which reads as a machine that cannot leave the program at all.
+        let test = "every_terminal_keysym_carries_the_value_the_switch_reads_it_by";
         let Some(context) = library(test) else {
             return;
         };
 
         let mut wrong = Vec::new();
         for asked in 1..=12u32 {
-            // The spelling `xkeyboard-config` writes, which is what a keymap is compiled from.
-            let name = format!("XF86_Switch_VT_{asked}");
-            let Some(sym) = context.keysym_from_name(&name) else {
-                wrong.push(format!("`{name}` is no keysym at all"));
-                continue;
-            };
-            let Some(canonical) = context.keysym_name(sym) else {
-                wrong.push(format!("`{name}` has no name to look up"));
-                continue;
-            };
-            let read = terminal::from_keysym(&canonical);
-            if read != Some(asked) {
-                wrong.push(format!(
-                    "`{name}` is named `{canonical}`, which reads as {read:?} rather than terminal \
-                     {asked}"
-                ));
+            let spellings = [
+                format!("XF86Switch_VT_{asked}"),
+                format!("XF86_Switch_VT_{asked}"),
+            ];
+            for name in spellings {
+                let Some(sym) = context.keysym_from_name(&name) else {
+                    wrong.push(format!("`{name}` is no keysym at all"));
+                    continue;
+                };
+                let read = terminal::from_keysym(sym.raw());
+                if read != Some(asked) {
+                    wrong.push(format!(
+                        "`{name}` is {:#x}, which reads as {read:?} rather than terminal {asked}",
+                        sym.raw()
+                    ));
+                }
             }
         }
 
@@ -1143,6 +1145,62 @@ mod tests {
         let test = "the_chord_a_layout_binds_reads_as_the_terminal_it_asks_for";
         let Some(mut layout) = layout_named(test, "us") else {
             return;
+        };
+
+        let plain = layout.press(Code::KEY_F1);
+        layout.release(Code::KEY_F1);
+        layout.press(Code::KEY_LEFTCTRL);
+        layout.press(Code::KEY_LEFTALT);
+        let chord = layout.press(Code::KEY_F1);
+
+        assert_eq!(plain.terminal, None, "`F1` on its own asks for no terminal");
+        assert_eq!(
+            chord.terminal,
+            Some(1),
+            "`Ctrl+Alt+F1` asks for terminal 1: {chord:?}"
+        );
+    }
+
+    #[test]
+    fn letting_go_of_control_first_leaves_f1_as_an_ordinary_key() {
+        // Why the seat remembers which key it swallowed. The terminal sits on the level the
+        // modifiers select, so a chord taken apart before the finger comes off `F1` reads as `F1`
+        // again here — and a caller that read this alone would send the release to the application
+        // with no press behind it. `Keys::batch` is where that is closed.
+        let test = "letting_go_of_control_first_leaves_f1_as_an_ordinary_key";
+        let Some(mut layout) = layout_named(test, "us") else {
+            return;
+        };
+
+        layout.press(Code::KEY_LEFTCTRL);
+        layout.press(Code::KEY_LEFTALT);
+        let chord = layout.press(Code::KEY_F1);
+        layout.release(Code::KEY_LEFTCTRL);
+        let after = layout.reading(Code::KEY_F1);
+
+        assert_eq!(chord.terminal, Some(1), "the press asked for terminal 1");
+        assert_eq!(
+            after.terminal, None,
+            "and with control gone the same key asks for nothing: {after:?}"
+        );
+        assert_eq!(after.key, Key::Named(NamedKey::F1));
+    }
+
+    #[test]
+    fn the_console_keymap_reads_the_chord_out_of_the_map_the_modifiers_select() {
+        // The half of the switch no other test covers. `Ctrl+Alt+F1` is a `KT_CONS` entry in the
+        // map those two bits select, and reading it needs the ioctl and the mask together — so this
+        // runs wherever a console answers and says why where none does.
+        let test = "the_console_keymap_reads_the_chord_out_of_the_map_the_modifiers_select";
+        let mut layout = match Console::open() {
+            Ok(layout) => layout,
+            Err(reason) => {
+                eprintln!(
+                    "{test}: no console this process may read ({reason}), so nothing was \
+                     asserted; run this from a virtual console"
+                );
+                return;
+            }
         };
 
         let plain = layout.press(Code::KEY_F1);
