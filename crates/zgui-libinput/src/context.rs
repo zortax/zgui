@@ -23,11 +23,14 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
+use std::time::Duration;
 
 use crate::device::{Capabilities, Capability, Device, DeviceId};
 use crate::error::{Error, Result};
-use crate::event::Event;
-use crate::library::{Libinput, LibinputDevice, LibinputEvent, Library, Symbols};
+use crate::event::{Event, Press, Scrolled};
+use crate::library::{
+    Libinput, LibinputDevice, LibinputEvent, LibinputPointerEvent, Library, Symbols,
+};
 
 pub use crate::context::files::Files;
 
@@ -38,6 +41,66 @@ const DEVICE_ADDED: u32 = 1;
 
 /// libinput's `LIBINPUT_EVENT_DEVICE_REMOVED`.
 const DEVICE_REMOVED: u32 = 2;
+
+/// libinput's `LIBINPUT_EVENT_KEYBOARD_KEY`.
+const KEYBOARD_KEY: u32 = 300;
+
+/// libinput's `LIBINPUT_EVENT_POINTER_MOTION`.
+const POINTER_MOTION: u32 = 400;
+
+/// libinput's `LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE`.
+const POINTER_MOTION_ABSOLUTE: u32 = 401;
+
+/// libinput's `LIBINPUT_EVENT_POINTER_BUTTON`.
+const POINTER_BUTTON: u32 = 402;
+
+/// libinput's `LIBINPUT_EVENT_POINTER_SCROLL_WHEEL`.
+const POINTER_SCROLL_WHEEL: u32 = 404;
+
+/// libinput's `LIBINPUT_EVENT_POINTER_SCROLL_FINGER`.
+const POINTER_SCROLL_FINGER: u32 = 405;
+
+/// libinput's `LIBINPUT_EVENT_POINTER_SCROLL_CONTINUOUS`.
+const POINTER_SCROLL_CONTINUOUS: u32 = 406;
+
+/// libinput's `LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL`.
+const VERTICAL: u32 = 0;
+
+/// libinput's `LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL`.
+const HORIZONTAL: u32 = 1;
+
+/// The width an absolute position is asked for in.
+///
+/// libinput scales the device's own range into whatever width the caller names, so a width of one
+/// answers the position as a fraction. A fraction is what leaves this crate: how wide the screen is
+/// belongs to whoever draws on it.
+const AS_A_FRACTION: u32 = 1;
+
+/// How much libinput reports about itself, through its own log.
+///
+/// The log goes to standard error. It carries what libinput decided about a device and why it
+/// refused one, and it is the first thing to read when a device behaves unlike the same device
+/// under another desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Loudness {
+    /// Everything, including what each device was probed for.
+    Debug,
+    /// What libinput decided about each device.
+    Information,
+    /// What went wrong. libinput's own default.
+    Errors,
+}
+
+impl Loudness {
+    /// Returns the number libinput knows this by.
+    const fn as_raw(self) -> u32 {
+        match self {
+            Self::Debug => 10,
+            Self::Information => 20,
+            Self::Errors => 30,
+        }
+    }
+}
 
 /// The name every evdev node starts with.
 ///
@@ -203,6 +266,23 @@ impl Context {
             next: 0,
             thread_bound: PhantomData,
         })
+    }
+
+    /// Sets how much libinput reports about itself.
+    ///
+    /// libinput writes to standard error, which is where its own default sends it. A run that wants
+    /// those lines redirects that descriptor: on a console the terminal has been drawn over by
+    /// then, so the lines land where nobody can read them.
+    ///
+    /// The handler libinput can take instead is left alone. It is given the context and no
+    /// `user_data`, so reaching the caller from inside it needs a map from contexts to callers held
+    /// outside the context, and the message is a C format string with a `va_list`, which only the C
+    /// library's own `vsnprintf` can read. Redirecting a descriptor answers the same question in
+    /// the shell.
+    pub fn loudness(&mut self, loudness: Loudness) {
+        let set = self.library.symbols().log_set_priority;
+        // SAFETY: `raw` is this context, and the number is one libinput knows.
+        unsafe { set(self.raw.as_ptr(), loudness.as_raw()) };
     }
 
     /// Returns the descriptor a loop waits on.
@@ -400,11 +480,21 @@ impl Context {
             };
 
             // SAFETY: `event` is an event libinput just handed over and nothing has destroyed it.
-            match unsafe { (symbols.event_get_type)(event.as_ptr()) } {
+            let kind = unsafe { (symbols.event_get_type)(event.as_ptr()) };
+            match kind {
                 DEVICE_ADDED => self.arrived(&symbols, event),
                 DEVICE_REMOVED => self.went(&symbols, event, suspending),
-                // Everything else is a kind this crate does not read yet. Destroying it is all that
-                // is owed.
+                KEYBOARD_KEY => self.struck(&symbols, event),
+                POINTER_MOTION
+                | POINTER_MOTION_ABSOLUTE
+                | POINTER_BUTTON
+                | POINTER_SCROLL_WHEEL
+                | POINTER_SCROLL_FINGER
+                | POINTER_SCROLL_CONTINUOUS => self.pointed(&symbols, event, kind),
+                // Touch, gestures, tablets, switches — and `POINTER_AXIS`, which libinput reports
+                // beside each scroll above for callers written before the three of them existed.
+                // Reading both would scroll twice as far as the wheel was turned. Destroying the
+                // event is all that is owed for any of them.
                 _ => {}
             }
 
@@ -485,6 +575,109 @@ impl Context {
         if !suspending {
             self.nodes.remove(at);
         }
+    }
+
+    /// Reads one key.
+    fn struck(&mut self, symbols: &Symbols, event: NonNull<LibinputEvent>) {
+        let Some(device) = self.reporting(symbols, event) else {
+            return;
+        };
+        // SAFETY: the event is live and its type is `KEYBOARD_KEY`, so reading it as a keyboard
+        // event is the right question. libinput answers null for any other type.
+        let keyboard = unsafe { (symbols.event_get_keyboard_event)(event.as_ptr()) };
+        let Some(keyboard) = NonNull::new(keyboard) else {
+            return;
+        };
+
+        self.pending.push_back(Event::Key {
+            device,
+            // SAFETY: `keyboard` is this event read as a keyboard event, and these three read it.
+            key: unsafe { (symbols.keyboard_get_key)(keyboard.as_ptr()) },
+            // SAFETY: as above.
+            press: Press::of(unsafe { (symbols.keyboard_get_key_state)(keyboard.as_ptr()) }),
+            // SAFETY: as above.
+            at: Duration::from_micros(unsafe {
+                (symbols.keyboard_get_time_usec)(keyboard.as_ptr())
+            }),
+        });
+    }
+
+    /// Reads one thing done with a pointing device.
+    fn pointed(&mut self, symbols: &Symbols, event: NonNull<LibinputEvent>, kind: u32) {
+        let Some(device) = self.reporting(symbols, event) else {
+            return;
+        };
+        // SAFETY: the event is live and its type is one of the pointer kinds, so reading it as a
+        // pointer event is the right question.
+        let pointer = unsafe { (symbols.event_get_pointer_event)(event.as_ptr()) };
+        let Some(pointer) = NonNull::new(pointer) else {
+            return;
+        };
+        let raw = pointer.as_ptr();
+
+        // SAFETY: `pointer` is this event read as a pointer event, and this reads it. Every other
+        // call below is the same.
+        let at = Duration::from_micros(unsafe { (symbols.pointer_get_time_usec)(raw) });
+
+        let read = match kind {
+            POINTER_MOTION => Event::Motion {
+                device,
+                // SAFETY: as above.
+                dx: unsafe { (symbols.pointer_get_dx)(raw) },
+                // SAFETY: as above.
+                dy: unsafe { (symbols.pointer_get_dy)(raw) },
+                at,
+            },
+            POINTER_MOTION_ABSOLUTE => Event::MotionAbsolute {
+                device,
+                // SAFETY: as above.
+                x: unsafe { (symbols.pointer_get_absolute_x_transformed)(raw, AS_A_FRACTION) },
+                // SAFETY: as above.
+                y: unsafe { (symbols.pointer_get_absolute_y_transformed)(raw, AS_A_FRACTION) },
+                at,
+            },
+            POINTER_BUTTON => Event::Button {
+                device,
+                // SAFETY: as above.
+                button: unsafe { (symbols.pointer_get_button)(raw) },
+                // SAFETY: as above.
+                press: Press::of(unsafe { (symbols.pointer_get_button_state)(raw) }),
+                at,
+            },
+            _ => {
+                let source = match kind {
+                    POINTER_SCROLL_FINGER => Scrolled::Finger,
+                    POINTER_SCROLL_CONTINUOUS => Scrolled::Continuous,
+                    _ => Scrolled::Wheel,
+                };
+                Event::Scroll {
+                    device,
+                    source,
+                    vertical: scrolled(symbols, pointer, source, VERTICAL),
+                    horizontal: scrolled(symbols, pointer, source, HORIZONTAL),
+                    at,
+                }
+            }
+        };
+        self.pending.push_back(read);
+    }
+
+    /// Returns which of this context's devices an event came from.
+    ///
+    /// An event from a device this context is not holding is one nothing can be filed under, so it
+    /// is dropped. A device arriving out of order looks like this. Reporting the event under
+    /// another device's id would be worse.
+    fn reporting(&self, symbols: &Symbols, event: NonNull<LibinputEvent>) -> Option<DeviceId> {
+        // SAFETY: `event` is a live event, and the device is borrowed from it.
+        let raw = unsafe { (symbols.event_get_device)(event.as_ptr()) };
+        let raw = NonNull::new(raw)?;
+        let sysname = text(symbols.device_get_sysname, raw);
+
+        self.nodes
+            .iter()
+            .filter_map(|node| node.live.as_ref())
+            .find(|live| live.device.sysname() == sysname)
+            .map(|live| live.device.id())
     }
 
     /// Runs one call into libinput with `files` reachable from the two callbacks.
@@ -595,6 +788,39 @@ fn capabilities(symbols: &Symbols, device: NonNull<LibinputDevice>) -> Capabilit
     answered
 }
 
+/// Returns how far one scroll went along one axis, where it went along it at all.
+///
+/// An axis this scroll does not carry is absent rather than zero. Zero is what a finger source
+/// reports to say that the fingers have stopped, and a kinetic scroll ends on it.
+///
+/// A wheel is read in one hundred and twentieths of a detent and everything else in pixels. That is
+/// the same rule the kernel's own `REL_WHEEL_HI_RES` follows, and the reason is the same: a
+/// free-spinning wheel reports fine movement in every update and a whole detent only when it has
+/// accumulated one.
+fn scrolled(
+    symbols: &Symbols,
+    pointer: NonNull<LibinputPointerEvent>,
+    source: Scrolled,
+    axis: u32,
+) -> Option<f64> {
+    // SAFETY: `pointer` is a live event read as a pointer event, of one of the scroll kinds, and
+    // `axis` is one of the two numbers libinput knows.
+    if unsafe { (symbols.pointer_has_axis)(pointer.as_ptr(), axis) } == 0 {
+        return None;
+    }
+    let value = match source {
+        // SAFETY: as above.
+        Scrolled::Wheel => unsafe {
+            (symbols.pointer_get_scroll_value_v120)(pointer.as_ptr(), axis)
+        },
+        // SAFETY: as above.
+        Scrolled::Finger | Scrolled::Continuous => unsafe {
+            (symbols.pointer_get_scroll_value)(pointer.as_ptr(), axis)
+        },
+    };
+    Some(value)
+}
+
 /// Gives back the reference a device was given when it arrived.
 fn release(symbols: &Symbols, live: Live) {
     // SAFETY: the reference taken in `arrived`, released once, here. Taking the `Live` by value is
@@ -664,6 +890,57 @@ pub(crate) mod tests {
              the library path."
         );
         true
+    }
+
+    #[test]
+    fn the_event_numbers_are_the_ones_the_header_gives() {
+        // Written out rather than compared with the constants they check. These come from
+        // `libinput.h` by hand, and a wrong one is silent: the kind never matches, the event is
+        // dropped as one this crate does not read, and a keyboard simply reports nothing.
+        assert_eq!(DEVICE_ADDED, 1);
+        assert_eq!(DEVICE_REMOVED, 2);
+        assert_eq!(KEYBOARD_KEY, 300);
+        assert_eq!(POINTER_MOTION, 400);
+        assert_eq!(POINTER_MOTION_ABSOLUTE, 401);
+        assert_eq!(POINTER_BUTTON, 402);
+        assert_eq!(POINTER_SCROLL_WHEEL, 404);
+        assert_eq!(POINTER_SCROLL_FINGER, 405);
+        assert_eq!(POINTER_SCROLL_CONTINUOUS, 406);
+        assert_eq!(VERTICAL, 0);
+        assert_eq!(HORIZONTAL, 1);
+    }
+
+    #[test]
+    fn the_log_priorities_are_the_ones_the_header_gives() {
+        // Written out rather than compared with the arms they check. A wrong number is quiet:
+        // libinput reports at whatever volume it reads the number as, and a run asking for
+        // everything gets errors alone.
+        assert_eq!(Loudness::Debug.as_raw(), 10);
+        assert_eq!(Loudness::Information.as_raw(), 20);
+        assert_eq!(Loudness::Errors.as_raw(), 30);
+
+        // Louder is a smaller number.
+        assert!(Loudness::Debug < Loudness::Errors);
+    }
+
+    #[test]
+    fn the_deprecated_axis_event_is_not_one_this_crate_reads() {
+        // `LIBINPUT_EVENT_POINTER_AXIS` is 403, and libinput reports one beside every scroll above
+        // for callers written before the three scroll kinds existed. A `403` in the match would
+        // scroll twice as far as the wheel was turned.
+        for kind in [
+            DEVICE_ADDED,
+            DEVICE_REMOVED,
+            KEYBOARD_KEY,
+            POINTER_MOTION,
+            POINTER_MOTION_ABSOLUTE,
+            POINTER_BUTTON,
+            POINTER_SCROLL_WHEEL,
+            POINTER_SCROLL_FINGER,
+            POINTER_SCROLL_CONTINUOUS,
+        ] {
+            assert_ne!(kind, 403, "no kind this crate reads is the deprecated axis");
+        }
     }
 
     #[test]
