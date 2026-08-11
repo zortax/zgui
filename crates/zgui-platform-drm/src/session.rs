@@ -79,6 +79,7 @@
 pub(crate) mod presence;
 pub(crate) mod switching;
 
+use std::fmt;
 use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -190,6 +191,60 @@ impl Record {
     /// Returns everything recorded on this list, in the order it was.
     pub(crate) fn taken(&self) -> Vec<Asked> {
         self.0.borrow().clone()
+    }
+}
+
+/// What a session answered instead of an input device.
+///
+/// Both carry the refusal as a caller reports it. They are apart because a caller that walks a
+/// directory of nodes answers them differently: a session that is waiting for its terminal is
+/// handed **every** one of its nodes revoked, so one line each would state a machine with no input
+/// devices while the machine has all of them. See [`Session::open_input`].
+#[derive(Debug)]
+pub enum Unopened {
+    /// The node is an input device this session cannot read yet.
+    ///
+    /// logind revokes each evdev descriptor it hands to a session that is waiting for its
+    /// terminal, so every request on it answers `ENODEV`. The device is this session's when a
+    /// person switches to this terminal, and the resume is what opens it — see
+    /// [`Seat::take_again`](crate::input::seat::Seat::take_again).
+    NotYet(PlatformError),
+    /// The node opened no device at all.
+    ///
+    /// A node this run may not have, a descriptor onto something other than an evdev node, and a
+    /// path this session already holds a device at.
+    Refused(PlatformError),
+}
+
+/// Prints the refusal's own words, whichever of the two this is.
+impl fmt::Display for Unopened {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotYet(error) | Self::Refused(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for Unopened {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotYet(error) | Self::Refused(error) => Some(error),
+        }
+    }
+}
+
+/// Returns what a refusal from `zgui-evdev` amounts to.
+///
+/// [`zgui_evdev::Error::Revoked`] is an evdev node that answers nothing, and a session waiting for
+/// its terminal is handed every one of its nodes that way. Everything else is a node this run gets
+/// no device at.
+///
+/// It reads the refusal and nothing else, so the decision runs with no seat, no daemon and no
+/// terminal.
+fn unopened(error: &zgui_evdev::Error) -> Unopened {
+    match error {
+        zgui_evdev::Error::Revoked { .. } => Unopened::NotYet(backend_error(error)),
+        _ => Unopened::Refused(backend_error(error)),
     }
 }
 
@@ -461,28 +516,34 @@ impl Session {
     /// Every refusal names the path it was asked for, because a caller opens these one at a time
     /// and reports each on its own.
     ///
-    /// # A path this session already holds is refused
+    /// # A path this session already holds
     ///
-    /// One path is one device here, because that is what [`Session::close_input`] gives back.
-    /// seatd answers a path its client already holds with the *same* device id and its reference
-    /// count raised, so a second open would leave two records of one device and one give-back — and
-    /// the count would stand at one, with the daemon holding the device, for the rest of the run.
-    /// A caller closes the path it holds and opens it again, which is what a resume does.
+    /// It is refused. One path is one device here, because a path is what [`Session::close_input`]
+    /// gives back. seatd answers a path its client already holds with the *same* device id and its
+    /// reference count raised, so a second open would leave two records of one device and one
+    /// give-back — and the count would stand at one, with the daemon holding the device, for the
+    /// rest of the run. A caller closes the path it holds and opens it again, and that is what a
+    /// resume does.
     ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::Backend`] when the node cannot be opened, when the descriptor that
-    /// came back names something other than an evdev node, and when this session already holds a
-    /// device at `path`. The first two are not unusual: on the seated path a daemon decides which
-    /// devices this session may have, and on the direct path most nodes belong to a group.
-    pub fn open_input(&mut self, path: &Path) -> Result<zgui_evdev::Device, PlatformError> {
+    /// Returns [`Unopened::NotYet`] when the descriptor that came back names an evdev node that
+    /// answers nothing, and a daemon hands every node to a session waiting for its terminal that
+    /// way. Returns [`Unopened::Refused`] when the node cannot be opened, when the descriptor names
+    /// something other than an evdev node, and when this session already holds a device at `path`.
+    /// None of them is unusual: on the seated path a daemon decides which devices this session may
+    /// have, and on the direct path most nodes belong to a group.
+    pub fn open_input(&mut self, path: &Path) -> Result<zgui_evdev::Device, Unopened> {
         #[cfg(test)]
         self.asked.push(Asked::Open(path.to_owned()));
 
         match &mut self.shape {
             Shape::Seated { seat, inputs, .. } => seated_input(seat, inputs, path),
+            // This process opens the node, so nothing revoked it: `Device::open` reads the node
+            // rather than a descriptor somebody handed over, and the probe that answers `ENODEV`
+            // runs on the other route alone.
             Shape::Direct { .. } => {
-                zgui_evdev::Device::open(path).map_err(|error| backend_error(&error))
+                zgui_evdev::Device::open(path).map_err(|error| unopened(&error))
             }
         }
     }
@@ -785,27 +846,27 @@ fn seated_input(
     seat: &zgui_seat::Seat,
     inputs: &mut Vec<(PathBuf, zgui_seat::Device)>,
     path: &Path,
-) -> Result<zgui_evdev::Device, PlatformError> {
+) -> Result<zgui_evdev::Device, Unopened> {
     if inputs.iter().any(|(held, _)| held == path) {
-        return Err(PlatformError::Backend(format!(
+        return Err(Unopened::Refused(PlatformError::Backend(format!(
             "{} is already open through this session, and a daemon that answered a second open \
              would hold a record of the device this run has no way to give back",
             path.display()
-        )));
+        ))));
     }
 
     let device = seat
         .open_device(path)
-        .map_err(|error| backend_error(&error))?;
+        .map_err(|error| Unopened::Refused(backend_error(&error)))?;
 
     let duplicate = match device.descriptor().try_clone_to_owned() {
         Ok(duplicate) => duplicate,
         Err(error) => {
             give_back(seat, device);
-            return Err(PlatformError::Backend(format!(
+            return Err(Unopened::Refused(PlatformError::Backend(format!(
                 "the descriptor the seat opened {} on cannot be copied: {error}",
                 path.display()
-            )));
+            ))));
         }
     };
 
@@ -816,7 +877,7 @@ fn seated_input(
         }
         Err(error) => {
             give_back(seat, device);
-            Err(backend_error(&error))
+            Err(unopened(&error))
         }
     }
 }
@@ -892,13 +953,21 @@ fn give_back(seat: &zgui_seat::Seat, device: zgui_seat::Device) {
 
 #[cfg(test)]
 mod tests {
-    //! What a session with no daemon does with the terminal a key asked for.
+    //! What a session with no daemon does with the terminal a key asked for, and what it makes of
+    //! a refusal.
     //!
     //! The direct shape is the one a test can build. [`Session::direct`] asks libseat nothing and
     //! takes no card and no terminal, so what is left to decide is what a switch does on a machine
     //! where nothing owns one.
+    //!
+    //! **A refusal is read apart from the session that produced it.** [`unopened`] is a function of
+    //! one value, so both answers are reachable here. Producing a revoked descriptor needs a daemon
+    //! that revokes one, and `tests/session_seated.rs` has no way to ask its backend for that. What
+    //! that binary does cover is the other answer, over `/dev/null` and a live seat.
 
-    use super::{Asked, Session};
+    use std::path::PathBuf;
+
+    use super::{Asked, Session, Unopened, unopened};
 
     #[test]
     fn a_run_that_owns_no_terminal_states_the_refusal_once() {
@@ -922,5 +991,47 @@ mod tests {
             ],
             "the first ask was refused with the reason, and every later one without a word"
         );
+    }
+
+    #[test]
+    fn a_revoked_node_is_a_device_that_arrives_later_rather_than_a_node_that_opened_nothing() {
+        // The whole of the decision. A run started on a terminal that is not the live one is handed
+        // every one of its evdev nodes revoked, so this is the answer for all twenty-two of them —
+        // and each of them is a device the resume takes.
+        let revoked = unopened(&zgui_evdev::Error::Revoked {
+            path: PathBuf::from("/dev/input/event0"),
+        });
+
+        assert!(
+            matches!(revoked, Unopened::NotYet(_)),
+            "{revoked:?}: a revoked descriptor is a device this session gets when it has the \
+             terminal"
+        );
+        assert!(
+            revoked.to_string().contains("/dev/input/event0"),
+            "and the refusal keeps the words the device crate wrote: {revoked}"
+        );
+    }
+
+    #[test]
+    fn every_other_refusal_is_a_node_this_run_gets_no_device_at() {
+        // The three shapes the seated path produces: a descriptor onto something that is no evdev
+        // node, a daemon that refused the node, and a node this session already holds. None of them
+        // arrives later, so each is reported where it happened.
+        for error in [
+            zgui_evdev::Error::Unusable("that is a graphics card".to_owned()),
+            zgui_evdev::Error::Open {
+                path: PathBuf::from("/dev/input/event0"),
+                source: std::io::Error::from_raw_os_error(rustix::io::Errno::ACCESS.raw_os_error()),
+            },
+        ] {
+            let refused = unopened(&error);
+            assert!(matches!(refused, Unopened::Refused(_)), "{refused:?}");
+            assert_eq!(
+                refused.to_string(),
+                error.to_string(),
+                "and it is reported in the words it arrived in"
+            );
+        }
     }
 }

@@ -450,9 +450,11 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Unusable`] naming `path` when `fd` names something other than an evdev
-    /// node, and when `fd` cannot be made non-blocking. Returns [`Error::Ioctl`] when the node
-    /// answers and will not say what it is.
+    /// Returns [`Error::Revoked`] naming `path` when `fd` names an evdev node that answers
+    /// nothing, as every node a session waiting for its terminal is handed does. Returns
+    /// [`Error::Unusable`] naming `path` when `fd` names something other than an evdev node, and
+    /// when `fd` cannot be made non-blocking. Returns [`Error::Ioctl`] when the node answers and
+    /// will not say what it is.
     pub fn over(fd: OwnedFd, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_owned();
         confirm_input_device(fd.as_fd(), &path)?;
@@ -681,16 +683,41 @@ fn raise_non_blocking(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Unusable`] naming `path` when the query is refused.
+/// Returns [`Error::Revoked`] naming `path` for an evdev node that answers nothing, and
+/// [`Error::Unusable`] naming `path` for a descriptor onto something else. [`refusal`] is which of
+/// the two, and why they are apart.
 fn confirm_input_device(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
     let mut version: c_int = 0;
 
-    ioctl::issue(fd, ioctl::GET_VERSION, &mut version).map_err(|error| {
-        Error::Unusable(format!(
-            "the descriptor for {} names something other than an input device: {error}",
-            path.display()
-        ))
-    })
+    ioctl::issue(fd, ioctl::GET_VERSION, &mut version).map_err(|error| refusal(&error, path))
+}
+
+/// Reports what a refused `EVIOCGVERSION` says about the descriptor.
+///
+/// The two answers have two separate causes.
+///
+/// **`ENODEV` is an evdev node.** The input driver refuses every request on a client whose
+/// descriptor was revoked and on a device that has gone, and it refuses them before it reads the
+/// request number. So the descriptor names an input device this caller cannot read *yet*: a session
+/// waiting for its terminal is handed each of its nodes revoked, and they are its own once a person
+/// switches to it.
+///
+/// **Anything else is a descriptor onto something the input driver never sees.** `ENOTTY` is the
+/// answer there, from `/dev/null` and from a graphics card alike, and it says the caller handed
+/// over the wrong descriptor.
+fn refusal(error: &Error, path: &Path) -> Error {
+    if let Error::Ioctl { source, .. } = error
+        && source.raw_os_error() == Some(rustix::io::Errno::NODEV.raw_os_error())
+    {
+        return Error::Revoked {
+            path: path.to_owned(),
+        };
+    }
+
+    Error::Unusable(format!(
+        "the descriptor for {} names something other than an input device: {error}",
+        path.display()
+    ))
 }
 
 /// Asks the device what it calls itself.
@@ -821,6 +848,57 @@ mod tests {
         // working device, and the replacement character says what happened where a person reads
         // it.
         assert_eq!(name_from(b"caf\xff\0"), "caf\u{fffd}");
+    }
+
+    /// What the probe answers for a descriptor whose `EVIOCGVERSION` failed with `errno`.
+    fn probed(errno: rustix::io::Errno) -> Error {
+        refusal(
+            &Error::Ioctl {
+                request: "GET_VERSION",
+                source: std::io::Error::from_raw_os_error(errno.raw_os_error()),
+            },
+            Path::new("/dev/input/event0"),
+        )
+    }
+
+    #[test]
+    fn a_node_that_answers_nothing_is_told_apart_from_a_descriptor_that_is_no_node() {
+        // The probe exists to catch a graphics card handed to the input call, and a revoked evdev
+        // node is a different machine. logind revokes every descriptor it hands to a session that
+        // is waiting for its terminal, so a run started on a background terminal meets `ENODEV` on
+        // every node it is given — and reporting each of them as the wrong kind of descriptor is a
+        // log that says the machine has no input devices while it has twenty-two.
+        let revoked = probed(rustix::io::Errno::NODEV);
+        let other = probed(rustix::io::Errno::NOTTY);
+
+        assert!(
+            matches!(revoked, Error::Revoked { .. }),
+            "`ENODEV` is the input driver refusing on its own device: {revoked:?}"
+        );
+        assert!(
+            matches!(other, Error::Unusable(_)),
+            "`ENOTTY` is a descriptor the input driver never sees, which is what `/dev/null` and a \
+             graphics card both answer: {other:?}"
+        );
+    }
+
+    #[test]
+    fn each_refusal_names_the_path_and_says_which_of_the_two_happened() {
+        // Both lines reach a log a person reads to find out why nothing can be typed. One has to
+        // read as "this device is coming", and the other as "this descriptor is the wrong thing".
+        let revoked = probed(rustix::io::Errno::NODEV).to_string();
+        let other = probed(rustix::io::Errno::NOTTY).to_string();
+
+        assert!(revoked.contains("/dev/input/event0"), "{revoked}");
+        assert!(other.contains("/dev/input/event0"), "{other}");
+        assert!(
+            revoked.contains("answers nothing yet"),
+            "a revoked node is a device that arrives later: {revoked}"
+        );
+        assert!(
+            other.contains("something other than an input device"),
+            "and a descriptor onto something else is what the probe was written for: {other}"
+        );
     }
 
     #[test]

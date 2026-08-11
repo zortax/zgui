@@ -47,6 +47,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use zgui_platform_drm::Session;
+use zgui_platform_drm::session::Unopened;
 
 /// The variable libseat reads the backend name out of.
 const BACKEND: &str = "LIBSEAT_BACKEND";
@@ -444,6 +445,13 @@ fn a_path_that_is_no_input_device_goes_back_to_the_seat(nodes: &[PathBuf]) {
     assert!(
         refusal.to_string().contains(NOT_A_CARD),
         "the refusal names the path it was asked for, and it reads: {refusal}"
+    );
+    // A descriptor onto something the input driver never sees answers `ENOTTY`, and the node this
+    // run gets later answers `ENODEV`. This is the first of the two, over a live seat: a caller
+    // that walks a directory reports one and counts the other.
+    assert!(
+        matches!(refusal, Unopened::Refused(_)),
+        "`/dev/null` is a descriptor this session gets no device at, ever: {refusal:?}"
     );
     assert_eq!(
         support::open_descriptors(),
