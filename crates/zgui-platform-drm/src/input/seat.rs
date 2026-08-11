@@ -26,8 +26,10 @@
 //!
 //! A device that came from the daemon goes back to it through the session. Dropping the descriptor
 //! leaves the daemon holding its record of the device, so the paths are opened and closed here
-//! rather than anywhere else. [`Seat::reopen`] closes every device before it opens the same paths
-//! again.
+//! rather than anywhere else.
+//!
+//! A terminal switch is those two halves a moment apart. [`Seat::let_go`] gives every device back
+//! and [`Seat::take_again`] opens them all again, and the loop puts the wait between them.
 //!
 //! # One device with two jobs
 //!
@@ -629,6 +631,11 @@ pub struct Seat {
     /// Nothing on a machine with no watch changes: the set of devices is then what it was at
     /// start-up, the way this backend behaved before the watch existed.
     watch: Option<Watch>,
+    /// The directory the devices come from.
+    ///
+    /// Kept because a session that comes back walks it again. See [`Seat::take_again`] for why a
+    /// resume walks the directory rather than a list of the paths that were held.
+    directory: PathBuf,
 }
 
 impl Seat {
@@ -694,17 +701,33 @@ impl Seat {
             pending: Vec::new(),
             anchored: Stamps::anchored(clock),
             watch,
+            directory: directory.to_owned(),
         };
-        // The nodes are listed here and opened through the session, rather than opened by the walk
-        // itself. Which devices this run may have is the session's answer: a seated run is handed
-        // each one by the daemon that owns the terminal, and on the ordinary machine that is the
-        // only way it gets one at all, because an `/dev/input/event*` node belongs to the `input`
-        // group.
-        match zgui_evdev::nodes_in(directory) {
+        let announced = seat.walk(session);
+        seat.pending.extend(announced);
+        seat
+    }
+
+    /// Opens every node in this seat's directory through the session, and takes what it can.
+    ///
+    /// The nodes are listed here and opened through the session, rather than opened by the walk
+    /// itself. Which devices this run may have is the session's answer: a seated run is handed each
+    /// one by the daemon that owns the terminal, and on the ordinary machine that is the only way it
+    /// gets one at all, because an `/dev/input/event*` node belongs to the `input` group.
+    ///
+    /// A node this seat already holds is left alone by [`Seat::take_node`], so this can be walked
+    /// over a set that is already part taken.
+    ///
+    /// What comes back is what was already held on the devices that were taken. Two runs of this
+    /// exist: the open, which puts them where the first read will report them, and the resume, which
+    /// hands them to the loop.
+    fn walk(&mut self, session: &mut Session) -> Vec<SurfaceEvent> {
+        let listed = zgui_evdev::nodes_in(&self.directory);
+        let mut announced = Vec::new();
+        match listed {
             Ok(nodes) => {
                 for path in &nodes {
-                    let announced = seat.take_node(session, path);
-                    seat.pending.extend(announced);
+                    announced.extend(self.take_node(session, path));
                 }
             }
             Err(error) => warn!(
@@ -712,20 +735,20 @@ impl Seat {
                 "no input device can be found on this machine: {error}"
             ),
         }
-        if !seat.devices.iter().any(|taken| taken.types) {
+        if !self.devices.iter().any(|taken| taken.types) {
             warn!(
                 target: "zgui::platform",
                 "no keyboard on this machine could be taken, so nothing can be typed into this \
                  program"
             );
         }
-        if !seat.devices.iter().any(|taken| taken.points.is_some()) {
+        if !self.devices.iter().any(|taken| taken.points.is_some()) {
             warn!(
                 target: "zgui::platform",
                 "no pointing device on this machine could be taken, so the cursor cannot be moved"
             );
         }
-        seat
+        announced
     }
 
     /// Returns the descriptors the frame loop waits on beside the device and the wake channel.
@@ -1003,49 +1026,32 @@ impl Seat {
         reports
     }
 
-    /// Gives every device back to the session and opens the same paths again.
+    /// Gives every device back to the session, and reports what each one was holding.
     ///
-    /// This is what a session that was away and has come back needs. An evdev descriptor another
-    /// session took is revoked for good — `EVIOCREVOKE` cannot be undone — so the recovery is a
-    /// device opened again, with a new descriptor and a new device id.
+    /// The first half of a terminal switch. Everything is already gone by the time it runs: logind
+    /// has revoked every evdev descriptor with `EVIOCREVOKE`, which cannot be undone, so there is
+    /// nothing to save and nothing to wait for.
     ///
-    /// # Closed before anything is opened, on the same path
+    /// **The devices go back through the session rather than by being dropped.** Dropping one closes
+    /// a descriptor and leaves the daemon holding its record of the device until the seat closes,
+    /// which on this path is one record per device per switch.
     ///
-    /// Every device goes first, and then the paths are walked. seatd's `seat_open_device` answers
-    /// the *same* device id with its reference count raised for a path the client already holds, so
-    /// a reopen that opened first would get one id where it expected two, and the first close would
-    /// release the device out from under the second. The grab says the same thing from the kernel's
-    /// side: it is exclusive, so a second open of a node this process still holds is a grab that is
-    /// refused.
+    /// Each device goes the way a device that stopped answering goes: its keys come off the layout
+    /// and the interactions its buttons were holding open are ended. Without that, a modifier held
+    /// while the terminal moved stays held for the rest of the program and a control gripped by the
+    /// pointer never lets go.
     ///
-    /// # What the devices were holding
-    ///
-    /// Each one goes the way a device that stopped answering goes — its keys come off the layout
-    /// and the interactions its buttons were holding open are ended — and each one arrives the way
-    /// a device plugged in arrives, which asks the kernel what is held on it after the grab. So a
-    /// modifier somebody kept a finger on is read again rather than counted twice.
+    /// On the libinput source the devices go back through the context, and what each was holding is
+    /// repaired in the read that follows, so nothing comes back here.
     ///
     /// The watch is untouched. It is this crate's own inotify rather than a device the seat opened,
     /// and no session ever takes it.
-    ///
-    /// # A path that does not come back is a device lost for the rest of the run
-    ///
-    /// Nothing here tries again, and the watch reports a node that is already in the directory to
-    /// nobody. So a device the daemon refuses at this moment — one it has yet to hand back after
-    /// the switch — is a keyboard or a mouse that reaches nothing until the program is started
-    /// again. Each one is reported as a warning, which is what says how it was lost.
-    pub fn reopen(
+    pub fn let_go(
         &mut self,
         session: &mut Session,
         pointer: &Pointer,
         screens: &[Screen],
     ) -> Vec<Report> {
-        let paths: Vec<PathBuf> = self
-            .devices
-            .iter()
-            .map(|taken| taken.device.path().to_owned())
-            .collect();
-
         let mut reports = Vec::new();
         for mut gone in std::mem::take(&mut self.devices) {
             reports.extend(let_go_of(&mut gone, &mut self.keys, pointer, screens));
@@ -1054,19 +1060,40 @@ impl Seat {
         // session tells the daemon here, and a daemon told while this process still held a
         // descriptor would release a device that is still grabbed.
         session.close_every_input();
-
-        for path in &paths {
-            reports.extend(self.take_node(session, path).map(Report::focused));
-            if !self.holds(path) {
-                warn!(
-                    target: "zgui::platform",
-                    "{} was held before this session was away and did not come back, so it \
-                     reaches nothing until this program is started again",
-                    path.display()
-                );
-            }
-        }
         reports
+    }
+
+    /// Opens every device again, and reports what is held on each.
+    ///
+    /// The second half of a terminal switch. Each device arrives the way a device plugged in
+    /// arrives, which asks the kernel what is held on it after the grab — so a modifier somebody
+    /// kept a finger on is read again rather than counted twice.
+    ///
+    /// # Order
+    ///
+    /// **Every device this seat holds has to go back through [`Seat::let_go`] before this runs.**
+    /// seatd's `seat_open_device` answers the *same* device id with its reference count raised for
+    /// a path the client already holds, so an open that came first would get one id where it
+    /// expected two, and the first close would release the device out from under the second. The
+    /// grab says the same thing from the kernel's side: it is exclusive, so a second open of a node
+    /// this process still holds is a grab that is refused.
+    ///
+    /// # The walk
+    ///
+    /// The directory is walked again rather than a list of what was held, and two machines need
+    /// that. A run started on a terminal that is not the live one held **nothing** at start-up —
+    /// the daemon hands over an evdev node it has already revoked, so the walk took none of them —
+    /// and a list of what was held would be empty for the whole run. A keyboard plugged in while
+    /// this session was away is in the directory and in no such list.
+    ///
+    /// What it costs is one open and one give-back per node this seat declines, per switch. That is
+    /// the same walk [`Seat::open`] pays for at start-up, once per terminal switch, which is a
+    /// person's own action.
+    pub fn take_again(&mut self, session: &mut Session) -> Vec<Report> {
+        self.walk(session)
+            .into_iter()
+            .map(Report::focused)
+            .collect()
     }
 }
 
@@ -2928,6 +2955,7 @@ mod tests {
             pending: Vec::new(),
             anchored: Stamps::from_origin(SINCE),
             watch: zgui_evdev::Watch::new_in(directory).ok(),
+            directory: directory.to_owned(),
         }
     }
 
@@ -3197,16 +3225,18 @@ mod tests {
     }
 
     #[test]
-    fn reopening_lets_every_device_go_before_it_opens_the_same_paths_again() {
-        let test = "reopening_lets_every_device_go_before_it_opens_the_same_paths_again";
+    fn a_suspend_gives_every_device_back_and_the_resume_after_it_takes_them_again() {
+        // The two halves of a terminal switch, a round apart, as the frame loop runs them when the
+        // session goes away and comes back.
+        let test = "a_suspend_gives_every_device_back_and_the_resume_after_it_takes_them_again";
         let _turn = turn();
-        let Some(path) = takeable_pointer(test) else {
+        let Some(mouse) = takeable_pointer(test) else {
             return;
         };
         // The direct shape, and it is asked for rather than opened: a session that opened a seat
         // would take this terminal for as long as the test ran.
         //
-        // **On this shape both give-backs do nothing, and that is why the session records what it
+        // **On this shape the give-back does nothing, and that is why the session records what it
         // was asked for.** What a seated run would be asked for, and in which order, is
         // `Session::asked` — written by each call before it reads the shape. That a daemon then
         // releases the device is the other half, and it is asserted from the session's own side by
@@ -3216,26 +3246,58 @@ mod tests {
         // **No test in this tree joins the two halves.** A seat over a seated session needs the
         // backend chosen before the process has a thread, which a test harness cannot do, and
         // `Session::open` on this machine takes the real terminal. So the composition — this seat
-        // driving a live seat's devices — is asserted by the hardware run in the plan and by
-        // nothing here.
+        // driving a live seat's devices across a real switch — is asserted by the hardware run in
+        // the plan and by nothing here.
         let mut session = Session::direct();
         let root = Scratch::new(test);
+        // The directory is this test's own, holding one name for the machine's mouse. A walk of the
+        // real `/dev/input` grabs every keyboard on the machine and holds it for as long as the
+        // seat lives.
+        let path = root.0.join("event0");
+        std::os::unix::fs::symlink(&mouse, &path).expect("the mouse is named in this directory");
         let mut seat = watching(&root.0);
 
-        seat.take_node(&mut session, &path);
+        let taken = seat.take_again(&mut session);
         assert!(
             seat.holds(&path),
-            "the node the kernel publishes as a mouse is one this seat takes"
+            "the node the kernel publishes as a mouse is one this seat takes: {taken:?}"
         );
         let watched = seat.descriptors().count();
 
-        // Twice over, because one round proves nothing about the second: a reopen that left a
+        // Twice over, because one round proves nothing about the second: a switch that left a
         // descriptor or a record behind carries it into the round after it.
         for round in 0..2 {
-            let reports = seat.reopen(&mut session, &Pointer::centred(&[]), &[]);
+            let gone = seat.let_go(&mut session, &Pointer::centred(&[]), &[]);
 
-            // A grab is exclusive and it is held by the open file description. So a reopen that
-            // opened the path before it let the device on it go would be refused the grab, the
+            assert!(
+                !seat.holds(&path),
+                "round {round}: the device went, which is what a session that lost the terminal \
+                 has to do with one the kernel has already revoked"
+            );
+            assert_eq!(
+                // The node the symbolic link names, because that is what `/proc/self/fd` resolves
+                // a descriptor onto it back to.
+                descriptors_naming(&mouse),
+                0,
+                "round {round}: and its descriptor closed, which is what has to happen before a \
+                 daemon releases the device"
+            );
+            assert_eq!(
+                seat.descriptors().count(),
+                watched - 1,
+                "round {round}: the watch is this crate's own inotify rather than a device, so it \
+                 is the one descriptor left"
+            );
+            assert!(
+                gone.is_empty(),
+                "round {round}: a seat with no layout and nothing held has nothing to say about a \
+                 device that went: {gone:?}"
+            );
+
+            let back = seat.take_again(&mut session);
+
+            // A grab is exclusive and it is held by the open file description. So a resume that
+            // opened the path before the device on it had gone would be refused the grab, the
             // device would be left where it is, and the path would not be here.
             assert!(
                 seat.holds(&path),
@@ -3243,21 +3305,18 @@ mod tests {
                  for again"
             );
             assert_eq!(
-                descriptors_naming(&path),
+                descriptors_naming(&mouse),
                 1,
-                "round {round}: the device that went closed its descriptor, so one name on the \
-                 node is left"
+                "round {round}: and the seat holds one name on the node"
             );
             assert_eq!(
                 seat.descriptors().count(),
                 watched,
-                "round {round}: the watch is this crate's own inotify rather than a device, so a \
-                 reopen leaves it where it was"
+                "round {round}: the loop waits on the device and the watch again"
             );
             assert!(
-                reports.is_empty(),
-                "round {round}: a seat with no layout and nowhere to put a pointer has nothing to \
-                 say about a device that came back: {reports:?}"
+                back.is_empty(),
+                "round {round}: and nothing was held on the device that came back: {back:?}"
             );
 
             let taken = seat.devices.first_mut().expect("the one device is here");
@@ -3277,7 +3336,7 @@ mod tests {
 
         // The session's own half, and the one the direct shape cannot show by counting anything.
         // **The give-back comes before the open, on the same path.** seatd answers a path its
-        // client already holds with the same device id and its reference count raised, so a reopen
+        // client already holds with the same device id and its reference count raised, so a resume
         // that opened first would take that count to zero on the first close and leave the daemon
         // releasing a device this process still holds grabbed.
         assert_eq!(
@@ -3291,6 +3350,47 @@ mod tests {
             ],
             "each round gave every device back through the session and then asked it for the path \
              again"
+        );
+    }
+
+    #[test]
+    fn a_resume_takes_a_device_a_seat_that_started_away_never_held() {
+        // A run started on a terminal nobody is looking at holds **nothing**: the daemon hands over
+        // an evdev node it has already revoked, so the walk at start-up takes none of them. A
+        // resume that walked a list of what was held would find an empty list and the program would
+        // have no keyboard and no mouse for the rest of the run.
+        //
+        // The same shape covers a keyboard plugged in while the session was away, which is in the
+        // directory and in no such list either.
+        let test = "a_resume_takes_a_device_a_seat_that_started_away_never_held";
+        let _turn = turn();
+        let Some(mouse) = takeable_pointer(test) else {
+            return;
+        };
+        let mut session = Session::direct();
+        let root = Scratch::new(test);
+        let mut seat = watching(&root.0);
+
+        // The directory is empty, which stands for a walk that could take nothing.
+        assert!(seat.devices.is_empty());
+        assert!(seat.take_again(&mut session).is_empty());
+        assert!(
+            seat.devices.is_empty(),
+            "there was nothing in the directory to take"
+        );
+
+        let path = root.0.join("event0");
+        std::os::unix::fs::symlink(&mouse, &path).expect("the mouse is named in this directory");
+        seat.take_again(&mut session);
+
+        assert!(
+            seat.holds(&path),
+            "the device arrived while this session was away, and the resume walked the directory"
+        );
+        assert_eq!(
+            session.asked(),
+            [Asked::Open(path.clone())],
+            "and the one node the directory holds is the one the session was asked for"
         );
     }
 

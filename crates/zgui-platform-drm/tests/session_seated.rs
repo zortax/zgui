@@ -221,8 +221,8 @@ fn an_input_device_comes_from_the_seat_and_goes_back_to_it(nodes: &[PathBuf]) {
 
 /// A node closed and opened again costs what it cost the first time.
 ///
-/// This is the shape a resume needs and the shape `Seat::reopen` has: an evdev descriptor another
-/// session took is revoked and `EVIOCREVOKE` cannot be undone, so a device that comes back is a
+/// This is the shape a resume needs and the shape `Seat::take_again` has: an evdev descriptor
+/// another session took is revoked and nothing puts it back, so a device that comes back is a
 /// device opened again. The close is made **first**, on the same path — seatd answers the same
 /// device id with its reference count raised for a path the client already holds, so an open that
 /// came first would get one id where it expected two.
@@ -376,10 +376,10 @@ fn a_path_this_session_holds_is_refused_a_second_open(nodes: &[PathBuf]) {
 /// Every device given back at once and every path opened again, three times over, and each one
 /// reads.
 ///
-/// This is `Seat::reopen` seen from the session's side: the seat lets go of every device, gives
-/// them all back in one call, and then walks the paths it held. Each round is asserted to cost what
-/// the first one cost, and each device that comes back is **read**, so the descriptor is known to
-/// be live rather than merely counted.
+/// This is a terminal switch seen from the session's side: the seat lets go of every device, gives
+/// them all back in one call, and then walks the directory again. Each round is asserted to cost
+/// what the first one cost, and each device that comes back is **read**, so the descriptor is known
+/// to be live rather than merely counted.
 ///
 /// What noop cannot show is the daemon's record. See what this binary leaves uncovered, above.
 fn every_input_device_closed_and_opened_again_reads(nodes: &[PathBuf]) {

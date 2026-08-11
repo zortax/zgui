@@ -37,6 +37,13 @@
 //! A modeset carries no completion event — the call returning says it finished — so the first
 //! present leaves nothing outstanding and the second present is taken at once.
 //!
+//! # Coming back after another session had the screen
+//!
+//! [`Scanout::restore`] is the other place a mode is set. A person who switches terminal gives the
+//! CRTC to another session, which sets its own mode on it, so this one has to set its own again on
+//! the way back. The buffers are this process's own and still hold the frame that was on the
+//! screen, so the picture returns at that commit rather than at the frame after it.
+//!
 //! # The pointer decides the shape
 //!
 //! A display whose engine composites no pointer has it drawn into the frame, and nothing can draw
@@ -137,6 +144,12 @@ pub struct Scanout {
     flipping: bool,
     /// Whether the mode has been set. The first present sets it.
     lit: bool,
+    /// The framebuffer that was last put on the screen, once one has been.
+    ///
+    /// What [`Scanout::restore`] puts back. The buffer behind it is this process's own GEM object
+    /// and holds the frame that was on the screen when another session took it, so a display comes
+    /// back with its picture at the commit rather than at the frame after it.
+    shown: Option<Framebuffer>,
 }
 
 /// The buffers a display is driven from, in one of the two shapes.
@@ -631,6 +644,7 @@ impl Scanout {
             back: 0,
             flipping: false,
             lit: false,
+            shown: None,
         }
     }
 
@@ -661,7 +675,45 @@ impl Scanout {
                 .map_err(backend)?;
             self.lit = true;
         }
+        // After the commit, so that what this names is a framebuffer the driver took. A refusal
+        // leaves the record naming whatever really is on the screen.
+        self.shown = Some(framebuffer);
         Ok(())
+    }
+
+    /// Puts this display back into its mode, showing the frame it last showed.
+    ///
+    /// What a session that has been away calls. Another session has set its own mode on the CRTC
+    /// and taken the plane, so the way back is a modeset rather than a flip — the atomic commit
+    /// carries `ALLOW_MODESET`, and the legacy one sets the CRTC. The buffer is this process's own
+    /// and still holds the last frame it drew, so the picture is back when this returns.
+    ///
+    /// Answers whether anything was put back. A display that never presented has nothing: nothing
+    /// is committed for it, and the first present after this sets the mode with the buffer it would
+    /// have used at start-up. That is a run started on a terminal nobody was looking at.
+    ///
+    /// **Any flip from before is forgotten.** Its completion is not coming — the frame it named was
+    /// on a CRTC another session then took — and a display that kept waiting for one would decline
+    /// every frame for the rest of the program.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the driver refuses the mode. The display is left
+    /// unlit then, so the next present sets it again rather than flipping onto a CRTC that is
+    /// showing nothing of this program's.
+    pub fn restore(
+        &mut self,
+        device: &Device,
+        commit: &mut dyn Commit,
+    ) -> Result<bool, PlatformError> {
+        let Some(framebuffer) = self.shown else {
+            return Ok(false);
+        };
+        self.flipping = false;
+        self.lit = false;
+
+        self.show(device, commit, framebuffer, None)?;
+        Ok(true)
     }
 }
 

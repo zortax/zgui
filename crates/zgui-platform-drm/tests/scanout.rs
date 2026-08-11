@@ -223,7 +223,72 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
         "three frames reached crtc {}: one modeset and two flips, both completed",
         output.pipe.crtc
     );
+
+    // What a session that has been away does on the way back. Another session has set its own mode
+    // on this CRTC by then, so the way back is a modeset carrying the buffer this display last
+    // presented — and the picture is up when the call returns rather than at the frame after it.
+    assert!(
+        scanout
+            .restore(&device, &mut *commit)
+            .expect("the driver sets the mode on this display again"),
+        "the display has presented, so it has a frame to put back"
+    );
+    // A modeset leaves no flip on its way, and it clears whatever one was outstanding — the
+    // completion of a flip from before a switch never arrives, because the CRTC it named was
+    // another session's. A display that kept waiting would decline every frame from here on.
+    assert!(
+        scanout
+            .present(&device, &mut *commit, &pixels, &cursor)
+            .expect("the driver accepts the flip after the mode was set again"),
+        "the display is taking frames again"
+    );
+    assert!(
+        await_flip(&device, &mut scanout, output.pipe.crtc),
+        "and that flip completes"
+    );
+    println!("crtc {} was put back into its mode", output.pipe.crtc);
+
     scanout.release(&device);
     cursor.release(&device);
     drop(device.drop_master());
+}
+
+#[test]
+fn a_display_that_never_presented_has_nothing_to_put_back() {
+    // A run started on a terminal nobody was looking at reaches its first resume with every display
+    // unlit: the buffers are allocated and registered — neither needs DRM master — and nothing has
+    // been committed, because a commit is the one thing master is for. So the resume puts nothing
+    // back and the first present sets the mode with the buffer it would have used at start-up.
+    //
+    // This needs no master, and that is the assertion: a `restore` that committed anyway would be
+    // refused with `EPERM` here and the result below would be an error rather than `false`.
+    let test = "a_display_that_never_presented_has_nothing_to_put_back";
+    let device = match Device::open_first_with(Interface::Preferred) {
+        Ok(device) => device,
+        Err(error) => {
+            eprintln!(
+                "{test}: no DRM device on this machine, so nothing was asserted: {error}\n\
+                 load the virtual driver with `sudo modprobe vkms` to run it"
+            );
+            return;
+        }
+    };
+    let outputs = Output::discover(&device).expect("the device is readable");
+    let Some(output) = outputs.first() else {
+        eprintln!("{test}: no display is plugged in, so nothing was asserted");
+        return;
+    };
+
+    let mut commit = commit::for_device(&device);
+    let mut scanout = Scanout::copied(&device, output, true)
+        .expect("a buffer and a framebuffer need no DRM master");
+
+    assert!(
+        !scanout
+            .restore(&device, &mut *commit)
+            .expect("a display with nothing to put back asks the driver for nothing"),
+        "nothing has been on this display, so there is nothing to put back"
+    );
+
+    scanout.release(&device);
 }

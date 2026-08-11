@@ -216,6 +216,13 @@ fn a_seat_opens_and_enables_inside_the_bound() {
         took < ENABLE_WITHIN,
         "the seat enabled inside the bound, and this one took {took:?} of {ENABLE_WITHIN:?}"
     );
+    // The other answer an open can give. noop has no session at all, so it enables and never
+    // reports itself inactive. The case where it does is logind on a background terminal, and it is
+    // asserted over a written queue rather than here.
+    assert!(
+        !seat.opened_inactive(),
+        "the open read an enable rather than a disable"
+    );
     drop(seat);
 }
 
