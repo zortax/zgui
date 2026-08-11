@@ -29,7 +29,9 @@
 //! rather than anywhere else.
 //!
 //! A terminal switch is those two halves a moment apart. [`Seat::let_go`] gives every device back
-//! and [`Seat::take_again`] opens them all again, and the loop puts the wait between them.
+//! and [`Seat::take_again`] opens them all again, and the loop puts the wait between them. The
+//! give-back runs before every resume, including the one where the loop read both changes in one
+//! turn and gave nothing back: [`Seat::take_again`] states why.
 //!
 //! # One device with two jobs
 //!
@@ -655,13 +657,14 @@ impl Seat {
         Self::open_in(session, clock, Path::new(zgui_evdev::DIRECTORY))
     }
 
-    /// Every device in `directory`, taken.
+    /// Takes every device in `directory`.
     ///
-    /// [`Seat::open`] is this over the directory the kernel puts input devices in, which is what a
-    /// run walks. The directory is a parameter so that a test can hand this one holding devices it
-    /// chose: a walk of the real one grabs every keyboard on the machine, and a grab lasts for as
-    /// long as the seat does.
-    fn open_in(session: &mut Session, clock: &dyn Clock, directory: &Path) -> Self {
+    /// [`Seat::open`] is this over the directory the kernel puts input devices in, and that is the
+    /// directory a run walks. The directory is a parameter so that a test can hand this one holding
+    /// devices it chose: a walk of the real one grabs every keyboard on the machine, and a grab
+    /// lasts for as long as the seat does. It is reachable across the crate because the frame
+    /// loop's own tests need a seat that holds nothing and takes nothing.
+    pub(crate) fn open_in(session: &mut Session, clock: &dyn Clock, directory: &Path) -> Self {
         let found = layout::find();
         for refusal in &found.refused {
             info!(target: "zgui::platform", "no layout from {refusal}");
@@ -715,8 +718,12 @@ impl Seat {
     /// one by the daemon that owns the terminal, and on the ordinary machine that is the only way it
     /// gets one at all, because an `/dev/input/event*` node belongs to the `input` group.
     ///
-    /// A node this seat already holds is left alone by [`Seat::take_node`], so this can be walked
-    /// over a set that is already part taken.
+    /// **A node this seat already holds is left where it is.** Nothing here checks: what refuses
+    /// the second open is the session, which holds a device at that path and answers every later
+    /// ask for it with a refusal. So a walk over a set that is part taken opens what is left and
+    /// repairs nothing that is held — and after a terminal switch what is held is a set of revoked
+    /// descriptors, which a walk alone would leave revoked. [`Seat::take_again`] states the
+    /// give-back that has to run first.
     ///
     /// What comes back is what was already held on the devices that were taken. Two runs of this
     /// exist: the open, which puts them where the first read will report them, and the resume, which
@@ -1069,14 +1076,24 @@ impl Seat {
     /// arrives, which asks the kernel what is held on it after the grab — so a modifier somebody
     /// kept a finger on is read again rather than counted twice.
     ///
+    /// On the libinput source the devices are opened again through the context, and what is held on
+    /// each is reported in the read that follows, so nothing comes back here.
+    ///
     /// # Order
     ///
-    /// **Every device this seat holds has to go back through [`Seat::let_go`] before this runs.**
+    /// [`Seat::let_go`] runs first, on **every** resume, and the two are never folded together.
     /// seatd's `seat_open_device` answers the *same* device id with its reference count raised for
     /// a path the client already holds, so an open that came first would get one id where it
     /// expected two, and the first close would release the device out from under the second. The
     /// grab says the same thing from the kernel's side: it is exclusive, so a second open of a node
     /// this process still holds is a grab that is refused.
+    ///
+    /// **"Every resume" includes the one where nothing was given back.** A turn that reads a
+    /// disable and an enable together is one resume, and it runs with every device still held —
+    /// each of them revoked, because logind revokes before it reports. A resume that opened first
+    /// there would be refused every path the session holds, take nothing, and leave the program
+    /// with no keyboard and no pointer for the rest of the run. The frame loop's `resume` keeps the
+    /// order, and it gives back whether or not it holds anything.
     ///
     /// # The walk
     ///

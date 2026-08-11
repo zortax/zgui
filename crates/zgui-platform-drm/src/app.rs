@@ -1,8 +1,8 @@
 //! The frame loop: take the device, light the displays, and turn until the application stops.
 //!
-//! The driver, and the only one this backend has. It opens the device, takes DRM master, discovers
-//! the displays, gives each one its buffers, and then turns: read the device, hand the frames that
-//! were asked for to the application, ask it how to wait, and wait.
+//! This is the backend's only driver. It opens the device, takes DRM master, discovers the
+//! displays, gives each one its buffers, and then turns: read the device, hand the frames that were
+//! asked for to the application, ask it how to wait, and wait.
 //!
 //! Which shape those buffers take is settled here, once per display, and it needs the graphics
 //! device the renderer will draw on — so the caller opens that device first and hands it in. See
@@ -14,15 +14,15 @@
 //! answering one whole class of event.
 //!
 //! 1. **A display finished a flip.** The device becomes readable, the completion is read, and the
-//!    buffer the display had before the flip is free for the next frame.
+//!    buffer the display had before it is free for the next frame.
 //! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
 //!    which is the second descriptor the wait watches, and arrives as a
 //!    [`WakeReason`](zgui_platform::WakeReason).
 //! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable,
 //!    and every device the seat took is one more descriptor the wait watches — so the watch set is
 //!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
-//!    surface, and a pointer event goes to the display the pointer is on — which is the display
-//!    that decides the focused surface.
+//!    surface and a pointer event goes to the display the pointer is on — the display that decides
+//!    the focused surface.
 //! 4. **Somebody plugged a device in.** The seat's watch on the device directory is one more
 //!    descriptor in the same set, and a node made there ends the wait. The device is opened,
 //!    grabbed and read from the next turn on. Nothing is dispatched for the arrival itself, beyond
@@ -44,28 +44,32 @@
 //! and it has two shapes: a session daemon opens the card and hands it over, which needs no
 //! privilege at all, or this process opens it and takes DRM master, which needs root or a free
 //! virtual terminal. A run started inside a desktop's own session gets the second shape, because a
-//! session that already has a controlling client is refused the seat, and DRM master is what
-//! refuses the run there.
+//! session that already has a controlling client is refused the seat, and DRM master refuses the
+//! run there.
 //!
-//! The session is also what gives everything back — the console, the master and every device the
-//! seat opened — so this loop opens one, holds it for longer than the card, and pairs nothing up
-//! itself.
+//! The session also gives everything back — the console, the master and every device the seat
+//! opened — so this loop opens one, holds it for longer than the card, and pairs nothing up itself.
 //!
 //! # Going away, and coming back
 //!
 //! A seated run gives its devices up when a person switches to another terminal. The
-//! `session::presence` module is what a turn's worth of changes becomes, and this loop is what
-//! carries the answer out.
+//! `session::presence` module turns a turn's worth of changes into one answer, and this loop
+//! carries that answer out.
 //!
 //! **Going away.** Every claimed surface is told it is occluded, every input device goes back
-//! through the seat, and nothing is committed. There is no window to finish a frame in: the
-//! terminal has already moved, DRM master has already gone and every input descriptor already
-//! answers `ENODEV` by the time the change is read.
+//! through the seat, the surface that held the keyboard is told it lost it, and nothing is
+//! committed. There is no window to finish a frame in: the terminal has already moved, DRM master
+//! has already gone and every input descriptor already answers `ENODEV` by the time the change is
+//! read.
 //!
-//! **Coming back.** The input devices are opened again, every display is put back into its mode
-//! with the buffer it last presented, every cursor goes back on its plane, and every surface is
-//! asked for a frame and told it is visible again. The buffers are this process's own and still
-//! hold the last frame, so the picture is back at the commit rather than at the frame after it.
+//! **Coming back.** Whatever the seat still holds goes back and every input device is opened again,
+//! every display is put back into its mode with the buffer it last presented, every cursor goes
+//! back on its plane, and every surface is asked for a frame and told it is visible again. The
+//! buffers are this process's own and still hold the last frame, so the picture is back at the
+//! commit rather than at the frame after it.
+//!
+//! The give-back on the way back is there for the turn that read a disable and an enable together.
+//! That turn is one resume over a seat that never gave anything up, and `resume` below sets it out.
 //!
 //! While the session is away the loop turns and commits nothing. Redraw requests are left where
 //! they are, so the frames that were asked for are drawn on the way back.
@@ -85,19 +89,19 @@
 //!
 //! The same process, and it takes both **after** the device. [`crate::session`] is where each one
 //! comes from, the way the card does: a seated run is handed every input device by the daemon, and
-//! a direct run opens the node itself. That ordering is the safety interlock:
-//! a direct run on a busy machine fails at DRM master and never reaches the grab, so it cannot take
-//! either away from the desktop that is using them. A machine where a compositor holds the devices
-//! reaches that refusal, because a session that already has a controlling client is refused the
-//! seat and falls back to the direct shape. See [`crate::input::seat`] for what the grab gives and
-//! for the one thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds
-//! no way out has to be killed from another terminal.
+//! a direct run opens the node itself. That ordering is the safety interlock: a direct run on a
+//! busy machine fails at DRM master and never reaches the grab, so it cannot take either away from
+//! the desktop that is using them. A machine where a compositor holds the devices reaches that
+//! refusal, because a session that already has a controlling client is refused the seat and falls
+//! back to the direct shape. See [`crate::input::seat`] for what the grab gives and for the one
+//! thing it costs — a grabbed keyboard raises no `SIGINT`, so an application that binds no way out
+//! has to be killed from another terminal.
 //!
 //! The interlock holds on the seated path too, and there it is the daemon's own. A run started on a
 //! terminal that is not the live one gets a seat that is open and waiting: logind hands over every
 //! evdev node it has already revoked, so the walk below takes none of them and this run grabs
 //! nothing at all while another session is on the screen. What it may have arrives with the enable,
-//! which is a person switching to this terminal.
+//! when a person switches to this terminal.
 //!
 //! # What moves the cursor
 //!
@@ -107,6 +111,7 @@
 //! the picture is what carries the pointer. [`crate::cursor`] is where that difference lives.
 
 use std::cell::RefCell;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -329,31 +334,38 @@ fn drive(
                 Ok(changes) => changes,
                 Err(error) => break 'running Err(error),
             };
-            match presence.turn(&changes) {
-                Some(Transition::Suspend) => suspend(
-                    &mut *handler,
-                    &cx,
-                    &surfaces[..cx.claimed()],
-                    &mut seat,
-                    session,
-                    &pointer,
-                    &screens,
-                    focused,
-                ),
-                Some(Transition::Resume) => resume(
-                    &mut *handler,
-                    &cx,
-                    &surfaces[..cx.claimed()],
-                    &mut seat,
-                    session,
-                    device,
-                    &commit,
-                    &scanouts,
-                    &cursors,
-                    focused,
-                ),
-                None => {}
-            }
+            // What a resume has to say about the devices, held until the focus below has been
+            // worked out. The surface that holds the keyboard is the one every key report goes to,
+            // and after a suspend there is none: a report delivered here would reach nothing.
+            let resumed = match presence.turn(&changes) {
+                Some(Transition::Suspend) => {
+                    suspend(
+                        &mut *handler,
+                        &cx,
+                        &surfaces[..cx.claimed()],
+                        &mut seat,
+                        session,
+                        &pointer,
+                        &screens,
+                        &mut focused,
+                    );
+                    Vec::new()
+                }
+                Some(Transition::Resume) => {
+                    let reports = resume(
+                        &mut *handler,
+                        &cx,
+                        &surfaces[..cx.claimed()],
+                        &mut seat,
+                        session,
+                        &pointer,
+                        &screens,
+                    );
+                    relight(device, &commit, &scanouts, &cursors);
+                    reports
+                }
+                None => Vec::new(),
+            };
 
             // One read carries the completions of every display that finished, so every scanout is
             // shown the same slice and each keeps the one that names its own CRTC.
@@ -370,15 +382,10 @@ fn drive(
             // application never took.
             let claimed = cx.claimed();
 
-            // Before the frames, so that a key pressed since the last turn is dispatched into the
-            // document the frame below then draws. The keyboards are read whether or not anything
-            // can be told about them: a descriptor left unread stays ready, and every later wait
-            // would return at once.
-            //
-            // Which surface holds the keys is worked out every turn rather than once, because the
-            // answer moves as soon as there is a pointer to move it. Both edges are reported.
-            // Losing the keyboard settles a field being typed into and ends a composition, and a
-            // surface never told it lost them holds both open for ever.
+            // Which surfaces a key can reach. Worked out every turn rather than once: which
+            // surface holds the keys has an answer that moves as soon as there is a pointer to move
+            // it. Both edges are reported. Losing the keyboard settles a field being typed into and
+            // ends a composition, and a surface never told it lost them holds both open for ever.
             let claimed_ids: Vec<SurfaceId> =
                 surfaces[..claimed].iter().map(|drawn| drawn.id()).collect();
             // Rebuilt per turn for the same reason the watch set is: a display the application has
@@ -422,6 +429,9 @@ fn drive(
                     }
                     focused = holds_keys;
                 }
+                // A resume's own reports first: they say what is held on the devices it opened, and
+                // a key struck since then is read against that.
+                deliver(&mut *handler, &cx, resumed, focused);
                 deliver(&mut *handler, &cx, reports, focused);
                 if cx.is_exiting() {
                     break;
@@ -568,6 +578,11 @@ fn deliver(
 ///
 /// Nothing is committed. The application's own redraw requests are left where they are by the loop,
 /// and the frames they ask for are drawn on the way back.
+///
+/// **The keyboard goes with the devices.** `focused` is emptied, and whatever held it is told so,
+/// because another session is typing into its own program from here on. A surface left focused
+/// keeps a caret blinking and a field unsettled for as long as the switch lasts, and the loop asks
+/// the question again on the way back.
 #[expect(
     clippy::too_many_arguments,
     reason = "this is one step of the loop's turn, written out so that the loop reads as the list \
@@ -582,7 +597,7 @@ fn suspend(
     session: &mut Session,
     pointer: &Pointer,
     screens: &[Screen],
-    focused: Option<SurfaceId>,
+    focused: &mut Option<SurfaceId>,
 ) {
     info!(
         target: "zgui::platform",
@@ -594,46 +609,87 @@ fn suspend(
     // After the surfaces are told. What comes back from this is a modifier or a button being let
     // go, and that belongs to a surface which already knows it is not being looked at.
     let reports = seat.let_go(session, pointer, screens);
-    deliver(handler, cx, reports, focused);
+    deliver(handler, cx, reports, *focused);
+    // After those reports, and the ordering carries the whole of the step: a key report names no
+    // surface and reaches whatever holds the keyboard, so the releases above would be delivered to
+    // nothing if the keyboard were given up first.
+    if let Some(left) = focused.take() {
+        handler.surface_event(cx, left, SurfaceEvent::Focused(false));
+    }
 }
 
-/// Takes the screen back.
+/// Takes the devices and the surfaces back, and answers what is held on the devices.
 ///
-/// The input devices are opened again, because an evdev descriptor another session took is revoked
-/// for good. Every display is put back into its mode with the buffer it last presented, and every
-/// cursor goes back on its plane, because the session that had the screen set its own mode on every
-/// CRTC and put its own image on every plane.
+/// The input devices are opened again, because `EVIOCREVOKE` cannot be undone and an evdev
+/// descriptor another session took stays dead. [`relight`] is the other half — the displays and the
+/// cursor planes — and it is apart because it is the half that needs the card.
 ///
-/// **Every surface is damaged in full rather than by what survived.** A frame skipped for occlusion
-/// retires its damage, so what the runtime believes is undrawn says nothing about what is on the
-/// screen. Telling a surface it is visible again is what marks the whole of it, and the redraw
-/// request beside it is what asks for the frame that draws it.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "this is one step of the loop's turn, written out so that the loop reads as the list \
-              of its own steps. Every argument is a distinct thing the loop owns, and grouping them \
-              into a struct would name a thing that exists for the length of one call"
-)]
+/// # Giving back before opening
+///
+/// Both arms of [`Transition::Resume`] reach this and the seat holds different things in them. A
+/// turn that reads an enable after a suspend holds nothing: the suspend gave every device back. A
+/// turn that reads a disable and an enable together — a person holding `Ctrl+Alt+Fn` down — holds
+/// **every** device, each revoked by logind before it reported either change.
+///
+/// So the give-back runs whatever is there. Over an empty list it asks the daemon for nothing. Over
+/// a held list every device in it is revoked, so giving it back is right. Left out, the walk that
+/// follows asks the session for paths it already holds, is refused every one of them, and the
+/// program has no keyboard and no pointer for the rest of the run.
+///
+/// # What comes back
+///
+/// The caller delivers it. The reports name no surface, so they reach whichever surface holds the
+/// keyboard, and after a suspend that is none. The loop works the focus out further down the same
+/// turn and delivers them there.
+///
+/// **Every surface is damaged in full.** A frame skipped for occlusion retires its damage, so what
+/// the runtime believes is undrawn says nothing about what is on the screen. Telling a surface it
+/// is visible again marks the whole of it, and the redraw request beside it asks for the frame that
+/// draws it.
+///
+/// **A surface that was never told it was occluded is told it is visible all the same.** On the arm
+/// where both changes arrived in one turn there was no suspend, so this is an edge with nothing in
+/// front of it — the runtime reads it as the level it already holds and marks no damage. That is
+/// the right answer there: no frame was ever skipped for occlusion, so nothing retired its damage,
+/// and [`Scanout::restore`] puts the last frame this program presented back on the screen.
 fn resume(
     handler: &mut dyn AppHandler,
     cx: &DrmCx,
     claimed: &[Arc<DrmSurface>],
     seat: &mut Seat,
     session: &mut Session,
-    device: &Device,
-    commit: &Rc<RefCell<Box<dyn Commit>>>,
-    scanouts: &[Rc<RefCell<Scanout>>],
-    cursors: &[Rc<RefCell<Cursor>>],
-    focused: Option<SurfaceId>,
-) {
+    pointer: &Pointer,
+    screens: &[Screen],
+) -> Vec<Report> {
     info!(
         target: "zgui::platform",
         "the screen is this session's again, so every display is put back into its mode and every \
          device is opened again"
     );
-    let reports = seat.take_again(session);
-    deliver(handler, cx, reports, focused);
+    let mut reports = seat.let_go(session, pointer, screens);
+    reports.extend(seat.take_again(session));
 
+    for drawn in claimed {
+        handler.surface_event(cx, drawn.id(), SurfaceEvent::Occluded(false));
+        drawn.request_redraw();
+    }
+    reports
+}
+
+/// Puts every display back into its mode and every cursor back on its plane.
+///
+/// The half of a resume that needs the card. The session that had the screen set its own mode on
+/// every CRTC and put its own image on every plane, so neither is carried across: the mode is set
+/// again with the buffer this display last presented, and the cursor is written rather than moved.
+///
+/// A refusal is reported and the display carries on. Every one of them is repaired by the frame the
+/// resume asked for, one refresh later.
+fn relight(
+    device: &Device,
+    commit: &Rc<RefCell<Box<dyn Commit>>>,
+    scanouts: &[Rc<RefCell<Scanout>>],
+    cursors: &[Rc<RefCell<Cursor>>],
+) {
     for scanout in scanouts {
         let mut committing = commit.borrow_mut();
         if let Err(error) = scanout.borrow_mut().restore(device, &mut **committing) {
@@ -648,7 +704,9 @@ fn resume(
         let mut cursor = cursor.borrow_mut();
         // The plane holds whatever the session that had the screen put on it, so what this cursor
         // believes is up there is worth nothing. Forgotten first, the commit below writes the image
-        // instead of moving one that is not there.
+        // instead of moving one that is not there, and clears the plane of a display the pointer is
+        // on no part of — which would otherwise keep the other session's pointer for the rest of
+        // the run.
         cursor.forget_the_plane();
         let mut committing = commit.borrow_mut();
         if let Err(error) = cursor.commit(device, &mut **committing) {
@@ -658,10 +716,6 @@ fn resume(
                  display's frames from now on: {error}"
             );
         }
-    }
-    for drawn in claimed {
-        handler.surface_event(cx, drawn.id(), SurfaceEvent::Occluded(false));
-        drawn.request_redraw();
     }
 }
 
@@ -743,20 +797,7 @@ fn wait(
     parked: Parked,
     now: Instant,
 ) -> Result<bool, PlatformError> {
-    let mut watched = vec![
-        PollFd::new(device, PollFlags::IN),
-        PollFd::new(waker, PollFlags::IN),
-    ];
-    watched.extend(
-        session
-            .descriptor()
-            .map(|daemon| PollFd::from_borrowed_fd(daemon, PollFlags::IN)),
-    );
-    watched.extend(
-        seat.into_iter()
-            .flat_map(Seat::descriptors)
-            .map(|keyboard| PollFd::from_borrowed_fd(keyboard, PollFlags::IN)),
-    );
+    let mut watched = watched(device.as_fd(), waker.as_fd(), session.descriptor(), seat);
     match poll(&mut watched, timeout(parked, now).as_ref()) {
         Ok(ready) => Ok(ready == 0),
         // A signal arrived first. Waiting again here would wait the whole length a second time on
@@ -770,20 +811,244 @@ fn wait(
     }
 }
 
+/// Returns the descriptors one wait watches, in the order they go in.
+///
+/// The device and the wake channel are always there. `session` is the session daemon's, and a
+/// direct run has none: nothing owns its terminal and a switch reaches it through nothing at all.
+/// `seat` adds every input device and the watch on the directory they come from, and it is nothing
+/// while another session has the screen.
+///
+/// Apart from [`wait`] so that what the set holds can be read without a card, a daemon or a
+/// terminal. A descriptor missing from here is a class of event that reaches the program late or
+/// never, and on the session's own descriptor it is every terminal switch for the rest of the run.
+fn watched<'a>(
+    device: BorrowedFd<'a>,
+    waker: BorrowedFd<'a>,
+    session: Option<BorrowedFd<'a>>,
+    seat: Option<&'a Seat>,
+) -> Vec<PollFd<'a>> {
+    let mut watched = vec![
+        PollFd::from_borrowed_fd(device, PollFlags::IN),
+        PollFd::from_borrowed_fd(waker, PollFlags::IN),
+    ];
+    watched.extend(session.map(|daemon| PollFd::from_borrowed_fd(daemon, PollFlags::IN)));
+    watched.extend(
+        seat.into_iter()
+            .flat_map(Seat::descriptors)
+            .map(|worked_with| PollFd::from_borrowed_fd(worked_with, PollFlags::IN)),
+    );
+    watched
+}
+
 #[cfg(test)]
 mod tests {
-    //! The one decision in a turn that a device cannot help with, and the one that costs a whole
-    //! processor when it is wrong.
+    //! What a turn decides, over a session that holds no terminal and a seat that holds no device.
     //!
-    //! **What is not here.** Everything else this loop does across a terminal switch needs a card:
-    //! putting a mode back, putting a cursor on its plane, and the devices a session daemon hands
-    //! over and takes away. The transitions themselves are
-    //! [`Presence`](crate::session::presence::Presence), which is pure and carries its own tests;
-    //! the input half is [`Seat::let_go`] and [`Seat::take_again`], which the seat's own tests hold
-    //! to the order a daemon needs. What is left over — a real switch, a real modeset, the picture
-    //! coming back — is the hardware run.
+    //! Three of the loop's steps run with no card at all: the decision that costs a whole processor
+    //! when it is wrong, the set of descriptors a wait watches, and both halves of what a terminal
+    //! switch does to the input devices and to the keyboard. Each of those is here, and each is
+    //! asserted through what the session was *asked* for. [`Asked`] records every input call before
+    //! it reads the shape, so what a seated run would be asked for, and in which order, is visible
+    //! with no daemon and no terminal.
+    //!
+    //! **What is not here.** [`relight`] and everything under it: putting a mode back, putting a
+    //! cursor on its plane, and telling a claimed surface it is visible again — a surface needs the
+    //! card that discovered its display. [`Scanout::restore`] clearing an outstanding flip is
+    //! covered by `tests/scanout.rs`, which needs DRM master and a monitor. The transitions
+    //! themselves are [`Presence`](crate::session::presence::Presence), which is pure and carries
+    //! its own tests. What is left over — a real switch, a real modeset, the picture coming back —
+    //! is the hardware run.
 
-    use super::owes_a_turn;
+    use std::os::fd::{AsFd, AsRawFd};
+    use std::path::{Path, PathBuf};
+
+    use zgui_platform::{PlatformCx, WakeReason};
+
+    use super::{
+        Arc, Clock, ConsoleClipboard, DrmCx, EventfdWaker, Pointer, Seat, Session, SurfaceEvent,
+        SurfaceId, SystemClock, Waker, owes_a_turn, resume, suspend, watched,
+    };
+    use crate::session::Asked;
+
+    /// A handler that records what it was told, and answers with nothing.
+    #[derive(Default)]
+    struct Recording {
+        /// Every surface event, in the order it arrived.
+        told: Vec<(SurfaceId, SurfaceEvent)>,
+    }
+
+    impl super::AppHandler for Recording {
+        fn surfaces_available(&mut self, _cx: &dyn PlatformCx) {}
+
+        fn surface_event(&mut self, _cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
+            self.told.push((surface, event));
+        }
+
+        fn wake(&mut self, _cx: &dyn PlatformCx, _reason: WakeReason) {}
+    }
+
+    /// Returns a context over no display at all.
+    ///
+    /// Everything the loop hands a callback is a value something else built, and the device stays
+    /// with the loop, so a context with no surfaces in it needs no `/dev/dri`. The two steps below
+    /// are written against a test that claims no display: what they do to a surface needs the card,
+    /// and what they do to the devices and to the keyboard does not.
+    fn over_no_display() -> DrmCx {
+        let waker = Arc::new(EventfdWaker::new().expect("this machine makes an eventfd"));
+        DrmCx::new(
+            Vec::new(),
+            Vec::new(),
+            Arc::new(SystemClock::new()) as Arc<dyn Clock>,
+            Arc::clone(&waker) as Arc<dyn Waker>,
+            ConsoleClipboard::new(waker as Arc<dyn Waker>),
+        )
+    }
+
+    /// A directory a test makes nodes in, removed when it goes out of scope.
+    ///
+    /// Named after the test that asked for it, so two tests running at once do not share one. Its
+    /// own rather than the seat module's, because a helper shared between two `cfg(test)` modules
+    /// would have to be reachable from the crate root.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        /// Returns an empty directory of its own.
+        fn new(test: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("zgui-drm-app-{}-{test}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("the directory is made");
+            Self(root)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Returns a seat over `directory`, holding nothing.
+    ///
+    /// The directory is the test's own and starts empty, so this grabs no device. A seat opened
+    /// over the real one takes every keyboard on the machine and holds it for as long as it lives.
+    fn seat_over(directory: &Path, session: &mut Session) -> Seat {
+        Seat::open_in(session, &SystemClock::new(), directory)
+    }
+
+    #[test]
+    fn a_resume_gives_back_what_it_still_holds_before_it_opens_anything() {
+        // The defect this covers takes every input device away for the rest of the run. A person
+        // holding `Ctrl+Alt+Fn` down leaves a disable and an enable in one turn, which is one
+        // resume — and the seat still holds every device, each of them revoked by logind before it
+        // reported either change. A resume that only walked would ask the session for paths it
+        // already holds, be refused every one of them, take nothing, and leave the program with no
+        // keyboard and no pointer.
+        let test = "a_resume_gives_back_what_it_still_holds_before_it_opens_anything";
+        let root = Scratch::new(test);
+        let mut session = Session::direct();
+        let mut seat = seat_over(&root.0, &mut session);
+        // Made after the seat, so that the only calls recorded below are the resume's own.
+        let node = root.0.join("event0");
+        std::fs::write(&node, []).expect("the file is made");
+        let cx = over_no_display();
+        let mut handler = Recording::default();
+
+        let reports = resume(
+            &mut handler,
+            &cx,
+            &[],
+            &mut seat,
+            &mut session,
+            &Pointer::centred(&[]),
+            &[],
+        );
+
+        assert_eq!(
+            session.asked(),
+            [Asked::CloseEvery, Asked::Open(node)],
+            "every device went back before the directory was walked, and it is the give-back that \
+             lets the walk open anything at all"
+        );
+        assert!(
+            reports.is_empty(),
+            "a seat with no layout and nothing held has nothing to say: {reports:?}"
+        );
+    }
+
+    #[test]
+    fn a_suspend_gives_the_devices_back_and_gives_the_keyboard_up_with_them() {
+        // Two things, and the order between them carries the second. Every device goes back through
+        // the session, because dropping one leaves the daemon holding its record of it. And the
+        // surface that held the keyboard is told it lost it: another session is being typed into
+        // from here on, and a surface left focused keeps a caret blinking and a field unsettled for
+        // as long as the switch lasts.
+        let test = "a_suspend_gives_the_devices_back_and_gives_the_keyboard_up_with_them";
+        let root = Scratch::new(test);
+        let mut session = Session::direct();
+        let mut seat = seat_over(&root.0, &mut session);
+        let cx = over_no_display();
+        let mut handler = Recording::default();
+        let typed_into = SurfaceId::new(7);
+        let mut focused = Some(typed_into);
+
+        suspend(
+            &mut handler,
+            &cx,
+            &[],
+            &mut seat,
+            &mut session,
+            &Pointer::centred(&[]),
+            &[],
+            &mut focused,
+        );
+
+        assert_eq!(
+            session.asked(),
+            [Asked::CloseEvery],
+            "every device this session opened went back to it"
+        );
+        assert_eq!(focused, None, "and the keyboard is another session's");
+        assert!(
+            matches!(
+                handler.told.as_slice(),
+                [(surface, SurfaceEvent::Focused(false))] if *surface == typed_into
+            ),
+            "so the surface that held it was told, once: {:?}",
+            handler.told
+        );
+    }
+
+    #[test]
+    fn the_session_is_one_of_the_descriptors_a_wait_watches() {
+        // A terminal switch reaches this program through this descriptor and through nothing else,
+        // so a wait that left it out would read a switch only when something else happened to wake
+        // the loop — and on an idle console that is never. Nothing else reports it: the input
+        // descriptors are revoked without a word and the card stops answering, so the symptom is a
+        // program that draws nothing and says nothing.
+        let device = EventfdWaker::new().expect("this machine makes an eventfd");
+        let waker = EventfdWaker::new().expect("this machine makes an eventfd");
+        let daemon = EventfdWaker::new().expect("this machine makes an eventfd");
+
+        let watching = watched(device.as_fd(), waker.as_fd(), Some(daemon.as_fd()), None);
+
+        assert_eq!(
+            watching.len(),
+            3,
+            "the device, the wake channel and the daemon"
+        );
+        assert_eq!(
+            watching[2].as_fd().as_raw_fd(),
+            daemon.as_fd().as_raw_fd(),
+            "and the daemon's is the third of them, which is what the list of the ways a turn \
+             happens says it is"
+        );
+        assert_eq!(
+            watched(device.as_fd(), waker.as_fd(), None, None).len(),
+            2,
+            "a direct run has no daemon, and nothing owns its terminal"
+        );
+    }
 
     #[test]
     fn a_frame_that_was_asked_for_hands_the_turn_back() {
