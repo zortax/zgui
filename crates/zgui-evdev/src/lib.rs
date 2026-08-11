@@ -3,35 +3,36 @@
 //! This is what libevdev is, written in Rust against the uapi headers. It links no C. Every call
 //! is an ioctl or a read on a file descriptor, issued through `rustix`'s `linux_raw` backend.
 //!
-//! Nothing here knows what zgui is. The crate is usable on its own, and most of it is tested on
-//! its own: a capability bitmap and a stream of event records are data, so the classification and
-//! the batching run with no device present.
+//! The crate names no zgui crate and is usable on its own. What depends on it is
+//! `zgui-platform-drm`, one step along the same layer. Most of it is tested without a device: a
+//! capability bitmap and a stream of event records are data, so the classification and the batching
+//! run with nothing plugged in.
 //!
 //! # Devices
 //!
-//! `discover` opens every node under `/dev/input` that it may, and reports the rest with the
-//! reason each gave. A `Device` says what it is, what it can report, and what it just reported. It
-//! hands out its descriptor through `AsFd` so a loop can park on it, and a read answers batches.
-//! The kernel groups everything that happened at one moment, and a reader that took a group apart
-//! would move a pointer twice for one movement.
+//! [`nodes`] answers every node under `/dev/input`, in the order the kernel numbers them. A caller
+//! opens each one the way its own machine allows: [`Device::open`] opens the node, which needs the
+//! group it belongs to, and [`Device::over`] builds a device on a descriptor a session daemon
+//! opened and handed over.
 //!
-//! `nodes` is that walk without the opening: it answers the paths, for a caller whose descriptors
-//! come from somewhere else. A session daemon opens an input device and hands the descriptor over,
-//! and `Device::over` builds a device on one.
+//! A [`Device`] says what it is, what it can report, and what it just reported. It hands out its
+//! descriptor through [`AsFd`](std::os::fd::AsFd) so a loop can park on it, and a read answers
+//! [`Batch`]es. The kernel groups everything that happened at one moment, and a reader that took a
+//! group apart would move a pointer twice for one movement.
 //!
 //! # Devices that arrive later
 //!
-//! `discover` reads the directory once. `Watch` asks the same directory a second way: it holds an
+//! [`nodes`] reads the directory once. [`Watch`] asks the same directory a second way: it holds an
 //! inotify descriptor a loop parks on, and it names the nodes that arrive while the program runs.
 //! It watches the change of ownership as well as the creation, because udev sets a new node's owner
 //! after the kernel makes it.
 //!
 //! # Layout
 //!
-//! A device says which key moved. What a key *means* is a layout's answer, and `Console` reads the
-//! one the kernel's own console driver holds. That is the layout of last resort: a machine with
+//! A device says which key moved. What a key *means* is a layout's answer, and [`Console`] reads
+//! the one the kernel's own console driver holds. That is the layout of last resort: a machine with
 //! libxkbcommon and its keyboard data has a better one, and this is what a machine with neither
-//! still has. `console` says plainly what it cannot express.
+//! still has. [`console`] says plainly what it cannot express.
 //!
 //! # The re-exports
 //!
@@ -78,7 +79,7 @@ pub use crate::console::{Console, Entry, Mode, Modifiers, Screen, Search};
 #[cfg(target_os = "linux")]
 pub use crate::device::{AxisRange, Bitmap, Capabilities, Device, Identity, Role, Roles};
 #[cfg(target_os = "linux")]
-pub use crate::discover::{Discovery, Skipped, discover, discover_in, nodes, nodes_in};
+pub use crate::discover::{DIRECTORY, Skipped, nodes, nodes_in};
 #[cfg(target_os = "linux")]
 pub use crate::error::{Error, Result};
 #[cfg(target_os = "linux")]

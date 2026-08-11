@@ -11,6 +11,8 @@
 
 #![cfg(target_os = "linux")]
 
+mod support;
+
 use zgui_drm::Device;
 use zgui_drm::commit;
 use zgui_drm::device::Interface;
@@ -21,22 +23,15 @@ use zgui_platform_drm::input::{pointer, seat};
 use zgui_platform_drm::output::Output;
 
 /// Returns the devices this process may read, or nothing with the reason printed.
+///
+/// Which nodes those are is read off the machine and the crate under test then **has** to open
+/// each one. See `support::openable_devices`.
 fn devices(test: &str) -> Option<Vec<zgui_evdev::Device>> {
-    let found = match zgui_evdev::discover() {
-        Ok(found) => found,
-        Err(error) => {
-            eprintln!("{test}: /dev/input cannot be read on this machine: {error}");
-            return None;
-        }
-    };
-    if found.opened.is_empty() {
-        eprintln!(
-            "{test}: no input device on this machine can be opened, so nothing was asserted; add \
-             this user to the `input` group to run it"
-        );
+    let opened = support::openable_devices(test);
+    if opened.is_empty() {
         return None;
     }
-    Some(found.opened)
+    Some(opened)
 }
 
 #[test]
