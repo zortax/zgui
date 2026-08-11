@@ -22,8 +22,23 @@ use crate::log::{self, LogLevel, Sink};
 /// This is xkb's RMLVO: the rules file that says how to read the rest, the model of the hardware,
 /// the layout, the variant of that layout, and the options. A name left empty takes libxkbcommon's
 /// own default, which it reads from `XKB_DEFAULT_RULES` and its four siblings and then from the
-/// defaults its build was given. So [`RuleNames::default`] is what the environment is set to, and
-/// the defaults libxkbcommon was built with where nothing set it.
+/// defaults its build was given — `evdev`, `pc105` and `us`.
+///
+/// So [`RuleNames::default`] is what the *environment* is set to, and `us` on a session where
+/// nothing set it. Setting those variables is a convention a session manager follows, so a caller
+/// that runs where there is none states the names itself.
+///
+/// ```
+/// use zgui_xkb::RuleNames;
+///
+/// let german = RuleNames {
+///     layout: Some("de".to_owned()),
+///     variant: Some("nodeadkeys".to_owned()),
+///     ..RuleNames::default()
+/// };
+///
+/// assert_eq!(german.to_string(), "layout=de variant=nodeadkeys");
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleNames {
     /// The rules file: `evdev` on Linux.
@@ -38,7 +53,7 @@ pub struct RuleNames {
     pub options: Option<String>,
 }
 
-/// Writes each name that is set, and names the machine's own settings when every field is empty.
+/// Writes each name that is set, and names libxkbcommon's own answer when every field is empty.
 impl fmt::Display for RuleNames {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let fields = [
@@ -59,7 +74,7 @@ impl fmt::Display for RuleNames {
             }
         }
         if written == 0 {
-            f.write_str("the names this machine is set to")?;
+            f.write_str("the names libxkbcommon reads for itself")?;
         }
         Ok(())
     }
@@ -365,10 +380,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_that_are_all_empty_read_as_the_machines_own() {
+    fn names_that_are_all_empty_read_as_the_librarys_own() {
+        // Which is `XKB_DEFAULT_LAYOUT` and its siblings, and `us` where the environment states
+        // none of them. A line calling that "the names this machine is set to" reads as a machine
+        // that was asked, and nothing asks it.
         assert_eq!(
             RuleNames::default().to_string(),
-            "the names this machine is set to"
+            "the names libxkbcommon reads for itself"
         );
     }
 

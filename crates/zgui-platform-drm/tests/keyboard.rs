@@ -57,6 +57,23 @@ fn a_layout_says_which_source_it_read() {
 }
 
 #[test]
+fn the_search_says_which_source_stated_this_machines_keyboard() {
+    // Needs no layout at all, because a machine that states nothing still says that it states
+    // nothing — and that is the line somebody reads when a program types American on a German
+    // keyboard. Which source answered on the machine this ran on is printed beside it.
+    let test = "the_search_says_which_source_stated_this_machines_keyboard";
+    let found = layout::find();
+
+    println!("{test}: {}", found.stated);
+
+    assert!(
+        found.stated.contains("stated by"),
+        "the search says where the names came from: {}",
+        found.stated
+    );
+}
+
+#[test]
 fn a_press_produces_the_character_the_layout_puts_on_the_key() {
     let Some(mut layout) = layout("a_press_produces_the_character_the_layout_puts_on_the_key")
     else {

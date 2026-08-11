@@ -6,27 +6,41 @@
 //! letters appear — so [`find`] reports it and the frame loop states it once at start-up.
 //!
 //! * **libxkbcommon** ([`Source::Xkb`]) reads the keyboard data the machine has installed. It
-//!   knows every level of every key, every layout in a group, and which keys repeat.
+//!   knows every level of every key, every layout in a group, and which keys repeat. *Which*
+//!   keyboard it compiles is a question of its own, and the `names` module beside this one answers
+//!   it: a console session has no session manager to state the names, so they are read from what
+//!   the machine itself states.
 //! * **the console keymap** ([`Source::Console`]) is what the kernel's own console driver holds,
-//!   put there by `loadkeys` at boot. It is the layout of last resort: a machine with no
-//!   libxkbcommon — or with the library and none of the keyboard data it reads — still has this
-//!   one.
+//!   put there by `loadkeys` at boot. A machine with no libxkbcommon — or with the library and none
+//!   of the keyboard data it reads — still has this one.
+//!
+//! # Which source is opened first
+//!
+//! libxkbcommon, wherever the machine states which keyboard it has, because it expresses everything
+//! a console keymap does and more.
+//!
+//! **A machine that states no keyboard is read from the kernel instead.** libxkbcommon's answer
+//! there is the names it was built with, which are `evdev`, `pc105` and `us`, and `us` is the wrong
+//! keyboard everywhere outside the United States. The console keymap is the table the terminal
+//! itself types with, so it is right on the machine it is read from — measured on a German machine
+//! that states no xkb names: libxkbcommon typed US there and the console keymap typed German. What
+//! reading it costs is below, and it is paid only by a machine that states nothing.
 //!
 //! # What a program gives up on the console keymap
 //!
 //! Three things, and a person will meet all three:
 //!
 //! * **Characters the keymap holds and the console cannot report.** Outside `K_UNICODE` the kernel
-//!   substitutes a hole for every entry above its eight-bit types, so a German keymap read in
-//!   `K_XLATE` — the ordinary mode — keeps its umlauts, which are Latin-1, and loses its euro
-//!   sign. Which mode a console is in reaches the line this reports at start-up.
+//!   substitutes a hole for every code point, so a German keymap read in `K_XLATE` — the ordinary
+//!   mode — keeps its umlauts, which are Latin-1, and loses its euro sign. Which mode a console is
+//!   in reaches the line this reports at start-up.
 //! * **No name for a key that types nothing.** Escape, enter, the arrows and the function keys are
 //!   actions the console driver takes on itself rather than names, so each is named from the
 //!   position it sits at instead. The position table is exact, so the name is right for a standard
 //!   keyboard whatever the layout.
 //! * **No caps lock and no command modifier.** The kernel builds a map index out of eight modifier
 //!   bits. Caps lock sits outside them, as one more of the driver's own actions, and there is no
-//!   super key among the eight either, so a shortcut that names meta can never match here.
+//!   super key among the eight either — so a shortcut that names meta can never match here.
 //!
 //! # The terminal a key asks for
 //!
@@ -43,6 +57,10 @@
 //! modifier rather than as a fault. `zgui_xkb::State::press` does both in the right order so that
 //! a caller cannot invert them, and [`Layout::press`] is written against it.
 //!
+//! A release is read before it is recorded, for the same reason: a modifier that is already up
+//! selects another level of every key it was holding. [`Layout::reading_before_release`] is the one
+//! call that does both, in that order.
+//!
 //! # The library's diagnostics
 //!
 //! libxkbcommon writes its own diagnostics to standard error unless it is told otherwise, and on
@@ -56,7 +74,7 @@ use std::str::FromStr;
 use zgui_evdev::Key;
 use zgui_vocab::{Modifiers, NamedKey, PhysicalKey};
 
-use crate::input::keyboard::{code, modifiers, terminal};
+use crate::input::keyboard::{code, modifiers, names, terminal};
 
 /// Which source a keyboard's layout came from.
 #[non_exhaustive]
@@ -166,41 +184,54 @@ pub struct Search {
     pub layout: Option<Box<dyn Layout>>,
     /// What each source that refused said, in the order they were tried.
     pub refused: Vec<String>,
+    /// Which keyboard this machine states it has, and where it states it.
+    ///
+    /// One line, whichever source answered, because it also says why: a machine that states no
+    /// keyboard is a machine whose console keymap is read first.
+    pub stated: String,
+}
+
+impl Search {
+    /// Takes what one source opened, and keeps the first that answered.
+    ///
+    /// The source is a closure, so a source behind one that answered is never opened: opening a
+    /// console holds a descriptor on a terminal, and compiling a keymap reads files.
+    fn opened<L: Layout + 'static>(&mut self, open: impl FnOnce() -> Result<L, String>) {
+        if self.layout.is_some() {
+            return;
+        }
+        match open() {
+            Ok(layout) => self.layout = Some(Box::new(layout)),
+            Err(reason) => self.refused.push(reason),
+        }
+    }
 }
 
 /// Opens the best layout this machine has.
 ///
-/// libxkbcommon first, because it expresses everything a console keymap does and more, then the
-/// keymap the console driver holds. A machine with neither answers with no layout, and every key
-/// then reaches a document by its position alone.
+/// libxkbcommon first, because it expresses everything a console keymap does and more, and then the
+/// keymap the console driver holds. **A machine that states no keyboard at all reads the console
+/// first**, for the reason the module documentation gives. A machine with neither source answers
+/// with no layout, and every key then reaches a document by its position alone.
 ///
-/// The names libxkbcommon is asked for are empty. Empty names tell it to use the ones the machine
-/// is already set to: `XKB_DEFAULT_LAYOUT` and its siblings, and the defaults the library was
-/// built with. A console session has no other source for them.
+/// Which names libxkbcommon is asked for is the `names` module's answer: the environment, then
+/// `/etc/vconsole.conf`, then `/etc/X11/xorg.conf.d/00-keyboard.conf`. A console session has no
+/// session manager to state them, so they are read from the machine itself.
 pub fn find() -> Search {
-    let mut refused = Vec::new();
-    match Xkb::open() {
-        Ok(layout) => {
-            return Search {
-                layout: Some(Box::new(layout)),
-                refused,
-            };
-        }
-        Err(reason) => refused.push(reason),
+    let asked = names::of(&names::Machine::read());
+    let mut search = Search {
+        layout: None,
+        refused: Vec::new(),
+        stated: asked.to_string(),
+    };
+    if names::reads_the_console_first(asked.from) {
+        search.opened(Console::open);
+        search.opened(|| Xkb::over(asked));
+    } else {
+        search.opened(|| Xkb::over(asked));
+        search.opened(Console::open);
     }
-    match Console::open() {
-        Ok(layout) => Search {
-            layout: Some(Box::new(layout)),
-            refused,
-        },
-        Err(reason) => {
-            refused.push(reason);
-            Search {
-                layout: None,
-                refused,
-            }
-        }
-    }
+    search
 }
 
 /// The keysym names that differ from the standard key value they stand for.
@@ -454,38 +485,32 @@ struct Xkb {
     compose: Option<zgui_xkb::ComposeState>,
     /// Why there is no sequence machine, for the line a person reads at start-up.
     without_compose: Option<String>,
-    /// The names the keymap was asked for, for the line a person reads at start-up.
-    names: zgui_xkb::RuleNames,
+    /// The names the keymap was asked for and where they came from, for the line a person reads at
+    /// start-up.
+    asked: names::Asked,
     /// The locale the sequences were compiled for.
     locale: String,
 }
 
 impl Xkb {
-    /// Opens libxkbcommon and compiles the keymap this machine is set to.
+    /// Opens libxkbcommon and compiles the keymap `asked` names.
+    ///
+    /// [`find`] works out the names, from what the machine states. A test states them
+    /// itself, because the compose path can be walked only on a layout that has a dead key and
+    /// which layout a machine is set to is no test's choice.
     ///
     /// # Errors
     ///
     /// Returns the reason as a sentence, because every one of them is something a caller reports
     /// rather than branches on: the library is absent, its keyboard data is absent, or the names
-    /// the machine is set to name a layout the rules do not know.
-    fn open() -> Result<Self, String> {
-        Self::over(zgui_xkb::RuleNames::default())
-    }
-
-    /// The same, from names a caller states.
-    ///
-    /// Private, and the only caller outside the tests is [`Xkb::open`] with the machine's own
-    /// names. It exists because the compose path can be exercised only on a layout that has a dead
-    /// key, and which layout a machine is set to is not something a test may choose.
-    ///
-    /// # Errors
-    ///
-    /// The same three as [`Xkb::open`], and a layout name the rules do not know.
-    fn over(names: zgui_xkb::RuleNames) -> Result<Self, String> {
+    /// state a layout the rules do not know.
+    fn over(asked: names::Asked) -> Result<Self, String> {
         // The context takes libxkbcommon's diagnostics away from standard error as it is made, so
         // the routing is done before anything below can produce a message.
         let context = zgui_xkb::Context::new().map_err(|error| error.to_string())?;
-        let keymap = context.keymap(&names).map_err(|error| error.to_string())?;
+        let keymap = context
+            .keymap(&asked.names)
+            .map_err(|error| error.to_string())?;
         let state = keymap.state().map_err(|error| error.to_string())?;
         // The one part of this that may be absent on a machine where everything else worked, so
         // its refusal is carried rather than returned: a keyboard with no compose data still types
@@ -504,7 +529,7 @@ impl Xkb {
             state,
             compose,
             without_compose,
-            names,
+            asked,
             locale,
         })
     }
@@ -619,7 +644,7 @@ impl Layout for Xkb {
             Some(reason) => format!("no dead key or compose sequence works ({reason})"),
             None => format!("composing in {}", self.locale),
         };
-        format!("libxkbcommon, compiled from {}, {composing}", self.names)
+        format!("libxkbcommon, compiled from {}, {composing}", self.asked)
     }
 
     fn press(&mut self, key: Key) -> Reading {
@@ -857,7 +882,7 @@ mod tests {
         ACCENTS, Console, RENAMED, Sequence, Xkb, accent, character, is_typed, named_key, typed_key,
     };
     use crate::input::keyboard::layout::Layout;
-    use crate::input::keyboard::terminal;
+    use crate::input::keyboard::{names, terminal};
     // `Key` in this module is the vocabulary's. A kernel key code is `Code`, so the two cannot
     // be confused where both appear in one line.
     use zgui_evdev::Key as Code;
@@ -1018,11 +1043,16 @@ mod tests {
     /// The machine's own layout is not something a test may choose, and the compose path can only
     /// be walked on one that has a dead key.
     fn layout_named(test: &str, layout: &str) -> Option<Xkb> {
-        let names = zgui_xkb::RuleNames {
-            layout: Some(layout.to_owned()),
-            ..zgui_xkb::RuleNames::default()
+        // Stated by nothing on this machine, because a test chose them. What a machine states is
+        // the `names` module's own subject and is tested there.
+        let asked = names::Asked {
+            names: zgui_xkb::RuleNames {
+                layout: Some(layout.to_owned()),
+                ..zgui_xkb::RuleNames::default()
+            },
+            from: names::Origin::Nowhere,
         };
-        match Xkb::over(names) {
+        match Xkb::over(asked) {
             Ok(built) => Some(built),
             Err(reason) => {
                 eprintln!(

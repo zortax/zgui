@@ -16,6 +16,13 @@
 //! start-up. Dead keys and compose sequences are applied where libxkbcommon has the data for them,
 //! so `´` then `e` inserts `é`.
 //!
+//! **Which keyboard the machine has is read from the machine.** A console session has no session
+//! manager to state it, so `XKB_DEFAULT_LAYOUT` and its siblings, `/etc/vconsole.conf` and
+//! `/etc/X11/xorg.conf.d/00-keyboard.conf` are read in that order, and the first that states a
+//! layout answers. A machine that states none of them is read from the kernel's console keymap,
+//! which is the table its terminal is already typing with — libxkbcommon's own answer there is
+//! `us`. The source that answered is part of the line stated at start-up.
+//!
 //! **The set of devices is not fixed.** A keyboard or a mouse plugged in while the program runs is
 //! opened, taken and read from the next turn on, because the loop waits on the device directory
 //! beside the devices themselves. One that goes is dropped, and it lets go of every key and every
