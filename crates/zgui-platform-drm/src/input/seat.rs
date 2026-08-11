@@ -626,6 +626,16 @@ impl Keys {
         self.modifiers
     }
 
+    /// Returns `true` if holding this key repeats it.
+    ///
+    /// The layout's answer, and `false` where there is no layout: a key that means nothing has
+    /// nothing to repeat, and a rule that repeated every key would repeat a held modifier as well.
+    pub fn repeats(&self, key: Key) -> bool {
+        self.layout
+            .as_ref()
+            .is_some_and(|layout| layout.repeats(key))
+    }
+
     /// Puts one device's keys back in step with what the kernel says it has down.
     ///
     /// Three moments need this and it is the same repair in all three.
@@ -1205,6 +1215,19 @@ impl Seat {
         }
     }
 
+    /// Returns when this seat is next owed something nothing will wake it for.
+    ///
+    /// A key repeat, and only on the source that makes its own: the kernel makes them for a reader
+    /// of its own stream, and that reader is woken by the device. Nothing on a console wakes a loop
+    /// for a repeat this backend owes itself, so a loop that did not cut its wait to this would
+    /// repeat a held key whenever something else happened to arrive.
+    pub fn due(&self) -> Option<Timestamp> {
+        match &self.source {
+            Stream::Kernel(_) => None,
+            Stream::Libinput(through) => through.due(),
+        }
+    }
+
     /// Returns the descriptors the frame loop waits on beside the device and the wake channel.
     ///
     /// Every device this seat took, and the watch on the directory they came from. A node made in
@@ -1423,7 +1446,7 @@ impl Seat {
         let devices = match source {
             Stream::Kernel(devices) => devices,
             Stream::Libinput(through) => {
-                let (read, asked) = through.read(session, keys, pointer, screens, anchored);
+                let (read, asked) = through.read(session, keys, pointer, screens, anchored, now);
                 reports.extend(read);
                 ask(&mut terminal, asked);
                 // The watch is the same on both sources, and a node plugged in while this runs
@@ -2031,6 +2054,11 @@ mod tests {
     }
 
     impl Layout for Recording {
+        /// Every key repeats, so a test that asks for one gets one. Which keys really do is the
+        /// keymap's answer, and that is asserted where the keymaps are.
+        fn repeats(&self, _key: Key) -> bool {
+            true
+        }
         /// The trait asks which source a layout read and a stub reads neither. Nothing here looks
         /// at the answer.
         fn source(&self) -> Source {
@@ -2084,6 +2112,11 @@ mod tests {
     struct Shared(std::rc::Rc<std::cell::RefCell<Recording>>);
 
     impl Layout for Shared {
+        /// Every key repeats, so a test that asks for one gets one. Which keys really do is the
+        /// keymap's answer, and that is asserted where the keymaps are.
+        fn repeats(&self, _key: Key) -> bool {
+            true
+        }
         fn source(&self) -> Source {
             self.0.borrow().source()
         }
@@ -2387,6 +2420,11 @@ mod tests {
     }
 
     impl Layout for Chorded {
+        /// Every key repeats, so a test that asks for one gets one. Which keys really do is the
+        /// keymap's answer, and that is asserted where the keymaps are.
+        fn repeats(&self, _key: Key) -> bool {
+            true
+        }
         fn source(&self) -> Source {
             Source::Xkb
         }

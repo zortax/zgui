@@ -27,6 +27,7 @@
 
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tracing::warn;
 
@@ -47,6 +48,18 @@ impl Held {
     /// Returns the node this device was opened at.
     pub(crate) fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Returns how long this device waits before repeating a key, and how often it repeats after
+    /// that.
+    ///
+    /// The kernel's own numbers for this keyboard, read with `EVIOCGREP`. libinput drops the
+    /// repeats the kernel makes from them, so a reader through libinput makes its own and makes
+    /// them at this rate. Nothing for a device that is no keyboard, and nothing for one whose
+    /// driver has no auto-repeat.
+    pub(crate) fn repeat(&self) -> Option<(Duration, Duration)> {
+        let (delay, period) = self.device.repeat().ok()?;
+        (!delay.is_zero() && !period.is_zero()).then_some((delay, period))
     }
 }
 
