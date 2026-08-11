@@ -6008,6 +6008,7 @@ dependencies = [
  "zgui-drm",
  "zgui-evdev",
  "zgui-geom",
+ "zgui-libinput",
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-render",

@@ -35,6 +35,7 @@
 //! that beside the rest of what this backend does not have.
 
 pub mod keyboard;
+pub(crate) mod lent;
 pub mod pointer;
 pub mod seat;
 pub mod wheel;
