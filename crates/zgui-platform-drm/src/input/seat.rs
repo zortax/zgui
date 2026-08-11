@@ -28,6 +28,12 @@
 //! leaves the daemon holding its record of the device, so the paths are opened and closed here
 //! rather than anywhere else.
 //!
+//! **A session that is waiting for its terminal is handed every node revoked**, so a walk there
+//! takes nothing at all. That is a state rather than a fault: each node is a device this run has
+//! the moment somebody switches to this terminal. One line names the count, in place of one line
+//! per node and two more saying the machine has no keyboard and no mouse. `Found` is the decision,
+//! and [`Seat::take_again`] takes the devices when the terminal moves.
+//!
 //! A terminal switch is those two halves a moment apart. [`Seat::let_go`] gives every device back
 //! and [`Seat::take_again`] opens them all again, and the loop puts the wait between them. The
 //! give-back runs before every resume, including the one where the loop read both changes in one
@@ -39,7 +45,7 @@
 //! keyboard off when it grants control. Both layouts read that chord as the terminal it asks for,
 //! so [`Seat::read`] answers the terminal beside the reports, and [`Heard::answered`] hands it to
 //! the session. The reports leave through that same call, so a turn that delivered them asked for
-//! the terminal. The key that asked reaches no surface — [`Keys::batch`] states why.
+//! the terminal. The key that asked reaches no surface — [`Keys::key`] states why.
 //!
 //! Every cursor plane goes back through that call as well, just before the ask. It is the one
 //! moment a session that is leaving is still active and still holds DRM master, and a plane nobody
@@ -104,7 +110,7 @@ use crate::input::keyboard::layout::{Layout, Reading};
 use crate::input::keyboard::{code, layout};
 use crate::input::pointer::{self, Axes, Pointer, Screen, Span};
 use crate::input::wheel::{self, HighResolution};
-use crate::session::{Session, Switched};
+use crate::session::{Session, Switched, Unopened};
 
 /// The twenty-six letter positions of a keyboard.
 ///
@@ -794,6 +800,73 @@ struct Pointing {
     down: BTreeSet<u16>,
 }
 
+/// What one node of the device directory amounted to.
+#[derive(Debug)]
+struct Opened {
+    /// What was already held on the device, where one was taken.
+    announced: Option<SurfaceEvent>,
+    /// Whether the node is an input device this session cannot read yet.
+    ///
+    /// See [`Unopened::NotYet`]. It is counted rather than reported, because a session waiting for
+    /// its terminal answers this for every node on the machine.
+    not_yet: bool,
+}
+
+impl Opened {
+    /// A node that opened no device, and whose reason has been reported.
+    const NOTHING: Self = Self {
+        announced: None,
+        not_yet: false,
+    };
+
+    /// A node that is an input device this session cannot read yet.
+    const NOT_YET: Self = Self {
+        announced: None,
+        not_yet: true,
+    };
+}
+
+/// What a walk of the device directory has to say for itself.
+///
+/// The decision is here, apart from the walk, because it is arithmetic over three answers and the
+/// walk needs a session daemon and a machine full of devices. [`Seat::report`] writes each of these
+/// out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    /// Every input device is another session's until somebody switches to this terminal.
+    ///
+    /// The count is how many nodes answered that way, and it keeps the report to one line in place
+    /// of one line for each of them.
+    Waiting(usize),
+    /// What this walk took, as the two things it can be missing.
+    Took {
+        /// Whether somebody can type into this program.
+        keyboard: bool,
+        /// Whether somebody can move the cursor.
+        pointer: bool,
+    },
+}
+
+impl Found {
+    /// Decides what a walk that met `waiting` nodes it cannot read yet, and took these devices,
+    /// amounts to.
+    ///
+    /// **A node that answers nothing yet decides the report only where nothing was taken.** A
+    /// session waiting for its terminal is handed every one of its devices revoked, so it holds
+    /// none at all; a walk that took a keyboard and met a revoked node is a machine where one
+    /// device has gone, and the warnings are the right report there.
+    ///
+    /// The two log levels rest on that difference. A session that is waiting states something that
+    /// ends the moment a person switches to this terminal; a session that holds the screen and
+    /// found no keyboard states something that lasts for the rest of the run.
+    const fn of(waiting: usize, keyboard: bool, pointer: bool) -> Self {
+        if waiting > 0 && !keyboard && !pointer {
+            return Self::Waiting(waiting);
+        }
+        Self::Took { keyboard, pointer }
+    }
+}
+
 /// One device this seat took.
 struct Taken {
     /// The device, grabbed for as long as this lives.
@@ -934,10 +1007,13 @@ impl Seat {
     fn walk(&mut self, session: &mut Session) -> Vec<SurfaceEvent> {
         let listed = zgui_evdev::nodes_in(&self.directory);
         let mut announced = Vec::new();
+        let mut waiting = 0;
         match listed {
             Ok(nodes) => {
                 for path in &nodes {
-                    announced.extend(self.take_node(session, path));
+                    let opened = self.take_node(session, path);
+                    announced.extend(opened.announced);
+                    waiting += usize::from(opened.not_yet);
                 }
             }
             Err(error) => warn!(
@@ -945,20 +1021,45 @@ impl Seat {
                 "no input device can be found on this machine: {error}"
             ),
         }
-        if !self.devices.iter().any(|taken| taken.types) {
-            warn!(
-                target: "zgui::platform",
-                "no keyboard on this machine could be taken, so nothing can be typed into this \
-                 program"
-            );
-        }
-        if !self.devices.iter().any(|taken| taken.points.is_some()) {
-            warn!(
-                target: "zgui::platform",
-                "no pointing device on this machine could be taken, so the cursor cannot be moved"
-            );
-        }
+        self.report(waiting);
         announced
+    }
+
+    /// Says what this walk left the person at the machine with.
+    ///
+    /// [`Found::of`] is the decision. A session that is waiting for its terminal answers one line
+    /// naming the count, at `info`, because that state ends the moment a person switches to this
+    /// terminal; a session that holds the screen and found no keyboard answers the warning,
+    /// because that is a machine nobody can type into for the rest of the run.
+    fn report(&self, waiting: usize) {
+        match Found::of(
+            waiting,
+            self.devices.iter().any(|taken| taken.types),
+            self.devices.iter().any(|taken| taken.points.is_some()),
+        ) {
+            Found::Waiting(nodes) => info!(
+                target: "zgui::platform",
+                "this run holds no input device at all, and {nodes} of the nodes it was handed \
+                 answer nothing yet: a session waiting for its terminal is handed every one of its \
+                 devices revoked, and they arrive when somebody switches to this terminal"
+            ),
+            Found::Took { keyboard, pointer } => {
+                if !keyboard {
+                    warn!(
+                        target: "zgui::platform",
+                        "no keyboard on this machine could be taken, so nothing can be typed into \
+                         this program"
+                    );
+                }
+                if !pointer {
+                    warn!(
+                        target: "zgui::platform",
+                        "no pointing device on this machine could be taken, so the cursor cannot \
+                         be moved"
+                    );
+                }
+            }
+        }
     }
 
     /// Returns the descriptors the frame loop waits on beside the device and the wake channel.
@@ -1069,7 +1170,7 @@ impl Seat {
         let opening: Vec<PathBuf> = untaken(&held, &arrived);
         opening
             .iter()
-            .filter_map(|path| self.take_node(session, path))
+            .filter_map(|path| self.take_node(session, path).announced)
             .map(Report::focused)
             .collect()
     }
@@ -1077,22 +1178,28 @@ impl Seat {
     /// Opens the node at `path` through the session and takes it, reporting what was already held
     /// on it.
     ///
-    /// A refusal is reported and the node is left where it is. Two of them are ordinary. A node
-    /// this run may not have is what most of `/dev/input` is on the direct path and what a session
-    /// daemon answers for a device it keeps; and a node udev has not finished with refuses
-    /// everybody, where the change that says it has finished is one more report the watch brings —
-    /// so that one is the first of two tries rather than a device lost.
+    /// A refusal is reported and the node is left where it is. Two of them are ordinary. The first
+    /// is a node this run may not have, which most of `/dev/input` is on the direct path and which
+    /// a session daemon answers for a device it keeps. The second is a node udev has not finished
+    /// with, which refuses everybody; the change that says it has finished is one more report the
+    /// watch brings, so that one is the first of two tries rather than a device lost.
+    ///
+    /// **A node this session cannot read yet is counted rather than reported.** It is an input
+    /// device, and a session waiting for its terminal is handed every one of them that way, so a
+    /// line each states that a machine full of keyboards has none. [`Seat::report`] is the one line
+    /// they amount to.
     ///
     /// **A node that opened and was left alone goes straight back.** Most of `/dev/input` is a
     /// device nobody types on and nobody points with — a power button, a lid switch, an
     /// accelerometer — and each one the seat declines is a device the daemon opened. Dropping it
     /// closes the descriptor and leaves the record, so the session is told here.
-    fn take_node(&mut self, session: &mut Session, path: &Path) -> Option<SurfaceEvent> {
+    fn take_node(&mut self, session: &mut Session, path: &Path) -> Opened {
         let device = match session.open_input(path) {
             Ok(device) => device,
-            Err(error) => {
+            Err(Unopened::NotYet(_)) => return Opened::NOT_YET,
+            Err(Unopened::Refused(error)) => {
                 info!(target: "zgui::platform", "{error}");
-                return None;
+                return Opened::NOTHING;
             }
         };
 
@@ -1100,7 +1207,10 @@ impl Seat {
         if !self.holds(path) {
             session.close_input(path);
         }
-        announced
+        Opened {
+            announced,
+            not_yet: false,
+        }
     }
 
     /// Returns `true` if this seat holds a device at `path`.
@@ -1589,6 +1699,15 @@ mod tests {
     //! descriptor anywhere, so what a person did reaches a surface event through exactly the code
     //! the frame loop runs — and the cases that matter are the ones a working keyboard rarely
     //! produces: a repeat, an overflow, a button on a keyboard node.
+    //!
+    //! # The walk's report
+    //!
+    //! [`Found::of`] is a function of three answers, so every line a walk can write is reachable
+    //! here. **The join is not.** A node that answers nothing yet needs a daemon that revokes a
+    //! descriptor before it hands it over, and the direct shape a test can build opens each node
+    //! itself. So what is asserted here is the decision; that a revoked descriptor produces it is
+    //! `zgui-evdev`'s `a_revoked_descriptor_is_an_input_device_that_answers_nothing_yet`, and that
+    //! the session reads that refusal as a device arriving later is `crate::session`'s own test.
 
     use std::collections::BTreeSet;
     use std::ffi::{c_int, c_ulong};
@@ -1598,9 +1717,9 @@ mod tests {
     use rustix::ioctl::{Opcode, opcode};
 
     use super::{
-        Axes, Down, Heard, HighResolution, Keys, Planes, Pointer, Pointing, Report, Screen, Seat,
-        Session, Span, Stamps, Transition, Translated, ask, cancelled, focused, pointed, types_on,
-        untaken,
+        Axes, Down, Found, Heard, HighResolution, Keys, Planes, Pointer, Pointing, Report, Screen,
+        Seat, Session, Span, Stamps, Transition, Translated, ask, cancelled, focused, pointed,
+        types_on, untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
     use crate::session::{Asked, Record};
@@ -4037,8 +4156,12 @@ mod tests {
             "a device the kernel will not hand over is left where it is"
         );
         assert!(
-            announced.is_none(),
+            announced.announced.is_none(),
             "so nothing was held on it: {announced:?}"
+        );
+        assert!(
+            !announced.not_yet,
+            "and the node opened, so it is no device this session is waiting for: {announced:?}"
         );
         assert_eq!(
             session.asked(),
@@ -4137,6 +4260,58 @@ mod tests {
             seat.descriptors().count(),
             2,
             "which the loop waits on beside the watch this directory got"
+        );
+    }
+
+    #[test]
+    fn a_session_waiting_for_its_terminal_is_one_line_naming_the_count() {
+        // The run this was written for started on a terminal that was not the live one, and the
+        // daemon handed it twenty-two revoked nodes. It reported each of them, and then that no
+        // keyboard on the machine could be taken and that the cursor could not be moved — twenty-
+        // four lines, all of them untrue ten seconds later when somebody switched to that terminal.
+        assert_eq!(Found::of(22, false, false), Found::Waiting(22));
+        assert_eq!(
+            Found::of(1, false, false),
+            Found::Waiting(1),
+            "and one node is the same state, so the count is what varies rather than the answer"
+        );
+    }
+
+    #[test]
+    fn a_session_that_holds_the_screen_and_found_no_keyboard_still_says_so() {
+        // The fault the two warnings exist for, and the one this must not lose: a machine where
+        // nothing could be taken is a program nobody can type into for the rest of the run.
+        assert_eq!(
+            Found::of(0, false, false),
+            Found::Took {
+                keyboard: false,
+                pointer: false
+            }
+        );
+        assert_eq!(
+            Found::of(0, true, true),
+            Found::Took {
+                keyboard: true,
+                pointer: true
+            },
+            "and a walk that took both says nothing at all"
+        );
+        // A device that has gone answers the same way a revoked one does, so a walk that took a
+        // keyboard and met one is a machine with a device missing rather than a session waiting.
+        // A session waiting for its terminal holds nothing at all, and that tells them apart.
+        assert_eq!(
+            Found::of(1, true, false),
+            Found::Took {
+                keyboard: true,
+                pointer: false
+            }
+        );
+        assert_eq!(
+            Found::of(1, false, true),
+            Found::Took {
+                keyboard: false,
+                pointer: true
+            }
         );
     }
 

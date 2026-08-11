@@ -70,6 +70,21 @@ pub enum Error {
         /// Why it failed.
         source: std::io::Error,
     },
+    /// The descriptor names an input device that answers nothing.
+    ///
+    /// The input driver answers `ENODEV` for every request on a client whose descriptor was
+    /// revoked, and for every request on a device that has gone. `logind` revokes each evdev
+    /// descriptor it hands to a session that is waiting for its terminal, so a run started on a
+    /// background terminal meets this on every node it is handed. Each of those nodes is a device
+    /// that run holds once a person switches to it.
+    ///
+    /// [`Error::Unusable`] covers the separate case of a descriptor onto something the input driver
+    /// never sees, such as `/dev/null` or a graphics card. Those answer `ENOTTY`, and that answer
+    /// says the caller handed over the wrong descriptor.
+    Revoked {
+        /// The path the caller named.
+        path: PathBuf,
+    },
     /// The call could not be made, or what came back cannot be used.
     ///
     /// The crate refuses here: an event type past `EV_MAX` or an axis past `ABS_MAX`, whose request
@@ -88,6 +103,12 @@ impl fmt::Display for Error {
             Self::Ioctl { request, source } => write!(f, "{request} failed: {source}"),
             Self::Read { source } => write!(f, "cannot read the event stream: {source}"),
             Self::Watch { path, source } => write!(f, "cannot watch {}: {source}", path.display()),
+            Self::Revoked { path } => write!(
+                f,
+                "the descriptor for {} names an input device that answers nothing yet: another \
+                 session holds the terminal, or the device has gone",
+                path.display()
+            ),
             Self::Unusable(what) => write!(f, "{what}"),
         }
     }
@@ -100,7 +121,7 @@ impl std::error::Error for Error {
             | Self::Ioctl { source, .. }
             | Self::Read { source }
             | Self::Watch { source, .. } => Some(source),
-            Self::Unusable(_) => None,
+            Self::Revoked { .. } | Self::Unusable(_) => None,
         }
     }
 }

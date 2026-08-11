@@ -11,15 +11,21 @@
 //! through the wrong number reads as zeros, and zeros are what the comparisons below refuse.
 
 #![cfg(target_os = "linux")]
+// `EVIOCREVOKE` is the one request this crate issues nowhere, and it is the request a session
+// daemon makes on an evdev descriptor. So it is declared and issued here, beside the test that
+// needs it.
+#![allow(unsafe_code)]
 
 mod support;
 
 use std::collections::BTreeSet;
+use std::ffi::{c_int, c_ulong};
 use std::path::{Path, PathBuf};
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fd::{AsFd, OwnedFd};
+use rustix::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use rustix::fs::{Mode, OFlags};
+use rustix::ioctl::{Opcode, opcode};
 use zgui_evdev::{Code, Device, EventType, Key};
 
 /// A descriptor onto `path`, opened the way a session daemon hands one over.
@@ -564,6 +570,88 @@ fn a_device_over_a_blocking_descriptor_reads_rather_than_waiting() {
         "{}: a blocking descriptor read {} batches and returned",
         path.display(),
         batches.len()
+    );
+}
+
+/// `EVIOCREVOKE`, computed the way the kernel's header computes it.
+///
+/// `_IOW('E', 0x91, int)`, built out of the same `rustix` const function this crate builds its own
+/// request numbers with, so no number here is transcribed.
+const REVOKE: Opcode = opcode::write::<c_int>(b'E', 0x91);
+
+/// Revokes the open file description `fd` names.
+///
+/// This is what logind does to an evdev descriptor it hands to a session that is waiting for its
+/// terminal, and what it does to every one of them when another session takes the screen. The
+/// descriptor stays open, every request on it answers `ENODEV`, and nothing puts it back.
+///
+/// The description this revokes is the one the test opened, so the device itself and every other
+/// client of it are untouched.
+///
+/// The argument is the value rather than a pointer to one: `evdev_do_ioctl` refuses an
+/// `EVIOCREVOKE` whose argument is non-null, so a call that pointed at a zero would be refused.
+fn revoke(fd: BorrowedFd<'_>) {
+    // SAFETY: `ioctl` is handed a descriptor this frame borrows for the length of the call, a
+    // request number computed for that call, and the integer argument the request reads. Nothing
+    // is dereferenced and nothing is written back, so the return value is the only result.
+    let answer = unsafe { ioctl(fd.as_raw_fd(), c_ulong::from(REVOKE), 0) };
+
+    assert_eq!(
+        answer,
+        0,
+        "the kernel revokes a descriptor onto a device it still has: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
+// The C library's own, for a request this crate issues nowhere. Declared here instead of reached
+// through a crate, for the reason `support` declares what it declares: what crosses is stated once,
+// beside the code that calls it.
+unsafe extern "C" {
+    /// `ioctl(2)`. Takes the descriptor, the request number, and the argument that request names.
+    fn ioctl(fd: c_int, request: c_ulong, argument: c_int) -> c_int;
+}
+
+#[test]
+fn a_revoked_descriptor_is_an_input_device_that_answers_nothing_yet() {
+    // What logind hands a session that is waiting for its terminal: an evdev node with the
+    // descriptor already revoked. The input driver then answers `ENODEV` for every request,
+    // including the one this crate probes with — so the probe has to read it as a device this run
+    // gets when a person switches to the terminal.
+    let test = "a_revoked_descriptor_is_an_input_device_that_answers_nothing_yet";
+    let devices = support::devices(test);
+    let Some(opened) = devices.first() else {
+        return;
+    };
+    let path = opened.path().to_owned();
+
+    let handed = handed_over(test, &path);
+    // The refusal takes the descriptor with it, so what it was left in is read through a second
+    // name for the same open file description.
+    let kept = handed.try_clone().expect("a descriptor duplicates");
+    revoke(handed.as_fd());
+
+    let error = Device::over(handed, &path).expect_err("a revoked descriptor answers no request");
+
+    assert!(
+        matches!(error, zgui_evdev::Error::Revoked { .. }),
+        "the node is an input device this run cannot read yet: {error:?}"
+    );
+    assert!(
+        error.to_string().contains(&path.display().to_string()),
+        "the refusal names the path its caller gave: {error}"
+    );
+    // The same rule the other refusal keeps: identify, then change. A revoked node goes back to the
+    // daemon that opened it, and the daemon's own descriptor names the same open file description.
+    let flags = rustix::fs::fcntl_getfl(&kept).expect("a descriptor reports its status flags");
+    assert!(
+        !flags.contains(OFlags::NONBLOCK),
+        "a descriptor this crate refuses goes back to its owner with the flags it arrived with, \
+         and this one reads {flags:?}"
+    );
+    println!(
+        "{}: revoked, and refused as a device that answers nothing yet",
+        path.display()
     );
 }
 
