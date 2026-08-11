@@ -148,6 +148,15 @@ pub trait Layout {
     /// Records a key coming up.
     fn release(&mut self, key: Key);
 
+    /// Returns `true` if holding this key down repeats it.
+    ///
+    /// A letter repeats and a modifier does not, so a caller that repeated everything would report
+    /// shift over and over while somebody held it. Which keys repeat is each layout's own answer.
+    ///
+    /// This is asked by the source that has to make the repeats itself. The kernel makes them for
+    /// a reader of its own stream, so that reader asks nothing.
+    fn repeats(&self, key: Key) -> bool;
+
     /// Reads what the key meant, and then records that it came up.
     ///
     /// One call rather than two lines a caller writes in an order, for the same reason
@@ -694,6 +703,12 @@ impl Layout for Xkb {
         self.state.release(zgui_xkb::Keycode::from_evdev(key.raw()));
     }
 
+    /// Returns `true` if the keymap repeats this key. A key it has no entry for does not repeat.
+    fn repeats(&self, key: Key) -> bool {
+        self.keymap
+            .key_repeats(zgui_xkb::Keycode::from_evdev(key.raw()))
+    }
+
     fn hold(&mut self, key: Key) {
         self.state.hold(zgui_xkb::Keycode::from_evdev(key.raw()));
     }
@@ -870,6 +885,36 @@ impl Layout for Console {
         if let Some(at) = self.held.iter().position(|(held, _)| *held == key) {
             self.held.remove(at);
         }
+    }
+
+    /// Returns `true` if the console keymap repeats this key.
+    ///
+    /// Six entry types repeat, and they are the ones that produce a character or a sequence over
+    /// and over: `Latin`, `Letter`, `Unicode` and `Meta`, the keypad's `Pad`, and the four arrows
+    /// of `Cursor`. Every other entry answers `false`.
+    ///
+    /// A key that holds a modifier, a lock or a sticky lock is held rather than struck, so
+    /// repeating it would change nothing and report the same hold over and over. A key that asks
+    /// for a terminal would repeat into a switch asked for thirty times a second. A key the keymap
+    /// has nothing for has no meaning to repeat.
+    ///
+    /// **A console keymap states no repeat flag of its own, so the list above is this backend's**,
+    /// and it is narrower than the xkb path. `KT_FN` covers the function keys and the editing block
+    /// on this layout, and `KT_SPEC` covers enter, so none of those repeats here. libxkbcommon
+    /// repeats all of them: enter, keypad enter, `F1`, `F12`, Home, PageUp, Insert and Delete were
+    /// measured repeating on an `evdev`/`pc105`/`us` keymap, and shift and caps lock were not.
+    fn repeats(&self, key: Key) -> bool {
+        matches!(
+            self.entry(key, self.mask()),
+            Some(
+                zgui_evdev::Entry::Latin(_)
+                    | zgui_evdev::Entry::Letter(_)
+                    | zgui_evdev::Entry::Unicode(_)
+                    | zgui_evdev::Entry::Meta(_)
+                    | zgui_evdev::Entry::Pad(_)
+                    | zgui_evdev::Entry::Cursor(_)
+            )
+        )
     }
 
     fn hold(&mut self, key: Key) {

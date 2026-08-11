@@ -4,6 +4,8 @@ use std::ffi::c_int;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+use std::time::Duration;
+
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::fs::{Mode, OFlags};
 
@@ -570,6 +572,29 @@ impl Device {
         let mut bits = [0_u8; bitmap_bytes::<Key>()];
         let written = ioctl::issue_bytes(self.fd(), ioctl::key_state(), &mut bits)?;
         Ok(Bitmap::from_bytes(&bits[..written.min(bits.len())]))
+    }
+
+    /// Returns how long a key is held before it repeats, and how often it repeats after that.
+    ///
+    /// The kernel's own auto-repeat runs on these two, and a client that reads this device's stream
+    /// gets those repeats for nothing. A client reading the device through a library that drops
+    /// them has to make its own, and this is the rate to make them at: the one this keyboard would
+    /// have repeated at. libinput drops them deliberately, because how long a key is held before it
+    /// repeats is a decision about a person.
+    ///
+    /// The device answers both in milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when the kernel refuses. A device with no `EV_REP` answers
+    /// `ENOSYS`, and the kernel writes nothing before it does.
+    pub fn repeat(&self) -> Result<(Duration, Duration)> {
+        let mut answered = [0_u32; 2];
+        ioctl::issue(self.fd.as_fd(), ioctl::GET_REPEAT, &mut answered)?;
+        Ok((
+            Duration::from_millis(u64::from(answered[0])),
+            Duration::from_millis(u64::from(answered[1])),
+        ))
     }
 
     /// Takes the device, so that its events reach this process and no other.

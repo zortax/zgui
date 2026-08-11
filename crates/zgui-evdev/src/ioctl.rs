@@ -48,7 +48,7 @@
 // the last caller was written.
 #![allow(dead_code)]
 
-use std::ffi::{c_int, c_void};
+use std::ffi::{c_int, c_uint, c_void};
 use std::marker::PhantomData;
 
 use rustix::fd::BorrowedFd;
@@ -274,6 +274,10 @@ macro_rules! console_by_value {
 
 read_only!(GET_VERSION, GROUP, 0x01, c_int);
 read_only!(GET_ID, GROUP, 0x02, sys::input_id);
+// `EVIOCGREP` answers two numbers: how long a key is held before it repeats, and how often it
+// repeats after that, both in milliseconds. The kernel's own auto-repeat runs on them, so a reader
+// that has to make the repeats itself asks here rather than choosing a rate of its own.
+read_only!(GET_REPEAT, GROUP, 0x03, [c_uint; 2]);
 by_value!(GRAB, GROUP, 0x90);
 // `EVIOCSCLOCKID` reads its argument through the pointer — `copy_from_user` in `evdev_ioctl` —
 // where `EVIOCGRAB` beside it reads the argument itself. So it is an ordinary pointer request

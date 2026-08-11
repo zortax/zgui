@@ -613,17 +613,27 @@ fn drive(
             );
             let parked = if owed { park.handed_back() } else { parked };
 
-            // A session waiting to hear that a terminal moved has a moment of its own to answer at,
-            // and nothing on a console wakes a parked loop for it. So the wait is cut to it, and
-            // the pointer comes back when the bound passes rather than at the next key somebody
-            // happens to press.
+            // Two moments the loop owes itself, and nothing on a console wakes it for either: the
+            // bound on a terminal switch, and the next repeat of a held key. The wait is cut to the
+            // nearer of the two. Paying the later one early costs a turn; paying the earlier one
+            // late is the defect — the pointer comes back, or a key repeats, at whatever somebody
+            // happens to press next.
             //
-            // A session that is away answers no such moment, and waiting on one would be a poll of
-            // no length every turn until the resume: what settles the record there is the resume
-            // itself, and the loop has nothing to commit in the meantime.
-            let bound = switching
-                .due()
-                .filter(|due| presence.is_active() && outlasts(parked, *due));
+            // A session that is away owes neither, and waiting on one would be a poll of no length
+            // every turn until the resume. The resume settles the switch record there, and the loop
+            // has nothing to commit in the meantime.
+            let repeating = presence
+                .is_active()
+                .then(|| seat.due())
+                .flatten()
+                // The seat answers in the numbering every event is stamped in, and a wait is made
+                // against the clock's own moments. The origin is what the two share.
+                .map(|due| clock.origin() + due.since_origin());
+            let owed_at = match (switching.due(), repeating) {
+                (Some(switch), Some(repeat)) => Some(switch.min(repeat)),
+                (switch, repeat) => switch.or(repeat),
+            };
+            let bound = owed_at.filter(|due| presence.is_active() && outlasts(parked, *due));
             let waiting = bound.map_or(parked, Parked::Until);
 
             match wait(
