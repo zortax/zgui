@@ -6,7 +6,7 @@
 //!
 //! # The grab
 //!
-//! libinput takes no exclusive grab of its own, so the grab is made here, as the node is opened.
+//! libinput takes no exclusive grab of its own, so the grab is made here, in `open_restricted`.
 //! Without one, every keystroke also reaches the shell behind the console, so somebody typing
 //! `reboot` into a text field leaves it on the command line for the shell to run when the program
 //! exits. `libinput debug-events --grab` makes its grab in exactly this call for exactly this
@@ -24,12 +24,6 @@
 //! The session takes a device back by path, and `close_restricted` is handed a descriptor and
 //! nothing else. So [`Held`] files each device under the descriptor libinput was given, and the
 //! path comes back out of it.
-
-// Nothing a running program reaches gets here yet: `through` is the only caller, and nothing
-// constructs a `Through` yet. The allow comes off with the milestone that gives `Seat` a second
-// source. It is scoped to this module rather than turned off in the manifest, so the rest of the
-// crate keeps reporting what it does not use.
-#![allow(dead_code)]
 
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
@@ -66,12 +60,26 @@ pub(crate) struct Lent<'a> {
     session: &'a mut Session,
     /// Every device that has been opened and not yet handed back.
     held: &'a mut Vec<Held>,
+    /// How many nodes this session cannot read yet.
+    ///
+    /// A session waiting for its terminal is handed every node revoked, so the open answers
+    /// `NotYet` and libinput is told nothing. The count lets a caller say "these arrive when
+    /// somebody switches to this terminal" in place of "this machine has no keyboard".
+    waiting: &'a mut usize,
 }
 
 impl<'a> Lent<'a> {
-    /// The session and the devices it has open.
-    pub(crate) fn new(session: &'a mut Session, held: &'a mut Vec<Held>) -> Self {
-        Self { session, held }
+    /// Lends the session, the devices it has open, and where to count the ones it cannot read yet.
+    pub(crate) fn new(
+        session: &'a mut Session,
+        held: &'a mut Vec<Held>,
+        waiting: &'a mut usize,
+    ) -> Self {
+        Self {
+            session,
+            held,
+            waiting,
+        }
     }
 }
 
@@ -86,7 +94,10 @@ impl zgui_libinput::Files for Lent<'_> {
             // A session waiting for its terminal is handed every node revoked. That is the state
             // rather than a fault: the device is this run's the moment somebody switches to this
             // terminal, and the resume is what opens it.
-            Err(Unopened::NotYet(_)) => return Err(ENODEV),
+            Err(Unopened::NotYet(_)) => {
+                *self.waiting += 1;
+                return Err(ENODEV);
+            }
             Err(Unopened::Refused(_)) => return Err(EACCES),
         };
 
@@ -178,7 +189,8 @@ mod tests {
     fn a_node_the_machine_does_not_have_is_refused_rather_than_held() {
         let mut session = Session::direct();
         let mut held = Vec::new();
-        let mut lent = Lent::new(&mut session, &mut held);
+        let mut waiting = 0;
+        let mut lent = Lent::new(&mut session, &mut held, &mut waiting);
 
         let refused = lent
             .open(Path::new("/dev/input/event9999"), ASKED_WITH)
@@ -194,7 +206,8 @@ mod tests {
         // refusal that happens after the open rather than at it.
         let mut session = Session::direct();
         let mut held = Vec::new();
-        let mut lent = Lent::new(&mut session, &mut held);
+        let mut waiting = 0;
+        let mut lent = Lent::new(&mut session, &mut held, &mut waiting);
 
         let refused = lent
             .open(Path::new("/dev/null"), ASKED_WITH)
@@ -219,7 +232,8 @@ mod tests {
         // session opened, so telling the session about it would take back somebody else's.
         let mut session = Session::direct();
         let mut held = Vec::new();
-        let mut lent = Lent::new(&mut session, &mut held);
+        let mut waiting = 0;
+        let mut lent = Lent::new(&mut session, &mut held, &mut waiting);
 
         let stranger = std::fs::File::open("/dev/null").expect("every machine has `/dev/null`");
         lent.close(OwnedFd::from(stranger));

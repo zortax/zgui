@@ -385,6 +385,36 @@ impl Context {
             .map(|live| &live.device)
     }
 
+    /// Turns tap-to-click on, where the device has it.
+    ///
+    /// libinput's own default is off, and a person who taps a touchpad expects a click. Nothing
+    /// else about a device is set here: which acceleration curve a person wants is a preference,
+    /// and this crate can read none.
+    ///
+    /// A device with no taps to configure — every mouse, every keyboard — is left alone, and so is
+    /// one that refuses. Both answer `false`.
+    pub fn tap_to_click(&mut self, device: DeviceId) -> bool {
+        let symbols = *self.library.symbols();
+        let Some(live) = self
+            .nodes
+            .iter()
+            .filter_map(|node| node.live.as_ref())
+            .find(|live| live.device.id() == device)
+        else {
+            return false;
+        };
+
+        // SAFETY: `raw` is a device this context holds a reference to, so it is alive.
+        let fingers = unsafe { (symbols.device_config_tap_get_finger_count)(live.raw.as_ptr()) };
+        if fingers <= 0 {
+            return false;
+        }
+        // SAFETY: as above, and `1` is libinput's own `ENABLED`.
+        let answered = unsafe { (symbols.device_config_tap_set_enabled)(live.raw.as_ptr(), 1) };
+        // `0` is libinput's `SUCCESS`.
+        answered == 0
+    }
+
     /// Closes every device and stops reading, keeping the nodes.
     ///
     /// This is what a session does when somebody switches to another terminal. Each device is
