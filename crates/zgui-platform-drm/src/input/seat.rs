@@ -340,6 +340,15 @@ impl Translated {
             terminal: None,
         }
     }
+
+    /// Takes what a later key amounted to as well.
+    ///
+    /// The events follow the ones already here, and the terminal follows the rule [`ask`] states:
+    /// the last key that asked for one is the one a person asked for.
+    fn and(&mut self, later: Self) {
+        self.events.extend(later.events);
+        ask(&mut self.terminal, later.terminal);
+    }
 }
 
 /// Records the terminal a key asked for, where it asked for one.
@@ -356,9 +365,13 @@ fn ask(answered: &mut Option<u32>, asked: Option<u32>) {
     }
 }
 
-/// Which way a key moved, as the value the kernel wrote says.
+/// Which way a key moved.
+///
+/// The kernel's own stream reports a value that is read into one of these, and libinput reports two
+/// of the three: how long a key is held before it repeats is a decision about a person rather than
+/// about a device, so libinput makes none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Transition {
+pub enum Transition {
     /// The key went down.
     Pressed,
     /// The key came up.
@@ -561,10 +574,27 @@ impl Down {
 
 /// The layout, what it last reported held, and what a batch of events means.
 ///
-/// This is the whole translation and it holds no device, which is what lets every part of it be
-/// exercised over bytes written by hand.
+/// The whole translation, and it holds no device, so every part of it can be exercised over bytes
+/// written by hand.
 ///
-/// # Which keys are down belongs to the device rather than to this
+/// ```
+/// use std::time::Duration;
+/// use zgui_evdev::Key;
+/// use zgui_platform_drm::input::seat::{Down, Keys, Transition};
+/// use zgui_vocab::Timestamp;
+///
+/// // No layout, so a key arrives by its position and types nothing.
+/// let mut keys = Keys::new(None);
+/// let mut down = Down::default();
+/// let at = Timestamp::from_origin(Duration::from_millis(250));
+///
+/// let struck = keys.key(&mut down, Key::KEY_A, Transition::Pressed, at);
+///
+/// assert_eq!(struck.events.len(), 1);
+/// assert_eq!(struck.terminal, None, "an ordinary key asks for no terminal");
+/// ```
+///
+/// # One set of held keys per device
 ///
 /// Every method here takes the calling device's own [`Down`]. One layout serves every keyboard
 /// this seat holds, and libxkbcommon counts a modifier's transitions — so shift held on two
@@ -670,60 +700,110 @@ impl Keys {
         if dropped(batch) {
             return Translated::nothing();
         }
-        let mut events = Vec::new();
-        let mut terminal = None;
+        let mut translated = Translated::nothing();
         for event in &batch.events {
             let Some(key) = event.key().filter(|key| typed(*key)) else {
                 continue;
             };
-            let transition = Transition::of(event.value);
-            // Read before the transition is recorded, because a release is what takes the key out
-            // of the swallowed set.
-            let swallowed = down.swallows(key);
-            let Struck { reading, moved } = self.read(down, key, transition);
-            if transition == Transition::Pressed && reading.terminal.is_some() {
-                down.swallow(key);
-                // No modifier is read here, because no key that asks for a terminal is a modifier:
-                // one keymap entry holds one meaning, and this one holds the terminal.
-                if moved {
-                    ask(&mut terminal, reading.terminal);
-                }
-                continue;
-            }
-            if swallowed {
-                continue;
-            }
-            let (state, repeat) = match transition {
-                Transition::Pressed => (KeyState::Pressed, false),
-                Transition::Repeated => (KeyState::Pressed, true),
-                Transition::Released => (KeyState::Released, false),
-            };
-            // The held set is read *after* the transition is recorded, so the press of shift
-            // carries shift and its release carries nothing — which is what a browser reports and
-            // what a handler reading the modifiers off a key event expects.
-            let modifiers = self
-                .layout
-                .as_ref()
-                .map_or(Modifiers::NONE, |layout| layout.modifiers());
-            // Before the key, because the state a key was struck in is announced before the event
-            // that happened in it.
-            if modifiers != self.modifiers {
-                self.modifiers = modifiers;
-                events.push(SurfaceEvent::ModifiersChanged(modifiers));
-            }
-            events.push(SurfaceEvent::Key {
-                state,
-                event: keyboard::event(
-                    code::physical(key),
-                    reading.key,
-                    reading.without_modifiers,
-                    repeat,
-                ),
-                modifiers,
-                timestamp: stamps.at(event.at),
-            });
+            translated.and(self.key(down, key, Transition::of(event.value), stamps.at(event.at)));
         }
-        Translated { events, terminal }
+        translated
+    }
+
+    /// Translates one key moving.
+    ///
+    /// The whole translation, and [`Keys::batch`] is a loop over it. The two callers differ in what
+    /// they read a key out of: the kernel's own stream reports a code and a value, and libinput
+    /// reports a code and which way it went. Neither difference reaches this far.
+    ///
+    /// # Keys that ask for a terminal
+    ///
+    /// The layout says which key asks for one, and both layouts do — `Ctrl+Alt+F1` is its own
+    /// keysym under libxkbcommon and a `KT_CONS` entry in a console keymap, so it has never
+    /// produced `F1`. Such a key is answered here as the terminal and as no event: it belongs to
+    /// the session, the way a key that toggles caps lock belongs to the console driver, and an
+    /// application that was told about it as well would act on a chord that is already taking the
+    /// screen away.
+    ///
+    /// **Only a press the device had not already made asks.** A repeat asks for nothing, so a chord
+    /// held down asks once rather than thirty times a second. A press of a key this device already
+    /// holds asks for nothing either: the layout is told nothing about one, so it is a press nobody
+    /// made. Such an event reaches any machine — [`Device::open`](zgui_evdev::Device::open) starts
+    /// the kernel queuing events to this client and the read of `EVIOCGKEY` follows it, so a key
+    /// struck in between arrives twice — and every resume opens every device again.
+    ///
+    /// **The press decides, and the key is remembered until it comes up.** The terminal sits on the
+    /// level the modifiers select, so a chord taken apart before the finger leaves the key reads as
+    /// an ordinary `F1` again, and the release would reach the application with no press behind it.
+    /// [`Down`] holds the codes that were swallowed, so the release is swallowed with the press and
+    /// an application is never told about half of a chord. A chord held through a terminal switch
+    /// comes back as a release with no press behind it, and [`Keys::resynchronise`] swallows that
+    /// one for the same reason.
+    ///
+    /// The transition is recorded either way. A key the layout was never told about would leave the
+    /// count of a modifier held over the chord wrong for the rest of the run.
+    pub fn key(
+        &mut self,
+        down: &mut Down,
+        key: Key,
+        transition: Transition,
+        at: Timestamp,
+    ) -> Translated {
+        // Read before the transition is recorded, because recording a release takes the key out of
+        // the swallowed set.
+        let swallowed = down.swallows(key);
+        let Struck { reading, moved } = self.read(down, key, transition);
+
+        if transition == Transition::Pressed && reading.terminal.is_some() {
+            down.swallow(key);
+            // No modifier is read here, because no key that asks for a terminal is a modifier: one
+            // keymap entry holds one meaning, and this one holds the terminal.
+            return Translated {
+                events: Vec::new(),
+                // A transition the layout was told nothing about is a transition nobody made.
+                terminal: if moved { reading.terminal } else { None },
+            };
+        }
+        if swallowed {
+            return Translated::nothing();
+        }
+
+        let (state, repeat) = match transition {
+            Transition::Pressed => (KeyState::Pressed, false),
+            Transition::Repeated => (KeyState::Pressed, true),
+            Transition::Released => (KeyState::Released, false),
+        };
+        // The held set is read *after* the transition is recorded, so the press of shift carries
+        // shift and its release carries nothing. That is what a browser reports, and what a handler
+        // reading the modifiers off a key event expects.
+        let modifiers = self
+            .layout
+            .as_ref()
+            .map_or(Modifiers::NONE, |layout| layout.modifiers());
+
+        let mut events = Vec::new();
+        // Before the key, because the state a key was struck in is announced before the event that
+        // happened in it.
+        if modifiers != self.modifiers {
+            self.modifiers = modifiers;
+            events.push(SurfaceEvent::ModifiersChanged(modifiers));
+        }
+        events.push(SurfaceEvent::Key {
+            state,
+            event: keyboard::event(
+                code::physical(key),
+                reading.key,
+                reading.without_modifiers,
+                repeat,
+            ),
+            modifiers,
+            timestamp: at,
+        });
+
+        Translated {
+            events,
+            terminal: None,
+        }
     }
 
     /// Reads the layout for one transition, and records the transition where there is one.
@@ -2686,6 +2766,58 @@ mod tests {
         let events = translate(&mut keys, &mut down, &moved(SINCE, Key::KEY_LEFTSHIFT, 0));
         assert_eq!(keys.modifiers(), Modifiers::NONE);
         assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn one_key_read_on_its_own_is_the_same_translation_as_one_key_in_a_batch() {
+        // The two ways in. `Keys::batch` reads the kernel's own stream, and `Keys::key` is the
+        // entry for a source that already knows which key moved — libinput reports a code and a
+        // direction, and never a batch. They have to be one translation, because everything that
+        // makes a key mean something is written once and both would otherwise drift.
+        let struck = [
+            (Key::KEY_LEFTSHIFT, Transition::Pressed),
+            (Key::KEY_A, Transition::Pressed),
+            (Key::KEY_A, Transition::Released),
+            (Key::KEY_LEFTSHIFT, Transition::Released),
+        ];
+        let at = Duration::from_millis(250);
+
+        let (mut batched, _, mut batched_down) = keys();
+        let mut through_a_batch = Vec::new();
+        for (key, transition) in struck {
+            let value = match transition {
+                Transition::Pressed => 1,
+                Transition::Repeated => 2,
+                Transition::Released => 0,
+            };
+            through_a_batch.extend(translate(
+                &mut batched,
+                &mut batched_down,
+                &moved(SINCE + at, key, value),
+            ));
+        }
+
+        let (mut directly, _, mut direct_down) = keys();
+        let mut one_at_a_time = Vec::new();
+        for (key, transition) in struck {
+            one_at_a_time.extend(
+                directly
+                    .key(
+                        &mut direct_down,
+                        key,
+                        transition,
+                        Stamps::from_origin(SINCE).at(SINCE + at),
+                    )
+                    .events,
+            );
+        }
+
+        assert_eq!(
+            format!("{one_at_a_time:?}"),
+            format!("{through_a_batch:?}"),
+            "the same keys through the two entries mean the same thing"
+        );
+        assert_eq!(directly.modifiers(), batched.modifiers());
     }
 
     #[test]
