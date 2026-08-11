@@ -8,12 +8,11 @@
 //!
 //! [`Session::open`] answers one of two shapes, and it never fails.
 //!
-//! **Seated.** libseat opened a seat, which either enabled or reported itself inactive because
-//! another terminal is the live one. [`Session::card`] and [`Session::open_input`] ask the daemon
-//! for the card and for each input device, and the console is already in graphics mode. logind and
-//! seatd set DRM master on a card before they answer the client, so a card from either arrives
-//! with master on it; libseat's noop backend opens the path with a plain `open(2)` and grants none
-//! of it.
+//! **Seated.** libseat opened a seat, and the seat said whether it holds the terminal.
+//! [`Session::card`] and [`Session::open_input`] ask the daemon for the card and for each input
+//! device, and the console is already in graphics mode. logind and seatd set DRM master on a card
+//! before they answer the client, so a card from either arrives with master on it; libseat's noop
+//! backend opens the path with a plain `open(2)` and grants none of it.
 //!
 //! **Direct.** This process opens the card and each input device, takes master itself, and puts the
 //! console into graphics mode. It is the answer where libseat is absent, where the seat was
@@ -43,8 +42,8 @@
 //!
 //! There is no window on the way out. logind moves the terminal, drops DRM master and revokes every
 //! evdev descriptor **before** it reports the change, so a suspend catches up with what has already
-//! happened. A resume opens every input device again, because a revoked evdev descriptor cannot be
-//! recovered, and sets every mode again, because another session has put its own on the CRTC.
+//! happened. A resume opens every input device again, because `EVIOCREVOKE` cannot be undone, and
+//! sets every mode again, because another session has put its own on the CRTC.
 //!
 //! A run started on a terminal that is not the live one is the same machinery from the other end.
 //! The seat opens, its devices are another session's, and the loop waits: [`zgui_seat::Seat`]
@@ -54,10 +53,16 @@
 //! Taking the seat also takes the terminal. logind puts the terminal into `K_OFF` and
 //! `KD_GRAPHICS` when it grants control, so the console keyboard stops answering for as long as the
 //! seat is held, and a key that asks for another terminal reaches this program rather than the
-//! console driver. So this program is what asks: the layout reads `Ctrl+Alt+Fn` as the terminal it
-//! is, and `Session::switch` carries that to the daemon. logind gives the terminal back when the
+//! console driver. So this program asks: the layout reads `Ctrl+Alt+Fn` as the terminal it is, and
+//! `Session::switch` carries that to the daemon. logind gives the terminal back when the
 //! controlling process **exits**, so a seated program that stops answering leaves a machine that
 //! draws nothing and answers no key until it is killed from elsewhere.
+//!
+//! **An ask is the one window this run has.** It is made while the session is still active and
+//! still holds DRM master, and the suspend that follows it has neither — so anything the next
+//! session would otherwise inherit is put right at the ask. [`crate::cursor::Planes`] is what that
+//! means today: a cursor plane keeps whatever was last put on it, and a session that never names
+//! that plane never clears it.
 
 pub(crate) mod presence;
 
@@ -102,7 +107,7 @@ pub struct Session {
     ///
     /// See [`Asked`].
     #[cfg(test)]
-    asked: Vec<Asked>,
+    asked: Record,
 }
 
 /// One call a caller made on a session, recorded while the tests run.
@@ -116,6 +121,8 @@ pub struct Session {
 ///
 /// [`Asked::Refused`] records a decision instead of a call, because that decision is otherwise a
 /// line in a log nobody reads.
+///
+/// The last three are made **for** a session. See [`Record`].
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Asked {
@@ -131,6 +138,56 @@ pub(crate) enum Asked {
     ///
     /// Once for the whole run, because the refusal is reported once. Every later ask records its
     /// own [`Asked::Switch`] and nothing else, and that absence says the state was kept.
+    Refused,
+    /// Every cursor plane taken back, before the ask.
+    ///
+    /// See [`crate::cursor::Planes::give_them_back`].
+    GavePlanesBack,
+    /// Every cursor plane taken again, after an ask that was refused.
+    ///
+    /// See [`crate::cursor::Planes::take_them_again`].
+    TookPlanesAgain,
+}
+
+/// The list [`Asked`] is recorded on, shared with whatever else a switch runs.
+///
+/// A switch is two things in one order: every cursor plane goes back, and then the terminal is
+/// asked for. The planes belong to the card and the code that hides them holds no session, so the
+/// two are recorded by different callers. A test that read two lists could say that both happened
+/// and nothing about which came first. One shared list is one order.
+///
+/// [`Session::recording`] is how a test hands the same list to the other caller.
+#[cfg(test)]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Record(std::rc::Rc<std::cell::RefCell<Vec<Asked>>>);
+
+#[cfg(test)]
+impl Record {
+    /// Records one call.
+    pub(crate) fn push(&self, asked: Asked) {
+        self.0.borrow_mut().push(asked);
+    }
+
+    /// Returns everything recorded on this list, in the order it was.
+    pub(crate) fn taken(&self) -> Vec<Asked> {
+        self.0.borrow().clone()
+    }
+}
+
+/// What a session did with the terminal a key asked for.
+///
+/// [`Session::switch`] answers it, and the answer decides what happens to the cursor planes that
+/// went back before the ask. A session that keeps the screen takes them again. Without that, a
+/// person on a machine that can never switch loses the pointer for the rest of the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Switched {
+    /// The ask went out, so this session is about to lose the screen.
+    ///
+    /// The terminal moving arrives later, as a change the daemon sends.
+    Asked,
+    /// The ask went nowhere, so this session still holds the screen.
+    ///
+    /// Every switch on the direct shape, and a seated one the daemon refused.
     Refused,
 }
 
@@ -266,7 +323,7 @@ impl Session {
                     },
                     took: None,
                     #[cfg(test)]
-                    asked: Vec::new(),
+                    asked: Record::default(),
                 }
             }
             Err(error) => {
@@ -282,7 +339,7 @@ impl Session {
                     },
                     took: None,
                     #[cfg(test)]
-                    asked: Vec::new(),
+                    asked: Record::default(),
                 }
             }
         }
@@ -512,26 +569,31 @@ impl Session {
     /// no surface.
     ///
     /// **Seated.** The daemon owns the terminal and moves it. This answers as soon as the request
-    /// goes out, and the terminal moving arrives later as a change the daemon sends — which the loop
+    /// goes out, and the terminal moving arrives later as a change the daemon sends, which the loop
     /// reads as a suspend.
     ///
     /// **Direct.** Nothing here owns a terminal, so this run cannot move one. The refusal is
     /// reported once, because every switch on this shape fails for the same reason and a person who
     /// presses the chord presses it again — a line for each would fill the log of a run that can
     /// never answer differently.
-    pub(crate) fn switch(&mut self, terminal: u32) {
+    ///
+    /// The answer says the ask went out, and says nothing about the terminal having moved. A switch
+    /// that was accepted is reported later, as the change the daemon sends.
+    pub(crate) fn switch(&mut self, terminal: u32) -> Switched {
         #[cfg(test)]
         self.asked.push(Asked::Switch(terminal));
 
         match &mut self.shape {
-            Shape::Seated { seat, .. } => {
-                if let Err(error) = seat.switch(terminal) {
+            Shape::Seated { seat, .. } => match seat.switch(terminal) {
+                Ok(()) => Switched::Asked,
+                Err(error) => {
                     warn!(
                         target: "zgui::platform",
                         "the session daemon was asked for terminal {terminal} and refused: {error}"
                     );
+                    Switched::Refused
                 }
-            }
+            },
             Shape::Direct { refused_a_switch } => {
                 if !std::mem::replace(refused_a_switch, true) {
                     #[cfg(test)]
@@ -544,6 +606,7 @@ impl Session {
                          as `chvt` over a network connection"
                     );
                 }
+                Switched::Refused
             }
         }
     }
@@ -560,7 +623,7 @@ impl Session {
                 refused_a_switch: false,
             },
             took: None,
-            asked: Vec::new(),
+            asked: Record::default(),
         }
     }
 
@@ -568,8 +631,16 @@ impl Session {
     ///
     /// See [`Asked`] for what this is for.
     #[cfg(test)]
-    pub(crate) fn asked(&self) -> &[Asked] {
-        &self.asked
+    pub(crate) fn asked(&self) -> Vec<Asked> {
+        self.asked.taken()
+    }
+
+    /// Returns the list this session records on, for whatever else a switch runs.
+    ///
+    /// See [`Record`].
+    #[cfg(test)]
+    pub(crate) fn recording(&self) -> Record {
+        self.asked.clone()
     }
 }
 

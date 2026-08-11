@@ -111,6 +111,14 @@
 //! place comes from the pointer this loop owns — so the two meet here and nowhere else. A display
 //! with a cursor plane is committed to; a display without one is asked for a frame, because there
 //! the picture is what carries the pointer. [`crate::cursor`] is where that difference lives.
+//!
+//! **A plane goes back before this program asks for another terminal.** Whatever is on a cursor
+//! plane stays on it until somebody names that plane in a commit, and a session that draws its own
+//! pointer into the frame names it never — so this program's pointer would sit over the next
+//! session's picture for the rest of the run. The ask is the last moment this session is active and
+//! holds DRM master, so the planes travel with it through
+//! [`Heard::answered`](crate::input::seat::Heard::answered). The involuntary path has no such
+//! moment: by the time a suspend is read, the terminal has moved and the master has gone.
 
 use std::cell::RefCell;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -130,7 +138,7 @@ use zgui_render_wgpu::Gpu;
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
-use crate::cursor::Cursor;
+use crate::cursor::{self, Cursor};
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
 use crate::input::pointer::{Pointer, Screen};
@@ -438,7 +446,21 @@ fn drive(
                 // so a terminal is asked for while this run owns one. `Heard::answered` is what asks
                 // and what hands the reports over, so the two cannot come apart — and a key that
                 // asked reaches no surface, so what is delivered below carries nothing for it.
-                deliver(&mut *handler, &cx, heard.answered(session), focused);
+                //
+                // The cursor planes go with it. This turn is the last moment a session that is
+                // leaving is active and holds DRM master, so it is the only place a plane can be
+                // cleared before the next session inherits it.
+                let mut planes = OnPlanes {
+                    device,
+                    commit: &commit,
+                    cursors: &cursors,
+                };
+                deliver(
+                    &mut *handler,
+                    &cx,
+                    heard.answered(session, &mut planes),
+                    focused,
+                );
                 if cx.is_exiting() {
                     break;
                 }
@@ -554,6 +576,48 @@ fn drive(
         release_cursor(cursor, device);
     }
     outcome
+}
+
+/// Every display's cursor, for the turn that asks for another terminal.
+///
+/// The three things one hide takes, borrowed from the loop that owns them. Built per ask rather
+/// than kept, because it is a view of what the loop already holds and it lives for the length of
+/// one call.
+struct OnPlanes<'a> {
+    /// The card every plane is on.
+    device: &'a Device,
+    /// The one commit for that card.
+    commit: &'a Rc<RefCell<Box<dyn Commit>>>,
+    /// One cursor per display.
+    cursors: &'a [Rc<RefCell<Cursor>>],
+}
+
+/// Clearing every plane before the ask, and putting them back where the ask went nowhere.
+///
+/// A refusal is reported and the rest of the displays carry on. The screen is going either way, and
+/// a plane the kernel would not clear is one nothing here can do more about. It costs this
+/// program's pointer left over the next session's picture, which the give-back exists to prevent.
+impl cursor::Planes for OnPlanes<'_> {
+    fn give_them_back(&mut self) {
+        for cursor in self.cursors {
+            let mut cursor = cursor.borrow_mut();
+            let mut committing = self.commit.borrow_mut();
+            if let Err(error) = cursor.give_the_plane_back(self.device, &mut **committing) {
+                warn!(
+                    target: "zgui::platform",
+                    "a cursor plane could not be cleared before this session asked for another \
+                     terminal, so this program's pointer may stay on the screen over the next \
+                     session's picture: {error}"
+                );
+            }
+        }
+    }
+
+    fn take_them_again(&mut self) {
+        for cursor in self.cursors {
+            cursor.borrow_mut().take_the_plane_again();
+        }
+    }
 }
 
 /// Hands `reports` to the surfaces they belong to.
@@ -859,14 +923,15 @@ mod tests {
     //!
     //! **What is not here.** [`relight`] and everything under it: putting a mode back, putting a
     //! cursor on its plane, and telling a claimed surface it is visible again — a surface needs the
-    //! card that discovered its display. [`Scanout::restore`] clearing an outstanding flip is
-    //! covered by `tests/scanout.rs`, which needs DRM master and a monitor. The transitions
-    //! themselves are [`Presence`](crate::session::presence::Presence), which is pure and carries
-    //! its own tests. The terminal a key asked for is
-    //! [`Heard::answered`](crate::input::seat::Heard::answered), where the ask and the reports are
-    //! one call — the turn above cannot deliver a report without making the ask, so there is
-    //! nothing here for a test to hold up. What is left over — a real switch, a real modeset, the
-    //! picture coming back — is the hardware run.
+    //! card that discovered its display. [`OnPlanes`] is the same shape from the other end: what
+    //! each cursor records is [`Cursor`]'s own and pure, and hiding one is a request to a driver.
+    //! [`Scanout::restore`] clearing an outstanding flip is covered by `tests/scanout.rs`, which
+    //! needs DRM master and a monitor. The transitions themselves are
+    //! [`Presence`](crate::session::presence::Presence), which is pure and carries its own tests.
+    //! The terminal a key asked for is [`Heard::answered`](crate::input::seat::Heard::answered),
+    //! where the ask, the planes and the reports are one call — the turn above cannot deliver a
+    //! report without making the ask, so there is nothing here for a test to hold up. What is left
+    //! over — a real switch, a real modeset, the picture coming back — is the hardware run.
 
     use std::os::fd::{AsFd, AsRawFd};
     use std::path::{Path, PathBuf};
