@@ -215,8 +215,21 @@ impl Search {
 /// with no layout, and every key then reaches a document by its position alone.
 ///
 /// Which names libxkbcommon is asked for is the `names` module's answer: the environment, then
-/// `/etc/vconsole.conf`, then `/etc/X11/xorg.conf.d/00-keyboard.conf`. A console session has no
-/// session manager to state them, so they are read from the machine itself.
+/// `/etc/vconsole.conf`, then `/etc/default/keyboard`, then
+/// `/etc/X11/xorg.conf.d/00-keyboard.conf`. A console session has no session manager to state them,
+/// so they are read from the machine itself.
+///
+/// ```no_run
+/// use zgui_platform_drm::input::keyboard::layout::{Layout, find};
+///
+/// let found = find();
+///
+/// // A source answered, or every source that refused said why.
+/// assert!(found.layout.is_some() || !found.refused.is_empty());
+/// if let Some(layout) = &found.layout {
+///     assert!(!layout.describe().is_empty(), "the line a person reads at start-up");
+/// }
+/// ```
 pub fn find() -> Search {
     let asked = names::of(&names::Machine::read());
     let mut search = Search {
