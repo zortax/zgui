@@ -63,15 +63,19 @@
 //!   already kept inside the union of the displays, so both are close. The contract offers no
 //!   method that asks for either, and a pointer event carries a position and no movement, so
 //!   neither is declared. `cx` is where that decision is written down.
-//! * **No virtual terminal management.** A session daemon opens the card where the machine has one
-//!   — `session` is that half, and it lets a program here start from an ordinary login shell. What
-//!   is absent is the other half: the seat is taken and nothing is read back from it, so a program
-//!   that loses its devices to another terminal is told nothing and carries on drawing into commits
-//!   that fail. **Switching away from a running program is not handled and is not safe.** A machine
-//!   with no libseat gets the older behaviour whole: the loop opens the card and takes DRM master
-//!   itself, which needs a free virtual terminal or root. A machine that has libseat and a seat
-//!   that never enables reaches the same path two seconds later, and holds `TakeControl` on its own
-//!   terminal — the console keyboard turned off with it — for that long.
+//! * **Nothing here asks for another terminal.** A seated program survives a switch in both
+//!   directions — `session` and the loop are those two halves — and a person on the keyboard cannot
+//!   start one. The daemon turns the console keyboard off when it grants control and this backend
+//!   grabs the physical keyboards, so `Ctrl+Alt+F2` reaches this program as a key and reaches the
+//!   console driver as nothing. Reading that key and asking the session for the terminal is the
+//!   milestone after this one; until then a switch comes from elsewhere, such as `chvt` over a
+//!   network connection.
+//! * **No switching on the degraded path.** A machine with no libseat gets the older behaviour
+//!   whole: the loop opens the card and takes DRM master itself, which needs a free virtual
+//!   terminal or root, and a terminal switch there leaves the program holding the display. A
+//!   machine that has libseat and a seat that says nothing at all reaches the same path two seconds
+//!   later, and holds `TakeControl` on its own terminal — the console keyboard turned off with it —
+//!   for that long.
 //! * **A held terminal is held until the process exits.** A daemon puts the terminal into
 //!   `KD_GRAPHICS` and turns the console keyboard off when it grants control, and gives both back
 //!   when the controlling process goes. So a seated program that stops answering leaves a machine
@@ -123,10 +127,18 @@
 //! # The loop
 //!
 //! `run` is the driver. It opens the session, takes the card from it, lights every display it
-//! finds, and then turns: read the completions, draw the frames that were asked for, ask the
-//! application how to wait, and wait on the device, the wake channel and every input device
-//! together. `park` decides the waiting, and it is the same state machine the windowing backend
-//! parks with.
+//! finds, and then turns: read what the session daemon said, read the completions, draw the frames
+//! that were asked for, ask the application how to wait, and wait on the device, the wake channel,
+//! the daemon and every input device together. `park` decides the waiting, and it is the same state
+//! machine the windowing backend parks with.
+//!
+//! A seated run also survives a person switching terminal. `session::presence` turns a turn's worth
+//! of the daemon's changes into one of three answers — give the devices back, take them again, or
+//! carry on — and the loop carries that answer out: the surfaces are told they are occluded and
+//! every input device goes back, and on the way in every device is opened again, every display is
+//! put back into its mode with the frame it last showed, and every surface is damaged in full and
+//! asked to draw. A run started on a terminal that is not the live one is the same machinery from
+//! the other end: it waits, and the display lights when somebody switches to it.
 //!
 //! The console's own mode goes with the card on the direct path: the session puts the terminal
 //! into graphics mode as it takes the card, so the kernel's text console stops drawing over the

@@ -8,19 +8,19 @@
 //!
 //! [`Session::open`] answers one of two shapes, and it never fails.
 //!
-//! **Seated.** libseat opened a seat and the seat enabled. [`Session::card`] and
-//! [`Session::open_input`] ask the daemon for the card and for each input device, and the console
-//! is already in graphics mode. logind and seatd set DRM master on a card before they answer the
-//! client, so a card from either arrives with master on it; libseat's noop backend opens the path
-//! with a plain `open(2)` and grants none of it.
+//! **Seated.** libseat opened a seat, and the seat said whether it holds the terminal.
+//! [`Session::card`] and [`Session::open_input`] ask the daemon for the card and for each input
+//! device, and the console is already in graphics mode. logind and seatd set DRM master on a card
+//! before they answer the client, so a card from either arrives with master on it; libseat's noop
+//! backend opens the path with a plain `open(2)` and grants none of it.
 //!
 //! **Direct.** This process opens the card and each input device, takes master itself, and puts the
 //! console into graphics mode. It is the answer where libseat is absent, where the seat was
-//! refused, and where a seat opened and never enabled. This path needs root or a free virtual
-//! terminal, and it is allowed to be worse.
+//! refused, and where a seat opened and said nothing about itself. This path needs root or a free
+//! virtual terminal, and it is allowed to be worse.
 //!
 //! **The fallback is free only where libseat is absent.** A machine that has the library and a seat
-//! that never enables pays [`zgui_seat::ENABLE_WITHIN`] waiting for an enable that is never coming.
+//! that says nothing pays [`zgui_seat::ENABLE_WITHIN`] waiting for an answer that is never coming.
 //! A seat logind granted holds the terminal for that whole wait — `K_OFF` and `KD_GRAPHICS`, so the
 //! console keyboard there stops answering — and gives it back when the seat closes.
 //!
@@ -32,24 +32,40 @@
 //! is used: one dropped while the card is still being drawn on restores the console and hands the
 //! master back under a live descriptor.
 //!
-//! # Switching away is not handled yet
+//! # Switching terminal
 //!
-//! A seated run takes the seat and reads nothing back from it. [`zgui_seat::Seat::dispatch`] is
-//! called by nothing here, so a session that loses its devices to another terminal is a session
-//! that carries on drawing: the commits fail, the input descriptors answer `ENODEV`, and the
-//! application is told none of it. The recovery is a later milestone.
+//! A seated session hands its devices over when a person switches to another terminal, and takes
+//! them again on the way back. A loop waits on the seat's own descriptor beside the device,
+//! `Session::dispatch` reads the changes off it, and `presence` turns a turn's worth of them into
+//! the one thing to do about them. All three are this crate's own — [`run`](crate::run) drives a
+//! console backend and nothing else does — so they are named here rather than linked.
+//!
+//! There is no window on the way out. logind moves the terminal, drops DRM master and revokes every
+//! evdev descriptor **before** it reports the change, so a suspend catches up with what has already
+//! happened. A resume opens every input device again, because `EVIOCREVOKE` cannot be undone, and
+//! sets every mode again, because another session has put its own on the CRTC.
+//!
+//! A run started on a terminal that is not the live one is the same machinery from the other end.
+//! The seat opens, its devices are another session's, and the loop waits: [`zgui_seat::Seat`]
+//! leaves the change that said so in its queue, so the first turn reads it as an ordinary suspend
+//! and the enable that arrives when a person switches to that terminal is an ordinary resume.
 //!
 //! Taking the seat also takes the terminal. logind puts the terminal into `K_OFF` and
-//! `KD_GRAPHICS` when it grants control, so the console keyboard stops answering and `Ctrl+Alt+F2`
-//! stops switching for as long as the seat is held. logind gives the terminal back when the
-//! controlling process **exits**, so a seated program that stops answering leaves a machine that
-//! draws nothing and answers no key until it is killed from elsewhere.
+//! `KD_GRAPHICS` when it grants control, so the console keyboard stops answering for as long as the
+//! seat is held, and a key that asks for another terminal reaches this program rather than the
+//! console driver. logind gives the terminal back when the controlling process **exits**, so a
+//! seated program that stops answering leaves a machine that draws nothing and answers no key until
+//! it is killed from elsewhere.
 
+pub(crate) mod presence;
+
+use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tracing::{info, warn};
 use zgui_platform::PlatformError;
+use zgui_seat::Change;
 
 use crate::console::ConsoleScreen;
 use crate::output::backend;
@@ -188,24 +204,41 @@ impl Session {
     /// Opens the session this run is in.
     ///
     /// libseat is tried first. Every failure — no library, a seat that was refused, a seat that
-    /// opened and never enabled — answers the direct shape, and one line at the crate's log says
-    /// which shape this run got and why.
+    /// opened and said nothing about itself — answers the direct shape, and one line at the crate's
+    /// log says which shape this run got and why.
     ///
     /// A run started inside a desktop's own session lands on the direct shape: logind refuses
     /// control of a session that already has a controlling client, and libseat's builtin backend
-    /// then hands back a seat that never enables. A run started on a terminal nobody is looking at
-    /// lands there as well: logind reads whether the session is active before it grants control and
-    /// reports an inactive one as disabled, so that seat never enables either. Both fail at DRM
-    /// master in [`Session::card`], which is the interlock this backend has always had.
+    /// then hands back a seat that says nothing. Such a run fails at DRM master in
+    /// [`Session::card`], which is the interlock this backend has always had.
+    ///
+    /// # A seat whose terminal is not the live one
+    ///
+    /// logind reads whether the session is active while the seat opens and reports an inactive one
+    /// as disabled, so a run started on a terminal nobody is looking at gets a seat that is open
+    /// and waiting. That is accepted here. The daemon holds that terminal, opens this session's
+    /// devices, and enables the seat when a person switches to it; the display lights then. The
+    /// interlock still holds — the screen belongs to whoever the daemon says it belongs to — and a
+    /// program started this way runs instead of failing two seconds later.
     pub fn open() -> Self {
         match zgui_seat::Seat::open() {
             Ok(seat) => {
-                info!(
-                    target: "zgui::platform",
-                    "the devices come from the session daemon, on seat {}, so this run needs no \
-                     privilege of its own",
-                    seat.name()
-                );
+                if seat.opened_inactive() {
+                    info!(
+                        target: "zgui::platform",
+                        "the devices come from the session daemon, on seat {}, and the terminal \
+                         this run is on is not the live one — so it waits, and the display lights \
+                         when somebody switches to it",
+                        seat.name()
+                    );
+                } else {
+                    info!(
+                        target: "zgui::platform",
+                        "the devices come from the session daemon, on seat {}, so this run needs \
+                         no privilege of its own",
+                        seat.name()
+                    );
+                }
                 Self {
                     shape: Shape::Seated {
                         seat,
@@ -409,6 +442,44 @@ impl Session {
     /// back.
     pub fn is_seated(&self) -> bool {
         matches!(self.shape, Shape::Seated { .. })
+    }
+
+    /// Returns the descriptor a loop waits on beside the device, where this session has one.
+    ///
+    /// It becomes readable when the daemon has something to say about the terminal.
+    /// [`Session::dispatch`] reads it. Nothing on the direct shape, where no daemon owns anything
+    /// and a terminal switch reaches this program through nothing at all.
+    pub(crate) fn descriptor(&self) -> Option<BorrowedFd<'_>> {
+        match &self.shape {
+            Shape::Seated { seat, .. } => Some(seat.descriptor()),
+            Shape::Direct => None,
+        }
+    }
+
+    /// Reads what the daemon has said since the last turn.
+    ///
+    /// This waits for nothing. A loop calls it once a turn, before anything else: a change here
+    /// moves the devices, the master and the terminal, so everything below it in a turn is looking
+    /// at a different machine afterwards.
+    ///
+    /// The direct shape answers nothing, always. There is no daemon to say anything, and a terminal
+    /// switch away from a direct run leaves it holding the display.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when libseat could not read its connection. That is the
+    /// seat gone: a connection that failed carries no later change, so the devices this session
+    /// holds are unusable and there is nothing further to wait for.
+    pub(crate) fn dispatch(&mut self) -> Result<Vec<Change>, PlatformError> {
+        match &mut self.shape {
+            Shape::Seated { seat, .. } => seat.dispatch().map_err(|error| {
+                PlatformError::Backend(format!(
+                    "the session daemon can no longer be read, so this run holds devices it can \
+                     neither use nor be told about: {error}"
+                ))
+            }),
+            Shape::Direct => Ok(Vec::new()),
+        }
     }
 
     /// Returns the direct shape, asked for by name.

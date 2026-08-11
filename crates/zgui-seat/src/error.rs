@@ -68,11 +68,15 @@ pub enum Error {
         /// `errno` at the refusal.
         errno: i32,
     },
-    /// The seat opened and never became usable.
+    /// The seat opened and said nothing about itself.
     ///
     /// A backend can accept the call and hand back a seat it cannot enable: the builtin backend
-    /// with no terminal to take does exactly that. A seat that has not enabled inside the bound is
-    /// a seat this session did not get, and waiting longer answers nothing.
+    /// with no terminal to take does exactly that. A seat that has reported neither an enable nor a
+    /// disable inside the bound is a seat this session did not get, and waiting longer answers
+    /// nothing.
+    ///
+    /// A seat whose session is inactive is a different case. Such a seat reports itself disabled
+    /// while it opens, and that answer arrives inside the bound.
     NeverEnabled {
         /// How long the seat was waited for.
         within: Duration,

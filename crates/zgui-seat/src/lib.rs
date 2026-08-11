@@ -43,7 +43,8 @@
     doc = "# Using a seat",
     doc = "",
     doc = "[`Seat::open`] opens the library, opens the seat this session is on, and waits for it \
-           to become usable. [`Seat::descriptor`] is what a loop waits on, and [`Seat::dispatch`] \
+           to say what it is. [`Seat::opened_inactive`] answers whether the terminal it is on is \
+           the live one. [`Seat::descriptor`] is what a loop waits on, and [`Seat::dispatch`] \
            answers a list of [`Change`]s. Dropping the seat closes it and gives the terminal back.",
     doc = "",
     doc = "[`Seat::open_device`] asks the seat for a graphics card or an input device and answers \

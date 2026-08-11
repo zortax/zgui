@@ -632,6 +632,20 @@ impl Cursor {
         self.asked = self.wanted();
     }
 
+    /// Forgets what the plane is holding, because another session has had it.
+    ///
+    /// A session that has been away calls this before it commits. What [`Cursor::asked_for`]
+    /// records is what **this** cursor put on the plane, and the session that owned the screen in
+    /// between has put its own there — so a cursor that kept the record would plan a move, which
+    /// keeps whatever image the plane already holds, and the pointer would come back as another
+    /// program's shape or as nothing at all.
+    ///
+    /// A display on the fallback is covered by the same call: the record there is a frame that was
+    /// asked for, and the frame that carried the pointer is one another session drew over.
+    pub fn forget_the_plane(&mut self) {
+        self.asked = None;
+    }
+
     /// Returns what putting this cursor on its plane would take, or nothing where it would take
     /// nothing.
     ///

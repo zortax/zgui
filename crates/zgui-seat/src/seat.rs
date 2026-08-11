@@ -20,13 +20,16 @@ mod listener;
 pub use crate::seat::device::Device;
 pub use crate::seat::listener::Change;
 
-/// How long [`Seat::open`] waits for the seat to enable.
+/// How long [`Seat::open`] waits for the seat to answer.
 ///
 /// The bound tells a seat this session got from one it did not get. `libseat_open_seat` answers a
-/// handle as soon as a backend accepts the call, and the builtin backend accepts it with no
-/// terminal it can take, so a seat that never enables arrives as a success. libseat names the
-/// backend that answered in its own log and offers no way to ask, so a caller reads the wait
+/// handle as soon as a backend accepts the call, and the builtin backend accepts it with
+/// no terminal it can take, so a seat that says nothing at all arrives as a success. libseat names
+/// the backend that answered in its own log and offers no way to ask, so a caller reads the wait
 /// running out instead.
+///
+/// A seat that reports itself **inactive** answers inside this bound and is not waited for: see
+/// [`Seat::opened_inactive`].
 pub const ENABLE_WITHIN: Duration = Duration::from_secs(2);
 
 /// How long one dispatch inside that wait stops for, in milliseconds.
@@ -38,10 +41,28 @@ const STEP: c_int = 25;
 /// `libseat_dispatch` with no wait at all.
 const NO_WAIT: c_int = 0;
 
-/// A seat, open and enabled.
+/// A seat, open.
 ///
 /// The seat owns the devices this session may use. [`Seat::descriptor`] is what a loop waits on,
 /// and [`Seat::dispatch`] turns what arrived into [`Change`]s.
+///
+/// An open seat is active or waiting for its terminal, and [`Seat::opened_inactive`] says which of
+/// the two the open answered with.
+///
+/// ```no_run
+/// use zgui_seat::{Change, Seat};
+///
+/// let mut seat = Seat::open()?;
+/// println!("`{}` is open", seat.name());
+///
+/// for change in seat.dispatch()? {
+///     match change {
+///         Change::Enabled => println!("the devices are this session's again"),
+///         Change::Disabled => println!("another session is taking the devices"),
+///     }
+/// }
+/// # Ok::<(), zgui_seat::Error>(())
+/// ```
 ///
 /// # Closing
 ///
@@ -61,6 +82,11 @@ pub struct Seat {
     name: String,
     /// The connection descriptor, read at the open.
     descriptor: RawFd,
+    /// Whether the session was inactive when this seat opened.
+    ///
+    /// A fact about the open and nothing later. Every change after it reaches a caller through
+    /// [`Seat::dispatch`], and the change that says this seat opened inactive is in that queue too.
+    inactive: bool,
     /// What makes this type `!Send` and `!Sync`.
     ///
     /// The raw pointers inside [`Held`] do this as well. The marker states it, so that a field
@@ -69,21 +95,40 @@ pub struct Seat {
 }
 
 impl Seat {
-    /// Opens the seat this session is on, and waits for it to enable.
+    /// Opens the seat this session is on, and waits for it to answer.
     ///
     /// The wait is bounded by [`ENABLE_WITHIN`]. `LIBSEAT_BACKEND` names the backend to use, and
     /// without it libseat tries each backend it was built with and takes the first that opens a
     /// seat.
     ///
+    /// A program started on a terminal nobody is looking at gets a seat whose session is another
+    /// one. That is still a seat this run has: the daemon opens its devices, holds its terminal,
+    /// and enables the seat when a person switches to it. So the open answers with it, and
+    /// [`Seat::opened_inactive`] says which of the two a caller got.
+    ///
+    /// The [`Change::Disabled`] that said so **stays in the queue**, so the first
+    /// [`Seat::dispatch`] reports it. A caller therefore reaches that state through the same route
+    /// it reaches every later switch through, and needs no second path for the start-up case.
+    ///
+    /// ```no_run
+    /// use zgui_seat::Seat;
+    ///
+    /// let seat = Seat::open()?;
+    /// if seat.opened_inactive() {
+    ///     println!("`{}` is waiting for its terminal", seat.name());
+    /// }
+    /// # Ok::<(), zgui_seat::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Library`] or [`Error::Symbol`] when libseat cannot be opened,
-    /// [`Error::Seat`] when libseat refused the seat, [`Error::Dispatch`] when libseat could not
-    /// read its connection while the wait ran, and [`Error::NeverEnabled`] when the seat opened and
-    /// did not enable inside the bound.
+    /// Returns [`Error::Library`] or [`Error::Symbol`] when libseat cannot be opened, [`Error::Seat`]
+    /// when libseat refused the seat, and [`Error::NeverEnabled`] when the seat opened and said
+    /// nothing at all inside the bound. libseat's builtin backend hands back such a seat when it
+    /// has no terminal to take.
     pub fn open() -> Result<Self> {
         let held = Held::open(Library::load()?)?;
-        held.wait_for_enable()?;
+        let answered = held.wait_for_an_answer()?;
 
         let descriptor = held.descriptor()?;
         let name = held.name();
@@ -92,8 +137,21 @@ impl Seat {
             held,
             name,
             descriptor,
+            inactive: answered == Change::Disabled,
             thread_bound: PhantomData,
         })
+    }
+
+    /// Returns `true` if the session was inactive when this seat opened.
+    ///
+    /// True for a program started on a terminal that is not the live one. The devices are another
+    /// session's until a person switches to this terminal, and [`Change::Enabled`] says that
+    /// happened.
+    ///
+    /// This answers the open and nothing after it. What the seat is **now** is what the [`Change`]s
+    /// [`Seat::dispatch`] hands out say, and the change that made this true is the first of them.
+    pub fn opened_inactive(&self) -> bool {
+        self.inactive
     }
 
     /// Returns the seat's name, such as `seat0`.
@@ -206,6 +264,7 @@ impl fmt::Debug for Seat {
         f.debug_struct("Seat")
             .field("name", &self.name)
             .field("descriptor", &self.descriptor)
+            .field("opened_inactive", &self.inactive)
             .finish_non_exhaustive()
     }
 }
@@ -260,23 +319,28 @@ impl Held {
         })
     }
 
-    /// Waits for the seat to enable, up to [`ENABLE_WITHIN`].
+    /// Waits for the seat to say what it is, up to [`ENABLE_WITHIN`].
     ///
     /// Two halves, and each covers a different backend. The queue is read first, because the seatd
-    /// and builtin backends make the call from inside `libseat_open_seat`. The wait then dispatches,
-    /// because the logind and noop backends set a flag during the open and make the call from the
-    /// first dispatch. A caller that did one of the two works on half the machines.
+    /// and builtin backends make the call from inside `libseat_open_seat`. The wait then
+    /// dispatches, because the logind and noop backends set a flag during the open and make the
+    /// call from the first dispatch. A caller that did one of the two works on half the machines.
     ///
     /// The first dispatch waits for nothing. Both of those backends make the call at the top of
     /// their dispatch and then spend what is left of the timeout waiting for a message that has
     /// already arrived, so a first step would cost its whole length on every open. Later dispatches
-    /// carry the step, which is what keeps the loop off the processor.
-    fn wait_for_enable(&self) -> Result<()> {
+    /// carry the step, which keeps the loop off the processor.
+    ///
+    /// **Either change ends the wait.** logind's `dispatch_and_execute` reads the session's active
+    /// state while the seat opens and reports an inactive one as disabled, so a seat opened from a
+    /// terminal nobody is looking at answers at once. Waiting the whole bound for an enable that
+    /// arrives when a person switches would hold that terminal, blanked, for the length of it.
+    fn wait_for_an_answer(&self) -> Result<Change> {
         let started = Instant::now();
         let mut timeout = NO_WAIT;
         loop {
-            if self.shared().take_through_enable() {
-                return Ok(());
+            if let Some(answered) = self.shared().first_answer() {
+                return Ok(answered);
             }
             if started.elapsed() >= ENABLE_WITHIN {
                 return Err(Error::NeverEnabled {
