@@ -6,11 +6,10 @@
 //!
 //! # The shapes
 //!
-//! Six, and the seventeen [`CursorStyle`] variants that ask for a cursor share them. Each is
-//! written as a silhouette, one character to a pixel, and the black outline around it is computed
-//! rather than drawn: an outline stated by hand is one that has to be kept right by hand every time
-//! a shape changes, and a cursor with a gap in its outline is invisible over anything the same
-//! colour as its fill.
+//! Six, and the seventeen [`CursorStyle`] variants share them. Each is written as a silhouette,
+//! one character to a pixel, and the black outline around it is computed rather than drawn: an
+//! outline stated by hand is one that has to be kept right by hand every time a shape changes, and
+//! a cursor with a gap in its outline is invisible over anything the same colour as its fill.
 //!
 //! A style with no shape of its own falls back to the arrow. [`CursorStyle`] states that rule —
 //! a missing cursor is a cosmetic problem, and an error return here would be checked by nobody.
@@ -19,9 +18,9 @@
 //!
 //! `ARGB8888`, which reaches memory as blue, green, red, alpha. The legacy cursor request carries
 //! no format and the kernel reads that one whatever it is told, so an image in any other is
-//! *reinterpreted* rather than refused — `XRGB8888`, the format everything else in this tree scans
-//! out, has its unused byte read as alpha and is completely transparent. `zgui-drm` refuses an
-//! image it would misread, and this is where the right one is made.
+//! *reinterpreted* rather than refused — `XRGB8888`, the format everything else in this tree
+//! scans out, has its unused byte read as alpha and is completely transparent. `zgui-drm` refuses
+//! an image it would misread, and this is where the right one is made.
 //!
 //! That byte order also makes the fallback cheap. `XRGB8888` puts blue, green and red in the same
 //! three places, so compositing a cursor into a frame reads the alpha and copies the other three
@@ -48,10 +47,11 @@
 //! loop does with a pointer that moved: a display on a plane commits, and a display on the
 //! fallback asks its surface to be drawn again.
 //!
-//! On the atomic interface the para-virtualised drivers are on the fallback. vmwgfx, qxl, virtio
-//! and virtualbox hide their cursor plane from a client that has not set
-//! `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`, which `zgui-drm` does not ask for, so **a virtual machine
-//! on one of those drivers has no hardware cursor here**.
+//! On the atomic interface, the para-virtualised drivers are on the fallback. vmwgfx, qxl, virtio
+//! and virtualbox set `DRIVER_CURSOR_HOTSPOT`, and the kernel hides a cursor plane on such a driver
+//! from an atomic client that has not set `DRM_CLIENT_CAP_CURSOR_PLANE_HOTSPOT`. `zgui-drm` does
+//! not ask for that capability, so **a virtual machine on one of those drivers has no hardware
+//! cursor here**.
 //!
 //! # Giving the plane back
 //!
@@ -65,6 +65,20 @@
 //! loop carries that to the ask, and [`Cursor::give_the_plane_back`] does it for one display. The
 //! involuntary path is out of reach — by the time a suspend is read the terminal has moved and DRM
 //! master has gone — so what is covered is a person pressing `Ctrl+Alt+Fn`.
+//!
+//! **Nothing here is owed.** A DRM client names the planes it uses in its own commits and leaves
+//! every other plane where it found it: wlroots asks libseat for the terminal with no cleanup at
+//! all, and its own commit disables the cursor plane it claimed for one of its outputs and names
+//! nobody else's. So a plane this backend never claimed is a plane this backend never touches, and
+//! a plane it did claim is one the next session leaves alone — which is why this one is given back
+//! before the switch. The kernel's own client is the exception:
+//! `drm_client_modeset_commit_atomic` disables every plane that is not primary, so switching to a
+//! **text** console clears a cursor plane and switching to another DRM client does not. This is
+//! done because the alternative is this program's pointer sitting on somebody else's screen.
+//!
+//! **The give-back is bounded.** A daemon can take the ask and move no terminal, which reports
+//! neither a switch nor a refusal, so the planes come back on their own where the answer they are
+//! due has not arrived. `session::switching` is that bound.
 
 use tracing::warn;
 use zgui_drm::buffer::DumbBuffer;
@@ -535,8 +549,8 @@ enum Asked {
     /// cursor the next session inherits, which the give-back exists to prevent.
     ///
     /// Two things leave this state, and every route out of a switch is one of them.
-    /// [`Cursor::take_the_plane_again`] is the switch that never happened, and
-    /// [`Cursor::forget_the_plane`] is the resume.
+    /// [`Cursor::take_the_plane_again`] is the switch that never happened — a refusal, or an ask
+    /// the daemon answered with silence — and [`Cursor::forget_the_plane`] is the resume.
     GivenBack,
 }
 
@@ -735,11 +749,12 @@ impl Cursor {
     /// inherit. [`Cursor::take_the_plane_again`] is the way out where the switch never happened,
     /// and [`Cursor::forget_the_plane`] is the way out where it did.
     ///
-    /// **An ask that moves no terminal leaves this display with no pointer.** A daemon that takes
-    /// the ask and then changes nothing — asking for the terminal this session is already on is how
-    /// that happens — sends neither a suspend nor a resume, so neither way out is reached and the
-    /// next real switch is what repairs it. That is what the record costs, and the alternative is a
-    /// pointer put back on the plane moments before the screen changes hands.
+    /// **An ask that moves no terminal is answered by a bound.** A daemon that takes the request and
+    /// then changes nothing — asking for the terminal this session is already on is how a person
+    /// meets it — sends neither a suspend nor a resume, so neither way out above is ever reached.
+    /// The loop therefore holds the moment an answer is due at, and takes the planes back where none
+    /// arrives: `session::switching` is that decision, and it says what the bound was measured
+    /// against.
     ///
     /// Answers at once on a display with no plane. The pointer is drawn into the frame there, and a
     /// frame reaches nobody after the terminal has moved.
@@ -766,6 +781,11 @@ impl Cursor {
     /// session keeps the screen, so the plane it emptied is its own again — and a cursor left
     /// waiting for a terminal that is never going to move is a person with no pointer for the rest
     /// of the run.
+    ///
+    /// **A refusal is the loud way that happens, and silence is the other.** A daemon can take the
+    /// request and move nothing, which reports neither a refusal nor a switch, so the frame loop
+    /// calls this again when the answer it is due has not arrived in time. `session::switching`
+    /// holds that bound.
     ///
     /// The plane is known to be empty, so this asks for the image rather than for everything:
     /// [`Cursor::forget_the_plane`] is the other half, for the plane a session really did lose.
@@ -965,7 +985,11 @@ impl Cursor {
 /// the planes reach it — that call belongs to the input devices and holds no card, and the frame
 /// loop holds the cursors, the device and the commit.
 ///
-/// [`Cursor::give_the_plane_back`] states why that order matters.
+/// [`Cursor::give_the_plane_back`] states why that order carries the whole answer.
+///
+/// **Three methods, because an ask has three ends.** The session refuses it, the terminal moves, or
+/// the daemon takes the request and moves nothing. The last one arrives as silence, so it is
+/// answered by a bound rather than by a report: see [`Planes::wait_for_the_switch`].
 pub trait Planes {
     /// Takes every cursor off its plane and commits it.
     ///
@@ -978,6 +1002,15 @@ pub trait Planes {
     ///
     /// The image itself goes back on the next turn, through the commit the loop already makes.
     fn take_them_again(&mut self);
+
+    /// Leaves them back, for an ask that went out.
+    ///
+    /// The terminal moves a turn or more later, so the planes stay empty until the daemon reports
+    /// what happened — and this is where the loop starts counting for a report that may never come.
+    /// A daemon that takes a request and moves no terminal sends neither a suspend nor a resume, so
+    /// a session that waited for one of them would draw no pointer for the rest of the run. The
+    /// `session::switching` module holds the bound and states what it was measured against.
+    fn wait_for_the_switch(&mut self);
 }
 
 /// Allocates one buffer of the extent this device asked for, registered where the atomic interface

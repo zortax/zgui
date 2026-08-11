@@ -8,6 +8,23 @@
 //! device the renderer will draw on — so the caller opens that device first and hands it in. See
 //! [`run`].
 //!
+//! # What one wait watches
+//!
+//! Four kinds of descriptor, and `watched` builds the set once per turn:
+//!
+//! * **the card**, which becomes readable when a display finishes a flip;
+//! * **the wake channel**, which another thread writes;
+//! * **the session daemon's descriptor**, if this run has one, which reports a terminal moving; and
+//! * **every input device the seat holds**, plus the seat's watch on the directory they come from.
+//!
+//! The last group is why the set is built per turn: it grows with a device plugged in and shrinks
+//! with one that stopped answering.
+//!
+//! **A descriptor that answers a failure and stays readable turns every later wait into a wait of
+//! no length**, so such a descriptor leaves the set. A device that answers a read with a failure is
+//! dropped from the seat, and the watch is dropped when it can no longer be read. A loop that kept
+//! either would run at the speed of the processor for the rest of the program.
+//!
 //! # The seven ways a turn happens
 //!
 //! The list is exhaustive on purpose. A missing entry is an application that quietly stops
@@ -17,31 +34,40 @@
 //!    buffer the display had before it is free for the next frame, and a frame that finished while
 //!    the flip was on its way is committed. The kernel takes one page flip per CRTC, so the
 //!    completion is the moment the frame waiting behind it becomes legal.
-//! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel,
-//!    which is the second descriptor the wait watches, and arrives as a
-//!    [`WakeReason`](zgui_platform::WakeReason).
-//! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable,
-//!    and every device the seat took is one more descriptor the wait watches — so the watch set is
-//!    built per turn and shrinks with a device that stopped answering. A key goes to the focused
-//!    surface, and a pointer event goes to the display the pointer is on — which is the display
-//!    that decides the focused surface. **A key that asks for a terminal goes to the session
-//!    instead**, and to nothing else: `Ctrl+Alt+F2` is a keysym of its own under libxkbcommon and a
-//!    `KT_CONS` entry in a console keymap, so the layout reads it as terminal 2 and `switch` asks
-//!    for it.
-//! 4. **Somebody plugged a device in.** The seat's watch on the device directory is one more
-//!    descriptor in the same set, and a node made there ends the wait. The device is opened,
-//!    grabbed and read from the next turn on. Nothing is dispatched for the arrival itself, beyond
-//!    a change in the held set where the device already had a modifier under a finger.
+//! 2. **Work finished on another thread.** It reaches the parked loop through the wake channel and
+//!    arrives as a [`WakeReason`](zgui_platform::WakeReason).
+//! 3. **Somebody pressed a key, or moved the pointer.** A device's descriptor becomes readable. A
+//!    key goes to the focused surface, and a pointer event goes to the display the pointer is on —
+//!    which is the display that decides the focused surface. **A key that asks for a terminal goes
+//!    to the session instead**, and to nothing else: `Ctrl+Alt+F2` is a keysym of its own under
+//!    libxkbcommon and a `KT_CONS` entry in a console keymap, so the layout reads it as terminal 2
+//!    and `switch` asks for it.
+//! 4. **Somebody plugged a device in.** A node made in the device directory ends the wait on the
+//!    seat's watch. The device is opened, grabbed and read from the next turn on. Nothing is
+//!    dispatched for the arrival itself, beyond a change in the held set where the device already
+//!    had a modifier under a finger.
 //! 5. **A surface asked to be drawn.** A request on a console is a flag on the surface and moves no
 //!    descriptor, so the loop reads the flags — before it parks as well as after it wakes.
 //! 6. **A deadline arrived.** The wait ran to its end, and the moment is reported through
 //!    [`AppHandler::deadline_reached`]. It draws nothing by itself. What draws is the request the
 //!    application makes while it is being told, and entry 5 picks that up.
 //! 7. **The session changed hands.** A person switched terminal, so the session daemon's own
-//!    descriptor — the third descriptor the wait watches, where this run has one — has a change to
+//!    descriptor — the third descriptor the wait watches, if this run has one — has a change to
 //!    report. It is read at the top of the turn, before anything else, because it moves the
 //!    devices, DRM master and the terminal, and everything below it is then looking at a different
 //!    machine.
+//!
+//! # Two moments nothing wakes the loop for
+//!
+//! **The wait is cut to the nearer of them.** A console has no timer to park on and nothing on it
+//! moves a descriptor for either, so a loop that waited past one would answer it at the next key or
+//! the next frame — which on an idle machine is never.
+//!
+//! * **The bound on a terminal switch.** A daemon can take an ask and move no terminal, and the
+//!   cursor planes are back and empty until it answers. `session::switching` holds that bound.
+//! * **The next repeat of a held key.** The kernel makes the repeats for a reader of its own
+//!   stream, and the device wakes that reader. libinput makes none, so on that source this backend
+//!   makes them itself and `Seat::due` says when the next one falls.
 //!
 //! # What holds the device
 //!
@@ -69,16 +95,16 @@
 //! read.
 //!
 //! **Coming back.** Whatever the seat still holds goes back and every input device is opened again,
-//! every display is put back into its mode with the newest frame it drew, every cursor goes back on
-//! its plane, and every surface is asked for a frame and told it is visible again. The buffers are
-//! this process's own and still hold that frame, so the picture is back at the commit rather than
-//! at the frame after it.
+//! every display is put back into its mode with the buffer it last presented, every cursor goes
+//! back on its plane, and every surface is asked for a frame and told it is visible again. The
+//! buffers are this process's own and still hold the last frame, so the picture is back at the
+//! commit rather than at the frame after it.
 //!
 //! The give-back on the way back is there for the turn that read a disable and an enable together.
 //! That turn is one resume over a seat that never gave anything up, and `resume` below sets it out.
 //!
-//! While the session is away the loop turns and commits nothing. Redraw requests are left where
-//! they are, so the frames that were asked for are drawn on the way back.
+//! **While the session is away the loop turns and commits nothing.** A redraw asked for then is
+//! held rather than taken, so the frames that were asked for are drawn on the way back.
 //!
 //! # What holds the screen
 //!
@@ -123,6 +149,13 @@
 //! holds DRM master, so the planes travel with it through
 //! [`Heard::answered`](crate::input::seat::Heard::answered). The involuntary path has no such
 //! moment: by the time a suspend is read, the terminal has moved and the master has gone.
+//!
+//! **A plane comes back if nothing moved.** A daemon can take the ask and change no terminal, so
+//! neither a suspend nor a resume ever arrives. The loop therefore holds the moment it is due an
+//! answer at, takes the planes back when that moment passes, and cuts its own wait to it so that
+//! there is a turn to do it in. `session::switching` holds that decision, and it costs a person who
+//! asks for the terminal this run is already on half a second of pointer instead of the rest of the
+//! run.
 
 use std::cell::RefCell;
 use std::os::fd::{AsFd, BorrowedFd};
@@ -142,16 +175,17 @@ use zgui_render_wgpu::Gpu;
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;
-use crate::cursor::{self, Cursor};
+use crate::cursor::{self, Cursor, Planes};
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
 use crate::input::pointer::{Pointer, Screen};
 use crate::input::seat::{self, Report, Seat};
 use crate::output::{self, Output, backend};
-use crate::park::{Park, Parked, timeout};
+use crate::park::{Park, Parked, outlasts, timeout};
 use crate::scanout::{BGRA, Scanout};
 use crate::session::Session;
 use crate::session::presence::{Presence, Transition};
+use crate::session::switching::Switching;
 use crate::surface::{self, DrmSurface};
 use crate::waker::EventfdWaker;
 
@@ -338,6 +372,9 @@ fn drive(
     // is never told otherwise, and a seated one whose terminal is not the live one is told on its
     // first turn, by the change its seat left in the queue.
     let mut presence = Presence::holding();
+    // Whether this session is waiting to hear that a terminal it asked for has moved. The cursor
+    // planes went back with the ask, and this is what puts them back where nothing moves.
+    let mut switching = Switching::nothing();
 
     let outcome: Result<(), PlatformError> = 'running: {
         let mut park = Park::new();
@@ -348,10 +385,14 @@ fn drive(
                 Ok(changes) => changes,
                 Err(error) => break 'running Err(error),
             };
+            // Read once, at the top of the turn. The park below reads the clock again, after the
+            // application has decided how to wait, and says why.
+            let now = clock.now();
+            let moved = presence.turn(&changes);
             // What a resume has to say about the devices, held until the focus below has been
             // worked out. The surface that holds the keyboard is the one every key report goes to,
             // and after a suspend there is none: a report delivered here would reach nothing.
-            let resumed = match presence.turn(&changes) {
+            let resumed = match moved {
                 Some(Transition::Suspend) => {
                     suspend(
                         &mut *handler,
@@ -380,6 +421,28 @@ fn drive(
                 }
                 None => Vec::new(),
             };
+
+            // Every display's cursor, for everything a turn does to a plane: an ask this turn
+            // makes, and an ask before it that moved no terminal.
+            let take_them_back = switching.turn(moved, presence, now);
+            let mut planes = OnPlanes {
+                device,
+                commit: &commit,
+                cursors: &cursors,
+                switching: &mut switching,
+                now,
+            };
+            // The daemon was asked for a terminal, answered nothing, and moved nothing — so the
+            // planes this session emptied are its own again. The cursor commit further down this
+            // turn is what puts the picture back on them.
+            if take_them_back {
+                info!(
+                    target: "zgui::platform",
+                    "the terminal this session asked for has not moved, so every cursor goes back \
+                     on its plane"
+                );
+                planes.take_them_again();
+            }
 
             // One read carries the completions of every display that finished, so every scanout is
             // shown the same slice and each keeps the one that names its own CRTC.
@@ -466,18 +529,14 @@ fn drive(
                 // a key struck since then is read against that.
                 deliver(&mut *handler, &cx, resumed, focused);
                 // Here, and inside this block. The session holds its devices for the whole of it,
-                // so a terminal is asked for while this run owns one. `Heard::answered` is what asks
-                // and what hands the reports over, so the two cannot come apart — and a key that
-                // asked reaches no surface, so what is delivered below carries nothing for it.
+                // so a terminal is asked for while this run owns one. `Heard::answered` makes the
+                // ask and hands the reports over in one call, so the two cannot come apart. A key
+                // that asked reaches no surface, so what is delivered below carries nothing for it.
                 //
                 // The cursor planes go with it. This turn is the last moment a session that is
-                // leaving is active and holds DRM master, so it is the only place a plane can be
-                // cleared before the next session inherits it.
-                let mut planes = OnPlanes {
-                    device,
-                    commit: &commit,
-                    cursors: &cursors,
-                };
+                // leaving is active and holds DRM master, so it is the one place a plane can be
+                // cleared before the next session inherits it. It goes through the `planes` the top
+                // of this turn built, so that the give-back and both ways back are one record.
                 deliver(
                     &mut *handler,
                     &cx,
@@ -554,14 +613,31 @@ fn drive(
             );
             let parked = if owed { park.handed_back() } else { parked };
 
+            // A session waiting to hear that a terminal moved has a moment of its own to answer at,
+            // and nothing on a console wakes a parked loop for it. So the wait is cut to it, and
+            // the pointer comes back when the bound passes rather than at the next key somebody
+            // happens to press.
+            //
+            // A session that is away answers no such moment, and waiting on one would be a poll of
+            // no length every turn until the resume: what settles the record there is the resume
+            // itself, and the loop has nothing to commit in the meantime.
+            let bound = switching
+                .due()
+                .filter(|due| presence.is_active() && outlasts(parked, *due));
+            let waiting = bound.map_or(parked, Parked::Until);
+
             match wait(
                 device,
                 &waker,
                 session,
                 presence.is_active().then_some(&seat),
-                parked,
+                waiting,
                 clock.now(),
             ) {
+                // The wait ran to its end at this loop's own bound. The application's moment is
+                // still ahead of it, so nothing of its is reported and the next turn asks for it
+                // again.
+                Ok(true) if bound.is_some() => park.cancel(),
                 // The wait ran to its end. Where it carried a deadline, that is the deadline
                 // arriving; where it carried none, nothing happened and nothing is reported.
                 Ok(true) => {
@@ -601,11 +677,11 @@ fn drive(
     outcome
 }
 
-/// Every display's cursor, for the turn that asks for another terminal.
+/// Every display's cursor, for what a turn does about another terminal.
 ///
-/// The three things one hide takes, borrowed from the loop that owns them. Built per ask rather
-/// than kept, because it is a view of what the loop already holds and it lives for the length of
-/// one call.
+/// What one hide takes, borrowed from the loop that owns it, and the record of what this session is
+/// waiting to hear. Built per turn rather than kept, because it is a view of what the loop already
+/// holds.
 struct OnPlanes<'a> {
     /// The card every plane is on.
     device: &'a Device,
@@ -613,13 +689,17 @@ struct OnPlanes<'a> {
     commit: &'a Rc<RefCell<Box<dyn Commit>>>,
     /// One cursor per display.
     cursors: &'a [Rc<RefCell<Cursor>>],
+    /// Whether this session is waiting to hear that a terminal it asked for has moved.
+    switching: &'a mut Switching,
+    /// The moment this turn is happening at, read from the loop's own clock.
+    now: Instant,
 }
 
-/// Clearing every plane before the ask, and putting them back where the ask went nowhere.
+/// Clears every plane before the ask, and takes them back the two ways they come back.
 ///
 /// A refusal is reported and the rest of the displays carry on. The screen is going either way, and
-/// a plane the kernel would not clear is one nothing here can do more about. It costs this
-/// program's pointer left over the next session's picture, which the give-back exists to prevent.
+/// nothing here can do more about a plane the kernel would not clear. It costs this program's
+/// pointer left over the next session's picture, and the give-back exists to prevent that.
 impl cursor::Planes for OnPlanes<'_> {
     fn give_them_back(&mut self) {
         for cursor in self.cursors {
@@ -640,6 +720,10 @@ impl cursor::Planes for OnPlanes<'_> {
         for cursor in self.cursors {
             cursor.borrow_mut().take_the_plane_again();
         }
+    }
+
+    fn wait_for_the_switch(&mut self) {
+        self.switching.asked(self.now);
     }
 }
 
@@ -950,11 +1034,14 @@ mod tests {
     //! each cursor records is [`Cursor`]'s own and pure, and hiding one is a request to a driver.
     //! [`Scanout::restore`] clearing an outstanding flip is covered by `tests/scanout.rs`, which
     //! needs DRM master and a monitor. The transitions themselves are
-    //! [`Presence`](crate::session::presence::Presence), which is pure and carries its own tests.
+    //! [`Presence`](crate::session::presence::Presence), and the bound on an ask that moved no
+    //! terminal is `session::switching` — both are pure and carry their own tests, as does the
+    //! comparison that cuts a wait to that bound.
     //! The terminal a key asked for is [`Heard::answered`](crate::input::seat::Heard::answered),
-    //! where the ask, the planes and the reports are one call — the turn above cannot deliver a
-    //! report without making the ask, so there is nothing here for a test to hold up. What is left
-    //! over — a real switch, a real modeset, the picture coming back — is the hardware run.
+    //! which is where the ask, the planes and the reports are one call — the turn above cannot
+    //! deliver a report without making the ask, so there is nothing here for a test to hold up.
+    //! What is left over — a real switch, a real modeset, the picture coming back — is the hardware
+    //! run.
 
     use std::os::fd::{AsFd, AsRawFd};
     use std::path::{Path, PathBuf};

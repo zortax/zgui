@@ -231,6 +231,27 @@ impl Park {
     }
 }
 
+/// Returns `true` if a wait on `parked` would outlast `bound`.
+///
+/// The loop has moments of its own to answer at, apart from the ones the application names: a
+/// session that asked for a terminal is due an answer, and a held key is due its next repeat.
+/// Nothing on a console wakes a parked loop for either. So the wait is cut to the earlier of the
+/// two, and this comparison says which one that is.
+///
+/// A park with no end is cut short by any moment at all. A park on the application's own moment is
+/// cut short by an earlier one. A wait of no length is cut short by nothing, because it is already
+/// over, and the turn after it reads the bound again.
+///
+/// The caller needs the answer as well as the wait. A wait that ended on the loop's own bound is no
+/// moment of the application's arriving, and reporting one there is an arrival the loop never had.
+pub(crate) fn outlasts(parked: Parked, bound: Instant) -> bool {
+    match parked {
+        Parked::Indefinitely => true,
+        Parked::Until(deadline) => bound < deadline,
+        Parked::Never => false,
+    }
+}
+
 /// Returns how long `poll` waits for `parked`, or nothing if it waits until something happens.
 ///
 /// The one arithmetic in the loop, and the one place a wait can be got wrong with nothing saying
@@ -271,7 +292,7 @@ mod tests {
     //! zero for ever and a moment that is dropped are all invisible on hardware until an
     //! application stops drawing, and all three are decided here.
 
-    use super::{Install, Park, Parked, timeout};
+    use super::{Install, Park, Parked, outlasts, timeout};
     use std::time::{Duration, Instant};
     use zgui_platform::IdlePolicy;
 
@@ -435,6 +456,39 @@ mod tests {
             park.resumes(),
             64,
             "one arrival per turn, and one frame owed for each"
+        );
+    }
+
+    #[test]
+    fn a_moment_the_loop_owes_cuts_a_wait_that_would_outlast_it() {
+        // The loop owes itself two moments and nothing on a console wakes it for either: a session
+        // waiting to hear that a terminal it asked for has moved, and the next repeat of a held
+        // key. A park left to outlast the nearer of the two would keep the pointer off the screen,
+        // or hold a repeat back, until a person pressed something.
+        let now = Instant::now();
+        let soon = now + Duration::from_millis(16);
+        let later = now + Duration::from_millis(500);
+
+        assert!(
+            outlasts(Parked::Indefinitely, later),
+            "a park with no end outlasts every moment there is"
+        );
+        assert!(
+            outlasts(Parked::Until(later), soon),
+            "and so does one that ends after the bound"
+        );
+        assert!(
+            !outlasts(Parked::Until(soon), later),
+            "a park that ends first is waited on as it is"
+        );
+        assert!(
+            !outlasts(Parked::Until(soon), soon),
+            "and so is one that ends at the same moment, which the application's own arrival then \
+             answers"
+        );
+        assert!(
+            !outlasts(Parked::Never, now),
+            "a wait of no length is over already, and the turn after it reads the bound again"
         );
     }
 
