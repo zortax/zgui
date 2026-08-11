@@ -41,6 +41,10 @@
 //! the session. The reports leave through that same call, so a turn that delivered them asked for
 //! the terminal. The key that asked reaches no surface — [`Keys::batch`] states why.
 //!
+//! Every cursor plane goes back through that call as well, just before the ask. It is the one
+//! moment a session that is leaving is still active and still holds DRM master, and a plane nobody
+//! claims keeps whatever was on it: [`Heard::answered`] states the rest.
+//!
 //! # One device with two jobs
 //!
 //! A device is opened once and read once, and what it is read *as* is two independent questions.
@@ -94,12 +98,13 @@ use zgui_evdev::{Absolute, Batch, Capabilities, Device, EventType, Key, Synchron
 use zgui_platform::{Clock, SurfaceEvent, SurfaceId};
 use zgui_vocab::{KeyState, Modifiers, PointerAction, Timestamp};
 
+use crate::cursor::Planes;
 use crate::input::keyboard;
 use crate::input::keyboard::layout::{Layout, Reading};
 use crate::input::keyboard::{code, layout};
 use crate::input::pointer::{self, Axes, Pointer, Screen, Span};
 use crate::input::wheel::{self, HighResolution};
-use crate::session::Session;
+use crate::session::{Session, Switched};
 
 /// The twenty-six letter positions of a keyboard.
 ///
@@ -262,7 +267,8 @@ impl Report {
 /// **The reports leave through [`Heard::answered`] and through no other route.** Both halves belong
 /// to the same turn: the session has to be asked while this run still holds its devices, and a
 /// caller that could take the reports on their own could drop the ask and leave a chord that does
-/// nothing anybody can see.
+/// nothing anybody can see. The cursor planes travel with the ask for the same reason —
+/// [`Heard::answered`] is the one place they can be given back in time.
 #[derive(Debug)]
 pub struct Heard {
     /// What people did, for the surfaces each belongs to.
@@ -278,10 +284,29 @@ impl Heard {
     /// Asks `session` for the terminal a key asked for, and answers with the reports.
     ///
     /// A read where nobody pressed the chord asks for nothing. A session asked every turn would
-    /// switch terminal on its own.
-    pub fn answered(self, session: &mut Session) -> Vec<Report> {
+    /// switch terminal on its own, and `planes` would be taken from a screen nobody is leaving.
+    ///
+    /// # Order
+    ///
+    /// A cursor plane this program enabled keeps this program's pointer until somebody names that
+    /// plane in a commit, and a session that draws its own pointer into the frame names it never.
+    /// So every cursor comes off its plane here, **before** the ask: this is the last moment the
+    /// run is active and still holds DRM master, and by the time the terminal moving is reported
+    /// both are gone. [`Planes`] and
+    /// [`Cursor::give_the_plane_back`](crate::cursor::Cursor::give_the_plane_back) say the rest.
+    ///
+    /// A switch the session refused is a session that keeps the screen, so the planes are taken
+    /// again. Every switch on the direct shape is refused, and a person there would otherwise lose
+    /// the pointer at the first press of the chord and never get it back.
+    pub fn answered(self, session: &mut Session, planes: &mut dyn Planes) -> Vec<Report> {
         if let Some(terminal) = self.terminal {
-            session.switch(terminal);
+            // Before the ask. A cursor plane this program enabled keeps this program's pointer
+            // until somebody names that plane in a commit, and a session that draws its own pointer
+            // into the frame names it never.
+            planes.give_them_back();
+            if session.switch(terminal) == Switched::Refused {
+                planes.take_them_again();
+            }
         }
         self.reports
     }
@@ -1567,11 +1592,12 @@ mod tests {
     use rustix::ioctl::{Opcode, opcode};
 
     use super::{
-        Axes, Down, Heard, HighResolution, Keys, Pointer, Pointing, Report, Screen, Seat, Session,
-        Span, Stamps, Transition, Translated, ask, cancelled, focused, pointed, types_on, untaken,
+        Axes, Down, Heard, HighResolution, Keys, Planes, Pointer, Pointing, Report, Screen, Seat,
+        Session, Span, Stamps, Transition, Translated, ask, cancelled, focused, pointed, types_on,
+        untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
-    use crate::session::Asked;
+    use crate::session::{Asked, Record};
     use std::time::Duration;
     use zgui_evdev::{
         Absolute, Bitmap, Capabilities, Device, EventType, Key, Reader, Relative, Synchronisation,
@@ -2175,12 +2201,35 @@ mod tests {
         );
     }
 
+    /// The cursor planes, as the calls they were asked for.
+    ///
+    /// Written over a [`Record`] so that a test can hand it the session's own list. The give-back
+    /// and the ask are then recorded on one list, in the order they were made, by the two callers
+    /// that made them, and that is the only way to assert an order no single object sees.
+    struct RecordedPlanes(Record);
+
+    impl Planes for RecordedPlanes {
+        fn give_them_back(&mut self) {
+            self.0.push(Asked::GavePlanesBack);
+        }
+
+        fn take_them_again(&mut self) {
+            self.0.push(Asked::TookPlanesAgain);
+        }
+    }
+
     #[test]
     fn the_terminal_a_key_asked_for_is_what_the_session_is_asked_for() {
         // The other half of the switch, and the join the frame loop cannot drop: the reports leave
         // through this call, so a turn that delivered them made the ask. A read where nobody pressed
-        // the chord asks for nothing — a session asked every turn would switch terminal on its own.
+        // the chord asks for nothing — a session asked every turn would switch terminal on its own,
+        // and would take the pointer off a screen nobody is leaving.
         let mut session = Session::direct();
+        // Apart from the session's own, so that what is asserted below is the session and nothing
+        // else. `the_cursor_planes_go_back_before_the_session_is_asked_for_a_terminal` is where the
+        // two are one list.
+        let apart = Record::default();
+        let mut planes = RecordedPlanes(apart.clone());
         let quiet = Heard {
             reports: Vec::new(),
             terminal: None,
@@ -2190,14 +2239,19 @@ mod tests {
             terminal: Some(2),
         };
 
-        assert!(quiet.answered(&mut session).is_empty());
+        assert!(quiet.answered(&mut session, &mut planes).is_empty());
         assert!(
             session.asked().is_empty(),
             "a read where no key asked for a terminal asks for none: {:?}",
             session.asked()
         );
+        assert!(
+            apart.taken().is_empty(),
+            "and takes no pointer off a screen: {:?}",
+            apart.taken()
+        );
 
-        let reports = asked.answered(&mut session);
+        let reports = asked.answered(&mut session, &mut planes);
 
         assert_eq!(
             session.asked(),
@@ -2209,6 +2263,37 @@ mod tests {
             reports.len(),
             1,
             "and the reports came out of the same call: {reports:?}"
+        );
+    }
+
+    #[test]
+    fn the_cursor_planes_go_back_before_the_session_is_asked_for_a_terminal() {
+        // The order is what this pins. A cursor plane keeps whatever was last put on it until
+        // somebody names that plane in a commit, and a session that draws its own pointer into the
+        // frame names it never — so a plane cleared after the ask is a plane cleared after the
+        // terminal has moved and DRM master has gone, and this program's pointer sits over the next
+        // session's picture for the rest of the run.
+        //
+        // Both callers record on one list, so what is read here is the order they ran in rather
+        // than two lists that each say their own half happened.
+        let mut session = Session::direct();
+        let mut planes = RecordedPlanes(session.recording());
+        let asked = Heard {
+            reports: Vec::new(),
+            terminal: Some(2),
+        };
+
+        asked.answered(&mut session, &mut planes);
+
+        assert_eq!(
+            session.asked(),
+            [
+                Asked::GavePlanesBack,
+                Asked::Switch(2),
+                Asked::Refused,
+                Asked::TookPlanesAgain,
+            ],
+            "every plane went back before the ask, and came back after a refusal"
         );
     }
 
