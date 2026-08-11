@@ -28,7 +28,8 @@
 //! **A device id that is answered twice.** seatd raises a reference count for a path the client
 //! already holds and answers the id it answered before, which is why a device is closed before the
 //! same path is opened again. noop and logind each answer a fresh id, so the ordering is asserted
-//! here by the cost of a round rather than by an id; asserting it by an id needs seatd.
+//! here by the cost of a round rather than by an id; asserting it by an id needs seatd. That a
+//! session refuses to ask twice at all is asserted here, on every backend.
 //!
 //! **Every device that is revoked.** A terminal switch leaves an evdev descriptor answering
 //! `ENODEV`, and nothing puts it back; noop has no session to switch away from. What is asserted
@@ -121,13 +122,32 @@ fn main() {
     println!("session_seated: an_input_device_closed_and_opened_again_costs_what_it_did");
     an_input_device_closed_and_opened_again_costs_what_it_did(&nodes);
 
+    println!("session_seated: a_path_this_session_holds_is_refused_a_second_open");
+    a_path_this_session_holds_is_refused_a_second_open(&nodes);
+
     println!("session_seated: a_path_that_is_no_input_device_goes_back_to_the_seat");
     a_path_that_is_no_input_device_goes_back_to_the_seat(&nodes);
 
     println!("session_seated: every_input_device_goes_back_at_once");
     every_input_device_goes_back_at_once(&nodes);
 
-    println!("session_seated: 10 checks passed");
+    println!("session_seated: every_input_device_closed_and_opened_again_reads");
+    every_input_device_closed_and_opened_again_reads(&nodes);
+
+    if nodes.len() < 2 {
+        eprintln!(
+            "session_seated: only one `event*` under /dev/input opens for this process, so which \
+             device a give-back names was not asserted. It needs two nodes this user may read and \
+             write: add this user to the `input` group."
+        );
+        println!("session_seated: 12 checks passed");
+        return;
+    }
+
+    println!("session_seated: one_input_device_goes_back_and_the_other_stays");
+    one_input_device_goes_back_and_the_other_stays(&nodes);
+
+    println!("session_seated: 13 checks passed");
 }
 
 /// One input device is opened through the seat, held by the session, and released through it.
@@ -243,6 +263,169 @@ fn an_input_device_closed_and_opened_again_costs_what_it_did(nodes: &[PathBuf]) 
         seated,
         "three rounds later the session holds what it held before the first one"
     );
+}
+
+/// A session holding two devices gives back the one it was asked for.
+///
+/// **This is the lookup [`Session::close_input`] makes, held to the path it was given.**
+/// `Seat::open` walks about twenty nodes and gives back every one it declines, while holding the
+/// two or three it took, so on a real machine that lookup runs against a list with a keyboard in
+/// it. A lookup that answered the first entry whatever it was asked for would hand the keyboard
+/// back on the first declined node after it — and logind revokes the device it is given back, under
+/// a descriptor this run still holds and has grabbed, with nothing to put it back.
+///
+/// The **second** device is the one closed, because a lookup that ignores its path answers the
+/// first.
+fn one_input_device_goes_back_and_the_other_stays(nodes: &[PathBuf]) {
+    let (first, second) = (&nodes[0], &nodes[1]);
+    let mut session = Session::open();
+    let seated = support::open_descriptors();
+
+    let opened: Vec<zgui_evdev::Device> = [first, second]
+        .into_iter()
+        .map(|path| {
+            session
+                .open_input(path)
+                .unwrap_or_else(|error| panic!("the seat opens {}: {error}", path.display()))
+        })
+        .collect();
+
+    drop(opened);
+    assert_eq!(
+        support::descriptors_naming(first).len(),
+        1,
+        "the caller let go of its own name on {}, and the seat's own device stays with the session",
+        first.display()
+    );
+    assert_eq!(
+        support::descriptors_naming(second).len(),
+        1,
+        "and the same for {}",
+        second.display()
+    );
+
+    session.close_input(second);
+
+    assert!(
+        support::descriptors_naming(second).is_empty(),
+        "the device at the path the session was asked for went back"
+    );
+    assert_eq!(
+        support::descriptors_naming(first).len(),
+        1,
+        "and the device it holds at another path is where it was: giving back {} took {} instead",
+        second.display(),
+        first.display()
+    );
+    assert_eq!(
+        support::open_descriptors(),
+        seated + 1,
+        "so one of the two is still open"
+    );
+
+    session.close_input(first);
+
+    assert_eq!(
+        support::open_descriptors(),
+        seated,
+        "and the other goes back when it is asked for"
+    );
+}
+
+/// A path this session already holds is refused, and nothing is opened for it.
+///
+/// One path is one device here, because that is what [`Session::close_input`] gives back. seatd
+/// answers a path its client already holds with the *same* device id and its reference count
+/// raised, so a second open would leave two records of one device, one give-back, and a daemon
+/// holding the device for the rest of the run.
+///
+/// Nothing in this backend opens one path twice today. What this asserts is that a caller that
+/// began doing it would be refused on every backend, rather than failing silently on seatd alone.
+fn a_path_this_session_holds_is_refused_a_second_open(nodes: &[PathBuf]) {
+    let path = &nodes[0];
+    let mut session = Session::open();
+    let seated = support::open_descriptors();
+
+    let device = session
+        .open_input(path)
+        .unwrap_or_else(|error| panic!("the seat opens {}: {error}", path.display()));
+    let refusal = session
+        .open_input(path)
+        .expect_err("a path this session holds a device at is refused a second device");
+
+    assert!(
+        refusal.to_string().contains(&path.display().to_string()),
+        "the refusal names the path it was asked for, and it reads: {refusal}"
+    );
+    assert_eq!(
+        support::open_descriptors(),
+        seated + 2,
+        "the second call asked the seat for nothing, so one node is still two descriptors"
+    );
+
+    drop(device);
+    session.close_input(path);
+
+    assert_eq!(
+        support::open_descriptors(),
+        seated,
+        "and the one device the session took goes back in one call"
+    );
+}
+
+/// Every device given back at once and every path opened again, three times over, and each one
+/// reads.
+///
+/// This is `Seat::reopen` seen from the session's side: the seat lets go of every device, gives
+/// them all back in one call, and then walks the paths it held. Each round is asserted to cost what
+/// the first one cost, and each device that comes back is **read**, so the descriptor is known to
+/// be live rather than merely counted.
+///
+/// What noop cannot show is the daemon's record. See what this binary leaves uncovered, above.
+fn every_input_device_closed_and_opened_again_reads(nodes: &[PathBuf]) {
+    let mut session = Session::open();
+    let seated = support::open_descriptors();
+
+    for round in 0..3 {
+        let mut opened: Vec<zgui_evdev::Device> = nodes
+            .iter()
+            .map(|path| {
+                session.open_input(path).unwrap_or_else(|error| {
+                    panic!(
+                        "round {round} asked the seat for {}: {error}",
+                        path.display()
+                    )
+                })
+            })
+            .collect();
+
+        assert_eq!(
+            support::open_descriptors(),
+            seated + 2 * nodes.len(),
+            "round {round} costs every node's two descriptors and nothing the round before left \
+             behind"
+        );
+        for device in &mut opened {
+            let path = device.path().to_owned();
+            device.read().unwrap_or_else(|error| {
+                panic!(
+                    "the device round {round} opened at {} answers a read: {error}",
+                    path.display()
+                )
+            });
+        }
+
+        // The descriptors close here, and the session is told after them. See
+        // `Session::close_every_input` for why that order is the one a daemon needs.
+        drop(opened);
+        session.close_every_input();
+
+        assert_eq!(
+            support::open_descriptors(),
+            seated,
+            "and round {round} gave all of them back in one call"
+        );
+    }
 }
 
 /// A path the seat opens that is no input device goes back, and the session says so.

@@ -645,6 +645,16 @@ impl Seat {
     /// reported through the crate's log rather than turned into an error the frame loop would have
     /// to decide about.
     pub fn open(session: &mut Session, clock: &dyn Clock) -> Self {
+        Self::open_in(session, clock, Path::new(zgui_evdev::DIRECTORY))
+    }
+
+    /// Every device in `directory`, taken.
+    ///
+    /// [`Seat::open`] is this over the directory the kernel puts input devices in, which is what a
+    /// run walks. The directory is a parameter so that a test can hand this one holding devices it
+    /// chose: a walk of the real one grabs every keyboard on the machine, and a grab lasts for as
+    /// long as the seat does.
+    fn open_in(session: &mut Session, clock: &dyn Clock, directory: &Path) -> Self {
         let found = layout::find();
         for refusal in &found.refused {
             info!(target: "zgui::platform", "no layout from {refusal}");
@@ -665,13 +675,14 @@ impl Seat {
         // between the two is in the directory the walk reads or in a report this watch holds; a
         // watch made afterwards has neither, and that device reaches nothing for the rest of the
         // program.
-        let watch = match Watch::new() {
+        let watch = match Watch::new_in(directory) {
             Ok(watch) => Some(watch),
             Err(error) => {
                 warn!(
                     target: "zgui::platform",
-                    "the device directory cannot be watched, so a keyboard or a mouse plugged in \
-                     while this runs reaches nothing: {error}"
+                    "{} cannot be watched, so a keyboard or a mouse plugged in while this runs \
+                     reaches nothing: {error}",
+                    directory.display()
                 );
                 None
             }
@@ -685,11 +696,11 @@ impl Seat {
             watch,
         };
         // The nodes are listed here and opened through the session, rather than opened by the walk
-        // `zgui_evdev::discover` is. Which devices this run may have is the session's answer: a
-        // seated run is handed each one by the daemon that owns the terminal, and on the ordinary
-        // machine that is the only way it gets one at all, because an `/dev/input/event*` node
-        // belongs to the `input` group.
-        match zgui_evdev::nodes() {
+        // itself. Which devices this run may have is the session's answer: a seated run is handed
+        // each one by the daemon that owns the terminal, and on the ordinary machine that is the
+        // only way it gets one at all, because an `/dev/input/event*` node belongs to the `input`
+        // group.
+        match zgui_evdev::nodes_in(directory) {
             Ok(nodes) => {
                 for path in &nodes {
                     let announced = seat.take_node(session, path);
@@ -1016,6 +1027,13 @@ impl Seat {
     ///
     /// The watch is untouched. It is this crate's own inotify rather than a device the seat opened,
     /// and no session ever takes it.
+    ///
+    /// # A path that does not come back is a device lost for the rest of the run
+    ///
+    /// Nothing here tries again, and the watch reports a node that is already in the directory to
+    /// nobody. So a device the daemon refuses at this moment — one it has yet to hand back after
+    /// the switch — is a keyboard or a mouse that reaches nothing until the program is started
+    /// again. Each one is reported as a warning, which is what says how it was lost.
     pub fn reopen(
         &mut self,
         session: &mut Session,
@@ -1039,6 +1057,14 @@ impl Seat {
 
         for path in &paths {
             reports.extend(self.take_node(session, path).map(Report::focused));
+            if !self.holds(path) {
+                warn!(
+                    target: "zgui::platform",
+                    "{} was held before this session was away and did not come back, so it \
+                     reaches nothing until this program is started again",
+                    path.display()
+                );
+            }
         }
         reports
     }
@@ -1316,13 +1342,18 @@ mod tests {
     //! produces: a repeat, an overflow, a button on a keyboard node.
 
     use std::collections::BTreeSet;
+    use std::ffi::{c_int, c_ulong};
     use std::path::{Path, PathBuf};
+
+    use rustix::fd::{AsFd, AsRawFd, BorrowedFd};
+    use rustix::ioctl::{Opcode, opcode};
 
     use super::{
         Axes, HighResolution, Keys, Pointer, Pointing, Report, Screen, Seat, Session, Span, Stamps,
         Transition, cancelled, focused, pointed, types_on, untaken,
     };
     use crate::input::keyboard::layout::{Layout, Reading, Source};
+    use crate::session::Asked;
     use std::time::Duration;
     use zgui_evdev::{
         Absolute, Bitmap, Capabilities, Device, EventType, Key, Reader, Relative, Synchronisation,
@@ -2948,45 +2979,208 @@ mod tests {
         );
     }
 
-    /// A readable node this seat takes that nobody types on, or nothing with the reason printed.
+    /// Where the kernel puts input devices.
+    ///
+    /// Written out rather than taken from [`zgui_evdev::DIRECTORY`]. Everything below asks the
+    /// machine, and a constant read out of the crate under test would let that crate decide what
+    /// the machine has.
+    const NODES: &str = "/dev/input";
+
+    /// Where the kernel publishes what each device is.
+    const PUBLISHED: &str = "/sys/class/input";
+
+    /// A node this seat takes that nobody types on, or nothing with the reason printed.
     ///
     /// A grab is exclusive and it lasts for as long as the device is held, so a test that took the
-    /// keyboard somebody is typing on would take it from the session for as long as it ran. What
-    /// is looked for is narrower than [`Role::Keyboard`](zgui_evdev::Role): a device this seat
-    /// works with that nobody types on — a mouse, a touchscreen, a graphics tablet, or the
-    /// pointing node of a keyboard.
+    /// keyboard somebody is typing on would take it from the session for as long as it ran.
     ///
-    /// [`points_with`](crate::input::pointer::points_with) accepts a device that reports a
-    /// position, so on a laptop the first match can be the touchscreen.
+    /// **The search is for a mouse**: two *relative* axes, a button, and no key from the block a
+    /// person types on. Narrower than [`crate::input::pointer::points_with`], deliberately — that
+    /// call accepts a device that reports a position as well, so on a laptop the first match can be
+    /// the touchscreen, and a test that grabbed one takes the screen away from whoever is using the
+    /// machine.
     ///
-    /// The node is grabbed and released here, so that the test below asserts what the seat did
-    /// rather than what the machine allowed. Both facts are read off the machine, and neither is
-    /// read off [`Seat`].
+    /// # What the machine is asked
+    ///
+    /// `/dev/input` is walked with `std::fs`, and what each node can report comes from
+    /// `/sys/class/input`, which the kernel writes out of the same `input_dev` the ioctls answer
+    /// from. Nothing asks `zgui_evdev` and nothing asks [`Seat`].
+    ///
+    /// That is deliberate. A search that opened each node through the crate under test would send
+    /// every test below into this arm exactly when that crate stopped opening devices, and print a
+    /// message blaming the machine for it. So a node this answers is a node the tests below
+    /// **assert** the seat takes.
     fn takeable_pointer(test: &str) -> Option<PathBuf> {
-        let nodes = zgui_evdev::nodes()
-            .map_err(|error| eprintln!("{test}: /dev/input cannot be read: {error}"))
-            .ok()?;
-        let found = nodes.iter().find_map(|path| {
-            let mut device = Device::open(path).ok()?;
-            let capabilities = device.capabilities();
-            if types_on(capabilities) || !crate::input::pointer::points_with(capabilities) {
-                return None;
-            }
-            // Taken and given straight back, which says the kernel hands this one over.
-            device.grab().ok()?;
-            device.release().ok()?;
-            Some(path.clone())
-        });
+        let found = readable_nodes()
+            .into_iter()
+            .find(|path| published(path).is_some_and(|codes| codes.is_a_mouse()));
 
         if found.is_none() {
             eprintln!(
-                "{test}: this machine has no node that this seat takes and nobody types on, so \
-                 nothing was asserted. It needs a readable `/dev/input/event*` with two relative \
-                 axes and no letter on it — a mouse — which usually means adding this user to the \
-                 `input` group."
+                "{test}: this machine publishes no mouse, so nothing was asserted. It needs a \
+                 readable `/dev/input/event*` with two relative axes, a button, and no key a \
+                 person types on. Most nodes belong to the `input` group, so adding this user to \
+                 that group is usually what is missing."
             );
         }
         found
+    }
+
+    /// The `event*` nodes under `/dev/input` this process can read, in the order the kernel
+    /// numbers them.
+    ///
+    /// Each candidate is opened read-only, as [`Device::open`] opens it. `/dev/input` also holds
+    /// `mice`, `mouse0` and `js0`, and `mouse0` is the one that matters: it starts with the same
+    /// prefix and is a different interface.
+    fn readable_nodes() -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(NODES) else {
+            return Vec::new();
+        };
+
+        let mut nodes: Vec<(u32, PathBuf)> = entries
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter_map(|path| {
+                let number = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_prefix("event"))
+                    .and_then(|number| number.parse().ok())?;
+                Some((number, path))
+            })
+            .filter(|(_, path)| std::fs::File::open(path).is_ok())
+            .collect();
+        nodes.sort();
+        nodes.into_iter().map(|(_, path)| path).collect()
+    }
+
+    /// What the kernel publishes about one node, as the codes it names.
+    struct Published {
+        /// Which event types the device emits.
+        types: BTreeSet<u16>,
+        /// Which keys and buttons it has.
+        keys: BTreeSet<u16>,
+        /// Which relative axes it has.
+        relative: BTreeSet<u16>,
+    }
+
+    impl Published {
+        /// Returns `true` if this is a device a person points with and nobody types on.
+        ///
+        /// The three maps and the rule over them are the kernel's own vocabulary, read through the
+        /// constants `zgui-evdev` generates from the headers. A key below `BTN_MISC` is a key a
+        /// person types on: the kernel puts every one of them below that boundary, and everything
+        /// from it upwards is a button or a code behind the buttons.
+        fn is_a_mouse(&self) -> bool {
+            let emits = |kind: EventType| self.types.contains(&kind.raw());
+            let axis = |axis: Relative| self.relative.contains(&axis.raw());
+
+            emits(EventType::EV_KEY)
+                && emits(EventType::EV_REL)
+                && axis(Relative::REL_X)
+                && axis(Relative::REL_Y)
+                && self.keys.contains(&Key::BTN_LEFT.raw())
+                && !self.keys.iter().any(|code| *code < Key::BTN_MISC.raw())
+        }
+    }
+
+    /// What the kernel publishes about the node at `path`, where it publishes anything.
+    ///
+    /// `/sys/class/input/eventN/device` is the `input_dev` behind the node, and the capability
+    /// files under it are written from the same maps `EVIOCGBIT` answers.
+    fn published(path: &Path) -> Option<Published> {
+        let directory = Path::new(PUBLISHED)
+            .join(path.file_name()?)
+            .join("device/capabilities");
+        let map = |name: &str| -> Option<BTreeSet<u16>> {
+            Some(published_codes(
+                &std::fs::read_to_string(directory.join(name)).ok()?,
+            ))
+        };
+
+        Some(Published {
+            types: map("ev")?,
+            keys: map("key")?,
+            relative: map("rel")?,
+        })
+    }
+
+    /// The codes one published capability map names.
+    ///
+    /// The kernel prints a bitmap as one hexadecimal word per machine word, **most significant
+    /// first** and separated by spaces, with the word holding code zero written last. So the
+    /// groups are counted from the right.
+    fn published_codes(text: &str) -> BTreeSet<u16> {
+        let width = usize::BITS;
+        text.split_whitespace()
+            .rev()
+            .enumerate()
+            .flat_map(|(group, word)| {
+                let bits = u64::from_str_radix(word, 16).unwrap_or(0);
+                let base = u32::try_from(group).unwrap_or(0) * width;
+                (0..width.min(u64::BITS))
+                    .filter(move |bit| bits >> bit & 1 == 1)
+                    .filter_map(move |bit| u16::try_from(base + bit).ok())
+            })
+            .collect()
+    }
+
+    /// Held for as long as a test holds the machine's one takeable device.
+    ///
+    /// The runner runs these on several threads, and an ordinary machine has one mouse, so two
+    /// tests that took it at once would meet `EBUSY` in whichever got there second. They take
+    /// turns rather than the device.
+    static TAKEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Takes the turn to hold a device.
+    ///
+    /// A test that panicked while holding it poisons the lock, and the turn is still free: the
+    /// grab went with the descriptor the panic dropped.
+    fn turn() -> std::sync::MutexGuard<'static, ()> {
+        TAKEN
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// `EVIOCREVOKE`, computed the way the kernel's header computes it.
+    ///
+    /// `_IOW('E', 0x91, int)`, built out of the same `rustix` const function `zgui-evdev` builds
+    /// its own request numbers with, so no number here is transcribed.
+    const REVOKE: Opcode = opcode::write::<c_int>(b'E', 0x91);
+
+    /// Revokes the open file description `fd` names.
+    ///
+    /// This is what logind does to an input device when another session takes the terminal. The
+    /// descriptor stays open and readable, every read on it answers `ENODEV`, and nothing puts it
+    /// back — `EVIOCREVOKE` cannot be undone. So it is the one thing a test can do to a device
+    /// that a terminal switch also does, and it is how the loop's answer to a device that stopped
+    /// answering is asserted with no session to switch away from.
+    ///
+    /// The argument is the value rather than a pointer to one. `evdev_do_ioctl` refuses a
+    /// `EVIOCREVOKE` whose argument is non-null, so a call that pointed at a zero would be
+    /// refused.
+    fn revoke(fd: BorrowedFd<'_>) {
+        // SAFETY: `ioctl` is handed a descriptor this frame borrows for the length of the call, a
+        // request number computed for that call, and the integer argument the request reads.
+        // Nothing is dereferenced and nothing is written back, so the return value is the only
+        // result.
+        let answer = unsafe { ioctl(fd.as_raw_fd(), c_ulong::from(REVOKE), 0) };
+
+        assert_eq!(
+            answer,
+            0,
+            "the kernel revokes a descriptor onto a device it still has: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+
+    // The C library's own, for a request this crate makes nowhere else. Declared here rather than
+    // reached through a crate, for the reason `tests/support/mod.rs` declares the loader's two:
+    // what crosses is stated once, beside the code that calls it.
+    unsafe extern "C" {
+        /// `ioctl(2)`. Takes the descriptor, the request number, and the argument that request
+        /// names.
+        fn ioctl(fd: c_int, request: c_ulong, argument: c_int) -> c_int;
     }
 
     /// How many descriptors this process holds onto `path`.
@@ -3005,19 +3199,25 @@ mod tests {
     #[test]
     fn reopening_lets_every_device_go_before_it_opens_the_same_paths_again() {
         let test = "reopening_lets_every_device_go_before_it_opens_the_same_paths_again";
+        let _turn = turn();
         let Some(path) = takeable_pointer(test) else {
             return;
         };
         // The direct shape, and it is asked for rather than opened: a session that opened a seat
         // would take this terminal for as long as the test ran.
         //
-        // **What that leaves uncovered.** On this shape `Session::close_input` and
-        // `Session::close_every_input` do nothing, so nothing here asserts that `reopen` makes the
-        // second call, or that `take_node` makes the first for a node this seat declines. Both
-        // calls are asserted from the other side by `tests/session_seated.rs`, which owns its own
-        // process and chooses libseat's backend in it; the seat being the caller has no test at
-        // all. Joining the two would mean a seat opened over a seated session, and `Seat::open`
-        // grabs every device on the machine, including the keyboard the developer is typing on.
+        // **On this shape both give-backs do nothing, and that is why the session records what it
+        // was asked for.** What a seated run would be asked for, and in which order, is
+        // `Session::asked` — written by each call before it reads the shape. That a daemon then
+        // releases the device is the other half, and it is asserted from the session's own side by
+        // `tests/session_seated.rs`, which owns its process and chooses libseat's noop backend in
+        // it.
+        //
+        // **No test in this tree joins the two halves.** A seat over a seated session needs the
+        // backend chosen before the process has a thread, which a test harness cannot do, and
+        // `Session::open` on this machine takes the real terminal. So the composition — this seat
+        // driving a live seat's devices — is asserted by the hardware run in the plan and by
+        // nothing here.
         let mut session = Session::direct();
         let root = Scratch::new(test);
         let mut seat = watching(&root.0);
@@ -3025,46 +3225,204 @@ mod tests {
         seat.take_node(&mut session, &path);
         assert!(
             seat.holds(&path),
-            "the node that was grabbed a moment ago is one this seat takes"
+            "the node the kernel publishes as a mouse is one this seat takes"
         );
         let watched = seat.descriptors().count();
 
-        let reports = seat.reopen(&mut session, &Pointer::centred(&[]), &[]);
+        // Twice over, because one round proves nothing about the second: a reopen that left a
+        // descriptor or a record behind carries it into the round after it.
+        for round in 0..2 {
+            let reports = seat.reopen(&mut session, &Pointer::centred(&[]), &[]);
 
-        // A grab is exclusive and it is held by the open file description. So a reopen that opened
-        // the path before it let the device on it go would be refused the grab, the device would be
-        // left where it is, and the path would not be here.
+            // A grab is exclusive and it is held by the open file description. So a reopen that
+            // opened the path before it let the device on it go would be refused the grab, the
+            // device would be left where it is, and the path would not be here.
+            assert!(
+                seat.holds(&path),
+                "round {round}: the path came back, so what held it had gone before it was asked \
+                 for again"
+            );
+            assert_eq!(
+                descriptors_naming(&path),
+                1,
+                "round {round}: the device that went closed its descriptor, so one name on the \
+                 node is left"
+            );
+            assert_eq!(
+                seat.descriptors().count(),
+                watched,
+                "round {round}: the watch is this crate's own inotify rather than a device, so a \
+                 reopen leaves it where it was"
+            );
+            assert!(
+                reports.is_empty(),
+                "round {round}: a seat with no layout and nowhere to put a pointer has nothing to \
+                 say about a device that came back: {reports:?}"
+            );
+
+            let taken = seat.devices.first_mut().expect("the one device is here");
+            assert!(
+                taken.device.is_grabbed(),
+                "round {round}: the device was taken again rather than only opened"
+            );
+            assert!(
+                taken.points.is_some(),
+                "round {round}: and it was read again, so what it does is known"
+            );
+            taken
+                .device
+                .read()
+                .unwrap_or_else(|error| panic!("round {round}: and it answers a read: {error}"));
+        }
+
+        // The session's own half, and the one the direct shape cannot show by counting anything.
+        // **The give-back comes before the open, on the same path.** seatd answers a path its
+        // client already holds with the same device id and its reference count raised, so a reopen
+        // that opened first would take that count to zero on the first close and leave the daemon
+        // releasing a device this process still holds grabbed.
+        assert_eq!(
+            session.asked(),
+            [
+                Asked::Open(path.clone()),
+                Asked::CloseEvery,
+                Asked::Open(path.clone()),
+                Asked::CloseEvery,
+                Asked::Open(path.clone()),
+            ],
+            "each round gave every device back through the session and then asked it for the path \
+             again"
+        );
+    }
+
+    #[test]
+    fn a_node_this_seat_declines_goes_back_to_the_session() {
+        // Most of `/dev/input` is a device nobody types on and nobody points with — a power
+        // button, a lid switch, an accelerometer — and `Seat::open` walks about twenty nodes to
+        // find the two or three it wants. Each one it declines was opened by the daemon, and
+        // dropping the device closes a descriptor and leaves the daemon's record standing: one
+        // record per declined node per run, held until the seat closes.
+        //
+        // The node here is declined for the other reason the seat declines one: the kernel refuses
+        // to hand it over, because this test is holding it. Both reasons reach the same line.
+        let test = "a_node_this_seat_declines_goes_back_to_the_session";
+        let _turn = turn();
+        let Some(path) = takeable_pointer(test) else {
+            return;
+        };
+        let mut session = Session::direct();
+        let root = Scratch::new(test);
+        let mut seat = watching(&root.0);
+
+        let mut held = Device::open(&path).expect("this process reads the node it just listed");
+        held.grab().expect("nothing else holds this device");
+
+        let announced = seat.take_node(&mut session, &path);
+
+        assert!(
+            !seat.holds(&path),
+            "a device the kernel will not hand over is left where it is"
+        );
+        assert!(
+            announced.is_none(),
+            "so nothing was held on it: {announced:?}"
+        );
+        assert_eq!(
+            session.asked(),
+            [Asked::Open(path.clone()), Asked::Close(path.clone())],
+            "and the node the session opened went back to it"
+        );
+    }
+
+    #[test]
+    fn a_device_that_stops_answering_goes_back_to_the_session() {
+        // What a terminal switch does to every input device this run holds, and what an unplugged
+        // device does to one: the descriptor answers `ENODEV` from then on. The loop drops it, and
+        // the daemon has to be told — a device dropped and never given back is a record logind
+        // holds until the process exits, and on a machine that switches back and forth that is one
+        // record per device per switch.
+        let test = "a_device_that_stops_answering_goes_back_to_the_session";
+        let _turn = turn();
+        let Some(path) = takeable_pointer(test) else {
+            return;
+        };
+        let mut session = Session::direct();
+        let root = Scratch::new(test);
+        let mut seat = watching(&root.0);
+
+        seat.take_node(&mut session, &path);
         assert!(
             seat.holds(&path),
-            "the path came back, so what held it had gone before it was asked for again"
+            "the node the kernel publishes as a mouse is one this seat takes"
+        );
+        revoke(seat.devices[0].device.as_fd());
+
+        let reports = seat.read(&mut session, &mut Pointer::centred(&[]), &[]);
+
+        assert!(
+            !seat.holds(&path),
+            "a device that answers a read with a failure is dropped rather than polled again: \
+             {reports:?}"
         );
         assert_eq!(
             descriptors_naming(&path),
+            0,
+            "its descriptor closed, which is what has to happen before a daemon releases the \
+             device"
+        );
+        assert_eq!(
+            session.asked(),
+            [Asked::Open(path.clone()), Asked::Close(path.clone())],
+            "and the session was told, so the record of the device goes with it"
+        );
+    }
+
+    #[test]
+    fn every_node_in_the_directory_is_opened_through_the_session() {
+        // The correction this milestone is about. `Seat::open` used to open each node itself,
+        // which needs the `input` group; a seated run gets its devices from the session, and on
+        // the ordinary machine that is the only way this program gets one at all.
+        //
+        // The directory is this test's own, holding one name for the machine's mouse and one
+        // ordinary file. A walk of the real `/dev/input` grabs every keyboard on the machine and
+        // holds it for as long as the seat lives.
+        let test = "every_node_in_the_directory_is_opened_through_the_session";
+        let _turn = turn();
+        let Some(path) = takeable_pointer(test) else {
+            return;
+        };
+        let root = Scratch::new(test);
+        let node = root.0.join("event0");
+        let empty = root.0.join("event1");
+        std::os::unix::fs::symlink(&path, &node).expect("the mouse is named in this directory");
+        std::fs::write(&empty, []).expect("the file is made");
+        let mut session = Session::direct();
+
+        let seat = Seat::open_in(
+            &mut session,
+            &Aged::started(Duration::from_secs(1)),
+            &root.0,
+        );
+
+        assert_eq!(
+            session.asked(),
+            [Asked::Open(node.clone()), Asked::Open(empty.clone())],
+            "every node in the directory was asked of the session, in the order the kernel \
+             numbers them"
+        );
+        assert_eq!(
+            seat.devices.len(),
             1,
-            "and the device that went closed its descriptor, so one name on the node is left"
+            "the one node that is a device was taken, and the empty file was left"
+        );
+        assert!(
+            seat.holds(&node),
+            "the device is named by the path it was opened at"
         );
         assert_eq!(
             seat.descriptors().count(),
-            watched,
-            "the watch is this crate's own inotify rather than a device, so a reopen leaves it \
-             where it was"
+            2,
+            "which the loop waits on beside the watch this directory got"
         );
-        assert!(
-            reports.is_empty(),
-            "a seat with no layout and nowhere to put a pointer has nothing to say about a device \
-             that came back: {reports:?}"
-        );
-
-        let taken = seat.devices.first_mut().expect("the one device is here");
-        assert!(
-            taken.device.is_grabbed(),
-            "the device was taken again rather than only opened"
-        );
-        assert!(
-            taken.points.is_some(),
-            "and it was read again, so what it does is known"
-        );
-        taken.device.read().expect("and it answers a read");
     }
 
     #[test]

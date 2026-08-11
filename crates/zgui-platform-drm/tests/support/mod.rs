@@ -224,6 +224,66 @@ pub(crate) fn openable_cards() -> Vec<PathBuf> {
 /// takes the device from the session for as long as it is held, so what a session binary asserts
 /// about an input device is the handover rather than the taking.
 pub(crate) fn openable_input_nodes() -> Vec<PathBuf> {
+    input_nodes(|path| {
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .is_ok()
+    })
+}
+
+/// Returns the `event*` nodes under `/dev/input` this process can read, in kernel order.
+///
+/// The same walk, opening each candidate the way [`zgui_evdev::Device::open`] does: read-only, and
+/// nothing else. So a node in this list is a node that call is expected to take.
+pub(crate) fn readable_input_nodes() -> Vec<PathBuf> {
+    input_nodes(|path| fs::File::open(path).is_ok())
+}
+
+/// Returns every input device on this machine that opens, or an empty list with the reason
+/// printed.
+///
+/// The nodes are [`readable_input_nodes`]'s answer, which is this module's own walk, and each one
+/// is then opened through the crate under test — where a refusal **fails**. The machine has already
+/// said that this process may read the node, so a device that will not open is a defect in what
+/// opens it.
+///
+/// A helper that asked `zgui_evdev` whether a device opens would send every test that reads it into
+/// the silent arm exactly when that crate stopped opening devices, and print a message blaming the
+/// machine for it.
+///
+/// **Nothing here is grabbed.** See [`openable_input_nodes`].
+pub(crate) fn openable_devices(test: &str) -> Vec<zgui_evdev::Device> {
+    let nodes = readable_input_nodes();
+    if nodes.is_empty() {
+        eprintln!(
+            "{test}: no `event*` under /dev/input opens for this process, so nothing was \
+             asserted; add this user to the group the nodes belong to — `input` on most machines \
+             — to run it"
+        );
+        return Vec::new();
+    }
+
+    nodes
+        .iter()
+        .map(|path| {
+            zgui_evdev::Device::open(path).unwrap_or_else(|error| {
+                panic!(
+                    "this process reads {} for itself, so `Device::open` takes it: {error}",
+                    path.display()
+                )
+            })
+        })
+        .collect()
+}
+
+/// Returns the `event*` nodes under `/dev/input` that `opens` accepts, in kernel order.
+///
+/// `event2` comes before `event10`, which sorting by name does not give. `/dev/input` also holds
+/// `mice`, `mouse0` and `js0`, and `mouse0` is the one that matters: it starts with the same
+/// prefix and is a different interface.
+fn input_nodes(opens: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(NODES) else {
         return Vec::new();
     };
@@ -239,13 +299,7 @@ pub(crate) fn openable_input_nodes() -> Vec<PathBuf> {
                 .and_then(|number| number.parse().ok())?;
             Some((number, path))
         })
-        .filter(|(_, path)| {
-            fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(path)
-                .is_ok()
-        })
+        .filter(|(_, path)| opens(path))
         .collect();
     nodes.sort();
     nodes.into_iter().map(|(_, path)| path).collect()

@@ -426,14 +426,21 @@ impl Device {
     /// descriptor over is the caller this exists for, and naming the device keeps its messages
     /// reading the way [`Device::open`] makes them read.
     ///
-    /// `O_NONBLOCK` is raised on `fd`, because [`Device::read`] answers at once only while that
-    /// flag is on. logind and seatd both open with it, and neither says so anywhere a program may
-    /// rely on, so it is asked for here. The flag belongs to the open file description, so the
-    /// daemon's own descriptor onto the node gets it too.
-    ///
-    /// `fd` is then checked to name an evdev node. A session hands out graphics cards over the
+    /// `fd` is checked to name an evdev node first. A session hands out graphics cards over the
     /// same call it hands out input devices, and a descriptor onto one of those would otherwise
     /// build a device with no name, no capabilities and no job.
+    ///
+    /// `O_NONBLOCK` is raised on `fd` after that, because [`Device::read`] answers at once only
+    /// while that flag is on. logind and seatd both open with it, and neither says so anywhere a
+    /// program may rely on, so it is asked for here.
+    ///
+    /// # Identifying before changing
+    ///
+    /// The status flags belong to the open file description, so raising one reaches the daemon's
+    /// own descriptor onto the node as well. On a node this crate keeps, that is the point of the
+    /// raise. On a descriptor this crate is about to refuse, it is a change to somebody else's
+    /// device. So the identity is asked for first, and a descriptor that names something other than
+    /// an input device goes back to its owner with the flags it arrived with.
     ///
     /// # The open mode
     ///
@@ -443,13 +450,13 @@ impl Device {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Unusable`] naming `path` when `fd` cannot be made non-blocking, and when
-    /// `fd` names something other than an evdev node. Returns [`Error::Ioctl`] when the node
+    /// Returns [`Error::Unusable`] naming `path` when `fd` names something other than an evdev
+    /// node, and when `fd` cannot be made non-blocking. Returns [`Error::Ioctl`] when the node
     /// answers and will not say what it is.
     pub fn over(fd: OwnedFd, path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_owned();
-        raise_non_blocking(fd.as_fd(), &path)?;
         confirm_input_device(fd.as_fd(), &path)?;
+        raise_non_blocking(fd.as_fd(), &path)?;
 
         Self::described(fd, path)
     }

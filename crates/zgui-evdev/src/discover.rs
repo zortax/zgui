@@ -2,16 +2,26 @@
 //!
 //! The kernel puts one node under `/dev/input` for every device it has, and a process reads the
 //! ones it has permission to. Most of them belong to the `input` group, so a program outside that
-//! group opens none, which is the ordinary case rather than a failure. A discovery therefore
-//! reports what it skipped beside what it opened.
+//! group opens none, which is the ordinary case rather than a failure.
+//!
+//! # Opening what the walk lists
+//!
+//! This module answers paths. Where a descriptor comes from is the caller's own question, and it
+//! has two answers: a program with the group opens the node itself, and a program on a seat asks
+//! the session daemon, which opens the node and hands the descriptor over. One walk serves both,
+//! and each caller builds its devices with [`Device::open`](crate::Device::open) or
+//! [`Device::over`](crate::Device::over).
 
 use std::path::{Path, PathBuf};
 
-use crate::device::Device;
 use crate::error::{Error, Result};
 
 /// Where the kernel puts input devices.
-pub(crate) const DIRECTORY: &str = "/dev/input";
+///
+/// [`nodes`] walks this directory and [`Watch::new`](crate::Watch::new) watches it. A caller that
+/// names it for itself — in a message that says where the devices came from, or in a test that
+/// uses a directory of its own — names it through this constant, so the path is written down once.
+pub const DIRECTORY: &str = "/dev/input";
 
 /// The prefix an event node's name has.
 const PREFIX: &str = "event";
@@ -30,7 +40,24 @@ pub(crate) fn node_number(name: &str) -> Option<u32> {
 
 /// Returns every event node under `/dev/input`, in the order the kernel numbers them.
 ///
-/// See [`nodes_in`] for the order, and for the caller that reads this rather than [`discover`].
+/// A path here is one to try. Opening it is the caller's own step, and permission is the ordinary
+/// refusal.
+///
+/// ```no_run
+/// use zgui_evdev::{Device, Role};
+///
+/// let mut keyboards = Vec::new();
+/// for node in zgui_evdev::nodes()? {
+///     assert!(node.starts_with(zgui_evdev::DIRECTORY));
+///     match Device::open(&node) {
+///         Ok(device) if device.roles().contains(Role::Keyboard) => keyboards.push(device),
+///         Ok(_other) => {}
+///         // Permission is the ordinary refusal, and the walk carries on past it.
+///         Err(refused) => eprintln!("{}: {refused}", node.display()),
+///     }
+/// }
+/// # Ok::<(), zgui_evdev::Error>(())
+/// ```
 ///
 /// # Errors
 ///
@@ -43,10 +70,11 @@ pub fn nodes() -> Result<Vec<PathBuf>> {
 ///
 /// `event2` comes before `event10`, where sorting by name puts them the other way round.
 ///
-/// [`discover_in`] opens each of these. A caller whose descriptors come from somewhere else walks
-/// this list instead: a session daemon opens an input device and hands the descriptor over, and
-/// [`Device::over`](crate::Device::over) builds a device on one. Both walks reach the nodes in one
-/// order.
+/// ```
+/// // A directory that is not there is the one thing a walk fails on. A node that refuses to open
+/// // is still listed, because opening it is the caller's step.
+/// assert!(zgui_evdev::nodes_in("/dev/input/no-such-directory").is_err());
+/// ```
 ///
 /// # Errors
 ///
@@ -81,66 +109,20 @@ pub(crate) fn numbered_in(directory: &Path) -> Result<Vec<(u32, PathBuf)>> {
     Ok(nodes)
 }
 
-/// A node that could not be opened, and why.
+/// A path that could not be opened, and why.
 #[derive(Debug)]
 pub struct Skipped {
-    /// The node that was tried.
+    /// The path that was tried.
     pub path: PathBuf,
     /// What it refused with. Permission is the ordinary case.
     pub reason: Error,
-}
-
-/// What a walk of the directory found.
-#[derive(Debug)]
-pub struct Discovery {
-    /// The devices that opened, in node order.
-    pub opened: Vec<Device>,
-    /// The nodes that did not, with the reason each gave.
-    pub skipped: Vec<Skipped>,
-}
-
-/// Opens every device under `/dev/input` that can be opened.
-///
-/// # Errors
-///
-/// Returns [`Error::Open`] when the directory itself cannot be read. A node that cannot be opened
-/// is not an error: it lands in [`Discovery::skipped`] with its reason, because a machine where
-/// half the devices belong to another group is the ordinary machine.
-pub fn discover() -> Result<Discovery> {
-    discover_in(DIRECTORY)
-}
-
-/// Opens every device under `directory` that can be opened.
-///
-/// The nodes come back in the order the kernel numbers them: `event2` before `event10`, which the
-/// name alone does not give.
-///
-/// # Errors
-///
-/// Returns [`Error::Open`] when the directory cannot be read.
-pub fn discover_in(directory: impl AsRef<Path>) -> Result<Discovery> {
-    let nodes = nodes_in(directory)?;
-
-    let mut discovery = Discovery {
-        opened: Vec::new(),
-        skipped: Vec::new(),
-    };
-    for path in nodes {
-        match Device::open(&path) {
-            Ok(device) => discovery.opened.push(device),
-            Err(reason) => discovery.skipped.push(Skipped { path, reason }),
-        }
-    }
-    Ok(discovery)
 }
 
 #[cfg(test)]
 mod tests {
     //! Which entries a walk picks up, over a directory made here.
     //!
-    //! No device is needed: the naming rule and the ordering are questions about a directory. The
-    //! files below are ordinary files, so every one of them fails to open as an input device, and
-    //! that is what makes them a test of the skipping.
+    //! No device is needed: the naming rule and the ordering are questions about a directory.
 
     use super::*;
 
@@ -169,15 +151,12 @@ mod tests {
         }
     }
 
-    /// The file names a walk reported skipping, in the order it reported them.
-    fn skipped(found: &Discovery) -> Vec<String> {
-        found
-            .skipped
+    /// The file names a walk answered, in the order it answered them.
+    fn named(listed: &[PathBuf]) -> Vec<String> {
+        listed
             .iter()
-            .map(|skipped| {
-                skipped
-                    .path
-                    .file_name()
+            .map(|path| {
+                path.file_name()
                     .expect("a node has a name")
                     .to_string_lossy()
                     .into_owned()
@@ -186,23 +165,22 @@ mod tests {
     }
 
     #[test]
-    fn only_the_event_nodes_are_tried() {
+    fn only_the_event_nodes_are_listed() {
         // `/dev/input` also holds `mice`, `mouse0`, `by-id` and `by-path`. `mouse0` is the one
         // that matters: it starts with the prefix and is a different interface, so a walk that
         // matched on the prefix alone would read a mouse through a protocol this crate has never
         // heard of.
         let root = Directory::new(
-            "only_the_event_nodes_are_tried",
+            "only_the_event_nodes_are_listed",
             &["event0", "mice", "mouse0", "js0"],
         );
 
-        let found = discover_in(&root.0).expect("the directory reads");
+        let listed = nodes_in(&root.0).expect("the directory reads");
 
-        assert!(found.opened.is_empty(), "an empty file is no device");
         assert_eq!(
-            skipped(&found),
+            named(&listed),
             ["event0"],
-            "only the numbered event nodes are tried at all"
+            "only the numbered event nodes are named at all"
         );
     }
 
@@ -214,23 +192,22 @@ mod tests {
             &["event0", "event2", "event10", "event11"],
         );
 
-        let found = discover_in(&root.0).expect("the directory reads");
+        let listed = nodes_in(&root.0).expect("the directory reads");
 
-        assert_eq!(skipped(&found), ["event0", "event2", "event10", "event11"]);
+        assert_eq!(named(&listed), ["event0", "event2", "event10", "event11"]);
     }
 
     #[test]
-    fn the_nodes_a_walk_lists_are_the_nodes_a_walk_opens() {
-        // Both walks read one list. A caller that opens its devices through a session daemon takes
-        // the paths, and a caller that opens them itself takes the devices, so the two have to name
-        // the same nodes in the same order.
+    fn every_node_is_named_by_the_path_it_is_opened_at() {
+        // The walk answers paths, and a caller opens each one. So each entry is the directory it
+        // was found in joined to the name, and that is the path a caller passes to `Device::open`
+        // or hands to a session daemon.
         let root = Directory::new(
-            "the_nodes_a_walk_lists_are_the_nodes_a_walk_opens",
+            "every_node_is_named_by_the_path_it_is_opened_at",
             &["event0", "event2", "event10", "mouse0", "by-id"],
         );
 
         let listed = nodes_in(&root.0).expect("the directory reads");
-        let found = discover_in(&root.0).expect("the directory reads");
 
         assert_eq!(
             listed,
@@ -241,31 +218,6 @@ mod tests {
             ],
             "the numbered event nodes, in the kernel's own order"
         );
-        assert_eq!(
-            listed,
-            found
-                .skipped
-                .iter()
-                .map(|skipped| skipped.path.clone())
-                .collect::<Vec<_>>(),
-            "every file here is an empty one, so the walk that opens them skips exactly the list"
-        );
-    }
-
-    #[test]
-    fn a_node_that_will_not_open_is_reported_with_its_reason() {
-        let root = Directory::new(
-            "a_node_that_will_not_open_is_reported_with_its_reason",
-            &["event0"],
-        );
-
-        let found = discover_in(&root.0).expect("the directory reads");
-
-        assert_eq!(found.skipped.len(), 1);
-        assert!(
-            !found.skipped[0].reason.to_string().is_empty(),
-            "the reason is what a person acts on, so it says something"
-        );
     }
 
     #[test]
@@ -274,8 +226,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&missing);
 
         assert!(
-            discover_in(&missing).is_err(),
-            "a walk of nothing is a failure, where a device that refuses is not"
+            nodes_in(&missing).is_err(),
+            "a walk of nothing is a failure, where a node that refuses to open is not"
         );
     }
 }

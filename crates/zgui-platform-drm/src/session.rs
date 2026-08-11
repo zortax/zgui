@@ -80,6 +80,29 @@ pub struct Session {
     shape: Shape,
     /// What the card cost, once one has been asked for.
     took: Option<Taken>,
+    /// Everything this session recorded, in the order it was.
+    ///
+    /// See [`Asked`].
+    #[cfg(test)]
+    asked: Vec<Asked>,
+}
+
+/// One input call a caller made on a session, recorded while the tests run.
+///
+/// [`crate::input::seat::Seat`] is the only caller of the three input calls in a running program,
+/// and every one of them costs a device the daemon holds a record of. On the direct shape two of
+/// them do nothing at all, so a test on that shape can assert what a seated run *would* be asked
+/// for and in which order. Each call records itself before it reads the shape, so what the seat
+/// asked for is visible with no seat, no daemon and no terminal.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Asked {
+    /// [`Session::open_input`], with the path it was asked for.
+    Open(PathBuf),
+    /// [`Session::close_input`], with the path it was asked for.
+    Close(PathBuf),
+    /// [`Session::close_every_input`].
+    CloseEvery,
 }
 
 /// The two shapes, and what each one holds.
@@ -190,6 +213,8 @@ impl Session {
                         inputs: Vec::new(),
                     },
                     took: None,
+                    #[cfg(test)]
+                    asked: Vec::new(),
                 }
             }
             Err(error) => {
@@ -202,6 +227,8 @@ impl Session {
                 Self {
                     shape: Shape::Direct,
                     took: None,
+                    #[cfg(test)]
+                    asked: Vec::new(),
                 }
             }
         }
@@ -301,13 +328,24 @@ impl Session {
     /// Every refusal names the path it was asked for, because a caller opens these one at a time
     /// and reports each on its own.
     ///
+    /// # A path this session already holds is refused
+    ///
+    /// One path is one device here, because that is what [`Session::close_input`] gives back.
+    /// seatd answers a path its client already holds with the *same* device id and its reference
+    /// count raised, so a second open would leave two records of one device and one give-back — and
+    /// the count would stand at one, with the daemon holding the device, for the rest of the run.
+    /// A caller closes the path it holds and opens it again, which is what a resume does.
+    ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::Backend`] when the node cannot be opened, and when the descriptor
-    /// that came back names something other than an evdev node. Neither is unusual: on the seated
-    /// path a daemon decides which devices this session may have, and on the direct path most
-    /// nodes belong to a group.
+    /// Returns [`PlatformError::Backend`] when the node cannot be opened, when the descriptor that
+    /// came back names something other than an evdev node, and when this session already holds a
+    /// device at `path`. The first two are not unusual: on the seated path a daemon decides which
+    /// devices this session may have, and on the direct path most nodes belong to a group.
     pub fn open_input(&mut self, path: &Path) -> Result<zgui_evdev::Device, PlatformError> {
+        #[cfg(test)]
+        self.asked.push(Asked::Open(path.to_owned()));
+
         match &mut self.shape {
             Shape::Seated { seat, inputs, .. } => seated_input(seat, inputs, path),
             Shape::Direct => zgui_evdev::Device::open(path).map_err(|error| backend_error(&error)),
@@ -331,6 +369,9 @@ impl Session {
     /// would keep that description — and the grab on it — alive after the daemon released the
     /// device, and the next open of the same node would then be refused the grab.
     pub fn close_input(&mut self, path: &Path) {
+        #[cfg(test)]
+        self.asked.push(Asked::Close(path.to_owned()));
+
         let Shape::Seated { seat, inputs, .. } = &mut self.shape else {
             return;
         };
@@ -350,6 +391,9 @@ impl Session {
     /// The same rule [`Session::close_input`] states holds here: the caller drops its own devices
     /// first.
     pub fn close_every_input(&mut self) {
+        #[cfg(test)]
+        self.asked.push(Asked::CloseEvery);
+
         let Shape::Seated { seat, inputs, .. } = &mut self.shape else {
             return;
         };
@@ -377,7 +421,16 @@ impl Session {
         Self {
             shape: Shape::Direct,
             took: None,
+            asked: Vec::new(),
         }
+    }
+
+    /// Returns every input call this session was asked for, in the order they were made.
+    ///
+    /// See [`Asked`] for what this is for.
+    #[cfg(test)]
+    pub(crate) fn asked(&self) -> &[Asked] {
+        &self.asked
     }
 }
 
@@ -492,11 +545,23 @@ fn seated_card(
 /// A node the seat opened and `zgui-evdev` refused goes straight back. A seat hands out graphics
 /// cards over the same call, and a backend that opens any path it is given hands out anything else
 /// as well.
+///
+/// A path this session already holds is refused before the seat is asked, for the reason
+/// [`Session::open_input`] states: one path is one device here, and a second open of one path is a
+/// device this session could never give back.
 fn seated_input(
     seat: &zgui_seat::Seat,
     inputs: &mut Vec<(PathBuf, zgui_seat::Device)>,
     path: &Path,
 ) -> Result<zgui_evdev::Device, PlatformError> {
+    if inputs.iter().any(|(held, _)| held == path) {
+        return Err(PlatformError::Backend(format!(
+            "{} is already open through this session, and a daemon that answered a second open \
+             would hold a record of the device this run has no way to give back",
+            path.display()
+        )));
+    }
+
     let device = seat
         .open_device(path)
         .map_err(|error| backend_error(&error))?;

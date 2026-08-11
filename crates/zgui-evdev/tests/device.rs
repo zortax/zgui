@@ -1,27 +1,26 @@
 //! Opening real devices, and building one over a descriptor somebody else opened.
 //!
-//! Everything here needs a node this user may read, so every test looks for one first. What is
-//! asserted is that a call *answers*, rather than what it answers: the answer is a fact about the
-//! hardware, and the call working is a fact about this crate.
+//! Everything here needs a node this user may read, so every test looks for one first. Which nodes
+//! those are is `support`'s answer, and it is read off the machine — see that module for why the
+//! search may not go through this crate.
+//!
+//! Most of what is asserted is that a call *answers*, rather than what it answers: the answer is a
+//! fact about the hardware, and the call working is a fact about this crate. Two facts are held to
+//! an exact value anyway, because the kernel publishes them a second way under `/sys/class/input`:
+//! what a device calls itself and what the hardware says it is. A request skipped or issued
+//! through the wrong number reads as zeros, and zeros are what the comparisons below refuse.
 
 #![cfg(target_os = "linux")]
 
 mod support;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::fd::{AsFd, OwnedFd};
 use rustix::fs::{Mode, OFlags};
-use zgui_evdev::{Device, EventType, Key};
-
-/// How long a read of an idle device is given to answer.
-///
-/// A read of a non-blocking descriptor answers in microseconds, and a read of a blocking one waits
-/// for somebody to touch the device. So this separates the two, and it is long enough that a loaded
-/// machine does not report the first as the second. It is a bound rather than an expectation: a
-/// test that waited for ever would hang the suite where it should redden it.
-const READ_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+use zgui_evdev::{Code, Device, EventType, Key};
 
 /// A descriptor onto `path`, opened the way a session daemon hands one over.
 ///
@@ -79,6 +78,120 @@ fn a_device_opens_and_says_what_it_is() {
             "a device reports at least one event type"
         );
     }
+}
+
+#[test]
+fn a_device_answers_the_name_and_the_identity_the_kernel_publishes() {
+    // The one place a value is asserted rather than printed. `/sys/class/input/eventN/device` is
+    // the same `input_dev` the ioctls read, published by the kernel a second way, so this holds
+    // `EVIOCGNAME` and `EVIOCGID` up against something outside this crate. A request that is
+    // skipped, or issued through a number the kernel reads as another request, answers a name of
+    // nothing and an identity of four zeros — and every comparison in this file that is between
+    // two devices is satisfied by both of them being wrong.
+    let test = "a_device_answers_the_name_and_the_identity_the_kernel_publishes";
+    let devices = support::devices(test);
+    if devices.is_empty() {
+        return;
+    }
+
+    let mut compared = 0;
+    for device in &devices {
+        let Some(published) = support::published(test, device.path()) else {
+            continue;
+        };
+        compared += 1;
+
+        assert_eq!(
+            device.name(),
+            published.name,
+            "{} calls itself what the kernel publishes for it",
+            device.path().display()
+        );
+        let identity = device.identity();
+        assert_eq!(
+            (
+                identity.bus,
+                identity.vendor,
+                identity.product,
+                identity.version
+            ),
+            (
+                published.bus,
+                published.vendor,
+                published.product,
+                published.version
+            ),
+            "{} reports the bus, the vendor, the product and the version the kernel publishes",
+            device.path().display()
+        );
+    }
+
+    if compared == 0 {
+        eprintln!(
+            "{test}: this kernel publishes nothing under /sys/class/input, so what each device \
+             says it is was read from the device alone and asserted against nothing"
+        );
+    }
+}
+
+#[test]
+fn a_device_answers_the_capability_maps_the_kernel_publishes() {
+    // The other half of the same anchor. Every map is `EVIOCGBIT` with the event type in the
+    // request number and a length this crate chose, so a map read at the wrong length or through
+    // the wrong type is a device that does the wrong job — and a comparison between two of this
+    // crate's own devices sees none of it.
+    let test = "a_device_answers_the_capability_maps_the_kernel_publishes";
+    let devices = support::devices(test);
+    if devices.is_empty() {
+        return;
+    }
+
+    let mut compared = 0;
+    for device in &devices {
+        let Some(published) = support::published(test, device.path()) else {
+            continue;
+        };
+        compared += 1;
+
+        let capabilities = device.capabilities();
+        let named = |published: &BTreeSet<u16>| published.iter().copied().collect::<Vec<_>>();
+        assert_eq!(
+            raw(capabilities.types().iter()),
+            named(&published.types),
+            "{} emits the event types the kernel publishes",
+            device.path().display()
+        );
+        assert_eq!(
+            raw(capabilities.keys().iter()),
+            named(&published.keys),
+            "{} has the keys the kernel publishes",
+            device.path().display()
+        );
+        assert_eq!(
+            raw(capabilities.relative().iter()),
+            named(&published.relative),
+            "{} has the relative axes the kernel publishes",
+            device.path().display()
+        );
+        assert_eq!(
+            raw(capabilities.absolute().iter()),
+            named(&published.absolute),
+            "{} has the absolute axes the kernel publishes",
+            device.path().display()
+        );
+    }
+
+    if compared == 0 {
+        eprintln!(
+            "{test}: this kernel publishes nothing under /sys/class/input, so what each device can \
+             report was read from the device alone and asserted against nothing"
+        );
+    }
+}
+
+/// The kernel's own numbers for a map's codes, in order.
+fn raw<C: Code>(codes: impl Iterator<Item = C>) -> Vec<u16> {
+    codes.map(Code::raw).collect()
 }
 
 #[test]
@@ -425,41 +538,32 @@ fn a_device_over_a_blocking_descriptor_reads_rather_than_waiting() {
         Device::over(blocking, &path).expect("a device is built over an open descriptor");
 
     // The flag lives on the open file description, so the copy this test kept reports it too. A
-    // session daemon's own descriptor is another name for that same description, and that is what
-    // such a daemon sees.
+    // session daemon's own descriptor is another name for that same
+    // description, and this is what such a daemon sees.
+    //
+    // **This is asserted before anything reads the device, and that ordering is what keeps the
+    // test bounded.** Nobody is asked to press a key, so a read of a descriptor that stayed
+    // blocking waits for an event that may never come — which at run time is a frame loop stopping
+    // dead with nothing printed, and here would be a test that never returns. A read made after
+    // the flag is known to be on cannot wait: the kernel answers `EAGAIN` where there is nothing
+    // to report.
     let flags = rustix::fs::fcntl_getfl(&kept).expect("a descriptor reports its status flags");
     assert!(
         flags.contains(OFlags::NONBLOCK),
-        "the flag reached the description behind the descriptor that was handed over: {flags:?}"
+        "the flag reached the description behind the descriptor that was handed over, and the \
+         descriptor a session daemon kept is still blocking: {flags:?}"
     );
 
-    // The observable behind that flag. Nobody is asked to press a key, so a blocking descriptor
-    // waits here for an event that may never come — which at run time is a frame loop stopping
-    // dead with nothing printed. The bound makes that a failure rather than a suite that never
-    // finishes.
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let answer = over
-            .read()
-            .map(|batches| batches.len())
-            .map_err(|error| error.to_string());
-        // The receiver is gone when the bound expired, and there is nobody left to tell.
-        let _ = sender.send(answer);
-    });
-    let answer = receiver.recv_timeout(READ_BOUND).unwrap_or_else(|_| {
-        panic!(
-            "reading {} is still waiting after {READ_BOUND:?}, so the descriptor handed over \
-             stayed blocking",
-            path.display()
-        )
-    });
+    // The observable behind that flag, read on this thread because the assertion above says it
+    // answers at once.
+    let batches = over.read().expect("a quiet device reads as nothing");
 
     // Whatever arrived came from somebody at the keyboard, so the count is not the assertion. That
     // the call came back is.
     println!(
-        "{}: a blocking descriptor read {:?} batches and returned",
+        "{}: a blocking descriptor read {} batches and returned",
         path.display(),
-        answer.expect("a quiet device reads as nothing")
+        batches.len()
     );
 }
 
@@ -470,6 +574,9 @@ fn a_descriptor_that_names_no_input_device_is_refused_rather_than_built_over() {
     // the one every machine has, and it refuses an input request number exactly as a card does.
     let other = rustix::fs::open("/dev/null", OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
         .expect("/dev/null opens");
+    // The refusal takes the descriptor with it, so what it was left in is read through a second
+    // name for the same open file description.
+    let kept = other.try_clone().expect("a descriptor duplicates");
     let named = PathBuf::from("/dev/input/event-that-is-no-device");
 
     let error = Device::over(other, &named)
@@ -482,6 +589,15 @@ fn a_descriptor_that_names_no_input_device_is_refused_rather_than_built_over() {
     assert!(
         error.to_string().contains("event-that-is-no-device"),
         "the refusal names the path its caller gave: {error}"
+    );
+    // Identify, then change. The status flags belong to the open file description, so raising one
+    // reaches every name for it — including the daemon's own descriptor onto a device this call is
+    // about to hand straight back.
+    let flags = rustix::fs::fcntl_getfl(&kept).expect("a descriptor reports its status flags");
+    assert!(
+        !flags.contains(OFlags::NONBLOCK),
+        "a descriptor this crate refuses goes back to its owner with the flags it arrived with, \
+         and this one reads {flags:?}"
     );
 
     // The other direction, so that the check above is a check rather than a refusal of everything.

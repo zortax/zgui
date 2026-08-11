@@ -11,6 +11,8 @@
 
 #![cfg(target_os = "linux")]
 
+mod support;
+
 use zgui_evdev::Key;
 use zgui_platform_drm::input::keyboard::layout::{self, Layout};
 use zgui_platform_drm::input::seat;
@@ -231,23 +233,13 @@ fn the_narrow_rule_refuses_a_device_udev_calls_a_keyboard() {
     // a keyboard under udev's `ID_INPUT_KEY`, and grabbing one takes a function away from the
     // session with no way to get it back while the program runs.
     let test = "the_narrow_rule_refuses_a_device_udev_calls_a_keyboard";
-    let found = match zgui_evdev::discover() {
-        Ok(found) => found,
-        Err(error) => {
-            eprintln!("{test}: /dev/input cannot be read on this machine: {error}");
-            return;
-        }
-    };
-    if found.opened.is_empty() {
-        eprintln!(
-            "{test}: no input device on this machine can be opened, so nothing was asserted; add \
-             this user to the `input` group to run it"
-        );
+    let opened = support::openable_devices(test);
+    if opened.is_empty() {
         return;
     }
 
     let mut narrowed = 0;
-    for device in &found.opened {
+    for device in &opened {
         let types_on = seat::types_on(device.capabilities());
         let udev = device.roles().contains(zgui_evdev::Role::Keyboard);
         println!(

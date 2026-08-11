@@ -1,9 +1,15 @@
 //! Hearing about the devices that arrive while a program runs.
 //!
-//! [`discover`](mod@crate::discover) reads `/dev/input` once. A keyboard plugged in afterwards puts
-//! a new node in that directory and nothing says so, so this watches the same directory and reports
-//! the event nodes that may now be openable. The watch sits beside the walk because it asks the
-//! same question a second way, and both apply the same rule about what an event node is called.
+//! [`nodes`](crate::nodes) reads `/dev/input` once. A keyboard plugged in afterwards puts a new
+//! node in that directory and nothing says so, so this watches the same directory and reports the
+//! event nodes that may now be openable. The watch sits beside the walk because it asks the same
+//! question a second way, and both apply the same rule about what an event node is called.
+//!
+//! # Ordering against the walk
+//!
+//! Make the watch before walking the directory. A device that arrives between the two then lands in
+//! one or the other: the walk lists it, or a report names it. A watch made after the walk has
+//! neither, and that device reaches nothing for the rest of the run.
 //!
 //! # When a node can be opened
 //!
