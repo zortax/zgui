@@ -107,15 +107,27 @@ fn frame(test: &str, width: u32, height: u32) -> Option<Pixels> {
     renderer.read_presented()
 }
 
-/// Waits for a flip on `crtc`, reporting whether it arrived inside [`DEADLINE`].
+/// Waits for a flip on `crtc`.
+///
+/// Returns `true` if the completion arrived inside [`DEADLINE`].
 ///
 /// The device is read once per turn and the whole slice is handed to the scanout, which is the
-/// shape the frame loop reads events in: one read carries every CRTC that finished.
-fn await_flip(device: &Device, scanout: &mut Scanout, crtc: u32) -> bool {
+/// shape the frame loop reads events in: one read carries every CRTC that finished. The commit
+/// goes with it, because a scanout holding a frame that was waiting for this completion commits it
+/// here. The copied shape never does, and this passes the commit on all the same so that both
+/// shapes are read the same way.
+fn await_flip(
+    device: &Device,
+    commit: &mut dyn commit::Commit,
+    scanout: &mut Scanout,
+    crtc: u32,
+) -> bool {
     let deadline = Instant::now() + DEADLINE;
     while Instant::now() < deadline {
         let events = device.poll_events().expect("the device can be read");
-        scanout.drain(&events);
+        scanout
+            .drain(device, commit, &events)
+            .expect("a display with nothing waiting commits nothing");
         if events
             .iter()
             .any(|event| matches!(event, Event::FlipComplete { crtc: done, .. } if *done == crtc))
@@ -200,7 +212,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
          that is still on screen"
     );
     assert!(
-        await_flip(&device, &mut scanout, output.pipe.crtc),
+        await_flip(&device, &mut *commit, &mut scanout, output.pipe.crtc),
         "a flip on a display running at {} mHz completes well inside {DEADLINE:?}",
         output.mode.refresh_rate_millihertz()
     );
@@ -215,7 +227,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
         "the completion freed the other buffer"
     );
     assert!(
-        await_flip(&device, &mut scanout, output.pipe.crtc),
+        await_flip(&device, &mut *commit, &mut scanout, output.pipe.crtc),
         "and the second flip completes too"
     );
 
@@ -243,7 +255,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
         "the display is taking frames again"
     );
     assert!(
-        await_flip(&device, &mut scanout, output.pipe.crtc),
+        await_flip(&device, &mut *commit, &mut scanout, output.pipe.crtc),
         "and that flip completes"
     );
     println!("crtc {} was put back into its mode", output.pipe.crtc);

@@ -11,10 +11,10 @@
 //!
 //! # The state the two halves share
 //!
-//! A [`Scanout`] is written by two callers at different moments. The loop clears its outstanding
-//! flip when the device reports a completion; the renderer puts a frame in the back buffer and asks
-//! for the next flip. Both run on the loop's thread, one at a time, so the buffers are held through
-//! [`Rc`] and [`RefCell`] rather than through a lock.
+//! A [`Scanout`] is written by two callers at different moments. The loop reads the completion the
+//! device reports and commits whatever frame was waiting for it; the renderer puts a frame in a
+//! free buffer and asks for the next flip. Both run on the loop's thread, one at a time, so the
+//! buffers are held through [`Rc`] and [`RefCell`] rather than through a lock.
 //!
 //! # The two ways a frame arrives
 //!
@@ -191,9 +191,14 @@ impl DrmDisplay {
     /// It runs before the frame is composed: the renderer is pointed at the answer, and the buffer
     /// has to come back from the display engine before anything writes into it.
     ///
-    /// Answers nothing while a flip is on its way. The frame is held back there before it is
-    /// drawn, so nothing is taken back and nothing is owed back. Answers nothing on the copied
-    /// shape as well, where no caller draws into a scanout buffer.
+    /// A flip on its way still leaves a buffer free, and that is what the third buffer is for: one
+    /// is on the screen, one is in the flip, and this answers the third. So a frame here starts as
+    /// soon as it is asked for rather than waiting for the vertical blank.
+    ///
+    /// Answers nothing when every buffer is the display's, which is the one on the screen, the one
+    /// the flip names, and one holding a finished frame that waits for that flip. Nothing is taken
+    /// back in that case, so nothing is owed back. Answers nothing on the copied shape as well,
+    /// where no caller draws into a scanout buffer.
     ///
     /// # Errors
     ///
@@ -203,14 +208,18 @@ impl DrmDisplay {
         self.scanout.borrow_mut().acquire()
     }
 
-    /// Gives the buffer the frame was drawn into to the display engine, and flips to it.
+    /// Gives the buffer the frame was drawn into to the display engine, and shows it.
     ///
     /// [`Scanout::present_drawn`]'s own answer. It runs after the frame is submitted, and only for
     /// a frame that was drawn: a buffer given over holds whatever is in it, so giving over a frame
     /// that drew nothing puts a picture from three frames ago on the screen.
     ///
-    /// Answers `false` while a flip is still on its way, which is the answer [`DrmDisplay::acquire`]
-    /// already gave before the frame was drawn.
+    /// A frame that finishes while a flip is on its way is **held** and goes to the driver when the
+    /// completion arrives, because the kernel takes one page flip per CRTC. It answers `true`
+    /// either way: the frame reaches the screen.
+    ///
+    /// Answers `false` for a display no frame was drawn on, which is one whose
+    /// [`DrmDisplay::acquire`] answered nothing.
     ///
     /// The pointer is not drawn: a display on this shape has one on a plane, which is the condition
     /// [`Scanout::imported`] chose it under.
