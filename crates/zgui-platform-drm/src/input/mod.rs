@@ -38,4 +38,5 @@ pub mod keyboard;
 pub(crate) mod lent;
 pub mod pointer;
 pub mod seat;
+pub(crate) mod through;
 pub mod wheel;

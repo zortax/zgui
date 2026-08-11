@@ -6,7 +6,7 @@
 //!
 //! # The grab
 //!
-//! libinput takes no exclusive grab of its own, so the grab is made here, in `open_restricted`.
+//! libinput takes no exclusive grab of its own, so the grab is made here, as the node is opened.
 //! Without one, every keystroke also reaches the shell behind the console, so somebody typing
 //! `reboot` into a text field leaves it on the command line for the shell to run when the program
 //! exits. `libinput debug-events --grab` makes its grab in exactly this call for exactly this
@@ -24,6 +24,12 @@
 //! The session takes a device back by path, and `close_restricted` is handed a descriptor and
 //! nothing else. So [`Held`] files each device under the descriptor libinput was given, and the
 //! path comes back out of it.
+
+// Nothing a running program reaches gets here yet: `through` is the only caller, and nothing
+// constructs a `Through` yet. The allow comes off with the milestone that gives `Seat` a second
+// source. It is scoped to this module rather than turned off in the manifest, so the rest of the
+// crate keeps reporting what it does not use.
+#![allow(dead_code)]
 
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};

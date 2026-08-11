@@ -247,7 +247,7 @@ pub struct Report {
 
 impl Report {
     /// Creates an event for whichever surface holds the keyboard.
-    const fn focused(event: SurfaceEvent) -> Self {
+    pub(crate) const fn focused(event: SurfaceEvent) -> Self {
         Self {
             surface: None,
             event,
@@ -359,7 +359,7 @@ impl Translated {
 /// An ask of nothing leaves the answer where it is, so a chord followed by a hundred ordinary keys
 /// still answers the chord. The two arguments have different types, so a caller cannot write them
 /// the wrong way round.
-fn ask(answered: &mut Option<u32>, asked: Option<u32>) {
+pub(crate) fn ask(answered: &mut Option<u32>, asked: Option<u32>) {
     if asked.is_some() {
         *answered = asked;
     }
@@ -1386,7 +1386,7 @@ impl Seat {
                         let held: BTreeSet<u16> = held.iter().map(Key::raw).collect();
                         if let Some(points) = taken.points.as_mut() {
                             reports.extend(cancelled(
-                                points,
+                                &mut points.down,
                                 &held,
                                 keys.modifiers(),
                                 taken.stamps,
@@ -1527,7 +1527,7 @@ fn let_go_of(
     let mut reports = Vec::new();
     if let Some(points) = gone.points.as_mut() {
         reports.extend(cancelled(
-            points,
+            &mut points.down,
             &BTreeSet::new(),
             keys.modifiers(),
             gone.stamps,
@@ -1599,7 +1599,7 @@ fn pointed(
 /// [`pointed`] is this over one batch of the kernel's own stream. A source that reports a movement
 /// already accelerated and a scroll already in its own unit calls this instead: what a pointer does
 /// with an update is the same question however the update was read, and it is answered once.
-fn moved(
+pub(crate) fn moved(
     motion: &pointer::Motion,
     turned: Option<ScrollDelta>,
     timestamp: Timestamp,
@@ -1681,16 +1681,16 @@ fn moved(
 /// next key means, so a modifier missed after an overflow comes out in every letter afterwards. A
 /// button has no such state — nothing above was told it went down, and recording it here would
 /// deliver a release that no control has a press for.
-fn cancelled(
-    points: &mut Pointing,
+pub(crate) fn cancelled(
+    down: &mut BTreeSet<u16>,
     held: &BTreeSet<u16>,
     modifiers: Modifiers,
     stamps: Stamps,
     pointer: &Pointer,
     screens: &[Screen],
 ) -> Vec<Report> {
-    let ended: Vec<u16> = points.down.difference(held).copied().collect();
-    points.down.retain(|code| held.contains(code));
+    let ended: Vec<u16> = down.difference(held).copied().collect();
+    down.retain(|code| held.contains(code));
     let Some((surface, at)) = pointer.position(screens) else {
         return Vec::new();
     };
@@ -3565,7 +3565,7 @@ mod tests {
         );
 
         let ended = cancelled(
-            &mut points,
+            &mut points.down,
             &BTreeSet::new(),
             Modifiers::NONE,
             Stamps::from_origin(SINCE),
@@ -3582,7 +3582,7 @@ mod tests {
         );
         assert!(
             cancelled(
-                &mut points,
+                &mut points.down,
                 &BTreeSet::new(),
                 Modifiers::NONE,
                 Stamps::from_origin(SINCE),
@@ -3618,7 +3618,7 @@ mod tests {
         let clock = Aged::started(Duration::from_secs(5));
         let stamps = Stamps::anchored(&clock);
         let ended = cancelled(
-            &mut points,
+            &mut points.down,
             &BTreeSet::new(),
             Modifiers::NONE,
             stamps,
@@ -3654,7 +3654,7 @@ mod tests {
         );
 
         let ended = cancelled(
-            &mut points,
+            &mut points.down,
             &BTreeSet::from([Key::BTN_LEFT.raw()]),
             Modifiers::NONE,
             Stamps::from_origin(SINCE),
