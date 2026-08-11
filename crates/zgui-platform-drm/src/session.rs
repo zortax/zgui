@@ -113,6 +113,9 @@ pub struct Session {
 /// nothing at all or refuse, so a test on that shape can assert what a seated run *would* be asked
 /// for and in which order. Each call records itself before it reads the shape, so what a caller
 /// asked for is visible with no seat, no daemon and no terminal.
+///
+/// [`Asked::Refused`] records a decision instead of a call, because that decision is otherwise a
+/// line in a log nobody reads.
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Asked {
@@ -124,6 +127,11 @@ pub(crate) enum Asked {
     CloseEvery,
     /// [`Session::switch`], with the terminal it was asked for.
     Switch(u32),
+    /// [`Session::switch`] on the direct shape, the first time it refused one.
+    ///
+    /// Once for the whole run, because the refusal is reported once. Every later ask records its
+    /// own [`Asked::Switch`] and nothing else, and that absence says the state was kept.
+    Refused,
 }
 
 /// The two shapes, and what each one holds.
@@ -526,6 +534,8 @@ impl Session {
             }
             Shape::Direct { refused_a_switch } => {
                 if !std::mem::replace(refused_a_switch, true) {
+                    #[cfg(test)]
+                    self.asked.push(Asked::Refused);
                     warn!(
                         target: "zgui::platform",
                         "this run opened its devices itself, so no session daemon owns the terminal \
@@ -783,6 +793,41 @@ fn give_back(seat: &zgui_seat::Seat, device: zgui_seat::Device) {
             target: "zgui::platform",
             "a device could not be given back to the seat, so the session daemon holds its record \
              of it until the seat closes: {error}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! What a session with no daemon does with the terminal a key asked for.
+    //!
+    //! The direct shape is the one a test can build. [`Session::direct`] asks libseat nothing and
+    //! takes no card and no terminal, so what is left to decide is what a switch does on a machine
+    //! where nothing owns one.
+
+    use super::{Asked, Session};
+
+    #[test]
+    fn a_run_that_owns_no_terminal_states_the_refusal_once() {
+        // Every switch on this shape fails for the one reason, and a person who presses the chord
+        // presses it again: one line each would fill the log of a run that can never answer
+        // differently. Every ask is still recorded, so what is held up here is the state rather
+        // than the call.
+        let mut session = Session::direct();
+
+        session.switch(2);
+        session.switch(3);
+        session.switch(2);
+
+        assert_eq!(
+            session.asked(),
+            [
+                Asked::Switch(2),
+                Asked::Refused,
+                Asked::Switch(3),
+                Asked::Switch(2),
+            ],
+            "the first ask was refused with the reason, and every later one without a word"
         );
     }
 }

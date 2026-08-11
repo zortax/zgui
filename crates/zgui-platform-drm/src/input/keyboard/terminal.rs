@@ -19,35 +19,31 @@
 //! # How many terminals each source names
 //!
 //! xkb names twelve, because twelve is what `fkey2vt` binds, and libxkbcommon has no keysym outside
-//! that range. A console keymap names as many terminals as its own entries do, and nothing here
-//! bounds the console side.
+//! that range. A console keymap names up to `MAX_NR_CONSOLES`, which is 63: `loadkeys` knows
+//! `Console_1` to `Console_63` and has no name above them. Nothing here holds that bound, because a
+//! number past it is refused by whatever is asked for the terminal.
 
 use zgui_evdev::Entry;
 
-/// The first terminal `fkey2vt` names.
-const FIRST: u32 = 1;
-
-/// The last one: twelve function keys, twelve terminals.
-const LAST: u32 = 12;
-
-/// What a keysym that asks for a terminal is called, up to the number.
+/// The keysym `fkey2vt` puts on the first terminal: `XF86Switch_VT_1`.
 ///
-/// **Both spellings are read.** `xkb_keysym_get_name` answers the first, and `xkeyboard-config`
-/// writes the second — the alias — in the symbol files it ships. A parser that knew one of them
-/// would work on the machine it was written on and answer nothing on the next.
-const NAMES: [&str; 2] = ["XF86Switch_VT_", "XF86_Switch_VT_"];
+/// **The keysym is matched by value.** The twelve sit in one contiguous range, so the terminal is
+/// how far past this one a keysym sits.
+// A name would have to be asked of libxkbcommon and parsed on every key event, and one keysym
+// carries two spellings: `xkb_keysym_get_name` answers `XF86Switch_VT_1`, and `xkeyboard-config`
+// writes the alias `XF86_Switch_VT_1` in the symbol files it ships. The value is one number under
+// either name.
+const FIRST: u32 = 0x1008_fe01;
 
-/// The terminal a keysym called `name` asks for.
-pub(crate) fn from_keysym(name: &str) -> Option<u32> {
-    let asked = NAMES.iter().find_map(|start| name.strip_prefix(start))?;
-    // `str::parse` reads a leading `+` and a leading zero, and libxkbcommon names no keysym either
-    // way, so the digits have to read back as themselves.
-    let terminal: u32 = asked
-        .parse()
-        .ok()
-        .filter(|terminal: &u32| terminal.to_string() == asked)?;
+/// The last one: twelve function keys, twelve terminals. `XF86Switch_VT_12`.
+const LAST: u32 = 0x1008_fe0c;
 
-    (FIRST..=LAST).contains(&terminal).then_some(terminal)
+/// Returns the terminal the keysym `sym` asks for, as `xkb_keysym_t` numbers it.
+pub(crate) const fn from_keysym(sym: u32) -> Option<u32> {
+    match sym {
+        FIRST..=LAST => Some(sym - FIRST + 1),
+        _ => None,
+    }
 }
 
 /// Returns the terminal a console keymap entry asks for.
@@ -61,45 +57,35 @@ pub(crate) fn from_entry(entry: Entry) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    //! A keysym name in and a terminal out, and the same for a keymap entry.
+    //! A keysym value in and a terminal out, and the same for a keymap entry.
     //!
-    //! All of it is arithmetic over a string and over a number, so none of it needs libxkbcommon
-    //! and none of it needs a console. That the names below are the names libxkbcommon answers with
-    //! is a separate question, and `layout`'s own tests hold it up against the library.
+    //! All of it is arithmetic over two numbers, so none of it needs libxkbcommon and none of it
+    //! needs a console. That the twelve values below are the values libxkbcommon answers with for
+    //! the twelve names is a separate question, and `layout`'s own tests hold it up against the
+    //! library.
 
     use super::{from_entry, from_keysym};
     use zgui_evdev::Entry;
 
     #[test]
-    fn both_spellings_of_a_switch_keysym_name_the_same_terminal() {
-        // libxkbcommon answers the first spelling and `xkeyboard-config` writes the second, so a
-        // reader of one alone works on one machine and reports nothing on the next.
-        assert_eq!(from_keysym("XF86Switch_VT_1"), Some(1));
-        assert_eq!(from_keysym("XF86_Switch_VT_1"), Some(1));
-        assert_eq!(from_keysym("XF86Switch_VT_12"), Some(12));
-        assert_eq!(from_keysym("XF86_Switch_VT_12"), Some(12));
+    fn the_twelve_switch_keysyms_are_the_twelve_terminals() {
+        // One contiguous range, so the terminal is read off the value. A reader
+        // that counted from the wrong end would send a person to terminal 12 for `Ctrl+Alt+F1`.
+        assert_eq!(from_keysym(0x1008_fe01), Some(1));
+        assert_eq!(from_keysym(0x1008_fe02), Some(2));
+        assert_eq!(from_keysym(0x1008_fe0c), Some(12));
     }
 
     #[test]
-    fn a_number_outside_what_xkb_names_is_no_terminal() {
-        // xkb defines 1 to 12. A number outside them is a name libxkbcommon has no keysym for, so
-        // one accepted here could only come from somewhere that made it up.
-        assert_eq!(from_keysym("XF86Switch_VT_0"), None);
-        assert_eq!(from_keysym("XF86Switch_VT_13"), None);
-        assert_eq!(from_keysym("XF86_Switch_VT_13"), None);
-    }
-
-    #[test]
-    fn a_keysym_that_merely_starts_the_same_way_asks_for_nothing() {
-        // Each of these would take a terminal away from a key that types, which is a key a person
-        // presses and a program never hears.
-        assert_eq!(from_keysym("XF86Switch_VTx"), None);
-        assert_eq!(from_keysym("XF86Switch_VT_"), None);
-        assert_eq!(from_keysym("XF86Switch_VT_1x"), None);
-        assert_eq!(from_keysym("XF86Switch_VT_1_1"), None);
-        // `str::parse` takes both of these and answers 1.
-        assert_eq!(from_keysym("XF86Switch_VT_01"), None);
-        assert_eq!(from_keysym("XF86Switch_VT_+1"), None);
+    fn a_keysym_outside_the_range_asks_for_nothing() {
+        // Each of these would take a terminal away from a key that types or names something, which
+        // is a key a person presses and a program never hears.
+        assert_eq!(from_keysym(0x1008_fe00), None, "one below the first");
+        assert_eq!(from_keysym(0x1008_fe0d), None, "one above the last");
+        assert_eq!(from_keysym(0x0061), None, "the letter a");
+        assert_eq!(from_keysym(0xffbe), None, "`F1` with nothing held");
+        assert_eq!(from_keysym(0x1008_ff14), None, "`XF86AudioPlay`");
+        assert_eq!(from_keysym(0), None, "no keysym at all");
     }
 
     #[test]
@@ -113,26 +99,39 @@ mod tests {
         // The two sources name one terminal for one chord, which is why both of them cross here.
         assert_eq!(
             from_entry(Entry::Switch(0)),
-            from_keysym("XF86Switch_VT_1"),
+            from_keysym(0x1008_fe01),
             "`Ctrl+Alt+F1` is terminal 1 on both layouts"
         );
         assert_eq!(
             from_entry(Entry::Switch(11)),
-            from_keysym("XF86Switch_VT_12"),
+            from_keysym(0x1008_fe0c),
             "and `Ctrl+Alt+F12` is terminal 12 on both"
         );
-        // The console side carries no bound of its own: a keymap can bind `Console_13` and the
-        // kernel switches to it, while xkb has no keysym for one.
+        // The console side reaches further than xkb: a keymap can bind `Console_13` and the kernel
+        // switches to it, while libxkbcommon has no keysym for one.
         assert_eq!(from_entry(Entry::Switch(12)), Some(13));
+    }
+
+    #[test]
+    fn the_widest_console_entry_stays_a_number_libseat_can_be_asked_for() {
+        // The console side is deliberately unbounded, so the widest entry a keymap can hold has to
+        // survive the whole way down: `Session::switch` takes a `u32` and `libseat_switch_session`
+        // takes a `c_int`, so a value that wrapped, went negative or overflowed here would reach
+        // the daemon as a terminal nobody asked for.
+        let widest =
+            from_entry(Entry::Switch(u8::MAX)).expect("a switch entry asks for a terminal");
+
+        assert_eq!(widest, 256, "255 counts from zero, so it is terminal 256");
+        assert!(
+            i32::try_from(widest).is_ok(),
+            "and it crosses to libseat's `c_int` as itself"
+        );
     }
 
     #[test]
     fn an_ordinary_key_asks_for_no_terminal_on_either_path() {
         // A key that answered a terminal is a key a document never sees, so every one of these is
         // a letter or a function key silently taken away.
-        assert_eq!(from_keysym("a"), None);
-        assert_eq!(from_keysym("F1"), None);
-        assert_eq!(from_keysym("XF86AudioPlay"), None);
         assert_eq!(from_entry(Entry::Latin(b'a')), None);
         assert_eq!(from_entry(Entry::Function(0)), None, "F1 with nothing held");
         assert_eq!(from_entry(Entry::Modifier(0)), None);

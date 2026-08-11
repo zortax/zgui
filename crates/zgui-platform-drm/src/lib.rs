@@ -66,10 +66,13 @@
 //! * **No switching on the degraded path.** A machine with no libseat gets the older behaviour
 //!   whole: the loop opens the card and takes DRM master itself, which needs a free virtual
 //!   terminal or root, and a terminal switch there leaves the program holding the display. A
-//!   terminal a key asks for is refused, once and with the reason, so a switch there comes from
-//!   elsewhere — `chvt` over a network connection is the usual way. A machine that has libseat and
-//!   a seat that says nothing at all reaches the same path two seconds later, and holds
-//!   `TakeControl` on its own terminal — the console keyboard turned off with it — for that long.
+//!   terminal a key asks for is refused, once and with the reason. **A person sees a dead key.**
+//!   The chord reaches no application — a key that asks for a terminal reaches no surface on either
+//!   path — and this path holds the console in `KD_GRAPHICS`, so the reason reaches a log file
+//!   rather than the screen. A switch there comes from elsewhere: `chvt` over a network connection
+//!   is the usual way. A machine that has libseat and a seat that says nothing at all reaches the
+//!   same path two seconds later, and holds `TakeControl` on its own terminal — the console
+//!   keyboard turned off with it — for that long.
 //! * **A held terminal is held until the process exits.** A daemon puts the terminal into
 //!   `KD_GRAPHICS` and turns the console keyboard off when it grants control, and gives both back
 //!   when the controlling process goes. So a seated program that stops answering leaves a machine
@@ -111,8 +114,8 @@
 //! draws, and this crate offers the things that step needs, all of them on `DrmDisplay` except the
 //! first: `FORMAT`, the texture a frame is composed into; `DrmDisplay::textures`, which hands out
 //! the buffers a renderer composes into and answers nothing on the copied shape, so it says which
-//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into
-//! the buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
+//! of the two paths a display is on; `DrmDisplay::present`, which copies a composed frame into the
+//! buffer a display is about to scan out of and asks for the flip; `DrmDisplay::acquire` and
 //! `DrmDisplay::present_drawn`, which bracket a frame drawn straight into a display's own buffer;
 //! and `Displays`, which says which display a surface is. The renderer that uses them lives in
 //! `zgui`, because a renderer is built by the runtime and a backend at this layer cannot name the
