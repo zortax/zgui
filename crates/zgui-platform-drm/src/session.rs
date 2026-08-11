@@ -10,9 +10,11 @@
 //!
 //! **Seated.** libseat opened a seat, and the seat said whether it holds the terminal.
 //! [`Session::card`] and [`Session::open_input`] ask the daemon for the card and for each input
-//! device, and the console is already in graphics mode. logind and seatd set DRM master on a card
-//! before they answer the client, so a card from either arrives with master on it; libseat's noop
-//! backend opens the path with a plain `open(2)` and grants none of it.
+//! device. **This backend takes neither the master nor the console here.** logind and seatd each
+//! set DRM master on a card before they answer the client, and each puts the terminal it owns into
+//! graphics mode when it grants control — [`Session::card_from`] states the two ways a card still
+//! arrives without master. libseat's noop backend opens the path with a plain `open(2)` and grants
+//! neither, so a run on that backend is a seated shape over a terminal still in text mode.
 //!
 //! **Direct.** This process opens the card and each input device, takes master itself, and puts the
 //! console into graphics mode. It is the answer where libseat is absent, where the seat was
@@ -31,6 +33,11 @@
 //! driver and the kernel need. So the session is held for as long as anything that came out of it
 //! is used: one dropped while the card is still being drawn on restores the console and hands the
 //! master back under a live descriptor.
+//!
+//! **A device goes back through the session.** Dropping the descriptor closes this process's name
+//! for the device and tells the daemon nothing, so the daemon's record of it stands until the seat
+//! closes — and a second open of the same path meets that record. [`Session::close_input`] and
+//! [`Session::close_every_input`] are the two ways out.
 //!
 //! # Switching terminal
 //!
@@ -53,8 +60,8 @@
 //! Taking the seat also takes the terminal. logind puts the terminal into `K_OFF` and
 //! `KD_GRAPHICS` when it grants control, so the console keyboard stops answering for as long as the
 //! seat is held, and a key that asks for another terminal reaches this program rather than the
-//! console driver. So this program asks: the layout reads `Ctrl+Alt+Fn` as the terminal it is, and
-//! `Session::switch` carries that to the daemon. logind gives the terminal back when the
+//! console driver. So this program is what asks: the layout reads `Ctrl+Alt+Fn` as the terminal it
+//! is, and `Session::switch` carries that to the daemon. logind gives the terminal back when the
 //! controlling process **exits**, so a seated program that stops answering leaves a machine that
 //! draws nothing and answers no key until it is killed from elsewhere.
 //!
@@ -63,8 +70,14 @@
 //! session would otherwise inherit is put right at the ask. [`crate::cursor::Planes`] is what that
 //! means today: a cursor plane keeps whatever was last put on it, and a session that never names
 //! that plane never clears it.
+//!
+//! **An ask can also move no terminal**, and what was put right for it then has to come back. The
+//! daemon can take the request and change nothing at all, so neither a suspend nor a resume ever
+//! arrives. `switching` holds the bound on that wait, and it puts the pointer back on a screen
+//! nobody left.
 
 pub(crate) mod presence;
+pub(crate) mod switching;
 
 use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
@@ -147,6 +160,12 @@ pub(crate) enum Asked {
     ///
     /// See [`crate::cursor::Planes::take_them_again`].
     TookPlanesAgain,
+    /// The planes left back, for an ask that went out.
+    ///
+    /// See [`crate::cursor::Planes::wait_for_the_switch`]. It appears on the seated shape alone:
+    /// every switch on the direct shape is refused, so a list that carries this and a
+    /// [`Asked::Refused`] describes a session that cannot exist.
+    WaitedForTheSwitch,
 }
 
 /// The list [`Asked`] is recorded on, shared with whatever else a switch runs.
@@ -179,6 +198,9 @@ impl Record {
 /// [`Session::switch`] answers it, and the answer decides what happens to the cursor planes that
 /// went back before the ask. A session that keeps the screen takes them again. Without that, a
 /// person on a machine that can never switch loses the pointer for the rest of the run.
+///
+/// An ask that went out leaves them back and waits, and that wait is bounded: the daemon can take a
+/// request and move no terminal, so `switching` ends it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Switched {
     /// The ask went out, so this session is about to lose the screen.

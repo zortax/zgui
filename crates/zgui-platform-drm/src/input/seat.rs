@@ -288,24 +288,26 @@ impl Heard {
     ///
     /// # Order
     ///
-    /// A cursor plane this program enabled keeps this program's pointer until somebody names that
-    /// plane in a commit, and a session that draws its own pointer into the frame names it never.
-    /// So every cursor comes off its plane here, **before** the ask: this is the last moment the
-    /// run is active and still holds DRM master, and by the time the terminal moving is reported
-    /// both are gone. [`Planes`] and
+    /// Every cursor comes off its plane **before** the ask. This is the last moment the run is
+    /// active and still holds DRM master, and by the time the terminal moving is reported both are
+    /// gone. [`Planes`] and
     /// [`Cursor::give_the_plane_back`](crate::cursor::Cursor::give_the_plane_back) say the rest.
     ///
     /// A switch the session refused is a session that keeps the screen, so the planes are taken
-    /// again. Every switch on the direct shape is refused, and a person there would otherwise lose
-    /// the pointer at the first press of the chord and never get it back.
+    /// again. An ask that went out leaves them back and waits, and that wait has an end, because a
+    /// daemon can take a request and move no terminal — [`Planes::wait_for_the_switch`] is where it
+    /// starts.
     pub fn answered(self, session: &mut Session, planes: &mut dyn Planes) -> Vec<Report> {
         if let Some(terminal) = self.terminal {
             // Before the ask. A cursor plane this program enabled keeps this program's pointer
             // until somebody names that plane in a commit, and a session that draws its own pointer
             // into the frame names it never.
             planes.give_them_back();
-            if session.switch(terminal) == Switched::Refused {
-                planes.take_them_again();
+            match session.switch(terminal) {
+                Switched::Asked => planes.wait_for_the_switch(),
+                // Every switch on the direct shape is refused, and a person there would otherwise
+                // lose the pointer at the first press of the chord and never get it back.
+                Switched::Refused => planes.take_them_again(),
             }
         }
         self.reports
@@ -2216,6 +2218,10 @@ mod tests {
         fn take_them_again(&mut self) {
             self.0.push(Asked::TookPlanesAgain);
         }
+
+        fn wait_for_the_switch(&mut self) {
+            self.0.push(Asked::WaitedForTheSwitch);
+        }
     }
 
     #[test]
@@ -2276,6 +2282,10 @@ mod tests {
         //
         // Both callers record on one list, so what is read here is the order they ran in rather
         // than two lists that each say their own half happened.
+        //
+        // A refusal takes them back at once, and waits for nothing: this run owns no terminal, so
+        // a bound started here would leave the pointer off this screen for half a second at every
+        // press of the chord.
         let mut session = Session::direct();
         let mut planes = RecordedPlanes(session.recording());
         let asked = Heard {
