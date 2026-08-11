@@ -28,12 +28,42 @@ pub(crate) fn node_number(name: &str) -> Option<u32> {
     name.strip_prefix(PREFIX)?.parse().ok()
 }
 
+/// Returns every event node under `/dev/input`, in the order the kernel numbers them.
+///
+/// See [`nodes_in`] for the order, and for the caller that reads this rather than [`discover`].
+///
+/// # Errors
+///
+/// Returns [`Error::Open`] when the directory cannot be read.
+pub fn nodes() -> Result<Vec<PathBuf>> {
+    nodes_in(DIRECTORY)
+}
+
+/// Returns every event node in `directory`, in the order the kernel numbers them.
+///
+/// `event2` comes before `event10`, where sorting by name puts them the other way round.
+///
+/// [`discover_in`] opens each of these. A caller whose descriptors come from somewhere else walks
+/// this list instead: a session daemon opens an input device and hands the descriptor over, and
+/// [`Device::over`](crate::Device::over) builds a device on one. Both walks reach the nodes in one
+/// order.
+///
+/// # Errors
+///
+/// Returns [`Error::Open`] when the directory cannot be read.
+pub fn nodes_in(directory: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
+    Ok(numbered_in(directory.as_ref())?
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect())
+}
+
 /// Returns every event node in `directory` with its number, in the order the kernel numbers them.
 ///
 /// # Errors
 ///
 /// Returns [`Error::Open`] when the directory cannot be read.
-pub(crate) fn nodes_in(directory: &Path) -> Result<Vec<(u32, PathBuf)>> {
+pub(crate) fn numbered_in(directory: &Path) -> Result<Vec<(u32, PathBuf)>> {
     let entries = std::fs::read_dir(directory).map_err(|source| Error::Open {
         path: directory.to_owned(),
         source,
@@ -89,13 +119,13 @@ pub fn discover() -> Result<Discovery> {
 ///
 /// Returns [`Error::Open`] when the directory cannot be read.
 pub fn discover_in(directory: impl AsRef<Path>) -> Result<Discovery> {
-    let nodes = nodes_in(directory.as_ref())?;
+    let nodes = nodes_in(directory)?;
 
     let mut discovery = Discovery {
         opened: Vec::new(),
         skipped: Vec::new(),
     };
-    for (_, path) in nodes {
+    for path in nodes {
         match Device::open(&path) {
             Ok(device) => discovery.opened.push(device),
             Err(reason) => discovery.skipped.push(Skipped { path, reason }),
@@ -187,6 +217,39 @@ mod tests {
         let found = discover_in(&root.0).expect("the directory reads");
 
         assert_eq!(skipped(&found), ["event0", "event2", "event10", "event11"]);
+    }
+
+    #[test]
+    fn the_nodes_a_walk_lists_are_the_nodes_a_walk_opens() {
+        // Both walks read one list. A caller that opens its devices through a session daemon takes
+        // the paths, and a caller that opens them itself takes the devices, so the two have to name
+        // the same nodes in the same order.
+        let root = Directory::new(
+            "the_nodes_a_walk_lists_are_the_nodes_a_walk_opens",
+            &["event0", "event2", "event10", "mouse0", "by-id"],
+        );
+
+        let listed = nodes_in(&root.0).expect("the directory reads");
+        let found = discover_in(&root.0).expect("the directory reads");
+
+        assert_eq!(
+            listed,
+            [
+                root.0.join("event0"),
+                root.0.join("event2"),
+                root.0.join("event10")
+            ],
+            "the numbered event nodes, in the kernel's own order"
+        );
+        assert_eq!(
+            listed,
+            found
+                .skipped
+                .iter()
+                .map(|skipped| skipped.path.clone())
+                .collect::<Vec<_>>(),
+            "every file here is an empty one, so the walk that opens them skips exactly the list"
+        );
     }
 
     #[test]

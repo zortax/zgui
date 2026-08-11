@@ -1,4 +1,4 @@
-//! Opening real devices.
+//! Opening real devices, and building one over a descriptor somebody else opened.
 //!
 //! Everything here needs a node this user may read, so every test looks for one first. What is
 //! asserted is that a call *answers*, rather than what it answers: the answer is a fact about the
@@ -8,9 +8,44 @@
 
 mod support;
 
+use std::path::{Path, PathBuf};
+
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
-use rustix::fd::AsFd;
+use rustix::fd::{AsFd, OwnedFd};
+use rustix::fs::{Mode, OFlags};
 use zgui_evdev::{Device, EventType, Key};
+
+/// How long a read of an idle device is given to answer.
+///
+/// A read of a non-blocking descriptor answers in microseconds, and a read of a blocking one waits
+/// for somebody to touch the device. So this separates the two, and it is long enough that a loaded
+/// machine does not report the first as the second. It is a bound rather than an expectation: a
+/// test that waited for ever would hang the suite where it should redden it.
+const READ_BOUND: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A descriptor onto `path`, opened the way a session daemon hands one over.
+///
+/// **Blocking**, because neither logind nor seatd states which status flags a client is handed, so
+/// what this crate does with a descriptor that has none of them is the case worth covering.
+///
+/// **Read-write**, because that is what logind opens with, where [`Device::open`] asks for
+/// read-only. A machine whose nodes this user may read and not write says so and hands back a
+/// read-only descriptor, which covers everything here except that the mode reaches nothing.
+fn handed_over(test: &str, path: &Path) -> OwnedFd {
+    match rustix::fs::open(path, OFlags::RDWR | OFlags::CLOEXEC, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(errno) => {
+            eprintln!(
+                "{test}: {} opens for reading and not for writing on this machine ({errno}), so \
+                 the descriptor below is read-only and that a device works either way was not \
+                 asserted. Add this user to the group the node belongs to to run it.",
+                path.display()
+            );
+            rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
+                .unwrap_or_else(|errno| panic!("a node that opened once opens again: {errno}"))
+        }
+    }
+}
 
 #[test]
 fn a_device_opens_and_says_what_it_is() {
@@ -311,4 +346,151 @@ fn a_device_can_be_grabbed_and_given_back() {
     device.grab().expect("the release reached the kernel");
     device.release().expect("and so did the second one");
     println!("{}: grabbed and released twice", device.path().display());
+}
+
+#[test]
+fn a_device_over_a_descriptor_reads_the_same_device_open_reads() {
+    let test = "a_device_over_a_descriptor_reads_the_same_device_open_reads";
+    let devices = support::devices(test);
+    let Some(opened) = devices.first() else {
+        return;
+    };
+    let path = opened.path().to_owned();
+
+    let over = Device::over(handed_over(test, &path), &path)
+        .expect("a device is built over an open descriptor");
+
+    // The identity and the capabilities are what a caller classifies a device by, so a constructor
+    // that read one of them through the wrong request, or skipped it, hands back a device that
+    // does no job at all.
+    assert_eq!(over.name(), opened.name(), "one node has one name");
+    assert_eq!(over.identity(), opened.identity());
+    assert_eq!(over.capabilities(), opened.capabilities());
+    assert_eq!(
+        over.roles().iter().collect::<Vec<_>>(),
+        opened.roles().iter().collect::<Vec<_>>(),
+        "so both answer the same jobs"
+    );
+    assert!(
+        !over.capabilities().types().is_empty(),
+        "and the maps were read rather than left empty"
+    );
+    assert_eq!(
+        over.has_monotonic_timestamps(),
+        opened.has_monotonic_timestamps(),
+        "the clock is asked for on a descriptor handed over as well"
+    );
+    assert!(!over.is_grabbed(), "a device arrives ungrabbed");
+    println!(
+        "{}: {:?} over a descriptor this test opened",
+        over.path().display(),
+        over.name()
+    );
+}
+
+#[test]
+fn a_device_over_a_descriptor_answers_the_path_its_caller_named() {
+    let test = "a_device_over_a_descriptor_answers_the_path_its_caller_named";
+    let devices = support::devices(test);
+    let Some(opened) = devices.first() else {
+        return;
+    };
+    let path = opened.path().to_owned();
+    // A name nothing can open, over a descriptor onto a device. The path is carried for messages,
+    // and this test says so: a call that opened it would be refused here.
+    let named = PathBuf::from("/dev/input/event-the-session-named");
+
+    let over = Device::over(handed_over(test, &path), &named)
+        .expect("a device is built over an open descriptor");
+
+    assert_eq!(over.path(), named);
+}
+
+#[test]
+fn a_device_over_a_blocking_descriptor_reads_rather_than_waiting() {
+    let test = "a_device_over_a_blocking_descriptor_reads_rather_than_waiting";
+    let devices = support::devices(test);
+    let Some(opened) = devices.first() else {
+        return;
+    };
+    let path = opened.path().to_owned();
+
+    // The duplicate stays here, so what reached the shared open file description can be read after
+    // the fact.
+    let blocking = handed_over(test, &path);
+    let kept = blocking
+        .try_clone()
+        .expect("a descriptor onto an open node duplicates");
+    let mut over =
+        Device::over(blocking, &path).expect("a device is built over an open descriptor");
+
+    // The flag lives on the open file description, so the copy this test kept reports it too. A
+    // session daemon's own descriptor is another name for that same description, and that is what
+    // such a daemon sees.
+    let flags = rustix::fs::fcntl_getfl(&kept).expect("a descriptor reports its status flags");
+    assert!(
+        flags.contains(OFlags::NONBLOCK),
+        "the flag reached the description behind the descriptor that was handed over: {flags:?}"
+    );
+
+    // The observable behind that flag. Nobody is asked to press a key, so a blocking descriptor
+    // waits here for an event that may never come — which at run time is a frame loop stopping
+    // dead with nothing printed. The bound makes that a failure rather than a suite that never
+    // finishes.
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let answer = over
+            .read()
+            .map(|batches| batches.len())
+            .map_err(|error| error.to_string());
+        // The receiver is gone when the bound expired, and there is nobody left to tell.
+        let _ = sender.send(answer);
+    });
+    let answer = receiver.recv_timeout(READ_BOUND).unwrap_or_else(|_| {
+        panic!(
+            "reading {} is still waiting after {READ_BOUND:?}, so the descriptor handed over \
+             stayed blocking",
+            path.display()
+        )
+    });
+
+    // Whatever arrived came from somebody at the keyboard, so the count is not the assertion. That
+    // the call came back is.
+    println!(
+        "{}: a blocking descriptor read {:?} batches and returned",
+        path.display(),
+        answer.expect("a quiet device reads as nothing")
+    );
+}
+
+#[test]
+fn a_descriptor_that_names_no_input_device_is_refused_rather_than_built_over() {
+    // A session hands out graphics cards over the call it hands out input devices with, so a
+    // descriptor onto something that is not a node is a mistake a caller can make. `/dev/null` is
+    // the one every machine has, and it refuses an input request number exactly as a card does.
+    let other = rustix::fs::open("/dev/null", OFlags::RDWR | OFlags::CLOEXEC, Mode::empty())
+        .expect("/dev/null opens");
+    let named = PathBuf::from("/dev/input/event-that-is-no-device");
+
+    let error = Device::over(other, &named)
+        .expect_err("a descriptor onto something other than an input device is refused");
+
+    assert!(
+        matches!(error, zgui_evdev::Error::Unusable(_)),
+        "the refusal says the descriptor cannot be used: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("event-that-is-no-device"),
+        "the refusal names the path its caller gave: {error}"
+    );
+
+    // The other direction, so that the check above is a check rather than a refusal of everything.
+    let test = "a_descriptor_that_names_no_input_device_is_refused_rather_than_built_over";
+    let devices = support::devices(test);
+    let Some(opened) = devices.first() else {
+        return;
+    };
+    let path = opened.path().to_owned();
+    Device::over(handed_over(test, &path), &path)
+        .unwrap_or_else(|error| panic!("a descriptor onto {} is taken: {error}", path.display()));
 }

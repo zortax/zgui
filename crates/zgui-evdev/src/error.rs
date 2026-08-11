@@ -70,11 +70,14 @@ pub enum Error {
         /// Why it failed.
         source: std::io::Error,
     },
-    /// The request could not be built, so nothing was asked.
+    /// The call could not be made, or what came back cannot be used.
     ///
     /// The crate refuses here: an event type past `EV_MAX` or an axis past `ABS_MAX`, whose request
     /// number would run into another request's range, and a buffer longer than the fourteen bits a
     /// request number has for its length.
+    ///
+    /// A descriptor handed to [`Device::over`](crate::Device::over) lands here as well, when it
+    /// cannot be made non-blocking and when it names something other than an evdev node.
     Unusable(String),
 }
 

@@ -31,7 +31,7 @@ use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
 use rustix::io::Errno;
 
-use crate::discover::{DIRECTORY, node_number, nodes_in};
+use crate::discover::{DIRECTORY, node_number, numbered_in};
 use crate::error::{Error, Result};
 
 /// What the kernel is asked to report.
@@ -175,7 +175,7 @@ impl Watch {
             }
         }
         if dropped {
-            nodes.extend(nodes_in(&self.directory)?);
+            nodes.extend(numbered_in(&self.directory)?);
         }
         Ok(nodes.into_iter().map(|(_, path)| path).collect())
     }

@@ -33,6 +33,9 @@ const INSTALLED_AS: [&str; 2] = ["libseat.so.1", "libseat.so"];
 /// Where the kernel puts display devices.
 const DEVICES: &str = "/dev/dri";
 
+/// Where the kernel puts input devices.
+const NODES: &str = "/dev/input";
+
 /// Returns `true` if libseat opens on this machine, asked of the loader directly.
 ///
 /// The library is opened and closed again. A handle the loader answers is a library a seat can be
@@ -207,6 +210,45 @@ pub(crate) fn openable_cards() -> Vec<PathBuf> {
         .collect();
     cards.sort();
     cards
+}
+
+/// Returns the `event*` nodes under `/dev/input` this process can open for itself, in kernel
+/// order.
+///
+/// The walk is this module's own, and it opens each candidate the way the noop backend opens a
+/// device: `O_RDWR`, and nothing else. So a node in this list is a node a seat on that backend
+/// hands over, and a machine that answers an empty list is a machine where the seated input path
+/// cannot be asserted about at all.
+///
+/// **Nothing here is grabbed, and nothing that reads this grabs one.** A grab is exclusive and it
+/// takes the device from the session for as long as it is held, so what a session binary asserts
+/// about an input device is the handover rather than the taking.
+pub(crate) fn openable_input_nodes() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(NODES) else {
+        return Vec::new();
+    };
+
+    let mut nodes: Vec<(u32, PathBuf)> = entries
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter_map(|path| {
+            let number = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("event"))
+                .and_then(|number| number.parse().ok())?;
+            Some((number, path))
+        })
+        .filter(|(_, path)| {
+            fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .is_ok()
+        })
+        .collect();
+    nodes.sort();
+    nodes.into_iter().map(|(_, path)| path).collect()
 }
 
 /// Returns how many descriptors this process holds.
