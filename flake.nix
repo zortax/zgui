@@ -46,11 +46,17 @@
       # process rather than on the link line.
       runtimeLibraries = with pkgs; [
         libGL
+        # Input policy for the console backend. The libraries it needs in turn — libudev,
+        # libevdev, mtdev, libwacom, lua — are on its own `RUNPATH`, so this one entry is enough.
+        libinput
         libx11
         libxcursor
         libxi
         libxkbcommon
         libxrandr
+        # libseat, for the session backend. `seatd` is the package that carries it, and the
+        # daemon it also carries is unused here: logind answers on this machine.
+        seatd
         vulkan-loader
         wayland
       ];
@@ -63,6 +69,7 @@
           pkg-config
           stdenv.cc
           pkgs.nix-rust-wrangler
+          python3
         ];
 
         buildInputs = with pkgs; [
