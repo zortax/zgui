@@ -273,6 +273,7 @@ impl Handover {
                     adapter.shared_instance().raw_instance(),
                     adapter.raw_physical_device(),
                     raw,
+                    adapter.shared_instance().instance_api_version(),
                 )?
             } else {
                 None

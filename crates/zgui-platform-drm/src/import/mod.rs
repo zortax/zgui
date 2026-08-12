@@ -526,8 +526,12 @@ fn wrap(
         usage: USAGE,
         view_formats: &[],
     };
-    // SAFETY: the hal texture was created immediately above, on this device, from a descriptor
-    // that states the same extent, format and usage as this one. It is handed over once and
+    // SAFETY: wgpu states three requirements of a hal texture and each is answered here. It was
+    // created immediately above from this device's own handle. It was created respecting this
+    // descriptor, which states the same extent, format and usage. And it is initialized: `image`
+    // bound memory to it before this, so the object is complete. Its *contents* are undefined,
+    // which is a different question and one wgpu accounts for — it records a texture handed to it
+    // as uninitialised and lays its first barrier down from `UNDEFINED`. It is handed over once and
     // nothing else names it.
     let texture = unsafe {
         gpu.device()
