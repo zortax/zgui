@@ -322,11 +322,12 @@ impl Context {
     /// Returns the keysym a name stands for: `a`, `Shift_L`, `Multi_key`.
     ///
     /// This is the other direction of [`Context::keysym_name`], and the two together check each
-    /// other. A caller that keys a table by keysym *name* has written down names by hand, and a
-    /// name libxkbcommon knows as an alias — `Mode_switch` for `ISO_Group_Shift` — is a row that
-    /// reads correctly and matches nothing, because a press is looked up under whatever
-    /// [`Context::keysym_name`] answers. Feeding a name through here and back through that call
-    /// finds one.
+    /// other. A caller that keys a table by keysym *name* has written down names by hand, and one
+    /// keysym has more than one spelling: which one the library answers with is its own choice, and
+    /// it changes between releases — `0xff7e` is `Mode_switch` up to 1.13.1 and `ISO_Group_Shift`
+    /// from 1.13.2. A row written with the other spelling reads correctly and matches nothing.
+    /// Feeding a name through here and back through that call finds one, and resolving the table to
+    /// keysyms once avoids the question.
     ///
     /// Answers nothing for a name no keysym has, and for every name when the loaded library
     /// carries no `xkb_keysym_from_name`. A name holding a zero byte answers nothing as well: a C

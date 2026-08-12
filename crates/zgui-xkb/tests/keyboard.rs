@@ -458,9 +458,10 @@ fn the_diagnostics_reach_a_sink_the_caller_set() {
 #[test]
 fn a_name_and_a_keysym_are_one_table_read_in_two_directions() {
     // What this pair is for: a caller that keys anything by keysym *name* has written those names
-    // down by hand, and libxkbcommon knows names it never gives back. `Mode_switch` is one — the
-    // library answers `ISO_Group_Shift` for that keysym — so a table keyed on the alias reads
-    // correctly and matches nothing at all. Feeding a name through here and back finds one.
+    // down by hand, and one keysym has more than one spelling. Which one the library gives back is
+    // its own choice and it changes between releases — `0xff7e` is `Mode_switch` up to 1.13.1 and
+    // `ISO_Group_Shift` from 1.13.2 — so a table keyed on the other spelling reads correctly and
+    // matches nothing at all. Feeding a name through here and back finds one.
     let test = "a_name_and_a_keysym_are_one_table_read_in_two_directions";
     let Some(context) = support::context(test) else {
         return;
