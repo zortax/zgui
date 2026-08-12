@@ -389,13 +389,12 @@ fn accent(name: &str) -> Option<char> {
         .map(|(_, accent)| *accent)
 }
 
-/// Returns what a keysym called `name` is, when the vocabulary names it.
+/// Returns what a keysym called `name` is, when the vocabulary names it under the same spelling.
+///
+/// The keys whose spellings differ are matched by keysym in [`Xkb::renamed`] before this is
+/// reached, because a name is libxkbcommon's to change and a keysym is not.
 fn named_key(name: &str) -> Option<NamedKey> {
-    RENAMED
-        .iter()
-        .find(|(keysym, _)| *keysym == name)
-        .map(|(_, named)| *named)
-        .or_else(|| NamedKey::from_str(name).ok())
+    NamedKey::from_str(name).ok()
 }
 
 /// Returns `true` if this is text a document can hold.
@@ -512,6 +511,14 @@ struct Xkb {
     asked: names::Asked,
     /// The locale the sequences were compiled for.
     locale: String,
+    /// [`RENAMED`] with every name resolved to the keysym it stands for.
+    ///
+    /// Resolved once here so that a press is matched on the keysym rather than on a name. Which
+    /// spelling libxkbcommon answers with is its own choice and it changes between releases: the
+    /// keysym `0xff7e` is `Mode_switch` up to 1.13.1 and `ISO_Group_Shift` from 1.13.2, and a table
+    /// keyed on either spelling matches nothing on the other. Both spellings name one keysym, so
+    /// matching the keysym is right under every version.
+    renamed: Vec<(zgui_xkb::Keysym, NamedKey)>,
 }
 
 impl Xkb {
@@ -545,6 +552,13 @@ impl Xkb {
             Ok(compose) => (Some(compose), None),
             Err(error) => (None, Some(error.to_string())),
         };
+        // A name the library does not know resolves to nothing and is left out. `RENAMED` is
+        // checked against the library by a test, so an unresolvable row is a defect there rather
+        // than something to report at run time.
+        let renamed = RENAMED
+            .iter()
+            .filter_map(|(name, named)| Some((context.keysym_from_name(name)?, *named)))
+            .collect();
         Ok(Self {
             context,
             keymap,
@@ -553,6 +567,7 @@ impl Xkb {
             without_compose,
             asked,
             locale,
+            renamed,
         })
     }
 
@@ -616,6 +631,9 @@ impl Xkb {
     fn named(&self, sym: zgui_xkb::Keysym, text: Option<&str>) -> zgui_vocab::Key {
         if sym.is_none() {
             return zgui_vocab::Key::Unidentified;
+        }
+        if let Some((_, named)) = self.renamed.iter().find(|(keysym, _)| *keysym == sym) {
+            return zgui_vocab::Key::Named(*named);
         }
         let name = self.context.keysym_name(sym);
         if let Some(name) = name.as_deref() {
@@ -964,6 +982,19 @@ mod tests {
         }
     }
 
+    /// What the table says a keysym called `name` means, read by name.
+    ///
+    /// [`Xkb`] matches by keysym, which needs a library. These tests are about the correspondence
+    /// the table states rather than about how it is looked up, so they read it directly and run
+    /// on a machine with no libxkbcommon at all.
+    fn meaning(name: &str) -> Option<NamedKey> {
+        RENAMED
+            .iter()
+            .find(|(row, _)| *row == name)
+            .map(|(_, named)| *named)
+            .or_else(|| NamedKey::from_str(name).ok())
+    }
+
     /// Every row of `table` whose name libxkbcommon does not answer with.
     fn aliases(
         context: &zgui_xkb::Context,
@@ -987,22 +1018,67 @@ mod tests {
     }
 
     #[test]
-    fn every_row_is_the_name_the_library_gives_back() {
-        // A press is looked up under whatever `keysym_name` answers, so a row written with an
-        // alias reads correctly and matches nothing at all. Nothing else finds one: the key still
-        // arrives, at the right position, carrying a name instead of the meaning it has.
-        let test = "every_row_is_the_name_the_library_gives_back";
+    fn every_row_names_a_keysym_the_library_knows() {
+        // The rows are matched by keysym, so which spelling libxkbcommon answers with does not
+        // matter — `Mode_switch` and `ISO_Group_Shift` are one keysym under two names, and the
+        // library swapped which one it gives back between 1.13.1 and 1.13.2. A name the library
+        // knows under *no* spelling is the one row that cannot work: it resolves to nothing and is
+        // dropped, so the key arrives carrying a name instead of the meaning it has.
+        let test = "every_row_names_a_keysym_the_library_knows";
         let Some(context) = library(test) else {
             return;
         };
 
-        let wrong = aliases(&context, RENAMED.iter().map(|(name, _)| *name));
+        let unknown: Vec<&str> = RENAMED
+            .iter()
+            .filter(|(name, _)| context.keysym_from_name(name).is_none())
+            .map(|(name, _)| *name)
+            .collect();
 
         assert!(
-            wrong.is_empty(),
-            "{} row(s) can never match:\n{}",
-            wrong.len(),
-            wrong.join("\n")
+            unknown.is_empty(),
+            "{} row(s) name no keysym at all: {}",
+            unknown.len(),
+            unknown.join(", ")
+        );
+    }
+
+    #[test]
+    fn no_keysym_is_given_two_meanings() {
+        // Two spellings of one keysym are allowed, and matching by keysym is what makes them
+        // harmless. Two *meanings* for one keysym are not: the first match wins, so the second row
+        // would be unreachable and which one that is depends on the order they are written in.
+        let test = "no_keysym_is_given_two_meanings";
+        let Some(context) = library(test) else {
+            return;
+        };
+
+        let mut seen: std::collections::BTreeMap<u32, (&str, NamedKey)> = Default::default();
+        let mut clashes = Vec::new();
+        for (name, named) in RENAMED {
+            let Some(sym) = context.keysym_from_name(name) else {
+                continue;
+            };
+            match seen.entry(sym.raw()) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert((name, *named));
+                }
+                std::collections::btree_map::Entry::Occupied(slot) => {
+                    let (first, meaning) = *slot.get();
+                    if meaning != *named {
+                        clashes.push(format!(
+                            "`{first}` and `{name}` are one keysym meaning {meaning:?} and {named:?}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            clashes.is_empty(),
+            "{} keysym(s) with two meanings:\n{}",
+            clashes.len(),
+            clashes.join("\n")
         );
     }
 
@@ -1348,7 +1424,7 @@ mod tests {
             ("Print", NamedKey::PrintScreen),
             ("ISO_Level3_Shift", NamedKey::AltGraph),
         ] {
-            assert_eq!(named_key(name), Some(named), "{name}");
+            assert_eq!(meaning(name), Some(named), "{name}");
         }
     }
 
@@ -1357,9 +1433,9 @@ mod tests {
         // The vocabulary names super and meta apart, and the windowing backend reaches `Super` for
         // this key. A shortcut written against one of the two names has to match on both backends,
         // and the modifier bit agreeing is what would otherwise hide the difference.
-        assert_eq!(named_key("Super_L"), Some(NamedKey::Super));
-        assert_eq!(named_key("Super_R"), Some(NamedKey::Super));
-        assert_eq!(named_key("Meta_L"), Some(NamedKey::Meta));
+        assert_eq!(meaning("Super_L"), Some(NamedKey::Super));
+        assert_eq!(meaning("Super_R"), Some(NamedKey::Super));
+        assert_eq!(meaning("Meta_L"), Some(NamedKey::Meta));
     }
 
     #[test]
@@ -1392,7 +1468,7 @@ mod tests {
         // A letter, a digit and a punctuation mark all mean the text they type, so naming one here
         // would put its keysym name into a document.
         for name in ["a", "A", "1", "period", "ssharp", "Cyrillic_a"] {
-            assert_eq!(named_key(name), None, "{name} was named");
+            assert_eq!(meaning(name), None, "{name} was named");
         }
     }
 
