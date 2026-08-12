@@ -68,8 +68,9 @@ impl Signal {
         instance: &ash::Instance,
         physical: vk::PhysicalDevice,
         device: &ash::Device,
+        api_version: u32,
     ) -> Result<Option<Self>, Unsupported> {
-        if !exportable(instance, physical) {
+        if !exportable(instance, physical, api_version) {
             return Ok(None);
         }
 
@@ -169,12 +170,21 @@ impl Signal {
 /// Both halves of the answer are read. `EXPORTABLE` says a payload can leave the driver at all, and
 /// the compatible list says this handle type may be named while the semaphore is created. A driver
 /// that reports one without the other describes a semaphore that cannot be built.
-fn exportable(instance: &ash::Instance, physical: vk::PhysicalDevice) -> bool {
+///
+/// `api_version` is the **instance's**, not the device's. The call below entered Vulkan as core
+/// 1.1, and wgpu-hal creates a 1.0 instance where the loader reports no version, so the entry point
+/// is absent on such an instance and the question cannot be asked. An unexportable answer is the
+/// safe one: the caller waits for the device itself.
+fn exportable(instance: &ash::Instance, physical: vk::PhysicalDevice, api_version: u32) -> bool {
+    if api_version < vk::API_VERSION_1_1 {
+        return false;
+    }
     let info = vk::PhysicalDeviceExternalSemaphoreInfo::default().handle_type(SYNC_FD);
     let mut answered = vk::ExternalSemaphoreProperties::default();
     // SAFETY: the physical device comes from this instance, and both structures are Vulkan's own
     // with their `sType` set by `default()`. The call writes only through the answer, which lives
-    // until after it. It is core Vulkan 1.1, which every driver this path reaches is past.
+    // until after it. It is core Vulkan 1.1, and the version was checked immediately above, so the
+    // entry point is one this instance has.
     unsafe {
         instance.get_physical_device_external_semaphore_properties(physical, &info, &mut answered);
     }
@@ -219,6 +229,7 @@ mod tests {
             Ok(exportable(
                 adapter.shared_instance().raw_instance(),
                 adapter.raw_physical_device(),
+                adapter.shared_instance().instance_api_version(),
             ))
         });
         match asked {
