@@ -550,9 +550,10 @@ fn a_device_that_never_asked_for_the_extensions_refuses_and_names_one() {
         Err(other) => {
             panic!("a device that enabled nothing was refused for another reason: {other}")
         }
-        // wgpu-hal enables two of the three on its own. A driver that also enabled the third
-        // without being asked would reach here, and that is a machine where the whole path works
-        // by luck rather than by request.
+        // wgpu-hal enables two of the five on its own, `VK_KHR_external_memory_fd` and
+        // `VK_EXT_external_memory_dma_buf`. A driver that also enabled the rest without being asked
+        // would reach here, and that is a machine where the whole path works by luck rather than by
+        // request.
         Ok(_) => eprintln!(
             "{test}: {} enabled every extension without being asked",
             gpu.describe()

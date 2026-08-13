@@ -93,8 +93,8 @@ use crate::scanout::FORMAT;
 /// answers [`Unsupported::Extension`] naming the one that is absent.
 ///
 /// wgpu-hal enables two of them by itself on any physical device that reports them:
-/// `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`. Asking for all five is what
-/// states the requirement instead of relying on that.
+/// `VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`. Asking for all five states the
+/// requirement instead of relying on that.
 pub const EXTENSIONS: [&CStr; 5] = [
     // The `DRM_FORMAT_MODIFIER_EXT` tiling, the candidate list an image is created from, and
     // reading back which layout the driver chose.
