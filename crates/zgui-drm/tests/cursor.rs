@@ -76,7 +76,10 @@ fn a_cursor_plane_is_one_that_says_it_is_and_can_drive_the_crtc_it_was_asked_for
     // A device where every CRTC answered `None` is one a caller composites a pointer on, and this
     // machine may be it. Saying which happened is the honest outcome.
     if found == 0 {
-        eprintln!("no CRTC on this device offers a cursor plane, so only the absence was asserted");
+        eprintln!(
+            "{test}: no CRTC on this device offers a cursor plane, so only the absence was \
+             asserted"
+        );
     }
 }
 
@@ -179,7 +182,7 @@ fn a_cursor_plane_names_every_property_an_atomic_cursor_commit_sets() {
         .enumerate()
         .find_map(|(index, _)| device.cursor_plane(index, &[]).ok().flatten())
     else {
-        eprintln!("this device offers no cursor plane, so nothing was asserted");
+        eprintln!("{test}: this device offers no cursor plane, so nothing was asserted");
         return;
     };
 

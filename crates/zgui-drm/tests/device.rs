@@ -319,14 +319,12 @@ fn an_atomic_device_names_the_properties_a_commit_is_built_from() {
 
 #[test]
 fn a_dumb_buffer_is_allocated_mapped_written_and_released() {
-    let Some(device) = support::device(
-        "a_dumb_buffer_is_allocated_mapped_written_and_released",
-        Interface::Preferred,
-    ) else {
+    let test = "a_dumb_buffer_is_allocated_mapped_written_and_released";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
     if !device.supports_dumb_buffers() {
-        eprintln!("this device has no dumb buffers, so nothing was asserted");
+        eprintln!("{test}: this device has no dumb buffers, so nothing was asserted");
         return;
     }
 
@@ -359,14 +357,12 @@ fn a_dumb_buffer_is_allocated_mapped_written_and_released() {
 
 #[test]
 fn a_dumb_buffer_is_accepted_for_scanout_and_released() {
-    let Some(device) = support::device(
-        "a_dumb_buffer_is_accepted_for_scanout_and_released",
-        Interface::Preferred,
-    ) else {
+    let test = "a_dumb_buffer_is_accepted_for_scanout_and_released";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
     if !device.supports_dumb_buffers() {
-        eprintln!("this device has no dumb buffers, so nothing was asserted");
+        eprintln!("{test}: this device has no dumb buffers, so nothing was asserted");
         return;
     }
 
@@ -390,14 +386,12 @@ fn a_dumb_buffer_is_accepted_for_scanout_and_released() {
 
 #[test]
 fn a_framebuffer_states_a_modifier_only_when_it_is_given_one() {
-    let Some(device) = support::device(
-        "a_framebuffer_states_a_modifier_only_when_it_is_given_one",
-        Interface::Preferred,
-    ) else {
+    let test = "a_framebuffer_states_a_modifier_only_when_it_is_given_one";
+    let Some(device) = support::device(test, Interface::Preferred) else {
         return;
     };
     if !device.supports_dumb_buffers() || !device.supports_format_modifiers() {
-        eprintln!("this device does not take modifiers, so nothing was asserted");
+        eprintln!("{test}: this device does not take modifiers, so nothing was asserted");
         return;
     }
 
