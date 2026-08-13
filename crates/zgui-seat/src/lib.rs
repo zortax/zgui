@@ -7,7 +7,7 @@
 //! over, takes the devices back when a person switches to another terminal, and gives them back on
 //! the way in. This crate is how libseat is asked.
 //!
-//! The crate names no other zgui crate and is usable on its own. It is written to be named by
+//! The crate names no zgui crate and is usable on its own. It is written to be named by
 //! `zgui-platform-drm`, one step along the same layer, and by nothing else.
 //!
 //! # Loading libseat

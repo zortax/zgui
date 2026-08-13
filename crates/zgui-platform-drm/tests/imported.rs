@@ -488,7 +488,7 @@ fn the_barriers_that_pass_a_frame_to_the_display_finish_inside_their_deadline() 
     eprintln!("{test}: a buffer given over twice is refused: {refusal}");
     handover
         .acquire(0)
-        .expect("and taking it back is what makes the next frame legal");
+        .expect("and taking it back is what the next frame needs");
 
     // A slot no buffer sits at is refused by name rather than reaching the driver, which is where
     // a renderer told to draw into a set of another length would otherwise arrive.
@@ -656,7 +656,7 @@ fn a_frame_is_given_to_the_display_engine_before_anything_is_committed() {
                 );
             }
             eprintln!(
-                "{test}: the barrier finished and the commit was refused, which is what a process \
+                "{test}: the barrier finished and the commit was refused, as a process \
                  that is not DRM master gets: {stated}"
             );
         }
@@ -855,7 +855,7 @@ fn a_frame_that_drew_nothing_leaves_the_next_one_the_buffer_it_took_back() {
         Ok(false) => panic!("nothing is outstanding in front of the first frame"),
         Err(refused) => {
             eprintln!(
-                "{test}: the barrier ran and the commit was refused, which is what a process that \
+                "{test}: the barrier ran and the commit was refused, as a process that \
                  is not DRM master gets: {refused}"
             );
             0

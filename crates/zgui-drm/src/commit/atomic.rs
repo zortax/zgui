@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(
             bytes.len(),
             68,
-            "a mode blob is the whole structure the header declares"
+            "a mode blob is every byte of the structure the header declares"
         );
         // The first field is the pixel clock. Reading it back pins the bytes to this structure and
         // to its field order.

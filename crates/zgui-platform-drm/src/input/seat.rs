@@ -3209,7 +3209,7 @@ mod tests {
         assert_eq!(Stamps::Read(read).at(wall), read);
         assert!(
             Stamps::from_origin(SINCE).at(wall).since_origin() > Duration::from_secs(1_000_000_000),
-            "which is what asking the device saves"
+            "which asking the device saves"
         );
     }
 
@@ -4369,16 +4369,16 @@ mod tests {
 
             assert!(
                 !seat.holds(&path),
-                "round {round}: the device went, which is what a session that lost the terminal \
-                 has to do with one the kernel has already revoked"
+                "round {round}: the device went, as a session that lost the terminal has to do \
+                 with one the kernel has already revoked"
             );
             assert_eq!(
                 // The node the symbolic link names, because that is what `/proc/self/fd` resolves
                 // a descriptor onto it back to.
                 descriptors_naming(&mouse),
                 0,
-                "round {round}: and its descriptor closed, which is what has to happen before a \
-                 daemon releases the device"
+                "round {round}: and its descriptor closed, which has to happen before a daemon \
+                 releases the device"
             );
             assert_eq!(
                 seat.descriptors().count(),
@@ -4573,7 +4573,7 @@ mod tests {
         assert_eq!(
             descriptors_naming(&path),
             0,
-            "its descriptor closed, which is what has to happen before a daemon releases the \
+            "its descriptor closed, which has to happen before a daemon releases the \
              device"
         );
         assert_eq!(

@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(
             turned(fine, &[(Relative::REL_WHEEL_HI_RES, 15)]),
             Some(ScrollDelta::Lines { x: 0.0, y: -0.125 }),
-            "an eighth of a detent, which is what a free-spinning wheel reports"
+            "an eighth of a detent, as a free-spinning wheel reports"
         );
     }
 

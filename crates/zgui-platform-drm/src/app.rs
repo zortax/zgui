@@ -1234,8 +1234,8 @@ mod tests {
         assert_eq!(
             watching[2].as_fd().as_raw_fd(),
             daemon.as_fd().as_raw_fd(),
-            "and the daemon's is the third of them, which is what the list of the ways a turn \
-             happens says it is"
+            "and the daemon's is the third of them, as the list of the ways a turn happens \
+             says"
         );
         assert_eq!(
             watched(device.as_fd(), waker.as_fd(), None, None).len(),
