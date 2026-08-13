@@ -208,6 +208,12 @@ impl std::ops::BitOr for Modifiers {
         Self(self.0 | other.0)
     }
 }
+/// The [`Entry::Special`] value enter carries.
+///
+/// `keyboard.h` states it as `K_ENTER K(KT_SPEC,1)`, and bindgen produces nothing for a
+/// function-like macro, so the low byte is written out here beside the type that holds it. Keypad
+/// enter is a different key and a different type: `K_PENTER K(KT_PAD,14)`.
+pub const ENTER: u8 = 1;
 
 /// What one entry of a console keymap holds.
 ///

@@ -907,20 +907,23 @@ impl Layout for Console {
 
     /// Returns `true` if the console keymap repeats this key.
     ///
-    /// Six entry types repeat, and they are the ones that produce a character or a sequence over
-    /// and over: `Latin`, `Letter`, `Unicode` and `Meta`, the keypad's `Pad`, and the four arrows
-    /// of `Cursor`. Every other entry answers `false`.
+    /// The entries that repeat are the ones producing a character or a sequence over and over:
+    /// `Latin`, `Letter`, `Unicode` and `Meta`, the keypad's `Pad`, the four arrows of `Cursor`, the
+    /// function keys and editing block of `Function`, and enter. Every other entry answers `false`.
     ///
     /// A key that holds a modifier, a lock or a sticky lock is held rather than struck, so
     /// repeating it would change nothing and report the same hold over and over. A key that asks
     /// for a terminal would repeat into a switch asked for thirty times a second. A key the keymap
     /// has nothing for has no meaning to repeat.
     ///
-    /// **A console keymap states no repeat flag of its own, so the list above is this backend's**,
-    /// and it is narrower than the xkb path. `KT_FN` covers the function keys and the editing block
-    /// on this layout, and `KT_SPEC` covers enter, so none of those repeats here. libxkbcommon
-    /// repeats all of them: enter, keypad enter, `F1`, `F12`, Home, PageUp, Insert and Delete were
-    /// measured repeating on an `evdev`/`pc105`/`us` keymap, and shift and caps lock were not.
+    /// **A console keymap states no repeat flag of its own, so the list above is this backend's.**
+    /// It is chosen to answer as the xkb path does: enter, keypad enter, `F1`, `F12`, Home, PageUp,
+    /// Insert and Delete were measured repeating on an `evdev`/`pc105`/`us` keymap, and shift and
+    /// caps lock were not.
+    ///
+    /// Only enter is taken out of `KT_SPEC`. That type also carries the actions a console takes for
+    /// itself — boot, secure attention, the caps and num toggles — and repeating one of those thirty
+    /// times a second is the reason the whole type cannot be let through.
     fn repeats(&self, key: Key) -> bool {
         matches!(
             self.entry(key, self.mask()),
@@ -931,6 +934,8 @@ impl Layout for Console {
                     | zgui_evdev::Entry::Meta(_)
                     | zgui_evdev::Entry::Pad(_)
                     | zgui_evdev::Entry::Cursor(_)
+                    | zgui_evdev::Entry::Function(_)
+                    | zgui_evdev::Entry::Special(zgui_evdev::ENTER)
             )
         )
     }

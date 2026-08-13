@@ -75,7 +75,7 @@ pub mod watch;
 #[cfg(target_os = "linux")]
 pub use crate::code::{Absolute, Code, EventType, Key, Relative, Synchronisation};
 #[cfg(target_os = "linux")]
-pub use crate::console::{Console, Entry, Mode, Modifiers, Screen, Search};
+pub use crate::console::{Console, ENTER, Entry, Mode, Modifiers, Screen, Search};
 #[cfg(target_os = "linux")]
 pub use crate::device::{AxisRange, Bitmap, Capabilities, Device, Identity, Role, Roles};
 #[cfg(target_os = "linux")]
