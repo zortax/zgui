@@ -102,19 +102,11 @@ mod present {
                 return None;
             }
         };
-        // wgpu-hal's own record of the list it passed to `vkCreateDevice`. The callback in
-        // `create` appended every name in `extensions` to that list, so every one of them is here.
-        let confirmed = opened.device.enabled_device_extensions();
-        if let Some(absent) = extensions.iter().find(|name| !confirmed.contains(name)) {
-            tracing::warn!(
-                adapter = %named(),
-                extension = ?absent,
-                "the device opened without a Vulkan device extension it was created with"
-            );
-            return None;
-        }
-        // The names asked for. Answering `confirmed` itself would add the names wgpu-hal enables
-        // on its own, which nothing here asked for.
+        // The names asked for. `Device::enabled_device_extensions` would answer wgpu-hal's own
+        // record of the list it handed `vkCreateDevice`, which the callback in `create` built from
+        // this same slice — so comparing the two can only ever agree, and Vulkan offers no call
+        // that reads back which device extensions a device actually enabled. What the driver
+        // refusing a name looks like is `create_device` failing, which is handled above.
         let enabled = extensions.to_vec();
 
         // SAFETY: `opened` was created from this adapter's own hal adapter, immediately above, and

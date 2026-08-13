@@ -7,16 +7,20 @@
 //!
 //! Nothing here creates such an image. What is asserted is the contract around the list: it
 //! reaches every device this crate opens, a machine that cannot grant it still gets a working
-//! device, the device that replaces a lost one asks for the same list, and what a device enabled
-//! is read off the device instead of assumed. None of that depends on how long the list is, and
-//! the five below are the five the console backend's own constant holds.
+//! device, and the device that replaces a lost one asks for the same list. None of that depends on
+//! how long the list is, and the five below are the five the console backend's own constant holds.
+//!
+//! What is **not** asserted is that a driver enabled them. Vulkan offers no call that reads back
+//! which device extensions a device enabled, so the list reached through wgpu's hal below is
+//! wgpu-hal's own record of what it handed `vkCreateDevice` rather than anything the driver said. A
+//! driver refusing a name shows up as `vkCreateDevice` failing, which the crate reports as a device
+//! it could not open. Reading the record still covers this crate's own plumbing: that the names
+//! asked for reach the call at all.
 
-// Reading back the list a device was created with needs wgpu's hal, and reaching it is unsafe. It
-// is a test's own business, and catching a device that reported an extension it does not have is
-// why the file exists — a claim checked only against the record that made it is no check at all.
+// Reaching wgpu-hal's record needs its hal, and reaching that is unsafe.
 #![allow(
     unsafe_code,
-    reason = "the driver's own extension list is reached through wgpu's hal"
+    reason = "wgpu-hal's record of the extension list is reached through its hal"
 )]
 
 mod support;
@@ -102,10 +106,11 @@ fn filled(colour: Color) -> Scene {
     scene
 }
 
-/// Returns the Vulkan device extensions the device was created with, read off the hal device.
+/// Returns the Vulkan device extensions wgpu-hal recorded handing `vkCreateDevice`.
 ///
-/// Independent of this crate's own record of what it asked for: the list here is wgpu-hal's, and
-/// it is the one `vkCreateDevice` was given. `None` where the device is not a Vulkan one.
+/// Apart from this crate's own record of what it asked for, and useful for that reason: the two
+/// agreeing says the names reached the call. Neither is the driver's answer — Vulkan has no call
+/// that gives one. `None` where the device is not a Vulkan one.
 #[cfg(vulkan_hal)]
 fn enabled_on(gpu: &Gpu) -> Option<Vec<&'static CStr>> {
     // SAFETY: the guard is read through and dropped. Nothing here destroys the device or anything
