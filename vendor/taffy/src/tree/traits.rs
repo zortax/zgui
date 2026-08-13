@@ -198,7 +198,59 @@ pub trait LayoutPartialTree: TraversePartialTree {
 
     /// Compute the specified node's size or full layout given the specified constraints
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput;
+
+    /// Whether the algorithms should collect independent child computations into batches.
+    ///
+    /// ZGUI-PATCH: the batched call sites cost a little per item even when the batch runs
+    /// serially, so a tree opts in — typically when it holds a parallel executor and the
+    /// container is worth distributing. The default keeps the original serial code paths,
+    /// which cost nothing.
+    fn wants_batches(&self) -> bool {
+        false
+    }
+
+    /// Compute several children whose computations do not depend on one another.
+    ///
+    /// The default runs them serially, in request order. An implementation may run them
+    /// concurrently; it must write results into `results` in request order, and it must not
+    /// change what any single computation would have produced.
+    ///
+    /// ZGUI-PATCH: batch seam for parallel measurement. Call sites in the algorithms collect
+    /// independent per-child computations into request lists rather than computing inline;
+    /// order-dependent work stays in serial tails after the batch returns.
+    fn compute_child_layouts(&mut self, requests: &[ChildRequest], results: &mut Vec<LayoutOutput>) {
+        results.clear();
+        results.extend(requests.iter().map(|request| self.compute_child_layout(request.node, request.input)));
+    }
 }
+
+/// One independent child computation a container needs.
+///
+/// ZGUI-PATCH: carried by [`LayoutPartialTree::compute_child_layouts`].
+#[derive(Clone, Copy, Debug)]
+pub struct ChildRequest {
+    /// The child to compute.
+    pub node: NodeId,
+    /// The complete question.
+    pub input: LayoutInput,
+}
+
+/// A request list an implementation may hand across worker threads.
+///
+/// ZGUI-PATCH. `LayoutInput` is plain data except the opaque calc word, which is why the slice
+/// is not `Sync` on its own. The word is never dereferenced by the algorithms: it is resolved
+/// through [`LayoutPartialTree::resolve_calc_value`], which takes `&self` and answers from
+/// state that outlives and synchronises the batch. An implementation that resolves calc any
+/// other way must not use this wrapper.
+pub struct SharedRequests<'a>(pub &'a [ChildRequest]);
+
+// SAFETY: see the type's documentation — the only non-`Send` content is an opaque word whose
+// every use goes through a `&self` resolver the sharing implementation vouches for.
+#[allow(unsafe_code)]
+unsafe impl Send for SharedRequests<'_> {}
+// SAFETY: as above; shared references hand out only `Copy` snapshots of plain data.
+#[allow(unsafe_code)]
+unsafe impl Sync for SharedRequests<'_> {}
 
 /// Trait used by the `compute_cached_layout` method which allows cached layout results to be stored and retrieved.
 ///

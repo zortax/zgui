@@ -45,6 +45,29 @@ fn a_removed_box_stops_being_named_by_its_element() {
 }
 
 #[test]
+fn restyling_a_box_swaps_its_interned_slot_and_frees_the_old_entry() {
+    let mut store = LayoutStore::new(DocumentId::FIRST);
+    let first = StyleDraft::initial().build();
+    let key = store.insert(BoxNode::new(
+        first,
+        BoxKind::Element,
+        FormattingContext::Block,
+    ));
+    assert_eq!(store.interned_styles(), 1);
+
+    let second = StyleDraft::initial().build();
+    assert!(store.set_style(key, &second));
+    assert_eq!(store.interned_styles(), 1, "the old entry was freed");
+    assert!(crate::style::same_cascade(
+        store.interned_style(key).expect("a slot"),
+        &second
+    ));
+
+    store.remove(key);
+    assert_eq!(store.interned_styles(), 0);
+}
+
+#[test]
 fn paragraph_ids_are_interned_while_active_and_reused_after_reclamation() {
     let mut store = LayoutStore::new(DocumentId::FIRST);
     let key = ParagraphKey(11);

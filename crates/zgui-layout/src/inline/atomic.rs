@@ -11,7 +11,6 @@
 //! can be dropped: without it a page with a handful of atomic inlines re-lays out its whole
 //! contents on every frame that changes any width.
 
-use rustc_hash::FxHashMap;
 use taffy::{AvailableSpace, LayoutInput, LayoutPartialTree, RunMode, Size, SizingMode};
 use zgui_dom::side::BoxKey;
 
@@ -70,11 +69,14 @@ impl SpaceKey {
     }
 }
 
-/// Shrink-to-fit answers, held for one layout pass.
+/// The pass's tally of shrink-to-fit questions.
+///
+/// The answers themselves live on each box (see [`AtomicAnswers`]), where the box's own
+/// invalidation clears them and an unchanged box keeps them across frames. The tally stays on the
+/// pass because it describes the pass: what a test asserts is that *this* layout asked and was
+/// answered.
 #[derive(Debug, Default)]
 pub struct AtomicMemo {
-    /// What each box measured under each constraint.
-    entries: FxHashMap<(BoxKey, Constraint), Measured>,
     /// How many nested layouts were avoided.
     hits: u32,
     /// How many were performed.
@@ -82,22 +84,6 @@ pub struct AtomicMemo {
 }
 
 impl AtomicMemo {
-    /// A held answer, if there is one.
-    pub fn get(&mut self, key: BoxKey, constraint: Constraint) -> Option<Measured> {
-        let held = self.entries.get(&(key, constraint)).copied();
-        if held.is_some() {
-            self.hits += 1;
-        } else {
-            self.misses += 1;
-        }
-        held
-    }
-
-    /// Holds one answer.
-    pub fn insert(&mut self, key: BoxKey, constraint: Constraint, measured: Measured) {
-        self.entries.insert((key, constraint), measured);
-    }
-
     /// How many nested layouts were avoided.
     pub fn hits(&self) -> u32 {
         self.hits
@@ -107,12 +93,72 @@ impl AtomicMemo {
     pub fn misses(&self) -> u32 {
         self.misses
     }
+}
 
-    /// Forgets everything.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-        self.hits = 0;
-        self.misses = 0;
+/// How many answers one atomic inline keeps.
+///
+/// Sized the way the size-only ring is: a flex container probes an item at a minimum-content, a
+/// maximum-content and a definite constraint per axis pass, so one ring holds a full pass's
+/// questions with room over, and the oldest answer makes way past that.
+const CAPACITY: usize = 16;
+
+/// The shrink-to-fit answers one atomic inline is holding, across frames.
+///
+/// Cleared by the box's own
+/// [`forget_layout`](crate::tree::store::state::BoxLayout::forget_layout): anything that changes
+/// what a nested layout of this box would produce — its style, its content, its descendants'
+/// styles, the device scale — marks the box dirty on its way to the root, and dirty is what
+/// empties this.
+#[derive(Clone, Debug)]
+pub(crate) struct AtomicAnswers {
+    /// The answers, oldest first.
+    entries: [(Constraint, Measured); CAPACITY],
+    /// How many entries are filled.
+    len: u8,
+    /// Where the next answer overwrites once the ring is full.
+    next: u8,
+}
+
+impl AtomicAnswers {
+    /// A held answer, if the box is still holding one for this constraint.
+    pub(crate) fn get(&self, constraint: Constraint) -> Option<Measured> {
+        self.entries[..self.len as usize]
+            .iter()
+            .find(|(held, _)| *held == constraint)
+            .map(|&(_, answer)| answer)
+    }
+
+    /// Records one answer.
+    pub(crate) fn insert(&mut self, constraint: Constraint, measured: Measured) {
+        if let Some(slot) = self.entries[..self.len as usize]
+            .iter_mut()
+            .find(|(held, _)| *held == constraint)
+        {
+            slot.1 = measured;
+            return;
+        }
+        if (self.len as usize) < CAPACITY {
+            self.entries[self.len as usize] = (constraint, measured);
+            self.len += 1;
+            return;
+        }
+        self.entries[self.next as usize] = (constraint, measured);
+        self.next = (self.next + 1) % CAPACITY as u8;
+    }
+
+    /// A ring holding one first answer.
+    fn holding(constraint: Constraint, measured: Measured) -> Box<Self> {
+        Box::new(Self {
+            entries: [(constraint, measured); CAPACITY],
+            len: 1,
+            next: 0,
+        })
+    }
+
+    /// Forgets every answer. The ring's storage is kept for the next one.
+    pub(crate) fn clear(&mut self) {
+        self.len = 0;
+        self.next = 0;
     }
 }
 
@@ -124,9 +170,15 @@ pub(crate) fn measure<C: MeasureContent>(
     available: Size<AvailableSpace>,
 ) -> Measured {
     let constraint = Constraint::new(known, available);
-    if let Some(held) = tree.atomic_memo_mut().get(key, constraint) {
+    let held = tree
+        .state(key)
+        .and_then(|state| state.atomic.as_deref())
+        .and_then(|answers| answers.get(constraint));
+    if let Some(held) = held {
+        tree.atomic_memo_mut().hits += 1;
         return held;
     }
+    tree.atomic_memo_mut().misses += 1;
     let output = tree.compute_child_layout(
         to_node_id(key),
         LayoutInput {
@@ -139,32 +191,27 @@ pub(crate) fn measure<C: MeasureContent>(
             vertical_margins_are_collapsible: taffy::Line::FALSE,
         },
     );
-    let last = tree
-        .store()
-        .state(key)
-        .and_then(|state| state.last_baseline);
+    let last = tree.state(key).and_then(|state| state.last_baseline);
     let measured = Measured {
         size: output.size,
         first_baseline: output.first_baselines.y,
         last_baseline: last.or(output.first_baselines.y),
     };
-    tree.atomic_memo_mut().insert(key, constraint, measured);
+    let state = tree.state_mut(key);
+    match state.atomic.as_deref_mut() {
+        Some(answers) => answers.insert(constraint, measured),
+        None => state.atomic = Some(AtomicAnswers::holding(constraint, measured)),
+    }
     measured
 }
 
 #[cfg(test)]
 mod tests {
     use taffy::{AvailableSpace, Size};
-    use zgui_arena::{DomainId, Generation};
-    use zgui_dom::side::BoxKey;
 
     use crate::measure::Measured;
 
-    use super::{AtomicMemo, Constraint};
-
-    fn key(index: u32) -> BoxKey {
-        BoxKey::new(index, Generation::FIRST, DomainId::FIRST)
-    }
+    use super::{AtomicAnswers, CAPACITY, Constraint};
 
     fn constraint(width: AvailableSpace) -> Constraint {
         Constraint::new(
@@ -177,50 +224,53 @@ mod tests {
     }
 
     #[test]
-    fn a_second_ask_under_the_same_constraint_is_answered_from_the_memo() {
-        let mut memo = AtomicMemo::default();
+    fn a_second_ask_under_the_same_constraint_is_answered_from_the_ring() {
         let held = Measured::sized(40.0, 20.0);
+        let answers = AtomicAnswers::holding(constraint(AvailableSpace::MinContent), held);
         assert_eq!(
-            memo.get(key(1), constraint(AvailableSpace::MinContent)),
-            None
-        );
-        memo.insert(key(1), constraint(AvailableSpace::MinContent), held);
-        assert_eq!(
-            memo.get(key(1), constraint(AvailableSpace::MinContent)),
+            answers.get(constraint(AvailableSpace::MinContent)),
             Some(held)
         );
-        assert_eq!(memo.hits(), 1);
-        assert_eq!(memo.misses(), 1);
     }
 
     #[test]
     fn the_three_probes_a_single_measurement_costs_are_three_separate_entries() {
         // Minimum content, maximum content and a definite width are different questions, and an
         // answer to one is not an answer to another.
-        let mut memo = AtomicMemo::default();
         let held = Measured::sized(40.0, 20.0);
-        memo.insert(key(1), constraint(AvailableSpace::MinContent), held);
+        let answers = AtomicAnswers::holding(constraint(AvailableSpace::MinContent), held);
+        assert_eq!(answers.get(constraint(AvailableSpace::MaxContent)), None);
         assert_eq!(
-            memo.get(key(1), constraint(AvailableSpace::MaxContent)),
-            None
-        );
-        assert_eq!(
-            memo.get(key(1), constraint(AvailableSpace::Definite(40.0))),
+            answers.get(constraint(AvailableSpace::Definite(40.0))),
             None
         );
     }
 
     #[test]
-    fn two_boxes_do_not_share_an_answer() {
-        let mut memo = AtomicMemo::default();
-        memo.insert(
-            key(1),
-            constraint(AvailableSpace::MinContent),
-            Measured::sized(40.0, 20.0),
+    fn the_ring_is_bounded_and_keeps_the_newest() {
+        let mut answers = AtomicAnswers::holding(
+            constraint(AvailableSpace::Definite(0.0)),
+            Measured::sized(0.0, 0.0),
         );
+        for index in 1..CAPACITY * 2 {
+            answers.insert(
+                constraint(AvailableSpace::Definite(index as f32)),
+                Measured::sized(index as f32, 0.0),
+            );
+        }
+        let newest = (CAPACITY * 2 - 1) as f32;
         assert_eq!(
-            memo.get(key(2), constraint(AvailableSpace::MinContent)),
-            None
+            answers.get(constraint(AvailableSpace::Definite(newest))),
+            Some(Measured::sized(newest, 0.0))
         );
+        assert_eq!(answers.get(constraint(AvailableSpace::Definite(0.0))), None);
+    }
+
+    #[test]
+    fn clearing_forgets_every_answer() {
+        let held = Measured::sized(40.0, 20.0);
+        let mut answers = AtomicAnswers::holding(constraint(AvailableSpace::MinContent), held);
+        answers.clear();
+        assert_eq!(answers.get(constraint(AvailableSpace::MinContent)), None);
     }
 }

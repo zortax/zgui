@@ -88,6 +88,13 @@ impl EllipsisSource {
             .flatten()
             .map(|mark| mark.paragraph)
     }
+
+    /// The marks themselves, for a commit rewriting worker-recorded paragraph identifiers.
+    pub(crate) fn marks_mut(&mut self) -> impl Iterator<Item = &mut EllipsisMark> {
+        [self.start.as_mut(), self.end.as_mut()]
+            .into_iter()
+            .flatten()
+    }
 }
 
 /// Where one line is cut off, and which end it is cut off at.
@@ -333,7 +340,7 @@ pub(crate) fn runs(
 /// An anonymous block wrapping a run of inline content is not an element and has the initial value
 /// of every property, so the governing box is the nearest real one — which is the element the
 /// author wrote the declaration on.
-pub(crate) fn governing(store: &crate::tree::store::LayoutStore, key: BoxKey) -> Option<BoxKey> {
+pub(crate) fn governing(store: crate::tree::store::Structure<'_>, key: BoxKey) -> Option<BoxKey> {
     let node = store.get(key)?;
     if node.kind.is_anonymous() {
         return node.parent;

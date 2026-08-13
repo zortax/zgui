@@ -11,15 +11,13 @@ use taffy::{
     Size, TrackSizingFunction,
 };
 use zgui_css::values::grid::{
-    GridAutoFlowValue, GridTemplateAreasValue, GridTemplateComponentValue, TrackListEntry,
-    TrackListValue, TrackSizeValue,
+    GridTemplateAreasValue, GridTemplateComponentValue, TrackListEntry, TrackListValue,
+    TrackSizeValue,
 };
 use zgui_css::values::length::LengthPercentage as CssLengthPercentage;
 use zgui_interned::Ident;
 
 use crate::style::StyleRef;
-use crate::style::convert::align;
-use crate::style::gap::gap_of;
 use crate::style::grid::names::{LineNamesIter, line_names};
 use crate::style::grid::repetition::Repetition;
 
@@ -163,60 +161,45 @@ impl GridContainerStyle for StyleRef<'_> {
     }
 
     fn grid_auto_flow(&self) -> GridAutoFlow {
-        let flow = self.position_group().grid_auto_flow;
-        let dense = flow.contains(GridAutoFlowValue::DENSE);
-        match (flow.contains(GridAutoFlowValue::COLUMN), dense) {
-            (false, false) => GridAutoFlow::Row,
-            (false, true) => GridAutoFlow::RowDense,
-            (true, false) => GridAutoFlow::Column,
-            (true, true) => GridAutoFlow::ColumnDense,
-        }
+        self.lowered().grid_auto_flow
     }
 
     fn gap(&self) -> Size<LengthPercentage> {
-        gap_of(*self)
+        self.lowered().gap
     }
 
     fn align_content(&self) -> Option<AlignContent> {
-        align::align_content(self.position_group().align_content.primary(), self.is_rtl())
+        self.lowered().align_content
     }
 
     fn justify_content(&self) -> Option<JustifyContent> {
-        align::align_content(
-            self.position_group().justify_content.primary(),
-            self.is_rtl(),
-        )
+        self.lowered().justify_content
     }
 
     fn align_items(&self) -> Option<AlignItems> {
-        align::align_items(self.position_group().align_items.0, self.is_rtl())
+        self.lowered().align_items
     }
 
     fn justify_items(&self) -> Option<AlignItems> {
-        align::justify_items(
-            (self.position_group().justify_items.computed.0).0,
-            self.is_rtl(),
-        )
+        self.lowered().justify_items
     }
 }
 
 impl GridItemStyle for StyleRef<'_> {
     fn grid_row(&self) -> Line<taffy::GridPlacement<Ident>> {
-        let position = self.position_group();
-        placement::line(&position.grid_row_start, &position.grid_row_end)
+        self.lowered().grid_row.clone()
     }
 
     fn grid_column(&self) -> Line<taffy::GridPlacement<Ident>> {
-        let position = self.position_group();
-        placement::line(&position.grid_column_start, &position.grid_column_end)
+        self.lowered().grid_column.clone()
     }
 
     fn align_self(&self) -> Option<AlignSelf> {
-        align::align_items(self.position_group().align_self.0, self.is_rtl())
+        self.lowered().align_self
     }
 
     fn justify_self(&self) -> Option<AlignSelf> {
-        align::align_items(self.position_group().justify_self.0, self.is_rtl())
+        self.lowered().justify_self
     }
 }
 

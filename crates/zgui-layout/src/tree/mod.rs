@@ -2,13 +2,14 @@
 
 pub mod cache;
 pub mod dirty;
+mod executor;
 pub mod gate;
+pub mod parallel;
 pub mod partial;
 pub mod print;
 pub mod store;
 pub mod traverse;
-
-use core::cell::RefCell;
+pub(crate) mod view;
 
 use taffy::{AvailableSpace, Size};
 use zgui_dom::side::BoxKey;
@@ -19,7 +20,6 @@ use crate::inline::atomic::AtomicMemo;
 use crate::inline::content::styles::TextStyles;
 use crate::key::to_node_id;
 use crate::measure::MeasureContent;
-use crate::style::calc::CalcArena;
 use crate::style::{DeviceStyle, MeasuredSizes, StyleRef};
 use crate::tree::store::LayoutStore;
 
@@ -41,33 +41,43 @@ use crate::tree::store::LayoutStore;
 /// `width: fit-content` button re-measuring its whole subtree on every frame that lays anything
 /// out.
 pub struct LayoutTree<'a, C> {
-    /// The boxes and their results.
-    store: &'a mut LayoutStore,
+    /// The boxes and their results, as this pass may reach them.
+    store: view::StoreView<'a>,
     /// Whoever can say how big a leaf's content is.
     content: &'a mut C,
     /// The two numbers no style carries.
     device: DeviceStyle,
-    /// Where this pass interns `calc()`.
-    calc: RefCell<CalcArena>,
     /// What each atomic inline's nested layout came out at, per constraint.
     atomic: AtomicMemo,
     /// The text properties of each distinct style this pass has met.
     text: TextStyles,
     /// Whoever lays custom elements out, when a window has any.
     custom: &'a dyn crate::custom::CustomLayoutSource,
+    /// Whether a custom source was installed, which is what keeps batches off.
+    ///
+    /// A custom source carries no `Sync` bound, so a batch would hand workers something the type
+    /// system cannot vouch for. Tracked as a flag beside the reference because the installed
+    /// source replaces the inert default and the two cannot be told apart through the trait.
+    has_custom: bool,
+    /// The pool parallel batches run on, when the application installed one.
+    parallel: Option<&'a parallel::LayoutPool>,
 }
 
 impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     /// Borrows a store for one pass.
+    ///
+    /// Lowers whatever styles the frame's writes left owing before any algorithm reads one.
     pub fn new(store: &'a mut LayoutStore, content: &'a mut C, device: DeviceStyle) -> Self {
+        store.ensure_lowered_styles(device);
         Self {
-            store,
+            store: view::StoreView::Exclusive(store),
             content,
             device,
-            calc: RefCell::new(CalcArena::new(device.scale)),
             atomic: AtomicMemo::default(),
             text: TextStyles::default(),
             custom: &crate::custom::NoCustomLayout,
+            has_custom: false,
+            parallel: None,
         }
     }
 
@@ -80,7 +90,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     /// pass — running it here as well would compute every origin twice, over every box, on every
     /// frame that laid anything out at all.
     pub fn layout_root(&mut self, viewport: Size<f32>) -> bool {
-        let Some(root) = self.store.root() else {
+        let Some(root) = self.store.get().root() else {
             return false;
         };
         counter::bump(Counter::LayoutReachedRoot);
@@ -98,13 +108,13 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             // gutter in it never enters one — and asking is a test against a list rather than a
             // walk of the tree.
             if pass + 1 == crate::scroll_region::auto::MAX_PASSES
-                || self.store.no_undecided_overflow()
+                || self.store.get().no_undecided_overflow()
                 || !crate::scroll_region::auto::revise(self, root)
             {
                 break;
             }
         }
-        self.store.record_root_layout(viewport);
+        self.store.get_mut().record_root_layout(viewport);
         true
     }
 
@@ -120,10 +130,10 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     /// its own fixpoint wants, and what a test comparing a held frame against a fresh one compares
     /// it to.
     pub fn relayout_root(&mut self, viewport: Size<f32>) -> gate::Relayout {
-        if self.store.root().is_none() {
+        if self.store.get().root().is_none() {
             return gate::Relayout::NoRoot;
         }
-        if gate::stands(self.store, viewport) {
+        if gate::stands(self.store.get(), viewport) {
             counter::bump(Counter::LayoutsHeld);
             return gate::Relayout::Held;
         }
@@ -146,6 +156,18 @@ impl<'a, C> LayoutTree<'a, C> {
     #[must_use]
     pub fn with_custom(mut self, custom: &'a dyn crate::custom::CustomLayoutSource) -> Self {
         self.custom = custom;
+        self.has_custom = true;
+        self
+    }
+
+    /// The same pass, running independent measurement batches on `pool`'s workers.
+    ///
+    /// The caller must have pre-flattened every dirty inline context — the frame's pre-shape
+    /// prepass does — because a batch worker may claim no brush slot. A pass without that
+    /// guarantee stays serial by not installing the pool.
+    #[must_use]
+    pub fn with_parallel(mut self, pool: &'a parallel::LayoutPool) -> Self {
+        self.parallel = Some(pool);
         self
     }
 
@@ -156,12 +178,67 @@ impl<'a, C> LayoutTree<'a, C> {
 
     /// The boxes and their results.
     pub fn store(&self) -> &LayoutStore {
-        self.store
+        self.store.get()
     }
 
     /// The boxes and their results, for modification.
     pub fn store_mut(&mut self) -> &mut LayoutStore {
-        self.store
+        self.store.get_mut()
+    }
+
+    /// One box's layout state, as this pass may see it.
+    ///
+    /// A worker's own writes are visible here and through nothing else; see
+    /// [`view::StoreView`] for the discipline.
+    pub(crate) fn state(&self, key: BoxKey) -> Option<&crate::tree::store::state::BoxLayout> {
+        self.store.state(key)
+    }
+
+    /// The same, for writing.
+    pub(crate) fn state_mut(&mut self, key: BoxKey) -> &mut crate::tree::store::state::BoxLayout {
+        self.store.state_mut(key)
+    }
+
+    /// The flattened form one box is holding.
+    pub(crate) fn flattened_of(
+        &self,
+        key: BoxKey,
+    ) -> Option<&crate::inline::content::memo::Flattened> {
+        self.store.flattened(key)
+    }
+
+    /// Holds a box's flattened form.
+    pub(crate) fn hold_flattened(
+        &mut self,
+        key: BoxKey,
+        flattened: crate::inline::content::memo::Flattened,
+    ) {
+        self.store.hold_flattened(key, flattened);
+    }
+
+    /// The lines one box resolved to.
+    pub(crate) fn inline_resolution_of(
+        &self,
+        key: BoxKey,
+    ) -> Option<&crate::inline::resolved::InlineResolution> {
+        self.store.inline_resolution(key)
+    }
+
+    /// Records what one inline formatting context resolved to.
+    pub(crate) fn set_inline_resolution(
+        &mut self,
+        key: BoxKey,
+        resolution: crate::inline::resolved::InlineResolution,
+    ) {
+        self.store.set_inline_resolution(key, resolution);
+    }
+
+    /// The identifier a shaped paragraph is carried by.
+    pub(crate) fn intern_paragraph(
+        &mut self,
+        key: zgui_text::ParagraphKey,
+    ) -> crate::fragment::ParagraphId {
+        self.store.intern_paragraph(key)
     }
 
     /// The two numbers no style carries.
@@ -190,7 +267,7 @@ impl<'a, C> LayoutTree<'a, C> {
     /// Handed out together because they are three fields of one borrow and flattening needs all
     /// three; taking them one at a time would borrow the whole tree three times over.
     pub(crate) fn content_parts(&mut self) -> (&LayoutStore, &mut C, &mut TextStyles) {
-        (self.store, self.content, &mut self.text)
+        (self.store.get(), self.content, &mut self.text)
     }
 
     /// The shrink-to-fit answers held for atomic inlines.
@@ -203,26 +280,33 @@ impl<'a, C> LayoutTree<'a, C> {
         &mut self.atomic
     }
 
-    /// How many `calc()` expressions this pass has interned.
+    /// How many `calc()` expressions the lowerings hold.
     pub fn interned_calcs(&self) -> usize {
-        self.calc.borrow().len()
+        self.store.get().interned_calcs()
     }
 
     /// A view over one box's style.
     pub(crate) fn style_of(&self, key: BoxKey) -> StyleRef<'_> {
-        let node = self.store.node(key);
+        let structure = self.store.structure();
+        let node = structure.node(key);
         let measured = MeasuredSizes {
             horizontal: self.store.intrinsic(key, crate::axis::Axis::Horizontal),
             vertical: self.store.intrinsic(key, crate::axis::Axis::Vertical),
         };
-        let natural_ratio = self.store.replaced(key).and_then(|content| content.ratio);
-        StyleRef::new(node, &self.calc, self.device, measured, natural_ratio)
+        let natural_ratio = structure.replaced(key).and_then(|content| content.ratio);
+        let lowered = structure.lowered_style(key);
+        StyleRef::new(node, lowered, self.device, measured, natural_ratio)
             .with_reserved_gutter(self.store.reserved_gutter(key))
     }
 
-    /// The `calc()` arena, for resolving a handle the layout algorithms hand back.
-    pub(crate) fn calc_arena(&self) -> &RefCell<CalcArena> {
-        &self.calc
+    /// The structural half of the store, readable in both modes.
+    pub(crate) fn structure(&self) -> crate::tree::store::Structure<'_> {
+        self.store.structure()
+    }
+
+    /// Resolves a `calc()` handle the layout algorithms hand back.
+    pub(crate) fn resolve_calc(&self, value: *const (), basis: f32) -> f32 {
+        self.store.structure().resolve_calc(value, basis)
     }
 }
 

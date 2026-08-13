@@ -67,7 +67,7 @@ pub(crate) fn measure_leaf<C: MeasureContent>(
     block: Option<&mut BlockContext<'_>>,
 ) -> Measured {
     let key = from_node_id(node);
-    if tree.store().node(key).fc == FormattingContext::Custom {
+    if tree.structure().node(key).fc == FormattingContext::Custom {
         // A custom element's measurement is the trait's, not the measurer's: the source was
         // installed on the pass, and the shell arithmetic around this call applies to its answer
         // exactly as it applies to a replaced box's.
@@ -79,7 +79,7 @@ pub(crate) fn measure_leaf<C: MeasureContent>(
             run_mode == RunMode::PerformLayout,
         );
     }
-    if tree.store().node(key).fc == FormattingContext::Inline {
+    if tree.structure().node(key).fc == FormattingContext::Inline {
         return measure::compute(
             tree,
             key,
@@ -94,9 +94,9 @@ pub(crate) fn measure_leaf<C: MeasureContent>(
         );
     }
     let scale = tree.device().scale;
-    let style = tree.store().node(key).style.clone();
+    let style = tree.structure().node(key).style.clone();
     let natural = tree
-        .store()
+        .structure()
         .replaced(key)
         .and_then(|content| content.natural);
     tree.content().measure(MeasureRequest {
@@ -123,10 +123,9 @@ pub(crate) fn content_of<C: MeasureContent>(
     key: BoxKey,
 ) -> Arc<Generated> {
     let scale = tree.device().scale;
-    let pieces = content::collect::pieces(tree.store(), key);
+    let pieces = content::collect::pieces(tree.structure(), key);
     if let Some(held) = tree
-        .store()
-        .flattened(key)
+        .flattened_of(key)
         .and_then(|held| held.reuse(scale, &pieces))
     {
         return held;
@@ -138,7 +137,6 @@ pub(crate) fn content_of<C: MeasureContent>(
             store, key, &pieces, styles, &mut claim, scale,
         ))
     };
-    tree.store_mut()
-        .hold_flattened(key, Flattened::new(scale, pieces, Arc::clone(&built)));
+    tree.hold_flattened(key, Flattened::new(scale, pieces, Arc::clone(&built)));
     built
 }

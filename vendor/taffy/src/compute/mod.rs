@@ -21,6 +21,44 @@
 //! | [`round_layout`]                  | [`RoundTree`]                                                                                                                                                                                      | Round a tree of float-valued layouts to integer pixels               |
 //! | [`print_tree`](crate::print_tree) | [`PrintTree`](crate::PrintTree)                                                                                                                                                                    | Print a debug representation of a node tree and it's computed layout |
 //!
+
+/// ZGUI-PATCH: reusable request and output buffers for the batched call sites.
+///
+/// A layout pass enters these sites once per container, and a nested container re-enters them
+/// while its parent's buffers are live — so the buffers come from a small per-thread pool that
+/// a call takes from and gives back to, rather than from one slot. Steady state allocates
+/// nothing; the pool grows to the deepest live nesting and stays there.
+/// ZGUI-PATCH: the fewest items a converted site hands over as a batch.
+///
+/// Below this, the site keeps its original serial loop even when the tree asks for batches:
+/// the executor's own distribution gate needs at least this many cold subtrees, so a smaller
+/// batch can never distribute, and collecting it into request buffers is pure overhead —
+/// measured at ~3-4% of a keystroke frame across the small containers a document is made of.
+pub(crate) const BATCH_MIN_ITEMS: usize = 8;
+
+pub(crate) mod batch_scratch {
+    use crate::tree::{ChildRequest, LayoutOutput};
+    use core::cell::RefCell;
+
+    std::thread_local! {
+        static POOL: RefCell<Vec<(Vec<ChildRequest>, Vec<LayoutOutput>)>> =
+            const { RefCell::new(Vec::new()) };
+    }
+
+    /// A cleared request/output buffer pair.
+    pub(crate) fn take() -> (Vec<ChildRequest>, Vec<LayoutOutput>) {
+        POOL.with(|pool| pool.borrow_mut().pop()).unwrap_or_default()
+    }
+
+    /// Gives a pair back for the next call.
+    pub(crate) fn give(mut buffers: (Vec<ChildRequest>, Vec<LayoutOutput>)) {
+        buffers.0.clear();
+        buffers.1.clear();
+        POOL.with(|pool| pool.borrow_mut().push(buffers));
+    }
+}
+
+
 pub(crate) mod common;
 pub(crate) mod leaf;
 

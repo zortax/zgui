@@ -50,6 +50,13 @@ counters! {
     /// Times a layout pass had to start from the document root instead of a subtree.
     LayoutReachedRoot => layout_reached_root, Group::BackendNeutral;
 
+    /// Batches of child layouts that ran across the layout pool's workers.
+    ///
+    /// Zero on a steady frame: the executor distributes only past its cold-work gates, so this
+    /// counts the frames that had enough cold subtrees to be worth the pool. A parity test reads
+    /// it to prove a pooled run distributed at all.
+    LayoutBatchesDistributed => layout_batches_distributed, Group::BackendNeutral;
+
     /// Times a layout pass was asked for and the results already held answered it.
     LayoutsHeld => layouts_held, Group::Skip { done: Counter::NodesRelaidOut };
 

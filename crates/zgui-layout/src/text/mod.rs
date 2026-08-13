@@ -5,6 +5,7 @@
 //! thing a pass does need — something that can answer how big a piece of content is.
 
 pub mod paragraphs;
+pub mod preshape;
 pub mod reshape;
 
 pub use crate::text::paragraphs::Paragraphs;

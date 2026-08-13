@@ -151,6 +151,22 @@ fn check_box(store: &LayoutStore, key: BoxKey, out: &mut Vec<Violation>) {
             key.index()
         )));
     }
+    // The interned entry is where per-style derivations live, so a slot naming a different
+    // allocation than the box holds serves derivations of a style the box no longer has. The
+    // symptom appears far away: a box laid out with margins from a style it wore frames ago.
+    match store.interned_style(key) {
+        None => out.push(Violation::new(format!(
+            "box {} holds no interned style slot",
+            key.index()
+        ))),
+        Some(interned) if !crate::style::same_cascade(interned, &node.style) => {
+            out.push(Violation::new(format!(
+                "box {}'s interned style slot names a different cascade result than the box holds",
+                key.index()
+            )));
+        }
+        Some(_) => {}
+    }
 }
 
 /// Every box's roster memberships say what its style says.

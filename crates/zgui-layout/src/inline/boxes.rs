@@ -105,7 +105,7 @@ fn atomic_box<C: MeasureContent>(
 ) -> (InlineBoxGeometry, Alignment, Option<Frame>) {
     let (margins, padding, border) = crate::inline::insets::frame_of(tree, key, basis);
     let measured = atomic::measure(tree, key, Size::NONE, available);
-    let node = tree.store().node(key);
+    let node = tree.structure().node(key);
     let style = node.style.clone();
     let replaced = node.fc == FormattingContext::Replaced;
     let scale = tree.device().scale;

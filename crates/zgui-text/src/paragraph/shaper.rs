@@ -50,6 +50,19 @@ pub trait ParagraphShaper {
         shaped
     }
 
+    /// A second shaper drawing on the same font sources, for a caller that shapes on another
+    /// thread.
+    ///
+    /// `None` when this engine cannot be forked, which keeps such a caller on its own thread.
+    /// A fork shares immutable font data and owns its own scratch; two forks shaping the same
+    /// content produce equal results.
+    fn fork(&self) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
     /// Breaks an already shaped paragraph into lines at the requested width.
     fn break_lines(
         &mut self,

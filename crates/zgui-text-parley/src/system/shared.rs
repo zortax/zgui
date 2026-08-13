@@ -37,7 +37,11 @@ impl Shared {
                 shared: true,
                 system_fonts: options.enumeration.reads_the_system(),
             }),
-            sources: SourceCache::default(),
+            // Shared, so every context cloned from this system — the frame's shaper and each of its
+            // forks — resolves one font file to one blob. An unshared cache gives each clone its
+            // own copy of the data, and everything keyed by blob identity downstream — the glyph
+            // raster above all — then treats the same face as a different font per shaper.
+            sources: SourceCache::new_shared(),
             faces: FaceTable::default(),
             colors: FxHashMap::default(),
         }

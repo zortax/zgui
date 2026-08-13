@@ -305,7 +305,7 @@ impl<C: MeasureContent> LayoutAccess for TreeAccess<'_, '_, C> {
         // The half a parent algorithm normally performs: computing a child answers *how big*,
         // and it is the parent that writes the answer into the child's kept state. The custom
         // element is the parent here, and this is its pen.
-        let state = self.tree.store_mut().state_mut(child);
+        let state = self.tree.state_mut(child);
         state.unrounded.size = measured.size;
         state.unrounded.content_size = measured.size;
         state.snapped = state.unrounded;
@@ -318,7 +318,7 @@ impl<C: MeasureContent> LayoutAccess for TreeAccess<'_, '_, C> {
         };
         // The whole placement, exactly as a line places its atoms: nothing above the element will
         // write this child's location again.
-        let state = self.tree.store_mut().state_mut(child);
+        let state = self.tree.state_mut(child);
         state.unrounded.location = taffy::Point { x, y };
         state.snapped = state.unrounded;
     }

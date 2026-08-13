@@ -261,7 +261,7 @@ pub(crate) fn compute<C: MeasureContent>(
         ),
         _ => Default::default(),
     };
-    let paragraph = tree.store_mut().intern_paragraph(summary.key);
+    let paragraph = tree.intern_paragraph(summary.key);
     let resolution = InlineResolution {
         paragraph,
         key: summary.key,
@@ -280,7 +280,7 @@ pub(crate) fn compute<C: MeasureContent>(
         first_baseline: resolution.first_baseline(),
         last_baseline: resolution.last_baseline(),
     };
-    tree.store_mut().set_inline_resolution(key, resolution);
+    tree.set_inline_resolution(key, resolution);
     measured
 }
 
@@ -299,10 +299,10 @@ fn mark_overflowing_lines<C: MeasureContent>(
     available: f32,
 ) -> ellipsis::EllipsisSource {
     let empty = ellipsis::EllipsisSource::default();
-    let Some(governing) = ellipsis::governing(tree.store(), key) else {
+    let Some(governing) = ellipsis::governing(tree.structure(), key) else {
         return empty;
     };
-    let style = tree.store().node(governing).style.clone();
+    let style = tree.structure().node(governing).style.clone();
     if !ellipsis::clips_inline_axis(&style) {
         return empty;
     }
@@ -370,7 +370,7 @@ fn shape_mark<C: MeasureContent>(
         probe: false,
     };
     tree.content().break_lines(summary.key, &request);
-    let paragraph = tree.store_mut().intern_paragraph(summary.key);
+    let paragraph = tree.intern_paragraph(summary.key);
     Some(ellipsis::EllipsisMark {
         paragraph,
         key: summary.key,
@@ -384,7 +384,7 @@ fn shape_mark<C: MeasureContent>(
 /// The height is not recomputed because the algorithm asking discards it, and computing it would
 /// mean breaking at a width the context is not going to be laid out at.
 fn probe<C: MeasureContent>(tree: &LayoutTree<'_, C>, key: BoxKey, width: f32) -> Measured {
-    let held = tree.store().inline_resolution(key);
+    let held = tree.inline_resolution_of(key);
     Measured {
         size: Size {
             width,
@@ -472,7 +472,7 @@ fn place<C: MeasureContent>(
                 .position(|entry| entry.id == placed.id)
                 .expect("the geometry the placement came from");
             let frame = boxes.frames.get(index).copied().flatten();
-            let state = tree.store_mut().state_mut(box_);
+            let state = tree.state_mut(box_);
             // The whole result, not only the position: an atomic inline is laid out by the line it
             // sits on, and no algorithm above it will write the box it came out at.
             state.unrounded.location = taffy::Point { x, y };
@@ -491,7 +491,7 @@ fn place<C: MeasureContent>(
 
 /// Where the content of one box begins inside it, measured from its own border edges.
 fn content_origin<C: MeasureContent>(tree: &LayoutTree<'_, C>, key: BoxKey) -> (f32, f32) {
-    let layout = tree.store().state(key).map(|state| state.unrounded);
+    let layout = tree.state(key).map(|state| state.unrounded);
     let top = layout.map_or(0.0, |layout| layout.border.top + layout.padding.top);
     let left = layout.map_or(0.0, |layout| layout.border.left + layout.padding.left);
     (top, left)

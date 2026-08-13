@@ -154,6 +154,88 @@ pub trait MeasureContent: ShapedClusters {
     /// against the colour, because the slot has to survive a theme change that rewrites what is in
     /// it — and two runs that merely computed to the same colour must not be re-coloured together.
     fn paint_slot(&mut self, paint: &TextPaint) -> Brush;
+
+    /// A measurer a parallel batch worker may own, when this one can produce them.
+    ///
+    /// The default is `None`, which keeps every batch this measurer serves serial. A measurer
+    /// that forks must guarantee a fork's answers equal its own, and take the fork's results back
+    /// through [`MeasureContent::absorb_measurer`] so later stages read them where they read
+    /// everything else.
+    ///
+    /// `owned` names the shaped paragraphs the worker's requests will break: a forking measurer
+    /// moves their entries into the fork, because breaking mutates an entry and the worker has to
+    /// own what it mutates. A key the measurer does not hold is shaped fresh on the worker.
+    fn fork_measurer(&mut self, owned: &[ParagraphKey]) -> Option<Box<dyn WorkerMeasure>> {
+        let _ = owned;
+        None
+    }
+
+    /// Takes back a measurer handed out by [`MeasureContent::fork_measurer`].
+    ///
+    /// Called once per fork after a batch commits, in request order.
+    fn absorb_measurer(&mut self, worker: Box<dyn WorkerMeasure>) {
+        let _ = worker;
+    }
+}
+
+/// A measurer one batch worker owns for the duration of one batch.
+///
+/// The `Any` seam is how the measurer that produced a fork recognises it at absorb time: the
+/// executor carries forks as trait objects, and only the producer knows the concrete type the
+/// results have to be drained out of.
+pub trait WorkerMeasure: MeasureContent + Send {
+    /// This measurer, for the producer's downcast.
+    fn as_any_mut(&mut self) -> &mut dyn core::any::Any;
+
+    /// The same, by value, so the producer can keep the fork warm for the next batch.
+    fn into_any(self: Box<Self>) -> Box<dyn core::any::Any>;
+}
+
+impl<T: MeasureContent + Send + 'static> WorkerMeasure for T {
+    fn as_any_mut(&mut self) -> &mut dyn core::any::Any {
+        self
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn core::any::Any> {
+        self
+    }
+}
+
+impl ShapedClusters for Box<dyn WorkerMeasure> {
+    fn visit_clusters(
+        &self,
+        paragraph: ParagraphKey,
+        line: u16,
+        visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
+    ) {
+        (**self).visit_clusters(paragraph, line, visit);
+    }
+}
+
+impl MeasureContent for Box<dyn WorkerMeasure> {
+    fn measure(&mut self, request: MeasureRequest<'_>) -> Measured {
+        (**self).measure(request)
+    }
+
+    fn shape(&mut self, content: &ParagraphContent<'_>) -> ShapedSummary {
+        (**self).shape(content)
+    }
+
+    fn shape_keyed(&mut self, key: ParagraphKey, content: &ParagraphContent<'_>) -> ShapedSummary {
+        (**self).shape_keyed(key, content)
+    }
+
+    fn break_lines(&mut self, key: ParagraphKey, request: &BreakRequest<'_>) -> BrokenParagraph {
+        (**self).break_lines(key, request)
+    }
+
+    fn strut(&mut self, style: &TextStyle) -> StrutMetrics {
+        (**self).strut(style)
+    }
+
+    fn paint_slot(&mut self, paint: &TextPaint) -> Brush {
+        (**self).paint_slot(paint)
+    }
 }
 
 /// A measurer that reports every box as empty and every paragraph as having no lines.
@@ -166,6 +248,12 @@ pub struct NoContent;
 impl MeasureContent for NoContent {
     fn measure(&mut self, _request: MeasureRequest<'_>) -> Measured {
         Measured::default()
+    }
+
+    fn fork_measurer(&mut self, _owned: &[ParagraphKey]) -> Option<Box<dyn WorkerMeasure>> {
+        // Stateless, so a fork is a copy and absorbing it back is nothing. This is what lets a
+        // text-free fixture exercise parallel batches.
+        Some(Box::new(Self))
     }
 
     fn shape(&mut self, _content: &ParagraphContent<'_>) -> ShapedSummary {

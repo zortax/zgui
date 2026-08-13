@@ -38,9 +38,7 @@ pub(crate) fn compute<C: MeasureContent>(
     // under a shared borrow that is released before the tree is used exclusively below.
     let prepared = {
         let style = tree.style_of(from_node_id(node));
-        let calc = |value: *const (), basis: f32| {
-            crate::style::calc::resolve_in(tree.calc_arena(), value, basis)
-        };
+        let calc = |value: *const (), basis: f32| tree.resolve_calc(value, basis);
 
         // Both axes resolve percentage padding and border against the containing block's *inline*
         // size. That is not an oversight in CSS; it is what the specification says.

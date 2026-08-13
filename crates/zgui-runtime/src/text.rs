@@ -78,11 +78,40 @@ pub trait TextEngine: MeasureContent + ShapedGlyphs + ShapedClusters {
     fn evict_inactive(&mut self, _active: &[ParagraphKey], _count: usize) -> usize {
         0
     }
+
+    /// Shapes the given paragraphs before layout asks for them, across `pool`'s workers.
+    ///
+    /// The default shapes nothing: layout then shapes each paragraph itself, exactly as it does
+    /// for an engine with no workers. An engine that overrides this must fill its cache with the
+    /// results serial shaping would have produced.
+    fn pre_shape_paragraphs(
+        &mut self,
+        jobs: &[(ParagraphKey, zgui_text::ParagraphContent<'_>)],
+        pool: &zgui_layout::tree::parallel::LayoutPool,
+    ) {
+        let _ = (jobs, pool);
+    }
+
+    /// A measurer a layout batch worker may own; see
+    /// [`MeasureContent::fork_measurer`](zgui_layout::MeasureContent::fork_measurer).
+    fn fork_worker_measurer(
+        &mut self,
+        owned: &[ParagraphKey],
+    ) -> Option<Box<dyn zgui_layout::WorkerMeasure>> {
+        let _ = owned;
+        None
+    }
+
+    /// Takes back a measurer handed out by [`TextEngine::fork_worker_measurer`].
+    fn absorb_worker_measurer(&mut self, worker: Box<dyn zgui_layout::WorkerMeasure>) {
+        let _ = worker;
+    }
 }
 
 impl<S, R> TextEngine for zgui_layout::Paragraphs<S, R>
 where
-    S: zgui_text::ParagraphShaper,
+    S: zgui_text::ParagraphShaper + Send + 'static,
+    S::Engine: Send + 'static,
     R: MeasureContent,
 {
     fn text_paints(&mut self) -> &mut TextPaintTable {
@@ -108,6 +137,32 @@ where
     fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
         zgui_layout::Paragraphs::evict_inactive(self, active, count)
     }
+
+    fn pre_shape_paragraphs(
+        &mut self,
+        jobs: &[(ParagraphKey, zgui_text::ParagraphContent<'_>)],
+        pool: &zgui_layout::tree::parallel::LayoutPool,
+    ) {
+        self.pre_shape(jobs, pool);
+    }
+
+    fn fork_worker_measurer(
+        &mut self,
+        owned: &[ParagraphKey],
+    ) -> Option<Box<dyn zgui_layout::WorkerMeasure>> {
+        self.fork_worker(owned)
+            .map(|worker| Box::new(worker) as Box<dyn zgui_layout::WorkerMeasure>)
+    }
+
+    fn absorb_worker_measurer(&mut self, worker: Box<dyn zgui_layout::WorkerMeasure>) {
+        // The fork this engine produced is the one thing that can come back; anything else is a
+        // batch mixing measurers, which the executor never does.
+        let worker = worker
+            .into_any()
+            .downcast::<zgui_layout::Paragraphs<S, zgui_layout::NaturalSize>>()
+            .expect("a worker measurer returns to the engine that forked it");
+        self.absorb_worker(*worker);
+    }
 }
 
 impl ShapedGlyphs for Box<dyn TextEngine> {
@@ -130,6 +185,17 @@ impl ShapedClusters for Box<dyn TextEngine> {
 impl MeasureContent for Box<dyn TextEngine> {
     fn measure(&mut self, request: zgui_layout::MeasureRequest<'_>) -> zgui_layout::Measured {
         (**self).measure(request)
+    }
+
+    fn fork_measurer(
+        &mut self,
+        owned: &[ParagraphKey],
+    ) -> Option<Box<dyn zgui_layout::WorkerMeasure>> {
+        (**self).fork_worker_measurer(owned)
+    }
+
+    fn absorb_measurer(&mut self, worker: Box<dyn zgui_layout::WorkerMeasure>) {
+        (**self).absorb_worker_measurer(worker);
     }
 
     fn shape(
@@ -183,6 +249,25 @@ impl TextEngine for Box<dyn TextEngine> {
 
     fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
         (**self).evict_inactive(active, count)
+    }
+
+    fn pre_shape_paragraphs(
+        &mut self,
+        jobs: &[(ParagraphKey, zgui_text::ParagraphContent<'_>)],
+        pool: &zgui_layout::tree::parallel::LayoutPool,
+    ) {
+        (**self).pre_shape_paragraphs(jobs, pool);
+    }
+
+    fn fork_worker_measurer(
+        &mut self,
+        owned: &[ParagraphKey],
+    ) -> Option<Box<dyn zgui_layout::WorkerMeasure>> {
+        (**self).fork_worker_measurer(owned)
+    }
+
+    fn absorb_worker_measurer(&mut self, worker: Box<dyn zgui_layout::WorkerMeasure>) {
+        (**self).absorb_worker_measurer(worker);
     }
 }
 

@@ -92,7 +92,9 @@ pub use crate::axis::Axis;
 pub use crate::fragment::hit::{HitEntry, HitIndex, PointerEvents};
 pub use crate::fragment::{FragKey, Fragment, FragmentFlags, FragmentKind};
 pub use crate::key::{from_node_id, to_node_id};
-pub use crate::measure::{MeasureContent, MeasureRequest, Measured, NaturalSize, NoContent};
+pub use crate::measure::{
+    MeasureContent, MeasureRequest, Measured, NaturalSize, NoContent, WorkerMeasure,
+};
 pub use crate::node::box_node::BoxNode;
 pub use crate::node::kind::{BoxKind, FormattingContext, PseudoKind};
 pub use crate::style::{DeviceStyle, StyleRef};

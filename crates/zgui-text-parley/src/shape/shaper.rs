@@ -155,6 +155,13 @@ impl ParagraphShaper for Shaper {
         self.shape_keyed(zgui_text::ParagraphKey::of(content), content)
     }
 
+    fn fork(&self) -> Option<Self> {
+        // The font system is shared and synchronised; the context clones the collection under
+        // its lock; the scratch and the strut cache start empty and warm up on the fork's
+        // thread. Nothing shaped depends on which shaper shaped it.
+        Some(Self::with_controls(Arc::clone(&self.fonts), self.controls))
+    }
+
     fn shape_keyed(
         &mut self,
         key: zgui_text::ParagraphKey,

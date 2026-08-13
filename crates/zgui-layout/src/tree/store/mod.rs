@@ -21,6 +21,7 @@ mod resolved;
 pub(crate) mod roster;
 mod scroll;
 pub(crate) mod state;
+pub(crate) mod styles;
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +38,7 @@ use crate::node::box_node::BoxNode;
 use crate::tree::store::content::{BoxContent, CustomBox, ReplacedBox};
 use crate::tree::store::roster::{Roster, Rosters};
 use crate::tree::store::state::BoxLayout;
+use crate::tree::store::styles::{StyleSlot, StyleTable};
 
 pub use crate::tree::store::resolved::ResolvedLayout;
 
@@ -73,6 +75,10 @@ pub struct LayoutStore {
     custom: PagedVec<BoxKey, Option<CustomBox>, 64>,
     /// The boxes whose style puts them in a class some pass has to visit.
     rosters: Rosters,
+    /// Every distinct computed style a live box holds, interned once each.
+    styles: StyleTable,
+    /// Which interned style each box holds.
+    style_slots: PagedVec<BoxKey, Option<StyleSlot>, 64>,
     /// The box the document is laid out from.
     root: Option<BoxKey>,
     /// Which boxes each element generated, in document order.
@@ -152,6 +158,8 @@ impl LayoutStore {
             replaced: PagedVec::for_domain(box_domain),
             custom: PagedVec::for_domain(box_domain),
             rosters: Rosters::default(),
+            styles: StyleTable::default(),
+            style_slots: PagedVec::for_domain(box_domain),
             root: None,
             boxes_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(document)),
             fragments: ChunkArena::new(fragment_domain),
@@ -227,6 +235,8 @@ impl LayoutStore {
             crate::node::kind::PaintedContent::Box
         };
         let key = named(self.boxes.insert(node));
+        let slot = self.styles.intern(&style);
+        self.style_slots.replace(key, Some(slot));
         self.layout.replace(key, Some(BoxLayout::default()));
         if let Some(replaced) = content.replaced {
             self.replaced.replace(key, Some(replaced));
@@ -259,8 +269,64 @@ impl LayoutStore {
             return false;
         }
         node.style = style.clone();
+        let slot = self.styles.intern(style);
+        if let Some(held) = self.style_slots.replace(key, Some(slot)) {
+            self.styles.release(held);
+        }
         self.classify(key, style);
         true
+    }
+
+    /// The style a box's interned slot names, if the box holds a slot.
+    pub(crate) fn interned_style(&self, key: BoxKey) -> Option<&ComputedStyle> {
+        let slot = self.style_slots.get(key).copied().flatten()?;
+        Some(self.styles.style(slot))
+    }
+
+    /// Lowers every interned style that owes a lowering for `device`.
+    pub(crate) fn ensure_lowered_styles(&mut self, device: crate::style::DeviceStyle) {
+        self.styles.ensure_lowered(device);
+    }
+
+    /// The read-only half of the store, beside the layout column borrowed for writing.
+    ///
+    /// This split is what a parallel batch runs on: the workers' exclusive borrows are carved out
+    /// of the returned column, and everything structural — boxes, styles, replaced content — is
+    /// shared through [`Structure`], which the borrow checker can see touches no layout state.
+    pub(crate) fn split_for_batch(
+        &mut self,
+    ) -> (&mut PagedVec<BoxKey, Option<BoxLayout>, 64>, Structure<'_>) {
+        (
+            &mut self.layout,
+            Structure {
+                boxes: &self.boxes,
+                styles: &self.styles,
+                style_slots: &self.style_slots,
+                replaced: &self.replaced,
+                root: self.root,
+            },
+        )
+    }
+
+    /// The same read surface over a store that is not split, for the serial pass.
+    pub(crate) fn structure(&self) -> Structure<'_> {
+        Structure {
+            boxes: &self.boxes,
+            styles: &self.styles,
+            style_slots: &self.style_slots,
+            replaced: &self.replaced,
+            root: self.root,
+        }
+    }
+
+    /// How many `calc()` expressions the lowerings hold.
+    pub fn interned_calcs(&self) -> usize {
+        self.styles.interned_calcs()
+    }
+
+    /// How many distinct computed styles are interned.
+    pub fn interned_styles(&self) -> usize {
+        self.styles.live()
     }
 
     /// Records which style-defined classes a box belongs to, and enrols it in the ones it has
@@ -367,6 +433,9 @@ impl LayoutStore {
                 .retain(|&mut it| it != key);
         }
         self.take_inline_resolution(key);
+        if let Some(slot) = self.style_slots.replace(key, None) {
+            self.styles.release(slot);
+        }
         self.layout.clear(key);
         self.replaced.clear(key);
         self.custom.clear(key);
@@ -391,6 +460,7 @@ impl LayoutStore {
         self.layout.compact_by(Option::is_none);
         self.replaced.compact_by(Option::is_none);
         self.custom.compact_by(Option::is_none);
+        self.style_slots.compact_by(Option::is_none);
     }
 
     /// The boxes one element generated, in document order.
@@ -400,6 +470,71 @@ impl LayoutStore {
 
     /// Walks every live box, in no particular order.
     pub fn keys(&self) -> Vec<BoxKey> {
+        self.structure().keys()
+    }
+}
+
+/// The store without its layout column: what a batch worker may read while the column is carved.
+///
+/// A view of shared borrows, so it is [`Copy`] and crosses into worker closures freely. Every
+/// method here reads structure alone; per-box layout state goes through the worker's own
+/// exclusive borrows, which is the whole point of the split.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Structure<'a> {
+    /// The box records.
+    boxes: &'a ChunkArena<BoxNode>,
+    /// The interned styles and their lowerings.
+    styles: &'a StyleTable,
+    /// Which interned style each box holds.
+    style_slots: &'a PagedVec<BoxKey, Option<StyleSlot>, 64>,
+    /// Intrinsics and identifiers held only by replaced boxes.
+    replaced: &'a PagedVec<BoxKey, Option<ReplacedBox>, 64>,
+    /// The box the document is laid out from.
+    root: Option<BoxKey>,
+}
+
+impl<'a> Structure<'a> {
+    /// The record for one box.
+    pub(crate) fn get(&self, key: BoxKey) -> Option<&'a BoxNode> {
+        self.boxes.get(slot(key))
+    }
+
+    /// The record for one box, which must exist.
+    ///
+    /// # Panics
+    ///
+    /// If the key names no live box.
+    pub(crate) fn node(&self, key: BoxKey) -> &'a BoxNode {
+        self.get(key).expect("a live box key")
+    }
+
+    /// A live box's style in the layout algorithms' vocabulary.
+    ///
+    /// # Panics
+    ///
+    /// If the key names no live box, or no pass has lowered the styles yet.
+    pub(crate) fn lowered_style(&self, key: BoxKey) -> &'a crate::style::lowered::LayoutStyle {
+        let slot = self
+            .style_slots
+            .get(key)
+            .copied()
+            .flatten()
+            .expect("a live box holds a style slot");
+        self.styles.lowered(slot)
+    }
+
+    /// Resolves a `calc()` handle a lowering embedded.
+    pub(crate) fn resolve_calc(&self, value: *const (), basis: f32) -> f32 {
+        self.styles.resolve_calc(value, basis)
+    }
+
+    /// The replaced-content record one box holds, if it is a replaced box.
+    pub(crate) fn replaced(&self, key: BoxKey) -> Option<&'a ReplacedBox> {
+        self.replaced.get(key)?.as_ref()
+    }
+
+    /// Walks every live box, in no particular order.
+    pub(crate) fn keys(&self) -> Vec<BoxKey> {
         let mut keys = Vec::new();
         if let Some(root) = self.root {
             let mut stack = vec![root];

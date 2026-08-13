@@ -62,6 +62,11 @@ impl StyleDraft {
         self.values.mutate_position()
     }
 
+    /// The padding group, for writing.
+    pub fn padding(&mut self) -> &mut style_structs::Padding {
+        self.values.mutate_padding()
+    }
+
     /// The list group, for writing.
     pub fn list(&mut self) -> &mut style_structs::List {
         self.values.mutate_list()

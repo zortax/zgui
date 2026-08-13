@@ -3,7 +3,7 @@
 use zgui_dom::side::BoxKey;
 
 use crate::node::kind::FormattingContext;
-use crate::tree::store::LayoutStore;
+use crate::tree::store::Structure;
 
 /// One piece of an inline formatting context, in document order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub(crate) enum Piece {
 ///
 /// Boxes that generate nothing are skipped here rather than filtered later, so that a `display:
 /// none` span leaves no trace in the string and therefore none in any offset mapped through it.
-pub(crate) fn pieces(store: &LayoutStore, root: BoxKey) -> Vec<Piece> {
+pub(crate) fn pieces(store: Structure<'_>, root: BoxKey) -> Vec<Piece> {
     let mut out = Vec::new();
     // A run of text that is block-level on its own — one that became a flex or grid item — is a
     // context whose whole content is itself.
@@ -41,7 +41,7 @@ pub(crate) fn pieces(store: &LayoutStore, root: BoxKey) -> Vec<Piece> {
 }
 
 /// Appends one child and everything below it.
-fn push(store: &LayoutStore, key: BoxKey, out: &mut Vec<Piece>) {
+fn push(store: Structure<'_>, key: BoxKey, out: &mut Vec<Piece>) {
     let Some(node) = store.get(key) else {
         return;
     };
@@ -106,7 +106,7 @@ mod tests {
         store.get_mut(root).expect("live").children = vec![span, image];
 
         assert_eq!(
-            pieces(&store, root),
+            pieces(store.structure(), root),
             vec![
                 Piece::Enter(span),
                 Piece::Text(text),

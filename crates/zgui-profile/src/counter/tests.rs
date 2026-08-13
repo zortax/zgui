@@ -14,7 +14,7 @@ fn exclusive() -> MutexGuard<'static, ()> {
 
 #[test]
 fn the_set_is_complete_and_has_no_duplicates() {
-    assert_eq!(Counter::COUNT, 82);
+    assert_eq!(Counter::COUNT, 83);
     assert_eq!(Counter::ALL.len(), Counter::COUNT);
 
     let names: BTreeSet<&str> = Counter::ALL.iter().map(|counter| counter.name()).collect();

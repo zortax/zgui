@@ -30,6 +30,7 @@ zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 taffy.workspace = true
 
 rustc-hash.workspace = true
+rayon.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
 

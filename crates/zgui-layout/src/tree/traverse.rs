@@ -17,15 +17,15 @@ impl<C> TraversePartialTree for LayoutTree<'_, C> {
         Self: 'a;
 
     fn child_ids(&self, parent: NodeId) -> Self::ChildIter<'_> {
-        ChildIter::new(&self.store().node(from_node_id(parent)).children)
+        ChildIter::new(&self.structure().node(from_node_id(parent)).children)
     }
 
     fn child_count(&self, parent: NodeId) -> usize {
-        self.store().node(from_node_id(parent)).children.len()
+        self.structure().node(from_node_id(parent)).children.len()
     }
 
     fn get_child_id(&self, parent: NodeId, index: usize) -> NodeId {
-        let children = &self.store().node(from_node_id(parent)).children;
+        let children = &self.structure().node(from_node_id(parent)).children;
         crate::key::to_node_id(children[index])
     }
 }

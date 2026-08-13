@@ -447,7 +447,105 @@ fn initialize_track_sizes(
 }
 
 /// 11.5.1 Shim baseline-aligned items so their intrinsic size contributions reflect their baseline alignment.
+///
+/// ZGUI-PATCH: dispatch between the original serial form and the batched form.
 fn resolve_item_baselines(
+    tree: &mut impl LayoutPartialTree,
+    axis: AbstractAxis,
+    items: &mut [GridItem],
+    inner_node_size: Size<Option<f32>>,
+) {
+    if tree.wants_batches() && items.len() >= crate::compute::BATCH_MIN_ITEMS {
+        resolve_item_baselines_batched(tree, axis, items, inner_node_size);
+    } else {
+        resolve_item_baselines_serial(tree, axis, items, inner_node_size);
+    }
+}
+
+/// ZGUI-PATCH: the baseline measurements read only frozen per-item inputs, so every
+/// participating row's items are collected and batched; the write-back replays the same rows in
+/// the same order.
+fn resolve_item_baselines_batched(
+    tree: &mut impl LayoutPartialTree,
+    axis: AbstractAxis,
+    items: &mut [GridItem],
+    inner_node_size: Size<Option<f32>>,
+) {
+    use crate::compute::batch_scratch;
+    use crate::tree::{ChildRequest, LayoutInput, RequestedAxis, RunMode, SizingMode};
+
+    let other_axis = axis.other();
+    items.sort_by_key(|item| item.placement(other_axis).start);
+
+    // Rows as index ranges over the sorted items, with their participation decided once.
+    let mut rows: Vec<(core::ops::Range<usize>, bool)> = Vec::new();
+    let mut start = 0;
+    while start < items.len() {
+        let current = items[start].placement(other_axis).start;
+        let end = items[start..]
+            .iter()
+            .position(|item| item.placement(other_axis).start != current)
+            .map_or(items.len(), |offset| start + offset);
+        let participating =
+            items[start..end].iter().filter(|item| item.align_self == AlignSelf::BASELINE).count() > 1;
+        rows.push((start..end, participating));
+        start = end;
+    }
+
+    let (mut requests, mut outputs) = batch_scratch::take();
+    for (range, participating) in rows.iter() {
+        if !participating {
+            continue;
+        }
+        for item in items[range.clone()].iter() {
+            requests.push(ChildRequest {
+                node: item.node,
+                input: LayoutInput {
+                    known_dimensions: Size::NONE,
+                    parent_size: inner_node_size,
+                    available_space: Size::MIN_CONTENT,
+                    sizing_mode: SizingMode::InherentSize,
+                    axis: RequestedAxis::Both,
+                    run_mode: RunMode::PerformLayout,
+                    vertical_margins_are_collapsible: Line::FALSE,
+                },
+            });
+        }
+    }
+    tree.compute_child_layouts(&requests, &mut outputs);
+    let mut next = outputs.iter();
+
+    for (range, participating) in rows {
+        if !participating {
+            continue;
+        }
+        let row_items = &mut items[range];
+        for item in row_items.iter_mut() {
+            let measured_size_and_baselines =
+                next.next().expect("every participating item was batched");
+
+            let baseline = measured_size_and_baselines.first_baselines.y;
+            let height = measured_size_and_baselines.size.height;
+
+            item.baseline = Some(
+                baseline.unwrap_or(height)
+                    + item.margin.top.resolve_or_zero(inner_node_size.width, |val, basis| tree.calc(val, basis)),
+            );
+        }
+
+        let row_max_baseline =
+            row_items.iter().map(|item| item.baseline.unwrap_or(0.0)).max_by(|a, b| a.total_cmp(b)).unwrap();
+        for item in row_items.iter_mut() {
+            item.baseline_shim = row_max_baseline - item.baseline.unwrap_or(0.0);
+        }
+    }
+
+    drop(next);
+    batch_scratch::give((requests, outputs));
+}
+
+/// ZGUI-PATCH: the unmodified serial form, taken when the tree wants no batches.
+fn resolve_item_baselines_serial(
     tree: &mut impl LayoutPartialTree,
     axis: AbstractAxis,
     items: &mut [GridItem],

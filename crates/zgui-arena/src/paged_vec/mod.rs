@@ -215,6 +215,61 @@ impl<K: ArenaKey, V: Default, const N: usize> PagedVec<K, V, N> {
         core::mem::replace(self.get_mut(key), value)
     }
 
+    /// Borrows many entries at once, exclusively and simultaneously.
+    ///
+    /// This is what hands a group of workers their disjoint slices of one table: each borrow is
+    /// carved off by a progressive split, so the exclusivity is the ordinary borrow rules and no
+    /// unsafe code is involved.
+    ///
+    /// # Panics
+    ///
+    /// If the keys are not strictly ascending by index — sorted and deduplicated is the caller's
+    /// statement that the borrows cannot alias — or if any key's page has never been written.
+    pub fn disjoint_mut(&mut self, keys: &[K]) -> Vec<&mut V> {
+        assert!(
+            keys.windows(2)
+                .all(|pair| pair[0].index() < pair[1].index()),
+            "disjoint borrows need strictly ascending keys"
+        );
+        // Bookkeeping first, while the table is still whole: every borrowed entry may be written.
+        for &key in keys {
+            self.check(key);
+            let (page, _) = split::<K, N>(key);
+            self.written.mark(page);
+        }
+        let mut out = Vec::with_capacity(keys.len());
+        let mut rest: &mut [Option<Page<V, N>>] = &mut self.pages;
+        let mut next_page = 0usize;
+        let mut index = 0;
+        while index < keys.len() {
+            let (page, _) = split::<K, N>(keys[index]);
+            let (_, tail) = rest.split_at_mut(page - next_page);
+            let (entry_page, tail) = tail
+                .split_first_mut()
+                .expect("every borrowed key is within the table");
+            rest = tail;
+            next_page = page + 1;
+            let mut slots: &mut [V] = entry_page
+                .as_mut()
+                .expect("every borrowed key has a written page")
+                .slice_mut();
+            let mut next_slot = 0usize;
+            while index < keys.len() {
+                let (entry_page_index, slot) = split::<K, N>(keys[index]);
+                if entry_page_index != page {
+                    break;
+                }
+                let (_, tail) = slots.split_at_mut(slot - next_slot);
+                let (entry, tail) = tail.split_first_mut().expect("a slot is within its page");
+                slots = tail;
+                next_slot = slot + 1;
+                out.push(entry);
+                index += 1;
+            }
+        }
+        out
+    }
+
     /// Resets the value stored for a key to the default.
     ///
     /// A key on an absent page is already the default, so this never allocates.
@@ -500,5 +555,42 @@ mod tests {
                 prop_assert_eq!(table.get(key(slot)), Some(&value));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod disjoint_tests {
+    use crate::{ChunkArena, DomainId, PagedVec};
+
+    #[test]
+    fn disjoint_borrows_span_pages_and_write_independently() {
+        let mut arena: ChunkArena<u32> = ChunkArena::new(DomainId::FIRST);
+        let keys: Vec<_> = (0..2100).map(|value| arena.insert(value)).collect();
+        let mut table: PagedVec<_, u32> = PagedVec::for_domain(arena.domain());
+        for &key in &keys {
+            *table.get_mut(key) = 1;
+        }
+        // Across three pages of the default page length, out of one call.
+        let picked = [keys[0], keys[1], keys[1023], keys[1024], keys[2099]];
+        let borrows = table.disjoint_mut(&picked);
+        assert_eq!(borrows.len(), 5);
+        for (offset, entry) in borrows.into_iter().enumerate() {
+            *entry += offset as u32;
+        }
+        assert_eq!(*table.get_mut(picked[4]), 5);
+        assert_eq!(*table.get_mut(picked[0]), 1);
+        assert_eq!(*table.get_mut(picked[3]), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "strictly ascending")]
+    fn unsorted_keys_are_refused() {
+        let mut arena: ChunkArena<u32> = ChunkArena::new(DomainId::FIRST);
+        let first = arena.insert(1);
+        let second = arena.insert(2);
+        let mut table: PagedVec<_, u32> = PagedVec::for_domain(arena.domain());
+        *table.get_mut(first) = 1;
+        *table.get_mut(second) = 1;
+        let _ = table.disjoint_mut(&[second, first]);
     }
 }

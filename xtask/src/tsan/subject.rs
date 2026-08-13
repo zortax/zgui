@@ -62,6 +62,18 @@ pub(crate) const SUBJECTS: &[Subject] = &[
         purpose: "the parallel style traversal at every worker count the engine supports",
         expectation: Expectation::Silent,
     },
+    Subject {
+        package: "zgui-text-parley",
+        test: "parallel_shape",
+        purpose: "forked shapers on worker threads over one shared font system",
+        expectation: Expectation::Silent,
+    },
+    Subject {
+        package: "zgui-layout",
+        test: "parallel_layout",
+        purpose: "layout batch workers over one shared store, at several pool widths",
+        expectation: Expectation::Silent,
+    },
 ];
 
 impl Subject {

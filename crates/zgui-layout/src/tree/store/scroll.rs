@@ -34,16 +34,4 @@ impl LayoutStore {
             state.scroll_lock = axes;
         }
     }
-
-    /// Which axes of one box reserve a scrollbar gutter whatever its own style says.
-    ///
-    /// The union of the decision an `overflow: auto` box reached and the gutter a locked container
-    /// is holding, which is the whole of what layout itself contributes to the question.
-    pub(crate) fn reserved_gutter(&self, key: BoxKey) -> (bool, bool) {
-        let held = self.auto_scroll(key);
-        match self.scroll_lock(key) {
-            Some(locked) => (held.0 || locked.0, held.1 || locked.1),
-            None => held,
-        }
-    }
 }

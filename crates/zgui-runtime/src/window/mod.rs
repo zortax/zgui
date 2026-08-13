@@ -121,10 +121,23 @@ pub struct Window {
     host_handle: HostHandle,
     /// The rule set and the device.
     engine: StyleEngine,
+    /// The application's cascade pool, when it runs one.
+    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
+    /// Whether the next restyle is a broad one, which is what the pool is for.
+    ///
+    /// True for the first cascade — the largest this window will ever run — and again whenever
+    /// the device is rebuilt, which recascades everything. An incremental restyle stays on the
+    /// frame thread: measured on the scroll-recycle path, handing a handful of arriving rows to
+    /// the pool cost four percent of the frame and bought nothing.
+    broad_restyle: bool,
+    /// The application's layout pool, when it runs one.
+    layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
     /// The boxes, their results and their fragments.
     layout: Rc<RefCell<LayoutStore>>,
     /// What is under a point.
     hit: HitIndex,
+    /// The reusable buffers the fragment walk works in, warm across frames.
+    diff_scratch: zgui_layout::fragment::diff::DiffScratch,
     /// Where each scroll container is scrolled to, and everything that moves one over time.
     scroll: Rc<RefCell<zgui_scroll::Scroller>>,
     /// What this desktop means by one detent of a wheel, and which way it points.
@@ -587,8 +600,12 @@ impl Window {
             host,
             host_handle,
             engine,
+            style_pool: None,
+            broad_restyle: true,
+            layout_pool: None,
             layout,
             hit: HitIndex::new(),
+            diff_scratch: zgui_layout::fragment::diff::DiffScratch::default(),
             scroll,
             last_frame: None,
             animator: zgui_anim::Animator::new(),
@@ -1089,6 +1106,21 @@ impl Window {
             scope.unmount();
         }
         self.dom.end_frame();
+    }
+}
+
+impl Window {
+    /// Hands this window the application's cascade pool.
+    pub(crate) fn set_style_pool(&mut self, pool: Rc<zgui_style::engine::thread_pool::StylePool>) {
+        self.style_pool = Some(pool);
+    }
+
+    /// Hands this window the application's layout pool.
+    pub(crate) fn set_layout_pool(
+        &mut self,
+        pool: std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>,
+    ) {
+        self.layout_pool = Some(pool);
     }
 }
 

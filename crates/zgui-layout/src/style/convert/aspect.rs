@@ -13,6 +13,19 @@ use zgui_css::values::size::{AspectRatioValue, PreferredRatio};
 /// A degenerate ratio — one with a zero on either side — is discarded, because CSS says such a
 /// ratio behaves as though none had been written.
 pub fn aspect_ratio(value: &AspectRatioValue, natural: Option<f32>) -> Option<f32> {
+    let (explicit, auto) = split(value);
+    if auto {
+        natural.or(explicit)
+    } else {
+        explicit.or(natural)
+    }
+}
+
+/// The property's two halves: the written ratio, if it is not degenerate, and whether the
+/// content's natural proportions are preferred.
+///
+/// Split out so a lowering can hold the style's half and supply a box's natural ratio later.
+pub(crate) fn split(value: &AspectRatioValue) -> (Option<f32>, bool) {
     let explicit = match &value.ratio {
         PreferredRatio::None => None,
         PreferredRatio::Ratio(ratio) => {
@@ -20,11 +33,7 @@ pub fn aspect_ratio(value: &AspectRatioValue, natural: Option<f32>) -> Option<f3
             (width > 0.0 && height > 0.0).then_some(width / height)
         }
     };
-    if value.auto {
-        natural.or(explicit)
-    } else {
-        explicit.or(natural)
-    }
+    (explicit, value.auto)
 }
 
 #[cfg(test)]

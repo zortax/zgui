@@ -12,7 +12,7 @@ use crate::tree::store::full::FullLayout;
 use crate::tree::store::measured::Measured;
 
 /// One box's layout-time state: what the engine cached, and what it produced.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct BoxLayout {
     /// The one full-layout answer a box may safely replay.
     pub(crate) full: FullLayout,
@@ -88,6 +88,12 @@ pub(crate) struct BoxLayout {
     /// not on the width it is asked about: a paragraph probed at twenty widths, and a document laid
     /// out again because something elsewhere moved, both reuse it.
     pub(crate) flattened: Option<Box<Flattened>>,
+    /// The shrink-to-fit answers this box holds, when it is an atomic inline that was measured.
+    ///
+    /// The fourth cache storey, emptied with the other three. See
+    /// [`AtomicAnswers`](crate::inline::atomic::AtomicAnswers) for why the constraint key lets it
+    /// survive a pass.
+    pub(crate) atomic: Option<Box<crate::inline::atomic::AtomicAnswers>>,
     /// The fragments this box produced.
     pub(crate) fragments: FragList,
     /// Which axes of an `overflow: auto` box were decided to scroll.
@@ -111,6 +117,9 @@ impl BoxLayout {
     pub(crate) fn forget_layout(&mut self) {
         self.forget_cached_sizes();
         self.intrinsic = [None, None];
+        if let Some(answers) = self.atomic.as_deref_mut() {
+            answers.clear();
+        }
     }
 
     /// Throws away the two cache storeys, keeping the intrinsic answer.

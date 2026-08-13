@@ -103,6 +103,23 @@ impl<E> ParagraphCache<E> {
         );
     }
 
+    /// Takes every shaped result out, in no particular order.
+    ///
+    /// For a worker cache being absorbed into the one the frame reads: the entries move whole,
+    /// break state included, so the lines a worker kept are the lines later stages find.
+    pub fn drain_shaped(&mut self) -> impl Iterator<Item = ShapedParagraph<E>> + '_ {
+        self.entries.drain().map(|(_, entry)| entry.shaped)
+    }
+
+    /// Takes one shaped result out, if it is held.
+    ///
+    /// The ownership move a batch worker needs: breaking mutates the entry, so the worker that
+    /// will break a paragraph has to own it for the duration, and the frame's cache gets it back
+    /// when the worker is absorbed.
+    pub fn take(&mut self, key: ParagraphKey) -> Option<ShapedParagraph<E>> {
+        self.entries.remove(&key).map(|entry| entry.shaped)
+    }
+
     /// Drops everything, and reports how many results that threw away.
     ///
     /// The count is the whole answer to "is anything now stale": every measurement taken from a

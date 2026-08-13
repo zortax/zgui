@@ -1,11 +1,12 @@
 //! The computed style, as the layout algorithms see it.
 //!
-//! No layout-engine style struct is ever built. The algorithms read styles through traits, and what
-//! implements those traits is [`StyleRef`] — a borrow of one box's computed style, two numbers the
-//! document supplies, and whatever the intrinsic pre-pass measured. It is [`Copy`], it holds no
-//! lock and no guard, and it is dropped before any recursion, which is what the algorithms require
-//! of it: they interleave shared style reads with exclusive recursion into the tree, and anything
-//! holding a borrow across that boundary deadlocks or fails to compile.
+//! No layout-engine style struct is built per box. The algorithms read styles through traits, and
+//! what implements those traits is [`StyleRef`] — a borrow of one box and its interned
+//! [`lowered::LayoutStyle`], plus whatever varies per box: the intrinsic pre-pass measurements,
+//! a replaced box's natural ratio, and the gutters layout has decided. It is [`Copy`], it holds
+//! no lock and no guard, and it is dropped before any recursion, which is what the algorithms
+//! require of it: they interleave shared style reads with exclusive recursion into the tree, and
+//! anything holding a borrow across that boundary deadlocks or fails to compile.
 
 pub mod block;
 pub mod calc;
@@ -14,16 +15,14 @@ pub mod core;
 pub mod flex;
 pub mod gap;
 pub mod grid;
+pub(crate) mod lowered;
 
-use ::core::cell::RefCell;
-
-use zgui_css::values::size::{BoxSizingValue, DisplayOutside, VisibilityValue};
 use zgui_css::{ComputedStyle, computed::style::style_structs};
 
 use crate::node::box_node::BoxNode;
 use crate::node::kind::FormattingContext;
-use crate::style::calc::CalcArena;
 use crate::style::convert::length::IntrinsicSizes;
+use crate::style::lowered::LayoutStyle;
 
 /// Whether two computed styles are the same cascade result, as opposed to two that merely agree.
 ///
@@ -78,8 +77,8 @@ pub struct MeasuredSizes {
 pub struct StyleRef<'a> {
     /// The box whose style this is.
     node: &'a BoxNode,
-    /// Where `calc()` expressions are interned for this pass.
-    calc: &'a RefCell<CalcArena>,
+    /// The box's style, lowered once into the layout algorithms' vocabulary.
+    lowered: &'a LayoutStyle,
     /// The numbers no style carries.
     device: DeviceStyle,
     /// What the intrinsic pre-pass measured for this box.
@@ -96,16 +95,16 @@ pub struct StyleRef<'a> {
 
 impl<'a> StyleRef<'a> {
     /// A view over `node`'s style.
-    pub fn new(
+    pub(crate) fn new(
         node: &'a BoxNode,
-        calc: &'a RefCell<CalcArena>,
+        lowered: &'a LayoutStyle,
         device: DeviceStyle,
         measured: MeasuredSizes,
         natural_ratio: Option<f32>,
     ) -> Self {
         Self {
             node,
-            calc,
+            lowered,
             device,
             measured,
             natural_ratio,
@@ -135,11 +134,6 @@ impl<'a> StyleRef<'a> {
         &self.node.style
     }
 
-    /// The `box` property group.
-    pub(crate) fn box_(self) -> &'a style_structs::Box {
-        self.node.style.get_box()
-    }
-
     /// The `position` property group, which carries every sizing and alignment property.
     ///
     /// Named for the group rather than for the property, because one of the layout traits also has
@@ -158,9 +152,9 @@ impl<'a> StyleRef<'a> {
         self.device.scrollbar_width
     }
 
-    /// Where this pass interns `calc()`.
-    pub(crate) fn calc(self) -> &'a RefCell<CalcArena> {
-        self.calc
+    /// The style in the layout algorithms' vocabulary.
+    pub(crate) fn lowered(self) -> &'a LayoutStyle {
+        self.lowered
     }
 
     /// What the intrinsic pre-pass measured, stated the way a size in the style is stated.
@@ -168,14 +162,11 @@ impl<'a> StyleRef<'a> {
     /// The measurement is of the whole box — the padding and the border are inside the number that
     /// came back. A size written in the style is the *content* box unless `box-sizing` says
     /// otherwise, and the layout algorithms add the padding and border back on to whatever the
-    /// style asked for. So under `box-sizing: content-box` they come off here, or every box sized
-    /// by a content keyword ends up one padding and border wider and taller than its own content.
-    ///
-    /// Percentage padding resolves against no basis, which is nothing: a percentage inset
-    /// contributes nothing to an intrinsic size, because the size it would resolve against is the
-    /// one being computed.
+    /// style asked for. So under `box-sizing: content-box` they come off here — the lowering
+    /// carries the amount — or every box sized by a content keyword ends up one padding and border
+    /// wider and taller than its own content.
     pub(crate) fn measured(self) -> MeasuredSizes {
-        let inset = self.intrinsic_inset();
+        let inset = self.lowered.intrinsic_inset;
         MeasuredSizes {
             horizontal: self
                 .measured
@@ -185,32 +176,9 @@ impl<'a> StyleRef<'a> {
         }
     }
 
-    /// How much of a measurement is this box's own padding and border, as far as a size written in
-    /// the style is concerned.
-    fn intrinsic_inset(self) -> taffy::Size<f32> {
-        use taffy::{CoreStyle, ResolveOrZero};
-
-        if self.node.style.get_position().box_sizing != BoxSizingValue::ContentBox {
-            return taffy::Size {
-                width: 0.0,
-                height: 0.0,
-            };
-        }
-        let resolve =
-            |value: *const (), basis: f32| crate::style::calc::resolve_in(self.calc, value, basis);
-        let padding = self.padding().resolve_or_zero(None::<f32>, resolve);
-        let border = self.border().resolve_or_zero(None::<f32>, resolve);
-        (padding + border).sum_axes()
-    }
-
     /// The natural proportions of this box's content.
     pub(crate) fn natural_ratio(self) -> Option<f32> {
         self.natural_ratio
-    }
-
-    /// Whether text runs right to left in this box.
-    pub(crate) fn is_rtl(self) -> bool {
-        self.node.style.get_inherited_box().direction == zgui_css::values::text::Direction::Rtl
     }
 
     /// Whether this box generates no geometry at all.
@@ -220,9 +188,7 @@ impl<'a> StyleRef<'a> {
     /// a removed row is removed from a table.
     pub(crate) fn generates_no_box(self) -> bool {
         self.node.fc == FormattingContext::None
-            || (self.node.style.get_inherited_box().visibility == VisibilityValue::Collapse
-                && self.node.style.get_box().display.outside() != DisplayOutside::None
-                && self.is_flex_item())
+            || (self.lowered.collapses_as_flex_item && self.is_flex_item())
     }
 
     /// Whether this box's parent lays it out by flex rules.

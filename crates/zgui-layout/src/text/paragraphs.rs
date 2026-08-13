@@ -34,6 +34,16 @@ pub struct Paragraphs<S: ParagraphShaper, R = NaturalSize> {
     /// The cascade results those brushes were claimed against, held so that their addresses
     /// cannot be handed out to a later style while a shaped paragraph still names the slot.
     pinned: Vec<zgui_text_style::TextPaintKey>,
+    /// Forked shapers for the pre-shape workers, kept warm across frames.
+    forks: Vec<S>,
+    /// Batch-worker measurers, kept warm across batches so a fork costs a font context once.
+    workers: Vec<Paragraphs<S, NaturalSize>>,
+    /// Whether this measurer belongs to a batch worker and so may claim no brush slot.
+    ///
+    /// A slot is an identity later frames compare against, and a worker's table is thrown away —
+    /// a claim here would shape a run into a slot nothing owns. The pre-shape prepass flattens
+    /// every dirty context serially before a batch runs, so a worker only ever reuses claims.
+    sealed_paints: bool,
     /// Whoever can size content this engine does not lay out.
     replaced: R,
 }
@@ -57,7 +67,120 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
             cache: ParagraphCache::new(),
             paints: TextPaintTable::new(),
             pinned: Vec::new(),
+            forks: Vec::new(),
+            workers: Vec::new(),
+            sealed_paints: false,
             replaced,
+        }
+    }
+
+    /// A measurer one batch worker owns, drawing on a fork of this one's shaper.
+    ///
+    /// `None` when the shaper cannot fork, which keeps the batch serial. The shaped results held
+    /// under `owned` move out of this cache and into the worker's: breaking mutates an entry, so
+    /// the worker that will break a paragraph owns it for the batch, and everything comes back
+    /// through [`Paragraphs::absorb_worker`]. A key nothing holds is a worker-side shape — a
+    /// cost, never a wrong answer.
+    ///
+    /// Workers are pooled across calls, so a steady frame forks no font context at all.
+    pub fn fork_worker(&mut self, owned: &[ParagraphKey]) -> Option<Paragraphs<S, NaturalSize>> {
+        let mut worker = match self.workers.pop() {
+            Some(worker) => worker,
+            None => {
+                let mut worker = Paragraphs::new(self.shaper.fork()?);
+                worker.sealed_paints = true;
+                worker
+            }
+        };
+        for &key in owned {
+            if let Some(shaped) = self.cache.take(key) {
+                worker.cache.insert(shaped);
+            }
+        }
+        Some(worker)
+    }
+
+    /// Takes a worker's shaped results into the cache the frame reads, and keeps the worker warm.
+    ///
+    /// Entries move whole — break state included — and replace what stands under their keys, so
+    /// the lines a worker kept are the lines painting finds. Called in request order, which makes
+    /// the winner of a shared key the one a serial pass would have kept.
+    pub fn absorb_worker(&mut self, mut worker: Paragraphs<S, NaturalSize>) {
+        for shaped in worker.cache.drain_shaped() {
+            self.cache.insert(shaped);
+        }
+        self.workers.push(worker);
+    }
+
+    /// Shapes the given paragraphs before layout asks for them, across `pool`'s workers.
+    ///
+    /// Keys the cache already holds are skipped. The rest are shaped on forked shapers and
+    /// inserted in job order, so layout finds every one warm and the cache is filled exactly as
+    /// serial shaping would have filled it. An engine that cannot fork shapes serially here,
+    /// which still warms the cache.
+    pub fn pre_shape(
+        &mut self,
+        jobs: &[(ParagraphKey, ParagraphContent<'_>)],
+        pool: &crate::tree::parallel::LayoutPool,
+    ) where
+        S: Send,
+        S::Engine: Send,
+    {
+        // Identical contexts share one key — a list of identical rows is the common case — so a
+        // key is taken once however many jobs carry it.
+        let mut taken: Vec<ParagraphKey> = Vec::new();
+        let misses: Vec<usize> = jobs
+            .iter()
+            .enumerate()
+            .filter(|(_, (key, _))| {
+                if self.cache.holds(*key) || taken.contains(key) {
+                    return false;
+                }
+                taken.push(*key);
+                true
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if misses.is_empty() {
+            return;
+        }
+        let wanted = pool.width().min(misses.len());
+        while self.forks.len() < wanted {
+            match self.shaper.fork() {
+                Some(fork) => self.forks.push(fork),
+                None => break,
+            }
+        }
+        // One miss gains nothing from a worker, and an unforkable engine has none to give.
+        if self.forks.is_empty() || misses.len() < 2 {
+            for &index in &misses {
+                let (key, content) = &jobs[index];
+                let shaped = self.shaper.shape_keyed(*key, content);
+                self.cache.insert(shaped);
+            }
+            return;
+        }
+        let per_chunk = misses.len().div_ceil(self.forks.len());
+        let mut outs: Vec<Vec<zgui_text::ShapedParagraph<S::Engine>>> =
+            (0..self.forks.len()).map(|_| Vec::new()).collect();
+        pool.scope(|scope| {
+            for ((fork, chunk), out) in self
+                .forks
+                .iter_mut()
+                .zip(misses.chunks(per_chunk))
+                .zip(outs.iter_mut())
+            {
+                scope.spawn(move |_| {
+                    for &index in chunk {
+                        let (key, content) = &jobs[index];
+                        out.push(fork.shape_keyed(*key, content));
+                    }
+                });
+            }
+        });
+        // Chunking preserved miss order, so this insertion order is the serial one.
+        for shaped in outs.into_iter().flatten() {
+            self.cache.insert(shaped);
         }
     }
 
@@ -179,6 +302,13 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
     }
 
     fn paint_slot(&mut self, paint: &TextPaint) -> Brush {
+        // See the field: a worker claiming would shape a run into a slot nothing owns, and the
+        // wrong colour it produces later has no error attached anywhere. The prepass flattening
+        // every dirty context first is what makes this unreachable.
+        assert!(
+            !self.sealed_paints,
+            "a batch worker was asked to claim a brush slot; a context was not pre-flattened"
+        );
         let address = paint.key.addr() as u64;
         let colour = paint.color;
         // The one thing that can be wrong here and produce no error anywhere. A slot answers to a

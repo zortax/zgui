@@ -38,19 +38,34 @@ use crate::tree::store::measured::probe::{Answer, Probe};
 const CAPACITY: usize = 16;
 
 /// The size-only answers one box is holding.
-#[derive(Debug, Default)]
+///
+/// A boxed fixed ring rather than a growable vector: a box that measures at all tends to fill
+/// several slots, so growth reallocated most rings two or three times per invalidation cycle,
+/// and a box that never measures pays one machine word. The ring is allocated at the first
+/// answer and never resized.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Measured {
-    /// The questions and their answers, oldest first.
-    entries: Vec<(Probe, Answer)>,
+    /// The ring, absent until a first answer arrives.
+    ring: Option<Box<Ring>>,
+}
+
+/// The questions and their answers.
+#[derive(Clone, Debug)]
+struct Ring {
+    /// The answers, oldest first.
+    entries: [(Probe, Answer); CAPACITY],
+    /// How many entries are filled.
+    len: u8,
     /// Where the next answer overwrites once the ring is full.
-    next: usize,
+    next: u8,
 }
 
 impl Measured {
     /// The answer this box gave to the same question, if it is still holding it.
     pub(crate) fn get(&self, input: &LayoutInput) -> Option<Answer> {
+        let ring = self.ring.as_deref()?;
         let probe = Probe::of(input);
-        self.entries
+        ring.filled()
             .iter()
             .find(|(held, _)| *held == probe)
             .map(|&(_, answer)| answer)
@@ -59,27 +74,59 @@ impl Measured {
     /// Records the answer to one question.
     pub(crate) fn insert(&mut self, input: &LayoutInput, answer: Answer) {
         let probe = Probe::of(input);
-        if let Some(slot) = self.entries.iter_mut().find(|(held, _)| *held == probe) {
+        let ring = self.ring.get_or_insert_with(|| {
+            Box::new(Ring {
+                entries: [(probe, answer); CAPACITY],
+                len: 0,
+                next: 0,
+            })
+        });
+        if let Some(slot) = ring
+            .filled_mut()
+            .iter_mut()
+            .find(|(held, _)| *held == probe)
+        {
             slot.1 = answer;
             return;
         }
-        if self.entries.len() < CAPACITY {
-            self.entries.push((probe, answer));
+        if (ring.len as usize) < CAPACITY {
+            ring.entries[ring.len as usize] = (probe, answer);
+            ring.len += 1;
             return;
         }
-        self.entries[self.next] = (probe, answer);
-        self.next = (self.next + 1) % CAPACITY;
+        ring.entries[ring.next as usize] = (probe, answer);
+        ring.next = (ring.next + 1) % CAPACITY as u8;
     }
 
     /// Whether this box is holding no answer at all.
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.ring.as_deref().is_none_or(|ring| ring.len == 0)
     }
 
-    /// Forgets every answer.
+    /// How many answers are held.
+    #[cfg(test)]
+    pub(crate) fn held(&self) -> usize {
+        self.ring.as_deref().map_or(0, |ring| ring.len as usize)
+    }
+
+    /// Forgets every answer. The ring's storage is kept for the next one.
     pub(crate) fn clear(&mut self) {
-        self.entries.clear();
-        self.next = 0;
+        if let Some(ring) = self.ring.as_deref_mut() {
+            ring.len = 0;
+            ring.next = 0;
+        }
+    }
+}
+
+impl Ring {
+    /// The entries holding an answer.
+    fn filled(&self) -> &[(Probe, Answer)] {
+        &self.entries[..self.len as usize]
+    }
+
+    /// The same, for updating an answer in place.
+    fn filled_mut(&mut self) -> &mut [(Probe, Answer)] {
+        &mut self.entries[..self.len as usize]
     }
 }
 

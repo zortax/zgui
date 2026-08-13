@@ -13,7 +13,7 @@ pub use cache::{Cache, ClearState};
 pub use layout::{CollapsibleMarginSet, Layout, LayoutInput, LayoutOutput, RequestedAxis, RunMode, SizingMode};
 pub use node::NodeId;
 pub(crate) use traits::LayoutPartialTreeExt;
-pub use traits::{LayoutPartialTree, PrintTree, RoundTree, TraversePartialTree, TraverseTree};
+pub use traits::{ChildRequest, LayoutPartialTree, PrintTree, RoundTree, SharedRequests, TraversePartialTree, TraverseTree};
 
 #[cfg(feature = "flexbox")]
 pub use traits::LayoutFlexboxContainer;

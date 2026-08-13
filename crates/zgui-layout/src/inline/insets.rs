@@ -17,9 +17,7 @@ pub(crate) fn frame_of<C: MeasureContent>(
     basis: Option<f32>,
 ) -> (Rect<f32>, Rect<f32>, Rect<f32>) {
     let style = tree.style_of(key);
-    let calc = |value: *const (), basis: f32| {
-        crate::style::calc::resolve_in(tree.calc_arena(), value, basis)
-    };
+    let calc = |value: *const (), basis: f32| tree.resolve_calc(value, basis);
     (
         taffy::CoreStyle::margin(&style).resolve_or_zero(basis, calc),
         taffy::CoreStyle::padding(&style).resolve_or_zero(basis, calc),
@@ -38,9 +36,7 @@ pub(crate) fn edges_of<C: MeasureContent>(
     basis: Option<f32>,
 ) -> (f32, f32) {
     let style = tree.style_of(key);
-    let calc = |value: *const (), basis: f32| {
-        crate::style::calc::resolve_in(tree.calc_arena(), value, basis)
-    };
+    let calc = |value: *const (), basis: f32| tree.resolve_calc(value, basis);
     let margin = taffy::CoreStyle::margin(&style).resolve_or_zero(basis, calc);
     let padding = taffy::CoreStyle::padding(&style).resolve_or_zero(basis, calc);
     let border = taffy::CoreStyle::border(&style).resolve_or_zero(basis, calc);

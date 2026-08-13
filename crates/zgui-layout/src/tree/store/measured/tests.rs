@@ -127,7 +127,7 @@ fn re_answering_one_question_overwrites_rather_than_growing() {
     memo.insert(&input, answer(40.0));
     memo.insert(&input, answer(50.0));
     assert_eq!(memo.get(&input), Some(answer(50.0)));
-    assert_eq!(memo.entries.len(), 1);
+    assert_eq!(memo.held(), 1);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn the_memo_is_bounded_and_keeps_the_newest() {
             answer(index as f32),
         );
     }
-    assert_eq!(memo.entries.len(), CAPACITY);
+    assert_eq!(memo.held(), CAPACITY);
     let newest = CAPACITY * 3 - 1;
     assert_eq!(
         memo.get(&probe(Some(newest as f32), AvailableSpace::MinContent)),

@@ -148,6 +148,10 @@ pub struct App {
     shared: Option<Box<dyn FnOnce()>>,
     /// When the application stops.
     exit: ExitPolicy,
+    /// How many workers the style cascade may use, when the default is not wanted.
+    style_threads: Option<usize>,
+    /// How many workers the layout engine may use, when the default is not wanted.
+    layout_threads: Option<usize>,
 }
 
 impl Default for App {
@@ -170,7 +174,30 @@ impl App {
             custom: None,
             shared: None,
             exit: ExitPolicy::default(),
+            style_threads: None,
+            layout_threads: None,
         }
+    }
+
+    /// How many workers the layout engine may use.
+    ///
+    /// The default is the machine's parallelism; the engine clamps to what it benefits from.
+    /// `0` and `1` mean layout runs on the frame thread with no pool at all. The
+    /// `ZGUI_LAYOUT_THREADS` environment variable overrides whatever is set here.
+    pub fn with_layout_threads(mut self, threads: usize) -> Self {
+        self.layout_threads = Some(threads);
+        self
+    }
+
+    /// How many workers the style cascade may use.
+    ///
+    /// The default is the machine's parallelism; the engine clamps to what it supports. `0` and
+    /// `1` mean the cascade runs on the frame thread with no pool at all. The `ZGUI_STYLE_THREADS`
+    /// environment variable overrides whatever is set here, so a run can be forced serial without
+    /// a rebuild.
+    pub fn with_style_threads(mut self, threads: usize) -> Self {
+        self.style_threads = Some(threads);
+        self
     }
 
     /// Runs `setup` in the scope above every window, before the first one opens.
@@ -436,11 +463,58 @@ pub struct Runtime {
     )>,
     /// Why the application stopped, if it did.
     failure: Failure,
+    /// The cascade's worker pool, shared by every window.
+    ///
+    /// Built eagerly so the first restyle — the largest cascade the application will ever run —
+    /// is the first to use it. `None` when the application asked for a serial cascade.
+    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
+    /// The layout engine's worker pool, shared the same way and for the same reason.
+    layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
+}
+
+/// The cascade pool an application runs with, from the environment or its builder.
+///
+/// `ZGUI_STYLE_THREADS` overrides the builder so a run can be forced serial, or to an exact
+/// width, without a rebuild.
+fn style_pool_for(
+    requested: Option<usize>,
+) -> Option<Rc<zgui_style::engine::thread_pool::StylePool>> {
+    let width = style_pool_width(
+        std::env::var("ZGUI_STYLE_THREADS").ok().as_deref(),
+        requested,
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+    );
+    (width > 1).then(|| Rc::new(zgui_style::engine::thread_pool::StylePool::new(width)))
+}
+
+/// How wide the cascade pool should be, with the environment over the builder over the machine.
+///
+/// `0` and `1` mean no pool: a one-worker pool costs scheduling and buys nothing over the frame
+/// thread. An unparseable environment value is ignored rather than honoured as zero, so a typo
+/// degrades to the configured behaviour instead of silently forcing a serial cascade.
+fn style_pool_width(env: Option<&str>, requested: Option<usize>, machine: usize) -> usize {
+    env.and_then(|value| value.trim().parse::<usize>().ok())
+        .or(requested)
+        .unwrap_or(machine)
+}
+
+/// The layout pool an application runs with, resolved the same way as the cascade's.
+fn layout_pool_for(
+    requested: Option<usize>,
+) -> Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>> {
+    let width = style_pool_width(
+        std::env::var("ZGUI_LAYOUT_THREADS").ok().as_deref(),
+        requested,
+        std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+    );
+    (width > 1).then(|| zgui_layout::tree::parallel::LayoutPool::new(width))
 }
 
 impl Runtime {
     /// Builds the handler for `app`.
     fn new(mut app: App, view: ViewFactory) -> Self {
+        let style_pool = style_pool_for(app.style_threads);
+        let layout_pool = layout_pool_for(app.layout_threads);
         let commands = WindowCommands::new();
         let clipboards = crate::clipboard::Clipboards::new();
         // The scope above every window: what is provided here is visible in all of them, and what a
@@ -510,6 +584,8 @@ impl Runtime {
             timers: Rc::new(RefCell::new(Timers::new())),
             waker: None,
             clock: None,
+            style_pool,
+            layout_pool,
             parked: Vec::new(),
             failure: Failure::default(),
         }
@@ -655,6 +731,12 @@ impl Runtime {
         // one travels and which way it points are both properties of the desktop, and a constant
         // above this line is a wheel that is wrong on every machine but the one it was written on.
         window.set_scroll_settings(cx.scroll_settings());
+        if let Some(pool) = &self.style_pool {
+            window.set_style_pool(Rc::clone(pool));
+        }
+        if let Some(pool) = &self.layout_pool {
+            window.set_layout_pool(std::sync::Arc::clone(pool));
+        }
         if let Some(embed) = self.embed.as_mut() {
             window.install_embed_host(embed());
         }
@@ -1122,5 +1204,26 @@ impl AppHandler for Runtime {
             window.close();
         }
         self.windows.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::style_pool_width;
+
+    #[test]
+    fn the_environment_overrides_the_builder_and_the_builder_the_machine() {
+        assert_eq!(style_pool_width(Some("4"), Some(2), 8), 4);
+        assert_eq!(style_pool_width(None, Some(2), 8), 2);
+        assert_eq!(style_pool_width(None, None, 8), 8);
+    }
+
+    #[test]
+    fn zero_and_one_mean_a_serial_cascade_and_a_typo_means_nothing() {
+        // The widths that build no pool pass through for the caller to test.
+        assert_eq!(style_pool_width(Some("0"), Some(4), 8), 0);
+        assert_eq!(style_pool_width(Some("1"), None, 8), 1);
+        assert_eq!(style_pool_width(Some("many"), Some(3), 8), 3);
+        assert_eq!(style_pool_width(Some(" 2 "), None, 8), 2);
     }
 }

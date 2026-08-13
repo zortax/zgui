@@ -33,6 +33,11 @@ impl<V, const N: usize> Page<V, N> {
         &mut self.0[slot]
     }
 
+    /// Borrows the whole page as one slice, for a caller splitting exclusive borrows out of it.
+    pub(crate) fn slice_mut(&mut self) -> &mut [V] {
+        &mut self.0[..]
+    }
+
     /// Every entry, in slot order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = &V> {
         self.0.iter()

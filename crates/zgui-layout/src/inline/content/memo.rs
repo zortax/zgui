@@ -17,7 +17,7 @@ use crate::inline::content::Generated;
 use crate::inline::content::collect::Piece;
 
 /// One inline formatting context's flattened form, and what it was flattened from.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Flattened {
     /// The device scale it was built at, which its paragraph indent is already expressed in.
     scale: f32,
@@ -48,6 +48,11 @@ impl Flattened {
     }
 
     /// The string a shaper was handed.
+    pub(crate) fn generated(&self) -> &std::sync::Arc<Generated> {
+        &self.content
+    }
+
+    /// The generated string this flattening produced.
     pub(crate) fn text(&self) -> &str {
         &self.content.text
     }

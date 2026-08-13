@@ -35,10 +35,12 @@ mod damage;
 mod dirty;
 mod geometry;
 mod rigid;
+mod scratch;
 pub mod split;
 
 pub use crate::fragment::diff::damage::pixels;
 pub use crate::fragment::diff::dirty::{DocumentMarks, Everything, FrameDirty, Owed};
+pub use crate::fragment::diff::scratch::DiffScratch;
 
 use crate::fragment::diff::damage::{absorb, overlaps, pairwise_disjoint};
 use crate::fragment::diff::geometry::{Geometry, compare};
@@ -90,6 +92,21 @@ pub fn rebuild(
     root: BoxKey,
     damage: &mut DamageSet,
 ) -> RigidMoves {
+    let mut scratch = DiffScratch::default();
+    rebuild_in(&mut scratch, store, hit, tables, dirty, root, damage)
+}
+
+/// The same walk in a caller's reusable buffers, which is what a per-frame caller wants.
+#[expect(clippy::too_many_arguments, reason = "the wrapped signature plus one")]
+pub fn rebuild_in(
+    scratch: &mut DiffScratch,
+    store: &mut LayoutStore,
+    hit: &mut HitIndex,
+    tables: &mut Tables<'_>,
+    dirty: &mut impl FrameDirty,
+    root: BoxKey,
+    damage: &mut DamageSet,
+) -> RigidMoves {
     // The frame boundary for the coordinate systems. A box that gave one back during the *previous*
     // frame kept it readable for the rest of that frame — the emit walk, the hit index and anything
     // asking where a box was all still resolved it — and this is where it stops. It is here rather
@@ -116,6 +133,7 @@ pub fn rebuild(
         tables,
         dirty,
         damage,
+        scratch,
         restacked: false,
         moves: RigidMoves::default(),
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
@@ -329,6 +347,8 @@ struct Pass<'a, 'b, D: FrameDirty> {
     dirty: &'a mut D,
     /// What must be redrawn.
     damage: &'a mut DamageSet,
+    /// The reusable buffers the walk works in.
+    scratch: &'a mut DiffScratch,
     /// Whether this walk produced a fragment that has no place in the painting order yet.
     restacked: bool,
     /// What the walk's rigid moves add up to.
@@ -417,24 +437,30 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // ones are pieces of the subtree and not part of the box's own ink. Folding them into it
         // would hide the commonest overlap there is — a background and the lines of text drawn on
         // top of it — behind a union that can never overlap itself.
+        let inks_mark = self.scratch.child_inks.len();
         let mut ink = Rect::ZERO;
-        let mut child_inks: Vec<Rect<DevicePx, Device>> = Vec::new();
-        for (slot, &frag) in fragments.iter().enumerate() {
+        for (slot, index) in fragments.clone().enumerate() {
+            let frag = self.scratch.written[index];
             let Some(fragment) = self.store.fragment(frag) else {
                 continue;
             };
             if slot == 0 {
                 ink = fragment.ink;
             } else {
-                child_inks.push(fragment.ink);
+                self.scratch.child_inks.push(fragment.ink);
             }
         }
 
-        let children = self.store.node(key).children.clone();
+        let children_mark = self.scratch.children.len();
+        self.scratch
+            .children
+            .extend_from_slice(&self.store.node(key).children);
+        let children_end = self.scratch.children.len();
+        let first_fragment = (!fragments.is_empty()).then(|| self.scratch.written[fragments.start]);
         let mut blending = placed.blends;
         let mut disjoint = true;
         let mut rigid = placed.rigid;
-        let mut subtree_ink = child_inks
+        let mut subtree_ink = self.scratch.child_inks[inks_mark..]
             .iter()
             .fold(ink, |held, piece| held.union(*piece));
         // A clean child may only be left alone if this box did not move: its own position is
@@ -446,16 +472,19 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // every descendant, so testing it would dismiss the skip for every sibling of anything
         // dirty, and the per-child test below is the refinement of exactly that question.
         let settled = !moved && !own.intersects(ENTERS);
-        for child in children {
+        // Deeper visits append their own regions past `children_end` and truncate them again, so
+        // the indices walked here stay this box's children throughout.
+        for index in children_mark..children_end {
+            let child = self.scratch.children[index];
             let clean = self.can_skip(child, owed.node);
             let folded = match movement {
                 _ if settled && clean => self.cached(child),
                 Some(movement) if clean && self.can_translate(child) => {
                     self.translate(child, movement)
                 }
-                _ => self.visit(child, placed.descent, fragments.first().copied(), owed.node),
+                _ => self.visit(child, placed.descent, first_fragment, owed.node),
             };
-            child_inks.push(folded.subtree_ink);
+            self.scratch.child_inks.push(folded.subtree_ink);
             blending |= folded.blending;
             disjoint &= folded.disjoint;
             rigid &= folded.rigid;
@@ -468,10 +497,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // children of the box's own fragment. Answered over ink, which is layout geometry, so no
         // damage set and no emission decision is an input to it: a frame that painted half the
         // subtree decides exactly what a frame that painted all of it decides.
+        let child_inks = &self.scratch.child_inks[inks_mark..];
         disjoint &= !child_inks.iter().any(|child| overlaps(ink, *child));
-        disjoint &= pairwise_disjoint(&child_inks);
+        disjoint &= pairwise_disjoint(child_inks);
 
-        self.record_fold(&fragments, subtree_ink, blending, disjoint, rigid);
+        self.record_fold(fragments.clone(), subtree_ink, blending, disjoint, rigid);
+        self.scratch.child_inks.truncate(inks_mark);
+        self.scratch.children.truncate(children_mark);
+        self.scratch.written.truncate(fragments.start);
         Folded {
             subtree_ink,
             blending,
@@ -566,33 +599,42 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     }
 
     /// Writes this box's fragments, reusing the names of the ones that are still there.
+    ///
+    /// Returns the region of the scratch written list holding this box's fragments, in draw
+    /// order. The caller truncates the region away when it is done with it.
     fn write_fragments(
         &mut self,
         key: BoxKey,
         placed: &Placed,
         parent: Option<FragKey>,
         owed: &Owed,
-    ) -> (Vec<FragKey>, bool) {
-        let kinds = self.kinds_of(key);
+    ) -> (core::ops::Range<usize>, bool) {
+        let kinds_mark = self.scratch.kinds.len();
+        self.kinds_of(key);
+        let count = self.scratch.kinds.len() - kinds_mark;
         // Names are kept for as long as the box keeps drawing the same things in the same
         // positions, because a name is what the hit index, the recorded painting and the previous
         // frame's damage all refer to. The first position that draws something different is where
         // reuse stops.
-        let keep = kinds
-            .iter()
-            .enumerate()
-            .take_while(|(slot, kind)| self.store.reusable_fragment(key, *slot, **kind).is_some())
-            .count();
+        let mut keep = 0;
+        while keep < count {
+            let kind = self.scratch.kinds[kinds_mark + keep];
+            if self.store.reusable_fragment(key, keep, kind).is_none() {
+                break;
+            }
+            keep += 1;
+        }
         self.retire(key, keep);
 
-        let mut written = Vec::with_capacity(kinds.len());
+        let written_mark = self.scratch.written.len();
         let mut moved = false;
-        for (slot, kind) in kinds.into_iter().enumerate() {
+        for slot in 0..count {
+            let kind = self.scratch.kinds[kinds_mark + slot];
             let geometry = self.geometry_for(key, placed, slot, kind);
             let parent = if slot == 0 {
                 parent
             } else {
-                written.first().copied()
+                Some(self.scratch.written[written_mark])
             };
             let frag = match self.store.reusable_fragment(key, slot, kind) {
                 Some(frag) => frag,
@@ -604,9 +646,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 }
             };
             moved |= self.update(frag, kind, &geometry, parent, owed) != Change::Identical;
-            written.push(frag);
+            self.scratch.written.push(frag);
         }
-        (written, moved)
+        self.scratch.kinds.truncate(kinds_mark);
+        (written_mark..self.scratch.written.len(), moved)
     }
 
     /// Drops every fragment of a box beyond the first `keep`, damaging what they covered.
@@ -614,29 +657,29 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// The rectangle a destroyed fragment occupied is nobody's ink from here on, so it is absorbed
     /// now or it is never absorbed at all and last frame's pixels stay on the screen.
     fn retire(&mut self, key: BoxKey, keep: usize) {
-        let stale: Vec<FragKey> = self
-            .store
-            .fragments_of_box(key)
-            .iter()
-            .skip(keep)
-            .copied()
-            .collect();
-        for frag in stale {
-            if let Some(fragment) = self.store.fragment(frag) {
-                // Where a destroyed piece *was*, so it is cut to nothing for the same reason a
-                // vacated rectangle is: the chain it named is last frame's.
-                let gone = fragment.subtree_ink;
-                self.damage_beyond_a_move(gone, Admitted::everything());
-            }
+        let mark = self.scratch.stale.len();
+        self.scratch
+            .stale
+            .extend(self.store.fragments_of_box(key).iter().skip(keep).copied());
+        for index in mark..self.scratch.stale.len() {
+            let frag = self.scratch.stale[index];
+            // Where a destroyed piece *was*, so it is cut to nothing for the same reason a
+            // vacated rectangle is: the chain it named is last frame's.
+            let Some(gone) = self.store.fragment(frag).map(|it| it.subtree_ink) else {
+                continue;
+            };
+            self.damage_beyond_a_move(gone, Admitted::everything());
         }
+        self.scratch.stale.truncate(mark);
         // The index is not touched here: `truncate_fragments` records what it destroyed, and the
         // one drain after the walk unregisters every destroyed name by the same route whether its
         // box was visited or deleted.
         self.store.truncate_fragments(key, keep);
     }
 
-    /// What each fragment of this box draws, in the order it draws them.
-    fn kinds_of(&self, key: BoxKey) -> Vec<FragmentKind> {
+    /// Appends what each fragment of this box draws, in the order it draws them, to the scratch
+    /// kind list.
+    fn kinds_of(&mut self, key: BoxKey) {
         let node = self.store.node(key);
         // A custom element before either: a registered implementation owns the box's painting
         // outright. Then a drawing before replaced content: an element carrying outlines is
@@ -654,10 +697,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             }
             crate::node::kind::PaintedContent::Box => FragmentKind::Box,
         };
-        let mut kinds = vec![own];
+        self.scratch.kinds.push(own);
         if let Some(resolution) = self.store.inline_resolution(key) {
             for index in 0..resolution.lines.len() {
-                kinds.push(FragmentKind::Line {
+                self.scratch.kinds.push(FragmentKind::Line {
                     paragraph: resolution.paragraph,
                     line: u16::try_from(index).unwrap_or(u16::MAX),
                 });
@@ -667,9 +710,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // slots its bars occupy — a name is what the hit index, the recorded painting and last
         // frame's damage all refer to, and reuse stops at the first slot that draws something else.
         if let Some(layout) = self.store.layout_of(key) {
-            kinds.extend(crate::scroll_region::bar::kinds(&layout));
+            self.scratch
+                .kinds
+                .extend(crate::scroll_region::bar::kinds(&layout));
         }
-        kinds
     }
 
     /// One fragment's geometry: the box's own for its first fragment, and one line's for the rest.
@@ -927,13 +971,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// Writes the three unwind answers onto this box's fragments.
     fn record_fold(
         &mut self,
-        fragments: &[FragKey],
+        fragments: core::ops::Range<usize>,
         subtree_ink: Rect<DevicePx, Device>,
         blending: bool,
         disjoint: bool,
         rigid: bool,
     ) {
-        for &frag in fragments {
+        for index in fragments {
+            let frag = self.scratch.written[index];
             let Some(fragment) = self.store.fragment_mut(frag) else {
                 continue;
             };

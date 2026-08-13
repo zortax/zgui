@@ -722,6 +722,8 @@ impl Window {
         let mut document = self.document.borrow_mut();
         let epoch = self.engine.device_epoch(&mut document, self.viewport);
         if epoch.changed {
+            // A device rebuild recascades everything, which is the breadth the pool is for.
+            self.broad_restyle = true;
             tracing::debug!(
                 target: "zgui::style",
                 origins = ?epoch.origins,
@@ -815,7 +817,14 @@ impl Window {
     /// restyled outside them would otherwise keep painting from the previous cascade.
     pub(crate) fn restyle(&mut self) -> usize {
         let mut document = self.document.borrow_mut();
-        let pass = self.engine.restyle(&mut document, None);
+        // The pool serves broad cascades and the frame thread serves incremental ones — see
+        // `Window::broad_restyle` for the measurement behind the split.
+        let pool = self
+            .broad_restyle
+            .then_some(())
+            .and(self.style_pool.as_deref());
+        let pass = self.engine.restyle(&mut document, pool);
+        self.broad_restyle = false;
         let mut layout = self.layout.borrow_mut();
         if pass.styled > 0 && layout.root().is_some() {
             zgui_layout::boxtree::patch::restyle(&mut layout, &document, &pass.styled_nodes());
@@ -974,9 +983,31 @@ impl Window {
         let height = surface.height.0;
         let relaid_out = {
             let mut layout = self.layout.borrow_mut();
+            // The pool's frames shape dirty plain-text paragraphs on workers before layout asks
+            // for them one at a time. On a frame with nothing dirty the walk exits at the clean
+            // root; a window without a pool never enters it.
+            if let Some(pool) = &self.layout_pool {
+                let jobs = {
+                    let mut tree = LayoutTree::new(&mut layout, &mut self.text, device);
+                    zgui_layout::text::preshape::collect(&mut tree)
+                };
+                if !jobs.is_empty() {
+                    self.text.pre_shape_paragraphs(&jobs.contents(), pool);
+                }
+            }
             let mut tree = LayoutTree::new(&mut layout, &mut self.text, device);
             if let Some(custom) = self.custom_layout.as_deref() {
                 tree = tree.with_custom(custom);
+            }
+            // Batches ride the pool by default. Workers write through refs carved out of the
+            // store and take ownership of the shaped paragraphs their subtrees hold, so a
+            // batch costs a steady frame nothing — the executor distributes only past eight
+            // cold subtrees and 256 planned boxes, a shape the `batch_scale` probe measured
+            // at half its serial time. `ZGUI_LAYOUT_BATCHES=0` opts a run out for A/B runs.
+            if let Some(pool) = &self.layout_pool
+                && std::env::var("ZGUI_LAYOUT_BATCHES").map_or(true, |value| value.trim() != "0")
+            {
+                tree = tree.with_parallel(pool);
             }
             let outcome = tree.relayout_root(zgui_layout::tree::viewport_of(surface));
             if !outcome.had_a_root() {
@@ -1026,7 +1057,8 @@ impl Window {
             self.damage_before_layout = self.damage;
         }
         self.layout_passes += 1;
-        let moved = zgui_layout::fragment::diff::rebuild(
+        let moved = zgui_layout::fragment::diff::rebuild_in(
+            &mut self.diff_scratch,
             &mut layout,
             &mut self.hit,
             &mut tables,

@@ -23,7 +23,7 @@ use crate::tree::LayoutTree;
 impl<C> CacheTree for LayoutTree<'_, C> {
     fn cache_get(&self, node: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
         let key = from_node_id(node);
-        let state = self.store().state(key)?;
+        let state = self.state(key)?;
         let mut output = match input.run_mode {
             RunMode::PerformLayout => state.full.get(input)?,
             RunMode::ComputeSize => {
@@ -40,7 +40,7 @@ impl<C> CacheTree for LayoutTree<'_, C> {
     }
 
     fn cache_store(&mut self, node: NodeId, input: &LayoutInput, output: LayoutOutput) {
-        let state = self.store_mut().state_mut(from_node_id(node));
+        let state = self.state_mut(from_node_id(node));
         match input.run_mode {
             RunMode::PerformLayout => state.full.store(input, output),
             RunMode::ComputeSize => {

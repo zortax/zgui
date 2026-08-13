@@ -5,47 +5,49 @@
 //! device pixels on the way through, because layout runs on the physical pixel grid rather than the
 //! CSS one — which is what lets the snapping pass produce crisp edges at a fractional scale.
 
-use core::cell::RefCell;
-
 use taffy::prelude::TaffyAuto;
 use taffy::{Dimension, LengthPercentage, LengthPercentageAuto};
 use zgui_css::values::length::LengthPercentage as CssLengthPercentage;
 use zgui_css::values::size::{InsetValue, MarginValue, MaxSizeValue, PaddingValue, SizeValue};
 
-use crate::style::calc::CalcArena;
+use crate::style::calc::InternCalc;
 
-/// A length or percentage, with `calc()` handed to the arena.
-pub fn length_percentage(
+/// A length or percentage, with `calc()` handed to the interner.
+pub(crate) fn length_percentage(
     value: &CssLengthPercentage,
     scale: f32,
-    calc: &RefCell<CalcArena>,
+    calc: &mut impl InternCalc,
 ) -> LengthPercentage {
     if let Some(length) = value.to_length() {
         LengthPercentage::length(length.px() * scale)
     } else if let Some(percentage) = value.to_percentage() {
         LengthPercentage::percent(percentage.0)
     } else {
-        LengthPercentage::calc(calc.borrow_mut().intern(value))
+        LengthPercentage::calc(calc.intern_calc(value))
     }
 }
 
 /// One padding side, which the grammar has already forbidden from being negative.
-pub fn padding(value: &PaddingValue, scale: f32, calc: &RefCell<CalcArena>) -> LengthPercentage {
+pub(crate) fn padding(
+    value: &PaddingValue,
+    scale: f32,
+    calc: &mut impl InternCalc,
+) -> LengthPercentage {
     length_percentage(&value.0, scale, calc)
 }
 
 /// A length or percentage that may also be `auto`.
-pub fn optional_length_percentage(
+pub(crate) fn optional_length_percentage(
     value: &CssLengthPercentage,
     scale: f32,
-    calc: &RefCell<CalcArena>,
+    calc: &mut impl InternCalc,
 ) -> LengthPercentageAuto {
     if let Some(length) = value.to_length() {
         LengthPercentageAuto::length(length.px() * scale)
     } else if let Some(percentage) = value.to_percentage() {
         LengthPercentageAuto::percent(percentage.0)
     } else {
-        LengthPercentageAuto::calc(calc.borrow_mut().intern(value))
+        LengthPercentageAuto::calc(calc.intern_calc(value))
     }
 }
 
@@ -53,7 +55,11 @@ pub fn optional_length_percentage(
 ///
 /// The anchor-positioning forms have no representation and become `auto`, which is what an
 /// unresolvable margin means everywhere else in CSS.
-pub fn margin(value: &MarginValue, scale: f32, calc: &RefCell<CalcArena>) -> LengthPercentageAuto {
+pub(crate) fn margin(
+    value: &MarginValue,
+    scale: f32,
+    calc: &mut impl InternCalc,
+) -> LengthPercentageAuto {
     match value {
         MarginValue::LengthPercentage(inner) | MarginValue::AnchorContainingCalcFunction(inner) => {
             optional_length_percentage(inner, scale, calc)
@@ -63,7 +69,11 @@ pub fn margin(value: &MarginValue, scale: f32, calc: &RefCell<CalcArena>) -> Len
 }
 
 /// One of `top`, `right`, `bottom` and `left`.
-pub fn inset(value: &InsetValue, scale: f32, calc: &RefCell<CalcArena>) -> LengthPercentageAuto {
+pub(crate) fn inset(
+    value: &InsetValue,
+    scale: f32,
+    calc: &mut impl InternCalc,
+) -> LengthPercentageAuto {
     match value {
         InsetValue::LengthPercentage(inner) | InsetValue::AnchorContainingCalcFunction(inner) => {
             optional_length_percentage(inner, scale, calc)
@@ -71,6 +81,25 @@ pub fn inset(value: &InsetValue, scale: f32, calc: &RefCell<CalcArena>) -> Lengt
         InsetValue::Auto | InsetValue::AnchorFunction(_) | InsetValue::AnchorSizeFunction(_) => {
             LengthPercentageAuto::AUTO
         }
+    }
+}
+
+/// One border side's width, in device pixels, or zero if that side draws nothing.
+///
+/// A side whose style is `none` or `hidden` has no border at all, whatever width was written. The
+/// computed width is the written one, so the suppression happens here — and it is not cosmetic: the
+/// initial width is three pixels, so a box with no border at all would otherwise lose six pixels of
+/// content box on each axis.
+pub(crate) fn border_side(
+    width: &zgui_css::values::border::BorderSideWidthValue,
+    style: zgui_css::values::border::BorderStyleValue,
+    scale: f32,
+) -> LengthPercentage {
+    use taffy::prelude::TaffyZero;
+    match style {
+        zgui_css::values::border::BorderStyleValue::None
+        | zgui_css::values::border::BorderStyleValue::Hidden => LengthPercentage::ZERO,
+        _ => LengthPercentage::length(width.0.to_f32_px() * scale),
     }
 }
 
@@ -119,10 +148,10 @@ impl IntrinsicSizes {
 /// is what they mean whenever the box has no margins — the case they are written for. The three
 /// content keywords need `intrinsic`; without it they fall back to `auto`, which is the value they
 /// would have had if the keyword had not been written.
-pub fn size(
+pub(crate) fn size(
     value: &SizeValue,
     scale: f32,
-    calc: &RefCell<CalcArena>,
+    calc: &mut impl InternCalc,
     intrinsic: Option<IntrinsicSizes>,
 ) -> Dimension {
     match value {
@@ -143,10 +172,10 @@ pub fn size(
 ///
 /// The layout algorithms spell "no maximum" `auto`, because an `auto` maximum resolves to nothing
 /// and clamping by nothing is a no-op.
-pub fn max_size(
+pub(crate) fn max_size(
     value: &MaxSizeValue,
     scale: f32,
-    calc: &RefCell<CalcArena>,
+    calc: &mut impl InternCalc,
     intrinsic: Option<IntrinsicSizes>,
 ) -> Dimension {
     match value {
@@ -163,13 +192,13 @@ pub fn max_size(
 }
 
 /// A length or percentage as a dimension.
-fn dimension(value: &CssLengthPercentage, scale: f32, calc: &RefCell<CalcArena>) -> Dimension {
+fn dimension(value: &CssLengthPercentage, scale: f32, calc: &mut impl InternCalc) -> Dimension {
     if let Some(length) = value.to_length() {
         Dimension::length(length.px() * scale)
     } else if let Some(percentage) = value.to_percentage() {
         Dimension::percent(percentage.0)
     } else {
-        Dimension::calc(calc.borrow_mut().intern(value))
+        Dimension::calc(calc.intern_calc(value))
     }
 }
 
@@ -183,42 +212,42 @@ fn keyword(
 
 #[cfg(test)]
 mod tests {
-    use core::cell::RefCell;
-
     use taffy::Dimension;
     use taffy::prelude::TaffyAuto;
     use zgui_css::values::length::{Length, LengthPercentage as CssLengthPercentage, percent};
     use zgui_css::values::size::SizeValue;
 
-    use crate::style::calc::CalcArena;
+    use crate::style::calc::CalcTable;
 
     use super::{IntrinsicSizes, length_percentage, size};
 
-    fn arena(scale: f32) -> RefCell<CalcArena> {
-        RefCell::new(CalcArena::new(scale))
+    fn table(scale: f32) -> CalcTable {
+        let mut table = CalcTable::default();
+        table.set_scale(scale);
+        table
     }
 
     #[test]
     fn an_absolute_length_reaches_the_engine_in_device_pixels() {
-        let calc = arena(2.0);
+        let mut calc = table(2.0);
         let value = CssLengthPercentage::new_length(Length::new(12.0));
-        let converted = length_percentage(&value, 2.0, &calc);
+        let converted = length_percentage(&value, 2.0, &mut calc);
         assert_eq!(converted.into_raw().value(), 24.0);
-        assert!(calc.borrow().is_empty(), "no calc was interned");
+        assert_eq!(calc.live(), 0, "no calc was interned");
     }
 
     #[test]
     fn a_percentage_crosses_as_a_fraction_on_both_sides() {
-        let calc = arena(1.0);
-        let converted = length_percentage(&percent(0.25), 1.0, &calc);
+        let mut calc = table(1.0);
+        let converted = length_percentage(&percent(0.25), 1.0, &mut calc);
         assert_eq!(converted, taffy::LengthPercentage::percent(0.25));
     }
 
     #[test]
     fn a_content_keyword_without_a_measurement_is_auto_rather_than_zero() {
-        let calc = arena(1.0);
+        let mut calc = table(1.0);
         assert_eq!(
-            size(&SizeValue::MinContent, 1.0, &calc, None),
+            size(&SizeValue::MinContent, 1.0, &mut calc, None),
             Dimension::AUTO
         );
         let sizes = IntrinsicSizes {
@@ -226,24 +255,24 @@ mod tests {
             max: 90.0,
         };
         assert_eq!(
-            size(&SizeValue::MinContent, 1.0, &calc, Some(sizes)),
+            size(&SizeValue::MinContent, 1.0, &mut calc, Some(sizes)),
             Dimension::length(30.0)
         );
         assert_eq!(
-            size(&SizeValue::MaxContent, 1.0, &calc, Some(sizes)),
+            size(&SizeValue::MaxContent, 1.0, &mut calc, Some(sizes)),
             Dimension::length(90.0)
         );
     }
 
     #[test]
     fn stretch_is_the_whole_containing_block() {
-        let calc = arena(1.0);
+        let mut calc = table(1.0);
         assert_eq!(
-            size(&SizeValue::Stretch, 1.0, &calc, None),
+            size(&SizeValue::Stretch, 1.0, &mut calc, None),
             Dimension::percent(1.0)
         );
         assert_eq!(
-            size(&SizeValue::WebkitFillAvailable, 1.0, &calc, None),
+            size(&SizeValue::WebkitFillAvailable, 1.0, &mut calc, None),
             Dimension::percent(1.0)
         );
     }

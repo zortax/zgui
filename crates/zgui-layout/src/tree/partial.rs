@@ -38,12 +38,12 @@ impl<C: MeasureContent> LayoutPartialTree for LayoutTree<'_, C> {
     }
 
     fn resolve_calc_value(&self, value: *const (), basis: f32) -> f32 {
-        crate::style::calc::resolve_in(self.calc_arena(), value, basis)
+        self.resolve_calc(value, basis)
     }
 
     fn set_unrounded_layout(&mut self, node: NodeId, layout: &taffy::Layout) {
         let key = from_node_id(node);
-        let state = self.store_mut().state_mut(key);
+        let state = self.state_mut(key);
         state.unrounded = *layout;
         // Until the snapping pass runs, the snapped result is the unrounded one, so a caller that
         // reads a layout between the two passes reads geometry rather than nothing.
@@ -52,6 +52,18 @@ impl<C: MeasureContent> LayoutPartialTree for LayoutTree<'_, C> {
 
     fn compute_child_layout(&mut self, node: NodeId, inputs: LayoutInput) -> LayoutOutput {
         dispatch(self, node, inputs, None)
+    }
+
+    fn wants_batches(&self) -> bool {
+        self.batch_pool().is_some()
+    }
+
+    fn compute_child_layouts(
+        &mut self,
+        requests: &[taffy::ChildRequest],
+        results: &mut Vec<LayoutOutput>,
+    ) {
+        self.run_batch(requests, results);
     }
 }
 
@@ -137,7 +149,7 @@ fn dispatch<C: MeasureContent>(
     let output = taffy::compute_cached_layout(tree, node, inputs, |tree, node, inputs| {
         let key = from_node_id(node);
         counter::bump(Counter::NodesRelaidOut);
-        let fc = tree.store().node(key).fc;
+        let fc = tree.structure().node(key).fc;
         let generates_no_box =
             tree.style_of(key).box_generation_mode() == taffy::BoxGenerationMode::None;
         let (mut output, last_baseline) = if generates_no_box {
@@ -162,7 +174,7 @@ fn dispatch<C: MeasureContent>(
                 // algorithm its inner display names; the leaf half is what the line asks for.
                 FormattingContext::Atomic => {
                     let inner = crate::style::convert::display::atomic_inner(
-                        tree.store().node(key).style.get_box().display,
+                        tree.structure().node(key).style.get_box().display,
                     );
                     match inner {
                         FormattingContext::Flex => {
@@ -196,7 +208,7 @@ fn dispatch<C: MeasureContent>(
     // how an incremental layout comes to disagree with a fresh one about where a row sits.
     if inputs.run_mode == RunMode::PerformLayout {
         let key = from_node_id(node);
-        let fc = tree.store().node(key).fc;
+        let fc = tree.structure().node(key).fc;
         record_baselines(tree, key, fc, &output);
     }
     output
@@ -214,7 +226,7 @@ fn record_baselines<C: MeasureContent>(
         .y
         .or_else(|| first_baseline_of_content(tree, key, fc));
     let last = last_baseline_of_content(tree, key, fc).or(first);
-    let state = tree.store_mut().state_mut(key);
+    let state = tree.state_mut(key);
     state.first_baseline = first;
     state.last_baseline = last;
 }
@@ -231,7 +243,7 @@ fn fill_in_baselines<C: MeasureContent>(
         output.first_baselines.y = first_baseline_of_content(tree, key, fc);
     }
     let last = measured_last.or_else(|| last_baseline_of_content(tree, key, fc));
-    let state = tree.store_mut().state_mut(key);
+    let state = tree.state_mut(key);
     state.first_baseline = output.first_baselines.y;
     state.last_baseline = last.or(output.first_baselines.y);
 }
@@ -252,7 +264,7 @@ fn inner_context<C: MeasureContent>(
     if fc != FormattingContext::Atomic {
         return fc;
     }
-    crate::style::convert::display::atomic_inner(tree.store().node(key).style.get_box().display)
+    crate::style::convert::display::atomic_inner(tree.structure().node(key).style.get_box().display)
 }
 
 /// The baseline a container inherits from its first in-flow child.
@@ -267,12 +279,12 @@ fn first_baseline_of_content<C: MeasureContent>(
     if inner_context(tree, key, fc) != FormattingContext::Block {
         return None;
     }
-    let children = tree.store().node(key).children.clone();
+    let children = tree.structure().node(key).children.clone();
     children.iter().find_map(|&child| {
         if !is_in_flow(tree, child) {
             return None;
         }
-        let state = tree.store().state(child)?;
+        let state = tree.state(child)?;
         let baseline = state.first_baseline?;
         Some(baseline + state.unrounded.location.y)
     })
@@ -298,23 +310,22 @@ fn last_baseline_of_content<C: MeasureContent>(
     if fc == FormattingContext::Inline {
         // A box that holds lines has a last baseline of its own, and it is not the same line as
         // its first whenever the content wrapped.
-        let state = tree.store().state(key)?;
+        let state = tree.state(key)?;
         let inset = state.unrounded.border.top + state.unrounded.padding.top;
         return tree
-            .store()
-            .inline_resolution(key)
+            .inline_resolution_of(key)
             .and_then(crate::inline::resolved::InlineResolution::last_baseline)
             .map(|baseline| baseline + inset);
     }
     if !inner_context(tree, key, fc).is_container() {
         return None;
     }
-    let children = tree.store().node(key).children.clone();
+    let children = tree.structure().node(key).children.clone();
     children.iter().rev().find_map(|&child| {
         if !is_in_flow(tree, child) {
             return None;
         }
-        let state = tree.store().state(child)?;
+        let state = tree.state(child)?;
         let baseline = state.last_baseline?;
         Some(baseline + state.unrounded.location.y)
     })

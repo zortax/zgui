@@ -209,6 +209,20 @@ use inner::CompactLengthInner;
 #[repr(transparent)]
 pub struct CompactLength(CompactLengthInner);
 
+// ZGUI-PATCH. The word may carry a calc pointer, which is why it is not `Send`/`Sync` upstream:
+// taffy cannot know what a caller's pointers point at. In this workspace it can be known — the
+// one producer of calc values is the layout store's interning table, whose handles are shifted
+// indices and never addresses, and whose resolution goes through `resolve_calc_value(&self, ..)`
+// against state that outlives every batch. A caller embedding real pointers must not use this
+// fork's parallel batches.
+//
+// SAFETY: per the above, the word is plain data in this workspace.
+#[allow(unsafe_code)]
+unsafe impl Send for CompactLength {}
+// SAFETY: as above.
+#[allow(unsafe_code)]
+unsafe impl Sync for CompactLength {}
+
 impl CompactLength {
     /// The tag indicating a calc() value
     #[cfg(feature = "calc")]
