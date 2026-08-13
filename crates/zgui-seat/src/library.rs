@@ -435,7 +435,7 @@ mod tests {
         // `Symbols::resolve` stops at the first name it cannot find, so a table that exists at all
         // is a table that resolved whole.
         let rows = library.symbols().rows();
-        assert_eq!(rows.len(), 10, "the table is the whole interface");
+        assert_eq!(rows.len(), 10, "the table states the interface in full");
 
         // A row copied from the one above it and left naming that symbol resolves, and gives one
         // address twice. Resolution alone reports nothing about that.

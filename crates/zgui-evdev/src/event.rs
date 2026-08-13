@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(
             source.raw_os_error(),
             Some(rustix::io::Errno::BADF.raw_os_error()),
-            "the errno survives, which is what `ENODEV` has to do on a revoked device"
+            "the errno survives, as `ENODEV` has to on a revoked device"
         );
         assert!(
             std::error::Error::source(&failure).is_some(),

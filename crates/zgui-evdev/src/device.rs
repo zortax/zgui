@@ -902,7 +902,7 @@ mod tests {
         );
         assert!(
             matches!(other, Error::Unusable(_)),
-            "`ENOTTY` is a descriptor the input driver never sees, which is what `/dev/null` and a \
+            "`ENOTTY` is a descriptor the input driver never sees, as `/dev/null` and a \
              graphics card both answer: {other:?}"
         );
     }

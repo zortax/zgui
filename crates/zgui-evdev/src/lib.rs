@@ -3,8 +3,8 @@
 //! This is what libevdev is, written in Rust against the uapi headers. It links no C. Every call
 //! is an ioctl or a read on a file descriptor, issued through `rustix`'s `linux_raw` backend.
 //!
-//! The crate names no zgui crate and is usable on its own. What depends on it is
-//! `zgui-platform-drm`, one step along the same layer. Most of it is tested without a device: a
+//! The crate names no zgui crate and is usable on its own. It is written to be named by
+//! `zgui-platform-drm`, one step along the same layer, and by nothing else. Most of it is tested without a device: a
 //! capability bitmap and a stream of event records are data, so the classification and the batching
 //! run with nothing plugged in.
 //!

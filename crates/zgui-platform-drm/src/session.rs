@@ -903,7 +903,7 @@ fn direct_card(cards: &[PathBuf]) -> Result<zgui_drm::Device, PlatformError> {
             Ok(card) => {
                 card.become_master().map_err(|error| {
                     PlatformError::Backend(format!(
-                        "this process opened {} and could not take DRM master on it, which is what \
+                        "this process opened {} and could not take DRM master on it, as \
                          another process holding the display looks like: {error}",
                         path.display()
                     ))

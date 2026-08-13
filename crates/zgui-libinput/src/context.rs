@@ -1253,7 +1253,7 @@ pub(crate) mod tests {
         assert_eq!(
             files.asked,
             [node.clone(), node],
-            "opened again by path, which is what makes a daemon able to own it"
+            "opened again by path, so a daemon can own it"
         );
         assert_ne!(
             after.id(),
