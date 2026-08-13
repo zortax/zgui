@@ -39,16 +39,18 @@ impl Device {
     /// nothing has happened yet. A frame loop parks on the descriptor and calls this when it
     /// wakes.
     ///
-    /// A caller matches a completion against its own flip by the user data it passed:
+    /// A caller matches a completion against its own flip by the CRTC it flipped. Nothing in this
+    /// crate sets the user data — both commit paths pass zero — so a completion carries no token of
+    /// the caller's own to match on:
     ///
     /// ```no_run
     /// use zgui_drm::{Device, Event};
     ///
     /// let device = Device::open_first()?;
-    /// let frame = 0xf1a9_u64;
+    /// let mine = device.resources()?.crtcs[0];
     ///
     /// let flipped = device.poll_events()?.into_iter().any(|event| {
-    ///     matches!(event, Event::FlipComplete { user_data, .. } if user_data == frame)
+    ///     matches!(event, Event::FlipComplete { crtc, .. } if crtc == mine)
     /// });
     /// # Ok::<(), zgui_drm::Error>(())
     /// ```
