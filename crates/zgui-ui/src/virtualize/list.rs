@@ -124,8 +124,8 @@ where
         scroll(node_ref = viewport, class = VirtualListStyle::CLASS, {..own}, {..attrs}, class = class) {
             box(
                 class = "zui-virtual-list__pane",
-                var:--zui-virtual-lead = move || Some(px(window.get().lead)),
-                var:--zui-virtual-trail = move || Some(px(window.get().trail))
+                style:padding-top = move || Some(px(window.get().lead)),
+                style:padding-bottom = move || Some(px(window.get().trail))
             ) {
                 for index in move || window.get().indices(), key = |index: &usize| *index {
                     Row(index = index, total = count, row = Rc::clone(&row), {..Attrs::new()})

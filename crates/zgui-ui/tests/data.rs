@@ -122,7 +122,7 @@ fn ten_thousand_rows_mount_a_bounded_number_of_elements() {
         .window
         .dom
         .tree()
-        .custom_property(pane, CustomPropertyName::new("zui-virtual-trail"))
+        .style_property(pane, "padding-bottom")
         .expect("the trailing spacer is written");
     assert_eq!(trail, format!("{}px", (10_000 - 23) as f32 * ROW));
     let _ = scroll;
@@ -181,7 +181,7 @@ fn a_row_height_that_moves_moves_the_rows_and_the_extent_together() {
         .window
         .dom
         .tree()
-        .custom_property(pane, CustomPropertyName::new("zui-virtual-trail"))
+        .style_property(pane, "padding-bottom")
         .expect("the trailing spacer is written");
     let now = indices_of(&harness, "zui-virtual-list__row").len();
     assert!(now < first, "taller rows fill the port with fewer of them");

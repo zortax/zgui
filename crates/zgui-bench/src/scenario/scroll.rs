@@ -157,13 +157,14 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: recycled.p50,
                 band: Band::Time {
-                    baseline: 1_030.0,
+                    baseline: 560.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 1020-1042 us across runs, up from 930: a translation frame \
-                            no longer emits the port, so a recycle frame finds less of it recorded. \
-                            It is the price of the translation frame's 5.8x, it is paid on one \
-                            frame in three, and the two together are a large net win",
+                rationale: "measured at 550-565 us across runs, down from 1030: the window's two \
+                            spacers were custom properties, which inherit, so a window that moved \
+                            changed the inherited environment of every row in it and recascaded \
+                            the whole port to shift it by one. Written straight onto the pane, a \
+                            recycle frame recascades the row that arrived",
                 budget: Some(1_500.0),
                 spread: Some(recycled),
             },
