@@ -185,6 +185,7 @@ pub mod resizable;
 pub mod scroll_area;
 pub mod select;
 pub mod separator;
+pub mod settings;
 pub mod sheet;
 pub mod sidebar;
 pub mod skeleton;

@@ -247,6 +247,13 @@ pub use crate::native_select::{
     NativeSelect, NativeSelectOptGroup, NativeSelectOptGroupProps, NativeSelectOption,
     NativeSelectOptionProps, NativeSelectProps, NativeSelectSize,
 };
+pub use crate::settings::{
+    Settings, SettingsContext, SettingsGroup, SettingsGroupDescription,
+    SettingsGroupDescriptionProps, SettingsGroupLabel, SettingsGroupLabelProps, SettingsGroupProps,
+    SettingsItem, SettingsItemContext, SettingsItemProps, SettingsPage, SettingsPageProps,
+    SettingsPages, SettingsPagesProps, SettingsPane, SettingsPaneProps, SettingsProps,
+    use_settings_item, use_settings_item_attrs,
+};
 pub use crate::spinner::{Spinner, SpinnerProps};
 pub use crate::toggle_group::{
     ToggleGroup, ToggleGroupItem, ToggleGroupItemProps, ToggleGroupProps, ToggleSelection,
