@@ -46,11 +46,33 @@ struct Rows<K> {
 }
 
 impl<K: Eq + Hash + Clone + 'static> Rows<K> {
+    /// Rebuilds one surviving row through `build`, in the scope that row already has.
+    ///
+    /// The previous run of the row goes first, so a row that is rebuilt for as long as it is on
+    /// screen holds one run's worth of signals, memos and cleanups rather than one per rebuild.
+    fn refresh(
+        item: &mut Item<K>,
+        cx: &BuildCxOwned,
+        build: &mut impl FnMut(&K, &BuildCx<'_>) -> AnyView,
+    ) {
+        let item_cx = cx.with_owner(item.owner.clone());
+        let Item {
+            key, state, owner, ..
+        } = item;
+        owner.with_cleanup(|| {
+            build(key, &item_cx.cx()).rebuild(state, &mut item_cx.cx());
+        });
+    }
+
     /// Brings the rows into line with `keys`, building each new one with `build`.
+    ///
+    /// `refresh` says that `build` is a different closure from the one the rows on screen were made
+    /// with, so every row that survives is built again through it.
     fn reconcile(
         &mut self,
         keys: Vec<K>,
         cx: &BuildCxOwned,
+        refresh: bool,
         mut build: impl FnMut(&K, &BuildCx<'_>) -> AnyView,
     ) {
         let dom = cx.dom().clone();
@@ -71,13 +93,22 @@ impl<K: Eq + Hash + Clone + 'static> Rows<K> {
         let mut anchor = Some(self.marker);
         for position in (0..keys.len()).rev() {
             let item = match made.steps[position] {
-                Step::Keep(index) => previous[index]
-                    .take()
-                    .expect("a plan never reuses one row twice"),
+                Step::Keep(index) => {
+                    let mut item = previous[index]
+                        .take()
+                        .expect("a plan never reuses one row twice");
+                    if refresh {
+                        Self::refresh(&mut item, cx, &mut build);
+                    }
+                    item
+                }
                 Step::Move(index) => {
                     let mut item = previous[index]
                         .take()
                         .expect("a plan never reuses one row twice");
+                    if refresh {
+                        Self::refresh(&mut item, cx, &mut build);
+                    }
                     if let Some(parent) = self.parent {
                         item.state.mount(&dom, parent, anchor);
                     }
@@ -171,6 +202,23 @@ type Agreed<I, T, K> = PhantomData<fn() -> (I, T, K)>;
 ///
 /// Rows are moved rather than rewritten. Inserting at the front of a thousand-row list is one node
 /// insertion, not a thousand rewrites, which is the entire reason a keyed list exists.
+///
+/// # When `children` runs
+///
+/// Exactly twice as often as a caller usually needs to think about, and the two cases are the whole
+/// contract:
+///
+/// * **A key the list has not seen** builds a row. A key that is already there keeps the row it
+///   has, whatever the collection now says that row's data is. Give a row a signal when its content
+///   has to follow its data, because the list itself watches the key list and nothing else.
+/// * **A rebuild of the list** builds every row again. A rebuilt `For` carries a different
+///   `children` — a component rebuilt with new props, a reactive hole that re-ran — and a row left
+///   over from its predecessor would go on drawing what the predecessor said. This is the case a
+///   list keyed by position depends on: its keys are `0..n` whatever the rows mean, so a change of
+///   meaning moves no key and the rebuild is the only thing that reaches the rows.
+///
+/// A rebuilt row is rebuilt in its own scope, and the previous run of that scope is disposed of
+/// first, exactly as a rebuilt component is.
 ///
 /// # Panics
 ///
@@ -306,7 +354,12 @@ where
             children,
             ..
         } = self;
-        move |_previous: Option<()>| {
+        move |previous: Option<()>| {
+            // An effect runs for the first time when the list is built or rebuilt. A rebuild
+            // carries a `children` that is not the closure the rows on screen were made with, so
+            // that first run builds every row again; a later run is a changed key list and leaves
+            // the rows it keeps alone.
+            let refresh = previous.is_none();
             // The collection is read here, and it is the only thing this effect subscribes to.
             let items: Vec<T> = each().into_iter().collect();
             let keys: Vec<K> = items.iter().map(&key).collect();
@@ -327,7 +380,7 @@ where
             );
 
             rows.borrow_mut()
-                .reconcile(keys.clone(), &scoped, |key, _| {
+                .reconcile(keys.clone(), &scoped, refresh, |key, _| {
                     match by_key.get(key).and_then(|index| sources[*index].take()) {
                         Some(item) => children(item),
                         None => AnyView::new(()),
@@ -444,6 +497,113 @@ mod tests {
         rows.set(vec![7]);
         flush();
         assert_eq!(f.text(), "7|");
+        f.window.unmount();
+    }
+
+    /// A rebuilt list carries a new row builder, and every row has to come from it.
+    ///
+    /// A window onto a longer list keys its rows by position, so a list that changed what a row
+    /// means while the window stood still would keep drawing the previous builder's rows.
+    #[test]
+    fn a_rebuilt_list_builds_every_row_through_the_new_builder() {
+        let f = Fixture::new();
+        let rows = f.window.with(|| RwSignal::new(vec![1, 2, 3]));
+        let mut state = f.window.with(|| {
+            For::new(
+                move || rows.get(),
+                |row: &i32| *row,
+                |row| AnyView::new(format!("a{row}")),
+            )
+            .build(&mut f.cx())
+        });
+        state.mount(&f.dom, f.root, None);
+        assert_eq!(f.text(), "a1a2a3");
+
+        f.window.with(|| {
+            For::new(
+                move || rows.get(),
+                |row: &i32| *row,
+                |row| AnyView::new(format!("b{row}")),
+            )
+            .rebuild(&mut state, &mut f.cx());
+        });
+        assert_eq!(
+            f.text(),
+            "b1b2b3",
+            "the kept rows came from the old builder"
+        );
+        f.window.unmount();
+    }
+
+    /// The other half of the same contract, and the reason a keyed list is worth having: a changed
+    /// collection builds the keys that are new to the list and leaves every other row where it is.
+    #[test]
+    fn a_changed_collection_builds_only_the_keys_that_are_new() {
+        let f = Fixture::new();
+        let built = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&built);
+        let rows = f.window.with(|| RwSignal::new(vec![1, 2]));
+
+        let mut state = f.window.with(|| {
+            For::new(
+                move || rows.get(),
+                |row: &i32| *row,
+                move |row: i32| {
+                    counter.set(counter.get() + 1);
+                    AnyView::new(row.to_string())
+                },
+            )
+            .build(&mut f.cx())
+        });
+        state.mount(&f.dom, f.root, None);
+        assert_eq!(built.get(), 2);
+
+        rows.set(vec![2, 1, 3]);
+        flush();
+        assert_eq!(f.text(), "213");
+        assert_eq!(
+            built.get(),
+            3,
+            "a reorder rebuilt a row that was already there"
+        );
+        f.window.unmount();
+    }
+
+    /// A row that is rebuilt over and over holds one run of itself, the way a rebuilt component
+    /// does. Without the disposal a list under a reactive hole would accumulate one row's worth of
+    /// signals, memos and cleanups per re-run, for as long as it stayed mounted.
+    #[test]
+    fn a_rebuilt_row_disposes_of_its_previous_run() {
+        let f = Fixture::new();
+        let live = Rc::new(Cell::new(0i32));
+        let rows = f.window.with(|| RwSignal::new(vec![1, 2, 3]));
+        let builder = {
+            let live = Rc::clone(&live);
+            move |row: i32| {
+                let live = Rc::clone(&live);
+                live.set(live.get() + 1);
+                on_cleanup_local(move || live.set(live.get() - 1));
+                AnyView::new(row.to_string())
+            }
+        };
+
+        let mut state = f.window.with(|| {
+            For::new(move || rows.get(), |row: &i32| *row, builder.clone()).build(&mut f.cx())
+        });
+        state.mount(&f.dom, f.root, None);
+        assert_eq!(live.get(), 3);
+
+        for _ in 0..8 {
+            let builder = builder.clone();
+            f.window.with(|| {
+                For::new(move || rows.get(), |row: &i32| *row, builder)
+                    .rebuild(&mut state, &mut f.cx());
+            });
+            assert_eq!(live.get(), 3, "one run of each row is alive at a time");
+        }
+
+        state.unmount(&f.dom);
+        assert_eq!(live.get(), 0);
         f.window.unmount();
     }
 

@@ -14,6 +14,12 @@
 //! controls — so the claim is made against the pixels after every one of those partial repaints,
 //! not only against the frame that opened it: every word the dialog holds is still inked after
 //! each hover, and after typing.
+//!
+//! The same mistake reaches text one more way, and the last test here is that one: a line cut
+//! short by `text-overflow` is cut with a clip of its own, and a clip measured where the line was
+//! laid out cuts a line inside a dialog somewhere the line is not. What is left of it is the slice
+//! the two rectangles happen to share — a value drawn as its own middle, pushed against the far
+//! edge of its cell, with the rest of the cell empty.
 
 mod desktop;
 mod device;
@@ -21,6 +27,7 @@ mod painted;
 
 use core::time::Duration;
 
+use zgui::geom::{Device, DevicePx, Rect, Size};
 use zgui::view;
 use zgui::view::AnyView;
 use zgui_ui::prelude::*;
@@ -35,7 +42,18 @@ const SHEET: &str = ":root {
                          color: #101010;
                          font-family: sans-serif;
                      }
-                     .page { padding: 24px; gap: 16px; align-items: flex-start }";
+                     .page { padding: 24px; gap: 16px; align-items: flex-start }
+                     .cell {
+                         width: 220px;
+                         overflow: hidden;
+                         text-overflow: ellipsis;
+                         white-space: nowrap;
+                         font-family: monospace;
+                     }";
+
+/// A value far too long for a 220-pixel cell, so the line is cut and marked.
+const OVERFLOWING: &str =
+    "postgres://user:secret@postgres-service.default.svc:5432/appdb?sslmode=require";
 
 /// Opens the fixture, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
@@ -50,16 +68,18 @@ macro_rules! staged {
     };
 }
 
-/// Whether the words are inked where their box is, read off the accumulated pixels.
+/// The smallest laid-out box whose whole text is `text`, where the window draws it.
 ///
-/// Deliberately not [`assert_painted`](crate::painted::words::assert_painted): that reads the
-/// last *drawn* frame's display list, and once a caret is blinking in the dialog the last drawn
-/// frame is routinely the blink — one quad, no glyphs, whatever the letters look like. The pixels
-/// accumulate across frames and cannot be fooled by phase.
-#[track_caller]
-fn assert_inked(stage: &Stage, text: &str) {
-    let census = stage.census();
-    let rect = census
+/// The smallest, because several nodes share one label — the text node, the panel it is on, the
+/// overlay band that panel hangs off — and the band is the size of the window.
+///
+/// # Panics
+///
+/// Panics when nothing placed says it, because a reading taken from a rectangle nobody has is the
+/// same reading for every question.
+fn box_saying(stage: &Stage, text: &str) -> Rect<DevicePx, Device> {
+    stage
+        .census()
         .nodes
         .iter()
         .filter(|node| node.text == text)
@@ -68,7 +88,26 @@ fn assert_inked(stage: &Stage, text: &str) {
         .min_by(|a, b| {
             (a.size.width.0 * a.size.height.0).total_cmp(&(b.size.width.0 * b.size.height.0))
         })
-        .unwrap_or_else(|| panic!("nothing placed says {text:?}"));
+        .unwrap_or_else(|| panic!("nothing placed says {text:?}"))
+}
+
+/// The left `fraction` of a rectangle.
+fn left_of(rect: Rect<DevicePx, Device>, fraction: f32) -> Rect<DevicePx, Device> {
+    Rect::new(
+        rect.origin,
+        Size::new(DevicePx(rect.size.width.0 * fraction), rect.size.height),
+    )
+}
+
+/// Whether the words are inked where their box is, read off the accumulated pixels.
+///
+/// Deliberately not [`assert_painted`](crate::painted::words::assert_painted): that reads the
+/// last *drawn* frame's display list, and once a caret is blinking in the dialog the last drawn
+/// frame is routinely the blink — one quad, no glyphs, whatever the letters look like. The pixels
+/// accumulate across frames and cannot be fooled by phase.
+#[track_caller]
+fn assert_inked(stage: &Stage, text: &str) {
+    let rect = box_saying(stage, text);
     let coverage = ink(stage, rect);
     assert!(
         coverage > 0.01,
@@ -244,4 +283,50 @@ fn a_dialog_look_alike_modal_surface_field_paints() {
     stage.wait(Duration::from_millis(500));
     stage.capture("modal-dialog-look");
     assert_inked(&stage, "Name");
+}
+
+/// A value too long for its cell is drawn from the left of that cell, inside a dialog too.
+///
+/// The report: a revealed secret too long for the cell it is shown in is drawn as a slice of its
+/// own middle, pushed against the right-hand edge of the cell, and only inside a dialog. The mark
+/// saying the value was cut is drawn through the line's untightened clip and survives, so what a
+/// reader sees is an empty cell with an ellipsis in it.
+///
+/// The left quarter of the cell is where the value starts, whatever the value is and whatever the
+/// font measures, so that is where the pixels are read.
+#[test]
+fn a_dialog_draws_an_overflowing_value_from_the_left_of_its_cell() {
+    let mut stage = staged!(|| {
+        AnyView::new(view! {
+            ThemeProvider {
+                column(class = "page") {
+                    Dialog {
+                        DialogTrigger {"Open dialog"}
+                        DialogContent {
+                            DialogTitle {"Secret"}
+                            box(class = "cell") {{OVERFLOWING}}
+                        }
+                    }
+                }
+            }
+        })
+    });
+    stage.wait(SETTLED);
+
+    let at = aim(&stage, "Open dialog");
+    stage.click(at);
+    stage.wait(Duration::from_millis(400));
+    stage.capture("dialog-overflowing-value");
+
+    let cell = box_saying(&stage, OVERFLOWING);
+    let whole = ink(&stage, cell);
+    assert!(
+        whole > 0.01,
+        "the cell at {cell:?} drew nothing: ink {whole}"
+    );
+    let head = ink(&stage, left_of(cell, 0.25));
+    assert!(
+        head > 0.01,
+        "the value's first letters are missing from the left of its cell at {cell:?}: ink {head}",
+    );
 }

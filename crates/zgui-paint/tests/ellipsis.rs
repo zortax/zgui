@@ -4,11 +4,11 @@ use std::cell::RefCell;
 
 use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
 use zgui_css::StyleDraft;
-use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
 use zgui_paint::emit::text::{self, EllipsisPaint, TextPlacement};
 use zgui_paint::{GlyphRun, GlyphSource, PlacedGlyph};
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId};
 use zgui_text::GlyphFormat;
 
 /// A source that draws one glyph for whatever it is asked about, and records what that was.
@@ -83,22 +83,27 @@ fn cut() -> EllipsisPaint {
     }
 }
 
-/// The scene a line is emitted into, and what the source was asked for.
-fn emit(ellipsis: Option<EllipsisPaint>) -> (Scene, Vec<(u32, u16)>) {
+/// Emits one line into `scene`, and reports what the source was asked for.
+fn emit_into(scene: &mut Scene, placement: TextPlacement) -> Vec<(u32, u16)> {
     let style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(64, 64));
     let source = Recorder::default();
     text::emit(
-        &mut scene,
+        scene,
         &source,
         ParagraphId(3),
         0,
         &style,
         text::Inherited::default(),
-        placement(ellipsis),
+        placement,
     );
-    let asked = source.asked.borrow().clone();
+    source.asked.borrow().clone()
+}
+
+/// The scene a line is emitted into, and what the source was asked for.
+fn emit(ellipsis: Option<EllipsisPaint>) -> (Scene, Vec<(u32, u16)>) {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(256, 64));
+    let asked = emit_into(&mut scene, placement(ellipsis));
     (scene, asked)
 }
 
@@ -164,6 +169,65 @@ fn the_cut_clips_the_line_and_not_the_mark() {
         window(&scene),
         (0.0, 40.0),
         "the cut is where the clip ends"
+    );
+}
+
+/// A coordinate system `by` device pixels to the right of the one it hangs off.
+///
+/// What a dialog is: laid out in one place and drawn in another, so everything inside it measures
+/// its rectangles in the panel's own system while the device sees them through the panel's matrix.
+fn panel(scene: &mut Scene, by: f32) -> SpatialId {
+    let viewport = scene.spatial.viewport();
+    let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    scene.spatial.space_of(
+        viewport,
+        owner,
+        OwnSpace::of(Some(Matrix4::translation(by, 0.0, 0.0)), None, false),
+    )
+}
+
+/// The clip a cut line's own glyphs are drawn through, placed on the device.
+///
+/// Each link put where the frame's matrices say its coordinate system now is, which is what the
+/// shader does to it. A link that names the wrong system resolves somewhere the glyphs are not.
+fn placed_window(scene: &Scene) -> (f32, f32) {
+    let cut = scene
+        .primitives
+        .mono_sprites
+        .iter()
+        .map(|sprite| sprite.clip)
+        .find(|clip| *clip != ClipId::ROOT.0)
+        .expect("one sprite is cut short");
+    let placed = scene
+        .clips
+        .bounds_placed(zgui_scene::ClipId(cut), &|id| scene.spatial.resolve(id));
+    (placed.left().0, placed.right().0)
+}
+
+/// A line cut short inside a transformed panel is cut where the line is *drawn*.
+///
+/// The report this stands against: a revealed secret too long for its cell is drawn as a slice of
+/// its middle, pushed against the right-hand edge of the cell, with the rest of the cell empty —
+/// and only inside a dialog. The cut states its window in the coordinates the line was laid out
+/// in; naming the viewport as the system those coordinates belong to puts the window wherever the
+/// panel is *not*, and what is left is whatever the two rectangles happen to overlap in.
+#[test]
+fn a_cut_line_in_a_transformed_panel_is_cut_where_it_is_drawn() {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(256, 64));
+    let panel = panel(&mut scene, 120.0);
+    emit_into(
+        &mut scene,
+        TextPlacement {
+            transform: panel,
+            ..placement(Some(cut()))
+        },
+    );
+
+    assert_eq!(
+        placed_window(&scene),
+        (120.0, 160.0),
+        "the cut window landed where the line was laid out rather than where it is drawn",
     );
 }
 

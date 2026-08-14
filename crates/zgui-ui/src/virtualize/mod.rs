@@ -56,13 +56,17 @@ use zgui::reactive::LocalStorage;
 /// }
 /// ```
 ///
-/// # Why the row height is a number and not a measurement
+/// # Why the row height is a declaration and not a measurement
 ///
 /// A window is decided *before* the rows in it are built, so it cannot be decided from their
 /// heights: measuring row 4 200 means building row 4 200, which is the cost virtualisation exists
 /// to avoid. Every virtualised list in this library is therefore a fixed-height list, the height is
-/// declared once, and a style sheet that disagrees with the declaration produces a scrollbar of the
+/// declared, and a style sheet that disagrees with the declaration produces a scrollbar of the
 /// wrong length rather than a wrong set of rows.
+///
+/// The declaration is a signal, so an application that lets a person choose the row height moves
+/// the list that is open rather than the next one it builds. A plain number is a declaration that
+/// never moves, and reads the same at the call site.
 #[derive(Copy, Clone)]
 pub struct Virtualize {
     /// The window, recomputed whenever the scroll position or the row count changes.
@@ -82,9 +86,10 @@ impl Virtualize {
     pub fn new(
         viewport: NodeRef,
         rows: Signal<usize, LocalStorage>,
-        row_size: f32,
+        row_size: impl Into<Signal<f32, LocalStorage>>,
         overscan: usize,
     ) -> Self {
+        let row_size = row_size.into();
         let scroll = viewport.observe_scroll();
         Self {
             window: Signal::derive_local(move || {
@@ -100,7 +105,7 @@ impl Virtualize {
                 };
                 window(
                     rows.get(),
-                    row_size,
+                    row_size.get(),
                     position.scrollport.height.0 / scale,
                     position.offset.y.0 / scale,
                     overscan,

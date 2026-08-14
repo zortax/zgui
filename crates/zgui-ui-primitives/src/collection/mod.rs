@@ -105,18 +105,23 @@ impl Collection {
     /// Every item, in tree order.
     ///
     /// Subscribes to the set, so a view built from this rebuilds when an item comes or goes.
+    ///
+    /// A collection that is gone holds no item. An item can outlive its parent by a moment — a
+    /// menu that closes disposes the collection while its items are still coming down, and a
+    /// binding of one of them can run once more as it goes — so the answer then is an empty set
+    /// rather than a panic.
     pub fn items(&self) -> Vec<CollectionItem> {
-        Self::in_tree_order(self.items.get())
+        Self::in_tree_order(self.items.try_get().unwrap_or_default())
     }
 
     /// The same, without subscribing.
     pub fn items_untracked(&self) -> Vec<CollectionItem> {
-        Self::in_tree_order(self.items.get_untracked())
+        Self::in_tree_order(self.items.try_get_untracked().unwrap_or_default())
     }
 
     /// How many items there are.
     pub fn len(&self) -> usize {
-        self.items.get().len()
+        self.items.try_get().unwrap_or_default().len()
     }
 
     /// Whether there are none.
@@ -446,6 +451,32 @@ mod tests {
         assert!(collection.step(None, -1, true).is_none());
         assert!(collection.end(false).is_none());
         assert!(collection.end(true).is_none());
+    }
+
+    #[test]
+    fn a_collection_that_is_gone_holds_no_item() {
+        // An item outlives its parent by a moment: a menu that closes disposes the collection
+        // while the items are still coming down, and a binding of one of them — the `tabindex` of
+        // a roving item, say — can run once more on its way out. `RovingContext::active` already
+        // answers "nobody" for a group that is gone, and every reader here has to agree with it.
+        let window = Window::open();
+        let handles = three(&window);
+        let parent = window.scope.with(Mounted::new);
+        let collection = parent.with(Collection::new);
+        for handle in &handles {
+            parent.with(|| collection.register(*handle));
+        }
+        assert_eq!(collection.len(), 3);
+
+        parent.unmount();
+
+        assert!(collection.items().is_empty());
+        assert!(collection.items_untracked().is_empty());
+        assert_eq!(collection.len(), 0);
+        assert!(collection.is_empty());
+        assert!(collection.end(false).is_none());
+        assert!(collection.step(None, 1, true).is_none());
+        assert!(collection.at(0).is_none());
     }
 
     #[test]

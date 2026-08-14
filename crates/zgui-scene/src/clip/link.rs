@@ -59,10 +59,19 @@ pub enum ClipLink {
 impl ClipLink {
     /// A square-cornered rectangular clip, measured in device pixels.
     pub fn rect(rect: Rect<DevicePx, Device>) -> Self {
+        Self::rect_in(rect, SpatialId::VIEWPORT)
+    }
+
+    /// A square-cornered rectangular clip, measured in the coordinate system `space` names.
+    ///
+    /// What a clip built from geometry that a transform above it moves needs: the rectangle is
+    /// stated where the content it cuts was measured, and whoever applies the clip resolves the
+    /// name against the frame's matrices. [`ClipLink::rect`] is this with the viewport named.
+    pub fn rect_in(rect: Rect<DevicePx, Device>, space: SpatialId) -> Self {
         Self::RoundedRect {
             rect,
             radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
-            space: SpatialId::VIEWPORT,
+            space,
         }
     }
 

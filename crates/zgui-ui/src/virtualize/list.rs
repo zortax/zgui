@@ -48,6 +48,13 @@ const SHEET: &str = "zui-virtual-list";
 /// announces "row 3 of 25" in a list of a hundred thousand. Each row therefore carries its true
 /// position and the true length of the list, and the container is a list rather than a box.
 ///
+/// # What a row is keyed by
+///
+/// Its position. Row 4 200 is row 4 200 whatever the list now holds, which is what makes a scroll
+/// of one row cost one row and nothing else. A `row` closure that captures the data it draws
+/// therefore reaches the rows on screen through a rebuild of the list, which is what a keyed list
+/// builds every row again for. A `row` closure that reads a signal updates without one.
+///
 /// # Keyboard
 ///
 /// None of its own. A virtualised list is a scroll container, and scrolling is the framework's;
@@ -64,9 +71,11 @@ pub fn VirtualList<V, F>(
     /// How tall one row is, in CSS pixels.
     ///
     /// Declared rather than measured: the window is decided before its rows are built, so a height
-    /// taken from the rows would mean building all of them to find out which to build.
-    #[prop(default = 32.0)]
-    row_size: f32,
+    /// taken from the rows would mean building all of them to find out which to build. The list
+    /// writes the declaration into `--zui-virtual-row`, which is what makes every row that tall, so
+    /// a signal here moves the rows and the scroll extent together.
+    #[prop(into, default = Signal::stored_local(32.0))]
+    row_size: Signal<f32, LocalStorage>,
     /// How many rows beyond each edge of the port to build, so a fast scroll shows rows rather
     /// than a gap.
     #[prop(default = 4)]
@@ -103,7 +112,7 @@ where
     let own = Attrs::new()
         .class_toggle(zgui::view::ClassName::new("zui-virtual-list"), true)
         .custom_property(CustomPropertyName::new("zui-virtual-row"), move || {
-            Some(format!("{row_size}px"))
+            Some(format!("{}px", row_size.get()))
         })
         .a11y_from(semantics);
 

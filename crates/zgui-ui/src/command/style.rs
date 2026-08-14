@@ -84,6 +84,10 @@ style! { pub CommandStyle =>
     // reaches both edges, and the field grows a third taller — a palette raised deliberately from
     // a keystroke is the thing being used, not a control on something else.
     ".zui-dialog.zui-command__dialog { padding: 0; gap: 0; overflow: hidden; }"
+    // The dialog's title is written so the surface has a name a reader can be told, and the field
+    // under it says the same thing to an eye. Drawing both would put a heading over a search box
+    // that already reads as one, so the written one is kept out of the layout.
+    ".zui-command__dialog .zui-dialog__title { display: none; }"
     ".zui-command__dialog .zui-command__field { height: 48px; }"
     ".zui-command__dialog .zui-command__group { padding-left: var(--zui-space-sm); padding-right: var(--zui-space-sm); }"
 }

@@ -550,6 +550,12 @@ impl EllipsisPaint {
 /// never a filter over the glyphs: a glyph's ink may reach past its own advance, so dropping glyphs
 /// by position cuts the ink of a cluster that survived or keeps the ink of a hidden one, and the
 /// specification speaks of characters.
+///
+/// The window names the line's own coordinate system, because that is the system the line box and
+/// the cut are measured in. A window named as device pixels is a window in whatever place the
+/// panel above it is *not*: a line inside a dialog held off-centre by its own transform is cut
+/// where it was laid out, so what survives is the slice the two rectangles happen to share and the
+/// rest of the cell is empty.
 fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement {
     let Some(mark) = placement.ellipsis else {
         return placement;
@@ -565,7 +571,10 @@ fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement
         Size::new(DevicePx((right - left).max(0.0)), line.size.height),
     );
     TextPlacement {
-        clip: scene.clips.push(placement.clip, ClipLink::rect(window)),
+        clip: scene.clips.push(
+            placement.clip,
+            ClipLink::rect_in(window, placement.transform),
+        ),
         ..placement
     }
 }

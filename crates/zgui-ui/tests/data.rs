@@ -128,6 +128,126 @@ fn ten_thousand_rows_mount_a_bounded_number_of_elements() {
     let _ = scroll;
 }
 
+/// The row height is a declaration, and an application that lets a person choose it writes a
+/// signal. Both the height a row is drawn at and the extent the scrollbar measures follow that
+/// choice while the list stands, because a list that followed one of them alone would scroll past
+/// its own end.
+#[test]
+fn a_row_height_that_moves_moves_the_rows_and_the_extent_together() {
+    let harness = Harness::open();
+    let port = NodeRef::new();
+    let count = harness
+        .window
+        .scope
+        .with(|| RwSignal::new_local(10_000_usize));
+    let tall = harness.window.scope.with(|| RwSignal::new_local(ROW));
+    let handle = harness.window.scope.with(|| port);
+
+    harness.mount(move || {
+        view! {
+            VirtualList(
+                count = count,
+                row_size = tall,
+                overscan = 2_usize,
+                node_ref = handle,
+                row = move |index: usize| view! { text {{move || format!("row {index}")}} }
+            )
+        }
+    });
+    let scroll = harness.find("zui-virtual-list");
+    harness
+        .window
+        .dom
+        .deliver(scroll, ObservedValue::ScrollPosition(scrolled(0.0, 10_000)));
+    harness.window.frame();
+
+    let declared = || {
+        harness
+            .window
+            .dom
+            .tree()
+            .custom_property(scroll, CustomPropertyName::new("zui-virtual-row"))
+            .expect("the row height is written")
+    };
+    assert_eq!(declared(), format!("{ROW}px"));
+    let first = indices_of(&harness, "zui-virtual-list__row").len();
+
+    tall.set(ROW * 2.0);
+    harness.window.frame();
+
+    assert_eq!(declared(), format!("{}px", ROW * 2.0));
+    let pane = harness.find("zui-virtual-list__pane");
+    let trail = harness
+        .window
+        .dom
+        .tree()
+        .custom_property(pane, CustomPropertyName::new("zui-virtual-trail"))
+        .expect("the trailing spacer is written");
+    let now = indices_of(&harness, "zui-virtual-list__row").len();
+    assert!(now < first, "taller rows fill the port with fewer of them");
+    assert_eq!(trail, format!("{}px", (10_000 - now) as f32 * ROW * 2.0));
+}
+
+/// A window onto a longer list keys its rows by position, so changing what a row *means* moves no
+/// key: row 0 is row 0 whatever it now shows. The rebuild that the change causes is the only thing
+/// that reaches those rows, and a list that left them alone would go on drawing the previous
+/// caller's rows for as long as the window stood still.
+#[test]
+fn changing_the_row_builder_redraws_the_rows_that_are_already_there() {
+    let harness = Harness::open();
+    let port = NodeRef::new();
+    let count = harness
+        .window
+        .scope
+        .with(|| RwSignal::new_local(10_000_usize));
+    let kind = harness
+        .window
+        .scope
+        .with(|| RwSignal::new_local("deployment"));
+    let handle = harness.window.scope.with(|| port);
+
+    harness.mount(move || {
+        move || {
+            let kind = kind.get();
+            view! {
+                VirtualList(
+                    count = count,
+                    row_size = ROW,
+                    overscan = 2_usize,
+                    node_ref = handle,
+                    row = move |index: usize| view! { text {{format!("{kind} {index}")}} }
+                )
+            }
+        }
+    });
+    let scroll = harness.find("zui-virtual-list");
+    harness
+        .window
+        .dom
+        .deliver(scroll, ObservedValue::ScrollPosition(scrolled(0.0, 10_000)));
+    harness.window.frame();
+
+    let pane = harness.find("zui-virtual-list__pane");
+    assert!(
+        harness
+            .window
+            .dom
+            .tree()
+            .text_content(pane)
+            .starts_with("deployment 0")
+    );
+
+    kind.set("node");
+    harness.window.frame();
+
+    let text = harness.window.dom.tree().text_content(pane);
+    assert!(
+        !text.contains("deployment"),
+        "a row of the previous list is still drawn in this one: {text}"
+    );
+    assert!(text.starts_with("node 0"));
+}
+
 #[test]
 fn scrolling_less_than_one_row_does_not_touch_the_tree_at_all() {
     let harness = Harness::open();
