@@ -29,7 +29,11 @@ fn sheet(step: f32) -> String {
         ":root { background-color: #ffffff; color: #101010; font-family: sans-serif }
          .page { padding: 8px }
          .spread { flex-direction: column; align-items: flex-start }
-         .rung { align-items: center; background-color: #f0f0f0; padding: 6px }",
+         .rung { align-items: center; background-color: #f0f0f0; padding: 6px }
+         /* Turned off the axes, which is what keeps these on the general rasteriser: an upright
+            icon is a coverage tile in the shared atlas and plans no pass at all, and a fixture
+            about where passes land needs shapes that make one. */
+         .rung .zui-icon { transform: rotate(30deg) }",
     );
     for index in 0..RUNGS {
         css.push_str(&format!(
@@ -185,7 +189,8 @@ fn every_mark_in_a_row_of_isolated_controls_is_drawn() {
         ":root { background-color: #ffffff; font-family: sans-serif }
          .page { padding: 16px }
          .spread { gap: 16px; align-items: center }
-         .iso { opacity: 0.9 }"
+         .iso { opacity: 0.9 }
+         .iso .zui-icon { transform: rotate(30deg) }"
             .to_owned(),
         || view! { Isolated() },
     ) else {
@@ -204,8 +209,9 @@ fn every_mark_in_a_row_of_isolated_controls_is_drawn() {
         frame.pass_regions.len()
     );
     // A checkbox carries both of its marks and shows one: a ticked box draws its tick and not the
-    // dash it would show if it were part-way. So half the drawings are *meant* to be invisible, and
-    // the number that must be on the screen is one per control rather than one per drawing.
+    // dash it would show if it were part-way. The mark that is not showing is hidden with
+    // `opacity: 0`, which the walk refuses whole, so what reaches the list is one drawing per
+    // control and every one of them has to be on the screen.
     let ink = inked(&frame);
     let drawn = ink.iter().filter(|fraction| **fraction > 0.0).count();
     assert_eq!(

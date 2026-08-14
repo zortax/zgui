@@ -22,6 +22,8 @@ pub mod order;
 pub mod replay;
 pub mod stacking;
 
+use std::borrow::Cow;
+
 use zgui_atlas::AtlasKey;
 use zgui_bits::DamageSet;
 use zgui_dom::side::BoxKey;
@@ -705,31 +707,50 @@ impl stacking::Visitor for Pass<'_, '_> {
             return false;
         };
         let style_ref = self.painter.styles.lower(&node.style, self.input.scale);
-        let mut style = self
+        let entry = self
             .painter
             .styles
             .get(style_ref)
-            .cloned()
             .expect("a reference just handed out resolves");
-        // The composition happens on this copy and nowhere else. The entry `style_ref` names is
+        // Copied only where there is something to compose into it. The entry `style_ref` names is
         // shared with every element that cascaded to the same result, so an animated value written
         // into it would animate all of them — which is exactly what a row of identical buttons
-        // looks like when one of them is hovered.
+        // looks like when one of them is hovered. That is a reason to copy the one box that is
+        // animating, and every other box borrows: a `PaintStyle` is several hundred bytes with two
+        // inline vectors and a path in it, and at most one box on a screen is being hovered.
         let anim = self.anim_of(store, key);
-        if let Some(over) = anim {
-            crate::lower::anim::compose(&mut style, over);
-        }
+        let style = match anim {
+            Some(over) => {
+                let mut composed = entry.clone();
+                crate::lower::anim::compose(&mut composed, over);
+                Cow::Owned(composed)
+            }
+            None => Cow::Borrowed(entry),
+        };
         let anim = anim.map_or(0, AnimOverride::signature);
 
         let fragments = store.fragments_of_box(key);
         let own = fragments.first().and_then(|frag| store.fragment(*frag));
 
-        // The two stacks are pushed once per entered box and popped once per leave, whatever the
-        // box turned out to have: a push made conditionally and a pop made on a different condition
-        // is how the alpha in force comes to belong to somebody else's subtree.
         let isolation = own.map_or(Isolation::None, |fragment| {
             group::isolation(&style, fragment)
         });
+        // A subtree at zero alpha composites nothing. Every fragment under it is already refused
+        // one at a time by `order::vanished`, so what this saves is the walk itself: the ink
+        // query, the lowered style and its copy, the animation lookup and the sorted child list,
+        // for every box below a panel that is laid out and invisible. A closed disclosure costs
+        // its own box rather than its contents.
+        //
+        // Refused before either stack is pushed, and before a band or a group target is opened, so
+        // the leave that never comes has nothing to withdraw.
+        if isolation.alpha() == 0.0 {
+            self.report.skipped_subtrees += 1;
+            counter::add(Counter::PrimitivesCulled, 1);
+            return false;
+        }
+        // The two stacks are pushed once per entered box and popped once per leave, whatever the
+        // box turned out to have: a push made conditionally and a pop made on a different condition
+        // is how the alpha in force comes to belong to somebody else's subtree.
         if let Some(fragment) = own
             && fragment.flags.contains(FragmentFlags::HAS_TRANSFORM)
             && let Some(space) = fragment.transform

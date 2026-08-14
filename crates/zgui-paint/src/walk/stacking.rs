@@ -11,6 +11,8 @@
 //! be opened before its subtree and closed after it, and an outline can be drawn after the
 //! descendants it must sit over.
 
+use std::borrow::Cow;
+
 use zgui_dom::side::BoxKey;
 use zgui_layout::LayoutStore;
 use zgui_layout::fragment::stacking::{level, z_index};
@@ -28,7 +30,7 @@ pub fn walk(store: &LayoutStore, root: BoxKey, visitor: &mut impl Visitor) {
     if !visitor.enter(store, root) {
         return;
     }
-    for child in children_in_paint_order(store, root) {
+    for &child in children_in_paint_order(store, root).iter() {
         walk(store, child, visitor);
     }
     visitor.leave(store, root);
@@ -39,10 +41,29 @@ pub fn walk(store: &LayoutStore, root: BoxKey, visitor: &mut impl Visitor) {
 /// The sort is stable, so two children in the same pass with the same `z-index` keep the order they
 /// are laid out in — which is the tie-break the specification gives, and which `order` on a flex
 /// item has already moved, exactly as it moves painting.
-pub fn children_in_paint_order(store: &LayoutStore, key: BoxKey) -> Vec<BoxKey> {
+///
+/// Borrowed where the two orders already agree, which is nearly every box: a container of ordinary
+/// block or inline children puts all of them in one pass at one index, and a stable sort of that is
+/// the list it started with. Recognising it costs one walk and saves two allocations and the sort,
+/// per entered box, per frame.
+pub fn children_in_paint_order(store: &LayoutStore, key: BoxKey) -> Cow<'_, [BoxKey]> {
     let Some(node) = store.get(key) else {
-        return Vec::new();
+        return Cow::Borrowed(&[]);
     };
+    let mut ranks = node
+        .children
+        .iter()
+        .map(|&child| (level(store, child) as u8, z_index(store, child)));
+    let mut previous = ranks.next();
+    let sorted = ranks.all(|rank| {
+        let ordered = previous.is_some_and(|last| last <= rank);
+        previous = Some(rank);
+        ordered
+    });
+    if sorted {
+        return Cow::Borrowed(&node.children);
+    }
+
     let mut children: Vec<(u8, i32, usize, BoxKey)> = node
         .children
         .iter()
@@ -57,7 +78,7 @@ pub fn children_in_paint_order(store: &LayoutStore, key: BoxKey) -> Vec<BoxKey> 
         })
         .collect();
     children.sort_by_key(|(pass, index, position, _)| (*pass, *index, *position));
-    children.into_iter().map(|(_, _, _, child)| child).collect()
+    Cow::Owned(children.into_iter().map(|(_, _, _, child)| child).collect())
 }
 
 #[cfg(test)]

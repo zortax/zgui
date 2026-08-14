@@ -30,16 +30,20 @@ fn two_rasterisers_on_one_device_share_one_renderer() {
     );
 
     // And two rasterisers really can be built over it, which is what the sharing is for.
-    let one = VelloRaster::new(&gpu, 64, 64).expect("a rasteriser");
-    let two = VelloRaster::new(&gpu, 64, 64).expect("a second rasteriser");
+    let one = VelloRaster::new(&gpu, 4096, 4096).expect("a rasteriser");
+    let two = VelloRaster::new(&gpu, 4096, 4096).expect("a second rasteriser");
     assert_eq!(
         one.memory().fixed,
         two.memory().fixed,
         "both report the same fixed footprint, because it is the same renderer's"
     );
-    assert!(
-        one.memory().scratch > 0 && two.memory().scratch > 0,
-        "each holds a scratch of its own, which is the part that does scale"
+    // The scratch is the part that does scale, so neither takes any until a frame says how much of
+    // it is reached. Sized from the surface at construction instead, the two rasterisers above
+    // would be a quarter of a gigabyte between them before either had drawn anything.
+    assert_eq!(
+        (one.memory().scratch, two.memory().scratch),
+        (0, 0),
+        "a rasteriser allocated a scratch for a surface rather than for a frame"
     );
 }
 

@@ -368,6 +368,7 @@ impl TextPlacement {
         RunSurface {
             translated_only: self.affine(scene).is_translation(),
             solid_brush: matches!(brush, RunBrush::Solid),
+            scale: self.scale,
         }
     }
 }

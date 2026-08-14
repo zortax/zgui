@@ -384,6 +384,9 @@ pub struct Window {
     declined: u64,
     /// When a frame that has been asked for is allowed to start.
     present: crate::window::present::PresentPace,
+    /// The output refresh rate last reported, so a change in it is logged once rather than per
+    /// frame. `None` inside the option is a backend that reports no rate at all.
+    reported_rate: std::cell::Cell<Option<Option<u32>>>,
     /// When to try again after a frame that did not reach the screen, if one is owed.
     ///
     /// A frame whose acquisition timed out, or whose surface the compositor replaced underneath it,
@@ -670,6 +673,7 @@ impl Window {
             configured: 0,
             declined: 0,
             present: crate::window::present::PresentPace::free_running(),
+            reported_rate: std::cell::Cell::new(None),
             retry_after: None,
             maintenance_due: None,
             held: 0,
@@ -949,8 +953,22 @@ impl Window {
     /// The rate a resize is answered at, and the rate an animation ticks at, are both this — so it
     /// is read from the surface rather than assumed, and a window that has been dragged onto
     /// another output is paced by that output from the next frame onwards.
+    ///
+    /// A backend that reports no rate is answered with sixty hertz, and that fallback paces
+    /// everything a window does: a resize step, an animation tick, a held frame. Logged when it
+    /// changes, because a fast display silently paced at sixty is indistinguishable from a fast
+    /// display that is simply slow, and there is nothing else that would ever say which.
     pub fn refresh_interval(&self) -> std::time::Duration {
-        zgui_platform::refresh_interval(self.surface.refresh_rate_millihertz())
+        let rate = self.surface.refresh_rate_millihertz();
+        if self.reported_rate.replace(Some(rate)) != Some(rate) {
+            match rate {
+                Some(rate) => tracing::debug!(millihertz = rate, "output refresh rate"),
+                None => tracing::info!(
+                    "the output reports no refresh rate; pacing this window at sixty hertz"
+                ),
+            }
+        }
+        zgui_platform::refresh_interval(rate)
     }
 
     /// How many device pixels there are to a CSS pixel.

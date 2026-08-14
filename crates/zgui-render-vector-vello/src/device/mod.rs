@@ -55,14 +55,19 @@ impl SharedRenderer {
             gpu.device(),
             RendererOptions {
                 use_cpu: false,
-                // Analytic area coverage is the default and the only one anything asks for; the
-                // multisampled variant is kept buildable so the two can be compared on real content
-                // rather than argued about, and the eight-sample one is not, because nothing would
-                // choose it over either neighbour.
+                // Analytic area coverage, and nothing else built beside it.
+                //
+                // Each variant is a separate compilation of the largest shader in the pipeline, and
+                // this construction is the third of a second a window pays the first time anything
+                // it draws needs curves. The multisampled alternative was kept buildable so the two
+                // could be compared on the content that provokes conflation — overlapping strokes,
+                // a rounded icon, a self-intersecting path — and they were: worst 48 over 845
+                // pixels, which is the outlines of four shapes at an edge level and not a seam. The
+                // comparison is settled, so the shader is not built.
                 antialiasing_support: AaSupport {
                     area: true,
                     msaa8: false,
-                    msaa16: true,
+                    msaa16: false,
                 },
                 num_init_threads: None,
                 pipeline_cache: cache.handle().cloned(),

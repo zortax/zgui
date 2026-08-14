@@ -158,6 +158,31 @@ impl BoundsTree {
         order
     }
 
+    /// Reserves `span + 1` consecutive orders for a group of primitives already ordered against
+    /// one another, and returns the lowest of them.
+    ///
+    /// One query and one leaf for the whole group, where inserting each separately is one of each
+    /// per primitive. What makes it sound is that the group's members were ordered against each
+    /// other by this same rule, over their own rectangles, and have moved rigidly since — so their
+    /// relative order still holds and the only question left is where the group sits, which is one
+    /// question about one rectangle.
+    ///
+    /// The leaf filed for `bounds` carries the group's *highest* order, so anything drawn later
+    /// that overlaps any part of the group sorts above all of it. That is coarser than asking per
+    /// primitive, and coarse in the safe direction: an order can come out higher than it needed to
+    /// be, never lower, and a higher order costs batching rather than correctness.
+    pub fn insert_block(&mut self, bounds: Rect<DevicePx, Device>, span: DrawOrder) -> DrawOrder {
+        let base = (self.max_intersecting(bounds) + 1).max(self.order_floor);
+        let top = base.saturating_add(span);
+        let leaf = self.insert_leaf(bounds, top);
+        self.max_leaf = match self.max_leaf {
+            Some(previous) if self.nodes[previous as usize].max_order >= top => Some(previous),
+            _ => Some(leaf),
+        };
+        counter::bump(Counter::BoundsTreeInserts);
+        base
+    }
+
     /// Inserts `bounds` above *everything*, whether it overlaps or not.
     ///
     /// A group's markers need this rather than an ordinary insert: an ordinary one would let

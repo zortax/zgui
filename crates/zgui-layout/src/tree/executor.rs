@@ -71,13 +71,15 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     pub(crate) fn run_batch(&mut self, requests: &[ChildRequest], results: &mut Vec<LayoutOutput>) {
         results.clear();
         let distributable = requests.len() >= MIN_COLD_NODES && self.batch_pool().is_some() && {
-            let mut cold: Vec<u64> = Vec::new();
+            // A set, because this runs over the children of one box and a flexible container with
+            // ten thousand of them is a shape this probe should not be quadratic in.
+            let mut cold: rustc_hash::FxHashSet<u64> = rustc_hash::FxHashSet::default();
             for request in requests {
                 let node = u64::from(request.node);
                 if !cold.contains(&node)
                     && taffy::CacheTree::cache_get(self, request.node, &request.input).is_none()
                 {
-                    cold.push(node);
+                    cold.insert(node);
                 }
             }
             cold.len() >= MIN_COLD_NODES
@@ -330,6 +332,13 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
         plans: &[ChunkPlan],
         snapshots: &[(BoxKey, Vec<ParagraphId>)],
     ) {
+        // Indexed once rather than scanned per box: both sides of this grow with how much text the
+        // batch carried, so scanning one for each entry of the other is quadratic in exactly the
+        // frames the batching exists to make cheaper.
+        let snapshots: rustc_hash::FxHashMap<BoxKey, &[ParagraphId]> = snapshots
+            .iter()
+            .map(|(key, ids)| (*key, ids.as_slice()))
+            .collect();
         let store = self.store.get_mut();
         for plan in plans {
             for &key in &plan.boxes {
@@ -350,10 +359,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
                 for mark in resolution.ellipsis.marks_mut() {
                     mark.paragraph = store.intern_paragraph(mark.key);
                 }
-                let old: &[ParagraphId] = snapshots
-                    .iter()
-                    .find(|(snapshot, _)| *snapshot == key)
-                    .map_or(&[], |(_, ids)| ids);
+                let old: &[ParagraphId] = snapshots.get(&key).copied().unwrap_or(&[]);
                 let new: Vec<ParagraphId> = resolution.paragraphs().collect();
                 for id in &new {
                     if !old.contains(id) {

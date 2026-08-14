@@ -128,17 +128,18 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
     {
         // Identical contexts share one key — a list of identical rows is the common case — so a
         // key is taken once however many jobs carry it.
-        let mut taken: Vec<ParagraphKey> = Vec::new();
+        //
+        // A set rather than a list. The case the list was written for is the one where it stays
+        // short, and that is also the case where it costs nothing either way; the case that decides
+        // the shape is the other one — a cold first paint, or a virtualised list remounting a
+        // screenful of distinct rows — where hundreds of distinct keys are scanned against each
+        // other on the frame path.
+        let mut taken: rustc_hash::FxHashSet<ParagraphKey> =
+            rustc_hash::FxHashSet::with_capacity_and_hasher(jobs.len(), rustc_hash::FxBuildHasher);
         let misses: Vec<usize> = jobs
             .iter()
             .enumerate()
-            .filter(|(_, (key, _))| {
-                if self.cache.holds(*key) || taken.contains(key) {
-                    return false;
-                }
-                taken.push(*key);
-                true
-            })
+            .filter(|(_, (key, _))| !self.cache.holds(*key) && taken.insert(*key))
             .map(|(index, _)| index)
             .collect();
         if misses.is_empty() {

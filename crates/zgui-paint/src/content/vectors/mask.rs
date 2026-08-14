@@ -23,13 +23,21 @@ pub enum VectorMaskStyle<'a> {
 /// The geometry needed to request one coverage mask.
 #[derive(Clone, Copy, Debug)]
 pub struct VectorMaskRequest<'a> {
-    /// The outline in device-pixel coordinates.
+    /// The outline in the coordinates its own box is measured in.
     pub path: &'a BezPath,
     /// Whether the outline is filled or stroked.
     pub style: VectorMaskStyle<'a>,
+    /// Mask texels per unit of each of the path's own axes.
+    ///
+    /// One and one where the shape is drawn under nothing but a translation, which is the ordinary
+    /// case and the one that makes a tile shared between two placements of the same icon. A shape
+    /// under a scale is rasterised at the density the scale asks for, so what reaches the screen is
+    /// coverage the rasteriser produced rather than coverage a sampler stretched. A rotation is a
+    /// density of one on both axes, so every angle of a turning shape shares one tile.
+    pub density: [f32; 2],
     /// Device pixels per CSS pixel.
     pub scale: f32,
-    /// Integer pixel bounds of the raster.
+    /// Integer pixel bounds of the raster, in the same space the density measures.
     pub bounds: Rect<i32, Device>,
 }
 
@@ -126,12 +134,16 @@ impl VectorMaskCache {
         }
         let commands = commands(
             request.path,
+            request.density,
             request.bounds.origin.x,
             request.bounds.origin.y,
         )?;
+        // The density needs no field of its own. It is already in the scaled commands, in the size
+        // they were measured to produce and in the scaled stroke width, so two requests that agree
+        // on all three ask for the same raster whatever densities they arrived at it by.
         let fingerprint = Fingerprint {
             commands: commands.into_boxed_slice(),
-            style: style(request.style)?,
+            style: style(request.style, request.density[0])?,
             scale: request.scale.to_bits(),
             size: [width, height],
         };
@@ -174,11 +186,18 @@ impl VectorMaskCache {
     }
 }
 
-fn commands(path: &BezPath, origin_x: i32, origin_y: i32) -> Option<Vec<Command>> {
+fn commands(
+    path: &BezPath,
+    density: [f32; 2],
+    origin_x: i32,
+    origin_y: i32,
+) -> Option<Vec<Command>> {
     let x = f64::from(origin_x);
     let y = f64::from(origin_y);
+    let kx = f64::from(density[0]);
+    let ky = f64::from(density[1]);
     let point = |point: zgui_scene::kurbo::Point| {
-        let point = [(point.x - x) as f32, (point.y - y) as f32];
+        let point = [(point.x * kx - x) as f32, (point.y * ky - y) as f32];
         (point[0].is_finite() && point[1].is_finite())
             .then_some([point[0].to_bits(), point[1].to_bits()])
     };
@@ -262,7 +281,12 @@ fn raster(fingerprint: &Fingerprint) -> Vec<u8> {
 }
 
 /// Converts the public, borrowed style into exact bits for the cache and raster closure.
-fn style(style: VectorMaskStyle<'_>) -> Option<Style> {
+///
+/// Every length of a stroke is measured along the outline, so `density` scales all of them. It is
+/// one number rather than two because stroking does not commute with a map that scales the two axes
+/// differently, and the caller declines the mask rather than ask this to draw the wrong outline.
+/// The miter limit is a ratio and is left alone.
+fn style(style: VectorMaskStyle<'_>, density: f32) -> Option<Style> {
     match style {
         VectorMaskStyle::Fill(rule) => Some(Style::Fill(rule == peniko::Fill::EvenOdd)),
         VectorMaskStyle::Stroke(stroke) => {
@@ -273,8 +297,9 @@ fn style(style: VectorMaskStyle<'_>) -> Option<Style> {
             if !finite || stroke.width <= 0.0 {
                 return None;
             }
+            let scaled = |value: f64| ((value * f64::from(density)) as f32).to_bits();
             Some(Style::Stroke {
-                width: (stroke.width as f32).to_bits(),
+                width: scaled(stroke.width),
                 join: kurbo_join(stroke.join),
                 miter_limit: (stroke.miter_limit as f32).to_bits(),
                 start_cap: kurbo_cap(stroke.start_cap),
@@ -282,9 +307,9 @@ fn style(style: VectorMaskStyle<'_>) -> Option<Style> {
                 dashes: stroke
                     .dash_pattern
                     .iter()
-                    .map(|value| (*value as f32).to_bits())
+                    .map(|value| scaled(*value))
                     .collect(),
-                dash_offset: (stroke.dash_offset as f32).to_bits(),
+                dash_offset: scaled(stroke.dash_offset),
             })
         }
     }

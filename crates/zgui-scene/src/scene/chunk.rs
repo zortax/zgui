@@ -6,8 +6,10 @@
 
 use core::ops::Range;
 
-use zgui_geom::{Device, DevicePx, Size};
+use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_profile::{Counter, counter};
+
+use crate::id::DrawOrder;
 
 use crate::group::BackdropFilter;
 use crate::id::{ClipId, PaintId};
@@ -130,6 +132,27 @@ pub struct ChunkPrims {
     ///
     /// Empty unless the invariant checks are on — see [`Scene`]'s `spaces`.
     pub spaces: Vec<Option<SpatialId>>,
+    /// What each entry's order is *within the chunk*, parallel to [`ChunkPrims::ops`], counting
+    /// from one.
+    ///
+    /// Not the order the encoding frame gave it. That number is a fact about the frame — where the
+    /// chunk's content fell among everything else drawn that day — and a chunk outlives it. What
+    /// does survive is how the chunk's own primitives stand against *each other*, which is decided
+    /// by the same rule the frame uses and against the same rectangles, over nothing but the
+    /// chunk. A replay adds where the chunk now sits to every one of these, and that is the whole
+    /// of the ordering it needs.
+    ///
+    /// So this is filled for the primitives the encoding *culled* as well, which the frame's own
+    /// order never was: the capture is the pushing's complete content, and a shape outside the
+    /// scroll port when it was encoded is inside it two frames later.
+    pub orders: Vec<DrawOrder>,
+    /// The highest entry of [`ChunkPrims::orders`], or zero for a chunk holding nothing.
+    pub span: DrawOrder,
+    /// The rectangle the whole chunk puts ink in, in the coordinates it was recorded in.
+    ///
+    /// `None` for a chunk with nothing in it. A replay asks the draw-order tree about this one
+    /// rectangle in place of asking about every primitive separately.
+    pub ink: Option<Rect<DevicePx, Device>>,
 }
 
 impl ChunkPrims {
@@ -156,6 +179,47 @@ impl ChunkPrims {
             + self.backdrops.capacity() * size_of::<BackdropFilter>()
             + self.vectors.capacity() * size_of::<VectorItem>()
             + self.spaces.capacity() * size_of::<Option<SpatialId>>()
+            + self.orders.capacity() * size_of::<DrawOrder>()
+    }
+
+    /// Whether the chunk carries an order for every operation it holds.
+    ///
+    /// A chunk built before the orders existed, or one a caller assembled by hand, answers no and
+    /// is replayed the long way — every primitive asking the tree for itself, which is what every
+    /// replay used to do.
+    pub fn carries_orders(&self) -> bool {
+        self.orders.len() == self.ops.len() && self.ink.is_some()
+    }
+
+    /// Settles the recorded orders into chunk-local ones and derives the span and the ink.
+    ///
+    /// Called once, where the chunk is closed. The orders arrive as whatever the recording tree
+    /// gave them — counting from one for a capture, and from wherever the frame happened to be for
+    /// an extraction — and leave counting from one, so a replay adds a base to them and nothing
+    /// else.
+    pub(crate) fn settle_orders(&mut self) {
+        self.span = 0;
+        self.ink = None;
+        if self.orders.len() != self.ops.len() {
+            self.orders.clear();
+            return;
+        }
+        let Some(floor) = self.orders.iter().copied().min() else {
+            return;
+        };
+        for order in &mut self.orders {
+            *order = *order - floor + 1;
+        }
+        self.span = self.orders.iter().copied().max().unwrap_or(0);
+        for &op in &self.ops {
+            let Some(bounds) = ink_of(self, op) else {
+                continue;
+            };
+            self.ink = Some(match self.ink {
+                Some(union) => union.union(bounds),
+                None => bounds,
+            });
+        }
     }
 
     /// Collects every side-table entry the chunk's primitives name into `holds`, distinct.
@@ -214,6 +278,49 @@ impl ChunkPrims {
         self.backdrops.clear();
         self.vectors.clear();
         self.spaces.clear();
+        self.orders.clear();
+        self.span = 0;
+        self.ink = None;
+    }
+}
+
+/// The order one of the frame's own primitives was given, for an extraction to rebase.
+///
+/// Zero for the kinds an extraction skips, which never reach [`ChunkPrims::ops`] at all.
+fn order_of(prims: &crate::scene::primitives::Primitives, op: PaintOp) -> DrawOrder {
+    let index = op.index as usize;
+    match op.kind {
+        PrimitiveKind::Quad => prims.quads.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::Shadow => prims.shadows.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::Decoration => prims.decorations.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::MonoSprite => prims.mono_sprites.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::SubpixelSprite => {
+            prims.subpixel_sprites.get(index).map_or(0, |prim| prim.order)
+        }
+        PrimitiveKind::ColorSprite => prims.color_sprites.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::External => prims.externals.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::Backdrop => prims.backdrops.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => 0,
+    }
+}
+
+/// Where one recorded operation puts ink, in the coordinates the chunk recorded it in.
+fn ink_of(chunk: &ChunkPrims, op: PaintOp) -> Option<Rect<DevicePx, Device>> {
+    let index = op.index as usize;
+    match op.kind {
+        PrimitiveKind::Quad => chunk.quads.get(index).map(Quad::ink),
+        PrimitiveKind::Shadow => chunk.shadows.get(index).map(Shadow::ink),
+        PrimitiveKind::Decoration => chunk.decorations.get(index).map(Decoration::ink),
+        PrimitiveKind::MonoSprite => chunk.mono_sprites.get(index).map(MonoSprite::ink),
+        PrimitiveKind::SubpixelSprite => {
+            chunk.subpixel_sprites.get(index).map(SubpixelSprite::ink)
+        }
+        PrimitiveKind::ColorSprite => chunk.color_sprites.get(index).map(ColorSprite::ink),
+        PrimitiveKind::External => chunk.externals.get(index).map(ExternalQuad::ink),
+        PrimitiveKind::Backdrop => chunk.backdrops.get(index).map(|prim| prim.bounds),
+        // A vector item is rasterised elsewhere and composited back in, and a replay does not
+        // re-plan a pass for one; its extent is no part of what the block is asked about.
+        PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => None,
     }
 }
 
@@ -279,14 +386,18 @@ impl Scene {
             "a chunk capture is already open: fragments are captured one at a time"
         );
         recycled.clear();
+        self.capture_order.clear();
         self.capture = Some(recycled);
     }
 
     /// Closes the capture opened by [`Scene::begin_chunk_capture`] and returns it.
     pub fn take_chunk_capture(&mut self) -> ChunkPrims {
-        self.capture
+        let mut chunk = self
+            .capture
             .take()
-            .expect("a chunk capture was opened before being taken")
+            .expect("a chunk capture was opened before being taken");
+        chunk.settle_orders();
+        chunk
     }
 
     /// Stamps every primitive pushed under the last capture with the chunk revision its encoding
@@ -402,12 +513,17 @@ impl Scene {
                 continue;
             };
             chunk.ops.push(PaintOp::new(op.kind, at));
+            // The frame's own order, which `settle_orders` rebases to the chunk's. Available here
+            // and not in a capture, because an extraction copies primitives the frame has already
+            // ordered rather than ones on their way to being ordered.
+            chunk.orders.push(order_of(&self.primitives, op));
             if self.checking {
                 chunk
                     .spaces
                     .push(self.spaces.get(position).copied().flatten());
             }
         }
+        chunk.settle_orders();
     }
 
     /// Re-emits a chunk's operations, offset by `by`, and returns the range they occupy in this
@@ -431,8 +547,32 @@ impl Scene {
     ) -> Range<u32> {
         let start = self.ops.len() as u32;
         let in_place = by.width.0 == 0.0 && by.height.0 == 0.0;
+        // One question for the whole chunk rather than one per primitive. The chunk's members were
+        // ordered against each other when they were captured and have moved rigidly since, so what
+        // the tree is asked is where the chunk sits now; the orders inside it are that answer plus
+        // the offsets they already had.
+        //
+        // This is what a scrolled port is made of. The emit walk over one is three quarters of the
+        // frame, and the largest thing inside that walk was re-inserting every primitive of every
+        // replayed row to rediscover an order none of them had changed.
+        let base = chunk.carries_orders().then(|| {
+            let ink = chunk.ink.expect("a chunk that carries orders carries its ink");
+            let moved = Rect::new(
+                zgui_geom::Point::new(
+                    DevicePx(ink.origin.x.0 + by.width.0),
+                    DevicePx(ink.origin.y.0 + by.height.0),
+                ),
+                ink.size,
+            );
+            self.order
+                .insert_block(moved, chunk.span.saturating_sub(1))
+        });
         for (position, op) in chunk.ops.iter().enumerate() {
             let index = op.index as usize;
+            if let Some(base) = base {
+                // Counting from one, so the chunk's lowest order is the base itself.
+                self.replay_order = chunk.orders.get(position).map(|order| base + order - 1);
+            }
             // Where this primitive's log entry will land, so the name it was originally pushed
             // under can be put back over the one the ordinary push path just wrote.
             let logged = self.ops.len();
@@ -535,6 +675,9 @@ impl Scene {
                 self.spaces[logged] = recorded;
             }
         }
+        // A push that never happened — a kind a replay skips, or a primitive the chunk no longer
+        // holds — leaves its order unclaimed, and nothing outside a replay may take one.
+        self.replay_order = None;
         start..self.ops.len() as u32
     }
 }

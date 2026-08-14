@@ -56,6 +56,13 @@ pub(crate) fn emit_tracked(
             route: Some(VectorRoute::AtlasMask),
         };
     }
+    // A transform with no area behind it — `scale(0)`, and a projection the display list flattened
+    // to one — takes every outline to a line or a point, so nothing it draws can reach a pixel. It
+    // is refused here rather than rasterised: a shape hidden this way would otherwise be the item
+    // that builds the general rasteriser, for a picture with no extent.
+    if flattened(scene, placement) {
+        return ShapeEmission::default();
+    }
     let clips: Vec<VectorClip> = shape
         .clips
         .iter()
@@ -96,12 +103,84 @@ pub(crate) fn emit_tracked(
     }
 }
 
-/// The longest edge, in device pixels, a shape may have and still take the atlas-mask path.
+/// The most coverage texels one mask may occupy.
 ///
-/// A mask holds one byte per texel, so the largest one is 64 KiB and several fit one default atlas
-/// texture. A larger shape takes the general vector path, which draws it correctly at any size. The
-/// atlas refuses anything past the device's own limit, which turns into the same fallback.
-const MAX_MASK_SIZE: i32 = 256;
+/// A mask holds one byte per texel, so this is 64 KiB and several fit one default atlas texture.
+const MAX_MASK_TEXELS: f32 = 64.0 * 1024.0;
+
+/// The widest a mask may be, which is one default atlas page.
+///
+/// Past this the atlas grows a texture for the tile alone, and a shape big enough to need one is
+/// big enough for the general vector path.
+const MAX_MASK_WIDTH: f32 = 1024.0;
+
+/// The tallest a mask may be.
+///
+/// A shelf allocator is asymmetric and so is this. A wide, thin mask — an axis, a rule, a divider —
+/// opens a shelf as thin as itself and costs the page almost nothing. A tall one opens a shelf as
+/// tall as itself that shorter tiles will not be placed in, so a single sliver can spend a quarter
+/// of a page shared with every glyph on the screen.
+const MAX_MASK_HEIGHT: f32 = 256.0;
+
+/// Whether a mask of this size is worth putting in a page shared with the glyphs.
+fn fits(width: f32, height: f32) -> bool {
+    width >= 1.0
+        && height >= 1.0
+        && width <= MAX_MASK_WIDTH
+        && height <= MAX_MASK_HEIGHT
+        && width * height <= MAX_MASK_TEXELS
+}
+
+/// How much residual rotation a linear part may carry and still be read as axis-preserving.
+///
+/// Relative, because the residue a matrix carries is proportional to the lengths in it: an absolute
+/// bound refuses a quarter turn composed through three nested transforms as readily as it refuses a
+/// real one.
+const EPSILON: f32 = 1.0e-4;
+
+/// Whether a placement's transform takes every outline under it to something with no area.
+fn flattened(scene: &Scene, placement: VectorPlacement) -> bool {
+    let Some(affine) = scene
+        .spatial
+        .resolve(placement.transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2)
+    else {
+        return false;
+    };
+    let area = affine.a * affine.d - affine.b * affine.c;
+    !area.is_finite() || area.abs() <= f32::EPSILON
+}
+
+/// Mask texels per unit of each of a shape's own axes, or `None` to decline the fast path.
+///
+/// The monochrome pages are sampled without filtering, so a mask is exact only where the shape's
+/// own axes land on the device's. That is every scale, every mirror and every quarter turn — which
+/// is what interfaces are built from — and it is not an arbitrary rotation or a shear, which stay
+/// on the general rasteriser.
+///
+/// A pure rotation gives a density of one on both axes, so a shape that turns rasterises once and
+/// shares that tile at every angle.
+fn density_of(affine: &zgui_geom::Affine2, stroked: bool) -> Option<[f32; 2]> {
+    let kx = affine.a.hypot(affine.b);
+    let ky = affine.c.hypot(affine.d);
+    const MIN_DENSITY: f32 = 1.0e-4;
+    if !kx.is_finite() || !ky.is_finite() || kx < MIN_DENSITY || ky < MIN_DENSITY {
+        return None;
+    }
+    let axial = affine.b.abs() <= EPSILON * kx && affine.c.abs() <= EPSILON * ky;
+    let quarter = affine.a.abs() <= EPSILON * kx && affine.d.abs() <= EPSILON * ky;
+    if !axial && !quarter {
+        return None;
+    }
+    // A stroke is measured along the outline, so it has one width whatever direction the outline
+    // runs in. A map that scales the two axes differently gives it two, and no single mask says
+    // what that shape looks like.
+    if stroked && (kx - ky).abs() > EPSILON * kx.max(ky) {
+        return None;
+    }
+    Some([kx, ky])
+}
 
 /// Emits a small solid translation-only shape as an atlas mask, or declines the fast path.
 fn emit_mask(
@@ -136,51 +215,91 @@ fn emit_mask(
             .filter(|color| color.alpha() != 0.0)
             .zip(inherited_stroke.as_ref()),
     };
-    // One mask has one tint and one coverage operation. A fill plus a stroke may use different
-    // paints and their overlapping antialiasing does not equal either operation alone, so it stays
-    // on the general rasteriser. Stroke-only icons are the important second common case.
-    let (color, style, stroke_for_ink) = match (fill, stroke) {
-        (Some((color, rule)), None) => (color, VectorMaskStyle::Fill(rule), None),
-        (None, Some((color, stroke))) => (
-            color,
-            VectorMaskStyle::Stroke(stroke),
-            Some(VectorStroke {
-                paint: PaintRef::NONE,
-                style: stroke.clone(),
-            }),
-        ),
-        _ => return None,
-    };
+    if fill.is_none() && stroke.is_none() {
+        return None;
+    }
     let affine = scene
         .spatial
         .resolve(placement.transform)
         .as_ref()
         .and_then(zgui_geom::Matrix4::to_affine2)?;
-    const EPSILON: f32 = 1.0e-6;
-    if (affine.a - 1.0).abs() > EPSILON
-        || affine.b.abs() > EPSILON
-        || affine.c.abs() > EPSILON
-        || (affine.d - 1.0).abs() > EPSILON
-    {
-        return None;
-    }
+    let density = density_of(&affine, stroke.is_some())?;
+    let outline = stroke.map(|(_, style)| VectorStroke {
+        paint: PaintRef::NONE,
+        style: style.clone(),
+    });
 
-    let local = ink_of(shape, stroke_for_ink.as_ref());
-    let left = local.left().0.floor();
-    let top = local.top().0.floor();
-    let right = local.right().0.ceil();
-    let bottom = local.bottom().0.ceil();
+    // A shape with both a fill and a stroke becomes two sprites, which is what the general
+    // rasteriser makes of it as well: two items, the stroke composited over the fill. Each is
+    // measured against its own ink, because a stroke puts ink outside the interior it follows.
+    //
+    // Both parts qualify or neither does. Half a shape from a sprite and half from a vector pass
+    // has no order between the halves, and one part alone draws a different picture.
+    let filled = match fill {
+        Some((color, rule)) => Some(mask_sprite(
+            shape,
+            masks,
+            placement,
+            density,
+            color,
+            VectorMaskStyle::Fill(rule),
+            None,
+        )?),
+        None => None,
+    };
+    let stroked = match stroke {
+        Some((color, style)) => Some(mask_sprite(
+            shape,
+            masks,
+            placement,
+            density,
+            color,
+            VectorMaskStyle::Stroke(style),
+            outline.as_ref(),
+        )?),
+        None => None,
+    };
+
+    let mut pushed = 0;
+    for sprite in [filled, stroked].into_iter().flatten() {
+        pushed += usize::from(scene.push_mono_sprite(sprite).is_some());
+    }
+    Some(pushed)
+}
+
+/// One part of a shape as a tinted sprite over a coverage tile, or `None` to decline the fast path.
+#[allow(clippy::too_many_arguments)]
+fn mask_sprite(
+    shape: &zgui_svg::Shape,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+    density: [f32; 2],
+    color: Color,
+    style: VectorMaskStyle<'_>,
+    stroke_for_ink: Option<&VectorStroke>,
+) -> Option<MonoSprite> {
+    let [kx, ky] = density;
+    let local = ink_of(shape, stroke_for_ink);
+    // Measured in mask space, which is the shape's own space scaled by the density. The sprite is
+    // handed back the same rectangle divided out again, so it keeps riding `placement.transform`
+    // and every clip, draw order and replay offset is stated where it always was.
+    let left = (local.left().0 * kx).floor();
+    let top = (local.top().0 * ky).floor();
+    let right = (local.right().0 * kx).ceil();
+    let bottom = (local.bottom().0 * ky).ceil();
     if ![left, top, right, bottom]
         .iter()
         .all(|edge| edge.is_finite())
     {
         return None;
     }
-    let width = (right - left) as i32;
-    let height = (bottom - top) as i32;
-    if width <= 0 || height <= 0 || width > MAX_MASK_SIZE || height > MAX_MASK_SIZE {
+    // Tested before the cast, which saturates rather than wraps: a saturated edge would pass a
+    // budget stated in the integers it saturated to.
+    if !fits(right - left, bottom - top) {
         return None;
     }
+    let width = (right - left) as i32;
+    let height = (bottom - top) as i32;
     let bounds = Rect::new(
         Point::new(left as i32, top as i32),
         Size::new(width, height),
@@ -188,16 +307,17 @@ fn emit_mask(
     let mask = masks.vector_mask(VectorMaskRequest {
         path: &shape.path,
         style,
+        density,
         scale: placement.scale,
         bounds,
     })?;
     let sprite_bounds = Rect::new(
-        Point::new(DevicePx(left), DevicePx(top)),
-        Size::new(DevicePx(width as f32), DevicePx(height as f32)),
+        Point::new(DevicePx(left / kx), DevicePx(top / ky)),
+        Size::new(DevicePx(width as f32 / kx), DevicePx(height as f32 / ky)),
     );
     let mut sprite = MonoSprite::new(sprite_bounds, mask.tile, color).clipped(placement.clip);
     sprite.transform = placement.transform.index();
-    Some(usize::from(scene.push_mono_sprite(sprite).is_some()))
+    Some(sprite)
 }
 
 /// What strokes one shape, which is the shape's own stroke or the element's.

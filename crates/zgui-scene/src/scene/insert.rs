@@ -20,14 +20,19 @@ use crate::vector::VectorItem;
 /// it lands in. The coordinate-system name is recorded beside it when the checks are on, exactly
 /// as [`Scene::record`] does for the frame's own log.
 macro_rules! tee {
-    ($self:ident, $kind:ident, $lane:ident, $space:expr, $prim:expr) => {
+    ($self:ident, $kind:ident, $lane:ident, $space:expr, $ink:expr, $prim:expr) => {
         if $self.capture.is_some() {
-            // Both read before the capture is borrowed, because either would borrow the scene.
+            // All three read before the capture is borrowed, because any of them would borrow the
+            // scene. The order comes from the capture's own tree rather than the frame's: it says
+            // where this primitive stands among the chunk's, which is what stays true after the
+            // frame it was encoded in is gone.
             let space = $space;
             let checking = $self.checking;
+            let order = $self.capture_order.insert($ink);
             if let Some(capture) = &mut $self.capture {
                 let at = capture.$lane.len() as u32;
                 capture.ops.push(PaintOp::new(PrimitiveKind::$kind, at));
+                capture.orders.push(order);
                 if checking {
                     capture.spaces.push(space);
                 }
@@ -80,7 +85,7 @@ impl Scene {
 
     /// Pushes a rounded rectangle, returning the order it took or `None` if it was culled.
     pub fn push_quad(&mut self, mut quad: Quad) -> Option<DrawOrder> {
-        tee!(self, Quad, quads, self.space_at(quad.transform), quad);
+        tee!(self, Quad, quads, self.space_at(quad.transform), quad.ink(), quad);
         let order = self.assign_order(quad.ink(), quad.clip_id(), quad.transform)?;
         quad.order = order;
         let space = self.space_at(quad.transform);
@@ -105,6 +110,7 @@ impl Scene {
             Shadow,
             shadows,
             self.space_at(shadow.transform),
+            shadow.ink(),
             shadow
         );
         let order = self.assign_order(shadow.ink(), shadow.clip_id(), shadow.transform)?;
@@ -131,6 +137,7 @@ impl Scene {
             Decoration,
             decorations,
             self.space_at(decoration.transform),
+            decoration.ink(),
             decoration
         );
         let order =
@@ -163,6 +170,7 @@ impl Scene {
             MonoSprite,
             mono_sprites,
             self.space_at(sprite.transform),
+            sprite.ink(),
             sprite
         );
         let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
@@ -204,6 +212,7 @@ impl Scene {
             SubpixelSprite,
             subpixel_sprites,
             self.space_at(sprite.transform),
+            sprite.ink(),
             sprite
         );
         let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
@@ -239,6 +248,7 @@ impl Scene {
             ColorSprite,
             color_sprites,
             self.space_at(sprite.transform),
+            sprite.ink(),
             sprite
         );
         let order = self.assign_order(sprite.ink(), sprite.clip_id(), sprite.transform)?;
@@ -274,7 +284,7 @@ impl Scene {
     /// the log out of step with what was drawn, which is what
     /// [`Scene::unreplayable`](Scene::unreplayable) counts.
     pub fn push_vector(&mut self, mut item: VectorItem) -> Option<DrawOrder> {
-        tee!(self, Vector, vectors, item.transform, item.clone());
+        tee!(self, Vector, vectors, item.transform, item.local_ink, item.clone());
         self.note_unreplayable();
         // The order and the cull read the ink measured in the subtree's own space, exactly as they
         // do for every other primitive: `item.ink` has the item's transform applied, and testing it
@@ -300,6 +310,7 @@ impl Scene {
             External,
             externals,
             Some(external.transform),
+            external.ink(),
             external
         );
         let order = self.assign_order(external.ink(), external.clip, external.transform.index())?;
@@ -316,7 +327,7 @@ impl Scene {
 
     /// Pushes a backdrop filter, returning the order it took or `None` if it was culled.
     pub fn push_backdrop(&mut self, mut backdrop: BackdropFilter) -> Option<DrawOrder> {
-        tee!(self, Backdrop, backdrops, None, backdrop.clone());
+        tee!(self, Backdrop, backdrops, None, backdrop.bounds, backdrop.clone());
         let order =
             self.assign_order(backdrop.bounds, backdrop.clip, SpatialId::VIEWPORT.index())?;
         backdrop.order = order;
@@ -388,11 +399,23 @@ impl Scene {
         let Some(clipped) = ink.intersection(admitted) else {
             counter::bump(Counter::PrimitivesCulled);
             self.note_unreplayable();
+            // Taken even where it goes unused, so an order reserved for a primitive the clip
+            // refused cannot be handed to whatever is pushed next.
+            self.replay_order = None;
             return None;
         };
         Some(match self.layer_stack.last() {
-            Some(order) => *order,
-            None => self.order.insert(clipped),
+            Some(order) => {
+                self.replay_order = None;
+                *order
+            }
+            // A replay carries the order this primitive already had among its chunk's, moved to
+            // wherever the chunk as a whole now sits. Asking the tree again per primitive
+            // rediscovers an order that did not change.
+            None => match self.replay_order.take() {
+                Some(order) => order,
+                None => self.order.insert(clipped),
+            },
         })
     }
 

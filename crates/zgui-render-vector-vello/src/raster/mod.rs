@@ -47,9 +47,15 @@ pub struct VelloRaster {
     passes: u32,
     /// How many layers the last frame's passes needed.
     depth: u32,
-    /// The coverage method every rasterisation asks for.
-    antialiasing: AaConfig,
 }
+
+/// The coverage method every rasterisation asks for.
+///
+/// The one the renderer is built with, and therefore the only one it can run. Analytic area
+/// coverage is faster and re-uploads no sample-mask table; the multisampled alternative was
+/// compared against it on the content that provokes conflation artefacts and showed nothing area
+/// coverage hides, so it is no longer built. See `SharedRenderer::new`.
+const ANTIALIASING: AaConfig = AaConfig::Area;
 
 impl std::fmt::Debug for VelloRaster {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -71,15 +77,19 @@ impl VelloRaster {
     /// shaders, or no writable storage textures. That is a real device rather than a hypothetical
     /// one, which is why there is a second rasteriser to bind instead of a panic here.
     pub fn new(gpu: &Arc<Gpu>, width: u32, height: u32) -> Result<Self, VectorError> {
+        let _ = (width, height);
         let shared = for_gpu(gpu).map_err(|error| VectorError::Device {
             detail: error.to_string(),
         })?;
-        let mut scratch = Scratch::new();
-        scratch.ensure(gpu, width.max(1), height.max(1), Scratch::LAYERS);
+        // Unallocated. The scratch is sized from what a frame's passes actually reach — the far
+        // corner anything is drawn at, not the surface — and `plan` asks for that on every frame
+        // that has anything to rasterise. Sizing it here instead spent the surface four times over
+        // on the frame a rasteriser was built, which is fifty-nine megabytes at 2560 by 1440 for a
+        // document whose vector content may be one icon in a corner.
         Ok(Self {
             gpu: Arc::clone(gpu),
             shared,
-            scratch,
+            scratch: Scratch::new(),
             scenes: (0..Scratch::LAYERS).map(|_| vello::Scene::new()).collect(),
             regions: Vec::new(),
             layered: Vec::new(),
@@ -87,24 +97,12 @@ impl VelloRaster {
             last: Encoded::default(),
             passes: 0,
             depth: 0,
-            antialiasing: AaConfig::Area,
         })
     }
 
     /// Which coverage method every rasterisation asks for.
-    ///
-    /// Analytic area coverage is the default: it is faster, and it does not re-upload a sample-mask
-    /// table on every rasterisation. The multisampled alternative exists so the two can be compared
-    /// on real content — overlapping strokes, a rounded icon, a self-intersecting path — rather than
-    /// argued about, because the conflation artefacts area coverage can produce are a property of
-    /// the content and not of the algorithm alone.
     pub fn antialiasing(&self) -> AaConfig {
-        self.antialiasing
-    }
-
-    /// Sets the coverage method.
-    pub fn set_antialiasing(&mut self, antialiasing: AaConfig) {
-        self.antialiasing = antialiasing;
+        ANTIALIASING
     }
 
     /// What the last frame's encoding cost, and what it could not do.
@@ -259,7 +257,7 @@ impl VectorRaster for VelloRaster {
             };
             let shared = &self.shared;
             let gpu = &self.gpu;
-            let antialiasing = self.antialiasing;
+            let antialiasing = ANTIALIASING;
             shared
                 .measuring(gpu, || {
                     renderer.render_to_texture(

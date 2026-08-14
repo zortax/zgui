@@ -253,7 +253,12 @@ fn frames(
 /// one: by the element's own `color`, with no property naming the drawing at all.
 const CSS: &str = "root { display: block; width: 400px; height: 300px }
      .icon { display: block; width: 32px; height: 32px; color: rgb(255, 0, 0) }
-     .thick { --zgui-stroke: rgb(0, 0, 255); --zgui-stroke-width: 2px }";
+     /* Turned off the axes, which is what keeps this shape on the general rasteriser. A fill and a
+        stroke together are two tinted coverage tiles when the shape stands square to the device,
+        and the two cases below are about the vector route: what a stroke paint carries into a
+        vector item, and which element the diagnostics blame for building the rasteriser. */
+     .thick { --zgui-stroke: rgb(0, 0, 255); --zgui-stroke-width: 2px;
+              transform: rotate(30deg) }";
 
 /// The outline every case draws: a triangle filling a twenty-four unit square.
 fn triangle() -> BezPath {

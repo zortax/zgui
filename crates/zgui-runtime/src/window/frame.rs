@@ -341,12 +341,16 @@ impl Window {
         mark("f.painted");
         // Immediately after the frame that produced them, and against the output this window is
         // actually on: what the acquisition made this frame wait for is how much earlier than
-        // necessary it was started, and whether it finished inside one frame of the output is
-        // whether there was anything to schedule into at all.
+        // necessary it was started, and what the frame cost is both what is left of the interval to
+        // schedule into and what the next hold has to leave room for.
+        //
+        // The cost is measured from the release and not from the request, so it is the frame's own
+        // work and not the hold before it. The servo adds its own hold back on, because it is the
+        // only thing that knows how much of the interval it gave away.
         let cost = clock.now().saturating_duration_since(now);
         let interval = self.refresh_interval();
         self.present
-            .observed(self.renderer.acquire_block(), cost < interval, interval);
+            .observed(self.renderer.acquire_block(), cost, interval);
         // Named for what it counts. A window with nothing moving in it is supposed to leave this
         // alone, so the assertion written against it — that a still document draws nothing over
         // three hundred refreshes — reads as zero when it holds rather than as three hundred.
@@ -1005,7 +1009,7 @@ impl Window {
             // cold subtrees and 256 planned boxes, a shape the `batch_scale` probe measured
             // at half its serial time. `ZGUI_LAYOUT_BATCHES=0` opts a run out for A/B runs.
             if let Some(pool) = &self.layout_pool
-                && std::env::var("ZGUI_LAYOUT_BATCHES").map_or(true, |value| value.trim() != "0")
+                && batches_wanted()
             {
                 tree = tree.with_parallel(pool);
             }
@@ -1269,14 +1273,22 @@ impl Window {
                 .or_insert(zgui_paint::VectorRoutes::NONE)
                 .union_with(report.routes);
         }
-        let complex_this_frame: Vec<_> = touched
-            .iter()
-            .filter_map(|(node, routes)| {
-                routes
-                    .contains(zgui_paint::VectorRoute::GeneralRaster)
-                    .then_some(*node)
-            })
-            .collect();
+        // Collected only while there is still a rasteriser left to build. It answers one question
+        // once per process — which element brought a path renderer up — and a window that has
+        // already answered it, or that never asks because its content is all in the atlas, pays
+        // nothing for the diagnostic.
+        let complex_this_frame: Vec<_> = if vector_before.initialized {
+            Vec::new()
+        } else {
+            touched
+                .iter()
+                .filter_map(|(node, routes)| {
+                    routes
+                        .contains(zgui_paint::VectorRoute::GeneralRaster)
+                        .then_some(*node)
+                })
+                .collect()
+        };
         for (node, routes) in touched {
             if routes.is_empty() {
                 self.vector_routes.remove(&node);
@@ -1391,6 +1403,18 @@ impl Window {
         }
         outcome
     }
+}
+
+/// Whether layout batches ride the pool, which `ZGUI_LAYOUT_BATCHES=0` opts a run out of.
+///
+/// Read once. The environment does not change under a running process, and reading it per frame put
+/// a `String` allocation and the process-wide environment lock on the layout path — inside the very
+/// measurement the switch exists to take.
+fn batches_wanted() -> bool {
+    static WANTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WANTED.get_or_init(|| {
+        !matches!(std::env::var("ZGUI_LAYOUT_BATCHES"), Ok(value) if value.trim() == "0")
+    })
 }
 
 /// How many glyphs have been placed and how many of those had to be rasterised.

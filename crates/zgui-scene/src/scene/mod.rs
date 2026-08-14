@@ -109,6 +109,13 @@ pub struct Scene {
     /// the order assignment, so the capture is the pushing's complete content rather than what one
     /// position's clip admitted of it. See [`Scene::begin_chunk_capture`].
     capture: Option<crate::scene::chunk::ChunkPrims>,
+    /// The draw order of the open capture's own content, against nothing else.
+    ///
+    /// A second tree, over one fragment, emptied whenever a capture opens. What it answers is the
+    /// question the frame's tree cannot: how the chunk's primitives stand against each other,
+    /// which is the part of the ordering that is still true on every later frame. The frame's own
+    /// answer folds in everything else drawn that day and is worth nothing to a replay.
+    capture_order: BoundsTree,
     /// Whether the names are kept at all.
     ///
     /// Read once, when the scene is made, rather than per primitive: it is a word of storage and a
@@ -136,6 +143,13 @@ pub struct Scene {
     pub(crate) travel: Travels,
     /// Orders forced by an explicitly pushed layer, innermost last.
     layer_stack: Vec<DrawOrder>,
+    /// The order the next primitive pushed is to take, set for the length of one replayed push.
+    ///
+    /// A replay knows every order it wants before it pushes anything: the chunk's members were
+    /// ordered against each other when they were captured and have moved rigidly since, so only
+    /// where the chunk now sits is a question. Set and taken once per push, so nothing can leak
+    /// past the primitive it was reserved for.
+    pub(crate) replay_order: Option<DrawOrder>,
     /// Every order a layer forced this frame, so a check knows which classes it does not own.
     forced_orders: Vec<DrawOrder>,
     /// Where the nth marker of each direction sits in [`Primitives::groups`].
@@ -248,6 +262,8 @@ impl Scene {
             ops: Vec::new(),
             spaces: Vec::new(),
             capture: None,
+            capture_order: BoundsTree::new(),
+            replay_order: None,
             checking: crate::invariant::enabled(),
             remap: Remap::default(),
             provenance: Default::default(),

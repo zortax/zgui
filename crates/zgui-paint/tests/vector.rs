@@ -162,6 +162,47 @@ fn a_transparent_fill_does_not_disqualify_a_small_solid_css_stroke() {
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
 }
 
+/// A shape carrying both a fill and a stroke is two sprites, which is what it was all along.
+///
+/// The general rasteriser makes two items of it too — the stroke composited over the fill — so two
+/// tinted masks in the same order draw the same picture from the atlas. Each is measured against
+/// its own ink, because a stroke puts ink outside the interior it follows.
+#[test]
+fn a_shape_with_a_fill_and_a_stroke_is_two_sprites_and_no_vector_item() {
+    let css = "root { display: block; width: 200px; height: 100px }
+               mark { display: block; width: 48px; height: 48px;
+                      --zgui-fill: rgb(0, 128, 255); --zgui-stroke: rgb(255, 0, 0);
+                      --zgui-stroke-width: 2px }";
+    let mut harness = Harness::new(tree(), css);
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    let report = harness.paint_cached_vectors(
+        &VectorCache::new(),
+        &mut content,
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+
+    assert!(report.vector_routes[0]
+        .routes
+        .contains(zgui_paint::VectorRoute::AtlasMask));
+    assert!(!report.vector_routes[0]
+        .routes
+        .contains(zgui_paint::VectorRoute::GeneralRaster));
+    assert!(harness.scene().primitives.vectors.is_empty());
+
+    let sprites = &harness.scene().primitives.mono_sprites;
+    assert_eq!(sprites.len(), 2);
+    assert_eq!(content.report().tiles, 2, "the two parts are two rasters");
+    let (fill, stroke) = (sprites[0], sprites[1]);
+    assert!(
+        stroke.order > fill.order,
+        "the stroke did not composite over the fill"
+    );
+    assert!(
+        stroke.ink().left() < fill.ink().left() && stroke.ink().right() > fill.ink().right(),
+        "the stroke was measured against the interior it follows rather than its own ink"
+    );
+}
+
 /// Every line the renderer was handed for a vector item.
 fn shapes(scene: &Scene) -> Vec<String> {
     let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
@@ -424,6 +465,35 @@ fn a_drawing_faded_to_nothing_is_not_in_the_display_list_at_all() {
     );
 }
 
+/// Nothing below a vanished box is walked either.
+///
+/// The primitives were already refused one fragment at a time, which is what the case above
+/// states. What a closed disclosure panel costs is its *descendants*: the ink query, the lowered
+/// style and the copy composition writes into, the animation lookup and the sorted child list, all
+/// spent to arrive at a fragment that pushes nothing. The subtree is refused whole instead, so a
+/// panel that is laid out and invisible costs its own box.
+#[test]
+fn nothing_below_a_vanished_box_is_walked() {
+    let hidden = "root { display: block; width: 200px; height: 100px }
+                  mark { display: block; width: 48px; height: 48px; opacity: 0 }
+                  deep { display: block; width: 48px; height: 48px }";
+    let nested = Element::new("root").children(vec![Element::new("mark").children(vec![
+        Element::new("deep").drawing(TRIANGLE, Some("0 0 24 24")),
+    ])]);
+    let mut harness = Harness::new(nested, hidden);
+    let cache = VectorCache::new();
+    let report = harness.paint_vectors(&cache);
+
+    assert_eq!(
+        report.emitted.len(),
+        1,
+        "the walk descended past a box nothing under it can be seen through"
+    );
+    assert!(report.skipped_subtrees >= 1);
+    assert!(harness.scene().primitives.vectors.is_empty());
+    assert!(harness.scene().primitives.mono_sprites.is_empty());
+}
+
 /// And the same drawing at an alpha a person can see is still drawn, so the case above is a
 /// statement about zero rather than about opacity.
 #[test]
@@ -615,7 +685,12 @@ fn sized_tree(edge: u32) -> (Element, String) {
 /// The route a drawing of `edge` square takes.
 fn route_at(edge: u32) -> (zgui_paint::VectorRoutes, usize, usize) {
     let (tree, css) = sized_tree(edge);
-    let mut harness = Harness::new(tree, css.as_str());
+    routes_of(tree, css.as_str())
+}
+
+/// The route one fixture's drawing takes, with the sprites and vector items it produced.
+fn routes_of(tree: Element, css: &str) -> (zgui_paint::VectorRoutes, usize, usize) {
+    let mut harness = Harness::new(tree, css);
     let report = harness.paint_cached_vectors(
         &VectorCache::new(),
         &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
@@ -626,6 +701,25 @@ fn route_at(edge: u32) -> (zgui_paint::VectorRoutes, usize, usize) {
         harness.scene().primitives.mono_sprites.len(),
         harness.scene().primitives.vectors.len(),
     )
+}
+
+/// The route the fixture drawing takes under `transform`.
+fn route_under(transform: &str) -> (zgui_paint::VectorRoutes, usize, usize) {
+    let css = format!(
+        "{LARGE_ROOT}
+         mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
+                 transform: {transform} }}"
+    );
+    routes_of(tree(), css.as_str())
+}
+
+/// Whether one route is the atlas mask and nothing else.
+fn is_mask(result: (zgui_paint::VectorRoutes, usize, usize)) -> bool {
+    let (routes, sprites, vectors) = result;
+    routes.contains(zgui_paint::VectorRoute::AtlasMask)
+        && !routes.contains(zgui_paint::VectorRoute::GeneralRaster)
+        && sprites == 1
+        && vectors == 0
 }
 
 #[test]
@@ -644,4 +738,163 @@ fn a_drawing_over_the_mask_limit_takes_the_general_raster() {
     assert!(!routes.contains(zgui_paint::VectorRoute::AtlasMask));
     assert_eq!(sprites, 0);
     assert_eq!(vectors, 1);
+}
+
+/// The turns and scales an interface is actually built from stay on the atlas.
+///
+/// A grip rotated a quarter turn, a chevron turned over, a panel that grows into place: each of
+/// these used to be the shape that built a path rasteriser, at a third of a second and a hundred
+/// and seventy megabytes, for a picture the atlas draws. The monochrome pages are sampled without
+/// filtering, so what makes these exact is that every one of them puts the shape's own axes back on
+/// the device's.
+#[test]
+fn a_drawing_under_a_turn_or_a_scale_stays_on_the_atlas() {
+    for transform in [
+        "rotate(90deg)",
+        "rotate(-90deg)",
+        "rotate(180deg)",
+        "scale(0.9)",
+        "scale(2)",
+        "scale(-1, 1)",
+        "scaleY(-1)",
+        "translate(3px, 5px) rotate(90deg)",
+        "rotate(90deg) rotate(90deg) rotate(180deg)",
+    ] {
+        assert!(
+            is_mask(route_under(transform)),
+            "`transform: {transform}` was sent to the general rasteriser"
+        );
+    }
+}
+
+/// The sprite one mask arrives as, and the texels behind it.
+fn sprite_under(transform: &str) -> (zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>, [i32; 2]) {
+    let css = format!(
+        "{LARGE_ROOT}
+         mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
+                 transform: {transform} }}"
+    );
+    let mut harness = Harness::new(tree(), css.as_str());
+    harness.paint_cached_vectors(
+        &VectorCache::new(),
+        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+    let sprite = harness.scene().primitives.mono_sprites[0];
+    (sprite.ink(), [sprite.tile.bounds[2], sprite.tile.bounds[3]])
+}
+
+/// What the density is for, stated as the two cases it distinguishes.
+///
+/// The sprite is always the shape's own rectangle, because it rides the same transform every other
+/// primitive of the box rides. What moves is the coverage behind it: a turn needs none, so the tile
+/// a shape has at rest is the tile it has at every angle; a scale needs twice the texels, and gets
+/// them from the rasteriser rather than from a sampler stretching the tile it had.
+#[test]
+fn a_turn_reuses_a_shapes_texels_and_a_scale_asks_for_more() {
+    let (rest, at_rest) = sprite_under("none");
+    let (turned, when_turned) = sprite_under("rotate(90deg)");
+    assert_eq!(turned, rest, "a turn moved the sprite out of its own box");
+    assert_eq!(when_turned, at_rest, "a turn rasterised the outline again");
+
+    let (scaled, when_scaled) = sprite_under("scale(2)");
+    assert_eq!(scaled, rest, "a scale moved the sprite out of its own box");
+    assert_eq!(
+        when_scaled,
+        [at_rest[0] * 2, at_rest[1] * 2],
+        "a doubled shape was drawn from the texels it had at rest"
+    );
+}
+
+/// And a map that does not put those axes back stays where it was.
+///
+/// The bound on the residue is relative, so a quarter turn composed through three transforms is
+/// still read as one. It has to refuse a real rotation just as reliably.
+#[test]
+fn a_drawing_under_a_rotation_or_a_shear_takes_the_general_raster() {
+    for transform in ["rotate(30deg)", "rotate(1deg)", "skewX(20deg)"] {
+        let (routes, sprites, vectors) = route_under(transform);
+        assert!(
+            routes.contains(zgui_paint::VectorRoute::GeneralRaster),
+            "`transform: {transform}` was drawn from an unfiltered mask"
+        );
+        assert_eq!(sprites, 0);
+        assert_eq!(vectors, 1);
+    }
+}
+
+/// A stroke has one width whatever direction the outline runs in, and one mask cannot say that
+/// under a map that scales the two axes differently.
+#[test]
+fn a_stroke_under_a_non_uniform_scale_takes_the_general_raster() {
+    let stroked = "root { display: block; width: 400px; height: 400px }
+                   mark { display: block; width: 48px; height: 48px; color: transparent;
+                          --zgui-stroke: rgb(0, 128, 255); --zgui-stroke-width: 2px;
+                          transform: scale(2, 1) }";
+    let (routes, sprites, vectors) = routes_of(tree(), stroked);
+    assert!(routes.contains(zgui_paint::VectorRoute::GeneralRaster));
+    assert_eq!(sprites, 0);
+    // The fill and the stroke, which is what the general path pushes for a shape carrying both,
+    // whatever either of them is coloured.
+    assert_eq!(vectors, 2);
+
+    let uniform = stroked.replace("scale(2, 1)", "scale(2)");
+    assert!(is_mask(routes_of(tree(), uniform.as_str())));
+}
+
+/// A drawing scaled to nothing is drawn by nobody.
+#[test]
+fn a_drawing_scaled_to_nothing_reaches_neither_rasteriser() {
+    let css = format!(
+        "{LARGE_ROOT}
+         mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
+                 transform: scale(0) }}"
+    );
+    let mut harness = Harness::new(tree(), css.as_str());
+    harness.paint_cached_vectors(
+        &VectorCache::new(),
+        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
+        &zgui_testkit_scene::MonoRaster::new(),
+    );
+    assert!(harness.scene().primitives.vectors.is_empty());
+    assert!(harness.scene().primitives.mono_sprites.is_empty());
+}
+
+/// A bar with no view box, `width` by `height` CSS pixels, filled.
+fn bar_tree(width: u32, height: u32) -> (Element, String) {
+    let path: &'static str = Box::leak(
+        format!("M0 0 L{width} 0 L{width} {height} L0 {height} Z").into_boxed_str(),
+    );
+    let css = format!(
+        "root {{ display: block; width: 1400px; height: 1400px }}
+         mark {{ display: block; width: {width}px; height: {height}px; color: rgb(0, 128, 255) }}"
+    );
+    (
+        Element::new("root").children(vec![Element::new("mark").drawing(path, None)]),
+        css,
+    )
+}
+
+/// The budget is stated in texels and in each edge, so a rule takes the atlas and a square does not.
+///
+/// An axis, a divider and a gridline are all far longer than any icon and hold less coverage than
+/// one. Under a cap on the longest edge every one of them built a path rasteriser.
+#[test]
+fn a_wide_thin_drawing_takes_the_atlas_and_a_large_square_does_not() {
+    let (tree, css) = bar_tree(1024, 2);
+    assert!(is_mask(routes_of(tree, css.as_str())), "a 1024×2 rule");
+
+    for (width, height, why) in [
+        (1025, 2, "one texel wider than a page"),
+        (2, 1024, "a shelf nothing shorter will be placed in"),
+        (300, 300, "ninety thousand texels"),
+    ] {
+        let (tree, css) = bar_tree(width, height);
+        let (routes, _, vectors) = routes_of(tree, css.as_str());
+        assert!(
+            routes.contains(zgui_paint::VectorRoute::GeneralRaster),
+            "{width}×{height} was put in the atlas, and it is {why}"
+        );
+        assert_eq!(vectors, 1);
+    }
 }

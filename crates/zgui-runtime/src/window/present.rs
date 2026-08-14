@@ -33,6 +33,23 @@
 //! frames are already late, and a hold left over from when the window *could* keep up delays frames
 //! that had nothing to spare. Waiting for the servo to unwind at half the error a frame is several
 //! intervals of exactly that, so the gate drops the hold outright instead.
+//!
+//! What the gate reads is the hold *plus* the frame, because that is what the frame occupied of the
+//! interval. A frame released four milliseconds late and running for three keeps up on a display
+//! whose interval is seven only if the four are not counted — and the hold that pushed it over is
+//! then left in place to push the next one over as well.
+//!
+//! # The reservation
+//!
+//! The servo converges on a margin measured against the frame that has just run, which is the right
+//! answer for a window whose frames all cost the same and the wrong one for every other window. A
+//! window with a tail — a row mounting under a fling, a document relaying out under a drag — has a
+//! median that fits with most of the interval to spare, so the servo gives that spare time away and
+//! the dear frame has nothing left to run in. It then costs a whole interval instead of a few
+//! milliseconds, which is a visible stutter that the average frametime does not contain.
+//!
+//! So the hold is capped a second time, at what leaves room for the dearest frame seen lately. It
+//! costs a steady window nothing, because there the dearest frame is the usual one.
 
 use std::cell::Cell;
 use std::time::{Duration, Instant};
@@ -44,6 +61,21 @@ use std::time::{Duration, Instant};
 /// handover entirely — which is a whole refresh interval spent, to save two milliseconds. This is
 /// the margin the loop keeps for a frame that runs long.
 const BUDGET: Duration = Duration::from_micros(2_000);
+
+/// What the recent worst frame cost is multiplied by each frame.
+///
+/// A window that has slowed down has to be believed at once, and one that has sped up has to be
+/// believed slowly: the frame that was dear will very likely be dear again, and giving its margin
+/// away on the strength of one cheap frame after it is how a burst of expensive frames comes to
+/// drop every second one. Halves in about thirty-five frames, which is a quarter of a second on a
+/// fast display and half of one on a slow one: long enough to hold a fling's margin across the
+/// cheap frames between its dear ones, short enough that a window is not paced by a resize it
+/// finished with.
+///
+/// What it guarantees is one frame deep — the frame after a dear one is never pushed past the
+/// interval, because the dear one's cost is still whole. Beyond that it is an estimate, and the
+/// gate is what catches a spike nothing could have predicted.
+const DECAY: f32 = 0.98;
 
 /// When a frame that has been asked for is allowed to start, and how that moment is arrived at.
 ///
@@ -61,7 +93,7 @@ const BUDGET: Duration = Duration::from_micros(2_000);
 ///
 /// // A frame that spent eight milliseconds waiting to be handed a surface was started about that
 /// // much too early, and half the error is taken back.
-/// pace.observed(Duration::from_millis(8), true, interval);
+/// pace.observed(Duration::from_millis(8), Duration::from_micros(500), interval);
 /// assert_eq!(pace.hold(), Duration::from_millis(3));
 ///
 /// // The next frame asked for is held until that moment, and released when it arrives.
@@ -78,6 +110,13 @@ pub struct PresentPace {
     /// A cell because deciding whether an offered frame runs is a question a window answers
     /// without being borrowed mutably, and the answer is the whole of what is remembered about it.
     until: Cell<Option<Instant>>,
+    /// What a frame has recently cost at its worst, decaying towards what one costs now.
+    ///
+    /// The hold is reserved out of the same interval the frame has to finish in, so how much of it
+    /// can be given away is a question about the *dearest* frame and not the usual one. Kept as a
+    /// decaying maximum rather than a window of samples: one number, no allocation, and a frame
+    /// that was expensive once stops being paid for once the window has settled.
+    worst: Duration,
 }
 
 impl PresentPace {
@@ -86,6 +125,7 @@ impl PresentPace {
         Self {
             hold: Duration::ZERO,
             until: Cell::new(None),
+            worst: Duration::ZERO,
         }
     }
 
@@ -131,26 +171,49 @@ impl PresentPace {
 
     /// Records what a frame that has just run cost, and moves the hold on.
     ///
-    /// `blocked` is how long that frame waited to be handed a surface to present into, `kept_up`
-    /// whether it finished inside one frame of the output, and `interval` one frame of the output.
-    pub fn observed(&mut self, blocked: Duration, kept_up: bool, interval: Duration) {
+    /// `blocked` is how long that frame waited to be handed a surface to present into, `cost` how
+    /// long the frame itself took once it was released, and `interval` one frame of the output.
+    pub fn observed(&mut self, blocked: Duration, cost: Duration, interval: Duration) {
         self.until.set(None);
-        if !kept_up {
+        // Held plus spent, because that is what the frame occupied of the interval. Measuring the
+        // cost alone reads a frame that was released four milliseconds late and ran for three as
+        // keeping up on a display whose interval is seven, so the frame that missed its handover
+        // reports as the frame that made it and the hold that caused the miss survives it.
+        let occupied = self.hold + cost;
+        self.decay(cost);
+        if occupied >= interval {
             // The gate. Not a step towards zero: a window that has fallen behind its display owes
             // every frame it can produce as early as it can produce it, and unwinding a hold built
             // up while it was keeping up would delay several of them on the way down.
             self.hold = Duration::ZERO;
             return;
         }
-        // The hold and the margin together can never exceed one frame of the output. Beyond that
-        // the frame is not being started late, it is being started for the interval after the one
-        // it was asked in — a dropped frame dressed up as a schedule.
-        let ceiling = interval.saturating_sub(BUDGET);
+        // Two ceilings, and the lower one wins.
+        //
+        // The first is the interval itself: a frame held past the moment its buffer could have been
+        // handed over is not started late, it is started for the interval after the one it was
+        // asked in — a dropped frame dressed up as a schedule.
+        //
+        // The second is what the window's own frames cost. The servo converges by driving the
+        // acquisition's wait down to the budget, which is a margin measured against the frame that
+        // has *just* run; a window whose frames vary — a row mounting under a fling, an icon
+        // re-encoded, a resize — then has no margin left for the dear one, and every one of those
+        // costs a whole interval instead of a few milliseconds. Reserving the dearest recent frame
+        // gives the tail back what the average would otherwise spend, and it costs a steady window
+        // nothing, because there the dearest frame *is* the usual one.
+        let ceiling = interval
+            .saturating_sub(BUDGET)
+            .min(interval.saturating_sub(self.worst + BUDGET));
         self.hold = if blocked > BUDGET {
             (self.hold + (blocked - BUDGET) / 2).min(ceiling)
         } else {
-            self.hold.saturating_sub((BUDGET - blocked) / 2)
+            self.hold.saturating_sub((BUDGET - blocked) / 2).min(ceiling)
         };
+    }
+
+    /// How much a frame recently cost at its worst, decayed towards `cost`.
+    fn decay(&mut self, cost: Duration) {
+        self.worst = self.worst.mul_f32(DECAY).max(cost);
     }
 }
 
@@ -165,6 +228,9 @@ mod tests {
     /// What a frame started a whole interval too early waits for.
     const FREE_RUNNING: Duration = Duration::from_micros(9_960);
 
+    /// A frame that costs almost nothing, which is what a steady window's frames are.
+    const CHEAP: Duration = Duration::from_micros(300);
+
     #[test]
     fn a_window_that_is_never_made_to_wait_is_never_held() {
         // The offscreen case, and the swap chain with an image to spare. Both report a block of
@@ -172,7 +238,7 @@ mod tests {
         // window that presents to nothing acquires a schedule it has no display to keep.
         let mut pace = PresentPace::free_running();
         for _ in 0..64 {
-            pace.observed(Duration::ZERO, true, INTERVAL);
+            pace.observed(Duration::ZERO, CHEAP, INTERVAL);
         }
         assert_eq!(pace.hold(), Duration::ZERO);
         assert!(!pace.holds_a_frame(Instant::now()));
@@ -188,7 +254,7 @@ mod tests {
         let mut pace = PresentPace::free_running();
         let mut blocked = FREE_RUNNING;
         for _ in 0..32 {
-            pace.observed(blocked, true, INTERVAL);
+            pace.observed(blocked, CHEAP, INTERVAL);
             blocked = FREE_RUNNING.saturating_sub(pace.hold());
         }
         assert!(
@@ -204,15 +270,16 @@ mod tests {
     }
 
     #[test]
-    fn the_hold_and_the_budget_never_exceed_one_frame_of_the_output() {
+    fn the_hold_the_frame_and_the_budget_never_exceed_one_frame_of_the_output() {
         // A frame held past the moment its buffer could have been handed over is not late, it is
         // in the next interval — the dropped frame this bound exists to refuse. Driven with a
         // block far larger than any real one, which is what a compositor that stalled produces.
         let mut pace = PresentPace::free_running();
         for _ in 0..64 {
-            pace.observed(Duration::from_millis(500), true, INTERVAL);
+            pace.observed(Duration::from_millis(500), CHEAP, INTERVAL);
         }
-        assert_eq!(pace.hold(), INTERVAL - BUDGET);
+        assert_eq!(pace.hold(), INTERVAL - CHEAP - BUDGET);
+        assert!(pace.hold() + CHEAP + BUDGET <= INTERVAL);
     }
 
     #[test]
@@ -222,13 +289,91 @@ mod tests {
         // half an error a frame is several more of them delayed on the way down.
         let mut pace = PresentPace::free_running();
         for _ in 0..8 {
-            pace.observed(FREE_RUNNING, true, INTERVAL);
+            pace.observed(FREE_RUNNING, CHEAP, INTERVAL);
         }
         assert!(pace.hold() > Duration::ZERO, "nothing was there to drop");
 
-        pace.observed(Duration::ZERO, false, INTERVAL);
+        pace.observed(Duration::ZERO, INTERVAL, INTERVAL);
         assert_eq!(pace.hold(), Duration::ZERO);
         assert!(!pace.holds_a_frame(Instant::now()));
+    }
+
+    /// A frame that only fits because the hold was not counted did not fit.
+    ///
+    /// The block the servo reads is the *acquisition's*, and a frame released too late does not
+    /// block at all — it has already missed the handover it was aiming at, so a swap-chain image is
+    /// waiting for it. Reading that as "kept up" leaves the hold that caused the miss in place, and
+    /// the servo then unwinds it at half the error a frame while the window drops one after
+    /// another.
+    #[test]
+    fn a_frame_the_hold_pushed_past_the_interval_did_not_keep_up() {
+        let mut pace = PresentPace::free_running();
+        for _ in 0..16 {
+            pace.observed(FREE_RUNNING, CHEAP, INTERVAL);
+        }
+        let held = pace.hold();
+        assert!(held > Duration::ZERO, "nothing was there to drop");
+
+        // Cheaper than the interval on its own, and dearer than it once the hold is added back.
+        let cost = INTERVAL - held + Duration::from_micros(1);
+        assert!(cost < INTERVAL, "the frame has to fit when measured alone");
+        pace.observed(Duration::ZERO, cost, INTERVAL);
+        assert_eq!(pace.hold(), Duration::ZERO);
+    }
+
+    /// The frame after a dear one is never pushed past the interval.
+    ///
+    /// This is the guarantee, and it is one frame deep on purpose. A spike nothing has seen before
+    /// cannot be reserved for and the gate is what catches it; what can be reserved for is the next
+    /// one, and frames that cost a lot arrive in runs — a fling mounting rows, a drag relaying out,
+    /// a document whose icons all re-encode at once.
+    #[test]
+    fn a_frame_as_dear_as_the_last_one_still_fits_the_interval() {
+        let dear = INTERVAL / 2;
+        let mut pace = PresentPace::free_running();
+        for _ in 0..64 {
+            pace.observed(FREE_RUNNING, CHEAP, INTERVAL);
+        }
+        pace.observed(FREE_RUNNING, dear, INTERVAL);
+        assert!(
+            pace.hold() + dear + BUDGET <= INTERVAL,
+            "a second frame costing {dear:?} would be pushed past the interval by a hold of {:?}",
+            pace.hold()
+        );
+    }
+
+    /// A window with a tail is held less than one without, and gets the margin back when it settles.
+    ///
+    /// A window whose frames vary has a median that fits with most of an interval to spare and a
+    /// tail that does not. Converging on the median spends that spare time and leaves the tail
+    /// nothing, so every dear frame costs a whole interval of judder — which the average frametime
+    /// never shows. The reservation is the part of the interval the median is not allowed to spend.
+    #[test]
+    fn a_window_with_a_tail_keeps_more_of_its_interval_and_gives_it_back() {
+        let dear = INTERVAL / 3;
+        let mut steady = PresentPace::free_running();
+        let mut varying = PresentPace::free_running();
+        for index in 0..96 {
+            steady.observed(FREE_RUNNING, CHEAP, INTERVAL);
+            // One frame in eight is dear; the rest cost almost nothing.
+            let cost = if index % 8 == 0 { dear } else { CHEAP };
+            varying.observed(FREE_RUNNING, cost, INTERVAL);
+        }
+        assert!(
+            steady.hold() > varying.hold(),
+            "the window with nothing to reserve for was held no longer than the one with a tail: \
+             {:?} against {:?}",
+            steady.hold(),
+            varying.hold()
+        );
+
+        // And the reservation is given back once the tail stops, so a burst does not pace a window
+        // for the rest of its life. It decays rather than being dropped, so this takes a few
+        // hundred frames — a second or two of a window that has settled.
+        for _ in 0..300 {
+            varying.observed(FREE_RUNNING, CHEAP, INTERVAL);
+        }
+        assert_eq!(varying.hold(), steady.hold());
     }
 
     #[test]
@@ -237,7 +382,7 @@ mod tests {
         // notch behind it asks again while the hold runs. Restarting the hold on each of them is a
         // frame that recedes for as long as the finger keeps moving.
         let mut pace = PresentPace::free_running();
-        pace.observed(FREE_RUNNING, true, INTERVAL);
+        pace.observed(FREE_RUNNING, CHEAP, INTERVAL);
         let start = Instant::now();
         let owed = {
             assert!(pace.holds_a_frame(start));
@@ -260,13 +405,13 @@ mod tests {
         // One hold per frame, and the next frame gets its own. Without this the first frame of a
         // scroll is scheduled and every one after it free-runs.
         let mut pace = PresentPace::free_running();
-        pace.observed(FREE_RUNNING, true, INTERVAL);
+        pace.observed(FREE_RUNNING, CHEAP, INTERVAL);
         let start = Instant::now();
         assert!(pace.holds_a_frame(start));
         let owed = pace.due().expect("a frame is being held");
         assert!(!pace.holds_a_frame(owed));
 
-        pace.observed(BUDGET, true, INTERVAL);
+        pace.observed(BUDGET, CHEAP, INTERVAL);
         assert!(
             pace.holds_a_frame(owed),
             "the frame after the released one was not held"

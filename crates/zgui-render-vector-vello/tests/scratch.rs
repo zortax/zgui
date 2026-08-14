@@ -81,7 +81,11 @@ fn the_scratch_shrinks_when_the_content_does() {
 
     let large = wide(6);
     raster.plan(large.pass_plan());
-    assert_eq!(raster.extent(), (SIDE as u32, SIDE as u32));
+    let grown = raster.extent();
+    assert!(
+        grown > (16, 16),
+        "the fixture has to reach further than the narrow one, or nothing here shrinks: {grown:?}"
+    );
     assert!(
         raster.layers() > Scratch::LAYERS,
         "the fixture has to stack passes deeper than the floor, or nothing here shrinks"
