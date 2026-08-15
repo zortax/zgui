@@ -209,9 +209,7 @@ mod tests {
 
     /// The bytes of one record, as the kernel lays out `input_event`.
     fn record(kind: EventType, code: u16, value: i32) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&1_i64.to_ne_bytes());
-        bytes.extend_from_slice(&0_i64.to_ne_bytes());
+        let mut bytes = crate::input::fixture::stamp(1, 0);
         bytes.extend_from_slice(&kind.raw().to_ne_bytes());
         bytes.extend_from_slice(&code.to_ne_bytes());
         bytes.extend_from_slice(&value.to_ne_bytes());
