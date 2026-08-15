@@ -304,6 +304,15 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
         vector_compute: downlevel
             .flags
             .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+            // The path renderer's shaders unpack two half floats out of one word, and naga
+            // refuses `unpack2x16float` without this. A software Vulkan device is where it is
+            // absent — those instructions need native half-float support there and nowhere else,
+            // which wgpu-hal knows and reports here. Asking is what keeps the fallback a fallback:
+            // the path renderer panics on a shader it cannot compile rather than answering with an
+            // error, and a panic unwinds past the branch that would have caught it.
+            && downlevel
+                .flags
+                .contains(wgpu::DownlevelFlags::SHADER_F16_IN_F32)
             && adapter
                 .get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm)
                 .allowed_usages
