@@ -202,6 +202,25 @@ fn begin_group(
 /// `scissor` is the region of the target beneath that this frame may write: the damage rectangle
 /// when that target is the composed one, and the enclosing group's own region when it is not.
 fn end_group(builder: &mut PlanBuilder<'_>, group: &OpenGroup, scissor: Rect<i32, Device>) {
+    // Closed here rather than by the first pass the composite opens, so that what follows can ask
+    // whether anything was drawn into the group at all: a pass with no draws is not recorded, and
+    // recording it is what would have cleared the target.
+    builder.end_pass();
+    if let Some(slot) = group.target.slot()
+        && builder.is_unwritten(slot)
+    {
+        // Nothing was drawn into this lease, so it never discarded what the lease before it left
+        // there — and compositing it now would put a stranger's content on the screen, inside this
+        // group's region, where it stays until something else happens to draw over it. An empty
+        // element carrying `opacity` is enough to open one: a label with no text still has a box,
+        // and a column of them down the side of a list is a column of windows onto whatever the
+        // pool last held.
+        //
+        // Skipped rather than cleared first, because that is what an empty group *is*: no pixels,
+        // and a filter over no pixels is no pixels whatever the filter says.
+        builder.release(slot);
+        return;
+    }
     let chain = Chain::of(&group.boundary.filters);
     let filtered = filter::plan(builder, &chain, group.target, group.region);
     if !is_source_over(&group.boundary) {

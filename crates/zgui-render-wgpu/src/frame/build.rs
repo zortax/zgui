@@ -164,12 +164,25 @@ impl<'gpu> PlanBuilder<'gpu> {
         Some(slot)
     }
 
+    /// Whether a lent target still holds whatever the lease before it left there.
+    ///
+    /// True until the first pass that writes into it, because that pass is the one that discards
+    /// it — see [`PlanBuilder::acquire_in`]. Anything about to *read* a lent target has to ask: a
+    /// lease nothing wrote into was never cleared, so reading it reads a stranger's pixels.
+    pub fn is_unwritten(&self, slot: GroupSlot) -> bool {
+        self.unwritten.contains(&slot)
+    }
+
     /// Returns a lent target.
     pub fn release(&mut self, slot: GroupSlot) {
         self.pool.release(slot);
         if let Some(at) = self.lent.iter().position(|held| *held == slot) {
             self.lent.remove(at);
         }
+        // The lease is over and it never discarded what it was given, so the obligation goes with
+        // it: the next lease of this slot pushes its own, and one left standing here would let the
+        // pass after that one skip the clear it owes.
+        self.unwritten.retain(|held| *held != slot);
     }
 
     /// Stages one blur block and returns the offset naming it.

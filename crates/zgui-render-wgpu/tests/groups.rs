@@ -284,3 +284,37 @@ fn a_half_resolution_target_is_composited_in_the_right_place() {
     );
     let _ = wgpu::TextureFormat::Rgba16Float;
 }
+
+#[test]
+fn an_empty_group_composites_nothing_rather_than_what_the_pool_last_held() {
+    // A group's target is lent by the pool and cleared by the first pass that *writes* into it. A
+    // group with nothing in it has no such pass, so the clear never happens — and compositing the
+    // target then reads whatever the previous lease left there and prints it inside the empty
+    // element's own box, where it stays until something else draws over it.
+    //
+    // An element with `opacity` and no content is all it takes: a label with no text still has a
+    // box, and a column of them down the side of a list is a column of windows onto the last thing
+    // that used the pool.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    quad(&mut scene, (0.0, 0.0, SIDE as f32, SIDE as f32), [255; 3]);
+    // Something distinctive, drawn through a group and so left in the pool's target.
+    grouped(&mut scene, (64.0, 64.0, 64.0, 64.0), 1.0, &[], |scene| {
+        quad(scene, (64.0, 64.0, 64.0, 64.0), [255, 0, 0]);
+    });
+    // Painted over, so the only red left anywhere is the red in the returned target.
+    quad(&mut scene, (0.0, 0.0, SIDE as f32, SIDE as f32), [255; 3]);
+    // And an empty group over the same place, which leases that same target back.
+    grouped(&mut scene, (64.0, 64.0, 64.0, 64.0), 1.0, &[], |_| {});
+    scene.finish(&DamageSet::full());
+
+    let pixels = present(&mut renderer, &scene);
+    assert_eq!(
+        pixels.rgba(96, 96),
+        [255, 255, 255, 255],
+        "the empty group put the last lease's content on the page"
+    );
+}
