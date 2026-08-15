@@ -77,7 +77,9 @@ impl Gpu {
     /// Opens a device on `adapter`, or says why it could not.
     ///
     /// A GL adapter is asked for the downlevel limit set rather than its own, because its own is
-    /// routinely more than a device created from it will grant.
+    /// routinely more than a device created from it will grant. The set is then clamped to what
+    /// the adapter reports, because the downlevel set names compute limits and a GL 3.3 context
+    /// has no compute to name them for.
     ///
     /// # Errors
     ///
@@ -117,7 +119,13 @@ impl Gpu {
     ) -> Result<Self, String> {
         let info = adapter.get_info();
         let limits = if info.backend == wgpu::Backend::Gl {
-            wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+            // Clamped to the adapter's own values, because the downlevel set asks for compute
+            // limits a GL 3.3 context reports zero for. `request_device` refuses a limit set as a
+            // whole, so asking for one number the adapter cannot meet costs the device — and with
+            // it the coverage rasteriser, which is the very thing such a context is for.
+            wgpu::Limits::downlevel_defaults()
+                .using_resolution(adapter.limits())
+                .or_worse_values_from(&adapter.limits())
         } else {
             adapter.limits()
         };
