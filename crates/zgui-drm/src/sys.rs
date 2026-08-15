@@ -42,9 +42,14 @@ mod tests {
     fn the_generated_structs_are_the_size_the_headers_say() {
         // A request number is `_IOWR(type, nr, sizeof(struct))`, so a struct that came out the
         // wrong size produces a *different request number*, and the kernel refuses that with
-        // `EINVAL` and no further explanation. These are the sizes read out of the headers on a
-        // 64-bit build, and they hold on 32-bit too: DRM declares its user pointers `__u64` for
-        // exactly that reason.
+        // `EINVAL` and no further explanation.
+        //
+        // DRM declares its user pointers `__u64`, which puts every field at the same offset on a
+        // 32-bit build as on a 64-bit one. Three of the structs below still change size, because
+        // the padding around a `__u64` follows the alignment the ABI gives it: x86-64 aligns one
+        // to 8 bytes and i386 to 4. Both sizes are read out of the headers, one per ABI.
+        let wide = align_of::<u64>() == 8;
+
         assert_eq!(size_of::<drm_gem_close>(), 8);
         assert_eq!(size_of::<drm_get_cap>(), 16);
         assert_eq!(size_of::<drm_set_client_cap>(), 16);
@@ -52,12 +57,18 @@ mod tests {
         assert_eq!(size_of::<drm_mode_get_connector>(), 80);
         assert_eq!(size_of::<drm_mode_get_encoder>(), 20);
         assert_eq!(size_of::<drm_mode_crtc>(), 104);
-        assert_eq!(size_of::<drm_mode_get_plane_res>(), 16);
+        assert_eq!(
+            size_of::<drm_mode_get_plane_res>(),
+            if wide { 16 } else { 12 }
+        );
         assert_eq!(size_of::<drm_mode_get_plane>(), 32);
-        assert_eq!(size_of::<drm_mode_obj_get_properties>(), 32);
+        assert_eq!(
+            size_of::<drm_mode_obj_get_properties>(),
+            if wide { 32 } else { 28 }
+        );
         assert_eq!(size_of::<drm_mode_get_property>(), 64);
         assert_eq!(size_of::<drm_mode_atomic>(), 56);
-        assert_eq!(size_of::<drm_mode_fb_cmd2>(), 104);
+        assert_eq!(size_of::<drm_mode_fb_cmd2>(), if wide { 104 } else { 100 });
         assert_eq!(size_of::<drm_mode_create_dumb>(), 32);
         assert_eq!(size_of::<drm_mode_map_dumb>(), 16);
         assert_eq!(size_of::<drm_mode_destroy_dumb>(), 4);
