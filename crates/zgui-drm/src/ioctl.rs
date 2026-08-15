@@ -192,6 +192,11 @@ mod tests {
         // to when the C preprocessor is run over the kernel's own headers. A struct generated at
         // the wrong size changes the number, and this is where that shows up as a failure instead
         // of as `EINVAL` from a device.
+        //
+        // The size sits in the number, so the three structs that change size with the alignment of
+        // a `__u64` carry two numbers each, one per ABI. `sys` states which structs those are.
+        let wide = align_of::<u64>() == 8;
+
         assert_eq!(GEM_CLOSE.opcode(), 0x4008_6409);
         assert_eq!(GET_CAP.opcode(), 0xc010_640c);
         assert_eq!(SET_CLIENT_CAP.opcode(), 0x4010_640d);
@@ -210,10 +215,19 @@ mod tests {
         assert_eq!(MODE_CREATE_DUMB.opcode(), 0xc020_64b2);
         assert_eq!(MODE_MAP_DUMB.opcode(), 0xc010_64b3);
         assert_eq!(MODE_DESTROY_DUMB.opcode(), 0xc004_64b4);
-        assert_eq!(MODE_GETPLANERESOURCES.opcode(), 0xc010_64b5);
+        assert_eq!(
+            MODE_GETPLANERESOURCES.opcode(),
+            if wide { 0xc010_64b5 } else { 0xc00c_64b5 }
+        );
         assert_eq!(MODE_GETPLANE.opcode(), 0xc020_64b6);
-        assert_eq!(MODE_ADDFB2.opcode(), 0xc068_64b8);
-        assert_eq!(MODE_OBJ_GETPROPERTIES.opcode(), 0xc020_64b9);
+        assert_eq!(
+            MODE_ADDFB2.opcode(),
+            if wide { 0xc068_64b8 } else { 0xc064_64b8 }
+        );
+        assert_eq!(
+            MODE_OBJ_GETPROPERTIES.opcode(),
+            if wide { 0xc020_64b9 } else { 0xc01c_64b9 }
+        );
         assert_eq!(MODE_CURSOR2.opcode(), 0xc024_64bb);
         assert_eq!(MODE_ATOMIC.opcode(), 0xc038_64bc);
         assert_eq!(MODE_CREATEPROPBLOB.opcode(), 0xc010_64bd);
