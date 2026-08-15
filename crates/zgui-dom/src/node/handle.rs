@@ -23,9 +23,12 @@ pub struct Node<'doc>(&'doc NodeInner);
 
 const _: () = assert!(size_of::<Node<'_>>() == size_of::<usize>());
 const _: () = assert!(size_of::<Option<Node<'_>>>() == size_of::<usize>());
+// What a `usize` has to hold here is a slot number, which `id::opaque` carries through one for the
+// style engine to key its snapshot map by. A generation-checked name is not among them:
+// `zgui_arena::Key` packs itself into a `NonZeroU64` and is eight bytes on every target.
 const _: () = assert!(
-    size_of::<usize>() == 8,
-    "a node's generation-checked name is packed into a pointer-sized integer"
+    size_of::<usize>() >= size_of::<u32>(),
+    "a node's opaque identity is its slot number carried in a `usize`"
 );
 
 impl<'doc> Node<'doc> {
