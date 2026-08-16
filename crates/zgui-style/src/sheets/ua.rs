@@ -62,9 +62,15 @@ spacer                       { display: block; flex: 1 1 auto; }
    page's scrollbar in it. Both horizontal insets are stated with the width on purpose: the leading
    edge wins the over-constraint — `left` in a left-to-right document, `right` in a right-to-left
    one — and the leading edge is exactly the one a vertical scrollbar is not on, so the root starts
-   flush against the window in either direction and grows across the strip. */
+   flush against the window in either direction and grows across the strip.
+
+   The `z-index` is what keeps the four band numbers below to themselves: without a context of its
+   own the root lets 10, 20, 30 and 40 compete with whatever the application numbered its chrome.
+   A plain number rather than the largest one there is, so an application that means to put
+   something over an overlay can still say so. */
 overlay_root                        { display: block; position: fixed; left: 0; right: 0; top: 0;
-                                      width: 100vw; height: 100vh; pointer-events: none; }
+                                      width: 100vw; height: 100vh; pointer-events: none;
+                                      z-index: 1000; }
 overlay_root > [data-layer]         { position: absolute; inset: 0; pointer-events: none; }
 overlay_root > [data-layer] > *     { pointer-events: auto; }
 overlay_root > [data-layer=content] { z-index: 10; }
