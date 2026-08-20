@@ -13,6 +13,24 @@ fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
     pre_present_callback(move || surface.pre_present_notify())
 }
 
+/// Whether the compositor notification is wired, which `ZGUI_PRESENT_PACING=notify` asks for.
+///
+/// Unwired by default. On Wayland the notification makes winit request a frame callback per
+/// present and withhold every redraw until it arrives, which serialises the present against the
+/// next frame's processor work and quantises the frame period to whole refresh intervals — a
+/// window whose frame costs a little over one interval presents at half its output's rate. See
+/// `docs/research/frame-callback-quantization.md`. The starvation stall the notification used to
+/// suppress is answered by the runtime's starvation latch instead. The environment switch keeps
+/// the old wiring reachable for A/B measurement.
+///
+/// Read once: the environment does not change under a running process.
+fn pacing_wanted() -> bool {
+    static WANTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WANTED.get_or_init(
+        || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(value) if value.trim() == "notify"),
+    )
+}
+
 /// Boxes a platform notification for the renderer seam.
 fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent {
     Box::new(notify)
@@ -56,8 +74,11 @@ fn renderer(
         .instance()
         .create_surface(handles)
         .map_err(|error| PlatformError::Backend(error.to_string()))?;
-    let mut renderer =
-        graphics.renderer_for_surface(target, drawable, Some(pre_present(surface)))?;
+    let mut renderer = graphics.renderer_for_surface(
+        target,
+        drawable,
+        pacing_wanted().then(|| pre_present(surface)),
+    )?;
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing in the window — every icon — is empty space. Which rasteriser this is comes
     // from what the device turned out to be able to run, and the fallback needs no compute shaders,

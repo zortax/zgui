@@ -41,7 +41,7 @@ pub use crate::id::{DocumentId, NodeId};
 pub use crate::node_ref::{ListenerGuard, NodeRef, focused_node};
 pub use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 pub use crate::sheet::{Stylesheet, install_stylesheet, remove_stylesheet};
-pub use crate::time::{Timers, set_interval, set_timeout};
+pub use crate::time::{Timers, request_frame, set_interval, set_timeout};
 pub use crate::value::{IntoReactiveValue, ReactiveValue};
 pub use crate::view::{Anchor, AnyView, Children, ChildrenFn, Either, IntoView, View};
 pub use zgui_vocab::{ListenerOptions, Role};

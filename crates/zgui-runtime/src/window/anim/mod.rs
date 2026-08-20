@@ -97,7 +97,7 @@ impl Window {
     /// drawn correctly whenever it is shown again, but the phase they were on describes a rate the
     /// window was not running at, and an occlusion is not bounded by anything.
     pub(crate) fn pace_animations(&mut self, now: std::time::Instant) {
-        if self.occluded || !self.is_animating() {
+        if self.occluded || self.starved || !self.is_animating() {
             self.animation.park();
             return;
         }

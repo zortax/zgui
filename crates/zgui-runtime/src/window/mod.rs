@@ -30,7 +30,7 @@ mod value;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
@@ -49,6 +49,14 @@ use zgui_view_dom::DocumentDom;
 use crate::binding::{HostBinding, NoBinding};
 use crate::host::RuntimeHost;
 use crate::text::TextEngine;
+
+/// What the first starvation probe waits, which is also what the graphics API's acquisition is
+/// willing to block — so the first probe costs at most one such block per second.
+pub(crate) const STARVE_BACKOFF_START: Duration = Duration::from_secs(1);
+
+/// The most a starvation probe waits. A cap because the probe is also what recovers a *visible*
+/// window from a compositor hiccup no event announces the end of.
+pub(crate) const STARVE_BACKOFF_CAP: Duration = Duration::from_secs(16);
 use crate::timer::Timers;
 use crate::wake::FrameGate;
 
@@ -399,6 +407,22 @@ pub struct Window {
     ///
     /// So it is a moment rather than a request, and the park is what comes back for it.
     retry_after: Option<Instant>,
+    /// Whether the surface is starved: the compositor stopped handing over buffers.
+    ///
+    /// Latched by an acquisition that timed out, which under a queued presentation mode is what a
+    /// surface the compositor is not drawing produces — the window sits on another workspace, or
+    /// behind something, on a platform that reports no occlusion. While it is set the window is
+    /// treated as the occluded one it very probably is: animations park, the blink stops, and a
+    /// frame that runs anyway — a timer's — skips the present that would block the loop a second.
+    /// What ends it is evidence of visibility (input, a focus, a configure) or the probe at
+    /// [`Window::retry_after`] succeeding.
+    starved: bool,
+    /// How long the next starvation probe waits, doubling to [`STARVE_BACKOFF_CAP`].
+    ///
+    /// The probe is the one attempt the latch allows: it runs the pipeline and lets the
+    /// acquisition block, so its price is up to a second of the loop — which is why the spacing
+    /// grows while the surface stays starved and resets the moment anything presents.
+    starve_backoff: Duration,
     /// One wall-clock deadline for shedding cold renderer and embed high-water resources.
     maintenance_due: Option<Instant>,
     /// How many offered frames were held back so that they would start closer to being shown.
@@ -675,6 +699,8 @@ impl Window {
             present: crate::window::present::PresentPace::free_running(),
             reported_rate: std::cell::Cell::new(None),
             retry_after: None,
+            starved: false,
+            starve_backoff: STARVE_BACKOFF_START,
             maintenance_due: None,
             held: 0,
             clock,
@@ -768,6 +794,11 @@ impl Window {
     /// The node-tree seam over it.
     pub fn dom(&self) -> &Rc<DocumentDom> {
         &self.dom
+    }
+
+    /// Whether the surface is starved: the compositor stopped handing over buffers.
+    pub fn is_starved(&self) -> bool {
+        self.starved
     }
 
     /// The engine seam a view asks its geometry through.

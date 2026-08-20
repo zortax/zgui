@@ -20,13 +20,15 @@ use zgui_dom::{Document, NodeKey};
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_layout::LayoutStore;
 use zgui_reactive::{LocalStorage, Signal};
-use zgui_view::host::{FocusMove, FocusTrapId, FocusTrapOptions, Repeat, TimerId};
+use zgui_view::host::{FocusMove, FocusTrapId, FocusTrapOptions, FrameRequestId, Repeat, TimerId};
 use zgui_view::{DocumentId, NodeId, ScrollBehavior, ScrollPosition, ScrollTarget, ViewHost};
+use zgui_vocab::Timestamp;
 
 mod entering;
 
 pub use crate::host::entering::{ATTEMPTS, Entering, Owed};
 
+use crate::frame_callbacks::FrameCallbacks;
 use crate::timer::Timers;
 use crate::wake::RuntimeWaker;
 
@@ -116,6 +118,12 @@ pub struct RuntimeHost {
     scroll: Rc<RefCell<zgui_scroll::Scroller>>,
     /// The scheduled callbacks of every window.
     timers: Rc<RefCell<Timers>>,
+    /// This window's pending frame callbacks.
+    ///
+    /// Per window rather than shared like the timer heap, because a frame callback is only ever
+    /// run by the frame of the window it was registered in, and a pending one is what makes that
+    /// window count as animating.
+    frame_callbacks: RefCell<FrameCallbacks>,
     /// What the next frame has been asked to do.
     commands: RefCell<Vec<Command>>,
     /// Which node holds focus, as a reactive value.
@@ -211,6 +219,7 @@ impl RuntimeHost {
             layout,
             scroll,
             timers,
+            frame_callbacks: RefCell::new(FrameCallbacks::new()),
             commands: RefCell::new(Vec::new()),
             animations: RefCell::default(),
             placements: RefCell::new(zgui_scene::Placements::new()),
@@ -230,6 +239,24 @@ impl RuntimeHost {
     /// Publishes how many device pixels one CSS pixel is, for the frames that follow.
     pub fn set_scale(&self, scale: f32) {
         self.scale.set(scale);
+    }
+
+    /// Whether a frame callback is pending, which makes this window count as animating.
+    pub fn has_frame_callbacks(&self) -> bool {
+        !self.frame_callbacks.borrow().is_empty()
+    }
+
+    /// When the first pending frame callback was registered, for the deadline merge.
+    pub(crate) fn frame_callbacks_since(&self) -> Option<std::time::Instant> {
+        self.frame_callbacks.borrow().pending_since()
+    }
+
+    /// Takes the pending frame callbacks, for the frame that runs them.
+    ///
+    /// Drained before anything runs, so a callback that registers again from its own body lands
+    /// in the emptied store and waits for the next frame.
+    pub(crate) fn take_frame_callbacks(&self) -> Vec<Rc<dyn Fn(Timestamp)>> {
+        self.frame_callbacks.borrow_mut().take()
     }
 
     /// Appends a command for the next frame to carry out.
@@ -695,6 +722,18 @@ impl ViewHost for RuntimeHost {
 
     fn cancel_timer(&self, timer: TimerId) {
         self.timers.borrow_mut().cancel(timer);
+    }
+
+    fn request_frame_callback(&self, callback: Rc<dyn Fn(Timestamp)>) -> FrameRequestId {
+        // No wake: a registration is made on the user-interface thread, so the loop is mid-turn
+        // and recomputes its deadlines before it parks — the same bargain the timer heap makes.
+        self.frame_callbacks
+            .borrow_mut()
+            .request(self.clock.now(), callback)
+    }
+
+    fn cancel_frame_callback(&self, request: FrameRequestId) {
+        self.frame_callbacks.borrow_mut().cancel(request);
     }
 
     fn precedes(&self, first: NodeId, second: NodeId) -> bool {

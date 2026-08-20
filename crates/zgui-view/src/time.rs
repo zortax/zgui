@@ -13,9 +13,10 @@ use core::time::Duration;
 use std::rc::Rc;
 
 use zgui_reactive::on_cleanup_local;
+use zgui_vocab::Timestamp;
 
 use crate::cx::current_host;
-use crate::host::{HostHandle, Repeat, TimerId};
+use crate::host::{FrameRequestId, HostHandle, Repeat, TimerId};
 
 /// A scheduled callback that is cancelled when this is dropped.
 struct Scheduled {
@@ -78,6 +79,53 @@ impl IntervalHandle {
 }
 
 impl Drop for IntervalHandle {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// A pending frame callback that is cancelled when this is dropped.
+struct RequestedFrame {
+    /// The engine holding it.
+    host: HostHandle,
+    /// Which registration it is.
+    id: FrameRequestId,
+    /// Whether it has already been cancelled.
+    cancelled: Cell<bool>,
+}
+
+impl RequestedFrame {
+    /// Cancels the callback. Doing so twice does nothing the second time.
+    fn cancel(&self) {
+        if !self.cancelled.replace(true) {
+            self.host.cancel_frame_callback(self.id);
+        }
+    }
+}
+
+impl Drop for RequestedFrame {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Keeps a frame callback pending.
+///
+/// Dropping it cancels the callback, as does the scope that requested it going away when the
+/// request was made through [`request_frame`]. A callback that already ran is cancelled to no
+/// effect, so an animation that re-requests from its own body simply overwrites the handle it
+/// holds with the new one.
+#[must_use = "dropping the handle cancels the frame callback"]
+pub struct FrameHandle(Rc<RequestedFrame>);
+
+impl FrameHandle {
+    /// Cancels the callback now.
+    pub fn cancel(self) {
+        self.0.cancel();
+    }
+}
+
+impl Drop for FrameHandle {
     fn drop(&mut self) {
         self.0.cancel();
     }
@@ -161,6 +209,31 @@ impl Timers {
             if let Ok(mut callback) = callback.try_borrow_mut() {
                 callback();
             }
+        }))
+    }
+
+    /// Runs `callback` once, during the next frame, with the moment that frame is for.
+    ///
+    /// While the registration is pending the window counts as animating, so the frame is paced
+    /// at the display's refresh interval; a callback that requests again from its own body runs
+    /// once per frame, one refresh apart, and stops by not requesting again. A motion written
+    /// this way measures its steps from successive timestamps rather than from the wall clock,
+    /// so a slow frame produces one larger step instead of a slower motion.
+    ///
+    /// Nothing requested through this is cancelled by a scope going away: the handle is what
+    /// cancels it, exactly as with [`Timers::set_timeout`].
+    #[must_use = "dropping the handle cancels the frame callback"]
+    pub fn request_frame(&self, callback: impl FnOnce(Timestamp) + 'static) -> FrameHandle {
+        let once = Cell::new(Some(callback));
+        let id = self.0.request_frame_callback(Rc::new(move |at| {
+            if let Some(callback) = once.take() {
+                callback(at);
+            }
+        }));
+        FrameHandle(Rc::new(RequestedFrame {
+            host: self.0.clone(),
+            id,
+            cancelled: Cell::new(false),
         }))
     }
 
@@ -272,6 +345,61 @@ pub fn set_interval(every: Duration, callback: impl FnMut() + 'static) -> Interv
     }))
 }
 
+/// Runs `callback` once, during the next frame, with the moment that frame is for.
+///
+/// This is the way a view drives an animation of its own: the callback runs before the frame's
+/// reactive work, a pending registration keeps the window's frames coming at the display's
+/// refresh interval, and a callback that requests again from its own body runs once per frame
+/// until it stops requesting. [`set_timeout`] with a zero delay runs at the start of the next
+/// frame too, but buys no cadence — it is a one-off, where this is a heartbeat.
+///
+/// Called from a component's body. A listener that has to request a frame takes a [`Timers`] in
+/// the body instead and carries it into the handler, because the scope this reads the clock from
+/// is not the scope a listener runs in.
+///
+/// The registration is cancelled when the scope that made it goes away, as well as by dropping
+/// the handle.
+///
+/// # Panics
+///
+/// In debug builds, when called outside a window's reactive scope, where there is no engine to
+/// register with. In release it returns a handle that cancels nothing.
+#[must_use = "dropping the handle cancels the frame callback"]
+#[track_caller]
+pub fn request_frame(callback: impl FnOnce(Timestamp) + 'static) -> FrameHandle {
+    let Some(host) = current_host() else {
+        debug_assert!(
+            false,
+            "a frame callback was requested outside a window's scope, where there is no engine \
+             to register with"
+        );
+        return FrameHandle(Rc::new(RequestedFrame {
+            host: HostHandle::new(crate::time::never::NeverSchedules),
+            id: FrameRequestId::new(0),
+            cancelled: Cell::new(true),
+        }));
+    };
+
+    let requested = Rc::new(RequestedFrame {
+        host: host.clone(),
+        id: {
+            let once = Cell::new(Some(callback));
+            host.request_frame_callback(Rc::new(move |at| {
+                if let Some(callback) = once.take() {
+                    callback(at);
+                }
+            }))
+        },
+        cancelled: Cell::new(false),
+    });
+
+    on_cleanup_local({
+        let requested = Rc::clone(&requested);
+        move || requested.cancel()
+    });
+    FrameHandle(requested)
+}
+
 /// The body both scheduling functions share.
 #[track_caller]
 fn schedule(after: Duration, repeat: Repeat, callback: impl Fn() + 'static) -> Rc<Scheduled> {
@@ -310,8 +438,11 @@ mod never {
 
     use zgui_geom::{Device, DevicePx, Rect};
     use zgui_reactive::{LocalStorage, Signal};
+    use zgui_vocab::Timestamp;
 
-    use crate::host::{FocusMove, FocusTrapId, FocusTrapOptions, Repeat, TimerId, ViewHost};
+    use crate::host::{
+        FocusMove, FocusTrapId, FocusTrapOptions, FrameRequestId, Repeat, TimerId, ViewHost,
+    };
     use crate::id::NodeId;
     use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 
@@ -387,6 +518,12 @@ mod never {
 
         fn cancel_timer(&self, _timer: TimerId) {}
 
+        fn request_frame_callback(&self, _callback: Rc<dyn Fn(Timestamp)>) -> FrameRequestId {
+            FrameRequestId::new(0)
+        }
+
+        fn cancel_frame_callback(&self, _request: FrameRequestId) {}
+
         fn precedes(&self, _first: NodeId, _second: NodeId) -> bool {
             false
         }
@@ -404,8 +541,9 @@ mod tests {
     use std::rc::Rc;
 
     use zgui_reactive::Mounted;
+    use zgui_vocab::Timestamp;
 
-    use super::{Timers, set_interval, set_timeout};
+    use super::{Timers, request_frame, set_interval, set_timeout};
     use crate::fixture::Fixture;
 
     #[test]
@@ -486,6 +624,123 @@ mod tests {
         f.engine.advance(Duration::from_millis(1000));
         assert_eq!(fired.get(), 1);
         assert_eq!(f.engine.live_timers(), 0);
+        drop(handle);
+        f.window.unmount();
+    }
+
+    #[test]
+    fn a_frame_callback_runs_once_with_the_moment_the_frame_is_for() {
+        let f = Fixture::new();
+        let seen = Rc::new(Cell::new(None));
+        let report = Rc::clone(&seen);
+        let handle = f
+            .window
+            .with(|| request_frame(move |at| report.set(Some(at))));
+
+        let at = Timestamp::from_origin(Duration::from_millis(16));
+        f.engine.frame(at);
+        assert_eq!(seen.get(), Some(at));
+
+        seen.set(None);
+        f.engine.frame(at + Duration::from_millis(16));
+        assert_eq!(seen.get(), None, "a frame callback is one frame's");
+        drop(handle);
+        f.window.unmount();
+    }
+
+    #[test]
+    fn a_callback_that_requests_again_waits_for_the_next_frame() {
+        // The heartbeat shape every self-driven animation is written in: request again from the
+        // body, run once per frame. A host that ran the new registration in the same frame would
+        // spin the animation to completion inside one frame.
+        let f = Fixture::new();
+        let clock = f
+            .window
+            .with(|| Timers::current().expect("inside a window"));
+        let runs = Rc::new(Cell::new(0));
+        let slot: Rc<core::cell::RefCell<Option<super::FrameHandle>>> =
+            Rc::new(core::cell::RefCell::new(None));
+
+        fn arm(
+            clock: &Timers,
+            runs: &Rc<Cell<u32>>,
+            slot: &Rc<core::cell::RefCell<Option<super::FrameHandle>>>,
+        ) -> super::FrameHandle {
+            let clock_again = clock.clone();
+            let runs = Rc::clone(runs);
+            let slot_again = Rc::clone(slot);
+            clock.request_frame(move |_| {
+                runs.set(runs.get() + 1);
+                if runs.get() < 3 {
+                    let next = arm(&clock_again, &runs, &slot_again);
+                    *slot_again.borrow_mut() = Some(next);
+                }
+            })
+        }
+        *slot.borrow_mut() = Some(arm(&clock, &runs, &slot));
+
+        for frame in 0..5 {
+            f.engine
+                .frame(Timestamp::from_origin(Duration::from_millis(16 * frame)));
+        }
+        assert_eq!(runs.get(), 3, "one run per frame, stopping by not asking");
+        assert_eq!(f.engine.pending_frames(), 0);
+        drop(slot);
+        f.window.unmount();
+    }
+
+    #[test]
+    fn dropping_the_handle_cancels_the_frame_callback() {
+        let f = Fixture::new();
+        let runs = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&runs);
+        let handle = f
+            .window
+            .with(|| request_frame(move |_| counter.set(counter.get() + 1)));
+        drop(handle);
+
+        f.engine.frame(Timestamp::ORIGIN);
+        assert_eq!(runs.get(), 0);
+        assert_eq!(f.engine.pending_frames(), 0);
+        f.window.unmount();
+    }
+
+    #[test]
+    fn a_frame_callback_is_cancelled_when_the_scope_that_requested_it_goes_away() {
+        let f = Fixture::new();
+        let runs = Rc::new(Cell::new(0));
+
+        let counter = Rc::clone(&runs);
+        let component = f.window.with(Mounted::new);
+        let handle = f
+            .window
+            .with(|| component.with(|| request_frame(move |_| counter.set(counter.get() + 1))));
+        assert_eq!(f.engine.pending_frames(), 1);
+
+        component.unmount();
+        assert_eq!(f.engine.pending_frames(), 0, "the cleanup cancelled it");
+
+        f.engine.frame(Timestamp::ORIGIN);
+        assert_eq!(runs.get(), 0);
+        drop(handle);
+        f.window.unmount();
+    }
+
+    #[test]
+    fn a_clock_taken_in_a_scope_can_request_frames_from_outside_it() {
+        // A glide restarted from a wheel listener is the case: the listener runs while an event
+        // is being delivered, which is not the scope that built the component.
+        let f = Fixture::new();
+        let clock = f
+            .window
+            .with(|| Timers::current().expect("inside a window"));
+        let runs = Rc::new(Cell::new(0));
+        let counter = Rc::clone(&runs);
+
+        // Deliberately outside `f.window.with(…)`, exactly as a listener is.
+        let handle = clock.request_frame(move |_| counter.set(counter.get() + 1));
+        f.engine.frame(Timestamp::ORIGIN);
+        assert_eq!(runs.get(), 1);
         drop(handle);
         f.window.unmount();
     }

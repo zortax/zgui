@@ -74,7 +74,7 @@
 //! | [`flow`] | [`Show`], [`For`], [`Suspense`], [`Transition`], [`ErrorBoundary`], [`Portal`], [`Dynamic`] |
 //! | [`node_ref`] | [`NodeRef`], the observation signals and the imperative escape hatches |
 //! | [`sheet`] | style sheets a view installs for itself |
-//! | [`time`] | [`set_timeout`] and [`set_interval`] |
+//! | [`time`] | [`set_timeout`], [`set_interval`] and [`request_frame`] |
 //! | [`expansion`] | the root the `view!` expansion names its crates through |
 //! | `stub` | an in-memory backend for examples and tests, behind the `stub-backend` feature |
 
@@ -120,14 +120,16 @@ pub use crate::flow::{
     SuspenseContext, Transition, ViewError, report_error,
 };
 pub use crate::host::{
-    FocusMove, FocusTrap, FocusTrapId, FocusTrapOptions, HostHandle, Repeat, TimerId, ViewHost,
-    WindowShortcut,
+    FocusMove, FocusTrap, FocusTrapId, FocusTrapOptions, FrameRequestId, HostHandle, Repeat,
+    TimerId, ViewHost, WindowShortcut,
 };
 pub use crate::id::{DOCUMENT_COUNT, DocumentId, NodeId};
 pub use crate::node_ref::{ListenerGuard, NodeRef, ObservationRegistry, focused_node};
 pub use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 pub use crate::sheet::{Stylesheet, install_stylesheet, remove_stylesheet};
-pub use crate::time::{IntervalHandle, TimeoutHandle, Timers, set_interval, set_timeout};
+pub use crate::time::{
+    FrameHandle, IntervalHandle, TimeoutHandle, Timers, request_frame, set_interval, set_timeout,
+};
 pub use crate::value::{IntoReactiveValue, ReactiveValue};
 pub use crate::view::{
     Anchor, AnyView, Children, ChildrenFn, ComponentMeta, Either, IntoView, Scoped, View,
@@ -144,4 +146,6 @@ pub use zgui_interned::{AttrName, ClassName, CustomPropertyName, ElementName, Id
 ///
 /// Re-exported for the same reason as the names above: every one of these appears in a signature
 /// on [`Dom`], [`Attrs`] or [`A11yBinding`].
-pub use zgui_vocab::{EventKind, ListenerOptions, PropKey, PropValue, Role, Semantics, UiState};
+pub use zgui_vocab::{
+    EventKind, ListenerOptions, PropKey, PropValue, Role, Semantics, Timestamp, UiState,
+};

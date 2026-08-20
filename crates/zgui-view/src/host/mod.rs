@@ -10,6 +10,7 @@
 //! layout engine.
 
 mod focus;
+mod frame;
 mod handle;
 mod shortcut;
 mod timer;
@@ -20,11 +21,13 @@ use std::rc::Rc;
 
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_reactive::{LocalStorage, Signal};
+use zgui_vocab::Timestamp;
 
 use crate::id::NodeId;
 use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 
 pub use crate::host::focus::{FocusMove, FocusTrap, FocusTrapId, FocusTrapOptions};
+pub use crate::host::frame::FrameRequestId;
 pub use crate::host::handle::HostHandle;
 pub use crate::host::shortcut::WindowShortcut;
 pub use crate::host::timer::{Repeat, TimerId};
@@ -241,6 +244,29 @@ pub trait ViewHost {
     /// Cancels a scheduled callback. Cancelling one that already fired, or one that was already
     /// cancelled, does nothing.
     fn cancel_timer(&self, timer: TimerId);
+
+    /// Runs `callback` once, during the next frame, with the moment that frame is for.
+    ///
+    /// This is what an animation a view drives itself is written with, and it differs from a
+    /// zero-length timer in the one way that matters: while a registration is pending the window
+    /// counts as animating, so the frame that runs it is paced at the display's refresh interval.
+    /// A callback that registers again from its own body therefore runs once per frame, one
+    /// refresh apart — and it stops the animation by not registering again.
+    ///
+    /// The callback runs before the frame's reactive work, so anything it writes settles in the
+    /// same frame. The timestamp it receives is the moment the frame is for, the same one the
+    /// frame's own animations are sampled against; a motion that measures its steps from
+    /// successive timestamps is drawn as even steps. An occluded window keeps the registration
+    /// and runs it on the first frame after the window is shown again.
+    ///
+    /// Reach for [`request_frame`](crate::time::request_frame) or
+    /// [`Timers::request_frame`](crate::time::Timers::request_frame) instead: they pair this
+    /// with the cancellation a callback that outlives its scope needs.
+    fn request_frame_callback(&self, callback: Rc<dyn Fn(Timestamp)>) -> FrameRequestId;
+
+    /// Cancels a pending frame callback. Cancelling one that already ran, or one that was
+    /// already cancelled, does nothing.
+    fn cancel_frame_callback(&self, request: FrameRequestId);
 
     /// Installs `css` as a style sheet of this document's, under `name`.
     ///

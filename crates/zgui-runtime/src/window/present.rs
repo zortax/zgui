@@ -54,13 +54,25 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-/// How long the acquisition should still block once the hold has converged.
+/// The most the acquisition should still block once the hold has converged.
 ///
 /// Not zero. A hold tuned until the frame is handed a surface the moment it asks leaves the frame
 /// no margin at all, and the first one that costs a little more than its predecessor misses the
 /// handover entirely — which is a whole refresh interval spent, to save two milliseconds. This is
-/// the margin the loop keeps for a frame that runs long.
+/// the margin the loop keeps for a frame that runs long, at the interval the figure was settled
+/// against; see [`budget`] for how it follows the output.
 const BUDGET: Duration = Duration::from_micros(2_000);
+
+/// The margin the loop keeps on this output: a sixth of the interval, within fixed bounds.
+///
+/// Proportional because the fixed figure was settled on a seventy-five-hertz output, where two
+/// milliseconds is a seventh of the interval — on a two-hundred-and-forty-hertz output the same
+/// two milliseconds is half of one, and a servo told to keep half the interval as margin gives
+/// half the latency win away. The floor keeps a margin worth having on the fastest outputs; the
+/// ceiling keeps the measured behaviour on the slow ones.
+fn budget(interval: Duration) -> Duration {
+    (interval / 6).clamp(Duration::from_micros(500), BUDGET)
+}
 
 /// What the recent worst frame cost is multiplied by each frame.
 ///
@@ -201,13 +213,16 @@ impl PresentPace {
         // costs a whole interval instead of a few milliseconds. Reserving the dearest recent frame
         // gives the tail back what the average would otherwise spend, and it costs a steady window
         // nothing, because there the dearest frame *is* the usual one.
+        let budget = budget(interval);
         let ceiling = interval
-            .saturating_sub(BUDGET)
-            .min(interval.saturating_sub(self.worst + BUDGET));
-        self.hold = if blocked > BUDGET {
-            (self.hold + (blocked - BUDGET) / 2).min(ceiling)
+            .saturating_sub(budget)
+            .min(interval.saturating_sub(self.worst + budget));
+        self.hold = if blocked > budget {
+            (self.hold + (blocked - budget) / 2).min(ceiling)
         } else {
-            self.hold.saturating_sub((BUDGET - blocked) / 2).min(ceiling)
+            self.hold
+                .saturating_sub((budget - blocked) / 2)
+                .min(ceiling)
         };
     }
 
@@ -219,10 +234,13 @@ impl PresentPace {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUDGET, PresentPace};
+    use super::{BUDGET, PresentPace, budget};
     use std::time::{Duration, Instant};
 
     /// One frame of the output every figure in this module was settled against.
+    ///
+    /// At this interval the proportional budget clamps to [`BUDGET`], so every figure below
+    /// means what it meant when it was measured.
     const INTERVAL: Duration = Duration::from_micros(13_347);
 
     /// What a frame started a whole interval too early waits for.
@@ -230,6 +248,43 @@ mod tests {
 
     /// A frame that costs almost nothing, which is what a steady window's frames are.
     const CHEAP: Duration = Duration::from_micros(300);
+
+    #[test]
+    fn the_budget_follows_the_output_within_its_bounds() {
+        // Seventy-five hertz keeps the figure everything here was measured at.
+        assert_eq!(budget(INTERVAL), BUDGET);
+        // Two hundred and forty hertz keeps a sixth of its interval rather than half of it.
+        assert_eq!(
+            budget(Duration::from_micros(4_167)),
+            Duration::from_nanos(694_500)
+        );
+        // An implausibly fast output still keeps a margin worth having.
+        assert_eq!(
+            budget(Duration::from_micros(2_000)),
+            Duration::from_micros(500)
+        );
+    }
+
+    #[test]
+    fn a_fast_output_converges_on_a_hold_that_leaves_its_own_smaller_budget() {
+        // The point of the proportional budget: on a fast output the servo drives the block
+        // towards a sixth of the interval, so the hold settles deeper into it than the fixed
+        // figure would allow.
+        let fast = Duration::from_micros(4_167);
+        let free = Duration::from_micros(3_000);
+        let mut pace = PresentPace::free_running();
+        let mut blocked = free;
+        for _ in 0..64 {
+            pace.observed(blocked, Duration::from_micros(300), fast);
+            blocked = free.saturating_sub(pace.hold());
+        }
+        assert!(
+            pace.hold() >= free - budget(fast) - Duration::from_micros(100),
+            "the hold stopped short of the slack a fast output offers: {:?}",
+            pace.hold()
+        );
+        assert!(pace.hold() <= free, "the hold overshot: {:?}", pace.hold());
+    }
 
     #[test]
     fn a_window_that_is_never_made_to_wait_is_never_held() {

@@ -116,10 +116,16 @@ fn renderer(
         return Ok(Box::new(recording));
     };
 
-    let presented = Arc::clone(surface);
-    let builder = Builder::new().with_pre_present(Box::new(move || {
-        presented.pre_present_notify();
-    }));
+    // The notify only when asked for, matching the application default.
+    let builder = Builder::new();
+    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
+        let presented = Arc::clone(surface);
+        builder.with_pre_present(Box::new(move || {
+            presented.pre_present_notify();
+        }))
+    } else {
+        builder
+    };
     // The surface has to be created from the instance the device is opened from, which is why the
     // window's handles are handed to the renderer rather than the other way round. The shared
     // handle keeps the window alive for as long as anything draws through it.

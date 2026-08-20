@@ -90,6 +90,16 @@ impl Window {
     /// runs then is built for whatever the window is at that moment rather than for the configure
     /// that installed the deadline.
     pub fn queue(&mut self, event: zgui_platform::SurfaceEvent) -> bool {
+        // Evidence of visibility ends a starvation hold. Input reaches windows the compositor is
+        // drawing, and a configure, a focus or an occlusion report is the compositor speaking
+        // about this surface — each says the buffers are being consumed again. The request is
+        // what turns the cleared latch back into frames: the parked deadlines re-arm at the end
+        // of the frame it buys.
+        if self.starved && Self::clears_starvation(&event) {
+            self.starved = false;
+            self.starve_backoff = crate::window::STARVE_BACKOFF_START;
+            self.request_frame();
+        }
         let wants_a_frame = match &event {
             zgui_platform::SurfaceEvent::Resized(size) => self.resized(*size, self.scale),
             zgui_platform::SurfaceEvent::ScaleFactorChanged { scale_factor, size } => {
@@ -136,6 +146,18 @@ impl Window {
         wants_a_frame
     }
 
+    /// Whether this event is evidence the compositor is consuming the surface's buffers again.
+    fn clears_starvation(event: &zgui_platform::SurfaceEvent) -> bool {
+        event.is_input()
+            || matches!(
+                event,
+                zgui_platform::SurfaceEvent::Resized(_)
+                    | zgui_platform::SurfaceEvent::ScaleFactorChanged { .. }
+                    | zgui_platform::SurfaceEvent::Focused(true)
+                    | zgui_platform::SurfaceEvent::Occluded(false)
+            )
+    }
+
     /// Runs one frame.
     ///
     /// The whole of it runs with the window's own scope current, which is what makes the free
@@ -169,6 +191,14 @@ impl Window {
         self.layout_passes = 0;
         self.scrolled_this_frame.clear();
 
+        // The starvation probe. The retry deadline this frame was woken at is the one attempt the
+        // latch allows, so the frame runs unlatched — its present is the probe — and the next
+        // timeout re-latches it with a longer wait. A frame that runs for any other reason while
+        // the latch holds — a timer's — keeps the latch and skips the present.
+        if self.starved && self.retry_after.is_some_and(|at| at <= now) {
+            self.starved = false;
+        }
+
         // The events that arrived since the last frame, and the commands their handlers issued.
         zgui_profile::latency::note_with("f.drain", || self.queued.len().to_string());
         // What the drain settled between its own events can leave work behind, exactly as the
@@ -194,6 +224,11 @@ impl Window {
         self.reconfigure_surface();
         mark("f.device");
         self.device_epoch();
+        // Frame callbacks before the animate stage and the flush, with the moment this frame is
+        // for: what one writes settles in this frame, and one that registers again runs in the
+        // next, one refresh interval later.
+        mark("f.raf");
+        self.run_frame_callbacks(timestamp);
         // Before the flush and therefore before the restyle: the elements this decides have to
         // cascade again are marked before the traversal goes looking for work, and the values it
         // writes for the ones that do not are in place before anything is painted.
@@ -425,9 +460,38 @@ impl Window {
         // [`FrameOutcome::wants_another_frame`] is what decides, and it is false for exactly the
         // outcomes that must not ask at all: an occluded surface, a frame that damaged nothing, and
         // a device that could not be rebuilt.
-        self.retry_after = outcome
-            .wants_another_frame()
-            .then(|| now + self.refresh_interval());
+        //
+        // A timed-out acquisition is the exception, and it is the starvation latch's to answer. The
+        // old rule — try again one refresh interval later — re-enters the block immediately: a
+        // surface the compositor stopped drawing makes every acquisition wait the whole of what
+        // the graphics API allows, on the thread that reads input, and one stall becomes an
+        // unbounded run of them. So a timeout latches the window as starved and owes a probe at a
+        // growing distance instead, and a frame that ran under the latch leaves the probe's moment
+        // where it was.
+        self.retry_after = match outcome {
+            FrameOutcome::Skipped(SkipReason::Timeout) => {
+                self.starved = true;
+                let backoff = self.starve_backoff;
+                self.starve_backoff = (backoff * 2).min(crate::window::STARVE_BACKOFF_CAP);
+                tracing::info!(
+                    backoff_s = backoff.as_secs(),
+                    "the surface acquisition timed out; treating the window as starved and \
+                     probing after the backoff"
+                );
+                zgui_profile::latency::note_with("f.starved", || {
+                    format!("backoff={}s", backoff.as_secs())
+                });
+                Some(now + backoff)
+            }
+            _ if self.starved => self.retry_after,
+            _ if outcome.wants_another_frame() => Some(now + self.refresh_interval()),
+            _ => None,
+        };
+        if matches!(outcome, FrameOutcome::Presented(_)) {
+            // A presented frame is the compositor consuming the surface again, so the next
+            // starvation — a workspace switch months later — starts from the short wait.
+            self.starve_backoff = crate::window::STARVE_BACKOFF_START;
+        }
 
         // Measured from when the last normal frame finished, so a continuously active document
         // never trims a working set and a parked one gets exactly one maintenance wake.
@@ -453,7 +517,9 @@ impl Window {
             // what produces a flash of empty window at launch.
             self.surface.set_visible(true);
             self.first_frame = false;
-        } else if self.first_frame && matches!(outcome, FrameOutcome::Skipped(SkipReason::Occluded))
+        } else if self.first_frame
+            && !self.starved
+            && matches!(outcome, FrameOutcome::Skipped(SkipReason::Occluded))
         {
             // The converse deadlock, real on macOS: a hidden window's layer hands out no
             // drawable, so the present that would show the window can never happen behind it.
@@ -521,27 +587,37 @@ impl Window {
     /// The earliest deadline, keeping maintenance distinct from render-producing work.
     pub(crate) fn scheduled_deadline(&self, now: Instant) -> Option<ScheduledDeadline> {
         let interval = self.refresh_interval();
-        let animation = self.animation.due().filter(|_| !self.occluded);
+        // The cadence's phase first, and the held registration moment only when the cadence is
+        // parked: while an animation is live the refresh phase governs, and a frame callback
+        // registered mid-frame must not pull the next frame earlier than it. The fallback is what
+        // buys the *first* frame for a registration made outside any frame — a resolved future, a
+        // platform callback — whose moment is already in the past by the time the loop parks.
+        let animation = self
+            .animation
+            .due()
+            .or_else(|| self.host.frame_callbacks_since())
+            .filter(|_| !(self.occluded || self.starved));
         let timer = self.timers.borrow().peek_for(self.dom.document_id(), now);
         let resize = if self.reconfigure {
             self.pace.due(interval)
         } else {
             None
         };
-        // The blink is excluded while the surface is hidden, for the same reason the animation
-        // deadline is: a caret blinking behind a minimised window is a loop running at two frames a
-        // second, for ever, drawing nothing anyone can see.
-        let blink = (!self.occluded)
+        // The blink is excluded while the surface is hidden or starved, for the same reason the
+        // animation deadline is: a caret blinking behind a minimised window is a loop running at
+        // two frames a second, for ever, drawing nothing anyone can see.
+        let blink = (!(self.occluded || self.starved))
             .then(|| self.carets.next_flip(now))
             .flatten();
         // A frame being held back owes a moment of its own, and it is the only source that owes one
         // for a frame that has already been asked for. Without it a window whose whole reason to
         // draw is the input it has already queued is held and never woken again.
         let held = self.present.due();
-        // The frame the renderer asked for and could not be given, owed one refresh interval after
-        // the one that failed. Excluded while the surface is hidden for the same reason the
-        // animation and the blink are: a window nobody can see must not keep running the pipeline
-        // to find out whether the compositor would take a frame yet.
+        // The frame the renderer asked for and could not be given. Excluded while the surface is
+        // hidden for the same reason the animation and the blink are — and deliberately *not*
+        // excluded while it is starved, because under the latch this moment is the probe, and the
+        // probe is the only thing that finds out the compositor came back without an event saying
+        // so.
         let retry = self.retry_after.filter(|_| !self.occluded);
         let render = [
             animation,
@@ -650,6 +726,11 @@ impl Window {
         if self.embed_animating {
             return true;
         }
+        // A pending frame callback is one by the same measure: it asked for the next frame, and
+        // it stops asking by not registering again.
+        if self.host.has_frame_callbacks() {
+            return true;
+        }
         let document = self.document.borrow();
         let Some(root) = document.root_index() else {
             return false;
@@ -682,6 +763,22 @@ impl Window {
             // a signal is reading it, not subscribing whatever scope happens to be current.
             let _zone = zgui_reactive::enter_non_reactive_zone();
             callback();
+        }
+        due.len()
+    }
+
+    /// Runs every pending frame callback once, with the moment this frame is for.
+    ///
+    /// The batch is drained before anything runs, so a callback that registers again from its own
+    /// body waits for the next frame — and the store is never borrowed while a callback runs, so
+    /// one may cancel, re-register or drop its own handle.
+    fn run_frame_callbacks(&mut self, at: zgui_vocab::Timestamp) -> usize {
+        let due = self.host.take_frame_callbacks();
+        for callback in &due {
+            // Inside the non-reactive zone, exactly as a timer's callback is: a callback that
+            // reads a signal is reading it, not subscribing whatever scope happens to be current.
+            let _zone = zgui_reactive::enter_non_reactive_zone();
+            callback(at);
         }
         due.len()
     }
@@ -1379,9 +1476,11 @@ impl Window {
         // stated no level to come back under.
         self.enforce_budgets();
 
-        if self.occluded {
+        if self.occluded || self.starved {
             // Nothing is acquired and nothing is presented, and the frame still ran: a callback
-            // fired and a sleeping task resumed behind a minimised window.
+            // fired and a sleeping task resumed behind a minimised window. A starved surface takes
+            // the same door for the same reason — its acquisition would block the loop for up to a
+            // second, and the probe is the one frame allowed to pay that.
             return FrameOutcome::Skipped(SkipReason::Occluded);
         }
         zgui_profile::latency::note_with("p.draw", || {
@@ -1412,9 +1511,9 @@ impl Window {
 /// measurement the switch exists to take.
 fn batches_wanted() -> bool {
     static WANTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *WANTED.get_or_init(|| {
-        !matches!(std::env::var("ZGUI_LAYOUT_BATCHES"), Ok(value) if value.trim() == "0")
-    })
+    *WANTED.get_or_init(
+        || !matches!(std::env::var("ZGUI_LAYOUT_BATCHES"), Ok(value) if value.trim() == "0"),
+    )
 }
 
 /// How many glyphs have been placed and how many of those had to be rasterised.

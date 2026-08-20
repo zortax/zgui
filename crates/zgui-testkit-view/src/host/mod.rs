@@ -9,8 +9,8 @@ use zgui_geom::{Device, DevicePx, Rect};
 use zgui_reactive::{LocalStorage, Signal};
 use zgui_view::stub::StubHost;
 use zgui_view::{
-    FocusMove, FocusTrapId, FocusTrapOptions, NodeId, Repeat, ScrollBehavior, ScrollPosition,
-    ScrollTarget, TimerId, ViewHost,
+    FocusMove, FocusTrapId, FocusTrapOptions, FrameRequestId, NodeId, Repeat, ScrollBehavior,
+    ScrollPosition, ScrollTarget, TimerId, Timestamp, ViewHost,
 };
 
 use crate::transcript::{Op, Transcript};
@@ -306,6 +306,14 @@ impl ViewHost for ScriptedHost {
 
     fn cancel_timer(&self, timer: TimerId) {
         self.inner.cancel_timer(timer);
+    }
+
+    fn request_frame_callback(&self, callback: Rc<dyn Fn(Timestamp)>) -> FrameRequestId {
+        self.inner.request_frame_callback(callback)
+    }
+
+    fn cancel_frame_callback(&self, request: FrameRequestId) {
+        self.inner.cancel_frame_callback(request);
     }
 
     fn precedes(&self, first: NodeId, second: NodeId) -> bool {

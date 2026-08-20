@@ -302,10 +302,16 @@ fn renderer(
             "this window offers no handles a graphics API can draw into".to_owned(),
         )));
     };
-    let presented = Arc::clone(surface);
-    let builder = Builder::new().with_pre_present(Box::new(move || {
-        presented.pre_present_notify();
-    }));
+    // The notify only when asked for, matching the application default.
+    let builder = Builder::new();
+    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
+        let presented = Arc::clone(surface);
+        builder.with_pre_present(Box::new(move || {
+            presented.pre_present_notify();
+        }))
+    } else {
+        builder
+    };
     let drawable = builder
         .instance()
         .create_surface(handles)

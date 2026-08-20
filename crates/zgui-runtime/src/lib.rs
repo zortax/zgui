@@ -73,6 +73,7 @@ pub mod dispatch;
 pub mod editing;
 pub mod embed;
 pub mod error;
+pub mod frame_callbacks;
 pub mod host;
 mod images;
 mod order;
@@ -101,6 +102,7 @@ pub use crate::embed::{
     EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, NoEmbeds,
 };
 pub use crate::error::AppError;
+pub use crate::frame_callbacks::FrameCallbacks;
 pub use crate::host::RuntimeHost;
 pub use crate::probe::FrameProbe;
 pub use crate::replaced::{IntrinsicTable, ReplacedMux};

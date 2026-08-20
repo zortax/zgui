@@ -9,8 +9,11 @@ use std::rc::Rc;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_reactive::prelude::*;
 use zgui_reactive::{LocalStorage, RwSignal, Signal};
+use zgui_vocab::Timestamp;
 
-use crate::host::{FocusMove, FocusTrapId, FocusTrapOptions, Repeat, TimerId, ViewHost};
+use crate::host::{
+    FocusMove, FocusTrapId, FocusTrapOptions, FrameRequestId, Repeat, TimerId, ViewHost,
+};
 use crate::id::NodeId;
 use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 
@@ -85,6 +88,10 @@ pub struct StubHost {
     timers: RefCell<Vec<Scheduled>>,
     /// The next timer number to mint.
     next_timer: Cell<u64>,
+    /// The frame callbacks that have not run or been cancelled.
+    frames: RefCell<Vec<(FrameRequestId, Rc<dyn Fn(Timestamp)>)>>,
+    /// The next frame-request number to mint.
+    next_frame: Cell<u64>,
     /// How far the virtual clock has advanced from its origin.
     now: Cell<Duration>,
     /// The style sheets installed, by name, in installation order.
@@ -125,6 +132,8 @@ impl StubHost {
             animations: RefCell::default(),
             timers: RefCell::default(),
             next_timer: Cell::new(1),
+            frames: RefCell::default(),
+            next_frame: Cell::new(1),
             now: Cell::new(Duration::ZERO),
             sheets: RefCell::default(),
             sheet_installs: Cell::new(0),
@@ -240,6 +249,22 @@ impl StubHost {
     /// How far the virtual clock has advanced from its origin.
     pub fn now(&self) -> Duration {
         self.now.get()
+    }
+
+    /// How many frame callbacks are still pending.
+    pub fn pending_frames(&self) -> usize {
+        self.frames.borrow().len()
+    }
+
+    /// Runs one frame's worth of callbacks, handing each the moment the frame is for.
+    ///
+    /// The pending batch is drained before anything runs, so a callback that registers again
+    /// from its own body waits for the next call — the once-per-frame rule a real window keeps.
+    pub fn frame(&self, at: Timestamp) {
+        let due = std::mem::take(&mut *self.frames.borrow_mut());
+        for (_, callback) in due {
+            callback(at);
+        }
     }
 
     /// Moves the clock forward, firing everything that comes due, in deadline order.
@@ -439,6 +464,17 @@ impl ViewHost for StubHost {
         self.timers
             .borrow_mut()
             .retain(|scheduled| scheduled.id != timer);
+    }
+
+    fn request_frame_callback(&self, callback: Rc<dyn Fn(Timestamp)>) -> FrameRequestId {
+        let id = FrameRequestId::new(self.next_frame.get());
+        self.next_frame.set(self.next_frame.get() + 1);
+        self.frames.borrow_mut().push((id, callback));
+        id
+    }
+
+    fn cancel_frame_callback(&self, request: FrameRequestId) {
+        self.frames.borrow_mut().retain(|(id, _)| *id != request);
     }
 
     fn precedes(&self, first: NodeId, second: NodeId) -> bool {

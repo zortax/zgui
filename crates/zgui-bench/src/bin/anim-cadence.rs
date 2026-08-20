@@ -215,10 +215,17 @@ fn open_device(
             "this window offers no handles a graphics API can draw into".to_owned(),
         ))
     })?;
-    let presented = Arc::clone(surface);
-    let builder = zgui_render_wgpu::Builder::new().with_pre_present(Box::new(move || {
-        presented.pre_present_notify();
-    }));
+    // The notify only when asked for, matching the application default — a bench wired
+    // differently from the loop it measures reports a cadence no application shows.
+    let builder = zgui_render_wgpu::Builder::new();
+    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
+        let presented = Arc::clone(surface);
+        builder.with_pre_present(Box::new(move || {
+            presented.pre_present_notify();
+        }))
+    } else {
+        builder
+    };
     let drawable = builder
         .instance()
         .create_surface(handles)
@@ -281,6 +288,14 @@ impl Renderer for Stamping {
         outcome
     }
 
+    fn shifts_composed_pixels(&self) -> bool {
+        self.inner.shifts_composed_pixels()
+    }
+
+    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
+        self.inner.shift_composed(shift);
+    }
+
     fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
         self.inner.register_external(texture)
     }
@@ -291,6 +306,28 @@ impl Renderer for Stamping {
 
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
+    }
+
+    fn vector_status(&self) -> zgui::render::VectorStatus {
+        self.inner.vector_status()
+    }
+
+    fn target_pool(&self) -> zgui::render::TargetPoolReport {
+        self.inner.target_pool()
+    }
+
+    fn release_cached_targets(&mut self) -> u64 {
+        self.inner.release_cached_targets()
+    }
+
+    fn release_idle_resources(&mut self) -> u64 {
+        self.inner.release_idle_resources()
+    }
+
+    // Forwarded so the pacing servo sees the real wait: the trait's default answers zero, which
+    // reads as a loop that is never made to wait and keeps the hold at nothing.
+    fn acquire_block(&self) -> core::time::Duration {
+        self.inner.acquire_block()
     }
 
     fn texture_sink(&mut self) -> &mut dyn TextureSink {
