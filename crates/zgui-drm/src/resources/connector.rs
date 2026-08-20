@@ -51,6 +51,63 @@ impl ConnectorKind {
     }
 }
 
+/// How a display arranges the coloured stripes inside one pixel.
+///
+/// What decides whether text can be antialiased per colour channel: doing so on a display whose
+/// stripes run the other way, or which has none, puts coloured fringes on every glyph in place of
+/// the extra resolution it is meant to buy.
+///
+/// **The numbers are `enum subpixel_order` and not the `DRM_MODE_SUBPIXEL_*` defines beside them.**
+/// The two disagree — the defines number from one and the enum from nought — and the kernel copies
+/// `display_info.subpixel_order` into this field unchanged. So `0` is the unknown, and a caller
+/// comparing against the defines is one off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubpixelOrder {
+    /// The driver does not say.
+    ///
+    /// The ordinary answer, and not a rare one: a driver states an order for a panel it is wired to
+    /// — a laptop's own screen — and almost never for anything on a cable. An analogue connector
+    /// cannot know what is on the far end at all.
+    Unknown,
+    /// Red, green and blue, left to right.
+    HorizontalRgb,
+    /// Blue, green and red, left to right.
+    HorizontalBgr,
+    /// Red, green and blue, top to bottom.
+    VerticalRgb,
+    /// Blue, green and red, top to bottom.
+    VerticalBgr,
+    /// The display has no subpixel geometry to speak of.
+    None,
+}
+
+impl SubpixelOrder {
+    /// Returns what the kernel's `enum subpixel_order` value means.
+    ///
+    /// A number this does not know is read as [`SubpixelOrder::Unknown`], which is the answer that
+    /// assumes least.
+    #[must_use]
+    pub const fn from_raw(raw: u32) -> Self {
+        match raw {
+            1 => Self::HorizontalRgb,
+            2 => Self::HorizontalBgr,
+            3 => Self::VerticalRgb,
+            4 => Self::VerticalBgr,
+            5 => Self::None,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Returns `true` where the stripes run across the pixel in a known order.
+    ///
+    /// The only arrangement per-channel coverage is drawn for. A vertical order is a display turned
+    /// on its side, which needs the coverage turned with it and is not what the rasteriser makes.
+    #[must_use]
+    pub const fn is_horizontal(self) -> bool {
+        matches!(self, Self::HorizontalRgb | Self::HorizontalBgr)
+    }
+}
+
 /// One connector.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -67,6 +124,8 @@ pub struct Connector {
     pub encoder: Option<u32>,
     /// The kernel's connection status, as `enum drm_connector_status`.
     connection: u32,
+    /// How the display arranges the stripes inside a pixel, where the driver says.
+    pub subpixel: SubpixelOrder,
 }
 
 impl Connector {
@@ -188,6 +247,7 @@ impl Device {
                     modes: modes.into_iter().map(|raw| Mode { raw }).collect(),
                     encoder: (filled.encoder_id != 0).then_some(filled.encoder_id),
                     connection: filled.connection,
+                    subpixel: SubpixelOrder::from_raw(filled.subpixel),
                 }))
             },
         )
