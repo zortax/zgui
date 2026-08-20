@@ -26,6 +26,7 @@
 //! renderer, which is work for another day.
 
 use std::cell::RefCell;
+use std::ffi::CStr;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
@@ -38,7 +39,7 @@ use crate::gpu::surface::ConfiguredSurface;
 use crate::pipeline::Pipelines;
 use crate::renderer::builder::open_device;
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
-use crate::target::swapchain::{Offscreen, Presentation};
+use crate::target::swapchain::{Offscreen, Presentation, Supplied};
 
 /// Everything device-level that the renderers on one device share.
 pub(crate) struct DeviceState {
@@ -77,6 +78,11 @@ struct Shared {
     instance: wgpu::Instance,
     /// Which backends may be enumerated.
     backends: wgpu::Backends,
+    /// The Vulkan device extensions every device opened here asks for.
+    ///
+    /// Held on the graphics, because a device this opens after a loss has to enable what the dead
+    /// one did. See [`SharedGraphics::with_extensions`].
+    extensions: Vec<&'static CStr>,
     /// The device most windows draw on, opened by the first surface and replaced after a loss.
     primary: RefCell<Option<Rc<DeviceState>>>,
     /// Devices opened for surfaces the primary adapter cannot present to.
@@ -101,14 +107,53 @@ impl SharedGraphics {
     /// Graphics over exactly `backends`.
     ///
     /// The empty set is meaningful: it is how a machine with no usable graphics device is
-    /// reproduced on a machine that has one.
+    /// reproduced on a machine that has one. No Vulkan device extension is asked for;
+    /// [`SharedGraphics::with_extensions`] is the constructor that states some.
     pub fn with_backends(backends: wgpu::Backends) -> Self {
+        Self::with_backends_and_extensions(backends, Vec::new())
+    }
+
+    /// Graphics over the backends the environment allows, asking every device for `extensions`.
+    ///
+    /// `extensions` names Vulkan device extensions, and they survive because they are stated here.
+    /// A device extension can be enabled only while a device is created, and this opens devices
+    /// from five places — the first surface, the first offscreen renderer,
+    /// [`SharedGraphics::open_gpu`], the replacement built after a device is lost, and the
+    /// separate device a surface the primary adapter cannot present to gets. All five read this
+    /// one list, so a program whose buffers depend on an extension keeps it across a device loss,
+    /// keeps it on a second monitor hung off another card, and cannot be handed an extension-free
+    /// device by asking in the wrong order.
+    ///
+    /// The list is all-or-nothing and a machine may refuse it. [`Gpu::vulkan_extensions`] on the
+    /// device that opened says whether it was enabled, and a caller reads that instead of
+    /// assuming: a console backend falls back to copying through the processor.
+    ///
+    /// ```
+    /// use zgui_render_wgpu::SharedGraphics;
+    ///
+    /// let graphics = SharedGraphics::with_extensions(vec![c"VK_EXT_image_drm_format_modifier"]);
+    ///
+    /// assert_eq!(graphics.extensions(), [c"VK_EXT_image_drm_format_modifier"]);
+    /// ```
+    pub fn with_extensions(extensions: Vec<&'static CStr>) -> Self {
+        Self::with_backends_and_extensions(adapter::requested_backends(), extensions)
+    }
+
+    /// Graphics over exactly `backends`, asking every device for `extensions`.
+    ///
+    /// For a caller that has to state both. [`SharedGraphics::with_backends`] and
+    /// [`SharedGraphics::with_extensions`] each state one.
+    pub fn with_backends_and_extensions(
+        backends: wgpu::Backends,
+        extensions: Vec<&'static CStr>,
+    ) -> Self {
         Self(Rc::new(Shared {
             instance: wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends,
                 ..wgpu::InstanceDescriptor::new_without_display_handle()
             }),
             backends,
+            extensions,
             primary: RefCell::new(None),
             fallbacks: RefCell::new(Vec::new()),
         }))
@@ -124,6 +169,13 @@ impl SharedGraphics {
         self.0.backends
     }
 
+    /// Returns the Vulkan device extensions every device opened here asks for.
+    ///
+    /// What was *asked for*. What a device got is [`Gpu::vulkan_extensions`] on the device itself.
+    pub fn extensions(&self) -> &[&'static CStr] {
+        &self.0.extensions
+    }
+
     /// The shared device, once a surface has chosen one.
     ///
     /// `None` before the first window opens, because an adapter is chosen against something to
@@ -134,6 +186,20 @@ impl SharedGraphics {
             .borrow()
             .as_ref()
             .map(|state| Arc::clone(&state.gpu))
+    }
+
+    /// Opens the shared device, or answers the one that is already open.
+    ///
+    /// [`SharedGraphics::gpu`] answers only a device that is already open. This one reverses the
+    /// order every other entry point here uses: a caller that presents into textures of its own
+    /// has to create them on a device, so it needs the device before it can ask for a renderer.
+    /// The candidate loop proves each adapter with a one-pixel texture, because no surface exists
+    /// to prove one with.
+    pub fn open_gpu(&self) -> Result<Arc<Gpu>, GpuUnavailable> {
+        if let Some(state) = self.usable_primary() {
+            return Ok(Arc::clone(&state.gpu));
+        }
+        Ok(Arc::clone(&self.open_primary()?.gpu))
     }
 
     /// A renderer for one more window, on the shared device where it can present there.
@@ -177,7 +243,7 @@ impl SharedGraphics {
 
         // The first surface: no device has been opened yet, so this is what chooses one.
         let mut surface = Some(surface);
-        let (gpu, presentation) = open_device(&self.0.instance, self.0.backends, |gpu| {
+        let (gpu, presentation) = self.open_one(|gpu| {
             let surface = surface
                 // A surface is configured for the adapter that accepted it, and a configured
                 // surface cannot be handed to a second one. When the first candidate fails, the
@@ -220,7 +286,7 @@ impl SharedGraphics {
             ));
             return Ok(self.assemble(state, presentation, target, None, origin));
         }
-        let (gpu, presentation) = open_device(&self.0.instance, self.0.backends, |gpu| {
+        let (gpu, presentation) = self.open_one(|gpu| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
                 extent,
@@ -231,6 +297,84 @@ impl SharedGraphics {
         let state = DeviceState::new(gpu);
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
         Ok(self.assemble(state, presentation, target, None, origin))
+    }
+
+    /// A renderer presenting into textures the caller supplies, on the shared device.
+    ///
+    /// What a backend that owns the buffers a display controller scans out of uses: the frame is
+    /// copied into the buffer the hardware reads, so nothing is read back to the processor and
+    /// nothing is copied through it. The caller chooses which of them each frame goes to with
+    /// [`WgpuRenderer::present_into`].
+    ///
+    /// # Order
+    ///
+    /// The textures have to be created on this device first, through
+    /// [`SharedGraphics::open_gpu`]. Nothing here can open one for them: a texture belongs to the
+    /// device that created it, so a device opened at this point would be the wrong one for
+    /// everything handed in. wgpu states no device on a texture handle, so the order is the only
+    /// thing that keeps the two together and this refuses rather than guessing.
+    ///
+    /// A caller whose textures need Vulkan device extensions states them once, on the graphics,
+    /// with [`SharedGraphics::with_extensions`]. Every device-opening path here reads that one
+    /// list, [`SharedGraphics::open_gpu`] included, so the device the textures are created on is
+    /// the device this presents into and it carries them. A list stated per call could not do
+    /// that: the primary is fixed for the rest of the process once it is open, so a caller
+    /// following the order above would open an extension-free device, find that its dma-buf images
+    /// will not import, and have no way back.
+    ///
+    /// # Errors
+    ///
+    /// Refuses where no device is open, where `target` and the textures state different extents,
+    /// and where the textures cannot be presented to as one set — [`Supplied::unusable`] says what
+    /// that means. Each refusal names what was wrong.
+    pub fn renderer_supplied(
+        &self,
+        target: RenderTarget,
+        textures: Vec<wgpu::Texture>,
+    ) -> Result<WgpuRenderer, GpuUnavailable> {
+        let Some(state) = self.usable_primary() else {
+            return Err(GpuUnavailable::new().rejected(
+                "the shared device",
+                "supplied textures come from a device, so one has to be open before a renderer can \
+                 present into them: open it with SharedGraphics::open_gpu",
+            ));
+        };
+        // Asked here as well as inside `Supplied::new`, so that the reason reaches the caller: a
+        // set that is refused is a set the caller has to fix.
+        if let Some(reason) = Supplied::unusable(&textures) {
+            return Err(GpuUnavailable::new().rejected(state.gpu.describe(), reason));
+        }
+        let wanted = extent(target);
+        let Some(supplied) = Supplied::new(textures) else {
+            return Err(GpuUnavailable::new().rejected(
+                state.gpu.describe(),
+                "the supplied textures cannot be presented to as one set",
+            ));
+        };
+        // The target and the textures are supplied separately and both describe the same screen.
+        // Where they disagree the copy that ends a frame would cover the whole buffer while
+        // reading a composed target of the other extent, which is a stretched frame nothing
+        // reports.
+        if supplied.size() != wanted {
+            return Err(GpuUnavailable::new().rejected(
+                state.gpu.describe(),
+                format!(
+                    "the target is {}×{} and the supplied textures are {}×{}; one screen has one \
+                     extent",
+                    wanted.width,
+                    wanted.height,
+                    supplied.size().width,
+                    supplied.size().height
+                ),
+            ));
+        }
+        Ok(self.assemble(
+            state,
+            Presentation::Supplied(supplied),
+            target,
+            None,
+            Origin::Supplied,
+        ))
     }
 
     /// The device to rebuild on after `lost` died, opened once and then answered to everyone.
@@ -247,9 +391,16 @@ impl SharedGraphics {
         {
             return Ok(state);
         }
-        // No surface exists during recovery — the window's own surface died with the device — so a
-        // small offscreen target is what the candidate loop proves an adapter with.
-        let (gpu, _) = open_device(&self.0.instance, self.0.backends, |gpu| {
+        self.open_primary()
+    }
+
+    /// Opens the shared device with no surface, and records it as the primary.
+    ///
+    /// A one-pixel offscreen target is what the candidate loop proves an adapter with here.
+    /// Recovery has nothing else to use, the window's own surface having died with the device, and
+    /// neither has a caller that has yet to create anything.
+    fn open_primary(&self) -> Result<Rc<DeviceState>, GpuUnavailable> {
+        let (gpu, _) = self.open_one(|gpu| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
                 Size::new(1, 1),
@@ -258,10 +409,28 @@ impl SharedGraphics {
             )))
         })?;
         let state = DeviceState::new(gpu);
-        // Assigning drops the strong reference to the dead device, so its memory is released as
+        // Assigning drops the strong reference to any dead device, so its memory is released as
         // soon as the last renderer has swapped over.
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
         Ok(state)
+    }
+
+    /// Runs the candidate loop with everything this graphics was constructed to state.
+    ///
+    /// Every device opened here goes through this, which keeps the five entry points agreeing. The
+    /// Vulkan device extensions matter most: a replacement device that read a different list would
+    /// leave a program running on a device its buffers cannot be imported into, and there is no
+    /// later point at which that could be noticed.
+    fn open_one(
+        &self,
+        present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
+    ) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
+        open_device(
+            &self.0.instance,
+            self.0.backends,
+            &self.0.extensions,
+            present,
+        )
     }
 
     /// The primary device, if there is one and it is still alive.
@@ -356,7 +525,7 @@ impl SharedGraphics {
             ));
         };
         let mut surface = Some(surface);
-        let (gpu, presentation) = open_device(&self.0.instance, self.0.backends, |gpu| {
+        let (gpu, presentation) = self.open_one(|gpu| {
             let surface = surface
                 .take()
                 .ok_or_else(|| "the surface was consumed by an earlier candidate".to_owned())?;

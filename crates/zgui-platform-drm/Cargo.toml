@@ -1,0 +1,101 @@
+[package]
+name = "zgui-platform-drm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# The platform contract over the kernel's display interface: a program that runs on a Linux console
+# with no display server under it. It drives `zgui-drm` for the display and `zgui-evdev` for input,
+# and reaches libseat, libinput and libxkbcommon through the three crates that open them.
+#
+# Everything is gated on Linux. The kernel interface exists nowhere else, so a macOS build of the
+# workspace compiles this crate as an empty one rather than failing on a header it cannot have.
+[target.'cfg(target_os = "linux")'.dependencies]
+# `TreeUpdate`, which the platform contract's `push_a11y_update` takes. This backend implements
+# that method as a no-op: no assistive technology is connected to a console, so the closure is
+# never run and no tree is built. The name is here for the signature.
+accesskit.workspace = true
+# Vulkan, for the buffers a display scans out of directly. An image with a DRM format modifier,
+# backed by exportable memory and handed to the kernel as a dma-buf, is described entirely in
+# Vulkan's own types: wgpu's API has no word for a modifier, for exportable memory or for a
+# descriptor. `import/` builds the image and hands it to wgpu through its hal at the end. This
+# crate is the only one that names ash, and the version is the one wgpu-hal links.
+ash.workspace = true
+# A surface reports the native handles a KMS display has: the device descriptor and the primary
+# plane. This is the same name the platform contract itself carries. The two `borrow_raw` calls in
+# `surface.rs` that build the handles are one of the two reasons outside its tests that this crate
+# is on the unsafe ledger's allowlist; `import/`, which calls a Vulkan driver, is the other. The
+# tests hold a third: an `ioctl` declared and called in `input/seat.rs`.
+raw-window-handle.workspace = true
+# The eventfd the wake channel is, the `poll` the frame loop parks in beside the device, and the
+# monotonic clock an input report is stamped against. Every one of them goes through a safe API.
+# The tests add `fstat`, to read back what an exported dma-buf descriptor is, and
+# `rustix::ioctl::opcode`, which builds the `EVIOCREVOKE` request number a revoked device is
+# asserted against. This crate issues no ioctl of its own outside those tests.
+rustix.workspace = true
+tracing.workspace = true
+zgui-drm = { path = "../zgui-drm", version = "0.1.0" }
+# The kernel's input interface: which devices exist, what each one can report, the grab that keeps
+# a keystroke away from the shell behind the console, and the keymap the console driver holds. It
+# is one step along the same layer, and this crate is the only one that names it.
+zgui-evdev = { path = "../zgui-evdev", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+# Input policy, asked through libinput: how far a pointer travels for one movement, whether a tap
+# is a click, whether a palm on the pad is anything. It reads the devices the seat hands over and
+# opens none itself. It is one step along the same layer, and this crate is the only one that names
+# it.
+zgui-libinput = { path = "../zgui-libinput", version = "0.1.0" }
+# The session daemon, asked through libseat: the seat this run is on, and the devices it hands
+# over. logind and seatd set DRM master on a card before they answer the client, so a console
+# program that asks either one starts from an ordinary login shell rather than from root. It is one
+# step along the same layer, and this crate is the only one that names it.
+zgui-seat = { path = "../zgui-seat", version = "0.1.0" }
+# The event vocabulary a key press is narrowed into: the three readings of one press, where the
+# key sits, and which modifiers were held. `zgui-platform-winit` names it from this layer for the
+# same reason — a backend translates into it and nothing above has to know which backend ran.
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+# What a key *means*: libxkbcommon, opened at run time. A machine without it reports its absence
+# as a value, and this crate answers by reading the console's own keymap instead.
+zgui-xkb = { path = "../zgui-xkb", version = "0.1.0" }
+# `Gpu`, the device and queue every path here draws through, and `Pixels`, which a readback answers
+# with: it carries the bytes and says which channel order they are in, and a scanout picks its
+# fourcc from that. `FORMAT` is the other end of the same agreement — the texture a frame is
+# composed into — and it is a wgpu format because the readback is. A backend at this layer may name
+# this one, and what draws through it lives in `zgui`.
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The stand-in display a context test hands out. This backend's own surface holds a device open,
+# and a machine with no `/dev/dri` has none to open, so a test whose subject is the context takes
+# the headless backend's surface instead. `zgui-platform-winit` names the same crate for the same
+# reason.
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# The scanout test draws one solid rectangle through the real renderer and puts it on a real
+# display. The renderer contract, the scene it draws, the colour and the damage set are all things
+# a caller builds and states, and every one of them is at this layer or below, so the test reaches
+# across no seam the crate itself may not.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+
+# Each of the two session binaries owns its process. Both choose libseat's backend by writing
+# `LIBSEAT_BACKEND` in their first statement, and writing an environment variable while another
+# thread reads the environment is a data race. `session_direct` also holds this process's
+# descriptor limit at zero for the length of the open, which would fail whatever else was opening a
+# file at the time. A test harness runs its tests on several threads, so neither belongs under one.
+[[test]]
+name = "session_direct"
+path = "tests/session_direct.rs"
+harness = false
+
+[[test]]
+name = "session_seated"
+path = "tests/session_seated.rs"
+harness = false
+
+[lints]
+workspace = true

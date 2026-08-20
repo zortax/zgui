@@ -89,10 +89,27 @@ pub enum SurfaceEvent {
         /// When it happened.
         timestamp: Timestamp,
     },
-    /// The set of held modifiers changed without any key event being delivered.
+    /// The set of held modifiers changed.
     ///
-    /// This exists because a modifier can change while the surface is not focused, and a
-    /// modifier state recovered only from key events is then wrong until the next press.
+    /// Delivered every time the set moves, including beside the key event that moved it. A consumer
+    /// that keeps the held set from this event alone is right at every moment, and so is one that
+    /// reads the set off a key event: this event dispatches nothing into a document, so the two do
+    /// not double up.
+    ///
+    /// It is its own event because the set also changes with no key event at all — while the
+    /// surface does not have the keyboard, and when a backend takes a device and reads the keys
+    /// already held out of the kernel. A modifier state recovered from key events alone is wrong
+    /// until the next press in both cases.
+    ///
+    /// ```
+    /// use zgui_platform::SurfaceEvent;
+    /// use zgui_vocab::Modifiers;
+    ///
+    /// let event = SurfaceEvent::ModifiersChanged(Modifiers::SHIFT);
+    ///
+    /// assert_eq!(event.modifiers(), Some(Modifiers::SHIFT));
+    /// assert!(event.to_dispatch().is_none());
+    /// ```
     ModifiersChanged(Modifiers),
     /// An input method did something to the text being composed.
     Ime(ImeEvent),

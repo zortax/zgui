@@ -1,0 +1,10 @@
+[package]
+name = "zgui-devtools"
+version = "0.1.0"
+edition = "2024"
+
+# PLANTED VIOLATION: the graph has nine layers, L0 to L8, so this header names none of them and
+# would leave this crate permissive about every edge it draws.
+# L9 — the inspector. Every dependency is a path to a crate below it.
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }

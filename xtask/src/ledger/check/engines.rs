@@ -61,8 +61,18 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-render-vector-vello",
             "zgui-render-vector-coverage",
             "zgui-platform-winit",
+            // A frame reaches a display here through the renderer: a copied frame arrives as
+            // `zgui-render-wgpu`'s readback type, and a drawn one is composed into the `wgpu`
+            // textures the display hands out. A wgpu release that breaks either reaches this crate.
+            "zgui-platform-drm",
         ],
     ),
+    // Vulkan itself, and one crate names it. A buffer a display controller scans out of is a
+    // Vulkan image created with a DRM format modifier, backed by exportable memory and handed to
+    // the kernel as a dma-buf, and wgpu's API has a word for none of that. A second crate reaching
+    // past wgpu into the driver would be a second place a device can be left holding an image
+    // nothing gives back.
+    ("ash", &["zgui-platform-drm"]),
     ("winit", &["zgui-platform-winit"]),
     ("accesskit_winit", &["zgui-platform-winit"]),
     ("arboard", &["zgui-platform-winit"]),
@@ -78,6 +88,31 @@ const LEDGER: &[(&str, &[&str])] = &[
     // dependency graph of every program that links the framework, to buy something `futures` and
     // `zgui-reactive`'s own executor already do.
     ("tokio", &["zgui-tokio"]),
+    // The kernel's own interfaces, reached with no libc. Confined for the same reason a windowing
+    // library is: what it costs to replace is what it costs to find, and a second crate issuing
+    // ioctls of its own is a second place a device can be left in a state nothing puts back.
+    // `zgui-drm` issues every DRM ioctl. `zgui-evdev` issues every input one, including the
+    // `EVIOCGRAB` that keeps a keystroke away from the shell behind the console — a second crate
+    // issuing that is a second place a keyboard can be left grabbed with nothing to release it.
+    // `zgui-platform-drm` issues no ioctl of its own outside its tests. It is on the row for the
+    // eventfd its wake channel is, the `poll` its frame loop parks in, the monotonic clock an
+    // input report is stamped against, and the `fstat` its tests read an exported descriptor with.
+    ("rustix", &["zgui-drm", "zgui-platform-drm", "zgui-evdev"]),
+    // Both uapi crates read vendored kernel headers at build time. An ioctl request number is
+    // computed from `size_of`, so a struct transcribed at the wrong width changes a number rather
+    // than failing to compile, and no test would find it.
+    ("bindgen", &["zgui-drm", "zgui-evdev"]),
+    // Resolving symbols out of a shared object at run time. The rule is one crate per library
+    // opened. A `dlopen` appears in no manifest, in no lock file and on no link line, so what a
+    // build needs and what a run needs stop being the same list, and the crate that opens the
+    // object is the only record left. Each library opened this way therefore has exactly one place
+    // that names its soname and one place that states what a run needs, and a second crate reaching
+    // into a library another crate already opened is a second such place for one dependency.
+    // Three libraries are opened this way. `zgui-xkb` opens libxkbcommon, because a console session
+    // has to start where neither the library nor its data files exist. `zgui-seat` opens libseat,
+    // because it has to start where no session daemon answers. `zgui-libinput` opens libinput,
+    // because it has to start where that library is absent and read the devices itself.
+    ("libloading", &["zgui-xkb", "zgui-seat", "zgui-libinput"]),
     (
         "accesskit",
         &[
@@ -87,10 +122,11 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-text",
             "zgui-text-parley",
             "zgui-dom",
-            // A surface publishes accessibility updates, so every backend of the platform
-            // contract names the same tree type the contract's own method takes.
+            // Every backend of the platform contract names the tree type the contract's own
+            // method takes, whatever it does with one.
             "zgui-platform-headless",
             "zgui-platform-winit",
+            "zgui-platform-drm",
         ],
     ),
     // `zgui-elements` is on the kurbo row because `<vector>`'s outlines are Béziers and there is

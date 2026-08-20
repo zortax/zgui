@@ -46,13 +46,24 @@ zgui-view = { path = "../zgui-view", version = "0.1.0" }
 zgui-view-macro = { path = "../zgui-view-macro", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# The console backend, off unless an application asks for it. Target-gated as well as optional: the
+# kernel's display interface exists on Linux and nowhere else, so a macOS build of an application
+# that names the feature still resolves rather than failing on a dependency it cannot have.
+[target.'cfg(target_os = "linux")'.dependencies]
+zgui-platform-drm = { path = "../zgui-platform-drm", version = "0.1.0", optional = true }
+# What the console renderer says when a frame did not reach a display — a readback that answered
+# nothing, a buffer the display would not give up, a driver that refused the flip — and what it
+# says when it settles on copying every frame through the processor. Optional beside the backend,
+# because `app/console.rs` is the only module here that reports anything this way.
+tracing = { workspace = true, optional = true }
+
 [dev-dependencies]
 # Driving the same application over buffers, which is how the wiring above is asserted on with no
 # display server and no graphics device.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 # The stage marks a profiling run reads back. The counters have to be compiled in, or every budget
-# stays green while measuring nothing — which is why this names the feature rather than relying on
-# whatever another crate happened to turn on.
+# stays green while measuring nothing, so this names the feature rather than relying on whatever
+# another crate happened to turn on.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 
 [features]
@@ -63,9 +74,17 @@ instrument = ["zgui-view/instrument"]
 
 # Routes background work to a tokio runtime, and polls the frame's tasks inside it so a UI task
 # may await a tokio timer or a socket directly. Off by default: without it the framework still
-# runs background work, on a small pool of its own with no reactor, which is what most programs
-# want. Turning it on links tokio.
+# runs background work, on a small pool of its own with no reactor, which suits most programs.
+# Turning it on links tokio.
 tokio = ["dep:zgui-tokio"]
+
+# Runs an application on a Linux console with no display server: the kernel's display interface,
+# a mode on every display that is plugged in, and a page flip per frame. Off by default, because it
+# links a second platform backend and every program that wants a window wants the other one.
+#
+# It adds `App::run_drm`, and that is the only entry point: the loop and the renderer factory it
+# needs are correct together and useless apart.
+drm = ["dep:zgui-platform-drm", "dep:tracing"]
 
 # Compiles the wall-clock budget target. Off by default so that an ordinary unoptimised test run
 # cannot execute a budget and report an unoptimised number as a regression; the gate switches it on

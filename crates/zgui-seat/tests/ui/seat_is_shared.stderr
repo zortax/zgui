@@ -1,0 +1,74 @@
+error[E0277]: `NonNull<library::Libseat>` cannot be shared between threads safely
+ --> tests/ui/seat_is_shared.rs:9:12
+  |
+9 |     shared(&seat);
+  |     ------ ^^^^^ `NonNull<library::Libseat>` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `zgui_seat::Seat`, the trait `Sync` is not implemented for `NonNull<library::Libseat>`
+note: required because it appears within the type `seat::Held`
+ --> src/seat.rs
+  |
+  | struct Held {
+  |        ^^^^
+note: required because it appears within the type `zgui_seat::Seat`
+ --> src/seat.rs
+  |
+  | pub struct Seat {
+  |            ^^^^
+note: required by a bound in `shared`
+ --> tests/ui/seat_is_shared.rs:5:14
+  |
+5 | fn shared<T: Sync>(_: &T) {}
+  |              ^^^^ required by this bound in `shared`
+
+error[E0277]: `NonNull<seat::listener::Shared>` cannot be shared between threads safely
+ --> tests/ui/seat_is_shared.rs:9:12
+  |
+9 |     shared(&seat);
+  |     ------ ^^^^^ `NonNull<seat::listener::Shared>` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `zgui_seat::Seat`, the trait `Sync` is not implemented for `NonNull<seat::listener::Shared>`
+note: required because it appears within the type `seat::Held`
+ --> src/seat.rs
+  |
+  | struct Held {
+  |        ^^^^
+note: required because it appears within the type `zgui_seat::Seat`
+ --> src/seat.rs
+  |
+  | pub struct Seat {
+  |            ^^^^
+note: required by a bound in `shared`
+ --> tests/ui/seat_is_shared.rs:5:14
+  |
+5 | fn shared<T: Sync>(_: &T) {}
+  |              ^^^^ required by this bound in `shared`
+
+error[E0277]: `*const ()` cannot be shared between threads safely
+ --> tests/ui/seat_is_shared.rs:9:12
+  |
+9 |     shared(&seat);
+  |     ------ ^^^^^ `*const ()` cannot be shared between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `zgui_seat::Seat`, the trait `Sync` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `zgui_seat::Seat`
+ --> src/seat.rs
+  |
+  | pub struct Seat {
+  |            ^^^^
+note: required by a bound in `shared`
+ --> tests/ui/seat_is_shared.rs:5:14
+  |
+5 | fn shared<T: Sync>(_: &T) {}
+  |              ^^^^ required by this bound in `shared`

@@ -1,0 +1,13 @@
+[package]
+name = "zgui-render-wgpu"
+version = "0.1.0"
+edition = "2024"
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+
+# PLANTED VIOLATION: a build script reaches a consumer's graph, so an upward edge in this table
+# inverts the tree as far as one in `[dependencies]` does.
+[build-dependencies]
+zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
