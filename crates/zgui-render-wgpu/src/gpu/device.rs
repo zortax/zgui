@@ -299,8 +299,23 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
     let downlevel = adapter.get_downlevel_capabilities();
     let features = device.features();
     let limits = device.limits();
+    let subpixel_text = features.contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+    // Said once, because it decides what every glyph small enough for the atlas looks like and
+    // there is otherwise no way to tell from outside which of the two a device settled on. Text
+    // above the atlas threshold is filled as outlines and is grayscale whatever this says, so a
+    // page carrying both sizes shows both answers at once.
+    tracing::info!(
+        target: "zgui::render",
+        "text small enough to be cached is drawn {}",
+        if subpixel_text {
+            "with one coverage value per display subpixel, which assumes the display's stripes run \
+             horizontally red, green, blue"
+        } else {
+            "with one coverage value per pixel"
+        }
+    );
     RenderCapabilities {
-        subpixel_text: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+        subpixel_text,
         vector_compute: downlevel
             .flags
             .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
