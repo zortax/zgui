@@ -275,10 +275,14 @@ impl Router {
     ///
     /// Panics if the document is poisoned by an earlier batch that unwound.
     pub fn rehit(&mut self, world: &World<'_>) -> Moved {
-        let Some((_, point)) = self.pointers.all().next() else {
+        let Some((pointer, point)) = self.pointers.all().next() else {
             return Moved::default();
         };
-        let chain = world.chain_at(point);
+        // Through the capture, exactly as an event of its own would be. A captured pointer hovers
+        // the element holding it and nothing below: a re-test that read the raw chain would light
+        // up whatever the pointer happens to be over, and the next real move would put it out
+        // again — which is a highlight that blinks once per frame for as long as the drag lasts.
+        let chain = self.aimed(world, pointer, world.chain_at(point));
         self.interaction
             .hover
             .move_to(world.document, world.filter, &chain)
@@ -350,10 +354,20 @@ impl Router {
             event,
             world.scale,
         ));
-        match self.capture.of(event.id) {
-            // The capture holds even when the pointer is somewhere else entirely, which is the
-            // whole point of it: a slider being dragged keeps receiving the pointer after it has
-            // left the slider.
+        self.aimed(world, event.id, under)
+    }
+
+    /// `under` as the pointer holding it sees it: cut at the capturing element, when one holds it.
+    ///
+    /// The capture holds even when the pointer is somewhere else entirely, which is the whole point
+    /// of it: a slider being dragged keeps receiving the pointer after it has left the slider.
+    fn aimed(
+        &self,
+        world: &World<'_>,
+        pointer: zgui_vocab::PointerId,
+        under: HitChain,
+    ) -> HitChain {
+        match self.capture.of(pointer) {
             Some(node) => match under.truncated_at(node) {
                 held if !held.is_empty() => held,
                 _ => HitChain::to_root(world.document.store(), node),

@@ -15,7 +15,7 @@ mod window;
 
 pub use crate::virtualize::list::{VirtualList, VirtualListProps};
 pub use crate::virtualize::style::VirtualListStyle;
-pub use crate::virtualize::window::{VirtualWindow, window};
+pub use crate::virtualize::window::{MAX_EXTENT, VirtualWindow, window};
 
 use zgui::prelude::*;
 use zgui::reactive::LocalStorage;

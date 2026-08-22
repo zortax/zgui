@@ -695,15 +695,17 @@ impl Window {
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
             scale: self.scale,
-            viewport: self.extent.map_or_else(
-                || zgui_geom::Size::new(0, 0),
-                |extent| {
-                    zgui_geom::Size::new(
-                        extent.width.0.round().max(0.0) as i32,
-                        extent.height.0.round().max(0.0) as i32,
-                    )
-                },
-            ),
+            // From the surface, and never from the last configure. A window that opens at the
+            // size it asked for is never resized, so on a backend that reports an extent only when
+            // one moves there is no extent at all — and an embed measured against nothing is one
+            // that is never visible and therefore never attached.
+            viewport: {
+                let surface = self.surface.size();
+                zgui_geom::Size::new(
+                    surface.width.0.round().max(0.0) as i32,
+                    surface.height.0.round().max(0.0) as i32,
+                )
+            },
             occluded: self.occluded,
             timestamp,
             waker: &self.waker,

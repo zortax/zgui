@@ -129,3 +129,65 @@ fn a_frame_that_moves_a_box_out_from_under_a_stationary_pointer_rewrites_the_hov
             .contains(UiState::HOVER)
     );
 }
+
+#[test]
+fn a_re_test_under_a_captured_pointer_hovers_the_element_holding_it() {
+    // The defect this covers: `rehit` read the raw chain while an event of its own read the chain
+    // cut at the capture. A drag over a list then hovered the row under the pointer on every frame
+    // whose geometry moved and un-hovered it on every pointer move, so the highlight blinked for as
+    // long as the drag lasted. Anything the drag draws that follows the pointer moves geometry
+    // every frame, which is what makes the two alternate.
+    let mut session = Session::new(slider());
+    let thumb = session.fixture.key("control");
+    let elsewhere = session.fixture.key("box");
+    let over_the_box = session.fixture.centre_of("box");
+
+    session.pointer_at(over_the_box, PointerAction::Moved);
+    assert_eq!(
+        session.router.interaction().hover.target(),
+        Some(elsewhere),
+        "with no capture the pointer hovers what it is over"
+    );
+
+    // The thumb takes the pointer while it is somewhere else entirely, which is what a drag that
+    // has left its source looks like.
+    session.router.capture_mut().set(PointerId::MOUSE, thumb);
+    session.pointer_at(over_the_box, PointerAction::Moved);
+    assert_eq!(
+        session.router.interaction().hover.target(),
+        Some(thumb),
+        "a captured pointer hovers the element holding it"
+    );
+
+    let moved = {
+        let filter = session.fixture.filter();
+        let world = session.fixture.world(&filter);
+        session.router.rehit(&world)
+    };
+    assert!(
+        moved.is_empty(),
+        "the re-test agreed with the event, so it wrote nothing"
+    );
+    assert_eq!(
+        session.router.interaction().hover.target(),
+        Some(thumb),
+        "and did not hand the hover back to what the pointer is merely over"
+    );
+
+    let index = session
+        .fixture
+        .document
+        .store()
+        .index_of(elsewhere)
+        .expect("a live element");
+    assert!(
+        !session
+            .fixture
+            .document
+            .store()
+            .core(index)
+            .ui_state()
+            .contains(UiState::HOVER),
+        "the element under the pointer is not lit while another holds the pointer"
+    );
+}

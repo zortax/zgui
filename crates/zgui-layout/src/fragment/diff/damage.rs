@@ -84,7 +84,13 @@ pub fn pixels(rect: Rect<DevicePx, Device>) -> Rect<i32, Device> {
     let top = rect.top().0.floor() as i32;
     let right = rect.right().0.ceil() as i32;
     let bottom = rect.bottom().0.ceil() as i32;
-    Rect::new(Point::new(left, top), Size::new(right - left, bottom - top))
+    // Saturating, because a float past the range of an `i32` lands on the ends of it and the
+    // difference between the two ends is wider than an `i32` holds. A rectangle that large is
+    // already larger than any display, so the widest one that can be said is the right answer.
+    Rect::new(
+        Point::new(left, top),
+        Size::new(right.saturating_sub(left), bottom.saturating_sub(top)),
+    )
 }
 
 #[cfg(test)]
@@ -92,6 +98,20 @@ mod tests {
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 
     use super::{overlaps, pairwise_disjoint, pixels};
+
+    #[test]
+    fn a_rectangle_far_past_what_a_pixel_count_holds_is_the_widest_one_that_fits() {
+        // A virtual list over a very long document asks for a box millions of pixels tall. The
+        // conversion lands on the ends of the range, and the difference between the two ends is
+        // wider than the range itself.
+        let rect: Rect<DevicePx, Device> = Rect::new(
+            Point::new(DevicePx(-4.0e9), DevicePx(-4.0e9)),
+            Size::new(DevicePx(8.0e9), DevicePx(8.0e9)),
+        );
+        let damaged = pixels(rect);
+        assert_eq!(damaged.size.width, i32::MAX);
+        assert_eq!(damaged.size.height, i32::MAX);
+    }
 
     #[test]
     fn a_rectangle_covering_part_of_a_pixel_damages_all_of_it() {

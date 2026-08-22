@@ -24,10 +24,19 @@
 /// assert_eq!(seen.total(), 200_000.0, "the container still measures the whole list");
 /// ```
 ///
+/// # A list longer than a container can be
+///
+/// The extent is capped at [`MAX_EXTENT`]. Past that the container is made exactly that tall and
+/// the scroll position maps onto the rows rather than mirroring them, so a scrollbar drag moves by
+/// many rows at once. Everything else — the keys, the built window, the row heights — is unchanged,
+/// and [`VirtualWindow::offset_of`] is where a row sits either way.
+///
 /// [`lead`]: VirtualWindow::lead
 /// [`trail`]: VirtualWindow::trail
 #[derive(Copy, Clone, PartialEq, Debug, Default)]
 pub struct VirtualWindow {
+    /// How many rows the list has, built and unbuilt alike.
+    pub rows: usize,
     /// The index of the first row that is built.
     pub first: usize,
     /// How many rows are built, counting from [`VirtualWindow::first`].
@@ -69,12 +78,47 @@ impl VirtualWindow {
     /// The height of the whole list, built and unbuilt alike, in CSS pixels.
     ///
     /// The two spacers plus the rows between them, which is what makes the scrollbar the same size
-    /// it would be if every row existed.
+    /// it would be if every row existed — or [`MAX_EXTENT`] for a list too long to say.
     #[must_use]
     pub fn total(&self) -> f32 {
         self.lead + self.count as f32 * self.row_size + self.trail
     }
+
+    /// Whether the container stands for more rows than its height can hold one by one.
+    ///
+    /// A compressed list scrolls in jumps: one pixel of the bar is many rows. What a view asks
+    /// before telling somebody the bar is exact.
+    #[must_use]
+    pub fn is_compressed(&self) -> bool {
+        f64::from(self.row_size) * self.rows as f64 > f64::from(MAX_EXTENT)
+    }
+
+    /// Where row `index` sits in the container, in CSS pixels.
+    ///
+    /// `index * row_size` for an ordinary list, and where the row falls in the compressed extent
+    /// for one too long for that. What anything scrolling a row into view asks, because a position
+    /// worked out from the row height alone is off by the whole compression.
+    #[must_use]
+    pub fn offset_of(&self, index: usize) -> f32 {
+        if !self.is_compressed() {
+            return index as f32 * self.row_size;
+        }
+        let last = self.rows.saturating_sub(1);
+        if last == 0 {
+            return 0.0;
+        }
+        let fraction = (index.min(last) as f64) / last as f64;
+        (fraction * f64::from(MAX_EXTENT)) as f32
+    }
 }
+
+/// The tallest a virtualised container is ever made, in CSS pixels.
+///
+/// Past about sixteen million a single-precision pixel can no longer tell one integer from the
+/// next, and a damage rectangle is counted in `i32` device pixels. A container measured in billions
+/// — which a multi-gigabyte file read sixteen bytes to the row asks for — lays out wrong and paints
+/// nothing. Four million is far inside both, and still longer than any bar somebody drags.
+pub const MAX_EXTENT: f32 = 4_000_000.0;
 
 /// The rows worth building for a list of `rows` rows, each `row_size` CSS pixels tall.
 ///
@@ -121,6 +165,7 @@ pub fn window(
         // it gives the container something to measure so that the next frame knows better.
         let count = (1 + overscan).min(rows);
         return VirtualWindow {
+            rows,
             first: 0,
             count,
             lead: 0.0,
@@ -143,6 +188,37 @@ pub fn window(
     // Rounded up, plus one: a port 400px tall showing 20px rows meets twenty-one rows whenever it
     // is scrolled to anything but an exact multiple of the row height.
     let visible = ((viewport / row_size).ceil() as usize).max(1) + 1;
+
+    // A list whose own height is more than a container can be. The offset then names a fraction of
+    // the list rather than a number of rows, and the two spacers add up to the capped extent.
+    let full = rows as f64 * f64::from(row_size);
+    if full > f64::from(MAX_EXTENT) {
+        let extent = f64::from(MAX_EXTENT);
+        let fraction = (f64::from(offset) / extent).clamp(0.0, 1.0);
+        let anchor = ((fraction * (rows - 1) as f64) as usize).min(rows - 1);
+
+        let first = anchor.saturating_sub(overscan);
+        let end = anchor
+            .saturating_add(visible)
+            .saturating_add(overscan)
+            .min(rows);
+        let count = end - first;
+
+        // The built rows sit under the port: the anchor is `overscan` rows into them, and the port
+        // begins at the offset.
+        let body = count as f64 * f64::from(row_size);
+        let room = (extent - body).max(0.0);
+        let lead = (f64::from(offset) - overscan as f64 * f64::from(row_size)).clamp(0.0, room);
+        return VirtualWindow {
+            rows,
+            first,
+            count,
+            lead: lead as f32,
+            trail: (extent - body - lead).max(0.0) as f32,
+            row_size,
+        };
+    }
+
     let anchor = (offset / row_size).floor().max(0.0);
     let anchor = if anchor >= rows as f32 {
         rows - 1
@@ -158,6 +234,7 @@ pub fn window(
     let count = end - first;
 
     VirtualWindow {
+        rows,
         first,
         count,
         lead: first as f32 * row_size,
@@ -239,6 +316,73 @@ mod tests {
         let past = window(10, 20.0, 400.0, 1_000_000.0, 2);
         assert!(past.end() <= 10);
         assert!(past.count > 0);
+    }
+
+    /// Three point two gigabytes of hex, sixteen bytes to a row: what broke before the cap.
+    const HUGE: usize = 3_221_225_472 / 16;
+
+    #[test]
+    fn a_list_longer_than_a_container_can_be_is_capped() {
+        let seen = window(HUGE, 22.0, 700.0, 0.0, 6);
+        assert!(seen.is_compressed());
+        assert!(
+            seen.total() <= super::MAX_EXTENT + 1.0,
+            "the container measured {}",
+            seen.total()
+        );
+        assert!(
+            seen.count < 100,
+            "and it still builds a handful: {}",
+            seen.count
+        );
+    }
+
+    #[test]
+    fn a_compressed_list_reaches_its_last_row() {
+        // The whole point: the end of a very long list has to be somewhere the bar can go.
+        let seen = window(HUGE, 22.0, 700.0, super::MAX_EXTENT, 6);
+        assert!(seen.contains(HUGE - 1), "the last row is not built");
+        assert_eq!(seen.end(), HUGE);
+    }
+
+    #[test]
+    fn a_compressed_window_walks_the_whole_list_in_order() {
+        let mut last = 0;
+        for step in 0..=100 {
+            let offset = super::MAX_EXTENT * step as f32 / 100.0;
+            let seen = window(HUGE, 22.0, 700.0, offset, 6);
+            assert!(seen.first >= last, "the window went backwards");
+            assert!(seen.total() <= super::MAX_EXTENT + 1.0);
+            assert!(seen.count > 0);
+            last = seen.first;
+        }
+        assert!(last > HUGE - 100, "the walk never reached the end: {last}");
+    }
+
+    #[test]
+    fn where_a_row_sits_is_the_row_height_until_it_cannot_be() {
+        // An ordinary list is exact, which is what a caret scrolled into view depends on.
+        let ordinary = window(10_000, 20.0, 400.0, 0.0, 2);
+        assert!(!ordinary.is_compressed());
+        assert_eq!(ordinary.offset_of(500), 10_000.0);
+
+        // A compressed one answers where the row falls in the extent instead, and the two ends
+        // are the two ends.
+        let huge = window(HUGE, 22.0, 700.0, 0.0, 6);
+        assert_eq!(huge.offset_of(0), 0.0);
+        assert!((huge.offset_of(HUGE - 1) - super::MAX_EXTENT).abs() < 1.0);
+        assert!(huge.offset_of(HUGE / 2) > 0.0);
+    }
+
+    #[test]
+    fn a_list_just_under_the_cap_is_not_compressed() {
+        // The boundary is where the two branches meet, and the ordinary one must keep its exact
+        // arithmetic right up to it.
+        let rows = (super::MAX_EXTENT / 20.0) as usize;
+        let under = window(rows, 20.0, 400.0, 0.0, 2);
+        assert!(!under.is_compressed());
+        assert!((under.total() - super::MAX_EXTENT).abs() < 1.0);
+        assert_eq!(under.offset_of(7), 140.0, "still exact");
     }
 
     #[test]
