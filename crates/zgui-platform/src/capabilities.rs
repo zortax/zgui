@@ -22,6 +22,12 @@ pub struct PlatformCapabilities {
     /// throughout; this flag exists so a backend that *can* do better opts in without any
     /// component changing.
     pub native_popup_surfaces: bool,
+    /// Whether a surface can be a part of the desktop shell rather than a window.
+    ///
+    /// A wallpaper, a dock, a panel and a lock screen are all the same kind of surface and no
+    /// desktop offers them by default. A program built around one checks this and says why it
+    /// cannot run, rather than opening an ordinary window where a panel was meant.
+    pub layer_surfaces: bool,
     /// Whether a drag can be started from this application towards another one.
     ///
     /// A draggable control written against "dragging works" is written against something several
@@ -75,6 +81,7 @@ impl PlatformCapabilities {
     pub fn none() -> Self {
         Self {
             native_popup_surfaces: false,
+            layer_surfaces: false,
             drag_source: false,
             drop_mime_types: Vec::new(),
             clipboard_formats: vec![ClipboardFormat::Text],
@@ -126,6 +133,7 @@ mod tests {
     fn the_starting_point_claims_nothing_but_plain_text() {
         let capabilities = PlatformCapabilities::none();
         assert!(!capabilities.native_popup_surfaces);
+        assert!(!capabilities.layer_surfaces);
         assert!(!capabilities.drag_source);
         assert!(!capabilities.accepts_drops());
         assert!(!capabilities.ime);

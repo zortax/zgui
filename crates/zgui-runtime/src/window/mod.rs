@@ -990,6 +990,17 @@ impl Window {
     /// changes, because a fast display silently paced at sixty is indistinguishable from a fast
     /// display that is simply slow, and there is nothing else that would ever say which.
     pub fn refresh_interval(&self) -> std::time::Duration {
+        // What the platform measured, where it measures: an interval taken from the presentation
+        // of this surface's own frames is the output it is actually on, restated every frame,
+        // where a rate is whatever the surface was last told about.
+        if let Some(measured) = self
+            .surface
+            .presentation_timing()
+            .and_then(|timing| timing.interval)
+            .filter(|interval| !interval.is_zero())
+        {
+            return measured;
+        }
         let rate = self.surface.refresh_rate_millihertz();
         if self.reported_rate.replace(Some(rate)) != Some(rate) {
             match rate {

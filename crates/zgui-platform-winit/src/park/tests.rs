@@ -19,7 +19,7 @@ use zgui_platform::{
 };
 
 use crate::park::model::{Cause, Model, Reading};
-use crate::park::policy::Parked;
+use zgui_platform::Parked;
 
 /// One tick of a sixty-hertz display, near enough for a model whose clock a test moves.
 const TICK: Duration = Duration::from_millis(16);

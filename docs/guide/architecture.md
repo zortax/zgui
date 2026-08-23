@@ -37,7 +37,8 @@ set, and the renderer keeps pixels outside that set.
   the renderer                      zgui-render (contract), zgui-render-wgpu (+ vector rasteriser)
             │
             ▼
-  a surface                         zgui-platform (contract), zgui-platform-winit / -headless
+  a surface                         zgui-platform (contract), zgui-platform-wayland /
+                                    -winit / -headless
 ```
 
 The arrows are one-way. A stage never reaches back up: layout does not mutate the document, paint
@@ -87,7 +88,7 @@ mechanically.
 |---|---|---|
 | L0 foundation | `zgui-geom`, `zgui-color`, `zgui-arena`, `zgui-interned`, `zgui-bits`, `zgui-profile` | Coordinate spaces, colour, storage whose addresses hold still, interned names, invalidation bits, counters. No policy. |
 | L1 contracts | `zgui-vocab`, `zgui-css`, `zgui-scene`, `zgui-render`, `zgui-atlas`, `zgui-platform`, `zgui-reactive` | The traits and value types the rest of the tree agrees on. Nothing here implements anything replaceable. |
-| L2 backends | `zgui-render-wgpu`, `zgui-render-vector-vello`, `zgui-render-vector-coverage`, `zgui-platform-winit`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
+| L2 backends | `zgui-render-wgpu`, `zgui-render-vector-vello`, `zgui-render-vector-coverage`, `zgui-platform-wayland`, `zgui-platform-winit`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
 | L3 document | `zgui-dom` | One arena of nodes, safe to read from many threads while the cascade runs over it. |
 | L4 engines | `zgui-style`, `zgui-layout`, `zgui-text`, `zgui-text-style`, `zgui-text-parley`, `zgui-paint`, `zgui-svg` | The stages that turn a document into a display list. |
 | L5 systems | `zgui-input`, `zgui-scroll`, `zgui-a11y`, `zgui-anim`, `zgui-edit` | Behaviour over a laid-out document: hit testing and dispatch, scrolling, the accessibility projection, transitions and animations, text editing. |

@@ -27,6 +27,10 @@ pub type Driver = fn(Box<dyn AppHandler>) -> Result<(), PlatformError>;
 
 /// The driver [`App::run`] uses: this machine's own desktop.
 ///
+/// On a Wayland session that is the backend that speaks to the compositor directly; everywhere
+/// else — macOS, Windows, an X11 session — it is the portable one. `ZGUI_PLATFORM=winit` forces
+/// the portable backend on a Wayland session, and `ZGUI_PLATFORM=wayland` asks for the other.
+///
 /// [`App::run_on`] takes a driver so that an application can be run somewhere other than a screen,
 /// and the other reason to name one is to sit *between* the desktop and the application without
 /// giving up either: a handler that wraps this one sees every event the window produces, and can
@@ -44,7 +48,42 @@ pub type Driver = fn(Box<dyn AppHandler>) -> Result<(), PlatformError>;
 /// # }
 /// ```
 pub fn desktop() -> Driver {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    if wayland_wanted() {
+        return zgui_platform_wayland::run;
+    }
     zgui_platform_winit::run
+}
+
+/// Whether this program should speak to a compositor directly.
+///
+/// Two questions, in this order. `ZGUI_PLATFORM` settles it outright when it is set, which is what
+/// a bug report needs: the same binary, one variable, both backends. Otherwise the answer is
+/// whether there is a Wayland display at all — an X11 session, a remote session and a machine with
+/// no desktop each answer no and each takes the portable backend.
+///
+/// Asked before either backend is started, so nothing is opened twice and nothing has to be undone.
+/// If the connection then fails anyway, [`run`](zgui_platform_wayland::run) says so and the caller
+/// is free to fall back; the driver this returns does not, because a driver that silently ran
+/// somewhere other than where it said would be worse than one that reported the failure.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn wayland_wanted() -> bool {
+    match std::env::var("ZGUI_PLATFORM") {
+        Ok(named) => named.trim().eq_ignore_ascii_case("wayland"),
+        Err(_) => zgui_platform_wayland::conn::is_available(),
+    }
 }
 
 /// An application, before it runs. The same as [`App::new`], under a name a component cannot take.
@@ -361,7 +400,7 @@ impl App {
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
-        self.run_on(zgui_platform_winit::run, view)
+        self.run_on(desktop(), view)
     }
 
     /// The same, over a platform backend of the caller's choosing.

@@ -22,7 +22,7 @@ use zgui_platform::{
 };
 
 use crate::park::model::{Cause, Model, Reading};
-use crate::park::policy::Parked;
+use zgui_platform::Parked;
 
 /// How many turns the soak takes.
 ///

@@ -261,7 +261,7 @@ impl Renderer for WgpuRenderer {
                 elapsed_ms = self.acquire_block.as_millis() as u64,
                 width = self.target.size.width,
                 height = self.target.size.height,
-                present_mode = ?crate::gpu::surface::PRESENT_MODE,
+                present_mode = ?self.presentation.present_mode(),
                 frame_latency = crate::gpu::surface::FRAME_LATENCY,
                 acquisition = presented.acquisition.name(),
                 "surface operation blocked the event-loop thread"

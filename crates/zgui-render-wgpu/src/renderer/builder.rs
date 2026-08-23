@@ -7,7 +7,7 @@ use zgui_render::{GpuUnavailable, RenderTarget};
 
 use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
-use crate::gpu::surface::ConfiguredSurface;
+use crate::gpu::surface::{ConfiguredSurface, PresentPacing, SurfaceSetup};
 use crate::renderer::shared::DeviceState;
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
 use crate::target::swapchain::{Offscreen, Presentation};
@@ -26,6 +26,8 @@ pub struct Builder {
     backends: wgpu::Backends,
     /// What to run between submitting a frame and presenting it.
     pre_present: Option<PrePresent>,
+    /// Who waits for the display.
+    present_pacing: PresentPacing,
 }
 
 impl Default for Builder {
@@ -53,7 +55,18 @@ impl Builder {
             }),
             backends,
             pre_present: None,
+            present_pacing: PresentPacing::Display,
         }
+    }
+
+    /// Configures presentation for `pacing` rather than for the display.
+    ///
+    /// A window integration that paces frames against its own compositor timing asks for
+    /// [`PresentPacing::Platform`] here, and must then actually pace them: nothing below this line
+    /// will wait for the display on its behalf.
+    pub fn with_present_pacing(mut self, pacing: PresentPacing) -> Self {
+        self.present_pacing = pacing;
+        self
     }
 
     /// The instance, so that whatever owns a native window can create a surface from it.
@@ -116,6 +129,11 @@ impl Builder {
         surface: wgpu::Surface<'static>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
         let mut surface = Some(surface);
+        let setup = SurfaceSetup {
+            size: extent(target),
+            opaque: target.opaque,
+            pacing: self.present_pacing,
+        };
         self.open(target, Origin::Surface, move |gpu| {
             let surface = surface
                 .take()
@@ -127,10 +145,7 @@ impl Builder {
                 return Err("the surface is not compatible with this adapter".to_owned());
             }
             Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-                gpu,
-                surface,
-                extent(target),
-                target.opaque,
+                gpu, surface, setup,
             ))))
         })
     }

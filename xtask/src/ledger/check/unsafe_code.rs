@@ -34,6 +34,10 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "zgui-platform-winit",
         "the Wayland clipboard's unsafe constructor",
     ),
+    (
+        "zgui-platform-wayland",
+        "borrowing the compositor's display and surface pointers as window handles",
+    ),
 ];
 
 /// Runs the check.

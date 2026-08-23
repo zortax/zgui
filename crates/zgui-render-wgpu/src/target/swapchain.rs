@@ -48,6 +48,14 @@ impl Presentation {
         }
     }
 
+    /// The presentation mode a real surface holds; nothing offscreen has one.
+    pub fn present_mode(&self) -> Option<wgpu::PresentMode> {
+        match self {
+            Self::Surface(surface) => Some(surface.present_mode()),
+            Self::Offscreen(_) => None,
+        }
+    }
+
     /// Whether a frame may be recorded against this at all.
     pub fn is_configured(&self) -> bool {
         match self {

@@ -86,6 +86,31 @@ mod tests {
     }
 
     #[test]
+    fn every_kind_of_field_is_something_a_backend_can_be_told_about() {
+        // A backend maps each of these onto whatever its platform offers, and a kind nothing ever
+        // names is a keyboard nobody can ask for.
+        let kinds = [
+            TextInputPurpose::Normal,
+            TextInputPurpose::Password,
+            TextInputPurpose::Pin,
+            TextInputPurpose::Number,
+            TextInputPurpose::Phone,
+            TextInputPurpose::Url,
+            TextInputPurpose::Email,
+            TextInputPurpose::Search,
+        ];
+        for kind in kinds {
+            let state = TextInput::new(
+                Point::new(CssPx(0.0), CssPx(0.0)),
+                Size::new(CssPx(1.0), CssPx(16.0)),
+            )
+            .with_purpose(kind);
+            assert_eq!(state.purpose, kind);
+        }
+        assert_eq!(kinds.iter().filter(|kind| kind.is_secret()).count(), 2);
+    }
+
+    #[test]
     fn the_state_carries_the_caret_rather_than_the_field() {
         let state = TextInput::new(
             Point::new(CssPx(120.0), CssPx(48.0)),

@@ -63,6 +63,7 @@ pub use wgpu;
 pub use crate::bind::globals::SubpixelOrder;
 pub use crate::gpu::device::Gpu;
 pub use crate::gpu::formats::{Formats, SrgbTier};
+pub use crate::gpu::surface::PresentPacing;
 pub use crate::renderer::WgpuRenderer;
 pub use crate::renderer::builder::Builder;
 pub use crate::renderer::readback::Pixels;

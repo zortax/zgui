@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use zgui_platform::{AppHandler, Clock, IdlePolicy, SurfaceEvent};
 use zgui_platform_headless::Headless;
 
-use crate::park::policy::{Park, Parked};
+use zgui_platform::{Park, Parked};
 
 /// Which reading of the park a model is driving.
 ///

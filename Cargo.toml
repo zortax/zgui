@@ -76,6 +76,45 @@ winit = "0.30.13"
 accesskit = "0.24.1"
 accesskit_winit = "0.33.2"
 accesskit_consumer = "0.38.0"
+
+# --- platform: named only by zgui-platform-wayland ------------------------------------------
+# The compositor spoken to directly, on the one desktop where going through a portable windowing
+# library costs correctness rather than only control: frame pacing, real occlusion, layer surfaces
+# and pop-ups are each unreachable or wrong through winit there. See `docs/guide/architecture.md`.
+#
+# The toolkit is the part of a Wayland client that is the same in every Wayland client — the
+# registry, the seat, the keymap, the shells, the data devices — and writing it again would be
+# several thousand lines of protocol plumbing with the same shape and worse coverage. Its defaults
+# are both wanted: `calloop` is the loop this backend runs on, and `xkbcommon` is the keymap, which
+# is why it is not `default-features = false`. That feature links libxkbcommon at build time
+# through pkg-config, which is a build dependency this crate's targets already all have.
+smithay-client-toolkit = "0.20.0"
+# The protocol itself, for the parts the toolkit does not wrap: fractional scale, the viewport it
+# is applied through, and the text input.
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.13", features = [
+    "client",
+    "staging",
+    "unstable",
+] }
+# `client_system` is not optional here and not a preference: it routes through libwayland, and the
+# graphics API's own window-system integration takes the same `wl_display` this connection holds.
+# The pure-Rust backend would hand it a pointer into a different implementation of the protocol.
+wayland-backend = { version = "0.3.16", features = ["client_system"] }
+# The loop every source is registered on, and the adapter that owns the read/dispatch/flush cycle
+# for the Wayland socket. Getting that cycle wrong by hand is a client that sleeps holding unread
+# events, which is a freeze.
+calloop = "0.14.4"
+calloop-wayland-source = "0.4.1"
+# The compositor's own extensions, for the layer shell and — under test — for the virtual input
+# device that gives a headless session something to move.
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+# The monotonic clock the compositor stamps its presentation feedback in, so that a reported
+# presentation can be placed on the same timeline the frame loop schedules against.
+rustix = { version = "1.1", features = ["event", "time"] }
+# The accessibility adapter for this desktop. `accesskit_winit` wraps the same one; this backend
+# has no winit to wrap it with.
+accesskit_unix = "0.22.1"
 # `default-features = false` drops `wayland-data-control`, so the X11 arm is taken
 # unconditionally and the Wayland clipboard goes through smithay-clipboard instead.
 arboard = { version = "3.6", default-features = false }

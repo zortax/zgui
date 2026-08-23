@@ -34,7 +34,7 @@ use zgui_render::{GpuUnavailable, RenderTarget};
 
 use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
-use crate::gpu::surface::ConfiguredSurface;
+use crate::gpu::surface::{ConfiguredSurface, PresentPacing, SurfaceSetup};
 use crate::pipeline::Pipelines;
 use crate::renderer::builder::open_device;
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
@@ -145,15 +145,19 @@ impl SharedGraphics {
         &self,
         target: RenderTarget,
         surface: wgpu::Surface<'static>,
+        pacing: PresentPacing,
         pre_present: Option<PrePresent>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let extent = extent(target);
-        let opaque = target.opaque;
+        let setup = SurfaceSetup {
+            size: extent(target),
+            opaque: target.opaque,
+            pacing,
+        };
 
         // A device that has been lost is not a device to hand another window: the next frame on it
         // would do nothing but notice the loss again.
         if let Some(state) = self.usable_primary() {
-            match self.present_on(&state, surface, extent, opaque) {
+            match self.present_on(&state, surface, setup) {
                 Ok(presentation) => {
                     return Ok(self.assemble(
                         state,
@@ -164,7 +168,7 @@ impl SharedGraphics {
                     ));
                 }
                 Err(Rejected::Incompatible(surface)) => {
-                    return self.on_another_device(target, surface, pre_present);
+                    return self.on_another_device(target, surface, setup, pre_present);
                 }
                 Err(Rejected::Failed(reason)) => {
                     // The surface was consumed proving the adapter cannot use it, so there is
@@ -188,7 +192,7 @@ impl SharedGraphics {
                 return Err("the surface is not compatible with this adapter".to_owned());
             }
             Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-                gpu, surface, extent, opaque,
+                gpu, surface, setup,
             ))))
         })?;
         let state = DeviceState::new(gpu);
@@ -281,8 +285,7 @@ impl SharedGraphics {
         &self,
         state: &Rc<DeviceState>,
         surface: wgpu::Surface<'static>,
-        extent: Size<i32, Device>,
-        opaque: bool,
+        setup: SurfaceSetup,
     ) -> Result<Presentation, Rejected> {
         if surface
             .get_capabilities(state.gpu.adapter())
@@ -295,9 +298,8 @@ impl SharedGraphics {
             .gpu
             .device()
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        let presentation = Presentation::Surface(Box::new(ConfiguredSurface::new(
-            &state.gpu, surface, extent, opaque,
-        )));
+        let presentation =
+            Presentation::Surface(Box::new(ConfiguredSurface::new(&state.gpu, surface, setup)));
         match futures::executor::block_on(scope.pop()) {
             None => Ok(presentation),
             Some(error) => Err(Rejected::Failed(error.to_string())),
@@ -312,10 +314,9 @@ impl SharedGraphics {
         &self,
         target: RenderTarget,
         surface: wgpu::Surface<'static>,
+        setup: SurfaceSetup,
         pre_present: Option<PrePresent>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let extent = extent(target);
-        let opaque = target.opaque;
         let mut surface = Some(surface);
 
         self.0.fallbacks.borrow_mut().retain(|state| {
@@ -332,7 +333,7 @@ impl SharedGraphics {
             .collect();
         for state in known {
             let Some(offered) = surface.take() else { break };
-            match self.present_on(&state, offered, extent, opaque) {
+            match self.present_on(&state, offered, setup) {
                 Ok(presentation) => {
                     return Ok(self.assemble(
                         state,
@@ -364,7 +365,7 @@ impl SharedGraphics {
                 return Err("the surface is not compatible with this adapter".to_owned());
             }
             Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-                gpu, surface, extent, opaque,
+                gpu, surface, setup,
             ))))
         })?;
         let state = DeviceState::new(gpu);

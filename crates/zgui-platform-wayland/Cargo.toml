@@ -1,0 +1,83 @@
+[package]
+name = "zgui-platform-wayland"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# The Wayland backend: the compositor spoken to directly rather than through a portable windowing
+# library. It exists beside `zgui-platform-winit` rather than replacing it — winit keeps macOS,
+# Windows and X11 — because the four things this desktop needs are each unreachable through that
+# seam: frames paced against the compositor's own callbacks, a surface that says when it stops
+# being drawn, presentation that never blocks the thread reading input, and the shell protocols a
+# pop-up or a panel is made of.
+[dependencies]
+accesskit.workspace = true
+accesskit_unix.workspace = true
+calloop.workspace = true
+calloop-wayland-source.workspace = true
+raw-window-handle.workspace = true
+rustix.workspace = true
+smithay-client-toolkit.workspace = true
+tracing.workspace = true
+wayland-backend.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+# The settings portal, which is where this desktop keeps its light-or-dark preference.
+zbus.workspace = true
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
+
+[dev-dependencies]
+# The renderer whose surface handles this backend hands over, and the runtime driven across it.
+# Both are here so the seams this crate opens have a consumer inside the workspace.
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# A headless compositor has a seat with no devices on it, so a property about input has to supply
+# one. This is how: a virtual pointer, created by the test over a connection of its own.
+wayland-protocols-wlr.workspace = true
+zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
+zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-view = { path = "../zgui-view", version = "0.1.0" }
+
+# A process opens one connection and runs one loop on it, so each property asserted against a real
+# compositor is its own program and none of them runs under a test harness.
+[[test]]
+name = "frame_chain"
+path = "tests/frame_chain.rs"
+harness = false
+
+[[test]]
+name = "pointer_stream"
+path = "tests/pointer_stream.rs"
+harness = false
+
+[[test]]
+name = "occlusion"
+path = "tests/occlusion.rs"
+harness = false
+
+[[test]]
+name = "clipboard"
+path = "tests/clipboard.rs"
+harness = false
+
+[[test]]
+name = "wake_idle"
+path = "tests/wake_idle.rs"
+harness = false
+
+[[test]]
+name = "wake_signal"
+path = "tests/wake_signal.rs"
+harness = false
+
+[lints]
+workspace = true

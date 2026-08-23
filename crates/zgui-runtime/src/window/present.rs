@@ -10,6 +10,15 @@
 //! picture is shown changes; what changes is how old it is when it is shown, and how long the loop
 //! spends unable to answer a pointer.
 //!
+//! # A platform that paces its own frames is already answered
+//!
+//! The servo below converges on a hold by watching how long the acquisition made a frame wait. A
+//! backend that asks the display server when to draw and hands over a surface that never blocks
+//! makes that wait zero, so the servo converges on no hold at all — which is the right answer
+//! there and needs no special case. The schedule on such a platform is the display server's own
+//! signal, and a hold layered on top of it aims the frame past the moment the server wanted it,
+//! which costs a refresh rather than saving one.
+//!
 //! # The hold is a servo, not a schedule
 //!
 //! No phase is estimated and nothing is asked of the window system. The one observation is
@@ -185,6 +194,10 @@ impl PresentPace {
     ///
     /// `blocked` is how long that frame waited to be handed a surface to present into, `cost` how
     /// long the frame itself took once it was released, and `interval` one frame of the output.
+    ///
+    /// What the acquisition made the frame wait for is the phase arriving by another route, one
+    /// refresh interval's worth of quantisation at a time. A platform that paces its own frames
+    /// never makes a frame wait, so this converges on no hold and leaves the schedule to it.
     pub fn observed(&mut self, blocked: Duration, cost: Duration, interval: Duration) {
         self.until.set(None);
         // Held plus spent, because that is what the frame occupied of the interval. Measuring the
@@ -214,9 +227,7 @@ impl PresentPace {
         // gives the tail back what the average would otherwise spend, and it costs a steady window
         // nothing, because there the dearest frame *is* the usual one.
         let budget = budget(interval);
-        let ceiling = interval
-            .saturating_sub(budget)
-            .min(interval.saturating_sub(self.worst + budget));
+        let ceiling = self.ceiling(interval, budget);
         self.hold = if blocked > budget {
             (self.hold + (blocked - budget) / 2).min(ceiling)
         } else {
@@ -224,6 +235,25 @@ impl PresentPace {
                 .saturating_sub((budget - blocked) / 2)
                 .min(ceiling)
         };
+    }
+
+    /// The most of an interval that may be given away.
+    ///
+    /// Two ceilings, and the lower one wins.
+    ///
+    /// The first is the interval itself: a frame held past the moment its buffer could have been
+    /// handed over is not started late, it is started for the interval after the one it was asked
+    /// in — a dropped frame dressed up as a schedule.
+    ///
+    /// The second is what this window's own frames cost. A window whose frames vary — a row
+    /// mounting under a fling, an icon re-encoded, a resize — has a median that fits with most of
+    /// the interval to spare, and giving that spare time away leaves the dear frame nothing to run
+    /// in. Reserving the dearest recent frame costs a steady window nothing, because there the
+    /// dearest frame *is* the usual one.
+    fn ceiling(&self, interval: Duration, budget: Duration) -> Duration {
+        interval
+            .saturating_sub(budget)
+            .min(interval.saturating_sub(self.worst + budget))
     }
 
     /// How much a frame recently cost at its worst, decayed towards `cost`.

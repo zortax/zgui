@@ -19,11 +19,59 @@ pub(crate) fn human_visible_wait(elapsed: std::time::Duration) -> bool {
 /// the pixels answering it; fewer stalls the queue on every frame.
 pub const FRAME_LATENCY: u32 = 2;
 
-/// The presentation mode, pinned so the compositor paces the frame loop.
+/// Who waits for the display.
 ///
-/// The event loop never spins: it waits on platform events and timer deadlines, and this is what
-/// makes the compositor's own cadence the thing frames are paced against.
-pub const PRESENT_MODE: wgpu::PresentMode = wgpu::PresentMode::Fifo;
+/// [`PresentPacing::Display`] lets the graphics API do it, inside the acquisition, on whichever
+/// thread asked for the frame. That is right wherever nothing else knows when a frame is due, and
+/// it is what makes the display's own cadence the thing frames are paced against.
+///
+/// [`PresentPacing::Platform`] is for a window integration that paces frames itself. The wait then
+/// has to leave the acquisition entirely: on a compositor that throttles the swap chain on its own
+/// frame callbacks, a surface it stops drawing receives none, and an acquisition that waits for one
+/// blocks the thread that also reads input until the driver's timeout — a freeze rather than a
+/// dropped frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PresentPacing {
+    /// The graphics API waits for the display.
+    #[default]
+    Display,
+    /// The window integration paces frames, and the acquisition must not block.
+    Platform,
+}
+
+/// The presentation mode for `pacing`, from what this surface actually offers.
+///
+/// Waiting is `Fifo`, which every implementation has. Not waiting is `Mailbox` where it exists and
+/// `Immediate` where it does not: both hand a texture back without waiting for the display, and
+/// `Mailbox` is preferred because it drops the frames it supersedes instead of showing them. A
+/// surface offering neither falls back to `Fifo` and the integration's own pacing then sits on top
+/// of the driver's, which costs latency but cannot deadlock.
+pub fn present_mode(
+    pacing: PresentPacing,
+    capabilities: &wgpu::SurfaceCapabilities,
+) -> wgpu::PresentMode {
+    if pacing == PresentPacing::Display {
+        return wgpu::PresentMode::Fifo;
+    }
+    [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Immediate]
+        .into_iter()
+        .find(|mode| capabilities.present_modes.contains(mode))
+        .unwrap_or(wgpu::PresentMode::Fifo)
+}
+
+/// What a surface is, as the swap chain has to be configured for it.
+///
+/// The three travel together because they are decided together, by whoever owns the window, and
+/// are re-stated on every candidate adapter a surface is offered to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceSetup {
+    /// The extent to configure at, in device pixels.
+    pub size: Size<i32, Device>,
+    /// Whether the surface is opaque.
+    pub opaque: bool,
+    /// Who waits for the display.
+    pub pacing: PresentPacing,
+}
 
 /// A configured surface: the swap chain, the configuration it holds, and whether it is current.
 ///
@@ -61,23 +109,20 @@ impl ConfiguredSurface {
     /// is drawn into it. That cannot happen through the format choice itself, which is exactly why
     /// the assertion is worth making: it is the guard on everything that might later be added
     /// beside it.
-    pub fn new(
-        gpu: &Gpu,
-        surface: wgpu::Surface<'static>,
-        size: Size<i32, Device>,
-        opaque: bool,
-    ) -> Self {
+    pub fn new(gpu: &Gpu, surface: wgpu::Surface<'static>, setup: SurfaceSetup) -> Self {
         let capabilities = surface.get_capabilities(gpu.adapter());
+        let mode = present_mode(setup.pacing, &capabilities);
         tracing::info!(
             offered = ?capabilities.present_modes,
-            chosen = ?PRESENT_MODE,
+            chosen = ?mode,
+            pacing = ?setup.pacing,
             frame_latency = FRAME_LATENCY,
             "surface presentation modes"
         );
         let formats = crate::gpu::formats::choose(
             &capabilities.formats,
             &capabilities.alpha_modes,
-            opaque,
+            setup.opaque,
             gpu.capabilities().mutable_texture_formats,
         );
         formats.log(&gpu.describe());
@@ -89,9 +134,9 @@ impl ConfiguredSurface {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: formats.surface,
-            width: size.width.max(1) as u32,
-            height: size.height.max(1) as u32,
-            present_mode: PRESENT_MODE,
+            width: setup.size.width.max(1) as u32,
+            height: setup.size.height.max(1) as u32,
+            present_mode: mode,
             desired_maximum_frame_latency: FRAME_LATENCY,
             alpha_mode: formats.alpha_mode,
             view_formats: formats.view_formats(),
@@ -104,7 +149,7 @@ impl ConfiguredSurface {
             reconfigure_pending: false,
             pending: None,
         };
-        configured.resize(size);
+        configured.resize(setup.size);
         configured.apply(gpu);
         configured
     }
@@ -211,6 +256,11 @@ impl ConfiguredSurface {
     /// The formats this surface draws in.
     pub fn formats(&self) -> Formats {
         self.formats
+    }
+
+    /// The presentation mode the swap chain actually holds.
+    pub fn present_mode(&self) -> wgpu::PresentMode {
+        self.config.present_mode
     }
 
     /// The extent the surface is being presented at.

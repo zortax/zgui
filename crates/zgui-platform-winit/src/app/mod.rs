@@ -138,11 +138,15 @@ impl<A: AppHandler> WinitApp<A> {
     /// An indefinite park is a block, a deadline is a block with a limit, and not parking at all is
     /// a poll. Nothing else in this crate names a control flow, so there is one place where a park
     /// becomes a decision the platform acts on.
+    ///
+    /// A park this backend has not been taught blocks. Waiting too long shows up as one late frame;
+    /// polling by mistake burns a core for ever, which is the failure the whole module exists to
+    /// prevent.
     const fn control_flow(parked: Parked) -> ControlFlow {
         match parked {
-            Parked::Indefinitely => ControlFlow::Wait,
             Parked::Until(deadline) => ControlFlow::WaitUntil(deadline),
             Parked::Never => ControlFlow::Poll,
+            _ => ControlFlow::Wait,
         }
     }
 
@@ -329,7 +333,6 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         zgui_profile::latency::note(
             "wait.out",
             match parked {
-                Parked::Indefinitely => "block".to_owned(),
                 Parked::Until(deadline) => format!(
                     "until+{}us",
                     deadline
@@ -337,6 +340,7 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
                         .as_micros()
                 ),
                 Parked::Never => "poll".to_owned(),
+                _ => "block".to_owned(),
             },
         );
         zgui_profile::latency::flush();

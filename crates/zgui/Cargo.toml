@@ -80,3 +80,9 @@ required-features = ["wall-clock"]
 
 [lints]
 workspace = true
+
+# The compositor spoken to directly, where there is one to speak to. It is a second backend rather
+# than a replacement: `zgui-platform-winit` keeps macOS, Windows and X11, and this is chosen at
+# start-up by whether a Wayland display exists.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+zgui-platform-wayland = { path = "../zgui-platform-wayland", version = "0.1.0" }

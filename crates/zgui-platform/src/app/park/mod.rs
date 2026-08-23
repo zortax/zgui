@@ -1,9 +1,9 @@
 //! How the loop parks, and the two ways of getting that wrong.
 //!
-//! Everything about waiting lives here, and nothing about waiting lives anywhere else in this
-//! crate. That is deliberate: parking is decided by three lines of arithmetic whose failure modes
-//! are invisible from outside, so they are written once, in a type with no event loop behind it,
-//! and asserted against a model of the loop's own behaviour as well as against the loop.
+//! Everything about waiting lives here, and nothing about waiting lives in any backend. That is
+//! deliberate: parking is decided by three lines of arithmetic whose failure modes are invisible
+//! from outside, so they are written once, in a type with no event loop behind it, and every
+//! backend routes through the same one rather than re-deriving it.
 //!
 //! # The two failures
 //!
@@ -54,12 +54,5 @@
 mod install;
 mod policy;
 
-pub use crate::park::install::Install;
-pub use crate::park::policy::{Park, Parked};
-
-#[cfg(test)]
-mod model;
-#[cfg(test)]
-mod soak;
-#[cfg(test)]
-mod tests;
+pub use crate::app::park::install::Install;
+pub use crate::app::park::policy::{Park, Parked};

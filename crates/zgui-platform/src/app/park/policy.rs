@@ -2,9 +2,9 @@
 
 use std::time::Instant;
 
-use zgui_platform::IdlePolicy;
+use crate::app::idle::IdlePolicy;
 
-use crate::park::install::Install;
+use crate::app::park::install::Install;
 
 /// How the loop is parked right now.
 ///
@@ -59,8 +59,7 @@ impl Parked {
 ///
 /// ```
 /// use std::time::{Duration, Instant};
-/// use zgui_platform::IdlePolicy;
-/// use zgui_platform_winit::{Install, Park, Parked};
+/// use zgui_platform::{IdlePolicy, Install, Park, Parked};
 ///
 /// let mut park = Park::new();
 /// let now = Instant::now();
@@ -177,8 +176,8 @@ impl Park {
 #[cfg(test)]
 mod tests {
     use super::{Install, Park, Parked};
+    use crate::app::idle::IdlePolicy;
     use std::time::{Duration, Instant};
-    use zgui_platform::IdlePolicy;
 
     #[test]
     fn a_deadline_in_the_future_is_installed_as_itself() {

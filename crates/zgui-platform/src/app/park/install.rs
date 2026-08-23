@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use crate::park::policy::Parked;
+use crate::app::park::policy::Parked;
 
 /// What installing a park produced: something to wait on, or a deadline that is already owed.
 ///
@@ -18,8 +18,7 @@ use crate::park::policy::Parked;
 ///
 /// ```
 /// use std::time::{Duration, Instant};
-/// use zgui_platform::IdlePolicy;
-/// use zgui_platform_winit::{Park, Parked};
+/// use zgui_platform::{IdlePolicy, Park, Parked};
 ///
 /// let mut park = Park::new();
 /// let now = Instant::now();

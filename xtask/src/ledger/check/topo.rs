@@ -27,7 +27,7 @@ const UNSCHEDULED: [&str; 2] = ["probe", "xtask"];
 ///
 /// This is not a general escape hatch. Every entry is one edge, from one named crate to one named
 /// crate, and each is an edge the architecture states outright.
-const DRIVEN: [(&str, &str); 8] = [
+const DRIVEN: [(&str, &str); 9] = [
     ("zgui-runtime", "zgui-scroll"),
     ("zgui-runtime", "zgui-anim"),
     ("zgui-runtime", "zgui-edit"),
@@ -52,6 +52,10 @@ const DRIVEN: [(&str, &str); 8] = [
     // document is all there is, so leaving the edge out would leave both rows classified by nobody
     // — which the census reports as unclassified rather than as read.
     ("zgui-conformance", "zgui-runtime"),
+    // The umbrella crate chooses a platform backend at start-up, so it names every one it can
+    // choose. The second one arrives later than the crate that chooses between them, which is the
+    // shape this table exists for: at phase 32 there was one backend and no choice to make.
+    ("zgui", "zgui-platform-wayland"),
 ];
 
 /// Runs the check.

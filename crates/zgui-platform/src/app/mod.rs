@@ -1,9 +1,11 @@
 //! The application's side of the contract: what the platform calls, and when.
 
 mod idle;
+mod park;
 mod wake;
 
 pub use crate::app::idle::IdlePolicy;
+pub use crate::app::park::{Install, Park, Parked};
 pub use crate::app::wake::WakeReason;
 
 use crate::cx::PlatformCx;

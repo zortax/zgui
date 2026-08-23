@@ -5,6 +5,7 @@ use zgui_vocab::SharedString;
 
 use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
+use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
 use crate::theme::ColorScheme;
 
 /// What a surface should be when it is created.
@@ -22,6 +23,12 @@ use crate::theme::ColorScheme;
 pub struct SurfaceAttributes {
     /// The window title.
     pub title: SharedString,
+    /// What this surface is to the desktop.
+    ///
+    /// A role a backend cannot make is refused rather than downgraded, so a component asks
+    /// [`PlatformCapabilities`](crate::PlatformCapabilities) first. Everything below this field
+    /// describes a window and is ignored by the roles that are not one.
+    pub role: SurfaceRole,
     /// The size the content should start at.
     pub size: Option<Size<CssPx, Css>>,
     /// The smallest the user may make it.
@@ -60,6 +67,7 @@ impl SurfaceAttributes {
     pub fn new(title: impl Into<SharedString>) -> Self {
         Self {
             title: title.into(),
+            role: SurfaceRole::Toplevel,
             size: None,
             min_size: None,
             max_size: None,
@@ -87,6 +95,39 @@ impl SurfaceAttributes {
         self.application_id = Some(id.into());
         self
     }
+
+    /// The same attributes as something other than an ordinary window.
+    pub fn with_role(mut self, role: SurfaceRole) -> Self {
+        self.role = role;
+        self
+    }
+
+    /// A pop-up, placed as `placement` says.
+    ///
+    /// Undecorated and not resizable, because neither is a thing a desktop offers on a pop-up: a
+    /// menu with a title bar and a drag handle is not a menu. The extent is the application's,
+    /// because a pop-up is sized by what is in it.
+    pub fn popup(placement: PopupPlacement) -> Self {
+        Self {
+            role: SurfaceRole::Popup(placement),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
+
+    /// A part of the desktop shell, placed as `placement` says.
+    ///
+    /// Undecorated for the same reason: a panel is furniture rather than a window, and the desktop
+    /// draws no frame around one.
+    pub fn layer(placement: LayerPlacement) -> Self {
+        Self {
+            role: SurfaceRole::Layer(placement),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -95,8 +136,9 @@ mod tests {
     use zgui_geom::{CssPx, Size};
 
     #[test]
-    fn a_new_surface_is_resizable_and_decorated() {
+    fn a_new_surface_is_an_ordinary_window_that_is_resizable_and_decorated() {
         let attributes = SurfaceAttributes::new("zgui");
+        assert_eq!(attributes.role, super::SurfaceRole::Toplevel);
         assert!(attributes.resizable);
         assert_eq!(attributes.decorations, Decorations::Full);
         assert!(!attributes.transparent);
@@ -110,6 +152,28 @@ mod tests {
         assert_eq!(attributes.size, Some(Size::new(CssPx(800.0), CssPx(600.0))));
         assert_eq!(attributes.min_size, None);
         assert_eq!(attributes.application_id, None);
+    }
+
+    #[test]
+    fn a_pop_up_and_a_layer_are_undecorated_and_not_resizable() {
+        // Both are furniture rather than windows: a menu with a title bar is not a menu, and a
+        // panel the user can drag the edge of is not a panel.
+        use super::{LayerPlacement, PopupPlacement, SurfaceRole};
+        use crate::surface::id::SurfaceId;
+        use zgui_geom::{Point, Rect};
+
+        let rect = Rect::new(
+            Point::new(CssPx(0.0), CssPx(0.0)),
+            Size::new(CssPx(10.0), CssPx(10.0)),
+        );
+        let popup = SurfaceAttributes::popup(PopupPlacement::below(SurfaceId::new(1), rect));
+        assert!(matches!(popup.role, SurfaceRole::Popup(_)));
+        assert!(!popup.resizable);
+        assert_eq!(popup.decorations, Decorations::None);
+
+        let layer = SurfaceAttributes::layer(LayerPlacement::default());
+        assert!(matches!(layer.role, SurfaceRole::Layer(_)));
+        assert_eq!(layer.decorations, Decorations::None);
     }
 
     #[test]

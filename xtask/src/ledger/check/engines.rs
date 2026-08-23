@@ -67,7 +67,23 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("accesskit_winit", &["zgui-platform-winit"]),
     ("arboard", &["zgui-platform-winit"]),
     ("smithay-clipboard", &["zgui-platform-winit"]),
-    ("zbus", &["zgui-platform-winit"]),
+    ("zbus", &["zgui-platform-winit", "zgui-platform-wayland"]),
+    // The compositor, spoken to directly. Every one of these names a Wayland protocol or the loop
+    // it is read on, and the whole point of a second platform backend is that none of them is
+    // reachable from anywhere else: a crate above the seam that named one would be a crate that
+    // stops compiling on macOS.
+    ("smithay-client-toolkit", &["zgui-platform-wayland"]),
+    ("wayland-client", &["zgui-platform-wayland"]),
+    ("wayland-backend", &["zgui-platform-wayland"]),
+    ("wayland-protocols", &["zgui-platform-wayland"]),
+    ("wayland-protocols-wlr", &["zgui-platform-wayland"]),
+    ("calloop", &["zgui-platform-wayland"]),
+    ("calloop-wayland-source", &["zgui-platform-wayland"]),
+    ("accesskit_unix", &["zgui-platform-wayland"]),
+    // The system's monotonic clock, read in one place: the compositor stamps its presentation
+    // feedback against it, and a reported presentation is useless until it is on the same timeline
+    // the frame loop schedules against.
+    ("rustix", &["zgui-platform-wayland"]),
     ("reactive_graph", &["zgui-reactive"]),
     ("reactive_stores", &["zgui-reactive"]),
     ("any_spawner", &["zgui-reactive"]),
@@ -91,6 +107,7 @@ const LEDGER: &[(&str, &[&str])] = &[
             // contract names the same tree type the contract's own method takes.
             "zgui-platform-headless",
             "zgui-platform-winit",
+            "zgui-platform-wayland",
         ],
     ),
     // `zgui-elements` is on the kurbo row because `<vector>`'s outlines are Béziers and there is

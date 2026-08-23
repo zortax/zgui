@@ -39,6 +39,15 @@ accessors, splits its lifecycle callbacks and removes its user-event payload tou
 a framework that names it directly. Behind `zgui-platform` it touches `zgui-platform-winit` and
 nothing else.
 
+**A desktop worth speaking to directly can be, without any of it leaking upward.** There are two
+production backends behind the platform contract, not one: `zgui-platform-winit` for macOS, Windows
+and X11, and `zgui-platform-wayland` for a Wayland session. The second exists because four things
+that desktop needs cannot be reached through a portable seam — frames paced against the
+compositor's own callbacks, presentation that never blocks the thread reading input, a surface that
+says when it has stopped being drawn, and the shell protocols a pop-up or a panel is made of — and
+none of the four is visible above the contract. Which one runs is decided at start-up by whether
+there is a Wayland display, and `ZGUI_PLATFORM` overrides it.
+
 **Every stage is testable without the one below it.** The style engine is exercised over a document
 with no layout engine. Layout is exercised with a fixed-metrics text source and no fonts. Paint is
 exercised with no graphics device. The frame loop is exercised with no display server. None of that
@@ -59,7 +68,8 @@ Every external engine is reachable from a bounded, enumerable set of crates, and
 architecture. `stylo` and its satellites are named by `zgui-css`, `zgui-dom` and `zgui-style` and by
 nothing else. `taffy` is named by `zgui-layout`. `parley` and its satellites by `zgui-text-parley`.
 `vello` by `zgui-render-vector-vello`. `wgpu` by the three graphics crates and the windowing
-backend. `winit` by `zgui-platform-winit`. `reactive_graph` by `zgui-reactive`.
+backend. `winit` by `zgui-platform-winit`. The Wayland protocol, its toolkit and the loop it is
+read on by `zgui-platform-wayland`. `reactive_graph` by `zgui-reactive`.
 
 The consequence is that replacing, patching or dropping any one of them is a change to a named set
 of manifests that can be counted before the work starts.

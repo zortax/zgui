@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use zgui_platform::{PlatformError, Surface};
 use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{SharedGraphics, renderer::PrePresent};
+use zgui_render_wgpu::{PresentPacing, SharedGraphics, renderer::PrePresent};
 use zgui_runtime::{AppError, RendererFactory};
 
 /// The compositor notification belonging to `surface`, kept alive with it.
@@ -13,22 +13,39 @@ fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
     pre_present_callback(move || surface.pre_present_notify())
 }
 
-/// Whether the compositor notification is wired, which `ZGUI_PRESENT_PACING=notify` asks for.
+/// Whether `surface` is told that a frame is about to be presented.
 ///
-/// Unwired by default. On Wayland the notification makes winit request a frame callback per
-/// present and withhold every redraw until it arrives, which serialises the present against the
-/// next frame's processor work and quantises the frame period to whole refresh intervals — a
-/// window whose frame costs a little over one interval presents at half its output's rate. See
-/// `docs/research/frame-callback-quantization.md`. The starvation stall the notification used to
-/// suppress is answered by the runtime's starvation latch instead. The environment switch keeps
-/// the old wiring reachable for A/B measurement.
+/// A backend that paces frames itself is always told, because the notification is how it learns
+/// that a buffer is being committed and is where it asks the compositor for the next frame. On a
+/// backend that leaves the wait to the display it is unwired by default, and
+/// `ZGUI_PRESENT_PACING=notify` is what asks for it.
+///
+/// The default is off because of what the notification does under winit on Wayland: it requests a
+/// frame callback per present and then withholds every redraw until the callback arrives, which
+/// serialises the present against the next frame's processor work and quantises the frame period
+/// to whole refresh intervals — a window whose frame costs a little over one interval presents at
+/// half its output's rate. See `docs/research/frame-callback-quantization.md`. The starvation
+/// stall the notification used to suppress is answered by the runtime's starvation latch instead.
+fn notify_wanted(pacing: PresentPacing) -> bool {
+    pacing == PresentPacing::Platform || pacing_override()
+}
+
+/// Whether the environment asked for the notification on a display-paced backend.
 ///
 /// Read once: the environment does not change under a running process.
-fn pacing_wanted() -> bool {
+fn pacing_override() -> bool {
     static WANTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *WANTED.get_or_init(
         || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(value) if value.trim() == "notify"),
     )
+}
+
+/// What `pacing` this surface's platform asks the renderer to configure for.
+fn pacing_of(surface: &Arc<dyn Surface>) -> PresentPacing {
+    match surface.present_pacing() {
+        zgui_platform::PresentPacing::Platform => PresentPacing::Platform,
+        _ => PresentPacing::Display,
+    }
 }
 
 /// Boxes a platform notification for the renderer seam.
@@ -74,10 +91,12 @@ fn renderer(
         .instance()
         .create_surface(handles)
         .map_err(|error| PlatformError::Backend(error.to_string()))?;
+    let pacing = pacing_of(surface);
     let mut renderer = graphics.renderer_for_surface(
         target,
         drawable,
-        pacing_wanted().then(|| pre_present(surface)),
+        pacing,
+        notify_wanted(pacing).then(|| pre_present(surface)),
     )?;
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing in the window — every icon — is empty space. Which rasteriser this is comes

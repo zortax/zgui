@@ -7,7 +7,9 @@ mod event;
 mod gpu;
 mod icon;
 mod id;
+mod role;
 mod text_input;
+mod timing;
 
 pub use crate::surface::attributes::SurfaceAttributes;
 pub use crate::surface::chrome::{
@@ -18,7 +20,11 @@ pub use crate::surface::event::SurfaceEvent;
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
+pub use crate::surface::role::{
+    Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
+};
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
+pub use crate::surface::timing::{PresentPacing, PresentationTiming};
 
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
@@ -59,6 +65,25 @@ pub trait Surface: Send + Sync + 'static {
     /// Absent when the platform does not say, in which case a deadline should be computed against
     /// the documented fallback rather than against an assumed rate.
     fn refresh_rate_millihertz(&self) -> Option<u32> {
+        None
+    }
+
+    /// Who waits for the display on this surface.
+    ///
+    /// The default hands the wait to the graphics API, which is right wherever the platform has no
+    /// timing of its own to pace against. A backend that answers [`PresentPacing::Platform`] is
+    /// promising two things: that it paces frames itself, and that presentation on this surface
+    /// must therefore be configured never to block the thread that asks for it.
+    fn present_pacing(&self) -> PresentPacing {
+        PresentPacing::Display
+    }
+
+    /// When this surface's frames reach the screen, as far as the platform knows.
+    ///
+    /// Absent means the platform reports no timing at all, and a caller falls back to
+    /// [`Surface::refresh_rate_millihertz`]. It is read once a frame, so it answers with a snapshot
+    /// rather than a borrow of whatever the backend keeps.
+    fn presentation_timing(&self) -> Option<PresentationTiming> {
         None
     }
 

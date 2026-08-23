@@ -123,7 +123,10 @@ fn main() -> Result<(), zgui::Error> {
             )))
         }))
         .run_on(
-            move |handler| zgui_platform_winit::run(Box::new(Pulling::new(handler, driving, edge))),
+            // This desktop's own backend, so that `ZGUI_PLATFORM` selects which one is measured.
+            // A cadence is a property of the windowing layer as much as of the frame loop, and the
+            // two backends on a Wayland session pace frames by different means entirely.
+            move |handler| zgui::app::desktop()(Box::new(Pulling::new(handler, driving, edge))),
             || view! { Listing() },
         )
 }
