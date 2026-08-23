@@ -231,6 +231,75 @@ fn a_cut_line_in_a_transformed_panel_is_cut_where_it_is_drawn() {
     );
 }
 
+/// The cut window travels with a replayed line.
+///
+/// The window is minted where the line is drawn on the frame that encodes it, and a scrolled
+/// line replays its chunk with an offset for as long as nothing else about it changes. The
+/// window has to arrive at the same place the glyphs do: left behind, it cuts the line against
+/// the position of the encode frame — the glyphs shrink away as the scroll runs, and past one
+/// line height only the mark is left.
+#[test]
+fn the_cut_window_travels_with_a_replayed_line() {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(256, 64));
+    scene.begin_chunk_capture(zgui_scene::ChunkPrims::default());
+    emit_into(&mut scene, placement(Some(cut())));
+    let chunk = scene.take_chunk_capture();
+    assert_eq!(window(&scene), (0.0, 40.0), "the control: cut where drawn");
+
+    // Replayed past the line's own height, which is where a left-behind window empties out.
+    scene.begin_frame(Size::new(256, 64));
+    let range = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(24.0)), 0);
+    assert_eq!(range.len(), 2, "the line's glyph and the mark both survive");
+    let cut_clip = scene
+        .primitives
+        .mono_sprites
+        .iter()
+        .map(|sprite| sprite.clip)
+        .find(|clip| *clip != ClipId::ROOT.0)
+        .expect("one sprite is cut short");
+    let resolved = scene.clips.resolve(zgui_scene::ClipId(cut_clip));
+    assert_eq!(
+        (resolved.left(), resolved.right()),
+        (0.0, 40.0),
+        "the cut still ends where the cut is"
+    );
+    assert_eq!(
+        scene.primitives.mono_sprites[0].bounds[1], 24.0,
+        "and the glyphs are drawn where the line is now"
+    );
+}
+
+/// The window of a line inside a transformed panel travels with a replay too.
+///
+/// The `1b0fff5` property under replay: the window names the panel's own coordinate system, and
+/// the replay's offset moves it in that system, so the placed window keeps covering the glyphs
+/// however the panel's matrix places them on the device.
+#[test]
+fn the_cut_window_of_a_panelled_line_travels_with_a_replayed_line() {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(256, 64));
+    let panel = panel(&mut scene, 120.0);
+    scene.begin_chunk_capture(zgui_scene::ChunkPrims::default());
+    emit_into(
+        &mut scene,
+        TextPlacement {
+            transform: panel,
+            ..placement(Some(cut()))
+        },
+    );
+    let chunk = scene.take_chunk_capture();
+
+    scene.begin_frame(Size::new(256, 64));
+    let range = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(24.0)), 0);
+    assert_eq!(range.len(), 2, "the line's glyph and the mark both survive");
+    assert_eq!(
+        placed_window(&scene),
+        (120.0, 160.0),
+        "the window is still placed through the panel's matrix"
+    );
+}
+
 /// A cut at the line's start hides everything before it, and the mark survives.
 ///
 /// The fixture's one glyph sits at the line's own origin, which is on the hidden side of a cut

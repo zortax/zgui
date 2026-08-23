@@ -87,6 +87,13 @@ pub struct Painted {
     /// every unvisited frame the box rebuild that accompanies such a change was protection
     /// enough; a record kept across frames needs the change in its own signature.
     pub content: u64,
+    /// A fingerprint of where a line is cut and marked, and zero for every other fragment.
+    ///
+    /// The cut is measured from the content box's start edge, so it holds still while the line
+    /// scrolls. Without it, a cut that moves inside an unmoved line box — a `text-align` flip on
+    /// an overflowing nowrap line — replays the window of the old cut into correctly damaged
+    /// pixels.
+    pub cut: u64,
     /// The bits of the device scale the fragment was encoded at.
     ///
     /// The lowered style already moves on rescale — the style cache is invalidated wholesale —

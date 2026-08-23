@@ -620,6 +620,7 @@ impl Pass<'_, '_> {
                     .map_or(0, |node| self.input.vectors.revision(node)),
                 _ => 0,
             },
+            cut: fragment.content_hash,
             scale: self.input.scale.to_bits(),
             decorations: decorate::signature(&decorations),
             text_fill: fill::signature(text_fill.as_ref()),

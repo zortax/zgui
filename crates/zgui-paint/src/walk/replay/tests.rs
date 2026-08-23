@@ -43,6 +43,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         transform_hash: zgui_scene::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
         custom: 0,
         content: 0,
+        cut: 0,
         scale: 1.0f32.to_bits(),
         decorations: 0,
         text_fill: 0,
@@ -382,6 +383,82 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
         scene.primitives.quads[0].bounds[1], 100.0,
         "at the position the fragment arrived at"
     );
+}
+
+/// An ellipsized line replayed beyond the line height still draws its glyphs.
+///
+/// The `text-overflow` window is minted by the encoding at the position the line is drawn, and
+/// noted on the capture. A scrolled line replays with an offset, and the note is what carries the
+/// window along: without it the glyphs are culled against the window of the encode frame — the
+/// visible slice shrinks as the scroll runs, and past one line height only the mark is left.
+#[test]
+fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let line = fragment(0.0, 0.0);
+    scene.begin_chunk_capture(cache.take_capture_scratch());
+    // The window a cut line's own glyphs are drawn through, minted inside the capture the way
+    // the text emitter mints it.
+    let window = scene.clips.only(zgui_scene::ClipLink::rect(Rect::new(
+        Point::new(DevicePx(0.0), DevicePx(0.0)),
+        Size::new(DevicePx(40.0), DevicePx(24.0)),
+    )));
+    scene.note_minted_clip(window);
+    let drawn = scene.push_quad(
+        zgui_scene::Quad::filled(line.border_box, zgui_scene::PaintRef::NONE).clipped(window),
+    );
+    let chunk = scene.take_chunk_capture();
+    assert!(drawn.is_some(), "the fixture draws inside its own window");
+    cache.encoded(
+        &mut scene,
+        &line,
+        painted(0),
+        Encoding {
+            chunk,
+            resources: &[],
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    // Scrolled past its own height, which is where an encode-position window empties out.
+    let scrolled = fragment(0.0, 100.0);
+    let Reuse::Replay(offset) = cache.reuse(&scene, &scrolled, painted(0)) else {
+        panic!("a scrolled line replays");
+    };
+    let (source, chunk) = cache.chunk(scrolled.key).expect("recorded");
+    let range = scene.replay_chunk(chunk, offset, source);
+    assert_eq!(range.len(), 1, "the window moved with the line");
+    assert_eq!(
+        scene.primitives.quads[0].bounds[1], 100.0,
+        "and its content is drawn where the line is now"
+    );
+}
+
+/// The cut is part of the painting, so a cut that moved is an encoding however still the line
+/// stayed. A `text-align` flip on an overflowing nowrap line moves the cut to the other end while
+/// the line box, the style, the chain and the transform all hold still.
+#[test]
+fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let recut = crate::walk::replay::Painted {
+        cut: 1,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, recut), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0)), Reuse::Encode);
 }
 
 #[test]

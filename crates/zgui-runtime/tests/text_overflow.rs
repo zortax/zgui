@@ -17,8 +17,12 @@
 
 mod support;
 
-use zgui_geom::DevicePx;
+use std::time::Duration;
+
+use zgui_geom::{Css, CssPx, DevicePx, Point, Size};
+use zgui_platform::SurfaceEvent;
 use zgui_view::{BuildCx, IntoView, View};
+use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
 
 /// One cluster's advance at the initial font size, in device pixels.
 const ADVANCE: f32 = 8.0;
@@ -145,6 +149,80 @@ fn a_string_mark_is_measured_as_the_string_it_names() {
         window.scene().primitives.mono_sprites.len(),
         9 + 3,
         "nine letters and a three-character mark"
+    );
+}
+
+/// A scrolled list of cut lines keeps its words as well as its marks.
+///
+/// The regression this stands against: a cut line's window is minted where the line is drawn on
+/// the frame that encodes it, and a scrolled row replays its chunk with an offset. A window left
+/// at the encode position cuts every replayed row against where it *was* — the words shrink away
+/// as the scroll runs, past one row height only the marks are left, and hovering a row restores
+/// it by re-encoding. So: scroll by whole rows, force a full repaint out of nothing but replays,
+/// and count what a congruent picture has to hold.
+#[test]
+fn scrolled_rows_keep_their_words_and_their_marks() {
+    let sheet = format!(
+        "{ROOT}
+         .port {{ display: block; width: 200px; height: 120px; overflow: scroll }}
+         .row {{ display: block; width: 96px; height: 20px; line-height: 20px;
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap }}"
+    );
+    let mut app = support::app_with_text(&sheet, |cx: &mut BuildCx<'_>| {
+        let mut port = zgui_elements::column().class("port");
+        for _ in 0..12 {
+            port = port.child(zgui_elements::text().class("row").child(WORDS));
+        }
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(port)
+                .into_view()
+                .build(cx),
+        )
+    });
+    app.settle(8);
+
+    // A full repaint before and after, so both counts describe the whole port rather than the
+    // last frame's damage band. Un-occluding damages everything and moves nothing, which is what
+    // makes the second repaint entirely a matter of replays.
+    let full_repaint = |app: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>| {
+        app.deliver_to_first(SurfaceEvent::Occluded(true));
+        app.deliver_to_first(SurfaceEvent::Occluded(false));
+        app.settle(8);
+    };
+    full_repaint(&mut app);
+    let rows = 120 / 20;
+    let before = app.app().windows()[0].scene().primitives.mono_sprites.len();
+    assert_eq!(
+        before,
+        rows * (KEPT + 1),
+        "the control: six rows of eleven letters and a mark each"
+    );
+
+    // Two whole rows, so the settled picture is congruent with the one before it.
+    app.deliver_to_first(SurfaceEvent::Wheel {
+        event: WheelEvent {
+            id: zgui_vocab::PointerId::MOUSE,
+            kind: zgui_vocab::PointerKind::Mouse,
+            position: Point::<CssPx, Css>::new(CssPx(100.0), CssPx(60.0)),
+            delta: ScrollDelta::Pixels(Size::new(CssPx(0.0), CssPx(40.0))),
+            phase: ScrollPhase::Discrete,
+        },
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    });
+    for _ in 0..30 {
+        app.advance(Duration::from_millis(20));
+        app.pump();
+    }
+    app.settle(8);
+
+    full_repaint(&mut app);
+    let after = app.app().windows()[0].scene().primitives.mono_sprites.len();
+    assert_eq!(
+        after, before,
+        "a scrolled row lost its words: every replayed line must draw what it drew, moved"
     );
 }
 

@@ -11,6 +11,7 @@ use zgui_profile::{Counter, counter};
 
 use crate::id::DrawOrder;
 
+use crate::clip::link::ClipNode;
 use crate::group::BackdropFilter;
 use crate::id::{ClipId, PaintId};
 use crate::ops::PaintOp;
@@ -153,6 +154,12 @@ pub struct ChunkPrims {
     /// `None` for a chunk with nothing in it. A replay asks the draw-order tree about this one
     /// rectangle in place of asking about every primitive separately.
     pub ink: Option<Rect<DevicePx, Device>>,
+    /// Clips the encoding minted for its own content, in mint order.
+    ///
+    /// A minted clip's rectangle is measured where the encoding drew, so a replay re-interns each
+    /// one at the chunk's current position before it re-emits anything — the same identity lands
+    /// in the same slot, and the slot comes to hold the moved rectangle.
+    pub minted: Vec<ClipId>,
 }
 
 impl ChunkPrims {
@@ -180,6 +187,7 @@ impl ChunkPrims {
             + self.vectors.capacity() * size_of::<VectorItem>()
             + self.spaces.capacity() * size_of::<Option<SpatialId>>()
             + self.orders.capacity() * size_of::<DrawOrder>()
+            + self.minted.capacity() * size_of::<ClipId>()
     }
 
     /// Whether the chunk carries an order for every operation it holds.
@@ -262,6 +270,11 @@ impl ChunkPrims {
                 holds.paint(stroke.paint);
             }
         }
+        // A minted clip is usually named by a sprite above and deduplicated away; holding it here
+        // keeps the slot alive even for a chunk whose every clipped primitive was pushed elsewhere.
+        for clip in &self.minted {
+            holds.clips.push(*clip);
+        }
         holds.settle();
     }
 
@@ -281,6 +294,7 @@ impl ChunkPrims {
         self.orders.clear();
         self.span = 0;
         self.ink = None;
+        self.minted.clear();
     }
 }
 
@@ -388,6 +402,17 @@ impl Scene {
         recycled.clear();
         self.capture_order.clear();
         self.capture = Some(recycled);
+    }
+
+    /// Notes a clip the open capture's encoding minted for its own content.
+    ///
+    /// A minted clip's rectangle is where the content is being drawn this frame, so the note is
+    /// what lets [`Scene::replay_chunk`] carry the clip along with the content. A no-op outside a
+    /// capture: an emission nobody records is never replayed.
+    pub fn note_minted_clip(&mut self, id: ClipId) {
+        if let Some(capture) = &mut self.capture {
+            capture.minted.push(id);
+        }
     }
 
     /// Closes the capture opened by [`Scene::begin_chunk_capture`] and returns it.
@@ -547,6 +572,28 @@ impl Scene {
     ) -> Range<u32> {
         let start = self.ops.len() as u32;
         let in_place = by.width.0 == 0.0 && by.height.0 == 0.0;
+        // A clip the encoding minted is named by its encode-position rectangle, so re-interning it
+        // shifted by the chunk's own movement lands in the same slot and rewrites the stored
+        // rectangle to where the content now is — the insert cull and the shader both read the
+        // moved window, and the clip index baked into the chunk stays valid. Unconditional, so a
+        // replay back in place restores the rectangle a moved replay wrote over.
+        for id in &chunk.minted {
+            let Some(&ClipNode::Link {
+                link,
+                parent,
+                shift,
+            }) = self.clips.get(*id)
+            else {
+                continue;
+            };
+            let settled = link.unshifted(shift);
+            let moved = settled.unshifted(Size::new(DevicePx(-by.width.0), DevicePx(-by.height.0)));
+            let re = self.clips.push_shifted(parent, moved, by);
+            debug_assert_eq!(
+                re, *id,
+                "a minted clip re-interned under its own identity keeps its slot"
+            );
+        }
         // One question for the whole chunk rather than one per primitive. The chunk's members were
         // ordered against each other when they were captured and have moved rigidly since, so what
         // the tree is asked is where the chunk sits now; the orders inside it are that answer plus

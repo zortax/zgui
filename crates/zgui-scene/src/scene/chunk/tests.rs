@@ -275,3 +275,34 @@ fn clearing_a_chunk_keeps_its_allocations() {
     assert!(chunk.is_empty());
     assert_eq!(chunk.bytes(), bytes);
 }
+
+/// A clip the encoding minted travels with the chunk instead of staying where it was drawn.
+///
+/// The `text-overflow` window is the case: an ellipsized line's chunk carries every glyph, and the
+/// window is the whole of what cuts it. Left at the encode position, the window culls the glyphs
+/// of every moved replay — the visible slice shrinks as the scroll runs, and past one line height
+/// only the mark is left.
+#[test]
+fn a_minted_clip_is_re_interned_where_the_chunk_replays() {
+    let (mut scene, fill) = scene();
+    scene.begin_chunk_capture(ChunkPrims::default());
+    let window = scene.clips.only(ClipLink::rect(rect(0.0, 0.0, 30.0, 20.0)));
+    scene.note_minted_clip(window);
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill).clipped(window));
+    let chunk = scene.take_chunk_capture();
+    assert_eq!(chunk.minted, vec![window], "the capture holds the note");
+    scene.finish(&DamageSet::full());
+
+    // Moved past its own height, so an encode-position window would refuse the quad outright.
+    scene.begin_frame(Size::new(400, 400));
+    let replayed = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(40.0)), 0);
+    assert_eq!(replayed.len(), 1, "the moved window admits the moved quad");
+    assert_eq!(scene.clips.bounds(window), rect(0.0, 40.0, 30.0, 20.0));
+
+    // Back in place: the same slot holds the encode rectangle again.
+    scene.finish(&DamageSet::full());
+    scene.begin_frame(Size::new(400, 400));
+    let returned = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)), 0);
+    assert_eq!(returned.len(), 1);
+    assert_eq!(scene.clips.bounds(window), rect(0.0, 0.0, 30.0, 20.0));
+}

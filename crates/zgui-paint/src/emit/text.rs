@@ -557,6 +557,11 @@ impl EllipsisPaint {
 /// panel above it is *not*: a line inside a dialog held off-centre by its own transform is cut
 /// where it was laid out, so what survives is the slice the two rectangles happen to share and the
 /// rest of the cell is empty.
+///
+/// The window is minted where the line is drawn this frame, and the line's chunk outlives the
+/// frame. The mint is noted on the open capture, so a replay re-interns the window at the chunk's
+/// position — without the note, a scrolled line would be cut against the window of the frame it
+/// was encoded in.
 fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement {
     let Some(mark) = placement.ellipsis else {
         return placement;
@@ -571,13 +576,12 @@ fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement
         Point::new(DevicePx(left), line.origin.y),
         Size::new(DevicePx((right - left).max(0.0)), line.size.height),
     );
-    TextPlacement {
-        clip: scene.clips.push(
-            placement.clip,
-            ClipLink::rect_in(window, placement.transform),
-        ),
-        ..placement
-    }
+    let clip = scene.clips.push(
+        placement.clip,
+        ClipLink::rect_in(window, placement.transform),
+    );
+    scene.note_minted_clip(clip);
+    TextPlacement { clip, ..placement }
 }
 
 /// Which line is being drawn, and which of its passes this is.
