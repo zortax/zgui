@@ -97,7 +97,19 @@ impl EventfdWaker {
                 );
             }
         }
-        std::mem::take(&mut *self.pending.lock().expect("the queue is not poisoned"))
+        std::mem::take(&mut *self.queue())
+    }
+
+    /// The queue, recovering from a panic on another thread.
+    ///
+    /// A poisoned lock here means a thread panicked while queueing a wake. What is under the lock
+    /// is a list of plain values and cannot be left half-written, so the queue is sound to take —
+    /// and refusing to wake the loop ever again would turn one thread's panic into a console
+    /// session that draws nothing and answers no key.
+    fn queue(&self) -> std::sync::MutexGuard<'_, Vec<WakeReason>> {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -111,10 +123,7 @@ impl Waker for EventfdWaker {
     fn wake(&self, reason: WakeReason) {
         // Queued before the counter is written, so a loop that reads the counter finds the reason
         // behind it.
-        self.pending
-            .lock()
-            .expect("the queue is not poisoned")
-            .push(reason);
+        self.queue().push(reason);
         match rustix::io::write(&self.fd, &ONE.to_ne_bytes()) {
             Ok(_) => {}
             // `EAGAIN` is the counter one short of its largest value, so a loop that has not
