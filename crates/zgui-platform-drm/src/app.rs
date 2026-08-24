@@ -611,7 +611,17 @@ fn drive(
                 answered,
                 surfaces[..claimed].iter().any(|drawn| drawn.wants_redraw()),
             );
-            let parked = if owed { park.handed_back() } else { parked };
+            // A turn that already owes a frame is handed back without waiting, and the moment goes
+            // with it. A wait of no length is no wait for that moment, and a moment left installed
+            // over one would be reported reached the instant `poll` came back — an arrival the loop
+            // never had. Forgetting it loses nothing: the application is asked again on the next
+            // turn, against a clock that has moved, and names the moment again if it still wants it.
+            let parked = if owed {
+                park.cancel();
+                Parked::Never
+            } else {
+                parked
+            };
 
             // Two moments the loop owes itself, and nothing on a console wakes it for either: the
             // bound on a terminal switch, and the next repeat of a held key. The wait is cut to the

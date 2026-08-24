@@ -1,235 +1,34 @@
-//! How the loop waits, and the ways of getting that wrong.
+//! Turning a park into the wait this loop hands `ppoll`.
 //!
-//! The same state machine as `zgui-platform-winit`'s own `park` module, over the same
-//! [`IdlePolicy`] and with the same invariant. It is written again here because the shipped one
-//! lives in the windowing backend: a console backend that named it would pull in a windowing
-//! library, X11 and Wayland to reach three lines of arithmetic.
+//! The state machine is [`zgui_platform::Park`]: every backend parks by the same arithmetic over
+//! the same [`IdlePolicy`], so it is stated once, in the contract. What lives here is the console's
+//! own half — the conversion of a [`Parked`] into the kernel's own pair of fields, and the cut
+//! against moments this loop owes itself.
 //!
-//! # The two failures
+//! # Why a conversion is needed at all
 //!
-//! **The stall.** A deadline arriving is reported as the *cause* of a turn of the loop, and it
-//! draws nothing by itself. Nothing is drawn until something asks, so the arrival has to be turned
-//! back into a request by hand. Miss that and a timer fires no frame and an animation never
-//! advances, and the symptom is an application that ignores its own clock.
+//! The windowing backend is told the cause of each turn by the platform. This loop owns its wait:
+//! [`timeout`] is what it hands `poll`, and a wait that runs to its end is the moment arriving. A
+//! wait of no length is a poll rather than a sleep, which is how a turn that already owes a frame
+//! reads its descriptors and goes round again.
 //!
-//! **The spin.** A deadline that has already passed, installed anyway, waits for no time at all.
-//! The loop wakes at once, finds the moment reached, reports it again, and draws nothing. From
-//! outside it looks like the stall.
+//! [`Park::resumes`] counts every report, including one made against nothing installed. This loop
+//! acts on [`Park::resumed`]'s answer rather than on the count, so the count is a diagnostic here
+//! and not a decision.
 //!
-//! # One invariant covering both
-//!
-//! **A moment the application named is either waited for or handed over — never dropped.**
-//!
-//! [`Park::install`] installs no moment that is not strictly in the future, which is the defence
-//! against the spin. It discards none either, which is the defence against a third failure the
-//! clamp on its own creates: the application decides what it wants against one reading of the
-//! clock, and the loop installs it against a second reading microseconds later. A moment picked
-//! four microseconds ahead is in the future for the first reading and in the past for the second.
-//! A clamp that answered "expired, so park on nothing" would block the loop for ever while holding
-//! a frame somebody is waiting for.
-//!
-//! So [`Park::install`] answers an [`Install`]. A moment that has passed comes back as
-//! [`Install::Overdue`], and the one route from there to a [`Parked`] is [`Install::park`], which
-//! takes the delivery as an argument. Forgetting to look at a flag, an early return and a `match`
-//! arm added later all fail to compile.
-//!
-//! # What differs from the windowing backend
-//!
-//! That loop is told the cause of each turn by the platform, and the platform re-derives an
-//! arrival from the installed instant every time with no memory of having reported it. This loop
-//! owns its own wait: [`timeout`] is what it hands `poll`, and a wait that runs to its end is the
-//! arrival. So [`Park::resumed`] counts only if a deadline was installed. The loop can tell a
-//! reached deadline from a park of no length, and a count for the second would report arrivals the
-//! loop never had.
+//! [`IdlePolicy`]: zgui_platform::IdlePolicy
 
 use std::time::{Duration, Instant};
 
 use rustix::event::{Nsecs, Secs, Timespec};
-use zgui_platform::IdlePolicy;
+
+pub(crate) use zgui_platform::{Park, Parked};
 
 /// A wait of no time at all, which is a poll rather than a sleep.
 const NONE: Timespec = Timespec {
     tv_sec: 0,
     tv_nsec: 0,
 };
-
-/// How the loop is parked right now.
-///
-/// Three answers, and every wait is one of them. They are stated apart from a `poll` timeout so
-/// that the decision can be made, and asserted on, with no device open.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Parked {
-    /// Blocked until the device or the wake channel has something to report.
-    Indefinitely,
-    /// The same, or until this moment arrives.
-    ///
-    /// The instant is strictly in the future when it is installed, which is the defence against the
-    /// spin. See [`Park::install`].
-    Until(Instant),
-    /// Not blocked at all: the descriptors are read and the turn is handed back.
-    Never,
-}
-
-/// What installing a park produced: something to wait on, or a deadline that is already owed.
-///
-/// The two are apart because they are not interchangeable. A park is a thing to wait on and asks
-/// nothing further of the caller. An overdue deadline is work the application asked for and has not
-/// been given, and a loop that waits on anything before handing it over is asleep on its own debt.
-///
-/// [`Install::park`] is the one way to obtain a [`Parked`] from one of these, and it demands the
-/// delivery as an argument. So an owed deadline can only be discharged.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use = "an install that is dropped may be dropping a deadline the application is waiting for"]
-pub(crate) enum Install {
-    /// Nothing is owed. This is what to wait on.
-    Ready(Parked),
-    /// The moment the application named had already passed when the loop came to park on it.
-    Overdue(Instant),
-}
-
-impl Install {
-    /// Returns the moment that is owed, if one is.
-    ///
-    /// For tracing and for the loop's own decision to hand the turn back. Reading it discharges
-    /// nothing: the value still carries the obligation.
-    pub(crate) const fn overdue(self) -> Option<Instant> {
-        match self {
-            Self::Overdue(deadline) => Some(deadline),
-            Self::Ready(_) => None,
-        }
-    }
-
-    /// Returns the park to wait on, delivering an owed deadline edge on the way there.
-    ///
-    /// `deliver` runs exactly when the moment the application named had already passed by the time
-    /// the loop came to park on it, and it is given that moment. When nothing is owed, `deliver`
-    /// stays unused and the park passes through unchanged.
-    pub(crate) fn park(self, deliver: impl FnOnce(Instant)) -> Parked {
-        match self {
-            Self::Ready(parked) => parked,
-            Self::Overdue(deadline) => {
-                deliver(deadline);
-                // Indefinite: the delivery has asked for the frame that services this moment, and
-                // the loop looks for such a frame before it parks. Polling instead would keep a
-                // loop whose frame cannot retire the deadline running at the speed of the
-                // processor for no drawn pixel.
-                Parked::Indefinitely
-            }
-        }
-    }
-}
-
-/// The loop's waiting, as a state machine with nothing else in it.
-///
-/// One of these belongs to a running loop. It is asked what to park on once per turn, and it is
-/// told when a wait it installed ran to its end. It counts the arrivals: the count against the
-/// frames separates a loop that parks correctly from a loop reporting the same expired moment for
-/// ever while drawing nothing.
-#[derive(Debug, Default)]
-pub(crate) struct Park {
-    /// The deadline the loop is parked on, when it is parked on one.
-    installed: Option<Instant>,
-    /// How many installed deadlines have been reported reached.
-    resumes: u64,
-}
-
-impl Park {
-    /// Returns a loop that is parked on nothing yet.
-    pub(crate) const fn new() -> Self {
-        Self {
-            installed: None,
-            resumes: 0,
-        }
-    }
-
-    /// Returns the moment the loop is parked until, if it is parked on a deadline.
-    ///
-    /// The loop acts on [`Park::resumed`], which asks and clears in one step. This reads the same
-    /// state without taking it, so an assertion can say that nothing expired is ever waited on.
-    #[cfg(test)]
-    pub(crate) const fn deadline(&self) -> Option<Instant> {
-        self.installed
-    }
-
-    /// Returns how many deadline arrivals have been reported to the application.
-    #[cfg(test)]
-    pub(crate) const fn resumes(&self) -> u64 {
-        self.resumes
-    }
-
-    /// Decides what to park on, given what the application asked for and the present moment.
-    ///
-    /// A moment has two answers and no third. A moment strictly in the future is installed and
-    /// waited for. A moment that has arrived is handed back as [`Install::Overdue`], whose one
-    /// route to a [`Parked`] is a delivery. No arm produces a park while holding a moment, so there
-    /// is nowhere for one to be lost.
-    ///
-    /// A moment that has passed is paid at once. Waiting on it is a wait of no length: the loop
-    /// wakes at once, reports the arrival, and does it again. Dropping it loses a frame, because
-    /// `now` is read after the application has already decided and a moment it picked microseconds
-    /// ahead can pass in between.
-    pub(crate) fn install(&mut self, policy: IdlePolicy, now: Instant) -> Install {
-        match policy {
-            IdlePolicy::Spin => {
-                self.installed = None;
-                Install::Ready(Parked::Never)
-            }
-            IdlePolicy::BlockUntil(deadline) if deadline > now => {
-                self.installed = Some(deadline);
-                Install::Ready(Parked::Until(deadline))
-            }
-            IdlePolicy::BlockUntil(deadline) => {
-                self.installed = None;
-                // Counted here at the install. It is the same arrival `Park::resumed` would have
-                // counted had the loop got as far as waiting for it.
-                self.resumes += 1;
-                Install::Overdue(deadline)
-            }
-            _ => {
-                self.installed = None;
-                Install::Ready(Parked::Indefinitely)
-            }
-        }
-    }
-
-    /// Takes the expiry edge, reporting whether a deadline this loop installed has arrived.
-    ///
-    /// The loop asks this on every wait that ran to its end, including a wait of no length, so a
-    /// park that carried no deadline answers `false` and counts nothing.
-    pub(crate) fn resumed(&mut self) -> bool {
-        // Cleared here, and *before* the answer is acted on. A handler that installs a fresh
-        // deadline from inside its own callback would otherwise be undone by a clearing after it.
-        let arrived = self.installed.take().is_some();
-        if arrived {
-            self.resumes += 1;
-        }
-        arrived
-    }
-
-    /// Forgets the deadline without counting an arrival.
-    ///
-    /// For the turn that is cut short for some other reason — the device reporting a finished flip,
-    /// a wake from another thread, a signal — after which the park is computed again from scratch.
-    /// A wait that was cancelled owes nothing: the application is asked again, and names the moment
-    /// again if it still wants it.
-    pub(crate) const fn cancel(&mut self) {
-        self.installed = None;
-    }
-
-    /// Hands the turn back without waiting, and forgets whatever the moment was.
-    ///
-    /// For the turn that already owes a frame: the loop reads its descriptors and goes round again
-    /// instead of sleeping. The moment goes with it. A wait of no length is no wait for that
-    /// moment, and a moment left installed over one would be reported reached the instant the poll
-    /// came back — an arrival the loop never had.
-    ///
-    /// Forgetting it loses nothing. The application is asked again on the next turn, against a
-    /// clock that has moved, and names the moment again if it still wants it.
-    pub(crate) const fn handed_back(&mut self) -> Parked {
-        self.installed = None;
-        Parked::Never
-    }
-}
 
 /// Returns `true` if a wait on `parked` would outlast `bound`.
 ///
@@ -249,6 +48,10 @@ pub(crate) fn outlasts(parked: Parked, bound: Instant) -> bool {
         Parked::Indefinitely => true,
         Parked::Until(deadline) => bound < deadline,
         Parked::Never => false,
+        // [`Parked`] is `#[non_exhaustive]`, so a wait this backend has never heard of is a wait it
+        // cannot measure. Answering that it outlasts the bound cuts it to the bound, which is a
+        // turn taken early rather than a moment of the loop's own missed.
+        _ => true,
     }
 }
 
@@ -263,6 +66,10 @@ pub(crate) fn timeout(parked: Parked, now: Instant) -> Option<Timespec> {
         Parked::Indefinitely => None,
         Parked::Never => Some(NONE),
         Parked::Until(deadline) => Some(span(deadline.saturating_duration_since(now))),
+        // A wait this backend has never heard of is answered as no wait at all, so the turn reads
+        // its descriptors and comes round again. The alternative is `None`, and a loop parked for
+        // ever on a wait it could not read is a frozen application rather than a busy one.
+        _ => Some(NONE),
     }
 }
 
@@ -292,9 +99,9 @@ mod tests {
     //! zero for ever and a moment that is dropped are all invisible on hardware until an
     //! application stops drawing, and all three are decided here.
 
-    use super::{Install, Park, Parked, outlasts, timeout};
+    use super::{Park, Parked, outlasts, timeout};
     use std::time::{Duration, Instant};
-    use zgui_platform::IdlePolicy;
+    use zgui_platform::{IdlePolicy, Install};
 
     /// Returns the wait `policy` produces, taking the deadline edge into `delivered` where one is
     /// owed.
@@ -518,11 +325,6 @@ mod tests {
         assert!(park.resumed(), "the installed deadline arrived");
         assert_eq!(park.deadline(), None);
         assert!(!park.resumed(), "nothing was installed the second time");
-        assert_eq!(
-            park.resumes(),
-            1,
-            "and a wait that carried no deadline counts nothing"
-        );
     }
 
     #[test]
@@ -537,7 +339,8 @@ mod tests {
         let mut delivered = 0;
 
         waits(&mut park, IdlePolicy::BlockUntil(soon), now, &mut delivered);
-        let parked = park.handed_back();
+        park.cancel();
+        let parked = Parked::Never;
 
         assert_eq!(parked, Parked::Never);
         let left = timeout(parked, now).expect("a handed-back turn is a wait of no length");
@@ -546,7 +349,6 @@ mod tests {
             !park.resumed(),
             "the wait ran to its end, and it was waiting for nothing"
         );
-        assert_eq!(park.resumes(), 0, "so no arrival is counted either");
     }
 
     #[test]
