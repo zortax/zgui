@@ -470,6 +470,19 @@ fn drive(
                              stays dark until the frame after this one: {error}"
                         );
                     }
+                    // A completion that never arrives is the one failure the rotation cannot
+                    // recover from on its own, so the wait for it is bounded here.
+                    if let Err(error) =
+                        scanout
+                            .borrow_mut()
+                            .abandon(device, &mut **committing, clock.now())
+                    {
+                        warn!(
+                            target: "zgui::platform",
+                            "the frame behind a lost flip completion could not be put on the \
+                             screen: {error}"
+                        );
+                    }
                 }
             }
 
@@ -623,11 +636,12 @@ fn drive(
                 parked
             };
 
-            // Two moments the loop owes itself, and nothing on a console wakes it for either: the
-            // bound on a terminal switch, and the next repeat of a held key. The wait is cut to the
-            // nearer of the two. Paying the later one early costs a turn; paying the earlier one
-            // late is the defect — the pointer comes back, or a key repeats, at whatever somebody
-            // happens to press next.
+            // Three moments the loop owes itself, and nothing on a console wakes it for any of
+            // them: the bound on a terminal switch, the next repeat of a held key, and the moment a
+            // flip completion stops being waited for. The wait is cut to the nearest. Paying a
+            // later one early costs a turn; paying an earlier one late is the defect — the pointer
+            // comes back, or a key repeats, at whatever somebody happens to press next, and a
+            // display whose completion was lost never draws again.
             //
             // A session that is away owes neither, and waiting on one would be a poll of no length
             // every turn until the resume. The resume settles the switch record there, and the loop
@@ -639,10 +653,16 @@ fn drive(
                 // The seat answers in the numbering every event is stamped in, and a wait is made
                 // against the clock's own moments. The origin is what the two share.
                 .map(|due| clock.origin() + due.since_origin());
-            let owed_at = match (switching.due(), repeating) {
-                (Some(switch), Some(repeat)) => Some(switch.min(repeat)),
-                (switch, repeat) => switch.or(repeat),
-            };
+            let flipping = presence.is_active().then(|| {
+                scanouts
+                    .iter()
+                    .filter_map(|scanout| scanout.borrow().overdue())
+                    .min()
+            });
+            let owed_at = [switching.due(), repeating, flipping.flatten()]
+                .into_iter()
+                .flatten()
+                .min();
             let bound = owed_at.filter(|due| presence.is_active() && outlasts(parked, *due));
             let waiting = bound.map_or(parked, Parked::Until);
 

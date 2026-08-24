@@ -70,6 +70,7 @@ pub(crate) mod rotation;
 
 use std::fmt;
 use std::os::fd::{AsFd, OwnedFd};
+use std::time::Instant;
 
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
@@ -78,7 +79,7 @@ use zgui_drm::format::{Format, Modifier};
 use zgui_drm::framebuffer::Framebuffer;
 use zgui_drm::resources::Mode;
 use zgui_drm::{Device, Event};
-use zgui_platform::PlatformError;
+use zgui_platform::{PlatformError, Watchdog, refresh_interval};
 use zgui_render_wgpu::{Gpu, Pixels, wgpu};
 
 use crate::cursor::Cursor;
@@ -163,6 +164,11 @@ pub struct Scanout {
     rotation: Rotation<OwnedFd>,
     /// Whether the mode has been set. The first present sets it.
     lit: bool,
+    /// When the flip the device has not reported yet was taken, if one is outstanding.
+    ///
+    /// A completion is what frees the buffer behind it, so a completion that never arrives stops
+    /// this display for good. [`Scanout::overdue`] is when waiting for it stops.
+    owed_since: Option<Instant>,
 }
 
 /// The buffers a display is driven from, in one of the two shapes.
@@ -611,10 +617,67 @@ impl Scanout {
         if !completed(events, self.pipe.crtc) {
             return Ok(());
         }
+        self.owed_since = None;
         let Some(ready) = self.rotation.completed() else {
             return Ok(());
         };
         self.show(device, commit, ready)
+    }
+
+    /// When the completion this display is waiting for stops being waited for.
+    ///
+    /// Nothing while no flip is outstanding. The loop parks no longer than this, because nothing
+    /// else wakes it for a completion that is not coming.
+    pub fn overdue(&self) -> Option<Instant> {
+        self.owed_since.map(|since| self.watchdog().expiry(since))
+    }
+
+    /// Gives up on a completion that has not arrived, and carries on as though it had.
+    ///
+    /// Answers whether it gave up on one. A completion is the only thing that frees the buffer the
+    /// display was reading, so one that never arrives leaves [`Rotation::drawing`] refusing a
+    /// buffer to every frame for the rest of the program — a display that goes dark and stays dark.
+    /// The same state a session coming back recovers from, reached without anyone taking the
+    /// terminal away.
+    ///
+    /// The flip is treated as having landed, because on the evidence it did: the driver took it,
+    /// and what went missing is the report. Treating it as refused instead would draw the next
+    /// frame into the buffer the display is reading out of, which tears.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the driver refuses the held frame's flip.
+    pub fn abandon(
+        &mut self,
+        device: &Device,
+        commit: &mut dyn Commit,
+        now: Instant,
+    ) -> Result<bool, PlatformError> {
+        let Some(since) = self.owed_since else {
+            return Ok(false);
+        };
+        let watchdog = self.watchdog();
+        if !watchdog.expired(since, now) {
+            return Ok(false);
+        }
+        warn!(
+            target: "zgui::platform",
+            grace_ms = watchdog.grace().as_millis() as u64,
+            "no flip completion arrived in time, so the frame behind it is taken as shown"
+        );
+        self.owed_since = None;
+        let Some(ready) = self.rotation.completed() else {
+            return Ok(true);
+        };
+        self.show(device, commit, ready)?;
+        Ok(true)
+    }
+
+    /// How long this display's completions are waited for.
+    fn watchdog(&self) -> Watchdog {
+        Watchdog::for_interval(Some(refresh_interval(Some(
+            self.mode.refresh_rate_millihertz(),
+        ))))
     }
 
     /// Gives the framebuffers and the buffers back.
@@ -681,6 +744,7 @@ impl Scanout {
             buffers,
             rotation,
             lit: false,
+            owed_since: None,
         }
     }
 
@@ -733,9 +797,14 @@ impl Scanout {
         // leaves the buffer where the next frame draws over it.
         if flipping {
             self.rotation.flipped(slot);
+            // Read here rather than passed in: this is the moment the driver took the flip, which
+            // is what the wait for its completion is measured from.
+            self.owed_since = Some(Instant::now());
         } else {
             self.lit = true;
             self.rotation.shown(slot);
+            // A modeset carries no completion, so nothing is owed after one.
+            self.owed_since = None;
         }
         Ok(())
     }
