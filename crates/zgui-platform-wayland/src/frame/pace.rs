@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use crate::frame::visibility::Visibility;
-use crate::frame::watchdog::Watchdog;
+use zgui_platform::Watchdog;
 
 /// What this surface owes the compositor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,8 +189,8 @@ impl Default for Pacer {
 mod tests {
     use super::Pacer;
     use crate::frame::visibility::Visibility;
-    use crate::frame::watchdog::Watchdog;
     use std::time::{Duration, Instant};
+    use zgui_platform::Watchdog;
 
     fn shown() -> Visibility {
         Visibility {
