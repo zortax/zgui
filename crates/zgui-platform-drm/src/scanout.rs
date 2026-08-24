@@ -70,7 +70,7 @@ pub(crate) mod rotation;
 
 use std::fmt;
 use std::os::fd::{AsFd, OwnedFd};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
@@ -591,6 +591,10 @@ impl Scanout {
 
     /// Reads this display's completion out of `events`, and shows the frame that waited for it.
     ///
+    /// Answers when the vertical blank was, on the kernel's monotonic clock, for the completion
+    /// it consumed. That moment is the display's own phase, which is what paces the frame after
+    /// it; nothing while no completion of this display's arrived.
+    ///
     /// The loop reads the device once and hands every scanout the same slice, because one read
     /// carries the completions of every CRTC that finished. An event naming another CRTC is
     /// another display's, and this leaves it alone.
@@ -613,15 +617,15 @@ impl Scanout {
         device: &Device,
         commit: &mut dyn Commit,
         events: &[Event],
-    ) -> Result<(), PlatformError> {
-        if !completed(events, self.pipe.crtc) {
-            return Ok(());
-        }
-        self.owed_since = None;
-        let Some(ready) = self.rotation.completed() else {
-            return Ok(());
+    ) -> Result<Option<Duration>, PlatformError> {
+        let Some(at) = completed(events, self.pipe.crtc) else {
+            return Ok(None);
         };
-        self.show(device, commit, ready)
+        self.owed_since = None;
+        if let Some(ready) = self.rotation.completed() {
+            self.show(device, commit, ready)?;
+        }
+        Ok(Some(at))
     }
 
     /// When the completion this display is waiting for stops being waited for.
@@ -1065,11 +1069,18 @@ fn blit(
     }
 }
 
-/// Returns `true` if any of `events` says a flip on `crtc` finished.
-fn completed(events: &[Event], crtc: u32) -> bool {
-    events.iter().any(
-        |event| matches!(event, Event::FlipComplete { crtc: finished, .. } if *finished == crtc),
-    )
+/// Returns when a flip on `crtc` finished, if any of `events` says one did.
+///
+/// The moment is the vertical blank's, on the kernel's monotonic clock. It is what a display knows
+/// about its own timing that nothing above it can work out: the nominal refresh rate gives the
+/// interval between blanks and says nothing about where in one the display currently is.
+fn completed(events: &[Event], crtc: u32) -> Option<Duration> {
+    events.iter().find_map(|event| match event {
+        Event::FlipComplete {
+            crtc: finished, at, ..
+        } if *finished == crtc => Some(*at),
+        _ => None,
+    })
 }
 
 /// Allocates one buffer of this extent, registered for scanout.
@@ -1215,18 +1226,20 @@ mod tests {
 
     #[test]
     fn a_completion_naming_this_crtc_is_this_displays_flip() {
-        assert!(completed(&[flip(62)], 62));
-        assert!(
+        assert_eq!(completed(&[flip(62)], 62), Some(Duration::from_secs(1)));
+        assert_eq!(
             completed(&[flip(81), flip(62)], 62),
+            Some(Duration::from_secs(1)),
             "one read carries the completions of every display that finished"
         );
     }
 
     #[test]
     fn a_completion_naming_another_crtc_belongs_to_another_display() {
-        assert!(!completed(&[flip(81)], 62));
-        assert!(
-            !completed(&[], 62),
+        assert_eq!(completed(&[flip(81)], 62), None);
+        assert_eq!(
+            completed(&[], 62),
+            None,
             "and a read with nothing in it says nothing"
         );
     }

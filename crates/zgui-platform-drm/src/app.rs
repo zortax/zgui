@@ -57,17 +57,21 @@
 //!    devices, DRM master and the terminal, and everything below it is then looking at a different
 //!    machine.
 //!
-//! # Two moments nothing wakes the loop for
+//! # Three moments nothing wakes the loop for
 //!
-//! **The wait is cut to the nearer of them.** A console has no timer to park on and nothing on it
-//! moves a descriptor for either, so a loop that waited past one would answer it at the next key or
-//! the next frame — which on an idle machine is never.
+//! **The wait is cut to the nearest of them.** A console has no timer to park on and nothing on it
+//! moves a descriptor for any of them, so a loop that waited past one would answer it at the next
+//! key or the next frame — which on an idle machine is never.
 //!
 //! * **The bound on a terminal switch.** A daemon can take an ask and move no terminal, and the
 //!   cursor planes are back and empty until it answers. `session::switching` holds that bound.
 //! * **The next repeat of a held key.** The kernel makes the repeats for a reader of its own
 //!   stream, and the device wakes that reader. libinput makes none, so on that source this backend
 //!   makes them itself and `Seat::due` says when the next one falls.
+//! * **The moment a flip completion stops being waited for.** A completion is what frees the buffer
+//!   the display was reading, so one that never arrives stops the display for good.
+//!   `Scanout::overdue` is that bound, and the device wakes the loop for the completion itself but
+//!   for nothing if it is lost.
 //!
 //! # What holds the device
 //!
@@ -179,7 +183,7 @@ use crate::cursor::{self, Cursor, Planes};
 use crate::cx::DrmCx;
 use crate::display::{Displays, DrmDisplay};
 use crate::input::pointer::{Pointer, Screen};
-use crate::input::seat::{self, Report, Seat};
+use crate::input::seat::{self, Report, Seat, Stamps};
 use crate::output::{self, Output, backend};
 use crate::park::{Park, Parked, outlasts, timeout};
 use crate::scanout::{BGRA, Scanout};
@@ -315,6 +319,12 @@ fn drive(
     let surfaces = surface::one_per_output(outputs, Arc::clone(device));
     let waker = Arc::new(EventfdWaker::new()?);
     let clock = Arc::new(SystemClock::new());
+    // The device stamps a completed flip on the kernel's monotonic clock, and everything above
+    // the contract reads the loop's own. Anchored once, here: reading the kernel clock again per
+    // completion would fold the turn's own latency into the phase, which is the one number a
+    // frame schedule is built on. The seat anchors its own, because a device that refuses
+    // monotonic stamps leaves its stream on another clock entirely and this one never does.
+    let flips = Stamps::anchored(&*clock);
     let cx = DrmCx::new(
         surfaces
             .iter()
@@ -457,18 +467,21 @@ fn drive(
                 Err(error) => break 'running Err(backend(error)),
             };
             if presence.is_active() {
-                for scanout in &scanouts {
+                for (drawn, scanout) in surfaces.iter().zip(&scanouts) {
                     let mut committing = commit.borrow_mut();
-                    if let Err(error) =
-                        scanout
-                            .borrow_mut()
-                            .drain(device, &mut **committing, &events)
+                    match scanout
+                        .borrow_mut()
+                        .drain(device, &mut **committing, &events)
                     {
-                        warn!(
+                        Ok(Some(at)) => {
+                            drawn.presented(clock.origin() + flips.at(at).since_origin());
+                        }
+                        Ok(None) => {}
+                        Err(error) => warn!(
                             target: "zgui::platform",
                             "the frame a display was holding could not be put on the screen, so it \
                              stays dark until the frame after this one: {error}"
-                        );
+                        ),
                     }
                     // A completion that never arrives is the one failure the rotation cannot
                     // recover from on its own, so the wait for it is bounded here.

@@ -3,6 +3,7 @@
 use std::os::fd::{AsFd, AsRawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use accesskit::TreeUpdate;
 use raw_window_handle::{
@@ -12,7 +13,8 @@ use raw_window_handle::{
 use zgui_drm::Device as DrmDevice;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, GpuSurface, Surface, SurfaceId, TextInput,
+    CursorStyle, Decorations, FullscreenMode, GpuSurface, PresentPacing, PresentationTiming,
+    Surface, SurfaceId, TextInput, refresh_interval,
 };
 
 use crate::output::Output;
@@ -66,6 +68,12 @@ pub struct DrmSurface {
     /// handles to the loop's own state and a [`Surface`] is `Send + Sync`, so a surface cannot
     /// hold one. The value crosses, and the loop carries it.
     cursor: Mutex<Option<CursorStyle>>,
+    /// When this display last put a frame on the screen, as the device reported it.
+    ///
+    /// The vertical blank of the last completed flip, on the loop's own timeline. It crosses from
+    /// the loop the same way a cursor shape does and for the same reason: the frame loop reads the
+    /// completion and a [`Surface`] is what the runtime asks.
+    presented: Mutex<Option<Instant>>,
 }
 
 impl DrmSurface {
@@ -81,6 +89,7 @@ impl DrmSurface {
             device,
             redraw: AtomicBool::new(false),
             cursor: Mutex::new(None),
+            presented: Mutex::new(None),
         }
     }
 
@@ -89,6 +98,19 @@ impl DrmSurface {
     /// The frame loop needs the pipe to commit a framebuffer, and the mode to allocate one.
     pub fn output(&self) -> &Output {
         &self.output
+    }
+
+    /// Records that a frame reached the screen at `at`.
+    ///
+    /// The frame loop calls it with the vertical blank the device reported, so what the runtime
+    /// reads afterwards is the display's own phase rather than a moment the loop happened to wake.
+    ///
+    /// A poisoned lock is left alone. What is under it is one moment, and a run that keeps drawing
+    /// against the nominal rate is worth more than one that stops.
+    pub fn presented(&self, at: Instant) {
+        if let Ok(mut last) = self.presented.lock() {
+            *last = Some(at);
+        }
     }
 
     /// Takes the pending request, reporting whether there was one.
@@ -149,6 +171,36 @@ impl Surface for DrmSurface {
         // Zero is a mode whose timings give no rate at all, which is absent rather than infinitely
         // fast. The contract states the fallback once, and this reports the truth to it.
         Some(self.output.mode.refresh_rate_millihertz()).filter(|rate| *rate > 0)
+    }
+
+    /// Answers that this backend paces its own frames.
+    ///
+    /// It does: a frame is refused a buffer until the flip before it reports, so the wait is on the
+    /// vertical blank and it happens here rather than inside a graphics API's acquisition. Nothing
+    /// on the console path reads this today — a frame is composed into the display's own buffers
+    /// rather than into a swap chain, and a swap chain is what the answer configures — so it is
+    /// stated for the day one is used, and because the default states the opposite.
+    fn present_pacing(&self) -> PresentPacing {
+        PresentPacing::Platform
+    }
+
+    /// Answers when frames reached the screen, from the completions the device reported.
+    ///
+    /// The interval is the mode's, which is exact: a mode's rate comes from the timings the kernel
+    /// runs the display at. The phase is the last vertical blank, which nothing above this backend
+    /// can work out — a rate says how far apart two blanks are and nothing about where in one the
+    /// display is now.
+    ///
+    /// The next refresh is left unanswered. The contract walks the phase forward by whole intervals
+    /// itself, and a display driven by this backend flips when a frame is ready rather than on a
+    /// schedule, so a prediction made here would be the same arithmetic against worse information.
+    fn presentation_timing(&self) -> Option<PresentationTiming> {
+        let last_presented = *self.presented.lock().ok()?;
+        Some(PresentationTiming {
+            last_presented,
+            interval: Some(refresh_interval(self.refresh_rate_millihertz())),
+            next_refresh: None,
+        })
     }
 
     /// Answers the current size unchanged: an output is the size of its mode.
