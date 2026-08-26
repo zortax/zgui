@@ -95,7 +95,11 @@ fn a_replay_carries_its_own_ordering() {
     scene.begin_frame(Size::new(400, 400));
     scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)), 0);
     let replayed: Vec<_> = scene.primitives.quads.iter().map(|q| q.order).collect();
-    assert_eq!(replayed, vec![1, 2, 3], "a replay reordered its own primitives");
+    assert_eq!(
+        replayed,
+        vec![1, 2, 3],
+        "a replay reordered its own primitives"
+    );
 }
 
 /// The order is the chunk's own, not the order the encoding frame happened to give it.
@@ -121,7 +125,11 @@ fn a_chunks_orders_are_its_own_and_not_the_frames() {
         scene.primitives.quads.last().is_some_and(|q| q.order > 3),
         "the fixture has to put the frame's orders well above the chunk's"
     );
-    assert_eq!(chunk.orders, vec![1, 2], "the chunk counts from its own floor");
+    assert_eq!(
+        chunk.orders,
+        vec![1, 2],
+        "the chunk counts from its own floor"
+    );
 }
 
 /// A primitive the encoding culled still carries an order, and takes it when a replay admits it.
@@ -144,8 +152,15 @@ fn a_primitive_the_encoding_culled_is_still_ordered_among_its_chunk() {
     let chunk = scene.take_chunk_capture();
 
     assert!(inside.is_some());
-    assert!(outside.is_none(), "the fixture has to have something culled");
-    assert_eq!(chunk.ops.len(), 2, "the capture keeps what the frame refused");
+    assert!(
+        outside.is_none(),
+        "the fixture has to have something culled"
+    );
+    assert_eq!(
+        chunk.ops.len(),
+        2,
+        "the capture keeps what the frame refused"
+    );
     assert_eq!(chunk.orders.len(), 2, "and orders it too");
     scene.finish(&DamageSet::full());
 
@@ -231,7 +246,11 @@ fn a_replay_costs_one_tree_entry_however_many_primitives_it_holds() {
     // The tree's own leaves, rather than the frame counters: those are a process-wide store and
     // these tests run beside one another.
     let leaves = scene.order.len();
-    assert_eq!(scene.primitives.quads.len(), PRIMITIVES, "all of them replayed");
+    assert_eq!(
+        scene.primitives.quads.len(),
+        PRIMITIVES,
+        "all of them replayed"
+    );
     assert_eq!(
         leaves, 1,
         "{PRIMITIVES} primitives that had already been ordered cost {leaves} entries in the \

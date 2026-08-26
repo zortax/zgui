@@ -181,12 +181,16 @@ fn a_shape_with_a_fill_and_a_stroke_is_two_sprites_and_no_vector_item() {
         &zgui_testkit_scene::MonoRaster::new(),
     );
 
-    assert!(report.vector_routes[0]
-        .routes
-        .contains(zgui_paint::VectorRoute::AtlasMask));
-    assert!(!report.vector_routes[0]
-        .routes
-        .contains(zgui_paint::VectorRoute::GeneralRaster));
+    assert!(
+        report.vector_routes[0]
+            .routes
+            .contains(zgui_paint::VectorRoute::AtlasMask)
+    );
+    assert!(
+        !report.vector_routes[0]
+            .routes
+            .contains(zgui_paint::VectorRoute::GeneralRaster)
+    );
     assert!(harness.scene().primitives.vectors.is_empty());
 
     let sprites = &harness.scene().primitives.mono_sprites;
@@ -768,7 +772,12 @@ fn a_drawing_under_a_turn_or_a_scale_stays_on_the_atlas() {
 }
 
 /// The sprite one mask arrives as, and the texels behind it.
-fn sprite_under(transform: &str) -> (zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>, [i32; 2]) {
+fn sprite_under(
+    transform: &str,
+) -> (
+    zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+    [i32; 2],
+) {
     let css = format!(
         "{LARGE_ROOT}
          mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
@@ -862,9 +871,8 @@ fn a_drawing_scaled_to_nothing_reaches_neither_rasteriser() {
 
 /// A bar with no view box, `width` by `height` CSS pixels, filled.
 fn bar_tree(width: u32, height: u32) -> (Element, String) {
-    let path: &'static str = Box::leak(
-        format!("M0 0 L{width} 0 L{width} {height} L0 {height} Z").into_boxed_str(),
-    );
+    let path: &'static str =
+        Box::leak(format!("M0 0 L{width} 0 L{width} {height} L0 {height} Z").into_boxed_str());
     let css = format!(
         "root {{ display: block; width: 1400px; height: 1400px }}
          mark {{ display: block; width: {width}px; height: {height}px; color: rgb(0, 128, 255) }}"

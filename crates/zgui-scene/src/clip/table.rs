@@ -56,6 +56,28 @@ impl ClipTable {
             link,
             parent,
             shift,
+            name: None,
+        })
+    }
+
+    /// The same, for the clip a box imposes on its descendants, named after the box.
+    ///
+    /// The name is the chain's whole identity: the same box under the same parent chain is the
+    /// same chain, whatever rectangle layout gave the box this frame. A resize therefore rewrites
+    /// the rectangle in the slot the chain already holds — one delta for the table's consumers —
+    /// and every record naming the chain keeps naming it.
+    pub fn push_named(
+        &mut self,
+        parent: ClipId,
+        link: ClipLink,
+        shift: Size<DevicePx, Device>,
+        owner: crate::spatial::PropertyOwner,
+    ) -> ClipId {
+        self.intern(ClipNode::Link {
+            link,
+            parent,
+            shift,
+            name: Some(owner),
         })
     }
 
@@ -326,6 +348,7 @@ impl ClipTable {
                 link,
                 parent,
                 shift,
+                ..
             }) = self.get(cursor)
             else {
                 break;
@@ -409,4 +432,80 @@ fn intersect(aabb: &mut [f32; 4], rect: Rect<DevicePx, Device>) {
     let right = (aabb[0] + aabb[2]).min(rect.origin.x.0 + rect.size.width.0);
     let bottom = (aabb[1] + aabb[3]).min(rect.origin.y.0 + rect.size.height.0);
     *aabb = [left, top, (right - left).max(0.0), (bottom - top).max(0.0)];
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_geom::{Point, Rect, Size};
+
+    use super::*;
+    use crate::spatial::PropertyOwner;
+
+    /// A rectangle at `x` with a fixed extent.
+    fn at(x: f32) -> Rect<DevicePx, Device> {
+        Rect::new(
+            Point::new(DevicePx(x), DevicePx(0.0)),
+            Size::new(DevicePx(100.0), DevicePx(50.0)),
+        )
+    }
+
+    /// An owner to name chains after.
+    fn owner(word: u64) -> PropertyOwner {
+        PropertyOwner::new(word).expect("a non-zero word names an owner")
+    }
+
+    #[test]
+    fn a_named_chain_resized_keeps_its_slot_and_notes_one_change() {
+        let mut clips = ClipTable::rooted();
+        let first = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(7));
+        let hash = clips.content_hash(first);
+        let version = clips.version();
+
+        let again = clips.push_named(ClipId::ROOT, ClipLink::rect(at(24.0)), UNMOVED, owner(7));
+        assert_eq!(again, first, "the same box is the same chain at any extent");
+        assert_eq!(
+            clips.content_hash(again),
+            hash,
+            "and the identity every record fingerprinted is unchanged"
+        );
+        assert_eq!(
+            clips.bounds(again),
+            at(24.0),
+            "while it clips where the box now is"
+        );
+
+        let mut changed = Vec::new();
+        clips.changes_since(version, &mut changed);
+        assert_eq!(
+            changed,
+            vec![first],
+            "the rewrite reached the table's consumers"
+        );
+    }
+
+    #[test]
+    fn a_named_chain_restated_unchanged_notes_nothing() {
+        let mut clips = ClipTable::rooted();
+        let first = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(7));
+        let version = clips.version();
+
+        let again = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(7));
+        assert_eq!(again, first);
+        let mut changed = Vec::new();
+        clips.changes_since(version, &mut changed);
+        assert!(changed.is_empty(), "nothing moved, so nothing was noted");
+    }
+
+    #[test]
+    fn a_name_is_the_whole_identity_and_geometry_is_none_of_it() {
+        let mut clips = ClipTable::rooted();
+        let named = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(7));
+        let other = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(8));
+        let unnamed = clips.push(ClipId::ROOT, ClipLink::rect(at(0.0)));
+        assert_ne!(named, other, "two boxes with one rectangle are two chains");
+        assert_ne!(
+            named, unnamed,
+            "a named chain never collides with a settled one"
+        );
+    }
 }

@@ -189,15 +189,19 @@ impl Content for ClipLink {
 ///
 /// # What makes two nodes the same node
 ///
-/// The rectangle a node holds is where its clipping box is being drawn, and a box inside something
-/// that is scrolling is drawn somewhere else on every frame of the scroll. Identity is taken on the
-/// rectangle with that movement subtracted — the same box, wherever the document has been scrolled
-/// to — so a chain interned again as the scroll runs is the chain that was already there, holding
-/// where its box has moved to. Deciding it on the drawn rectangle instead would mint a node per
-/// clipping box per frame, and the table would grow for as long as anything scrolled.
+/// A node that carries a **name** is the clipping *box* it is named after: the same box under the
+/// same parent chain is the same node, whatever rectangle the box has been laid out to. That is
+/// what lets a resize rewrite the rectangle in place — every record naming the chain keeps naming
+/// it, and replays instead of re-encoding. Deciding it on the rectangle instead would mint a node
+/// per clipping box per resize step, and every descendant's record would go stale with each one.
 ///
-/// Everything that *reads* a node reads the rectangle as drawn, because that is what a clip is
-/// applied at.
+/// An unnamed node — a residual chain, a clip minted inside an encoding — is its *settled*
+/// geometry: the rectangle with the scroll's movement subtracted, the same rectangle of the
+/// document wherever the document has been scrolled to. Deciding it on the drawn rectangle would
+/// mint a node per frame for as long as anything scrolled.
+///
+/// Named and unnamed nodes never compare equal, whatever their geometry. Everything that *reads* a
+/// node reads the rectangle as drawn, because that is what a clip is applied at.
 #[derive(Clone, Copy, Debug)]
 pub enum ClipNode {
     /// The chain that clips nothing.
@@ -211,6 +215,8 @@ pub enum ClipNode {
         /// How far the scroll and sticky offsets above the clipping box have carried `link` from
         /// where layout placed it.
         shift: Size<DevicePx, Device>,
+        /// The box the node is named after, where the node is a box's own clip.
+        name: Option<crate::spatial::PropertyOwner>,
     },
 }
 
@@ -229,12 +235,19 @@ impl PartialEq for ClipNode {
         match (self, other) {
             (Self::Root, Self::Root) => true,
             (
-                Self::Link { parent, .. },
+                Self::Link { parent, name, .. },
                 Self::Link {
                     parent: other_parent,
+                    name: other_name,
                     ..
                 },
-            ) => parent == other_parent && self.settled() == other.settled(),
+            ) => {
+                if name.is_some() || other_name.is_some() {
+                    name == other_name && parent == other_parent
+                } else {
+                    parent == other_parent && self.settled() == other.settled()
+                }
+            }
             _ => false,
         }
     }
@@ -244,7 +257,14 @@ impl Content for ClipNode {
     fn content_hash(&self) -> u64 {
         match self {
             Self::Root => ContentHash::new().u32(u32::MAX).finish(),
-            Self::Link { parent, .. } => ContentHash::new()
+            Self::Link {
+                parent,
+                name: Some(owner),
+                ..
+            } => ContentHash::new().u64(owner.get()).u32(parent.0).finish(),
+            Self::Link {
+                parent, name: None, ..
+            } => ContentHash::new()
                 .u64(self.settled().map_or(0, |link| link.content_hash()))
                 .u32(parent.0)
                 .finish(),
@@ -259,13 +279,20 @@ impl Content for ClipNode {
                     link,
                     parent,
                     shift,
+                    name,
                 },
                 Self::Link {
                     link: other_link,
                     parent: other_parent,
                     shift: other_shift,
+                    name: other_name,
                 },
-            ) => link == other_link && parent == other_parent && shift == other_shift,
+            ) => {
+                link == other_link
+                    && parent == other_parent
+                    && shift == other_shift
+                    && name == other_name
+            }
             _ => false,
         }
     }

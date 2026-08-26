@@ -32,9 +32,13 @@ pub fn clips_children(style: &ComputedStyle) -> bool {
 /// not inside the padding, and it takes the box's own corner radii so that content is cut to the
 /// curve rather than to the corner it is inscribed in.
 ///
+/// `owner` names the box, and the name is the chain's identity: the same box under the same parent
+/// chain is the same chain whatever this frame's layout gave it, so a resize rewrites the stored
+/// rectangle in place and every record naming the chain keeps naming it.
+///
 /// `shift` is everything the scroll and sticky offsets above this box have added to where it is
-/// drawn. The chain is named by the padding box less that shift, so a box carried along by a scroll
-/// issues the chain it already issued rather than a new one on every frame of the movement.
+/// drawn. It travels with the link so that a residual chain derived from this one — which is named
+/// by settled geometry rather than by a box — holds still while a scroll runs.
 ///
 /// `space` is the coordinate system the padding box is measured in — the one this box's own
 /// fragments draw under. It travels with the link because the rectangle is only device pixels when
@@ -58,12 +62,13 @@ pub fn chain_for_children(
     scale: f32,
     shift: Size<DevicePx, Device>,
     space: zgui_scene::SpatialId,
+    owner: zgui_scene::PropertyOwner,
 ) -> ClipId {
     if !clips_children(style) {
         return parent;
     }
     let radii = inner_radii(style, padding_box, border, scale);
-    clips.push_shifted(
+    clips.push_named(
         parent,
         ClipLink::RoundedRect {
             rect: padding_box,
@@ -71,6 +76,7 @@ pub fn chain_for_children(
             space,
         },
         shift,
+        owner,
     )
 }
 
@@ -153,6 +159,11 @@ mod tests {
         )
     }
 
+    /// An owner to name chains after.
+    fn owner(word: u64) -> zgui_scene::PropertyOwner {
+        zgui_scene::PropertyOwner::new(word).expect("a non-zero word names an owner")
+    }
+
     #[test]
     fn a_box_that_clips_nothing_leaves_the_chain_it_was_given() {
         let style = StyleDraft::initial().build();
@@ -167,6 +178,7 @@ mod tests {
             1.0,
             UNMOVED,
             zgui_scene::SpatialId::VIEWPORT,
+            owner(1),
         );
         assert_eq!(chain, ClipId::ROOT);
         assert_eq!(clips.len(), 1, "no link was interned");
@@ -188,6 +200,7 @@ mod tests {
             1.0,
             UNMOVED,
             zgui_scene::SpatialId::VIEWPORT,
+            owner(1),
         );
         assert_eq!(clips.len(), 2, "the root and the box's own link");
 
@@ -203,6 +216,7 @@ mod tests {
             1.0,
             by,
             zgui_scene::SpatialId::VIEWPORT,
+            owner(1),
         );
         assert_eq!(again, first, "the same clipping box is the same chain");
         assert_eq!(clips.len(), 2, "and nothing was interned for the movement");
@@ -210,6 +224,49 @@ mod tests {
             clips.bounds(again),
             rect().translate(by),
             "while the chain clips where the box now is"
+        );
+    }
+
+    #[test]
+    fn a_clipping_box_laid_out_to_a_new_extent_keeps_the_chain_it_had() {
+        let mut draft = StyleDraft::initial();
+        draft.box_group().overflow_y = zgui_css::values::size::OverflowValue::Hidden;
+        let style = draft.build();
+        let mut clips = ClipTable::rooted();
+        let first = chain_for_children(
+            &mut clips,
+            ClipId::ROOT,
+            &style,
+            rect(),
+            Edges::ZERO,
+            1.0,
+            UNMOVED,
+            zgui_scene::SpatialId::VIEWPORT,
+            owner(1),
+        );
+
+        // The same box after a resize: the window is wider, so layout gave it a wider padding box.
+        let wider = Rect::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(148.0), DevicePx(50.0)),
+        );
+        let again = chain_for_children(
+            &mut clips,
+            ClipId::ROOT,
+            &style,
+            wider,
+            Edges::ZERO,
+            1.0,
+            UNMOVED,
+            zgui_scene::SpatialId::VIEWPORT,
+            owner(1),
+        );
+        assert_eq!(again, first, "the same clipping box is the same chain");
+        assert_eq!(clips.len(), 2, "and nothing was interned for the resize");
+        assert_eq!(
+            clips.bounds(again),
+            wider,
+            "while the chain clips the extent the box now has"
         );
     }
 

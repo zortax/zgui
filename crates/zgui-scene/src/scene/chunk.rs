@@ -308,9 +308,10 @@ fn order_of(prims: &crate::scene::primitives::Primitives, op: PaintOp) -> DrawOr
         PrimitiveKind::Shadow => prims.shadows.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Decoration => prims.decorations.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::MonoSprite => prims.mono_sprites.get(index).map_or(0, |prim| prim.order),
-        PrimitiveKind::SubpixelSprite => {
-            prims.subpixel_sprites.get(index).map_or(0, |prim| prim.order)
-        }
+        PrimitiveKind::SubpixelSprite => prims
+            .subpixel_sprites
+            .get(index)
+            .map_or(0, |prim| prim.order),
         PrimitiveKind::ColorSprite => prims.color_sprites.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::External => prims.externals.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Backdrop => prims.backdrops.get(index).map_or(0, |prim| prim.order),
@@ -326,9 +327,7 @@ fn ink_of(chunk: &ChunkPrims, op: PaintOp) -> Option<Rect<DevicePx, Device>> {
         PrimitiveKind::Shadow => chunk.shadows.get(index).map(Shadow::ink),
         PrimitiveKind::Decoration => chunk.decorations.get(index).map(Decoration::ink),
         PrimitiveKind::MonoSprite => chunk.mono_sprites.get(index).map(MonoSprite::ink),
-        PrimitiveKind::SubpixelSprite => {
-            chunk.subpixel_sprites.get(index).map(SubpixelSprite::ink)
-        }
+        PrimitiveKind::SubpixelSprite => chunk.subpixel_sprites.get(index).map(SubpixelSprite::ink),
         PrimitiveKind::ColorSprite => chunk.color_sprites.get(index).map(ColorSprite::ink),
         PrimitiveKind::External => chunk.externals.get(index).map(ExternalQuad::ink),
         PrimitiveKind::Backdrop => chunk.backdrops.get(index).map(|prim| prim.bounds),
@@ -582,6 +581,7 @@ impl Scene {
                 link,
                 parent,
                 shift,
+                ..
             }) = self.clips.get(*id)
             else {
                 continue;
@@ -603,7 +603,9 @@ impl Scene {
         // frame, and the largest thing inside that walk was re-inserting every primitive of every
         // replayed row to rediscover an order none of them had changed.
         let base = chunk.carries_orders().then(|| {
-            let ink = chunk.ink.expect("a chunk that carries orders carries its ink");
+            let ink = chunk
+                .ink
+                .expect("a chunk that carries orders carries its ink");
             let moved = Rect::new(
                 zgui_geom::Point::new(
                     DevicePx(ink.origin.x.0 + by.width.0),
@@ -611,8 +613,7 @@ impl Scene {
                 ),
                 ink.size,
             );
-            self.order
-                .insert_block(moved, chunk.span.saturating_sub(1))
+            self.order.insert_block(moved, chunk.span.saturating_sub(1))
         });
         for (position, op) in chunk.ops.iter().enumerate() {
             let index = op.index as usize;

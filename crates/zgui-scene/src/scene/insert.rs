@@ -85,7 +85,14 @@ impl Scene {
 
     /// Pushes a rounded rectangle, returning the order it took or `None` if it was culled.
     pub fn push_quad(&mut self, mut quad: Quad) -> Option<DrawOrder> {
-        tee!(self, Quad, quads, self.space_at(quad.transform), quad.ink(), quad);
+        tee!(
+            self,
+            Quad,
+            quads,
+            self.space_at(quad.transform),
+            quad.ink(),
+            quad
+        );
         let order = self.assign_order(quad.ink(), quad.clip_id(), quad.transform)?;
         quad.order = order;
         let space = self.space_at(quad.transform);
@@ -284,7 +291,14 @@ impl Scene {
     /// the log out of step with what was drawn, which is what
     /// [`Scene::unreplayable`](Scene::unreplayable) counts.
     pub fn push_vector(&mut self, mut item: VectorItem) -> Option<DrawOrder> {
-        tee!(self, Vector, vectors, item.transform, item.local_ink, item.clone());
+        tee!(
+            self,
+            Vector,
+            vectors,
+            item.transform,
+            item.local_ink,
+            item.clone()
+        );
         self.note_unreplayable();
         // The order and the cull read the ink measured in the subtree's own space, exactly as they
         // do for every other primitive: `item.ink` has the item's transform applied, and testing it
@@ -327,7 +341,14 @@ impl Scene {
 
     /// Pushes a backdrop filter, returning the order it took or `None` if it was culled.
     pub fn push_backdrop(&mut self, mut backdrop: BackdropFilter) -> Option<DrawOrder> {
-        tee!(self, Backdrop, backdrops, None, backdrop.bounds, backdrop.clone());
+        tee!(
+            self,
+            Backdrop,
+            backdrops,
+            None,
+            backdrop.bounds,
+            backdrop.clone()
+        );
         let order =
             self.assign_order(backdrop.bounds, backdrop.clip, SpatialId::VIEWPORT.index())?;
         backdrop.order = order;

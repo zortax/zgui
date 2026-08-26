@@ -167,6 +167,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             scale,
             shift,
             space,
+            zgui_scene::PropertyOwner::of(key),
         )
     }
 

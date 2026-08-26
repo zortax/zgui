@@ -294,6 +294,7 @@ pub(crate) fn place(
         // The box's own space, transform and all: a transform on a clipping box carries its clip
         // with it, which is the same matrix its own fragments are drawn through.
         space,
+        PropertyOwner::of(key),
     );
     let clips_children = child_clip != from.clip;
 
