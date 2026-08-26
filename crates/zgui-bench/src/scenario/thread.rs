@@ -392,11 +392,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: cost.p50,
                 band: Band::Time {
-                    baseline: 51.0,
+                    baseline: 13.2,
                     tolerance: STARTUP_TOLERANCE,
                 },
-                rationale: "the measured on-screen p50 of one width step over the thread, which \
-                            every paragraph in it currently pays into",
+                rationale: "measured at 51ms before the resize retention work: the clip identity \
+                            fix alone took it to 13, and the counts beside this say where the \
+                            rest goes",
                 budget: Some(8.0),
                 spread: Some(cost),
             },
@@ -405,7 +406,7 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: cost.p95,
                 band: Band::Time {
-                    baseline: 53.0,
+                    baseline: 15.0,
                     tolerance: STARTUP_TOLERANCE,
                 },
                 rationale: "the shoulder of the same distribution: a drag is judged by its worst \
