@@ -170,30 +170,46 @@ pub(crate) enum Fixture {
 /// Panics when the reactive runtime's executor slot is already taken, which is a program that
 /// mounted two applications on one thread rather than a measurement that failed.
 pub(crate) fn runtime(fixture: Fixture) -> Runtime {
+    match fixture {
+        Fixture::Table => custom(SHEET, |cx| {
+            Box::new(view! { Table(rows = TABLE_ROWS) }.into_view().build(cx))
+        }),
+        Fixture::Still => custom(SHEET, |cx| {
+            Box::new(view! { Table(rows = STILL_ROWS) }.into_view().build(cx))
+        }),
+        Fixture::LongList => custom(SHEET, |cx| {
+            Box::new(view! { LongList() }.into_view().build(cx))
+        }),
+    }
+}
+
+/// Builds the runtime over `sheet` holding whatever `build` mounts.
+///
+/// The seam a scenario with a document of its own comes through, so the font stack, the renderer
+/// and the window's stated size are the same for every measurement whatever it is taken over.
+///
+/// # Panics
+///
+/// Panics when the reactive runtime's executor slot is already taken, which is a program that
+/// mounted two applications on one thread rather than a measurement that failed.
+pub(crate) fn custom(
+    sheet: &'static str,
+    build: impl FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
+) -> Runtime {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
     let raster = fonts.clone();
-    let app = zgui::runtime::App::new()
+    zgui::runtime::App::new()
         .with_title("zgui-bench")
         .with_size(crate::gallery::WIDTH, crate::gallery::HEIGHT)
-        .with_stylesheet(SHEET)
+        .with_stylesheet(sheet)
         .with_renderer(Box::new(crate::draw::renderer))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()));
-    let built = match fixture {
-        Fixture::Table => app.into_handler(|cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
-            Box::new(view! { Table(rows = TABLE_ROWS) }.into_view().build(cx))
-        }),
-        Fixture::Still => app.into_handler(|cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
-            Box::new(view! { Table(rows = STILL_ROWS) }.into_view().build(cx))
-        }),
-        Fixture::LongList => app.into_handler(|cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
-            Box::new(view! { LongList() }.into_view().build(cx))
-        }),
-    };
-    built.expect("the reactive runtime installs")
+        .with_glyph_raster(Box::new(move || raster.raster()))
+        .into_handler(build)
+        .expect("the reactive runtime installs")
 }
