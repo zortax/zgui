@@ -36,6 +36,24 @@ impl Extent {
         }
     }
 
+    /// The granularity width and height are asked for at.
+    ///
+    /// The class every other resize-sensitive texture in the workspace rounds to. A drag whose
+    /// regions grow a few pixels per frame otherwise reallocates the texture on every step; per
+    /// class, it reallocates once per 256 pixels crossed, at a bounded cost in texels held.
+    pub const SIZE_CLASS: u32 = 256;
+
+    /// This extent with its width and height rounded up to the class, layers untouched.
+    #[must_use]
+    pub fn classed(self) -> Self {
+        let up = |texels: u32| texels.max(1).div_ceil(Self::SIZE_CLASS) * Self::SIZE_CLASS;
+        Self {
+            width: up(self.width),
+            height: up(self.height),
+            layers: self.layers,
+        }
+    }
+
     /// The smallest extent containing both.
     pub fn union(self, other: Self) -> Self {
         Self {
@@ -212,5 +230,35 @@ mod tests {
             None,
             "a texture already the right size must not be reallocated for being the right size"
         );
+    }
+
+    #[test]
+    fn a_classed_drag_reallocates_per_class_crossed_and_never_per_step() {
+        let mut decay = Decay::new();
+        let now = Instant::now();
+        let mut allocations = 0;
+        for step in 0..100u32 {
+            let want = Extent::new(800 + step * 8, 600, 4).classed();
+            if decay
+                .wants_at(want, later(now, u64::from(step) * 16))
+                .is_some()
+            {
+                allocations += 1;
+            }
+        }
+        // 800 through 1592 texels crosses the classes at 1024, 1280 and 1536, plus the first
+        // allocation itself.
+        assert_eq!(
+            allocations, 4,
+            "a 100-step grow-drag reallocated {allocations} times"
+        );
+    }
+
+    #[test]
+    fn a_classed_extent_rounds_up_and_keeps_its_layers() {
+        assert_eq!(Extent::new(1, 1, 7).classed(), Extent::new(256, 256, 7));
+        assert_eq!(Extent::new(256, 512, 3).classed(), Extent::new(256, 512, 3));
+        assert_eq!(Extent::new(257, 511, 3).classed(), Extent::new(512, 512, 3));
+        assert_eq!(Extent::new(0, 0, 1).classed(), Extent::new(256, 256, 1));
     }
 }

@@ -69,11 +69,14 @@ impl Scratch {
     /// down is not, because a scroll's demand swings frame to frame and a texture reallocated on the
     /// quiet frame between two busy ones costs more than it saves.
     pub fn ensure(&mut self, gpu: &Gpu, width: u32, height: u32, layers: u32) {
+        // Rounded to the class before the decay sees it, so a drag growing the regions a few
+        // pixels a frame asks for the same extent all the way across one class.
         let want = Extent::new(
             width.max(1),
             height.max(1),
             layers.clamp(Self::LAYERS, Self::MAX_LAYERS),
-        );
+        )
+        .classed();
         if let Some(extent) = self.decay.wants(want) {
             self.allocate(gpu, extent);
         }
