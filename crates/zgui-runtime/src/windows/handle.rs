@@ -135,16 +135,22 @@ impl WindowHandle {
     }
 
     /// Records the size and density the window actually turned out to have.
+    ///
+    /// Each signal is written only when its value moved. A drag delivers a configure per step, and
+    /// a step that changed the width alone must wake the readers of the width alone — a scale
+    /// signal that fires with an unchanged value re-runs every effect reading it, once per step.
     pub(crate) fn set_geometry(
         &self,
         size: zgui_geom::Size<zgui_geom::DevicePx, zgui_geom::Device>,
         scale: f32,
     ) {
-        self.shared.scale.set(scale);
-        self.shared.size.set(Size::new(
-            CssPx(size.width.0 / scale),
-            CssPx(size.height.0 / scale),
-        ));
+        if self.shared.scale.get_untracked() != scale {
+            self.shared.scale.set(scale);
+        }
+        let size = Size::new(CssPx(size.width.0 / scale), CssPx(size.height.0 / scale));
+        if self.shared.size.get_untracked() != size {
+            self.shared.size.set(size);
+        }
     }
 
     /// Records whether the window holds the keyboard.
