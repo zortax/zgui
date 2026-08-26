@@ -25,7 +25,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "zgui-geom",
         "plain-old-data impls for the types that cross to the GPU",
     ),
-    ("zgui-render-wgpu", "GPU resource handling"),
+    (
+        "zgui-render-wgpu",
+        "loading a pipeline cache from a stored blob, and creating a device through wgpu's hal so \
+         that it enables the Vulkan device extensions a caller asked for",
+    ),
     (
         "zgui-render-vector-vello",
         "creating a pipeline cache from a stored blob",
@@ -37,6 +41,32 @@ const ALLOWLIST: &[(&str, &str)] = &[
     (
         "zgui-platform-wayland",
         "borrowing the compositor's display and surface pointers as window handles",
+    ),
+    (
+        "zgui-drm",
+        "the ioctls, the mapping of a dumb buffer, and taking ownership of the descriptor a \
+         dma-buf export hands back",
+    ),
+    (
+        "zgui-evdev",
+        "the ioctls, and reading an event record out of a byte buffer",
+    ),
+    (
+        "zgui-xkb",
+        "loading libxkbcommon at run time, and every call made into it",
+    ),
+    (
+        "zgui-seat",
+        "loading libseat at run time, and every call made into it",
+    ),
+    (
+        "zgui-libinput",
+        "loading libinput at run time, and every call made into it",
+    ),
+    (
+        "zgui-platform-drm",
+        "the two `borrow_raw` calls that report a surface's DRM handles, and the Vulkan calls that \
+         make the images a display scans out of — every one of those is reached through wgpu's hal",
     ),
 ];
 

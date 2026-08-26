@@ -59,6 +59,35 @@ fn a_known_pattern_survives_composition_and_the_copy_to_the_surface() {
         [255, 0, 0, 255],
         "just outside the square"
     );
+
+    // The whole rectangle, read the way a caller copying it out reads it. A scanout takes the
+    // bytes in one go and is told which order they are in, so the two ways of reading one pixel
+    // have to agree at every pixel.
+    let size = pixels.size();
+    let bytes = pixels.bytes();
+    assert_eq!(
+        bytes.len(),
+        (size.width * size.height * 4) as usize,
+        "the bytes are tightly packed, four to a pixel"
+    );
+    for y in 0..size.height {
+        for x in 0..size.width {
+            let offset = ((y * size.width + x) * 4) as usize;
+            let raw: [u8; 4] = bytes[offset..offset + 4]
+                .try_into()
+                .expect("four bytes make a pixel");
+            let expected = if pixels.is_bgra() {
+                [raw[2], raw[1], raw[0], raw[3]]
+            } else {
+                raw
+            };
+            assert_eq!(
+                pixels.rgba(x, y),
+                expected,
+                "the bytes at ({x}, {y}) are the pixel read there"
+            );
+        }
+    }
 }
 
 #[test]

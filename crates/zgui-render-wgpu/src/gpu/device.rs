@@ -1,10 +1,12 @@
 //! Opening a device, and what the one that opened can do.
 
+use std::ffi::CStr;
 use std::sync::Arc;
 
 use zgui_render::RenderCapabilities;
 
 use crate::gpu::adapter;
+use crate::gpu::extensions;
 use crate::gpu::loss::DeviceLoss;
 
 /// The optional features asked for when they are offered, and done without when they are not.
@@ -35,6 +37,8 @@ pub struct Gpu {
     queue: wgpu::Queue,
     /// What this device can do.
     capabilities: RenderCapabilities,
+    /// The Vulkan device extensions enabled beyond the ones wgpu asks for.
+    extensions: Vec<&'static CStr>,
     /// Whether the device has been reported lost.
     loss: Arc<DeviceLoss>,
 }
@@ -44,22 +48,74 @@ impl Gpu {
     ///
     /// A GL adapter is asked for the downlevel limit set rather than its own, because its own is
     /// routinely more than a device created from it will grant.
-    pub fn open(instance: wgpu::Instance, adapter: wgpu::Adapter) -> Result<Self, String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the message `request_device` refused with.
+    ///
+    /// # Vulkan device extensions
+    ///
+    /// `extensions` names Vulkan device extensions to enable on top of the ones wgpu asks for. A
+    /// Vulkan image created with a DRM format modifier and exported as a dma-buf needs some of
+    /// them, and a device extension can be enabled only while the device is created, so the list
+    /// has to arrive here. The empty slice is the ordinary request and takes the ordinary path,
+    /// unchanged in every respect.
+    ///
+    /// Which names an exported image needs is the console backend's constant to state, and nothing
+    /// here counts them. wgpu-hal 29.0.4 enables `VK_KHR_external_memory_fd` and
+    /// `VK_EXT_external_memory_dma_buf` on any physical device that has them, so such a list adds
+    /// fewer names than it holds.
+    ///
+    /// The list is all-or-nothing. Where the adapter is Vulkan and its physical device has every
+    /// name, the device is created through wgpu's hal with all of them enabled. Everything else —
+    /// a GL adapter, one missing name, a driver that refuses — opens the device the ordinary way
+    /// and leaves [`Gpu::vulkan_extensions`] empty. A caller reads that method and does what it
+    /// can do without them.
+    ///
+    /// The list has to be **dependency-closed**: an extension that requires another one requires
+    /// that name here too. Only the names given are checked against the physical device, and
+    /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387` requires the list to hold every
+    /// extension required by a name in it. A list that breaks the rule is undefined behaviour, and
+    /// a driver that answers `VK_ERROR_EXTENSION_NOT_PRESENT` reaches the same panic inside
+    /// wgpu-hal that a missing name reaches. In `vk.xml`, every name the console backend's
+    /// constant holds requires core Vulkan 1.2 or another name in that constant:
+    /// `VK_EXT_external_memory_dma_buf` requires `VK_KHR_external_memory_fd`.
+    pub fn open(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        extensions: &[&'static CStr],
+    ) -> Result<Self, String> {
         let info = adapter.get_info();
         let limits = if info.backend == wgpu::Backend::Gl {
             wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
         } else {
             adapter.limits()
         };
-        let (device, queue) =
-            futures::executor::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("zgui.device"),
-                required_features: optional_features() & adapter.features(),
-                required_limits: limits,
-                ..Default::default()
-            }))
-            .map_err(|error| error.to_string())?;
+        // Derived once and read by both paths. The hal path creates the device itself, so a
+        // feature set or a limit set of its own would give a device capabilities the ordinary path
+        // never grants, with nothing anywhere to report the difference.
+        let descriptor = wgpu::DeviceDescriptor {
+            label: Some("zgui.device"),
+            required_features: optional_features() & adapter.features(),
+            required_limits: limits,
+            ..Default::default()
+        };
+        let (device, queue, extensions) = match extensions::open(&adapter, extensions, &descriptor)
+        {
+            Some(opened) => opened,
+            None => {
+                let (device, queue) =
+                    futures::executor::block_on(adapter.request_device(&descriptor))
+                        .map_err(|error| error.to_string())?;
+                (device, queue, Vec::new())
+            }
+        };
 
+        // Registered outside the match, so that a device from either arm has it. A device opened
+        // through the hal reports a loss the same way, and one with no watcher would go on drawing
+        // into a dead device with nothing to notice it. No test would see an arm that lost this:
+        // the suite injects a loss through `DeviceLoss::report`, because a real one cannot be
+        // provoked.
         let loss = Arc::new(DeviceLoss::new());
         let watcher = Arc::clone(&loss);
         device.set_device_lost_callback(move |reason, message| watcher.report(reason, &message));
@@ -71,6 +127,7 @@ impl Gpu {
             device,
             queue,
             capabilities,
+            extensions,
             loss,
         })
     }
@@ -101,6 +158,19 @@ impl Gpu {
     /// What this device can do.
     pub fn capabilities(&self) -> RenderCapabilities {
         self.capabilities
+    }
+
+    /// Returns the Vulkan device extensions enabled beyond the ones wgpu asks for.
+    ///
+    /// The names that were asked for. wgpu-hal appends them to the list `vkCreateDevice` is given,
+    /// so a device that opened is a device that has them. Empty on four occasions: where nothing
+    /// asked for any, where the adapter is a GL one or the target has no Vulkan backend at all,
+    /// where the physical device lacks a name that was asked for, and where the driver refused a
+    /// device carrying them. So this is the answer to whether they were enabled, and it is an
+    /// answer a caller has to read: an image created for an extension the device never enabled is
+    /// refused much later, by a call that names something else entirely.
+    pub fn vulkan_extensions(&self) -> &[&'static CStr] {
+        &self.extensions
     }
 
     /// Whether the device has been reported lost.

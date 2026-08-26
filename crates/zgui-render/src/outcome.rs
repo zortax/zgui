@@ -19,19 +19,31 @@ pub struct FrameStats {
 
 /// Why a frame did not reach the screen.
 ///
-/// Every variant but [`SkipReason::Unconfigured`] means the frame's work **was** submitted: the
-/// target it composes into holds this frame's pixels, and its damage is retired. Only an
-/// unconfigured surface skips before any work is recorded, so only that one retains damage for the
-/// next attempt.
+/// Most variants mean the frame's work **was** submitted: the target it composes into holds this
+/// frame's pixels, and its damage is retired. Three of them skip before anything is recorded —
+/// [`SkipReason::Unconfigured`], [`SkipReason::Unacquired`] and [`SkipReason::DeviceUnavailable`] —
+/// so those three retain damage for the next attempt. [`FrameOutcome::retires_damage`] answers
+/// which a variant is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SkipReason {
     /// The surface has not been configured yet, so nothing was recorded and nothing was submitted.
     ///
-    /// The one arm that retains damage.
+    /// One of the three arms that retains damage. Ask for another frame: configuring the surface is
+    /// the first thing the next one does.
     Unconfigured,
     /// Acquiring a surface to present into timed out. Ask for another frame.
     Timeout,
+    /// Nothing could be taken to compose into, so nothing was recorded.
+    ///
+    /// A renderer that composes straight into the buffer a display scans out of is handed that
+    /// buffer before it draws, and a display with none free stops the frame there. Ask for another
+    /// frame: one refresh interval later a buffer is free. The damage this frame was going to draw
+    /// is still owed, so this arm retains it.
+    ///
+    /// [`SkipReason::Timeout`] is the same refusal met *after* the frame was composed, where the
+    /// work was submitted and the damage retires.
+    Unacquired,
     /// The window is not visible. **Do not** ask for another frame — waiting for a platform event
     /// or a timer deadline is the difference between a parked loop and a busy one.
     Occluded,
@@ -85,7 +97,9 @@ impl FrameOutcome {
     pub const fn retires_damage(&self) -> bool {
         !matches!(
             self,
-            Self::Skipped(SkipReason::Unconfigured | SkipReason::DeviceUnavailable)
+            Self::Skipped(
+                SkipReason::Unconfigured | SkipReason::Unacquired | SkipReason::DeviceUnavailable
+            )
         )
     }
 
@@ -93,6 +107,9 @@ impl FrameOutcome {
     ///
     /// False for an occluded surface, which waits for a platform event instead: honouring a redraw
     /// request there is precisely how an invisible window ends up running at full rate.
+    ///
+    /// True for a frame that was refused what it would compose into. The buffer frees when the flip
+    /// holding it completes, and the frame still owes everything it was going to draw.
     pub const fn wants_another_frame(&self) -> bool {
         match self {
             Self::Presented(_) => false,
@@ -173,12 +190,32 @@ mod tests {
         assert!(FrameOutcome::Skipped(SkipReason::Validation).retires_damage());
         assert!(FrameOutcome::Recovered.retires_damage());
 
-        for arm in [SkipReason::Unconfigured, SkipReason::DeviceUnavailable] {
+        for arm in [
+            SkipReason::Unconfigured,
+            SkipReason::Unacquired,
+            SkipReason::DeviceUnavailable,
+        ] {
             assert!(
                 !FrameOutcome::Skipped(arm).retires_damage(),
                 "{arm:?} records nothing, so it must keep its damage"
             );
         }
+    }
+
+    /// The two skips an acquisition that gave nothing can produce.
+    ///
+    /// What separates them is when the frame met it. A timeout arrives after the composition, with
+    /// the target already holding this frame's pixels; a refused buffer arrives before the frame
+    /// drew anything.
+    #[test]
+    fn a_frame_refused_what_it_would_compose_into_keeps_its_damage() {
+        assert!(!FrameOutcome::Skipped(SkipReason::Unacquired).retires_damage());
+        assert!(FrameOutcome::Skipped(SkipReason::Timeout).retires_damage());
+        assert!(
+            FrameOutcome::Skipped(SkipReason::Unacquired).wants_another_frame(),
+            "the buffer frees when the flip holding it completes, so the next frame draws what \
+             this one still owes"
+        );
     }
 
     #[test]

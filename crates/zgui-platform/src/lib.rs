@@ -93,7 +93,7 @@ pub use crate::surface::{
     Anchor, BadIcon, Constrain, CursorStyle, DecorationSource, Decorations, DragEvent,
     FullscreenMode, GpuSurface, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement,
     PresentPacing, PresentationTiming, ResizeEdge, Surface, SurfaceAttributes, SurfaceEvent,
-    SurfaceId, SurfaceRole, TextInput, TextInputPurpose, WindowIcon, WindowLevel,
+    SurfaceId, SurfaceRole, TextInput, TextInputPurpose, Watchdog, WindowIcon, WindowLevel,
 };
 pub use crate::theme::ColorScheme;
 pub use crate::waker::Waker;

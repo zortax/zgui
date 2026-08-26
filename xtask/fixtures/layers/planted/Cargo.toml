@@ -1,0 +1,3 @@
+# Fixture workspace for `cargo xtask ledger layers`.
+[workspace]
+members = ["crates/*"]

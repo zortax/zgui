@@ -2,6 +2,7 @@
 
 pub mod adapter;
 pub mod device;
+pub(crate) mod extensions;
 pub mod formats;
 pub mod loss;
 pub mod pipeline_cache;

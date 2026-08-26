@@ -1,0 +1,9 @@
+[package]
+name = "zgui-color"
+version = "0.1.0"
+edition = "2024"
+
+# L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
+# A same-layer edge, which the rule permits: one stage in a layer supplies data to another.
+[dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }

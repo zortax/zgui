@@ -4,10 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# L6 — frontend. Every dependency is inherited: `foo.workspace = true`.
+#
 # The bridge behind trait-based custom elements: the user-facing `CustomElement` trait, the
 # registry its implementations live in, and the adapters that answer the layout and paint seams
 # from it. Positioned like zgui-view-dom — it names both the view layer and the engines, so that
-# neither has to name the other. Every dependency is inherited: `foo.workspace = true`.
+# neither has to name the other.
 [dependencies]
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }

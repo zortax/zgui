@@ -44,6 +44,23 @@ impl Pixels {
         }
     }
 
+    /// Returns the bytes, row-major and tightly packed, four to a pixel.
+    ///
+    /// In the order the texture stores them, so [`Pixels::is_bgra`] says which order that is.
+    /// [`Pixels::rgba`] is for asserting on one pixel; this is for a caller copying the whole
+    /// rectangle somewhere else, where a call per pixel would be millions of calls a frame.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Returns `true` where the bytes store blue first.
+    ///
+    /// A caller handing these to something that names its own formats — a scanout, a codec — has
+    /// to say which order they are in, and the texture's format is what decided it.
+    pub fn is_bgra(&self) -> bool {
+        self.bgra
+    }
+
     /// The extent that was read.
     pub fn size(&self) -> Size<i32, Device> {
         self.size

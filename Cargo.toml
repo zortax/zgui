@@ -70,11 +70,28 @@ naga = "29.0.4"
 # Encoding that representation, and nothing else. A shader's intermediate form is written by a
 # build script and read by the program it was built for, so the two ends are always the same build.
 bincode = "1.3"
+# Vulkan itself, named only by `zgui-platform-drm`. A buffer a display controller scans out of is a
+# Vulkan image created with a DRM format modifier, backed by exportable memory and handed to the
+# kernel as a dma-buf. wgpu's API describes none of those three, so the image is built in Vulkan's
+# own types and reaches wgpu through its hal at the end.
+#
+# The version is the one wgpu-hal links and it has to stay that way. wgpu-hal does not re-export
+# `ash`, so `vk::Image` crosses between two crates that each name the dependency for themselves,
+# and two copies of ash in the graph are two unrelated types under one spelling: `texture_from_raw`
+# would refuse the image. wgpu-hal 29.0.4 asks for `ash = "0.38"`, `Cargo.lock` resolves that to
+# 0.38.0+1.3.281, and the versions ledger holds the graph to one copy.
+ash = "0.38"
 
-# --- platform: named only by zgui-platform-winit -------------------------------------------
+# --- platform, clipboards and accessibility --------------------------------------------------
+# `winit`, `accesskit_winit`, `arboard`, `smithay-clipboard` and `zbus` are the windowing
+# backend's: `zgui-platform-winit` is the only crate that ships one of them, and `probe`, the
+# canary that compiles the pinned versions together, links winit and the winit adapter beside it.
 winit = "0.30.13"
+# The accessibility tree, which belongs to no one backend: nine crates may name it and eight do,
+# from the vocabulary a node is described in up to each backend of the platform contract.
 accesskit = "0.24.1"
 accesskit_winit = "0.33.2"
+# Reading a published tree back, named by `zgui-runtime` and `zgui-ui`.
 accesskit_consumer = "0.38.0"
 
 # --- platform: named only by zgui-platform-wayland ------------------------------------------
@@ -109,9 +126,9 @@ calloop-wayland-source = "0.4.1"
 # The compositor's own extensions, for the layer shell and — under test — for the virtual input
 # device that gives a headless session something to move.
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
-# The monotonic clock the compositor stamps its presentation feedback in, so that a reported
-# presentation can be placed on the same timeline the frame loop schedules against.
-rustix = { version = "1.1", features = ["event", "time"] }
+# rustix is named here too, for the monotonic clock the compositor stamps its presentation feedback
+# in. One workspace entry serves both backends; it is below, with the kernel's interfaces.
+
 # The accessibility adapter for this desktop. `accesskit_winit` wraps the same one; this backend
 # has no winit to wrap it with.
 accesskit_unix = "0.22.1"
@@ -120,6 +137,8 @@ accesskit_unix = "0.22.1"
 arboard = { version = "3.6", default-features = false }
 smithay-clipboard = "0.7"
 zbus = "5.18"
+# The native handles a surface hands a graphics API, named by the platform contract and by both
+# backends that implement it.
 raw-window-handle = "0.6.2"
 
 # --- reactivity: named only by zgui-reactive ------------------------------------------------
@@ -137,10 +156,10 @@ futures = { version = "0.3", features = ["thread-pool"] }
 
 # --- the tokio backend: named only by zgui-tokio ---------------------------------------------
 # `default-features = false` because this crate wants a runtime and its synchronisation, and none
-# of the process, signal or io-std machinery a default tokio brings. `rt-multi-thread` is what
-# makes background work actually concurrent; `time` and `net` are what an application installs this
-# for in the first place, and leaving them out would make `tokio::time::sleep` panic at runtime
-# inside a framework that had just promised it worked.
+# of the process, signal or io-std machinery a default tokio brings. `rt-multi-thread` makes
+# background work actually concurrent; `time` and `net` are why an application installs this in the
+# first place, and leaving them out would make `tokio::time::sleep` panic at runtime inside a
+# framework that had just promised it worked.
 tokio = { version = "1", default-features = false, features = [
     "rt",
     "rt-multi-thread",
@@ -153,18 +172,18 @@ tokio = { version = "1", default-features = false, features = [
 kurbo = "0.13.1"
 peniko = "0.6.1"
 # --- vector documents: named only by zgui-svg -------------------------------------------------
-# A parser, not a renderer: it resolves an SVG document into a tree of paths, paints and clips
-# and draws nothing itself, which is why it can sit under a rendering model of our own that two
-# different rasterisers implement. `default-features = false` drops the `text` feature, and with
-# it fontdb, rustybuzz and a second font stack alongside the one this framework already has.
+# A parser and nothing else: it resolves an SVG document into a tree of paths, paints and clips
+# and draws nothing itself, so it sits under a rendering model of our own that two different
+# rasterisers implement. `default-features = false` drops the `text` feature, and with it fontdb,
+# rustybuzz and a second font stack alongside the one this framework already has.
 usvg = { version = "0.46.0", default-features = false }
 etagere = "0.3"
 bytemuck = { version = "1.25", features = ["derive"] }
 
 # --- raster image codecs: named only by zgui-image --------------------------------------------
 # `default-features = false` because the default set links every codec the crate knows, rayon and
-# all; the four here are what `image(src=...)` promises to show. GIF decodes to its first frame —
-# animation is a scheduling question, not a decoding one, and it does not belong in this crate.
+# all; the four here cover what `image(src=...)` promises to show. GIF decodes to its first frame —
+# animation is a scheduling question, and it does not belong in this crate.
 image = { version = "0.25", default-features = false, features = [
     "png",
     "jpeg",
@@ -186,6 +205,41 @@ rustc-hash = "2.1"
 smallvec = "1.15"
 rayon = "1.12"
 toml = "1.1"
+
+# --- the kernel's interfaces: named by zgui-drm, zgui-evdev, zgui-platform-drm -----------------
+# `default-features = false` states the feature list in full. `std` is the only default and it is
+# back in the list below; what stays off is `use-libc`, so rustix takes its `linux_raw` backend on
+# Linux and a call reaches the kernel without passing through libc.
+#
+# `fs` opens a device node, reads back the flags it was opened with, and watches `/dev/input`
+# through inotify for a node that arrives later. `mm` maps a dumb buffer. `event` covers the
+# eventfd a wake channel is and the `poll` a frame loop parks in. `time` reads `CLOCK_MONOTONIC`,
+# to anchor the clock an input report is stamped against to the frame loop's own origin; without
+# it the two share no zero.
+#
+# `zgui-platform-wayland` reads that same clock, for the timeline its presentation feedback is
+# stamped in. A workspace entry is one entry, so this list is the union and every member takes all
+# of it.
+rustix = { version = "1.1", default-features = false, features = [
+    "std",
+    "fs",
+    "mm",
+    "event",
+    "time",
+] }
+# Reads the vendored uapi headers at build time, for `zgui-drm` and `zgui-evdev`. The alternative
+# is transcribing every struct by hand, where one field of the wrong width silently changes an
+# ioctl request number — the number is computed from `size_of` — and the kernel then refuses the
+# call with an errno that points at nothing.
+bindgen = "0.72"
+
+# --- libraries opened at run time: named only by zgui-xkb, zgui-seat, zgui-libinput -------------
+# `dlopen` and `dlsym`, wrapped so that a shared object cannot outlive the symbols taken out of
+# it. Three libraries are reached this way, one crate each: libxkbcommon, libseat and libinput.
+# Each is loaded at run time and never linked, so a build needs neither the library nor the data
+# files it reads, and a console session still starts on a machine that has none of them. There is
+# no feature set to state — the crate has none.
+libloading = "0.8"
 
 # --- test and benchmark tooling ----------------------------------------------------------------
 proptest = "1.11"

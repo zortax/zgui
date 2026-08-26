@@ -4,10 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
+#
 # The wgpu companion: what an application links to fill `surface` elements with textures another
 # renderer produced. It is the one crate that walks through `Renderer::as_any_mut` to the concrete
 # wgpu backend, and it deliberately names wgpu only through zgui-render-wgpu's re-export, so the
-# single-wgpu rule holds by construction. Every dependency is inherited: `foo.workspace = true`.
+# single-wgpu rule holds by construction.
 [dependencies]
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }

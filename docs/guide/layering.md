@@ -1,6 +1,6 @@
 # The layering rules
 
-zgui has forty-eight crates under `crates/`. Forty-seven are in the layered product graph. The
+zgui has fifty-nine crates under `crates/`. Fifty-eight are in the layered product graph. The
 unpublished `probe` crate is a compile canary for the pinned external engines and is not in a layer.
 The graph must follow a machine-checked rule. This document gives that rule.
 
@@ -23,9 +23,9 @@ stage in that layer.
 | L7 | runtime and tooling | The frame pipeline, the umbrella crate, the test instruments. |
 | L8 | product | The component library, the inspector, the worked applications. |
 
-`cargo xtask ledger` checks the manifest graph against the implementation-phase order. It also
-checks the named architectural edges in this guide. The layer label documents the classification;
-the ledger checks the actual dependencies.
+`cargo xtask ledger layers` reads that declaration from every manifest and checks the real
+dependencies against it. `cargo xtask ledger` also checks the manifest graph against the
+implementation-phase order, and the named architectural edges in this guide.
 
 ## Why the rule earns its cost
 
@@ -57,10 +57,27 @@ is a special test mode; it is what the layering already made possible.
 vector rasterisers, two text metric sources, and a capture renderer beside the GPU renderer. Each
 of those exists because the boundary above it names no library.
 
-## The four checks that enforce it
+## The five checks that enforce it
 
-The layer rule alone is not enough, because a downward edge can still be the wrong edge. Four
-narrower checks run beside it.
+`cargo xtask ledger layers` enforces the rule above. The rule alone is not enough, because a
+downward edge can still be the wrong edge, so four narrower checks run beside it.
+
+### The declared layer
+
+Every layered manifest opens its dependency list with a `# L<n> — …` header, and the check compares
+that number with the header of every member the manifest names in `[dependencies]` or
+`[build-dependencies]`. A member that declares no layer fails as well, because a member with no
+layer is a member whose edges nothing compares, and a crate added tomorrow would leave the graph
+through that gap.
+
+Development dependencies are outside it. A crate drives its own subject through the stack above it —
+a layout or paint stage against the golden-image harness, the windowing backend against a real frame
+loop — and a test binary carries none of that into a consumer's build. The two seams where a
+development edge does matter are the pinned lists below, which are checked across every section.
+
+The header is committed, so a fork gets the same answer as this tree. `cargo xtask ledger topo` asks
+a related question — a crate may not depend on one that arrives in a later implementation phase —
+from a schedule that is local to a checkout, and it reports that it skipped when there is none.
 
 ### Engine naming
 

@@ -1,0 +1,11 @@
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The compile canary, which the guide places outside the layered graph. It carries no layer header
+# and `UNLAYERED` exempts it by name, so this tree stays clean: a missing-header report is only
+# ever about a crate nobody exempted.
+[dependencies]
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }

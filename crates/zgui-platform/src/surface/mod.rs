@@ -10,6 +10,7 @@ mod id;
 mod role;
 mod text_input;
 mod timing;
+mod watchdog;
 
 pub use crate::surface::attributes::SurfaceAttributes;
 pub use crate::surface::chrome::{
@@ -25,6 +26,7 @@ pub use crate::surface::role::{
 };
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{PresentPacing, PresentationTiming};
+pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};

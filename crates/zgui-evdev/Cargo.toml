@@ -1,0 +1,26 @@
+[package]
+name = "zgui-evdev"
+version.workspace = true
+edition.workspace = true
+# The one crate in the workspace that does not inherit the licence. The vendored uapi headers are
+# the kernel's and keep the kernel's, so a package built from this directory carries both and says
+# so. The syscall-note exception puts a program that reaches the kernel through those headers
+# outside the reach of the GPL, and an interface such as this one stands on that exception.
+license = "Apache-2.0 AND (GPL-2.0-only WITH Linux-syscall-note)"
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# The kernel's input interface, and nothing about this framework. It names no zgui crate, so it
+# is a library that happens to live here rather than a layer of the product: what depends on it is
+# `zgui-platform-drm`, one step along the same layer.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
+
+# Not gated on the target: a build script is compiled for every host, so the crate has to be
+# reachable everywhere the script is. Whether it is *run* is the script's own decision, taken
+# against `CARGO_CFG_TARGET_OS`. Compiling bindgen costs no libclang; running it does.
+[build-dependencies]
+bindgen.workspace = true
+
+[lints]
+workspace = true

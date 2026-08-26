@@ -1,0 +1,392 @@
+//! An open DRM device, and what it can do.
+
+use std::path::{Path, PathBuf};
+
+use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+use rustix::fs::{Mode, OFlags};
+
+use crate::error::{Error, Result};
+use crate::ioctl;
+use crate::sys;
+
+/// Where the kernel puts display devices.
+const DIRECTORY: &str = "/dev/dri";
+
+/// Which modesetting interface to drive a device through.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Interface {
+    /// Atomic where the driver offers it, legacy where it does not.
+    #[default]
+    Preferred,
+    /// The legacy interface, whatever the driver offers.
+    ///
+    /// Every atomic driver still serves the legacy ioctls: the kernel implements them over its own
+    /// atomic helpers. Asking for this on a device that has both is how the legacy path is
+    /// exercised on hardware.
+    Legacy,
+}
+
+/// Returns the `card*` devices under `/dev/dri`, sorted by path.
+///
+/// [`Device::open_first_with`] walks this list. A caller that opens its devices through a session
+/// daemon walks the same list, so both reach the cards in one order.
+///
+/// A directory that holds no card answers an empty list.
+///
+/// ```
+/// use zgui_drm::cards;
+///
+/// // A machine with no `/dev/dri` at all refuses, and the empty list stands in for it here.
+/// let cards = cards().unwrap_or_default();
+///
+/// assert!(cards.is_sorted());
+/// assert!(cards.iter().all(|card| card.starts_with("/dev/dri")));
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Open`] naming the directory when it cannot be read.
+pub fn cards() -> Result<Vec<PathBuf>> {
+    let mut cards: Vec<PathBuf> = std::fs::read_dir(DIRECTORY)
+        .map_err(|source| Error::Open {
+            path: PathBuf::from(DIRECTORY),
+            source,
+        })?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("card"))
+        })
+        .collect();
+    cards.sort();
+    Ok(cards)
+}
+
+/// An open display device.
+#[derive(Debug)]
+pub struct Device {
+    /// The open descriptor.
+    fd: OwnedFd,
+    /// Which device this is, for messages.
+    path: PathBuf,
+    /// Whether the kernel accepted the atomic client capability.
+    atomic: bool,
+}
+
+impl Device {
+    /// Opens the device at `path`, preferring the atomic interface.
+    ///
+    /// ```
+    /// use zgui_drm::Device;
+    ///
+    /// let refused = Device::open("/dev/dri/card-no-such-device")
+    ///     .expect_err("no machine has a card by that name");
+    ///
+    /// assert!(refused.to_string().contains("/dev/dri/card-no-such-device"));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Open`] when the device cannot be opened.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, Interface::Preferred)
+    }
+
+    /// Opens the device at `path`, through `interface`.
+    ///
+    /// With [`Interface::Preferred`] the universal-planes and atomic client capabilities are asked
+    /// for, and a kernel that refuses atomic is not an error: it means the legacy interface is what
+    /// this device has. With [`Interface::Legacy`] neither is asked for, so the device behaves as
+    /// it would for a client that predates them. [`Device::is_atomic`] reports which one every
+    /// later call will use.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Open`] when the device cannot be opened.
+    pub fn open_with(path: impl AsRef<Path>, interface: Interface) -> Result<Self> {
+        let path = path.as_ref().to_owned();
+        // `O_NONBLOCK` makes reading flip events a poll: the frame loop asks whether a flip has
+        // completed and carries on when it has not.
+        let fd = rustix::fs::open(
+            &path,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .map_err(|errno| Error::Open {
+            path: path.clone(),
+            source: errno.into(),
+        })?;
+
+        Ok(Self::configured(fd, path, interface))
+    }
+
+    /// Builds a device over `fd`, preferring the atomic interface.
+    ///
+    /// `path` names the device for messages. This call does not open it. See
+    /// [`Device::over_with`] for what reaches the descriptor and why.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unusable`] naming `path` when `fd` cannot be made non-blocking. Returns it
+    /// also when `fd` names something other than a DRM device.
+    pub fn over(fd: OwnedFd, path: impl AsRef<Path>) -> Result<Self> {
+        Self::over_with(fd, path, Interface::Preferred)
+    }
+
+    /// Builds a device over `fd`, through `interface`.
+    ///
+    /// `path` names the device for messages. This call does not open it, because the caller
+    /// already holds the descriptor. A session daemon that opened the card and handed the
+    /// descriptor over is the caller this exists for, and naming the device keeps its errors and
+    /// its logs reading as they do for [`Device::open_with`].
+    ///
+    /// `interface` selects the client capabilities exactly as it does for [`Device::open_with`],
+    /// and they apply to the descriptor the caller was handed. `DRM_IOCTL_SET_CLIENT_CAP` records
+    /// on the kernel's `drm_file`, which belongs to the open file description. A descriptor
+    /// received from a session daemon names the same description the daemon holds, so a capability
+    /// set here applies to it, and the master the daemon granted is already visible through it.
+    ///
+    /// `O_NONBLOCK` is raised on `fd`, because [`Device::poll_events`] answers at once only while
+    /// that flag is on. The flag belongs to the open file description as well, so the daemon's own
+    /// descriptor onto the card gets it too.
+    ///
+    /// `fd` is then checked to name a DRM device. A session hands out input devices over the same
+    /// interface it hands out cards, and a descriptor onto one of those would otherwise build a
+    /// device that reports as a legacy card and refuses every later call with an errno that names
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unusable`] naming `path` when `fd` cannot be made non-blocking. Returns it
+    /// also when `fd` names something other than a DRM device.
+    pub fn over_with(fd: OwnedFd, path: impl AsRef<Path>, interface: Interface) -> Result<Self> {
+        let path = path.as_ref().to_owned();
+        raise_non_blocking(fd.as_fd(), &path)?;
+        confirm_drm_device(fd.as_fd(), &path)?;
+
+        Ok(Self::configured(fd, path, interface))
+    }
+
+    /// Builds the device over an open descriptor and applies what `interface` asks for.
+    ///
+    /// [`Device::open_with`] and [`Device::over_with`] both end here, so a descriptor this crate
+    /// opened and a descriptor handed to it are set up the same way.
+    fn configured(fd: OwnedFd, path: PathBuf, interface: Interface) -> Self {
+        let mut device = Self {
+            fd,
+            path,
+            atomic: false,
+        };
+
+        // A caller that asked for the legacy interface asks for neither capability, so the kernel
+        // presents the device the way it did before either existed.
+        if interface == Interface::Preferred {
+            // Universal planes has to be accepted before atomic, and asking for atomic implies it.
+            // Asking for both separately is what tells the two failures apart on a kernel that has
+            // one and not the other.
+            //
+            // A kernel that takes the first and refuses the second leaves the device with
+            // universal planes on and `atomic` false, and a client capability cannot be turned
+            // back off. That tier is a real one — legacy modesetting with the full plane list —
+            // and the legacy path addresses a CRTC directly, so it neither reads the plane list
+            // nor is affected by its presence.
+            let planes = device
+                .set_client_capability(u64::from(sys::DRM_CLIENT_CAP_UNIVERSAL_PLANES), 1)
+                .is_ok();
+            device.atomic = planes
+                && device
+                    .set_client_capability(u64::from(sys::DRM_CLIENT_CAP_ATOMIC), 1)
+                    .is_ok();
+        }
+
+        device
+    }
+
+    /// Opens the first device under `/dev/dri` that can be opened, preferring atomic.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Open`] with why the last candidate refused, or naming the directory when
+    /// it holds no `card*` entry at all.
+    pub fn open_first() -> Result<Self> {
+        Self::open_first_with(Interface::Preferred)
+    }
+
+    /// Opens the first device under `/dev/dri` that can be opened, through `interface`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Open`] with why the last candidate refused, or naming the directory when
+    /// it holds no `card*` entry at all.
+    pub fn open_first_with(interface: Interface) -> Result<Self> {
+        let cards = cards()?;
+
+        let mut refused = None;
+        for card in &cards {
+            match Self::open_with(card, interface) {
+                Ok(device) => return Ok(device),
+                // The last refusal is the one reported. A machine with one card has one reason,
+                // and a machine with several has the reason for the last card tried. Reporting
+                // "not found" for a device that is there and answered `EACCES` would name the
+                // wrong problem.
+                Err(error) => refused = Some(error),
+            }
+        }
+
+        Err(refused.unwrap_or_else(|| Error::Open {
+            path: PathBuf::from(DIRECTORY),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        }))
+    }
+
+    /// Returns `true` if this device is driven through the atomic interface.
+    ///
+    /// Decided once, when the device was opened. Every later call reads this instead of asking the
+    /// kernel again.
+    pub fn is_atomic(&self) -> bool {
+        self.atomic
+    }
+
+    /// Returns which device this is.
+    ///
+    /// [`Device::open`] answers the path it opened. [`Device::over`] answers the path its caller
+    /// named.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the descriptor, for the modules that issue ioctls against it.
+    ///
+    /// The same descriptor [`AsFd`] hands out, reached without the trait in scope.
+    pub(crate) fn fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+
+    /// Returns what the driver reports for `capability`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when the kernel refuses the query. A capability it has never heard
+    /// of is refused that way.
+    pub fn capability(&self, capability: u64) -> Result<u64> {
+        let mut request = sys::drm_get_cap {
+            capability,
+            value: 0,
+        };
+        ioctl::issue(self.fd(), ioctl::GET_CAP, &mut request)?;
+        Ok(request.value)
+    }
+
+    /// Returns `true` if dumb buffers can be allocated on this device.
+    pub fn supports_dumb_buffers(&self) -> bool {
+        self.capability(u64::from(sys::DRM_CAP_DUMB_BUFFER))
+            .is_ok_and(|value| value != 0)
+    }
+
+    /// Returns `true` if a framebuffer may name a format modifier on this device.
+    pub fn supports_format_modifiers(&self) -> bool {
+        self.capability(u64::from(sys::DRM_CAP_ADDFB2_MODIFIERS))
+            .is_ok_and(|value| value != 0)
+    }
+
+    /// Asks the kernel to turn a client capability on.
+    fn set_client_capability(&self, capability: u64, value: u64) -> Result<()> {
+        let mut request = sys::drm_set_client_cap { capability, value };
+        ioctl::issue(self.fd(), ioctl::SET_CLIENT_CAP, &mut request)
+    }
+
+    /// Becomes the device's master, which modesetting requires.
+    ///
+    /// Master is held by the open file description. So dropping the [`Device`] gives it up only
+    /// when the device holds the last descriptor onto that description. [`Device::open`] builds
+    /// such a device. A device built by [`Device::over`] holds a second name for a description the
+    /// session daemon keeps, and master stays there until the daemon closes its own descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when another process holds it, or when this one lacks the
+    /// privilege.
+    pub fn become_master(&self) -> Result<()> {
+        // `SET_MASTER` is a `DRM_IO` request: the kernel reads and writes nothing through the
+        // pointer, and `Request<()>` says so.
+        ioctl::issue(self.fd(), ioctl::SET_MASTER, &mut ())
+    }
+
+    /// Gives up being the device's master.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`] when the kernel refuses.
+    pub fn drop_master(&self) -> Result<()> {
+        ioctl::issue(self.fd(), ioctl::DROP_MASTER, &mut ())
+    }
+}
+
+/// Raises `O_NONBLOCK` on `fd`, keeping every other status flag it carries.
+///
+/// [`Device::open_with`] asks for the flag when it opens the device, and this is the same thing
+/// for a descriptor somebody else opened. `F_SETFL` writes the whole set of status flags, so
+/// `F_GETFL` reads them first.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming `path` when the kernel refuses either call.
+fn raise_non_blocking(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
+    let flags = rustix::fs::fcntl_getfl(fd).map_err(|errno| {
+        Error::Unusable(format!(
+            "cannot read the flags of the descriptor for {}: {errno}",
+            path.display()
+        ))
+    })?;
+
+    rustix::fs::fcntl_setfl(fd, flags | OFlags::NONBLOCK).map_err(|errno| {
+        Error::Unusable(format!(
+            "cannot make the descriptor for {} non-blocking: {errno}",
+            path.display()
+        ))
+    })
+}
+
+/// Confirms that `fd` names a DRM device.
+///
+/// The query is `DRM_CAP_TIMESTAMP_MONOTONIC`. The kernel answers it for every DRM device before
+/// it reads anything about the driver, so one ioctl is enough, and a caller with no master and no
+/// privilege still gets an answer. A descriptor onto anything else refuses the request number.
+///
+/// # Errors
+///
+/// Returns [`Error::Unusable`] naming `path` when the query is refused.
+fn confirm_drm_device(fd: BorrowedFd<'_>, path: &Path) -> Result<()> {
+    let mut request = sys::drm_get_cap {
+        capability: u64::from(sys::DRM_CAP_TIMESTAMP_MONOTONIC),
+        value: 0,
+    };
+
+    ioctl::issue(fd, ioctl::GET_CAP, &mut request).map_err(|error| {
+        Error::Unusable(format!(
+            "the descriptor for {} names something other than a DRM device: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// The open descriptor, for a caller that needs the device as a file.
+///
+/// A graphics API is the caller this exists for: `raw-window-handle`'s `DrmDisplayHandle` carries
+/// the device as a raw `i32`, and `as_fd().as_raw_fd()` is how one is taken out. Every other
+/// consumer of a descriptor — `rustix`, `poll`, anything that borrows a file — composes with this
+/// spelling directly.
+///
+/// # The borrow
+///
+/// The descriptor is owned by the [`Device`] and is closed when the device is dropped. So a caller
+/// that keeps the number instead of the borrow must keep the device alive for at least as long. A
+/// number kept past the drop names whatever the process opened next.
+impl AsFd for Device {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+}
