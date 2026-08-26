@@ -11,21 +11,25 @@
 // The draw-order permutation: the instance array keeps push order, and a draw's instance
 // range walks this list.
 @group(1) @binding(1) var<storage, read> remap: array<u32>;
+@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 @vertex
 fn vs_color_sprite(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> SpriteVarying {
-    let slot = remap[instance];
+    let packed = remap[instance];
+    let slot = packed & REMAP_SLOT_MASK;
+    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let sprite = sprites[slot];
     let corner = unit_corner(vertex);
-    let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds);
+    let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: SpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
     out.local = local;
     out.texel = tile_texel(corner, sprite.tile);
     out.instance = slot;
+    out.shift = shift;
     return out;
 }
 
@@ -52,6 +56,6 @@ fn fs_color_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
     // Coverage against the frame rather than the quad: a `cover` picture is cut to its box, a
     // letterboxed one keeps drawing only where it is, and the rounded corners follow the box in
     // both cases.
-    let rounded = rect_coverage(in.local, sprite.frame, sprite.radii);
+    let rounded = rect_coverage(in.local - in.shift, sprite.frame, sprite.radii);
     return texel * sprite.opacity * rounded * clip;
 }

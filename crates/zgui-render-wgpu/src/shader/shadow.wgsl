@@ -24,11 +24,13 @@ struct Shadow {
 // The draw-order permutation: the instance array keeps push order, and a draw's instance
 // range walks this list.
 @group(1) @binding(1) var<storage, read> remap: array<u32>;
+@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 struct ShadowVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) instance: u32,
+    @location(2) @interpolate(flat) shift: vec2<f32>,
 }
 
 @vertex
@@ -36,15 +38,18 @@ fn vs_shadow(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> ShadowVarying {
-    let slot = remap[instance];
+    let packed = remap[instance];
+    let slot = packed & REMAP_SLOT_MASK;
+    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let shadow = shadows[slot];
     // `bounds` is already everything the primitive paints: the blurred shape dilated by the
     // gaussian's reach for a drop shadow, and the casting box itself for an inset one.
-    let local = inflated_corner(vertex, shadow.bounds);
+    let local = inflated_corner(vertex, shadow.bounds) + shift;
     var out: ShadowVarying;
     out.position = to_clip_position(local, shadow.transform);
     out.local = local;
     out.instance = slot;
+    out.shift = shift;
     return out;
 }
 
@@ -93,12 +98,13 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     let shape = shadow_shape(shadow);
     let half_size = bounds_size(shape) * 0.5;
     let center = bounds_origin(shape) + half_size;
-    let center_to_point = in.local - center;
+    let local = in.local - in.shift;
+    let center_to_point = local - center;
     let corner = pick_corner_radii(center_to_point, shadow.radii);
 
     var alpha: f32;
     if shadow.blur <= 0.0 {
-        alpha = saturate(0.5 - quad_sdf(in.local, shape, shadow.radii));
+        alpha = saturate(0.5 - quad_sdf(local, shape, shadow.radii));
     } else {
         // The gaussian is negligible beyond three standard deviations, and the shape contributes
         // nothing outside its own extent, so the samples are spent only where the two overlap.
@@ -125,13 +131,13 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     if shadow.inset != 0u {
         // An inset shadow is the complement of the blurred hole, clipped to the element it sits in.
         alpha = 1.0 - alpha;
-        let element_distance = quad_sdf(in.local, shadow.element_bounds, shadow.element_radii);
+        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii);
         alpha *= saturate(0.5 - element_distance);
     } else {
         // An outer shadow is never painted within the box that casts it. Behind a filled box the
         // difference cannot be seen, but a box with no fill of its own — a field that is a hole in
         // the page — would otherwise wear its own shadow as a wash over its whole interior.
-        let element_distance = quad_sdf(in.local, shadow.element_bounds, shadow.element_radii);
+        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii);
         alpha *= saturate(0.5 + element_distance);
     }
 

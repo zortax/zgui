@@ -9,6 +9,7 @@
 // The draw-order permutation: the instance array keeps push order, and a draw's instance
 // range walks this list.
 @group(1) @binding(1) var<storage, read> remap: array<u32>;
+@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 struct SubpixelOutput {
     @location(0) @blend_src(0) color: vec4<f32>,
@@ -20,15 +21,18 @@ fn vs_subpixel_sprite(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> SpriteVarying {
-    let slot = remap[instance];
+    let packed = remap[instance];
+    let slot = packed & REMAP_SLOT_MASK;
+    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let sprite = sprites[slot];
     let corner = unit_corner(vertex);
-    let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds);
+    let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: SpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
     out.local = local;
     out.texel = tile_texel(corner, sprite.tile);
     out.instance = slot;
+    out.shift = shift;
     return out;
 }
 

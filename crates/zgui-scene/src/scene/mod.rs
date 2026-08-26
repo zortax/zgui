@@ -134,6 +134,12 @@ pub struct Scene {
     chunk_inserted: Vec<crate::scene::chunk::ChunkUpload>,
     /// Chunk revisions dropped since the notes were last cleared.
     chunk_retired: Vec<u64>,
+    /// How far each chunk replayed away from where it was encoded, this frame, by revision.
+    ///
+    /// What lets a moved replay keep its resident bytes: the renderer serves the encode-position
+    /// copy and adds the offset at draw time. Per frame, because the movement is — the same chunk
+    /// replays somewhere else on the next step of a drag.
+    chunk_offsets: rustc_hash::FxHashMap<u64, [f32; 2]>,
     /// The draw-order assigner.
     order: BoundsTree,
     /// The region each moving coordinate system declared it would visit.
@@ -270,6 +276,7 @@ impl Scene {
             capture_stamped: Vec::new(),
             chunk_inserted: Vec::new(),
             chunk_retired: Vec::new(),
+            chunk_offsets: rustc_hash::FxHashMap::default(),
             order: BoundsTree::new(),
             travel: Travels::new(),
             layer_stack: Vec::new(),
@@ -311,6 +318,7 @@ impl Scene {
             lane.clear();
         }
         self.capture_stamped.clear();
+        self.chunk_offsets.clear();
         // The chunk notes are deliberately not cleared here: a frame that never reaches the
         // renderer — skipped, undamaged — leaves them standing for the next frame that does, and
         // an eviction after a draw lands in the notes the following draw consumes. The runtime

@@ -28,6 +28,7 @@ struct Quad {
 // The draw-order permutation: the instance array keeps push order, and a draw's instance
 // range walks this list.
 @group(1) @binding(1) var<storage, read> remap: array<u32>;
+@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 const BORDER_SOLID: u32 = 0u;
 const BORDER_DASHED: u32 = 1u;
@@ -37,6 +38,7 @@ struct QuadVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) instance: u32,
+    @location(2) @interpolate(flat) shift: vec2<f32>,
 }
 
 @vertex
@@ -44,13 +46,16 @@ fn vs_quad(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> QuadVarying {
-    let slot = remap[instance];
+    let packed = remap[instance];
+    let slot = packed & REMAP_SLOT_MASK;
+    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let quad = quads[slot];
-    let local = inflated_corner(vertex, quad.bounds);
+    let local = inflated_corner(vertex, quad.bounds) + shift;
     var out: QuadVarying;
     out.position = to_clip_position(local, quad.transform);
     out.local = local;
     out.instance = slot;
+    out.shift = shift;
     return out;
 }
 
@@ -63,7 +68,7 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let point = in.local;
+    let point = in.local - in.shift;
     let paint_origin = vec2<f32>(quad.paint_origin.x, quad.paint_origin.y);
     let background = paint_color(quad.fill, point, paint_origin);
 

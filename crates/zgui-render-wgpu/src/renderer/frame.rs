@@ -46,14 +46,18 @@ pub struct FrameBuffers {
     /// The persistent chunk arenas the six instanced pipelines draw out of, and the residence
     /// over them.
     pub chunks: crate::buffer::persist::ChunkStore,
-    /// The resolved remap of each instanced kind — arena slots in draw order, one per pipeline.
+    /// The resolved remap of each instanced kind — packed offset-and-slot entries in draw order.
     pub remaps: [StorageBuffer; 6],
     /// What each remap buffer holds, so an unchanged frame skips the upload entirely.
     last_remaps: [Vec<u32>; 6],
+    /// The frame's chunk offsets, named by the high bits of a remap entry.
+    offsets: StorageBuffer,
+    /// What the offsets buffer holds, so a frame that moved nothing skips the upload.
+    last_offsets: Vec<[f32; 2]>,
     /// Bind groups whose resources are the stable frame side-table buffers.
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
-    /// One bind group per instance and remap buffer allocation epoch.
-    instance_binds: RefCell<HashMap<PipelineKind, ([u64; 2], wgpu::BindGroup)>>,
+    /// One bind group per instance, remap and offset buffer allocation epoch.
+    instance_binds: RefCell<HashMap<PipelineKind, ([u64; 3], wgpu::BindGroup)>>,
     /// Whether idle trimming replaced the retained side-table buffers with empty allocations.
     tables_released: bool,
 }
@@ -84,6 +88,8 @@ impl FrameBuffers {
                 StorageBuffer::new(gpu, "zgui.remap.color_sprites"),
             ],
             last_remaps: Default::default(),
+            offsets: StorageBuffer::new(gpu, "zgui.remap.offsets"),
+            last_offsets: Vec::new(),
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::new(HashMap::new()),
             tables_released: false,
@@ -179,6 +185,14 @@ impl FrameBuffers {
             uploaded += buffer.upload(gpu, &mut self.uploader, encoder, resolved);
             self.last_remaps[lane].clear();
             self.last_remaps[lane].extend_from_slice(resolved);
+        }
+        let offsets = self.chunks.frame_offsets();
+        if offsets != self.last_offsets.as_slice() {
+            uploaded += self
+                .offsets
+                .upload(gpu, &mut self.uploader, encoder, offsets);
+            self.last_offsets.clear();
+            self.last_offsets.extend_from_slice(offsets);
         }
         uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
@@ -360,7 +374,11 @@ impl FrameBuffers {
     ) -> Option<wgpu::BindGroup> {
         let lane = Self::lane(kind)?;
         let remap = &self.remaps[lane];
-        let signature = [self.chunks.generation(lane), remap.generation()];
+        let signature = [
+            self.chunks.generation(lane),
+            remap.generation(),
+            self.offsets.generation(),
+        ];
         if let Some((held, bind)) = self.instance_binds.borrow().get(&kind)
             && *held == signature
         {
@@ -377,6 +395,10 @@ impl FrameBuffers {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: remap.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.offsets.binding(),
                 },
             ],
         });

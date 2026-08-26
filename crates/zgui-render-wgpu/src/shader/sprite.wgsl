@@ -40,6 +40,7 @@ struct SpriteVarying {
     @location(0) local: vec2<f32>,
     @location(1) texel: vec2<f32>,
     @location(2) @interpolate(flat) instance: u32,
+    @location(3) @interpolate(flat) shift: vec2<f32>,
 }
 
 // Where in the atlas a unit-square corner reads from, in texels.

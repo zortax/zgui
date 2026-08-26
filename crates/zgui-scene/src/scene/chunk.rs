@@ -67,11 +67,12 @@ impl TableHolds {
 
 /// Where one pushed instanced primitive came from, for a renderer that keeps chunks resident.
 ///
-/// A primitive replayed in place out of a chunk carries the chunk's revision and its index in
-/// the chunk's own lane, so a renderer holding that chunk's bytes on the device can point a draw
-/// at them without any upload. Everything else — a fresh encoding not yet resident, a replay
-/// that applied an offset, an outline emitted outside any capture — is transient: this frame's
-/// bytes are its only source.
+/// A primitive replayed out of a chunk carries the chunk's revision and its index in the chunk's
+/// own lane, so a renderer holding that chunk's bytes on the device can point a draw at them
+/// without any upload. A replay that applied an offset records it in the scene's frame offsets,
+/// and the renderer adds it at draw time — the resident bytes hold the encode position always.
+/// Everything else — a fresh encoding not yet resident, an outline emitted outside any capture —
+/// is transient: this frame's bytes are its only source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChunkSlot {
     /// The chunk the primitive came from, by revision — zero for transient content.
@@ -472,6 +473,11 @@ impl Scene {
         &self.chunk_retired
     }
 
+    /// How far each chunk replayed away from where it was encoded this frame, by revision.
+    pub fn chunk_offsets(&self) -> &rustc_hash::FxHashMap<u64, [f32; 2]> {
+        &self.chunk_offsets
+    }
+
     /// Empties both chunk-note lists.
     ///
     /// The runtime calls this once a draw has consumed them — after the outcome retired the
@@ -559,10 +565,13 @@ impl Scene {
     /// vector item replays only where `by` is zero, because its curves are placed in device
     /// coordinates and shared with the rasteriser's encoding cache — translating them would mean
     /// copying the path. The caller encodes a moved drawing instead.
-    /// `source` is the chunk's revision, stamped as the provenance of every primitive pushed in
-    /// place — a renderer holding the chunk resident points those draws at its copy. Zero for a
-    /// chunk nobody tracks, and an offset replay stays transient: its bytes differ from the
-    /// resident copy by the translation.
+    /// `source` is the chunk's revision, stamped as the provenance of every primitive a replay
+    /// pushes — a renderer holding the chunk resident points those draws at its copy. A replay
+    /// away from the encode position records its offset beside the stamp, and the renderer adds
+    /// it at draw time; the frame arrays still hold the translated bytes, which is what a
+    /// renderer without residence for the chunk correctly falls back to. Zero for a chunk nobody
+    /// tracks. Vectors, externals and backdrops are never stamped — their movement is not a
+    /// uniform translation of instanced bytes.
     pub fn replay_chunk(
         &mut self,
         chunk: &ChunkPrims,
@@ -571,6 +580,9 @@ impl Scene {
     ) -> Range<u32> {
         let start = self.ops.len() as u32;
         let in_place = by.width.0 == 0.0 && by.height.0 == 0.0;
+        if !in_place && source != 0 {
+            self.chunk_offsets.insert(source, [by.width.0, by.height.0]);
+        }
         // A clip the encoding minted is named by its encode-position rectangle, so re-interning it
         // shifted by the chunk's own movement lands in the same slot and rewrites the stored
         // rectangle to where the content now is — the insert cull and the shader both read the
@@ -635,7 +647,7 @@ impl Scene {
                     if quad.samples_its_paint() && (by.width.0 != 0.0 || by.height.0 != 0.0) {
                         counter::bump(Counter::PaintsReanchored);
                     }
-                    if self.push_quad(quad).is_some() && in_place && source != 0 {
+                    if self.push_quad(quad).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::Quad, source, op.index);
                     }
                 }
@@ -645,7 +657,7 @@ impl Scene {
                     };
                     translate(&mut shadow.bounds, by);
                     translate(&mut shadow.element_bounds, by);
-                    if self.push_shadow(shadow).is_some() && in_place && source != 0 {
+                    if self.push_shadow(shadow).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::Shadow, source, op.index);
                     }
                 }
@@ -654,7 +666,7 @@ impl Scene {
                         continue;
                     };
                     translate(&mut decoration.bounds, by);
-                    if self.push_decoration(decoration).is_some() && in_place && source != 0 {
+                    if self.push_decoration(decoration).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::Decoration, source, op.index);
                     }
                 }
@@ -663,7 +675,7 @@ impl Scene {
                         continue;
                     };
                     translate(&mut sprite.bounds, by);
-                    if self.push_mono_sprite(sprite).is_some() && in_place && source != 0 {
+                    if self.push_mono_sprite(sprite).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::MonoSprite, source, op.index);
                     }
                 }
@@ -672,7 +684,7 @@ impl Scene {
                         continue;
                     };
                     translate(&mut sprite.bounds, by);
-                    if self.push_subpixel_sprite(sprite).is_some() && in_place && source != 0 {
+                    if self.push_subpixel_sprite(sprite).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::SubpixelSprite, source, op.index);
                     }
                 }
@@ -684,7 +696,7 @@ impl Scene {
                     // The frame moves with the picture it confines, or a replayed `cover` is cut
                     // against the rectangle its box moved away from.
                     translate(&mut sprite.frame, by);
-                    if self.push_color_sprite(sprite).is_some() && in_place && source != 0 {
+                    if self.push_color_sprite(sprite).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::ColorSprite, source, op.index);
                     }
                 }

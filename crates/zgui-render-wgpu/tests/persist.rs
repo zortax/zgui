@@ -3,8 +3,9 @@
 //! The paint cache notes an encoded chunk into the scene; the renderer uploads it once and keeps
 //! it resident. A later frame that replays the chunk in place stamps its primitives' provenance,
 //! and the resolved remap points the draw at the resident bytes — so what that frame uploads is
-//! the remap and the frame's own small tables, and none of the primitives. A replay that moved is
-//! transient again: its bytes differ from the resident copy by the translation.
+//! the remap and the frame's own small tables, and none of the primitives. A replay that moved
+//! keeps its residence too: the chunk's offset rides the remap's high bits and the shader adds it
+//! at draw time, so a drag re-uploads nothing but the remap and one small offset table.
 
 mod support;
 
@@ -24,12 +25,17 @@ use support::{SIDE, plain_renderer, rect};
 /// upload costs, so the comparison discriminates.
 const QUADS: usize = 100;
 
-/// Pushes the chunk's quads: a column of small distinct rectangles.
-fn push_quads(scene: &mut Scene, fill: PaintRef) {
+/// Pushes the chunk's quads: a column of small distinct rectangles, `down` from the top.
+fn push_quads_at(scene: &mut Scene, fill: PaintRef, down: f32) {
     for at in 0..QUADS {
-        let y = 2.0 + (at as f32) * 2.0;
+        let y = down + 2.0 + (at as f32) * 2.0;
         scene.push_quad(Quad::filled(rect(8.0, y, 64.0, 1.5), fill));
     }
+}
+
+/// Pushes the chunk's quads where the capture takes them.
+fn push_quads(scene: &mut Scene, fill: PaintRef) {
+    push_quads_at(scene, fill, 0.0);
 }
 
 /// One frame's uploaded bytes and pixels, drawn over full damage.
@@ -99,14 +105,34 @@ fn a_resident_chunk_replayed_in_place_uploads_no_primitive_bytes() {
          {second_bytes}"
     );
 
-    // Frame three: the same chunk, replayed eight pixels down. The bytes differ from the
-    // resident copy by the translation, so the frame is transient again and pays its uploads.
+    // Frame three: the same chunk, replayed eight pixels down. The resident bytes stay where
+    // they are; the offset rides the remap's high bits and the shader adds it, so the frame
+    // uploads the remap, one small offset table, and none of the primitives.
     scene.begin_frame(Size::new(SIDE, SIDE));
     scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(8.0)), 1);
     scene.finish(&DamageSet::full());
-    let (moved_bytes, _) = draw_bytes(&mut renderer, &scene);
+    let (moved_bytes, moved) = draw_bytes(&mut renderer, &scene);
     assert!(
-        moved_bytes > second_bytes * 2,
-        "a moved replay's bytes are its own: {moved_bytes} against {second_bytes}"
+        moved_bytes * 4 < first_bytes,
+        "a moved replay re-uploads its primitives: {moved_bytes} against {first_bytes}"
+    );
+
+    // The control: the same quads encoded fresh at the moved position, through a renderer of its
+    // own so the two draws share nothing. Sequential, because one machine offers one device: the
+    // resident draw's renderer is over before the control's is made.
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let mut control = Scene::new();
+    control.begin_frame(Size::new(SIDE, SIDE));
+    let fill = PaintRef::solid(control.paints.solid(Color::srgb_u8(40, 120, 200, 255)));
+    push_quads_at(&mut control, fill, 8.0);
+    control.finish(&DamageSet::full());
+    let (_, expected) = draw_bytes(&mut control_renderer, &control);
+    assert_eq!(
+        moved.max_difference(&expected),
+        0,
+        "the offset draw puts every primitive exactly where a fresh encoding would"
     );
 }

@@ -35,6 +35,18 @@ pub(crate) const LANES: [PrimitiveKind; 6] = [
     PrimitiveKind::ColorSprite,
 ];
 
+/// How many low bits of a resolved remap entry name the arena slot.
+///
+/// The bits above name an entry in the frame's offset table, which is how a chunk that merely
+/// moved keeps its residence: the resident bytes stay where they are and the shader adds the
+/// chunk's offset to what it reads. Twenty-four bits is sixteen million elements a lane — over a
+/// gigabyte of quads — and a resident slot past it falls back to the transient gather, which is
+/// correct and merely copies.
+pub(crate) const SLOT_BITS: u32 = 24;
+
+/// The mask that keeps a resolved remap entry's arena slot.
+pub(crate) const SLOT_MASK: u32 = (1 << SLOT_BITS) - 1;
+
 /// One resident chunk: its bytes, and where each lane's elements sit in the arenas.
 #[derive(Debug)]
 struct Resident {
@@ -281,6 +293,17 @@ pub struct ChunkStore {
     resolved: [Vec<u32>; 6],
     /// Per-frame scratch: gathered transient element bytes for each lane.
     gathered: [Vec<u8>; 6],
+    /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
+    ///
+    /// Entry zero is the zero offset every unmoved element names, so a frame with nothing moved
+    /// carries one entry and every remap entry's high bits are clear.
+    frame_offsets: Vec<[f32; 2]>,
+    /// Per-frame scratch: each moved revision's offset index, or the spill marker.
+    ///
+    /// A frame can name at most as many offsets as the remap's high bits can count. A revision
+    /// past that spills to [`u32::MAX`] and is served transiently — the frame arrays hold its
+    /// translated bytes — which is correct and merely copies.
+    offset_of: HashMap<u64, u32>,
 }
 
 impl ChunkStore {
@@ -323,6 +346,8 @@ impl ChunkStore {
             ledger: RetireLedger::new(),
             resolved: Default::default(),
             gathered: Default::default(),
+            frame_offsets: vec![[0.0, 0.0]],
+            offset_of: HashMap::new(),
         }
     }
 
@@ -518,6 +543,19 @@ impl ChunkStore {
         scene: &Scene,
     ) -> u64 {
         let mut uploaded = 0;
+        self.frame_offsets.clear();
+        self.frame_offsets.push([0.0, 0.0]);
+        self.offset_of.clear();
+        for (&revision, &offset) in scene.chunk_offsets() {
+            let index = if self.frame_offsets.len() <= (u32::MAX >> SLOT_BITS) as usize {
+                let index = self.frame_offsets.len() as u32;
+                self.frame_offsets.push(offset);
+                index
+            } else {
+                u32::MAX
+            };
+            self.offset_of.insert(revision, index);
+        }
         for (lane, &kind) in LANES.iter().enumerate() {
             let remap = scene.remap(kind);
             let provenance = scene.provenance(kind);
@@ -525,12 +563,18 @@ impl ChunkStore {
             self.resolved[lane].clear();
             self.gathered[lane].clear();
 
-            // First pass: how many positions cannot be served from a resident chunk.
+            // First pass: how many positions cannot be served from a resident chunk. The test is
+            // the same call the second pass resolves with, so the two can never disagree.
             let transients = remap
                 .iter()
                 .filter(|&&index| {
-                    let slot = provenance[index as usize];
-                    slot.is_transient() || !self.residence.contains_key(&slot.revision)
+                    resident_slot(
+                        &self.residence,
+                        &self.offset_of,
+                        lane,
+                        &provenance[index as usize],
+                    )
+                    .is_none()
                 })
                 .count() as u32;
             let transient_range = if transients > 0 {
@@ -546,20 +590,17 @@ impl ChunkStore {
             } else {
                 0..0
             };
+            debug_assert!(
+                transient_range.end <= SLOT_MASK,
+                "a lane's transient range left the slot bits; see SLOT_BITS"
+            );
 
             let bytes = lane_bytes(scene, lane);
             let mut placed = 0;
             for &index in remap {
                 let slot = provenance[index as usize];
-                let resident = if slot.is_transient() {
-                    None
-                } else {
-                    self.residence
-                        .get(&slot.revision)
-                        .and_then(|resident| resident.ranges[lane].as_ref())
-                };
-                match resident {
-                    Some(range) => self.resolved[lane].push(range.start + slot.index),
+                match resident_slot(&self.residence, &self.offset_of, lane, &slot) {
+                    Some(at) => self.resolved[lane].push(at),
                     None => {
                         let at = index as usize * element;
                         self.gathered[lane].extend_from_slice(&bytes[at..at + element]);
@@ -581,9 +622,14 @@ impl ChunkStore {
         uploaded
     }
 
-    /// The resolved remap for `lane`: arena slots, in draw order.
+    /// The resolved remap for `lane`: packed offset-and-slot entries, in draw order.
     pub fn resolved_remap(&self, lane: usize) -> &[u32] {
         &self.resolved[lane]
+    }
+
+    /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
+    pub fn frame_offsets(&self) -> &[[f32; 2]] {
+        &self.frame_offsets
     }
 
     /// Ties the frame's retirements to the submission just made.
@@ -604,6 +650,31 @@ impl ChunkStore {
         }
         before.saturating_sub(self.bytes())
     }
+}
+
+/// The packed remap entry serving one primitive from a resident chunk, if one can.
+///
+/// `None` is the transient answer, for every reason there is: the primitive is transient by
+/// provenance, its chunk is not resident, the chunk holds nothing in this lane, the resident
+/// slot lies past what the slot bits can name, or the chunk moved this frame and the offset
+/// table was already full.
+fn resident_slot(
+    residence: &HashMap<u64, Resident>,
+    offset_of: &HashMap<u64, u32>,
+    lane: usize,
+    slot: &zgui_scene::ChunkSlot,
+) -> Option<u32> {
+    if slot.is_transient() {
+        return None;
+    }
+    let offset = match offset_of.get(&slot.revision) {
+        Some(&u32::MAX) => return None,
+        Some(&index) => index,
+        None => 0,
+    };
+    let range = residence.get(&slot.revision)?.ranges[lane].as_ref()?;
+    let at = range.start + slot.index;
+    (at <= SLOT_MASK).then_some((offset << SLOT_BITS) | at)
 }
 
 /// The frame array of `lane`, as bytes.
