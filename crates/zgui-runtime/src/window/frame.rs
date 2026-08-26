@@ -825,8 +825,12 @@ impl Window {
         let mut document = self.document.borrow_mut();
         let epoch = self.engine.device_epoch(&mut document, self.viewport);
         if epoch.changed {
-            // A device rebuild recascades everything, which is the breadth the pool is for.
-            self.broad_restyle = true;
+            // The pool is for breadth, and only some device changes have any: a flipped media
+            // query recascades whole origins, and a resize over a document full of viewport units
+            // recascades all of them. The ordinary resize step flips nothing and invalidates a
+            // handful — the overlay root and whatever else states a `vw` — and waking the pool
+            // for those costs more than they do.
+            self.broad_restyle |= !epoch.origins.is_empty() || epoch.units_invalidated >= 32;
             tracing::debug!(
                 target: "zgui::style",
                 origins = ?epoch.origins,

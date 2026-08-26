@@ -95,16 +95,23 @@ pub(crate) fn invalidate_units(document: &mut Document) -> usize {
     let mut marked = Vec::new();
     for_each_element(document, |document, index| {
         let node = document.node(index);
+        // Asked read-only first, because the answer is no for nearly every element on every step
+        // of a drag: the write borrow is taken only where a unit was actually resolved.
+        let hint = {
+            let Some(data) = node.borrow_style_data() else {
+                return;
+            };
+            if !data.has_styles() {
+                return;
+            }
+            match data.styles.viewport_unit_usage() {
+                ViewportUnitUsage::None => return,
+                ViewportUnitUsage::FromDeclaration => RestyleHint::RECASCADE_SELF,
+                ViewportUnitUsage::FromQuery => RestyleHint::RESTYLE_SELF,
+            }
+        };
         let Some(mut data) = node.mutate_style_data() else {
             return;
-        };
-        if !data.has_styles() {
-            return;
-        }
-        let hint = match data.styles.viewport_unit_usage() {
-            ViewportUnitUsage::None => return,
-            ViewportUnitUsage::FromDeclaration => RestyleHint::RECASCADE_SELF,
-            ViewportUnitUsage::FromQuery => RestyleHint::RESTYLE_SELF,
         };
         data.hint.insert(hint);
         marked.push((index, hint));
