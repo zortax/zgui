@@ -122,6 +122,16 @@ impl ResizePace {
         self.answered = Some(now);
     }
 
+    /// Forgets the frame last answered, so the next ask is admitted at once.
+    ///
+    /// The release of a drag. The pacing exists because a mid-drag frame is superseded before the
+    /// output can show it; a level the compositor says is final supersedes nothing, so the frame
+    /// that settles the window is worth starting the moment the drag ends rather than when the
+    /// interval runs out.
+    pub fn settle(&mut self) {
+        self.answered = None;
+    }
+
     /// How many configures have moved the level without a frame of their own.
     ///
     /// This is the count of pipeline runs a drag did *not* pay for: layout, paint and a swapchain

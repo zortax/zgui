@@ -73,6 +73,10 @@ pub(crate) struct Shared {
     pub(crate) maximized: bool,
     /// Whether the compositor last configured the surface as full screen.
     pub(crate) fullscreen: bool,
+    /// Whether the compositor last configured the surface as being interactively resized.
+    pub(crate) resizing: bool,
+    /// Whether the application has been told a drag is running.
+    pub(crate) told_resizing: bool,
     /// The smallest and largest extents the user may drag to.
     ///
     /// Remembered because the shell takes them as two requests and this contract sets them one at
@@ -101,6 +105,8 @@ impl Shared {
             ladder: crate::surface::Scale::default(),
             maximized: false,
             fullscreen: false,
+            resizing: false,
+            told_resizing: false,
             bounds: (None, None),
             pending_configure: None,
         }
@@ -216,6 +222,18 @@ impl Shared {
         self.told_hidden = hidden;
         self.pacer.hidden(hidden);
         Some(SurfaceEvent::Occluded(hidden))
+    }
+
+    /// The drag edge to report, if the resizing state moved since it was last reported.
+    ///
+    /// The same shape as [`Shared::visibility_edge`]: the compositor restates the level with
+    /// every configure, and only the flips are events.
+    pub(crate) fn resizing_edge(&mut self) -> Option<SurfaceEvent> {
+        if self.resizing == self.told_resizing {
+            return None;
+        }
+        self.told_resizing = self.resizing;
+        Some(SurfaceEvent::ResizingChanged(self.resizing))
     }
 
     /// This surface's timing, as the contract reports it.
@@ -404,6 +422,26 @@ mod tests {
         assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Declined);
         // The next redraw runs normally; yesterday's refusal says nothing about it.
         assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
+    }
+
+    #[test]
+    fn a_drag_edge_is_reported_once_per_flip() {
+        let mut shared = Shared::new();
+        assert!(shared.resizing_edge().is_none(), "no drag has begun");
+        shared.resizing = true;
+        assert!(matches!(
+            shared.resizing_edge(),
+            Some(SurfaceEvent::ResizingChanged(true))
+        ));
+        assert!(
+            shared.resizing_edge().is_none(),
+            "the level was restated, and a restatement is no edge"
+        );
+        shared.resizing = false;
+        assert!(matches!(
+            shared.resizing_edge(),
+            Some(SurfaceEvent::ResizingChanged(false))
+        ));
     }
 
     #[test]

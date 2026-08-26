@@ -56,6 +56,13 @@ pub enum SurfaceEvent {
     /// frames that timers ask for, or work waiting on a timer behind a minimised window never
     /// resumes.
     Occluded(bool),
+    /// The user began or stopped interactively resizing the surface.
+    ///
+    /// Best effort, and an edge: a desktop that says nothing about drags never sends it, and its
+    /// absence means nothing. Where it does arrive, the `false` edge is the moment the size the
+    /// window is at is the size it is going to stay at — which is what lets a paced resize settle
+    /// at once instead of waiting out its own interval.
+    ResizingChanged(bool),
     /// The desktop's light or dark preference changed.
     ColorSchemeChanged(ColorScheme),
     /// A pointer did something.

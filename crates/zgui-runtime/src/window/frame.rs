@@ -135,6 +135,19 @@ impl Window {
                 self.handle.set_focused(*focused);
                 moved
             }
+            // A drag edge, where a desktop reports one. The release with a reconfiguration still
+            // owed is the one edge that buys a frame of its own: the level the window holds is
+            // the level it stays at, so the pacing has nothing left to save by waiting out its
+            // interval, and the settled window is on the screen a whole interval sooner.
+            zgui_platform::SurfaceEvent::ResizingChanged(live) => {
+                self.resizing = *live;
+                let settles = !*live && self.reconfigure;
+                if settles {
+                    self.pace.settle();
+                    zgui_profile::latency::mark("w.resize.settled");
+                }
+                settles
+            }
             _ => true,
         };
         // Focus is not input from a person, but what it does — ending a composition, announcing a

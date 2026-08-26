@@ -384,6 +384,11 @@ pub struct Window {
     surface_focused: bool,
     /// Whether the surface has to be reconfigured before the next frame is built.
     reconfigure: bool,
+    /// Whether the desktop says the surface is being interactively resized right now.
+    ///
+    /// Best effort: a desktop that says nothing about drags leaves this false for ever, and
+    /// nothing may degrade for its absence.
+    resizing: bool,
     /// How often a configure may be answered with a frame, and what that has skipped.
     pace: crate::window::resize::ResizePace,
     /// How many times the renderer has been pointed at a new surface extent.
@@ -693,6 +698,7 @@ impl Window {
             surface_focused: true,
             extent: None,
             reconfigure: true,
+            resizing: false,
             pace: crate::window::resize::ResizePace::new(),
             configured: 0,
             declined: 0,
@@ -919,6 +925,13 @@ impl Window {
     /// every window presenting to something with an image always spare.
     pub const fn present_hold(&self) -> std::time::Duration {
         self.present.hold()
+    }
+
+    /// Whether the desktop says this window is being interactively resized right now.
+    ///
+    /// Best effort: a desktop that says nothing about drags answers false for the whole of one.
+    pub const fn is_resizing(&self) -> bool {
+        self.resizing
     }
 
     /// Records that an offered frame was held back, so that the deadline can ask for it again.

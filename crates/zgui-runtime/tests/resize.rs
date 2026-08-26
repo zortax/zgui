@@ -352,3 +352,68 @@ fn a_configure_that_repeats_the_extent_asks_for_nothing_at_all() {
     );
     harness.shut_down();
 }
+
+#[test]
+fn the_release_of_a_drag_settles_the_window_without_waiting_out_the_interval() {
+    // The one edge that buys a frame of its own. A drag's last configure is deferred like any
+    // other, and the window ordinarily waits out the interval its pacing installed. A desktop
+    // that says the drag is over supersedes that wait: nothing further is coming, so the level
+    // the window holds is final and the frame that settles it is worth starting now. The clock
+    // is held, so nothing below is answered by a deadline.
+    let mut harness = app();
+    let surface = only_surface(&harness);
+    harness.settle(8);
+    harness.hold_clock(true);
+    harness.redraw_on_configure(true);
+    harness.advance(Duration::from_millis(100));
+
+    // One resize frame, which everything after it is paced against.
+    harness.deliver(surface, SurfaceEvent::Resized(wide(900.0)));
+    harness.settle(8);
+
+    // The rest of the drag, inside that frame's interval: deferred, and correctly not drawn.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a step index bounded by the loop"
+    )]
+    harness.deliver_all(
+        surface,
+        (1..=8).map(|step| SurfaceEvent::Resized(wide(900.0 + step as f32 * 10.0))),
+    );
+    harness.pump();
+    assert_ne!(
+        laid_out(&harness),
+        wide(980.0),
+        "the burst was answered where it arrived, so nothing was deferred and the release below \
+         settles nothing"
+    );
+
+    // The compositor says the drag is over. The clock never moves.
+    harness.deliver(surface, SurfaceEvent::ResizingChanged(false));
+    harness.pump();
+    assert_eq!(
+        laid_out(&harness),
+        wide(980.0),
+        "the released drag's final size waited for the interval the release made pointless"
+    );
+    harness.assert_park_invariant();
+    harness.shut_down();
+}
+
+#[test]
+fn a_drag_edge_with_nothing_owed_asks_for_nothing() {
+    // The other half of the contract: the edges are levels about the future, and a window whose
+    // size is settled owes no frame for hearing about them.
+    let mut harness = app();
+    let surface = only_surface(&harness);
+    harness.deliver(surface, SurfaceEvent::Resized(wide(880.0)));
+    harness.settle(8);
+    harness.advance(Duration::from_millis(100));
+    harness.reset_counts();
+
+    harness.deliver(surface, SurfaceEvent::ResizingChanged(true));
+    harness.deliver(surface, SurfaceEvent::ResizingChanged(false));
+    assert_eq!(harness.redraws_requested(), 0);
+    assert_eq!(harness.settle(8), 0, "a drag edge alone bought a frame");
+    harness.shut_down();
+}

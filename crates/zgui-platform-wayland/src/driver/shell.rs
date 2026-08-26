@@ -11,7 +11,7 @@
 //! on the screen, which is the cost this framework exists to avoid.
 
 use zgui_geom::{Css, CssPx, Size};
-use zgui_platform::{DecorationSource, Surface as _, SurfaceId};
+use zgui_platform::{DecorationSource, Surface as _, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
 use crate::surface::role::toplevel;
@@ -67,13 +67,14 @@ impl WaylandState {
             return;
         };
 
-        let (resized, visibility, extent, answered) = {
+        let (resized, visibility, resizing, extent, answered) = {
             let mut shared = surface.shared();
             let extent = toplevel::extent(pending.size, surface.wanted(), shared.logical);
             let state_flip =
                 shared.maximized != pending.maximized || shared.fullscreen != pending.fullscreen;
             shared.maximized = pending.maximized;
             shared.fullscreen = pending.fullscreen;
+            shared.resizing = pending.resizing;
             shared.visibility.configured = true;
             // The state this whole shell is bound at version six for, and the only signal on this
             // desktop that reliably says a window is not being seen.
@@ -84,7 +85,13 @@ impl WaylandState {
             let scale = shared.ladder.factor();
             let resized = shared.resized(extent, scale);
             let answered = shared.answers_restatement(state_flip);
-            (resized, shared.visibility_edge(), extent, answered)
+            (
+                resized,
+                shared.visibility_edge(),
+                shared.resizing_edge(),
+                extent,
+                answered,
+            )
         };
 
         crate::surface::scale::declare(&surface);
@@ -97,6 +104,14 @@ impl WaylandState {
         if let Some(event) = visibility {
             self.report(id, event);
         }
+        // The two drag edges straddle the resize they ride with. The start edge goes ahead, so
+        // the runtime knows the configure that follows belongs to a drag; the release edge goes
+        // after, so the level it settles is the one this configure carried.
+        let released = matches!(resizing, Some(SurfaceEvent::ResizingChanged(false)));
+        if let Some(event) = resizing.filter(|_| !released) {
+            zgui_profile::latency::mark("w.resizing");
+            self.report(id, event);
+        }
         match resized {
             Some(event) => self.report(id, event),
             None if answered => surface.request_redraw(),
@@ -104,6 +119,10 @@ impl WaylandState {
             // quarter of its configures, measured across a monitor — and each one used to run
             // the whole pipeline for a frame identical to the one already on the screen.
             None => zgui_profile::latency::mark("cfg.repeat"),
+        }
+        if released {
+            zgui_profile::latency::mark("w.resizing");
+            self.report(id, SurfaceEvent::ResizingChanged(false));
         }
     }
 
