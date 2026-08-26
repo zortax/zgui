@@ -141,6 +141,7 @@ pub fn pre_present(surface: &WaylandSurface) {
     let logical = {
         let mut shared = surface.shared();
         shared.presented = true;
+        shared.mapped = true;
         shared.pending_viewport.take()
     };
     if let Some(logical) = logical {

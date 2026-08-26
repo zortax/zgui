@@ -46,6 +46,12 @@ pub(crate) struct Shared {
     pub(crate) told_hidden: bool,
     /// Whether a buffer was committed during the redraw now being delivered.
     pub(crate) presented: bool,
+    /// Whether any buffer has ever been committed.
+    ///
+    /// What separates a configure that restates the extent from the one that maps the surface: the
+    /// first configure has to be answered with a frame or the surface is never shown, and every
+    /// later restatement is a frame identical to the one already on the screen.
+    pub(crate) mapped: bool,
     /// A viewport destination that has not yet ridden a commit.
     pub(crate) pending_viewport: Option<Size<CssPx, Css>>,
     /// The scale the compositor wants, from whichever source it offered.
@@ -76,6 +82,7 @@ impl Shared {
             visibility: Visibility::default(),
             told_hidden: true,
             presented: false,
+            mapped: false,
             pending_viewport: None,
             ladder: crate::surface::Scale::default(),
             maximized: false,
@@ -117,6 +124,16 @@ impl Shared {
         } else {
             SurfaceEvent::Resized(size)
         })
+    }
+
+    /// Whether a configure that moved nothing still buys a redraw.
+    ///
+    /// The first configure has to be answered with a frame, or a surface configured at the extent
+    /// it was created with never commits a buffer and is never mapped. A maximise or full-screen
+    /// flip that kept the extent is answered too, conservatively: the runtime reads those levels
+    /// off the surface during a frame.
+    pub(crate) fn answers_restatement(&self, state_flip: bool) -> bool {
+        !self.mapped || state_flip
     }
 
     /// How many frames may go unanswered before the compositor is taken to be showing none of them.
@@ -301,5 +318,25 @@ mod tests {
             shared.pacer.deadline(shared.visibility, now),
             Some(now + Duration::from_millis(400))
         );
+    }
+
+    #[test]
+    fn the_first_configure_is_answered_even_when_it_moves_nothing() {
+        let shared = Shared::new();
+        assert!(shared.answers_restatement(false));
+    }
+
+    #[test]
+    fn a_restated_extent_after_the_first_buffer_buys_no_frame() {
+        let mut shared = Shared::new();
+        shared.mapped = true;
+        assert!(!shared.answers_restatement(false));
+    }
+
+    #[test]
+    fn a_state_flip_that_kept_the_extent_is_still_answered() {
+        let mut shared = Shared::new();
+        shared.mapped = true;
+        assert!(shared.answers_restatement(true));
     }
 }

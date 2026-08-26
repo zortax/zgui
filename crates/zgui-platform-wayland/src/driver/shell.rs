@@ -67,9 +67,11 @@ impl WaylandState {
             return;
         };
 
-        let (resized, visibility, extent) = {
+        let (resized, visibility, extent, answered) = {
             let mut shared = surface.shared();
             let extent = toplevel::extent(pending.size, surface.wanted(), shared.logical);
+            let state_flip =
+                shared.maximized != pending.maximized || shared.fullscreen != pending.fullscreen;
             shared.maximized = pending.maximized;
             shared.fullscreen = pending.fullscreen;
             shared.visibility.configured = true;
@@ -81,7 +83,8 @@ impl WaylandState {
             }
             let scale = shared.ladder.factor();
             let resized = shared.resized(extent, scale);
-            (resized, shared.visibility_edge(), extent)
+            let answered = shared.answers_restatement(state_flip);
+            (resized, shared.visibility_edge(), extent, answered)
         };
 
         crate::surface::scale::declare(&surface);
@@ -96,10 +99,11 @@ impl WaylandState {
         }
         match resized {
             Some(event) => self.report(id, event),
-            // A configure that changed nothing still has to produce a frame the first time, or a
-            // surface configured at the extent it was created with never commits a buffer and is
-            // never mapped.
-            None => surface.request_redraw(),
+            None if answered => surface.request_redraw(),
+            // The rest are restatements. A drag delivers the same extent more than once — a
+            // quarter of its configures, measured across a monitor — and each one used to run
+            // the whole pipeline for a frame identical to the one already on the screen.
+            None => zgui_profile::latency::mark("cfg.repeat"),
         }
     }
 
