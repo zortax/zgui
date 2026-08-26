@@ -142,6 +142,46 @@ fn a_pooled_layout_equals_the_serial_one_at_every_width() {
     }
 }
 
+/// Lays the fixture out twice, the second pass into a wider viewport over the warm tree.
+fn resized(pool: Option<&LayoutPool>) -> Vec<(u32, [u32; 4])> {
+    let mut store = fixture();
+    let mut content = NoContent;
+    let mut tree = LayoutTree::new(&mut store, &mut content, DeviceStyle::default());
+    if let Some(pool) = pool {
+        tree = tree.with_parallel(pool);
+    }
+    assert!(tree.layout_viewport(400.0, 300.0));
+    let before = zgui_profile::counter::snapshot();
+    // The cross axis moves: the row's items stretch to the container's height, so every item is
+    // asked a question no cache holds. A main-axis move alone re-asks almost nothing here — the
+    // items size by their own content, and answers that still fit are held.
+    assert!(tree.layout_viewport(400.0, 360.0));
+    let moved = before.delta(&zgui_profile::counter::snapshot());
+    if pool.is_some() {
+        assert!(
+            moved.layout_batches_distributed > 0,
+            "the warm resize distributed no batch against {} nodes relaid out; the cold work a \
+             resize re-opens is exactly what the gates are for",
+            moved.nodes_relaid_out,
+        );
+    }
+    drop(tree);
+    snapshot(&store)
+}
+
+#[test]
+fn a_pooled_warm_resize_equals_the_serial_one() {
+    // The resize question, apart from the cold one above: every box holds a standing answer, a
+    // new width misses all of them, and the batch runs over a warm store whose paragraphs and
+    // intrinsic answers must be reused rather than rebuilt.
+    let serial = resized(None);
+    for workers in [2, 8] {
+        let pool = LayoutPool::new(workers);
+        let pooled = resized(Some(&pool));
+        assert_eq!(pooled, serial, "{workers} workers disagreed with serial");
+    }
+}
+
 #[test]
 fn a_pool_below_the_distribution_threshold_changes_nothing() {
     // Three items stay under the executor's minimum, so the batch runs serially even with a pool

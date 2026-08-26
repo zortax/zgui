@@ -170,4 +170,10 @@ fn a_document_with_one_custom_element_still_distributes_its_batches() {
         "a resize of {ROWS} rows beside one custom element distributed no batch: the custom \
          source is serialising the whole pass again"
     );
+    assert_eq!(
+        moved.text_shaped, 0,
+        "a warm width step shaped {} runs on the workers; shaping is width-independent, so the \
+         batch handoff lost the shaped paragraphs it was meant to carry",
+        moved.text_shaped
+    );
 }
