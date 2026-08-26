@@ -35,6 +35,13 @@ pub struct HitIndex {
     forest: Forest,
     /// Entries touched since the last bulk build.
     churn: u32,
+    /// Whether a bulk rebuild has become owed, latched until it runs.
+    ///
+    /// Latched rather than re-derived, because the threshold compares churn against how many
+    /// entries there are, and a pass that removes many entries and then inserts more can carry
+    /// the comparison back under the line — while the hierarchy work skipped in between is only
+    /// sound if the rebuild actually happens.
+    owed_rebuild: bool,
     /// The entries written by [`HitIndex::carry`] that the hierarchy has not been told about yet.
     ///
     /// Held on the index rather than raised at each call site so that the buffer outlives the frame
@@ -162,7 +169,19 @@ impl HitIndex {
     }
 
     /// The write both paths share, reporting what the hierarchy had to do to take it.
+    ///
+    /// Once enough has churned that the pass ends in a bulk rebuild anyway, the hierarchy is dead
+    /// weight: the rebuild derives it from the store whole, so every placement between here and
+    /// there is thrown-away work. The entry itself is still written — a read by name must see the
+    /// new one — and the hierarchy is left stale, which is sound because a crossed threshold can
+    /// never uncross before the rebuild resets it. A resize frame touches every fragment, and this
+    /// is what keeps it from paying one tree surgery each on the way to a rebuild it already owes.
     fn write(&mut self, frag: FragKey, entry: HitEntry) -> Placed {
+        if self.owes_rebuild() {
+            self.entries.insert(frag, entry);
+            counter::bump(Counter::HitEntriesUpdated);
+            return Placed::InPlace;
+        }
         let placed = self.forest.place(frag, entry.space, entry.envelope);
         self.entries.insert(frag, entry);
         counter::bump(Counter::HitEntriesUpdated);
@@ -172,14 +191,24 @@ impl HitIndex {
     /// Takes one fragment out.
     pub fn remove(&mut self, frag: FragKey) {
         if self.entries.remove(frag).is_some() {
-            self.forest.remove(frag);
             self.churn = self.churn.saturating_add(1);
+            if !self.owes_rebuild() {
+                self.forest.remove(frag);
+            }
         }
     }
 
     /// Whether the index has been touched enough that rebuilding it is the cheaper option.
     pub fn should_rebuild(&self) -> bool {
-        !self.entries.is_empty() && self.churn as usize > self.entries.len() / CHURN_FRACTION
+        self.owed_rebuild
+            || (!self.entries.is_empty()
+                && self.churn as usize > self.entries.len() / CHURN_FRACTION)
+    }
+
+    /// The same question, latching a yes until the rebuild it obliges has run.
+    fn owes_rebuild(&mut self) -> bool {
+        self.owed_rebuild = self.should_rebuild();
+        self.owed_rebuild
     }
 
     /// Builds the whole index again from the fragment tree.
@@ -191,6 +220,7 @@ impl HitIndex {
         self.entries.clear();
         self.forest.clear();
         self.churn = 0;
+        self.owed_rebuild = false;
         // A run that had not been settled named entries this build is about to replace, and
         // settling it afterwards would file rectangles for fragments the hierarchy has just been
         // told about properly.

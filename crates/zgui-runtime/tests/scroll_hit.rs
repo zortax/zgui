@@ -224,12 +224,17 @@ fn a_scrolled_fragment_keeps_the_place_it_had_in_the_hierarchy() {
     let rebuilds = built.control(Counter::HitIndexRebuilds);
     // Measured against the document rather than against a round number: every row generates a
     // fragment and so does the port around them, so a build that placed fewer entries than there
-    // are rows placed nothing worth comparing against.
+    // are rows placed nothing worth comparing against. The build's entries reach the hierarchy
+    // through its one bulk rebuild — a fresh document crosses the churn threshold immediately,
+    // and per-entry placement on the way to an owed rebuild is thrown-away work.
     assert!(
-        built.get(Counter::HitEntriesReinserted) > ROWS as u64,
-        "the build did not place entries through the hierarchy at all, so the comparison below \
-         has no control: {}",
-        built.get(Counter::HitEntriesReinserted)
+        built.get(Counter::HitEntriesUpdated) > ROWS as u64,
+        "the build did not write entries at all, so the comparison below has no control: {}",
+        built.get(Counter::HitEntriesUpdated)
+    );
+    assert!(
+        built.get(Counter::HitIndexRebuilds) >= 1,
+        "the build's entries never reached the hierarchy: no bulk build ran"
     );
 
     let before = row_extents(&harness);
