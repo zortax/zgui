@@ -53,11 +53,13 @@ pub struct LayoutTree<'a, C> {
     text: TextStyles,
     /// Whoever lays custom elements out, when a window has any.
     custom: &'a dyn crate::custom::CustomLayoutSource,
-    /// Whether a custom source was installed, which is what keeps batches off.
+    /// Whether a custom source was installed, which is what makes the distributor look for
+    /// custom subtrees to pin.
     ///
-    /// A custom source carries no `Sync` bound, so a batch would hand workers something the type
-    /// system cannot vouch for. Tracked as a flag beside the reference because the installed
-    /// source replaces the inert default and the two cannot be told apart through the trait.
+    /// A custom source carries no `Sync` bound, so a batch pins every subtree holding a custom
+    /// element to the thread the source lives on and distributes the rest. Tracked as a flag
+    /// beside the reference because the installed source replaces the inert default and the two
+    /// cannot be told apart through the trait.
     has_custom: bool,
     /// The pool parallel batches run on, when the application installed one.
     parallel: Option<&'a parallel::LayoutPool>,

@@ -125,6 +125,15 @@ impl MonoShaper {
 impl ParagraphShaper for MonoShaper {
     type Engine = MonoLayout;
 
+    /// A fresh shaper, since this one draws on no font sources at all.
+    ///
+    /// Deterministic by construction, so a fork shaping the same content produces equal results.
+    /// The fork's own pass counts vanish when a batch absorbs it; a test counting passes across a
+    /// batch reads the framework's counters, which every fork bumps alike.
+    fn fork(&self) -> Option<Self> {
+        Some(Self::default())
+    }
+
     fn shape(&mut self, content: &ParagraphContent<'_>) -> ShapedParagraph<Self::Engine> {
         debug_assert!(
             content.runs_are_well_formed(),

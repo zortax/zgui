@@ -58,13 +58,33 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     /// The pool this pass may distribute batches on, if every condition for one holds.
     ///
     /// Exclusive passes only: a worker's own nested batches run serially on the worker, which
-    /// keeps the store split single-level. A pass with a custom source installed stays serial
-    /// because the source's contract carries no `Sync` bound.
+    /// keeps the store split single-level. A custom source keeps the pool: its contract carries
+    /// no `Sync` bound, so the distributor pins every subtree holding a custom element to this
+    /// thread and the workers carry a source that is never asked.
     pub(crate) fn batch_pool(&self) -> Option<&'a LayoutPool> {
-        match (&self.store, self.has_custom) {
-            (StoreView::Exclusive(_), false) => self.parallel,
-            _ => None,
+        match &self.store {
+            StoreView::Exclusive(_) => self.parallel,
+            StoreView::Worker(_) => None,
         }
+    }
+
+    /// Whether any box of `root`'s subtree is a custom element.
+    ///
+    /// Asked per node per batch, and only when a custom source is installed at all — a document
+    /// with none pays one flag test. The walk is what the answer costs where one is: the store
+    /// records custom content per box, and a subtree summary would have to be maintained by every
+    /// splice for a question only the distributor asks.
+    fn subtree_has_custom(&self, root: BoxKey) -> bool {
+        let store = self.store.get();
+        let structure = self.store.structure();
+        let mut stack = vec![root];
+        while let Some(key) = stack.pop() {
+            if store.custom_content(key).is_some() {
+                return true;
+            }
+            stack.extend(structure.node(key).children.iter().copied());
+        }
+        false
     }
 
     /// Runs one batch, serially where it stands or across the pool.
@@ -110,6 +130,25 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
                 node_order.push(request.node);
             }
             slot.push(index);
+        }
+
+        // A subtree holding a custom element stays on this thread, where the installed source
+        // lives — the source's contract carries no `Sync` bound, and the workers' own source
+        // answers nothing. Everything else distributes around it. The page test is what makes
+        // this free for the ordinary application, which installs a source and holds no custom
+        // box: the walks run only where one may exist.
+        let mut pinned: Vec<usize> = Vec::new();
+        if self.has_custom && self.store.get().may_hold_custom_boxes() {
+            node_order.retain(|&node| {
+                if self.subtree_has_custom(from_node_id(node)) {
+                    let held = node_requests
+                        .get(&u64::from(node))
+                        .expect("every ordered node was recorded");
+                    pinned.extend(held.iter().copied());
+                    return false;
+                }
+                true
+            });
         }
 
         let wanted = pool.width().min(node_order.len() / 2).max(1);
@@ -195,9 +234,18 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
         tracing::debug!(
             target: "zgui::layout",
             requests = requests.len(),
+            pinned = pinned.len(),
             workers = measurers.len(),
             "batch distributed"
         );
+
+        // The pinned subtrees first, while the store is still whole: they are laid out through
+        // the installed source on this thread, exactly as a serial pass would lay them out.
+        let mut ordered: Vec<Option<LayoutOutput>> = vec![None; requests.len()];
+        for &index in &pinned {
+            let request = requests[index];
+            ordered[index] = Some(self.compute_child_layout(request.node, request.input));
+        }
 
         // Carve one exclusive borrow per planned box out of the layout column. The sort is what
         // lets the carving be ordinary splitting, and its strict-ascending requirement is also
@@ -258,7 +306,6 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
 
         // Every result back into request order, then the paragraph identifiers, then the
         // measurers — the same sequence a serial pass produces.
-        let mut ordered: Vec<Option<LayoutOutput>> = vec![None; requests.len()];
         for outcome in outcomes {
             for (index, output) in outcome.expect("every spawned worker finished") {
                 ordered[index] = Some(output);

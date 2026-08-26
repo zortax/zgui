@@ -67,6 +67,16 @@ impl LayoutStore {
         self.custom.get(key).copied().flatten()
     }
 
+    /// Whether any box of this document may carry custom content.
+    ///
+    /// From the sparse table's page count, so a document with none answers without a walk — which
+    /// is every document, in an application that installs a custom source it never uses.
+    /// Conservative by one compaction: a page whose last custom box left reads as occupied until
+    /// the recycle drops it, and what that costs is a walk that finds nothing to pin.
+    pub(crate) fn may_hold_custom_boxes(&self) -> bool {
+        self.custom.pages() > 0
+    }
+
     /// The custom registry reference captured by `key`, when it is custom content.
     ///
     /// Exposes the compact value rather than the sparse table's private storage type; paint needs

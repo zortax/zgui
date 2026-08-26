@@ -28,6 +28,7 @@ workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
