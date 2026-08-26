@@ -94,7 +94,8 @@ impl Arena {
             let range = self.free[at].clone();
             let taken = range.start..range.start + len;
             if range.end - range.start == len {
-                self.free.swap_remove(at);
+                // An ordered remove, because the order is what `free` merges by.
+                self.free.remove(at);
             } else {
                 self.free[at] = range.start + len..range.end;
             }
@@ -108,23 +109,37 @@ impl Arena {
         None
     }
 
-    /// Gives a range back, keeping the free list coalesced enough to be useful.
+    /// Gives a range back, merging every neighbour it touches and retracting the tail.
+    ///
+    /// The list is kept sorted by start, which is what lets a return merge *both* of its
+    /// neighbours: a drag frees and re-takes differently sized ranges every frame, and a list
+    /// that merged only one side fragmented toward one entry per chunk — with every allocation
+    /// scanning all of them.
     fn free(&mut self, range: Range<u32>) {
         if range.is_empty() {
             return;
         }
-        // Merge with a neighbour where one is adjacent; a linear scan over a short list.
-        for held in &mut self.free {
-            if held.end == range.start {
-                held.end = range.end;
-                return;
+        let at = self.free.partition_point(|held| held.start < range.start);
+        let merges_left = at > 0 && self.free[at - 1].end == range.start;
+        let merges_right = at < self.free.len() && range.end == self.free[at].start;
+        match (merges_left, merges_right) {
+            (true, true) => {
+                self.free[at - 1].end = self.free[at].end;
+                self.free.remove(at);
             }
-            if range.end == held.start {
-                held.start = range.start;
-                return;
-            }
+            (true, false) => self.free[at - 1].end = range.end,
+            (false, true) => self.free[at].start = range.start,
+            (false, false) => self.free.insert(at, range),
         }
-        self.free.push(range);
+        // A range that has come to abut the tail is not a fragment at all: giving it back to the
+        // tail is what lets a fully drained arena allocate from zero again.
+        while let Some(last) = self.free.last() {
+            if last.end != self.tail {
+                break;
+            }
+            self.tail = last.start;
+            self.free.pop();
+        }
     }
 
     /// Copies `bytes` over the elements starting at `start`.
