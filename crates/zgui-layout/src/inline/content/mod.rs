@@ -76,12 +76,15 @@ pub(crate) struct Generated {
     /// The string the shaper is handed.
     pub(crate) text: String,
     /// How to get from an offset in it back to the document.
-    pub(crate) map: TextMap,
+    ///
+    /// Shared, because every resolution built over this flattening carries it too — a paragraph
+    /// re-broken per width step re-carried a copy of it into each resolution otherwise.
+    pub(crate) map: Arc<TextMap>,
     /// The styled ranges, covering the string with no gaps.
     pub(crate) runs: Vec<StyledRun>,
     /// The box each text run's characters came from, parallel to the run indices the offset map
-    /// reports.
-    pub(crate) sources: Vec<BoxKey>,
+    /// reports. Shared for the same reason the map is.
+    pub(crate) sources: Arc<[BoxKey]>,
     /// The atomic inlines and inline-box edges, in ascending offset order.
     pub(crate) items: Vec<Item>,
     /// What the context has as a whole.

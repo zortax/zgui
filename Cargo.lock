@@ -5780,6 +5780,7 @@ dependencies = [
  "zgui-paint",
  "zgui-platform",
  "zgui-platform-headless",
+ "zgui-profile",
  "zgui-reactive",
  "zgui-render",
  "zgui-runtime",

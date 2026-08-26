@@ -14,6 +14,7 @@
 //! space began rather than nowhere.
 
 use core::ops::Range;
+use std::sync::Arc;
 
 use zgui_css::ComputedStyle;
 use zgui_css::values::text::TabSize;
@@ -63,7 +64,7 @@ pub(crate) fn build(
     Generated {
         key: std::sync::OnceLock::new(),
         text: builder.text,
-        map: builder.map,
+        map: Arc::new(builder.map),
         runs,
         sources,
         items: builder.items,

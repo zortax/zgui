@@ -43,9 +43,9 @@ pub struct InlineResolution {
     /// space collapsed, tabs expanded, a direction control prefixed — which the document never
     /// contained. A caret, a selection and an accessibility range are all expressed in the text the
     /// document does hold, so nothing can cross between the two without this.
-    pub map: TextMap,
+    pub map: std::sync::Arc<TextMap>,
     /// The box each text run of that string came from, indexed by the run number the map reports.
-    pub sources: Vec<BoxKey>,
+    pub sources: std::sync::Arc<[BoxKey]>,
     /// What the lines that did not fit are cut off with.
     ///
     /// Empty unless some line overflowed *and* the box asked for a mark, so a context whose text

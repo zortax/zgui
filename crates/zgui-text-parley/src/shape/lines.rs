@@ -53,11 +53,11 @@ pub(crate) fn read(
         }
     }
     BrokenParagraph {
-        geometry: TextGeometry {
+        geometry: std::sync::Arc::new(TextGeometry {
             lines,
             size: Size::new(CssPx(layout.width()), CssPx(layout.height())),
             is_rtl: layout.is_rtl(),
-        },
+        }),
         boxes,
     }
 }

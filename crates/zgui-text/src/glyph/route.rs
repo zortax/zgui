@@ -192,7 +192,9 @@ impl ShapedRun<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ATLAS_MAX_CSS_SIZE, ATLAS_MAX_SIZE, RasterPath, RunProfile, RunSurface, atlas_max_size};
+    use super::{
+        ATLAS_MAX_CSS_SIZE, ATLAS_MAX_SIZE, RasterPath, RunProfile, RunSurface, atlas_max_size,
+    };
 
     #[test]
     fn the_atlas_keeps_what_it_can_serve_and_gives_up_the_rest() {

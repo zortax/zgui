@@ -152,7 +152,7 @@ mod tests {
     /// Two lines of a paragraph whose shaper reported a 10 px line height for both.
     fn broken() -> BrokenParagraph {
         BrokenParagraph {
-            geometry: TextGeometry {
+            geometry: std::sync::Arc::new(TextGeometry {
                 lines: vec![
                     LineGeometry {
                         text: 0..5,
@@ -173,7 +173,7 @@ mod tests {
                 ],
                 size: Size::<CssPx, Css>::new(CssPx(40.0), CssPx(20.0)),
                 is_rtl: false,
-            },
+            }),
             boxes: Default::default(),
         }
     }

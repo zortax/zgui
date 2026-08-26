@@ -79,11 +79,11 @@ pub fn geometry(
     }
 
     BrokenParagraph {
-        geometry: TextGeometry {
+        geometry: std::sync::Arc::new(TextGeometry {
             size: Size::<CssPx, Css>::new(CssPx(widest), top),
             lines,
             is_rtl: request.paragraph.direction == Direction::RightToLeft,
-        },
+        }),
         boxes,
     }
 }

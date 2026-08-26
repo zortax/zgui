@@ -296,11 +296,11 @@ fn assemble(shaped: &ShapedParagraph<MonoLayout>, request: &BreakRequest<'_>) ->
     }
 
     BrokenParagraph {
-        geometry: TextGeometry {
+        geometry: std::sync::Arc::new(TextGeometry {
             size: Size::<CssPx, Css>::new(CssPx(widest), top),
             lines,
             is_rtl: false,
-        },
+        }),
         boxes,
     }
 }

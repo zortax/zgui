@@ -63,7 +63,7 @@ pub struct Located {
     /// The lines and their clusters.
     pub lines: LineMap,
     /// How to get between the shaper's string and the document's.
-    pub map: TextMap,
+    pub map: std::sync::Arc<TextMap>,
     /// How many bytes each source run holds, in document order.
     ///
     /// The editing model's offsets count these one after another, with nothing in between: a
