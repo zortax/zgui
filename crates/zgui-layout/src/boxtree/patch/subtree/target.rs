@@ -5,13 +5,24 @@ use zgui_dom::{Document, NodeIndex, NodeKind};
 
 use crate::boxtree::build::Owed;
 
-/// How many separately marked elements are worth splicing one at a time.
+/// How many *containers* are worth splicing one at a time.
 ///
-/// Past this the marks are no longer a local change: they are a large part of the document, every
-/// splice pays for its own confinement test, and building the whole tree once is both simpler and
-/// cheaper. The number is a threshold and not a boundary of correctness — either path is correct at
-/// any count.
+/// Past this the marks are no longer a local change: every splice pays for its own confinement
+/// test, and building the whole tree once is both simpler and cheaper. The number is a threshold
+/// and not a boundary of correctness — either path is correct at any count.
+///
+/// Counted over the collapsed, outermost containers rather than over the raw marks, because that
+/// is what the splices scale with: a virtualised list crossing a dozen row boundaries in one fast
+/// frame marks hundreds of elements, and every one of them collapses to the list's own pane — one
+/// container, one child-by-child splice, however many rows arrived.
 const MOST: usize = 64;
+
+/// How many raw marks are worth collapsing at all.
+///
+/// The collapse itself is a hash insert per mark, so it is cheap — but a frame that marked half
+/// the document is not a local change whatever it collapses to, and the whole-tree build answers
+/// it without the collection pass.
+const RAW_MOST: usize = 4_096;
 
 /// The elements whose boxes are rebuilt to service `owed`, outermost only.
 ///
@@ -32,7 +43,7 @@ const MOST: usize = 64;
 /// own, which the root element is, or when there are more marks than a splice-by-splice pass is
 /// worth.
 pub(super) fn containers(document: &Document, owed: &Owed) -> Option<Vec<NodeIndex>> {
-    if owed.is_empty() || owed.len() > MOST {
+    if owed.is_empty() || owed.len() > RAW_MOST {
         return None;
     }
     let store = document.store();
@@ -55,6 +66,9 @@ pub(super) fn containers(document: &Document, owed: &Owed) -> Option<Vec<NodeInd
         .copied()
         .filter(|&node| !has_ancestor_in(document, node, &set))
         .collect();
+    if outermost.len() > MOST {
+        return None;
+    }
     Some(outermost)
 }
 
