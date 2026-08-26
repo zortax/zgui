@@ -126,8 +126,10 @@ impl Pacer {
 
     /// Records that a commit went out and a callback was asked for with it.
     ///
-    /// Every delivered redraw ends here, whether it presented a frame or not. A turn that ends
-    /// without a commit ends the callback chain, and the surface never draws again.
+    /// Every delivered redraw that *ran* ends here, whether it presented a frame or not. A turn
+    /// that ends without a commit ends the callback chain, and the surface never draws again. A
+    /// declined redraw never committed, so it never reaches this — the pacer keeps owing nothing,
+    /// and the next request is taken the moment it is made.
     pub const fn committed(&mut self, now: Instant) {
         self.owed = Owed::Callback(now);
     }

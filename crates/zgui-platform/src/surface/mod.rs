@@ -113,6 +113,18 @@ pub trait Surface: Send + Sync + 'static {
     /// is what keeps frame pacing honest; where it means nothing it costs nothing.
     fn pre_present_notify(&self);
 
+    /// Tells the platform the redraw just delivered was refused without running.
+    ///
+    /// Called inside the delivery of a redraw, before the platform closes it out. The contract:
+    /// treat the turn as if no redraw ran — commit nothing, owe the compositor nothing — because
+    /// the application keeps the obligation and asks for the frame itself when its own deadline
+    /// arrives. A refused redraw that still cost a compositor round trip would put that deadline
+    /// behind the answer to an empty commit.
+    ///
+    /// Distinct from a redraw that ran and presented nothing: that one keeps whatever bookkeeping
+    /// the platform's pacing needs, because only the platform knows what a skipped frame owes.
+    fn redraw_declined(&self) {}
+
     /// Sets the window title.
     fn set_title(&self, title: &str);
 

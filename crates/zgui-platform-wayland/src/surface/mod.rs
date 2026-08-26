@@ -286,19 +286,20 @@ impl WaylandSurface {
         surface.frame(&self.qh, surface.clone());
     }
 
-    /// Ends a delivered redraw, keeping the frame chain alive whether or not anything was drawn.
+    /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
     ///
-    /// A frame callback rides a commit. Every reason a frame can end without presenting — no
-    /// damage, a lost device, a refused acquisition, a surface the compositor is not drawing —
+    /// A frame callback rides a commit. Every reason a *ran* frame can end without presenting —
+    /// no damage, a lost device, a refused acquisition, a surface the compositor is not drawing —
     /// would otherwise end the turn with no commit, and the compositor would never speak about
     /// this surface again.
+    ///
+    /// A redraw the application **declined** ends differently: nothing ran, so nothing is
+    /// committed and no callback is owed. The application kept the obligation, and its own
+    /// deadline asks for the frame — which the pacer, owing nothing, answers in the same turn.
+    /// A bufferless commit here would put that deadline behind a compositor round trip.
     pub(crate) fn finish_redraw(&self, now: Instant) {
-        let presented = {
-            let mut shared = self.shared();
-            shared.pacer.committed(now);
-            std::mem::replace(&mut shared.presented, false)
-        };
-        if !presented {
+        let end = self.shared().end_of_redraw(now);
+        if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
             self.ask_for_callback();
             self.role.commit();
         }
@@ -380,6 +381,10 @@ impl Surface for WaylandSurface {
 
     fn pre_present_notify(&self) {
         chrome::pre_present(self);
+    }
+
+    fn redraw_declined(&self) {
+        self.shared().declined = true;
     }
 
     fn set_title(&self, title: &str) {

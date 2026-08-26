@@ -888,6 +888,10 @@ impl Window {
     pub fn declined_a_frame(&mut self) {
         self.declined += 1;
         self.awaiting_frame.set(false);
+        // The platform closes the redraw out after this returns, and must treat it as one that
+        // never ran: the obligation stays here, and the deadline that discharges it must not wait
+        // behind a compositor round trip the refusal itself started.
+        self.surface.redraw_declined();
         zgui_profile::latency::mark("f.declined");
     }
 
@@ -925,6 +929,7 @@ impl Window {
     pub fn held_a_frame(&mut self) {
         self.held += 1;
         self.awaiting_frame.set(false);
+        self.surface.redraw_declined();
         zgui_profile::latency::mark("f.held");
     }
 

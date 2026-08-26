@@ -14,6 +14,17 @@ use crate::frame::{Pacer, Timing, Visibility, Watchdog};
 /// would leave the other pinned there.
 pub(crate) type Bounds = (Option<Size<CssPx, Css>>, Option<Size<CssPx, Css>>);
 
+/// How a delivered redraw ended, and what the surface owes the compositor for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EndOfRedraw {
+    /// A buffer was committed, and the frame callback rode that commit.
+    Presented,
+    /// The redraw ran and presented nothing; a bufferless commit must keep the chain alive.
+    KeepChainAlive,
+    /// The redraw was refused without running; nothing is committed and nothing is owed.
+    Declined,
+}
+
 /// The mutable half of a surface.
 ///
 /// It is one lock rather than several because every field is read or written in the same two
@@ -46,6 +57,8 @@ pub(crate) struct Shared {
     pub(crate) told_hidden: bool,
     /// Whether a buffer was committed during the redraw now being delivered.
     pub(crate) presented: bool,
+    /// Whether the redraw now being delivered was refused without running.
+    pub(crate) declined: bool,
     /// Whether any buffer has ever been committed.
     ///
     /// What separates a configure that restates the extent from the one that maps the surface: the
@@ -82,6 +95,7 @@ impl Shared {
             visibility: Visibility::default(),
             told_hidden: true,
             presented: false,
+            declined: false,
             mapped: false,
             pending_viewport: None,
             ladder: crate::surface::Scale::default(),
@@ -124,6 +138,28 @@ impl Shared {
         } else {
             SurfaceEvent::Resized(size)
         })
+    }
+
+    /// How the redraw just delivered ended, consuming what the delivery recorded.
+    ///
+    /// A redraw that **presented** owes the compositor nothing further here — the callback rode
+    /// the commit `pre_present` made. One that **ran and presented nothing** must keep the chain
+    /// alive with a bufferless commit, or a compositor that answers only commits never speaks
+    /// about this surface again — and the silence that follows such a commit is also how a hidden
+    /// surface is recognised. One that was **declined** never ran: nothing is committed and the
+    /// pacer is left as it was, so the runtime's own deadline is answered the moment it asks.
+    pub(crate) fn end_of_redraw(&mut self, now: Instant) -> EndOfRedraw {
+        let presented = std::mem::replace(&mut self.presented, false);
+        let declined = std::mem::replace(&mut self.declined, false);
+        if presented {
+            self.pacer.committed(now);
+            EndOfRedraw::Presented
+        } else if declined {
+            EndOfRedraw::Declined
+        } else {
+            self.pacer.committed(now);
+            EndOfRedraw::KeepChainAlive
+        }
     }
 
     /// Whether a configure that moved nothing still buys a redraw.
@@ -190,7 +226,7 @@ impl Shared {
 
 #[cfg(test)]
 mod tests {
-    use super::Shared;
+    use super::{EndOfRedraw, Shared};
     use std::time::{Duration, Instant};
     use zgui_geom::{CssPx, DevicePx, Size};
     use zgui_platform::SurfaceEvent;
@@ -318,6 +354,56 @@ mod tests {
             shared.pacer.deadline(shared.visibility, now),
             Some(now + Duration::from_millis(400))
         );
+    }
+
+    #[test]
+    fn a_declined_redraw_owes_nothing_and_the_next_request_is_answered_at_once() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.declined = true;
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Declined);
+        assert_eq!(
+            shared.pacer.deadline(shared.visibility, now),
+            None,
+            "a declined redraw left a callback owed"
+        );
+        // The runtime's deadline renews the request, and nothing stands in front of it.
+        shared.pacer.request();
+        let mut visibility = shared.visibility;
+        assert!(shared.pacer.take(&mut visibility, now));
+    }
+
+    #[test]
+    fn a_redraw_that_ran_and_presented_nothing_still_owes_the_chain_a_commit() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
+        // The commit went out, so the compositor is owed an answer before the next frame.
+        shared.pacer.request();
+        let mut visibility = shared.visibility;
+        assert!(!shared.pacer.take(&mut visibility, now));
+    }
+
+    #[test]
+    fn a_redraw_that_presented_rides_its_own_commit() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.presented = true;
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Presented);
+    }
+
+    #[test]
+    fn a_decline_is_consumed_by_the_redraw_it_belongs_to() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.declined = true;
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Declined);
+        // The next redraw runs normally; yesterday's refusal says nothing about it.
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
     }
 
     #[test]

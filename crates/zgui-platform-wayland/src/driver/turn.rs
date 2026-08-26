@@ -171,10 +171,12 @@ impl<A: AppHandler> WaylandApp<A> {
 
     /// Gives a frame to every surface that asked for one and is allowed one.
     ///
-    /// The three steps per surface are one sequence and the third is not optional: ask the
-    /// compositor for the next callback, let the application draw, then commit whether or not it
-    /// did. A callback rides a commit, and a turn that ends without one ends the chain — after
-    /// which the compositor never speaks about that surface again.
+    /// The three steps per surface are one sequence: ask the compositor for the next callback,
+    /// let the application draw, then close the redraw out. A redraw that *ran* ends in a commit
+    /// whether or not it presented — a callback rides a commit, and a turn that ends without one
+    /// ends the chain, after which the compositor never speaks about that surface again. A redraw
+    /// the application declined ends in nothing: the application kept the obligation, and its own
+    /// deadline must not wait behind the answer to an empty commit.
     fn deliver_frames(&mut self) {
         let now = self.state.live.clock.now();
         for surface in self.state.live.all() {

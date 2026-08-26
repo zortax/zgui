@@ -79,5 +79,10 @@ name = "wake_signal"
 path = "tests/wake_signal.rs"
 harness = false
 
+[[test]]
+name = "declined_redraw"
+path = "tests/declined_redraw.rs"
+harness = false
+
 [lints]
 workspace = true
