@@ -31,7 +31,7 @@ pub fn onto_device(
     space: Option<SpatialId>,
     placements: &Placements,
 ) -> Rect<DevicePx, Device> {
-    match space.and_then(|id| placements.get(id)) {
+    match space.and_then(|id| placements.moves(id)) {
         Some(matrix) => transformed_bounds(matrix, rect),
         None => rect,
     }

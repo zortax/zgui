@@ -13,12 +13,22 @@
 
 use std::borrow::Cow;
 
+use smallvec::SmallVec;
 use zgui_dom::side::BoxKey;
 use zgui_layout::LayoutStore;
 use zgui_layout::fragment::stacking::{level, z_index};
 
 /// What a walk does at each box.
 pub trait Visitor {
+    /// Called before a box is ranked among its siblings. Returning `false` drops its subtree.
+    ///
+    /// This is the cheap question, asked once per child of every entered box, and it exists
+    /// because ranking is the expensive part of order: which pass a child paints in only matters
+    /// for a child that paints this frame, and a damaged corner of a long list must not rank a
+    /// thousand rows to find the two it touches.
+    fn descends(&mut self, _store: &LayoutStore, _key: BoxKey) -> bool {
+        true
+    }
     /// Called on the way in. Returning `false` skips the box's subtree entirely.
     fn enter(&mut self, store: &LayoutStore, key: BoxKey) -> bool;
     /// Called on the way out, and only for a box whose [`Visitor::enter`] returned `true`.
@@ -26,12 +36,29 @@ pub trait Visitor {
 }
 
 /// Walks `root` and everything below it in painting order.
+///
+/// Only the children the visitor descends into are ranked. The relative order of the emitted
+/// children is the one the full sort gives, because the sort is stable and a dropped child
+/// contributes nothing to interleave with.
 pub fn walk(store: &LayoutStore, root: BoxKey, visitor: &mut impl Visitor) {
     if !visitor.enter(store, root) {
         return;
     }
-    for &child in children_in_paint_order(store, root).iter() {
-        walk(store, child, visitor);
+    if let Some(node) = store.get(root) {
+        let mut kept: SmallVec<[(u8, i32, usize, BoxKey); 16]> = SmallVec::new();
+        for (position, &child) in node.children.iter().enumerate() {
+            if visitor.descends(store, child) {
+                kept.push((0, 0, position, child));
+            }
+        }
+        for entry in &mut kept {
+            entry.0 = level(store, entry.3) as u8;
+            entry.1 = z_index(store, entry.3);
+        }
+        kept.sort_by_key(|(pass, index, position, _)| (*pass, *index, *position));
+        for (_, _, _, child) in kept {
+            walk(store, child, visitor);
+        }
     }
     visitor.leave(store, root);
 }

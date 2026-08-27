@@ -54,6 +54,13 @@ struct Slot {
     occupant: Option<Generation>,
     /// The matrix mapping that occupant's coordinates onto the device.
     matrix: Matrix4,
+    /// Whether that matrix moves nothing, decided once when it is resolved.
+    ///
+    /// Nearly every coordinate system in a document resolves to the identity — a space is
+    /// established per scroll container and per transformable box, and most never move — and a
+    /// consumer placing a rectangle per fragment per frame wants to skip the arithmetic rather
+    /// than perform a transform that lands where it started.
+    identity: bool,
 }
 
 impl Default for Slot {
@@ -61,6 +68,7 @@ impl Default for Slot {
         Self {
             occupant: None,
             matrix: Matrix4::IDENTITY,
+            identity: true,
         }
     }
 }
@@ -164,6 +172,7 @@ impl Placements {
             Some((id, matrix)) => Slot {
                 occupant: Some(id.generation()),
                 matrix,
+                identity: matrix == Matrix4::IDENTITY,
             },
             None => Slot::default(),
         }
@@ -173,6 +182,16 @@ impl Placements {
     pub fn get(&self, id: SpatialId) -> Option<&Matrix4> {
         let slot = self.slots.get(id.index() as usize)?;
         (slot.occupant == Some(id.generation())).then_some(&slot.matrix)
+    }
+
+    /// The matrix `id` names, only where it moves anything.
+    ///
+    /// `None` both where the slot has moved on and where the answer is the identity: a caller
+    /// transforming geometry treats the two the same, and the identity is the common case a
+    /// per-fragment cull must not pay matrix arithmetic for.
+    pub fn moves(&self, id: SpatialId) -> Option<&Matrix4> {
+        let slot = self.slots.get(id.index() as usize)?;
+        (slot.occupant == Some(id.generation()) && !slot.identity).then_some(&slot.matrix)
     }
 
     /// Every slot's matrix, in slot order, with the identity where nothing is live.

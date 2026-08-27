@@ -692,6 +692,23 @@ impl Pass<'_, '_> {
 }
 
 impl stacking::Visitor for Pass<'_, '_> {
+    fn descends(&mut self, _store: &LayoutStore, key: BoxKey) -> bool {
+        // The same refusal `enter` makes, asked before the box is ranked among its siblings so a
+        // skipped subtree costs its ink test and nothing else. A box that passes pays the test
+        // again on entry, which is a few rectangle reads on the handful that paint.
+        let Some(ink) = self.subtree_ink(key) else {
+            counter::bump(Counter::NodesVisited);
+            return false;
+        };
+        if !self.reaches(ink) {
+            counter::bump(Counter::NodesVisited);
+            self.report.skipped_subtrees += 1;
+            counter::add(Counter::PrimitivesCulled, 1);
+            return false;
+        }
+        true
+    }
+
     fn enter(&mut self, store: &LayoutStore, key: BoxKey) -> bool {
         counter::bump(Counter::NodesVisited);
         // A box with no fragments generated no geometry, which is what `display: none` produces;
