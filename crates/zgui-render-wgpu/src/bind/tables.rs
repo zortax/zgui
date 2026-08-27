@@ -504,6 +504,12 @@ impl PreparedTables {
         // refresh down to everything applied inside a refreshed slot.
         for index in 0..self.changed_clips.len() {
             let id = self.changed_clips[index];
+            // The sweep retracts the id space where its tail is free, and journals the slots it
+            // frees — so a journaled slot can lie past the current end, where there is no entry
+            // to write and nothing left to name it.
+            if id.0 as usize >= table.slots() {
+                continue;
+            }
             let current = meta_of(table.get(id));
             if self.deps.meta[id.0 as usize] != current {
                 self.deps.note(id.0, current);
@@ -521,6 +527,10 @@ impl PreparedTables {
             }
         }
         while let Some(slot) = self.deps.next() {
+            // A stale edge can also reach past a retracted id space.
+            if slot as usize >= self.tables.clips.len() {
+                continue;
+            }
             let id = ClipId(slot);
             let value = if table.contains(id) {
                 gpu_clip(&table.resolve_placed(id, &|space| self.placements.get(space).copied()))
@@ -964,6 +974,49 @@ mod tests {
             prepared.tables().clips[inner.0 as usize].aabb[0],
             20.0,
             "the inner chain re-resolved through the moved outer rectangle"
+        );
+    }
+
+    #[test]
+    fn a_sweep_that_retracts_the_id_space_is_absorbed() {
+        let mut scene = zgui_scene::Scene::new();
+        let kept = scene
+            .clips
+            .only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
+        let doomed = scene
+            .clips
+            .only(ClipLink::rect(rect(5.0, 5.0, 20.0, 20.0)));
+        assert!(doomed.0 > kept.0, "the doomed chain holds the tail slot");
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        // The kept chain stays in use while the tail chain ages out; the sweep then frees the
+        // tail slot, retracts the id space over it, and journals the freeing.
+        for _ in 0..12 {
+            scene.clips.begin_frame();
+            scene.clips.only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
+        }
+        assert!(scene.clips.evict_unreachable_chains(8, usize::MAX) >= 1);
+        assert!(
+            scene.clips.slots() <= doomed.0 as usize,
+            "the id space retracted over the freed tail"
+        );
+
+        // The journaled slot lies past the table's end now; preparing must absorb that.
+        prepared.update(&scene);
+        assert_eq!(prepared.tables().clips.len(), scene.clips.slots());
+        assert!(
+            prepared
+                .dirty()
+                .clips
+                .slots
+                .iter()
+                .all(|slot| (*slot as usize) < scene.clips.slots())
+        );
+        assert_eq!(
+            prepared.tables().clips[kept.0 as usize],
+            gpu_clip(&scene.clips.resolve(kept)),
+            "the surviving chain still resolves"
         );
     }
 

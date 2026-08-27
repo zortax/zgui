@@ -367,9 +367,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// [`RigidMoves::only`] reports: a caller may shift pixels it already has only when nothing was
     /// composed, removed or repainted in place, and this is where "something was" is recorded.
     fn damage_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
-        if rect.size.height.0 > 400.0 && rect.size.height.0 < 100_000.0 {
-            eprintln!("TALL {:?}", rect);
-        }
         let Some(rect) = admitted.cut(rect) else {
             return;
         };
