@@ -4,8 +4,6 @@
 //! storage buffers rather than in the instances themselves: an N-stop gradient then costs a quad
 //! exactly as many instance bytes as a flat colour.
 
-use std::collections::HashSet;
-
 use bytemuck::{Pod, Zeroable};
 use zgui_color::{Color, ColorSpace, GradientStop, HueInterpolation, Interpolation};
 use zgui_geom::Matrix4;
@@ -227,8 +225,12 @@ pub struct PreparedTables {
     dirty: DirtyTables,
     changed_clips: Vec<ClipId>,
     changed_paints: Vec<PaintId>,
-    changed_clip_slots: HashSet<u32>,
-    moved_spaces: HashSet<u32>,
+    // Dense rather than hashed: both are probed per chain link inside a scan of the whole clip
+    // id space, where a hash per membership test was most of the frame on a grown table.
+    changed_clip_slots: Vec<bool>,
+    moved_spaces: Vec<bool>,
+    /// How many space slots moved this frame, so an untouched frame skips the clip scan.
+    moved_space_count: usize,
 }
 
 impl PreparedTables {
@@ -239,6 +241,7 @@ impl PreparedTables {
         self.changed_paints.clear();
         self.changed_clip_slots.clear();
         self.moved_spaces.clear();
+        self.moved_space_count = 0;
 
         let clip_coverage = scene
             .clips
@@ -278,7 +281,8 @@ impl PreparedTables {
         let first = self.placements.is_empty();
         self.placements.take_noting_slots(tree, &mut |slot, _| {
             self.dirty.spatial.slots.push(slot);
-            self.moved_spaces.insert(slot);
+            note(&mut self.moved_spaces, slot as usize);
+            self.moved_space_count += 1;
         });
         self.tables
             .spatial
@@ -297,7 +301,7 @@ impl PreparedTables {
             }
         } else {
             for (slot, matrix) in self.placements.matrices().enumerate() {
-                if self.moved_spaces.contains(&(slot as u32)) {
+                if noted(&self.moved_spaces, slot) {
                     self.tables.spatial[slot] = GpuSpatial::of(matrix);
                 }
             }
@@ -350,15 +354,16 @@ impl PreparedTables {
             return;
         }
         self.tables.clips.resize(table.slots(), freed_clip());
-        if self.changed_clips.is_empty() && self.moved_spaces.is_empty() {
+        if self.changed_clips.is_empty() && self.moved_space_count == 0 {
             return;
         }
 
-        self.changed_clip_slots
-            .extend(self.changed_clips.iter().map(|id| id.0));
+        for id in &self.changed_clips {
+            note(&mut self.changed_clip_slots, id.0 as usize);
+        }
         for index in 0..table.slots() {
             let id = ClipId(index as u32);
-            let dirty = self.changed_clip_slots.contains(&id.0)
+            let dirty = noted(&self.changed_clip_slots, index)
                 || table.contains(id)
                     && clip_chain_is_dirty(table, id, &self.changed_clip_slots, &self.moved_spaces);
             if !dirty {
@@ -378,24 +383,37 @@ impl PreparedTables {
 fn clip_chain_is_dirty(
     table: &ClipTable,
     id: ClipId,
-    changed_clips: &HashSet<u32>,
-    moved_spaces: &HashSet<u32>,
+    changed_clips: &[bool],
+    moved_spaces: &[bool],
 ) -> bool {
     let mut cursor = id;
     while let Some(ClipNode::Link { link, parent, .. }) = table.get(cursor) {
-        if changed_clips.contains(&cursor.0) {
+        if noted(changed_clips, cursor.0 as usize) {
             return true;
         }
         let space = match link {
             ClipLink::RoundedRect { space, .. } => *space,
             ClipLink::Mask { transform, .. } => *transform,
         };
-        if moved_spaces.contains(&space.index()) {
+        if noted(moved_spaces, space.index() as usize) {
             return true;
         }
         cursor = *parent;
     }
-    changed_clips.contains(&cursor.0)
+    noted(changed_clips, cursor.0 as usize)
+}
+
+/// Marks one slot in a dense set, growing it to reach.
+fn note(set: &mut Vec<bool>, slot: usize) {
+    if slot >= set.len() {
+        set.resize(slot + 1, false);
+    }
+    set[slot] = true;
+}
+
+/// Whether a dense set marks `slot`.
+fn noted(set: &[bool], slot: usize) -> bool {
+    set.get(slot).copied().unwrap_or(false)
 }
 
 /// Resolves clips through an already-computed placement cache.
