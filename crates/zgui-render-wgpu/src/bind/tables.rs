@@ -225,12 +225,147 @@ pub struct PreparedTables {
     dirty: DirtyTables,
     changed_clips: Vec<ClipId>,
     changed_paints: Vec<PaintId>,
-    // Dense rather than hashed: both are probed per chain link inside a scan of the whole clip
-    // id space, where a hash per membership test was most of the frame on a grown table.
-    changed_clip_slots: Vec<bool>,
+    // Dense rather than hashed: probed per slot in the spatial write loop, where a hash per
+    // membership test was most of the frame on a grown table.
     moved_spaces: Vec<bool>,
-    /// How many space slots moved this frame, so an untouched frame skips the clip scan.
+    /// How many space slots moved this frame, so an untouched frame skips the clip refresh.
     moved_space_count: usize,
+    /// Which clip slots depend on which, so a frame refreshes the dependents of what changed
+    /// rather than walking every chain in the id space.
+    deps: ClipDependents,
+}
+
+/// The meta a slot holding no chain link is indexed under.
+const NO_META: (u32, u32) = (u32::MAX, u32::MAX);
+
+/// The (parent slot, own space slot) a clip table entry hangs from.
+fn meta_of(node: Option<&ClipNode>) -> (u32, u32) {
+    match node {
+        Some(ClipNode::Link { link, parent, .. }) => {
+            let space = match link {
+                ClipLink::RoundedRect { space, .. } => space.index(),
+                ClipLink::Mask { transform, .. } => transform.index(),
+            };
+            (parent.0, space)
+        }
+        _ => NO_META,
+    }
+}
+
+/// The clip table's dependency edges, kept between frames.
+///
+/// A slot's resolved value depends on its own entry, its ancestors' entries, and the placement of
+/// every space along the chain — so when one of those moves, the slot and everything applied
+/// inside it refresh. Edges are only ever added: a slot reused for a different chain gains its
+/// new edges and leaves the old ones standing as false candidates, which cost one wasted
+/// comparison each and never a wrong pixel. The whole index is rebuilt when the stale share
+/// passes a watermark, and whenever the consumer refreshes every slot anyway.
+#[derive(Clone, Debug, Default)]
+struct ClipDependents {
+    /// The meta each clip slot was last indexed under.
+    meta: Vec<(u32, u32)>,
+    /// The clip slots applied directly inside each clip slot.
+    children: Vec<Vec<u32>>,
+    /// The clip slots whose own link is measured in each space slot.
+    users: Vec<Vec<u32>>,
+    /// How many memberships stand, for the staleness watermark.
+    edges: usize,
+    /// Which slots this frame has queued, cleared again when the frame settles.
+    queued: Vec<bool>,
+    /// The slots to refresh, in discovery order.
+    stack: Vec<u32>,
+    /// How far the refresh has read into the stack.
+    cursor: usize,
+}
+
+impl ClipDependents {
+    /// Grows the per-slot storage to cover `slots`.
+    fn reach(&mut self, slots: usize) {
+        if self.meta.len() < slots {
+            self.meta.resize(slots, NO_META);
+            self.children.resize_with(slots, Vec::new);
+            self.queued.resize(slots, false);
+        }
+    }
+
+    /// Whether the stale edges have accrued past what a rebuild costs to clear.
+    fn wants_rebuild(&self, slots: usize) -> bool {
+        self.edges > slots.saturating_mul(4) + 1_024
+    }
+
+    /// Rebuilds every edge from the table as it stands.
+    fn rebuild(&mut self, table: &ClipTable) {
+        for list in &mut self.children {
+            list.clear();
+        }
+        for list in &mut self.users {
+            list.clear();
+        }
+        self.meta.clear();
+        self.edges = 0;
+        self.reach(table.slots());
+        for slot in 0..table.slots() as u32 {
+            self.note(slot, meta_of(table.get(ClipId(slot))));
+        }
+    }
+
+    /// Records where one slot hangs, adding its edges.
+    fn note(&mut self, slot: u32, meta: (u32, u32)) {
+        self.reach(slot as usize + 1);
+        self.meta[slot as usize] = meta;
+        let (parent, space) = meta;
+        if parent != u32::MAX {
+            self.reach(parent as usize + 1);
+            self.children[parent as usize].push(slot);
+            self.edges += 1;
+        }
+        if space != u32::MAX {
+            if self.users.len() <= space as usize {
+                self.users.resize_with(space as usize + 1, Vec::new);
+            }
+            self.users[space as usize].push(slot);
+            self.edges += 1;
+        }
+    }
+
+    /// Queues one slot for refresh, once.
+    fn queue(&mut self, slot: u32) {
+        self.reach(slot as usize + 1);
+        if !self.queued[slot as usize] {
+            self.queued[slot as usize] = true;
+            self.stack.push(slot);
+        }
+    }
+
+    /// Queues every recorded user of one space.
+    fn queue_users(&mut self, space: u32) {
+        let Some(users) = self.users.get(space as usize) else {
+            return;
+        };
+        for index in 0..users.len() {
+            let slot = self.users[space as usize][index];
+            self.queue(slot);
+        }
+    }
+
+    /// The next queued slot, with everything applied directly inside it queued behind it.
+    fn next(&mut self) -> Option<u32> {
+        let slot = *self.stack.get(self.cursor)?;
+        self.cursor += 1;
+        for index in 0..self.children[slot as usize].len() {
+            let child = self.children[slot as usize][index];
+            self.queue(child);
+        }
+        Some(slot)
+    }
+
+    /// Ends the frame's refresh, clearing the queue for the next one.
+    fn settle(&mut self) {
+        for slot in self.stack.drain(..) {
+            self.queued[slot as usize] = false;
+        }
+        self.cursor = 0;
+    }
 }
 
 impl PreparedTables {
@@ -239,7 +374,6 @@ impl PreparedTables {
         self.dirty.clear();
         self.changed_clips.clear();
         self.changed_paints.clear();
-        self.changed_clip_slots.clear();
         self.moved_spaces.clear();
         self.moved_space_count = 0;
 
@@ -351,56 +485,57 @@ impl PreparedTables {
         if coverage == ChangeCoverage::All {
             self.tables.clips = clips_with(table, &self.placements);
             self.dirty.clips.mark_all();
+            self.deps.rebuild(table);
             return;
         }
         self.tables.clips.resize(table.slots(), freed_clip());
-        if self.changed_clips.is_empty() && self.moved_space_count == 0 {
+        self.deps.reach(table.slots());
+        if self.changed_clips.is_empty()
+            && self.moved_space_count == 0
+            && !self.dirty.spatial.all
+        {
             return;
         }
-
-        for id in &self.changed_clips {
-            note(&mut self.changed_clip_slots, id.0 as usize);
+        if self.deps.wants_rebuild(table.slots()) {
+            self.deps.rebuild(table);
         }
-        for index in 0..table.slots() {
-            let id = ClipId(index as u32);
-            let dirty = noted(&self.changed_clip_slots, index)
-                || table.contains(id)
-                    && clip_chain_is_dirty(table, id, &self.changed_clip_slots, &self.moved_spaces);
-            if !dirty {
-                continue;
+        // Seed with every journaled slot, re-homed in the index where its chain changed shape,
+        // and with every recorded dependent of a space that moved. The closure below carries the
+        // refresh down to everything applied inside a refreshed slot.
+        for index in 0..self.changed_clips.len() {
+            let id = self.changed_clips[index];
+            let current = meta_of(table.get(id));
+            if self.deps.meta[id.0 as usize] != current {
+                self.deps.note(id.0, current);
             }
-            self.tables.clips[index] = if table.contains(id) {
+            self.deps.queue(id.0);
+        }
+        if self.dirty.spatial.all {
+            for slot in 0..table.slots() as u32 {
+                self.deps.queue(slot);
+            }
+        } else {
+            for index in 0..self.dirty.spatial.slots.len() {
+                let space = self.dirty.spatial.slots[index];
+                self.deps.queue_users(space);
+            }
+        }
+        while let Some(slot) = self.deps.next() {
+            let id = ClipId(slot);
+            let value = if table.contains(id) {
                 gpu_clip(&table.resolve_placed(id, &|space| self.placements.get(space).copied()))
             } else {
                 freed_clip()
             };
-            self.dirty.clips.slots.push(index as u32);
+            // A false candidate — a stale edge, a chain a moved space no longer reaches —
+            // resolves to what the slot already holds, and owes no upload.
+            if self.tables.clips[slot as usize] != value {
+                self.tables.clips[slot as usize] = value;
+                self.dirty.clips.slots.push(slot);
+            }
         }
+        self.deps.settle();
     }
-}
-
-/// Whether a chain itself, one of its ancestors, or one of its coordinate systems changed.
-fn clip_chain_is_dirty(
-    table: &ClipTable,
-    id: ClipId,
-    changed_clips: &[bool],
-    moved_spaces: &[bool],
-) -> bool {
-    let mut cursor = id;
-    while let Some(ClipNode::Link { link, parent, .. }) = table.get(cursor) {
-        if noted(changed_clips, cursor.0 as usize) {
-            return true;
-        }
-        let space = match link {
-            ClipLink::RoundedRect { space, .. } => *space,
-            ClipLink::Mask { transform, .. } => *transform,
-        };
-        if noted(moved_spaces, space.index() as usize) {
-            return true;
-        }
-        cursor = *parent;
-    }
-    noted(changed_clips, cursor.0 as usize)
 }
 
 /// Marks one slot in a dense set, growing it to reach.
@@ -790,5 +925,85 @@ mod tests {
         assert_eq!(prepared.dirty().spatial.slots, vec![space.index()]);
         assert_eq!(prepared.dirty().clips.slots, vec![clip.0]);
         assert_eq!(prepared.tables().clips[clip.0 as usize].aabb[0], 9.0);
+    }
+
+    #[test]
+    fn rewriting_a_parent_chain_refreshes_what_is_applied_inside_it() {
+        let mut scene = zgui_scene::Scene::new();
+        let owner = PropertyOwner::new(3).expect("a handle is never empty");
+        let outer = scene.clips.push_named(
+            ClipId::ROOT,
+            ClipLink::rect(rect(0.0, 0.0, 100.0, 100.0)),
+            Size::ZERO,
+            owner,
+        );
+        let inner = scene
+            .clips
+            .push(outer, ClipLink::rect(rect(10.0, 10.0, 50.0, 50.0)));
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        // The box the outer chain is named after moves, which rewrites the slot in place.
+        let again = scene.clips.push_named(
+            ClipId::ROOT,
+            ClipLink::rect(rect(20.0, 0.0, 100.0, 100.0)),
+            Size::ZERO,
+            owner,
+        );
+        assert_eq!(again, outer, "the same box is the same chain");
+        prepared.update(&scene);
+
+        let mut dirtied = prepared.dirty().clips.slots.clone();
+        dirtied.sort_unstable();
+        assert_eq!(
+            dirtied,
+            vec![outer.0, inner.0],
+            "the rewritten chain and the one applied inside it, and nothing else"
+        );
+        assert_eq!(
+            prepared.tables().clips[inner.0 as usize].aabb[0],
+            20.0,
+            "the inner chain re-resolved through the moved outer rectangle"
+        );
+    }
+
+    #[test]
+    fn a_slot_reused_for_a_different_chain_follows_its_new_space() {
+        let mut scene = zgui_scene::Scene::new();
+        let doomed = scene
+            .clips
+            .only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        // The slot is freed and taken by a chain measured in a coordinate system of its own.
+        for _ in 0..3 {
+            scene.clips.begin_frame();
+        }
+        assert_eq!(scene.clips.evict_least_recently_used(), 1);
+        let owner = PropertyOwner::new(4).expect("a handle is never empty");
+        let space = scene.spatial.space_of(
+            scene.spatial.viewport(),
+            owner,
+            OwnSpace::of(Some(Matrix4::translation(2.0, 0.0, 0.0)), None, false),
+        );
+        let reused = scene.clips.only(ClipLink::RoundedRect {
+            rect: rect(0.0, 0.0, 10.0, 10.0),
+            radii: zgui_geom::Corners::default(),
+            space,
+        });
+        assert_eq!(reused.0, doomed.0, "the hole is taken again");
+        prepared.update(&scene);
+        assert_eq!(prepared.tables().clips[reused.0 as usize].aabb[0], 2.0);
+
+        // The new home's space moves; the refresh has to reach the re-homed slot.
+        scene.spatial.space_of(
+            scene.spatial.viewport(),
+            owner,
+            OwnSpace::of(Some(Matrix4::translation(7.0, 0.0, 0.0)), None, false),
+        );
+        prepared.update(&scene);
+        assert_eq!(prepared.dirty().clips.slots, vec![reused.0]);
+        assert_eq!(prepared.tables().clips[reused.0 as usize].aabb[0], 7.0);
     }
 }
