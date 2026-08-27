@@ -158,6 +158,11 @@ impl FragmentFlags {
     /// Somewhere below this fragment is one that blends with what is behind it, so this subtree
     /// cannot be flattened into its parent's paint.
     pub const HAS_BLENDING_DESCENDANT: Self = Self(1 << 5);
+    /// The box's own painting is nothing: no background, no border, no outline, no shadow.
+    ///
+    /// Decided from the style when the fragment is placed, and read where a change to the box is
+    /// weighed for damage — a box that paints nothing owes none for a move of its own.
+    pub const PAINTS_NOTHING: Self = Self(1 << 6);
 
     /// Whether every flag in `other` is set here.
     pub const fn contains(self, other: Self) -> bool {

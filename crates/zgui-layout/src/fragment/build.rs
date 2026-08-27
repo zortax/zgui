@@ -339,6 +339,9 @@ pub(crate) fn place(
     if is_sticky {
         flags = flags.union(FragmentFlags::IS_STICKY);
     }
+    if ink::paints_nothing(&node.style, border) {
+        flags = flags.union(FragmentFlags::PAINTS_NOTHING);
+    }
 
     Some(Placed {
         border_box,

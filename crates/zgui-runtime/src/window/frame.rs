@@ -1292,6 +1292,15 @@ impl Window {
             }
             self.damage
                 .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));
+            zgui_profile::latency::note_with("d.postshift", || {
+                format!(
+                    "by={:?} inherited={:?} beyond={:?} after={:?}",
+                    shift.map(|s| s.by),
+                    self.damage_before_layout.rects(),
+                    self.rigid_moves.beyond.rects(),
+                    self.damage.rects()
+                )
+            });
             mark("p.expand");
             zgui_paint::expand(&layout, &mut self.damage, viewport, self.scale);
             self.scene.begin_frame(viewport);

@@ -64,9 +64,11 @@ fn a_paint_only_change_still_damages_the_fragment_it_repainted() {
     // stage would be handed no rectangle, and the button would never change colour.
     let fixture = Fixture::new(
         Element::new("root").children(vec![Element::new("a"), Element::new("b")]),
+        // The repainted box carries a background, because the damage is owed for pixels: a box
+        // that paints nothing owes none, which the companion case below pins.
         "root { display: block; width: 200px }
          a { display: block; height: 30px }
-         b { display: block; height: 30px }",
+         b { display: block; height: 30px; background-color: #246 }",
     );
     let mut store = fixture.box_tree();
     let mut content = measurer();
@@ -92,6 +94,42 @@ fn a_paint_only_change_still_damages_the_fragment_it_repainted() {
     assert!(
         covers(&frame.damage, ink),
         "the repainted piece is not in it"
+    );
+}
+
+#[test]
+fn a_repaint_mark_on_a_paintless_box_damages_nothing() {
+    // The other half of the contract above. A keyed list that splices its children marks every
+    // retained row, and each row's container paints nothing — no background, no border, no
+    // outline, no shadow — so absorbing its ink would stripe the whole port with damage on every
+    // frame the window over it shifts. A style that starts painting flips the fragment's flags,
+    // which the geometry compare reads, so that change is damaged as a change rather than here.
+    let fixture = Fixture::new(
+        Element::new("root").children(vec![Element::new("a"), Element::new("b")]),
+        "root { display: block; width: 200px }
+         a { display: block; height: 30px }
+         b { display: block; height: 30px }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 200.0);
+
+    let target = second_child(&store);
+    let node = store.node(target).source;
+
+    frame.damage = DamageSet::new();
+    let root = store.root().expect("a root");
+    let mut dirty = OnlyThis {
+        node,
+        bits: Dirty::REPAINT,
+        marked: Vec::new(),
+    };
+    fragments(&mut frame, &mut store, root, &mut dirty);
+
+    assert!(
+        frame.damage.is_empty(),
+        "a repaint of nothing damaged {:?}",
+        frame.damage.rects()
     );
 }
 

@@ -41,6 +41,54 @@ pub(super) struct Geometry {
     pub(super) content_hash: u64,
 }
 
+/// Whether a changed fragment is a paintless box that moved rigidly, or stood still, while its
+/// inner boxes repositioned.
+///
+/// Such a fragment owes the frame no damage of its own: it painted nothing before and paints
+/// nothing after, and what moved *inside* it is other fragments' geometry, which damages itself.
+/// The virtualised list's pane is the case this names — a fragment as tall as every row there
+/// will ever be, re-laid on every frame the window over it shifts, whose old-union-new ink used
+/// to be the whole scrollport, every frame a row crossed an edge.
+///
+/// Held to fragments whose only flag is [`FragmentFlags::PAINTS_NOTHING`]: a clipping,
+/// transformed, sticky, stacking or read-extent box couples to its surroundings in ways this
+/// comparison does not measure, and each of those is rare enough to pay the two rectangles.
+pub(super) fn repositioned_within(previous: &Fragment, next: &Geometry) -> bool {
+    let plain = |flags: FragmentFlags| {
+        flags.without(FragmentFlags::HAS_BLENDING_DESCENDANT) == FragmentFlags::PAINTS_NOTHING
+    };
+    plain(next.flags)
+        && plain(previous.flags)
+        && previous.border_box.size == next.border_box.size
+        && previous.border == next.border
+        && previous.clip == next.clip
+        && previous.clip_transform == next.clip_transform
+        && previous.transform == next.transform
+        && previous.transform_hash == next.transform_hash
+        && previous.stacking == next.stacking
+        && previous.scroll == next.scroll
+        && previous.content_hash == next.content_hash
+        && moved_alike(previous.border_box, next.border_box, previous.ink, next.ink)
+        && moved_alike(
+            previous.border_box,
+            next.border_box,
+            previous.local_ink,
+            next.local_ink,
+        )
+}
+
+/// Whether `ink` moved exactly as far as the border box did, keeping its size.
+fn moved_alike(
+    border_was: Rect<DevicePx, Device>,
+    border_is: Rect<DevicePx, Device>,
+    ink_was: Rect<DevicePx, Device>,
+    ink_is: Rect<DevicePx, Device>,
+) -> bool {
+    ink_was.size == ink_is.size
+        && ink_is.origin.x.0 - ink_was.origin.x.0 == border_is.origin.x.0 - border_was.origin.x.0
+        && ink_is.origin.y.0 - ink_was.origin.y.0 == border_is.origin.y.0 - border_was.origin.y.0
+}
+
 /// What changed between a fragment and the geometry that replaces it.
 pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
     let same_shape = previous.border_box.size == next.border_box.size

@@ -7,6 +7,8 @@
 
 use zgui_css::ComputedStyle;
 use zgui_css::values::border::OutlineStyleValue;
+use zgui_css::values::color::{current, to_color};
+use zgui_css::values::image::ImageValue;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
 use zgui_scene::{Filter, read_extent};
 
@@ -43,6 +45,31 @@ pub fn of(
 /// applying it is painted, so both call one function.
 pub fn bleed(rect: Rect<DevicePx, Device>, filters: &[Filter]) -> Rect<DevicePx, Device> {
     read_extent(rect, filters)
+}
+
+/// Whether the box's own painting is nothing at all.
+///
+/// Everything a plain box can paint is asked in turn: the background colour and its layers, the
+/// border (by its snapped widths — a styled border of no width paints no pixel), the outline,
+/// and the shadows, inset and outer alike. The colour is resolved so `currentColor` at any
+/// visible alpha answers no. What this deliberately does not ask about — transforms, clips,
+/// filters, stacking — belongs to the flags a consumer reads beside this.
+pub fn paints_nothing(style: &ComputedStyle, border: Edges<DevicePx>) -> bool {
+    let background = style.get_background();
+    border == Edges::ZERO
+        && to_color(&background.background_color.resolve_to_absolute(current(style))).alpha()
+            == 0.0
+        && background
+            .background_image
+            .0
+            .iter()
+            .all(|image| matches!(image, ImageValue::None))
+        && style.get_effects().box_shadow.0.is_empty()
+        && {
+            let outline = style.get_outline();
+            outline.outline_style == OutlineStyleValue::none()
+                || outline.outline_width.0.to_f32_px() == 0.0
+        }
 }
 
 /// The union of every outer box shadow, or nothing when there are none.

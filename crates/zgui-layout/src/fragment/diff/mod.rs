@@ -43,7 +43,7 @@ pub use crate::fragment::diff::dirty::{DocumentMarks, Everything, FrameDirty, Ow
 pub use crate::fragment::diff::scratch::DiffScratch;
 
 use crate::fragment::diff::damage::{absorb, overlaps, pairwise_disjoint};
-use crate::fragment::diff::geometry::{Geometry, compare};
+use crate::fragment::diff::geometry::{Geometry, compare, repositioned_within};
 
 /// What a fragment's geometry did between two frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,13 +187,15 @@ pub fn rebuild_in(
     counter::set(Counter::FragmentsLive, u64::from(store.fragment_count()));
     counter::set(Counter::BoxesLive, u64::from(store.box_capacity()));
     crate::invariants::check_if_enabled(store, hit);
-    // A bulk rebuild of the index is not damage, but it is the walk conceding that it could not
-    // service the frame incrementally, and a frame like that is not one whose pixels may be
-    // shifted.
-    RigidMoves {
-        settled: moves.settled && !restacked,
-        ..moves
-    }
+    // A bulk rebuild of the index is deliberately *not* folded into `settled`. It rebuilds
+    // painting order, and painting order is consulted where pixels are derived — inside this
+    // frame's damage, after the rebuild has run. What a shift of the pixels outside the damage
+    // rests on is narrower: that every divergence from a pure move is *in* the damage, and the
+    // walk puts it there unconditionally — a fragment born this frame has no previous and is
+    // damaged whole, a retired one is damaged where it was, a changed one at both — and an
+    // insertion moves no surviving fragment relative to another.
+    let _ = restacked;
+    moves
 }
 
 /// The viewport a subtree is composed inside, taken from the document's own root box.
@@ -216,11 +218,11 @@ fn viewport_of(store: &LayoutStore, fallback: BoxKey) -> Size<DevicePx, Device> 
 /// is drawn over the region, which this walk never looks at.
 #[derive(Clone, Copy, Debug)]
 pub struct RigidMoves {
-    /// Whether the walk serviced the frame incrementally.
+    /// Whether every pass's moves can stand for the frame.
     ///
-    /// False when a fragment appeared that has no place in painting order yet, which forces a bulk
-    /// rebuild of the hit index and means the frame is not one whose pixels anyone should be
-    /// moving around.
+    /// Held true by the walk itself — everything a walk does that a move cannot express lands in
+    /// [`RigidMoves::beyond`] instead — and false only when a caller combines it with a pass that
+    /// said otherwise.
     pub settled: bool,
     /// The offset the rigid moves took, when every one of them took the same one.
     ///
@@ -365,6 +367,9 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// [`RigidMoves::only`] reports: a caller may shift pixels it already has only when nothing was
     /// composed, removed or repainted in place, and this is where "something was" is recorded.
     fn damage_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
+        if rect.size.height.0 > 400.0 && rect.size.height.0 < 100_000.0 {
+            eprintln!("TALL {:?}", rect);
+        }
         let Some(rect) = admitted.cut(rect) else {
             return;
         };
@@ -902,7 +907,15 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 // commonest frames there are — a hover repainting one button, and a counter whose
                 // digit changed width for width — put nothing in the damage set at all and paint
                 // nothing.
-                if own.intersects(REPAINTS_IN_PLACE) {
+                // The repaint of a box that paints nothing is nothing — and marks land on it
+                // all the same: a keyed list that spliced its children marks every retained row,
+                // and each row's paintless container would otherwise stripe the port with damage
+                // on every frame the window over it shifts. A style that *starts* painting flips
+                // [`FragmentFlags::PAINTS_NOTHING`], which the geometry comparison reads, so such
+                // a change lands in [`Change::Changed`] rather than here.
+                let vacuous =
+                    kind == FragmentKind::Box && next.flags.contains(FragmentFlags::PAINTS_NOTHING);
+                if own.intersects(REPAINTS_IN_PLACE) && !vacuous {
                     self.damage_beyond_a_move(next.ink, admitted);
                 }
                 if own.contains(Dirty::REHIT) {
@@ -923,10 +936,21 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             Change::Changed => {
                 self.dirty
                     .mark(owed.node, Dirty::REPAINT | Dirty::REHIT | self.a11y(node));
-                if let Some(previous) = &previous {
-                    self.damage_beyond_a_move(previous.ink, Admitted::everything());
+                // A paintless box that moved rigidly, or stood still while its inner boxes
+                // repositioned, owes the frame no damage of its own. Repaint marks do not hold
+                // it back: a repaint of nothing is nothing, and a style that *starts* painting
+                // flips [`FragmentFlags::PAINTS_NOTHING`], which the comparison reads on both
+                // sides.
+                let repositioned = kind == FragmentKind::Box
+                    && previous
+                        .as_ref()
+                        .is_some_and(|previous| repositioned_within(previous, next));
+                if !repositioned {
+                    if let Some(previous) = &previous {
+                        self.damage_beyond_a_move(previous.ink, Admitted::everything());
+                    }
+                    self.damage_beyond_a_move(next.ink, admitted);
                 }
-                self.damage_beyond_a_move(next.ink, admitted);
                 self.touch_hit(frag, change);
             }
         }
