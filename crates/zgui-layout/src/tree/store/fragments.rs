@@ -29,6 +29,17 @@ impl LayoutStore {
         self.fragments.len()
     }
 
+    /// Calls `visit` with every fragment whose key still resolves.
+    ///
+    /// This is for a maintenance pass over the whole document — one that marks what fragments
+    /// name in a table about to be swept. A consumer after one element's pieces wants
+    /// [`LayoutStore::fragments_of`].
+    pub fn each_fragment(&self, mut visit: impl FnMut(&Fragment)) {
+        for fragment in self.fragments.iter() {
+            visit(fragment);
+        }
+    }
+
     /// The fragments one box produced, in the order it produced them.
     pub fn fragments_of_box(&self, key: BoxKey) -> &[FragKey] {
         self.layout

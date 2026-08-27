@@ -8,7 +8,7 @@ pub(crate) mod alloc;
 pub(crate) mod block;
 mod recycle;
 
-use crate::chunk::alloc::Slots;
+use crate::chunk::alloc::{SlotState, Slots};
 use crate::chunk::block::Block;
 use crate::key::{DomainId, Key};
 
@@ -194,6 +194,24 @@ impl<T> ChunkArena<T> {
         // SAFETY: the key resolved, so the slot holds a value, and `&mut self` is proof that no
         // other reference into the arena is live for as long as the returned one is.
         Some(unsafe { self.blocks[index as usize / BLOCK_LEN].get_mut(index as usize % BLOCK_LEN) })
+    }
+
+    /// Every value whose key still resolves, in slot order.
+    ///
+    /// A value removed this frame but not yet recycled is included, because its key still
+    /// resolves; see the type-level notes on deferred removal.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        (0..self.slots.capacity()).filter_map(|index| {
+            match self.slots.state(index) {
+                // SAFETY: the slot's state says it holds a value, and the slot cannot be emptied
+                // while the returned reference lives: every operation that empties a slot takes
+                // `&mut self`, which the borrow of `self` behind this reference rules out.
+                SlotState::Live | SlotState::Removed => Some(unsafe {
+                    self.blocks[index as usize / BLOCK_LEN].get(index as usize % BLOCK_LEN)
+                }),
+                SlotState::Vacant => None,
+            }
+        })
     }
 
     /// Whether a key still resolves.

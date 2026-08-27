@@ -125,6 +125,44 @@ impl Window {
         let report = manager::report(self);
         manager::enforce(self, &report, epoch);
         self.budgets.record(report);
+        self.sweep_clip_chains(epoch);
+    }
+
+    /// Frees the clip chains nothing can reach any more, on a stride of frames.
+    ///
+    /// The clip table interns a chain per clipped rectangle of the document, and content that
+    /// goes leaves its chains behind: a long list scrolled end to end mints one cut clip per
+    /// ellipsized line at every position the window passed. Each dead chain costs the renderer's
+    /// side-table preparation a slot per frame, for ever, which is how a session that visited a
+    /// large document once stays expensive after leaving it.
+    ///
+    /// Live fragments' chains are touched first. A fragment re-encoded long after its record was
+    /// dropped emits under the chain id it stored at build, so what a live fragment names has to
+    /// survive the sweep; everything else is reachable only through holds the table already
+    /// counts. The stride keeps the walk off ordinary frames, and the floor skips documents whose
+    /// table never grew.
+    fn sweep_clip_chains(&mut self, epoch: crate::budget::SceneEpoch) {
+        /// How many frames pass between sweeps.
+        const STRIDE: u64 = 64;
+        /// The id-space extent below which sweeping buys nothing.
+        const FLOOR: usize = 1_024;
+        /// How many frames of not being touched make a chain old enough to go.
+        const KEEP_GENERATIONS: u64 = 128;
+        /// The most chains one sweep frees, so the change journal stays a delta for its readers.
+        const CAP: usize = 2_048;
+
+        if !epoch.get().is_multiple_of(STRIDE) || self.scene.clips.slots() < FLOOR {
+            return;
+        }
+        let scene = &mut self.scene;
+        let layout = self.layout.borrow();
+        layout.each_fragment(|fragment| {
+            scene.clips.use_of(fragment.clip);
+        });
+        drop(layout);
+        scene
+            .clips
+            .evict_unreachable_chains(KEEP_GENERATIONS, CAP);
     }
 
     /// Drops everything every budgeted cache holds.

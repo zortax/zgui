@@ -86,6 +86,23 @@ impl ClipTable {
         self.push(ClipId::ROOT, link)
     }
 
+    /// Frees every chain nothing can reach any more, and reports how many went.
+    ///
+    /// Chains belong to content that can go — a cut clip minted where an ellipsized line once
+    /// scrolled past, a box chain whose box has left the tree — and each dead one still costs
+    /// the table's consumers a slot per walk of the id space, for ever. Nothing re-reads a
+    /// chain by a stored id alone: a record holds what its primitives name, and everything else
+    /// interns the chain again from what it is looking at, so an evicted chain is a cache miss
+    /// at worst. A caller that does store ids across frames — the fragment tree — touches them
+    /// with [`Table::use_of`] before sweeping, and what a kept chain resolves through is kept
+    /// with it.
+    pub fn evict_unreachable_chains(&mut self, keep_generations: u64, cap: usize) -> usize {
+        self.evict_unreachable(keep_generations, cap, |node| match node {
+            ClipNode::Link { parent, .. } => Some(*parent),
+            ClipNode::Root => None,
+        })
+    }
+
     /// How many links `id` applies.
     pub fn depth(&self, id: ClipId) -> u32 {
         let mut depth = 0;
@@ -494,6 +511,37 @@ mod tests {
         let mut changed = Vec::new();
         clips.changes_since(version, &mut changed);
         assert!(changed.is_empty(), "nothing moved, so nothing was noted");
+    }
+
+    #[test]
+    fn a_sweep_keeps_a_held_chain_and_the_chain_it_hangs_from() {
+        let mut clips = ClipTable::rooted();
+        clips.begin_frame();
+        let outer = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(7));
+        let held = clips.push(outer, ClipLink::rect(at(8.0)));
+        clips.retain(held);
+        // The chains an ellipsized line minted at positions the window has left behind.
+        let minted: Vec<ClipId> = (0..64)
+            .map(|line| clips.push(outer, ClipLink::rect(at(100.0 + line as f32))))
+            .collect();
+        for _ in 0..=8 {
+            clips.begin_frame();
+        }
+
+        let freed = clips.evict_unreachable_chains(8, usize::MAX);
+
+        assert_eq!(freed, 64, "every chain nothing reaches went");
+        assert!(minted.iter().all(|id| !clips.contains(*id)));
+        assert!(clips.contains(held), "a record's hold is reachability");
+        assert!(
+            clips.contains(outer),
+            "and the chain it resolves through stays with it"
+        );
+        assert_eq!(
+            Some(clips.bounds(held)),
+            at(8.0).intersection(at(0.0)),
+            "the survivor still resolves through its whole chain"
+        );
     }
 
     #[test]

@@ -384,6 +384,71 @@ impl<K: TableId, V: Content> Table<K, V> {
         doomed.len()
     }
 
+    /// Frees every entry that nothing can reach any more, and reports how many went.
+    ///
+    /// An entry is reachable while something holds it, while it was touched within the last
+    /// `keep_generations` frames, or while a reachable entry resolves through it — `parent_of`
+    /// names the entry a value resolves through, and reachability closes over it.
+    /// [`Table::evict_least_recently_used`] steps the coldest generation of a table whose
+    /// entries all still mean something; this walks every slot and is for a table whose id space
+    /// grows with content that has gone, on a maintenance cadence rather than every frame.
+    ///
+    /// At most `cap` entries go per call, so one sweep of a long backlog cannot flood the change
+    /// journal past what [`Table::changes_since`] readers can absorb as a delta.
+    pub fn evict_unreachable(
+        &mut self,
+        keep_generations: u64,
+        cap: usize,
+        parent_of: impl Fn(&V) -> Option<K>,
+    ) -> usize {
+        let horizon = self.generation.saturating_sub(keep_generations);
+        let mut keep = vec![false; self.entries.len()];
+        for (slot, held) in self.entries.iter().enumerate() {
+            let Some(entry) = held else { continue };
+            keep[slot] = entry.pinned
+                || entry.refs > 0
+                || entry.generation >= horizon
+                || self.used.contains(slot);
+        }
+        // What a kept entry resolves through must keep resolving. A walk continues from every
+        // slot it marks, so each chain of parents is climbed once across the whole pass.
+        for slot in 0..self.entries.len() {
+            if !keep[slot] {
+                continue;
+            }
+            let mut cursor = slot;
+            while let Some(entry) = self.entries[cursor].as_ref() {
+                let Some(parent) = parent_of(&entry.value) else {
+                    break;
+                };
+                let parent = parent.index() as usize;
+                if parent >= keep.len() || keep[parent] {
+                    break;
+                }
+                keep[parent] = true;
+                cursor = parent;
+            }
+        }
+        let mut freed = 0;
+        for (slot, kept) in keep.iter().enumerate() {
+            if freed == cap {
+                break;
+            }
+            if *kept || self.entries[slot].is_none() {
+                continue;
+            }
+            self.free_slot(slot as u32);
+            freed += 1;
+        }
+        // The id space retracts where the tail is free, so walks of it shorten with the table.
+        while matches!(self.entries.last(), Some(None)) {
+            self.entries.pop();
+        }
+        let len = self.entries.len() as u32;
+        self.free.retain(|slot| *slot < len);
+        freed
+    }
+
     /// Every slot that could be evicted, with its generation.
     fn evictable(&self) -> impl Iterator<Item = (u32, u64)> + '_ {
         self.entries

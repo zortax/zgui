@@ -187,3 +187,89 @@ fn a_clone_rejects_the_sources_version() {
         ChangeCoverage::All
     );
 }
+
+/// Advances `table` far enough that everything untouched falls past a keep of `generations`.
+fn age(table: &mut Table<ClipId, Matrix4>, generations: u64) {
+    for _ in 0..=generations {
+        table.begin_frame();
+    }
+}
+
+#[test]
+fn a_sweep_takes_what_nothing_reaches_and_keeps_what_something_does() {
+    let mut table = table();
+    table.begin_frame();
+    let held = table.intern(shifted(1.0));
+    table.retain(held);
+    let dead = table.intern(shifted(2.0));
+    age(&mut table, 8);
+    let fresh = table.intern(shifted(3.0));
+
+    let freed = table.evict_unreachable(8, usize::MAX, |_| None);
+
+    assert_eq!(freed, 1, "exactly the unheld, untouched entry went");
+    assert!(!table.contains(dead));
+    assert!(table.contains(held), "a hold is reachability");
+    assert!(table.contains(fresh), "a recent touch is reachability");
+}
+
+#[test]
+fn a_sweep_keeps_every_parent_a_kept_entry_resolves_through() {
+    let mut table = table();
+    table.begin_frame();
+    let outer = table.intern(shifted(1.0));
+    let inner = table.intern(shifted(2.0));
+    let dead = table.intern(shifted(3.0));
+    table.retain(inner);
+    age(&mut table, 8);
+
+    // `inner` resolves through `outer`, the way a clip chain resolves through its parents.
+    let parent = move |value: &Matrix4| (*value == shifted(2.0)).then_some(outer);
+    let freed = table.evict_unreachable(8, usize::MAX, parent);
+
+    assert_eq!(freed, 1);
+    assert!(!table.contains(dead));
+    assert!(table.contains(inner));
+    assert!(table.contains(outer), "what a kept entry resolves through stays");
+}
+
+#[test]
+fn a_sweep_retracts_the_tail_and_notes_what_it_freed() {
+    let mut table = table();
+    table.begin_frame();
+    let kept = table.intern(shifted(1.0));
+    table.retain(kept);
+    for by in 2..=6 {
+        table.intern(shifted(by as f32));
+    }
+    age(&mut table, 8);
+    let version = table.version();
+    assert_eq!(table.slots(), 6);
+
+    let freed = table.evict_unreachable(8, usize::MAX, |_| None);
+
+    assert_eq!(freed, 5);
+    assert_eq!(table.slots(), 1, "the free tail is no longer id space");
+    let mut changed = Vec::new();
+    assert_eq!(
+        table.changes_since(version, &mut changed),
+        ChangeCoverage::Delta,
+        "a capped sweep stays within the journal"
+    );
+    assert_eq!(changed.len(), 5, "every freed slot reached the readers");
+    let reused = table.intern(shifted(9.0));
+    assert!(reused.0 < 6, "the retracted id space is issued afresh");
+}
+
+#[test]
+fn a_sweep_frees_no_more_than_its_cap() {
+    let mut table = table();
+    table.begin_frame();
+    for by in 1..=10 {
+        table.intern(shifted(by as f32));
+    }
+    age(&mut table, 8);
+
+    assert_eq!(table.evict_unreachable(8, 4, |_| None), 4);
+    assert_eq!(table.len(), 6, "the rest waits for the next sweep");
+}
