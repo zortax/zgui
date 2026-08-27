@@ -333,8 +333,18 @@ counters! {
     /// Clip chains the scene is holding right now.
     ClipEntriesLive => clip_entries_live, Group::Live;
 
+    /// How far the clip id space reaches, freed slots included.
+    ///
+    /// Every per-frame walk of the table is bounded by this rather than by the live count, so a
+    /// table that frees entries without retracting its tail reads flat there and grows here —
+    /// which is exactly the failure this watches for.
+    ClipSlotsReach => clip_slots_reach, Group::Live;
+
     /// Paints the scene is holding right now.
     PaintEntriesLive => paint_entries_live, Group::Live;
+
+    /// How far the paint id space reaches, freed slots included.
+    PaintSlotsReach => paint_slots_reach, Group::Live;
 
     /// Coordinate systems the spatial tree is holding right now.
     SpatialNodesLive => spatial_nodes_live, Group::Live;

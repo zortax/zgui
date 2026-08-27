@@ -14,7 +14,7 @@ fn exclusive() -> MutexGuard<'static, ()> {
 
 #[test]
 fn the_set_is_complete_and_has_no_duplicates() {
-    assert_eq!(Counter::COUNT, 83);
+    assert_eq!(Counter::COUNT, 85);
     assert_eq!(Counter::ALL.len(), Counter::COUNT);
 
     let names: BTreeSet<&str> = Counter::ALL.iter().map(|counter| counter.name()).collect();
@@ -190,10 +190,13 @@ fn a_live_count_is_assigned_and_a_total_is_accumulated() {
 fn every_live_count_says_so_and_nothing_else_does() {
     for counter in Counter::live() {
         assert!(counter.group().is_live(), "{}", counter.name());
+        // A `_reach` gauge is the id-space reading beside a `_live` one: how far the slots go,
+        // freed ones included, which is what bounds every walk of the table.
         assert!(
             counter.name().ends_with("_live")
                 || counter.name().starts_with("scratch_")
                 || counter.name().ends_with("_nodes")
+                || counter.name().ends_with("_reach")
         );
     }
     assert!(

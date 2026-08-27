@@ -92,6 +92,9 @@ pub struct Table<K: TableId, V: Content> {
     by_hash: FxHashMap<u64, SmallVec<[u32; 2]>>,
     /// Which slots this frame has touched.
     used: EpochBitset,
+    /// How many slots hold an entry, kept beside the storage so a gauge read per frame costs
+    /// nothing.
+    live: usize,
     /// The current frame generation.
     generation: u64,
     /// This table, as distinct from another table at the same revision.
@@ -111,6 +114,7 @@ impl<K: TableId, V: Content> Clone for Table<K, V> {
             free: self.free.clone(),
             by_hash: self.by_hash.clone(),
             used: self.used.clone(),
+            live: self.live,
             generation: self.generation,
             // A clone can diverge immediately, so it must never accept the source's token.
             instance: next_instance(),
@@ -138,6 +142,7 @@ impl<K: TableId, V: Content> Table<K, V> {
             free: Vec::new(),
             by_hash: FxHashMap::default(),
             used: EpochBitset::new(),
+            live: 0,
             generation: 0,
             instance: next_instance(),
             revision: 0,
@@ -198,7 +203,7 @@ impl<K: TableId, V: Content> Table<K, V> {
     /// a hole behind, and anything walking the id space wants [`Table::slots`] instead: the two
     /// differ by exactly the number of free slots the moment anything is freed.
     pub fn len(&self) -> usize {
-        self.entries.iter().flatten().count()
+        self.live
     }
 
     /// How far the id space reaches: one past the highest slot the table has ever handed out.
@@ -255,6 +260,7 @@ impl<K: TableId, V: Content> Table<K, V> {
                 (self.entries.len() - 1) as u32
             }
         };
+        self.live += 1;
         self.by_hash.entry(hash).or_default().push(slot);
         self.note_change(slot);
         self.touch(slot);
@@ -464,6 +470,7 @@ impl<K: TableId, V: Content> Table<K, V> {
         let Some(entry) = self.entries[slot as usize].take() else {
             return;
         };
+        self.live -= 1;
         if let Some(bucket) = self.by_hash.get_mut(&entry.hash) {
             bucket.retain(|candidate| *candidate != slot);
             if bucket.is_empty() {

@@ -99,6 +99,11 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
         self.named.values().copied()
     }
 
+    /// How many live names there are, without walking them.
+    pub fn names(&self) -> usize {
+        self.named.len()
+    }
+
     /// Names a node after the box that establishes it, giving back the name that box already had.
     ///
     /// The value is overwritten and the name is not, which is what an animating transform needs:
