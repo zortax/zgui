@@ -20,6 +20,11 @@
 //! A key whose face could not be resolved, and a key the atlas had no room for. Both are states of
 //! the world rather than properties of the glyph: a face registered later, or an eviction, makes
 //! the same key succeed, and a remembered failure would outlive its cause.
+//!
+//! No room is reported rather than merely not remembered. A frame that draws nothing where a
+//! letter belongs is recorded by the paint cache and replayed for as long as the fragment stands,
+//! so "the atlas has room again next frame" is not on its own enough to bring the letter back —
+//! the room has to be made while the letter is being placed.
 
 use std::collections::VecDeque;
 
@@ -48,6 +53,20 @@ pub(crate) struct Rasterised {
     pub(crate) placement: Point<DevicePx, Device>,
     /// How many pixels there are.
     pub(crate) size: Size<u32, Device>,
+}
+
+/// What a lookup answered.
+///
+/// Three outcomes rather than an option, because a caller can do something about exactly one of
+/// them: nothing to draw is the final answer for a space and for a face with no outline, and no
+/// room is a state of the atlas that freeing cold content changes.
+enum Placed {
+    /// The pixels, and where they are.
+    Tile(Rasterised),
+    /// There is nothing to draw.
+    Nothing,
+    /// There was no room. Freeing cold content and asking again may place it.
+    NoRoom,
 }
 
 /// What one key rasterised to, last time anything asked.
@@ -119,10 +138,27 @@ impl Rasterising<'_> {
         let Self {
             glyphs,
             atlas,
-            vector_masks: _,
+            vector_masks,
             named,
         } = self;
-        let rasterised = glyphs.tile_for(atlas, raster, key)?;
+        let rasterised = match glyphs.tile_for(atlas, raster, key) {
+            Placed::Tile(rasterised) => rasterised,
+            Placed::Nothing => return None,
+            // The pool is full of colder content. One eviction step spares everything this frame
+            // has drawn and everything anything holds, so a single retry is safe — and it is
+            // enough, because one step frees a whole generation.
+            Placed::NoRoom => {
+                let mut removed = Vec::new();
+                let freed = atlas.evict_least_recently_used_into(&mut removed);
+                glyphs.forget_tiles(&removed);
+                vector_masks.forget_tiles(&removed);
+                counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+                match glyphs.tile_for(atlas, raster, key) {
+                    Placed::Tile(rasterised) => rasterised,
+                    Placed::Nothing | Placed::NoRoom => return None,
+                }
+            }
+        };
         named.push(rasterised.key);
         Some(rasterised)
     }
@@ -149,21 +185,17 @@ impl GlyphCache {
 
     /// The tile holding one glyph's pixels, rasterising it only if nothing here can answer.
     ///
-    /// Returns `None` for a glyph with no pixels, a face that could not be resolved, and an atlas
-    /// with no room — three different reasons a caller treats the same way, by drawing nothing.
-    fn tile_for(
-        &mut self,
-        atlas: &mut Atlas,
-        raster: &dyn GlyphRaster,
-        key: &GlyphKey,
-    ) -> Option<Rasterised> {
+    /// A glyph with no pixels and a face that could not be resolved both answer
+    /// [`Placed::Nothing`]; an atlas with no room answers [`Placed::NoRoom`], which is a different
+    /// thing entirely and is why the three are not one option.
+    fn tile_for(&mut self, atlas: &mut Atlas, raster: &dyn GlyphRaster, key: &GlyphKey) -> Placed {
         if let Some(remembered) = self.entries.get(key).copied() {
             let Some(atlas_key) = remembered.tile else {
                 // Known to rasterise to nothing. Rasterising it again would produce nothing again.
-                return None;
+                return Placed::Nothing;
             };
             if let Some(tile) = atlas.get(atlas_key) {
-                return Some(Rasterised {
+                return Placed::Tile(Rasterised {
                     tile,
                     key: atlas_key,
                     placement: remembered.placement,
@@ -184,15 +216,12 @@ impl GlyphCache {
     }
 
     /// Makes one glyph's pixels, uploads them, and remembers what happened.
-    fn rasterise(
-        &mut self,
-        atlas: &mut Atlas,
-        raster: &dyn GlyphRaster,
-        key: &GlyphKey,
-    ) -> Option<Rasterised> {
+    fn rasterise(&mut self, atlas: &mut Atlas, raster: &dyn GlyphRaster, key: &GlyphKey) -> Placed {
         crate::content::probe::rastered();
         // A face that has no bytes right now may have them later, so this is not remembered.
-        let image = raster.raster(key)?;
+        let Some(image) = raster.raster(key) else {
+            return Placed::Nothing;
+        };
         if image.is_empty() || !image.is_well_formed() {
             self.entries.insert(
                 *key,
@@ -204,15 +233,15 @@ impl GlyphCache {
             );
             self.blank_order.push_back(*key);
             self.prune_blanks();
-            return None;
+            return Placed::Nothing;
         }
         let prepared = AtlasGlyph::of(key, &image);
         let extent = Size::new(prepared.size.width as i32, prepared.size.height as i32);
         // A full atlas is a state of this frame, not a property of the glyph, so a failure here
-        // leaves nothing remembered.
-        let tile = atlas
-            .get_or_insert(prepared.key, extent, || prepared.texels)
-            .ok()?;
+        // leaves nothing remembered and is reported as what it is.
+        let Ok(tile) = atlas.get_or_insert(prepared.key, extent, || prepared.texels) else {
+            return Placed::NoRoom;
+        };
         if let Some(previous) = self.entries.insert(
             *key,
             Remembered {
@@ -226,7 +255,7 @@ impl GlyphCache {
         }
         self.by_tile.insert(prepared.key, *key);
         self.forget_eviction(key);
-        Some(Rasterised {
+        Placed::Tile(Rasterised {
             tile,
             key: prepared.key,
             placement: image.placement,

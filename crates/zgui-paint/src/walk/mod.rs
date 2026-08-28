@@ -655,6 +655,10 @@ impl Pass<'_, '_> {
                 // as long as this fragment lives.
                 self.named.clear();
                 self.input.resources.take_named(&mut self.named);
+                // Read either side of the encoding: a refusal in between is a raster the fragment
+                // draws that had nowhere to go, and it leaves a hole in the chunk that nothing
+                // downstream can see.
+                let refusals = self.input.resources.refusals();
                 // Everything the emitters push between here and the take is the fragment's own,
                 // captured before the cull so the record is the painting and never one position's
                 // clipped part of it.
@@ -680,6 +684,7 @@ impl Pass<'_, '_> {
                     Encoding {
                         chunk,
                         resources: &self.named,
+                        complete: self.input.resources.refusals() == refusals,
                     },
                     self.input.resources,
                 );

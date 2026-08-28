@@ -595,6 +595,10 @@ impl ResourceOwner for TileOwner<'_> {
     fn contains(&self, key: AtlasKey) -> bool {
         self.0.borrow().contains(key)
     }
+
+    fn refusals(&self) -> u64 {
+        self.0.borrow().refusals()
+    }
 }
 
 impl ReplacedSource for FrameContent<'_> {
@@ -667,12 +671,27 @@ impl VectorMaskSource for FrameContent<'_> {
     ) -> Option<crate::content::vectors::VectorMask> {
         let mut writing = self.writing.borrow_mut();
         let Rasterising {
+            glyphs,
             atlas,
             vector_masks,
             named,
-            ..
         } = &mut *writing;
-        let mask = vector_masks.tile_for(atlas, request)?;
+        let before = atlas.refusals();
+        let mask = match vector_masks.tile_for(atlas, request) {
+            Some(mask) => mask,
+            // Nothing else in that call touches the atlas, so a refusal between the two readings
+            // is this mask's. One eviction step spares everything this frame has drawn and
+            // everything anything holds, so a single retry is safe.
+            None if atlas.refusals() != before => {
+                let mut removed = Vec::new();
+                let freed = atlas.evict_least_recently_used_into(&mut removed);
+                glyphs.forget_tiles(&removed);
+                vector_masks.forget_tiles(&removed);
+                counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+                vector_masks.tile_for(atlas, request)?
+            }
+            None => return None,
+        };
         named.push(mask.key);
         Some(mask)
     }
@@ -693,5 +712,9 @@ impl ResourceOwner for FrameContent<'_> {
 
     fn contains(&self, key: AtlasKey) -> bool {
         self.writing.borrow().atlas.contains(key)
+    }
+
+    fn refusals(&self) -> u64 {
+        self.writing.borrow().atlas.refusals()
     }
 }

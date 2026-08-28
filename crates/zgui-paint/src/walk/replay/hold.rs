@@ -54,6 +54,15 @@ pub trait ResourceOwner {
     /// Without marking, because this is what an assertion asks: a check that marked would make the
     /// thing it was checking true.
     fn contains(&self, key: AtlasKey) -> bool;
+
+    /// How many placements the cache has refused since it was built.
+    ///
+    /// Monotonic, and read either side of an encoding. A difference says the encoding drew less
+    /// than the fragment meant to — a letter the cache had no room for — and a record of that
+    /// replays the gap for as long as the fragment stands. The count is the only way to know: what
+    /// a refusal produces is no primitive at all, and a display list with one glyph missing is
+    /// exactly a display list of a shorter word.
+    fn refusals(&self) -> u64;
 }
 
 /// An owner with nothing to own.
@@ -77,5 +86,10 @@ impl ResourceOwner for NoResources {
     /// through this owner names no keys, so nothing ever asks.
     fn contains(&self, _key: AtlasKey) -> bool {
         false
+    }
+
+    /// Nothing was ever asked for, so nothing was ever refused.
+    fn refusals(&self) -> u64 {
+        0
     }
 }

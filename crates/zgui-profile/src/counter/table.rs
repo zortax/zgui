@@ -145,6 +145,13 @@ counters! {
     /// Cached primitive ranges reused by offsetting them rather than re-encoding them.
     ChunksTranslated => chunks_translated, Group::Skip { done: Counter::ChunksReencoded };
 
+    /// Encodings thrown away because something they drew had nowhere to go.
+    ///
+    /// A range encoded while the atlas refused a raster is a range with a letter missing from it,
+    /// and a recorded one replays that gap until the fragment itself changes. Anything other than
+    /// zero over a run that is not thrashing the atlas is content being dropped off the screen.
+    ChunksIncomplete => chunks_incomplete, Group::BackendNeutral;
+
     /// Paint records kept across a frame that did not visit their fragment.
     ///
     /// The retention owned chunks buy: a record survives culling, clean frames and invisibility,

@@ -24,11 +24,18 @@
 //!
 //! # What a missing glyph does
 //!
-//! Nothing, silently, and that is deliberate at three different points. A face that has no outline
-//! for a glyph, a glyph that rasterises to no pixels at all (a space does), and an atlas with no
-//! room left each produce no primitive rather than a placeholder — a frame that drew a box where a
-//! space belongs would be worse than one that drew nothing, and an atlas that is full this frame
-//! has room again next frame once eviction has run.
+//! Nothing, silently, and that is deliberate at two of the three points it can happen. A face that
+//! has no outline for a glyph and a glyph that rasterises to no pixels at all (a space does) each
+//! produce no primitive rather than a placeholder: a frame that drew a box where a space belongs
+//! would be worse than one that drew nothing.
+//!
+//! An atlas with no room left is the third, and it is not the same kind of answer. Room is made
+//! rather than waited for — one eviction step, then the placement is asked again — because the
+//! frame is the last moment at which anything knows the glyph was wanted. What the encoding
+//! produces is recorded by the paint cache and replayed until the fragment itself changes, so a
+//! letter dropped here is a letter dropped for the rest of the session. When even the retry cannot
+//! place it, nothing is drawn and the record is refused instead; see
+//! [`Encoding::complete`](crate::walk::replay::Encoding::complete).
 
 pub(crate) mod cache;
 pub mod curve;

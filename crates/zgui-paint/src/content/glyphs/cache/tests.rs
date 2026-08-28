@@ -8,7 +8,17 @@ use zgui_text::{
     FaceId, GlyphFormat, GlyphImage, GlyphKey, GlyphRaster, RasterStyle, SubpixelOffset,
 };
 
-use super::{COLD_ANSWERS, GlyphCache};
+use crate::content::vectors::VectorMaskCache;
+
+use super::{COLD_ANSWERS, GlyphCache, Placed, Rasterised, Rasterising};
+
+/// The pixels an answer carries, for the cases that only ask whether a glyph was placed.
+fn tile(placed: Placed) -> Option<Rasterised> {
+    match placed {
+        Placed::Tile(held) => Some(held),
+        Placed::Nothing | Placed::NoRoom => None,
+    }
+}
 
 /// A rasteriser that counts what it was asked for and answers from a script.
 struct Counting {
@@ -70,8 +80,8 @@ fn a_glyph_already_in_the_atlas_is_not_rasterised_again() {
     let raster = Counting::new(Size::new(5, 9));
     let mut cache = GlyphCache::default();
 
-    let first = cache.tile_for(&mut atlas, &raster, &key());
-    let second = cache.tile_for(&mut atlas, &raster, &key());
+    let first = tile(cache.tile_for(&mut atlas, &raster, &key()));
+    let second = tile(cache.tile_for(&mut atlas, &raster, &key()));
 
     assert_eq!(
         raster.calls.load(Ordering::Relaxed),
@@ -98,9 +108,9 @@ fn a_glyph_with_no_pixels_is_not_rasterised_again_either() {
     let raster = Counting::new(Size::new(0, 0));
     let mut cache = GlyphCache::default();
 
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_none());
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_none());
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_none());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_none());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_none());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_none());
 
     assert_eq!(
         raster.calls.load(Ordering::Relaxed),
@@ -120,13 +130,13 @@ fn an_evicted_tile_is_made_again_rather_than_reported_as_missing() {
     let mut cache = GlyphCache::default();
 
     atlas.begin_frame();
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_some());
     atlas.begin_frame();
     let freed = atlas.evict_least_recently_used();
     assert_eq!(freed.tiles, 1, "the tile this case is about actually went");
 
     assert!(
-        cache.tile_for(&mut atlas, &raster, &key()).is_some(),
+        tile(cache.tile_for(&mut atlas, &raster, &key())).is_some(),
         "the glyph still draws"
     );
     assert_eq!(
@@ -144,7 +154,7 @@ fn detailed_eviction_immediately_releases_the_placement_metadata() {
     let mut cache = GlyphCache::default();
 
     atlas.begin_frame();
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_some());
     atlas.begin_frame();
     let mut removed = Vec::new();
     assert_eq!(atlas.evict_least_recently_used_into(&mut removed).tiles, 1);
@@ -156,7 +166,7 @@ fn detailed_eviction_immediately_releases_the_placement_metadata() {
     );
 
     let before = zgui_profile::counter::snapshot();
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_some());
     let counted = before.delta(&zgui_profile::counter::snapshot());
     assert_eq!(raster.calls.load(Ordering::Relaxed), 2);
     assert_eq!(counted.rebuilt_after_eviction, 1);
@@ -169,11 +179,7 @@ fn blank_glyph_answers_are_bounded() {
     let mut cache = GlyphCache::default();
 
     for glyph in 0..=(COLD_ANSWERS as u16) {
-        assert!(
-            cache
-                .tile_for(&mut atlas, &raster, &key_for(glyph))
-                .is_none()
-        );
+        assert!(tile(cache.tile_for(&mut atlas, &raster, &key_for(glyph))).is_none());
     }
 
     assert_eq!(cache.len(), COLD_ANSWERS);
@@ -187,9 +193,57 @@ fn clearing_forgets_every_key() {
     let raster = Counting::new(Size::new(5, 9));
     let mut cache = GlyphCache::default();
 
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_some());
     cache.clear();
     assert_eq!(cache.len(), 0);
-    assert!(cache.tile_for(&mut atlas, &raster, &key()).is_some());
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_some());
     assert_eq!(raster.calls.load(Ordering::Relaxed), 2);
+}
+
+/// One 64-pixel-square monochrome texture, which four 32-square glyphs fill exactly.
+fn one_small_texture() -> AtlasLimits {
+    AtlasLimits {
+        texture_size: 64,
+        max_texture_size: 64,
+        max_textures_per_pool: 1,
+        soft_bytes: None,
+    }
+}
+
+#[test]
+fn a_full_atlas_makes_room_rather_than_dropping_the_glyph() {
+    // The defect this exists for: a glyph the atlas had no room for was drawn as nothing, and the
+    // fragment that drew it recorded that nothing and replayed it for the rest of the session. So
+    // one full frame took a letter off the screen permanently.
+    let mut atlas = Atlas::new(one_small_texture());
+    let raster = Counting::new(Size::new(32, 32));
+    let mut glyphs = GlyphCache::default();
+    let mut vector_masks = VectorMaskCache::default();
+
+    atlas.begin_frame();
+    for glyph in 0..4 {
+        let mut writing = Rasterising {
+            glyphs: &mut glyphs,
+            atlas: &mut atlas,
+            vector_masks: &mut vector_masks,
+            named: Vec::new(),
+        };
+        assert!(
+            writing.tile_for(&raster, &key_for(glyph)).is_some(),
+            "glyph {glyph} fills a quarter of the only texture"
+        );
+    }
+
+    // A later frame, so everything above is cold and nothing holds it.
+    atlas.begin_frame();
+    let mut writing = Rasterising {
+        glyphs: &mut glyphs,
+        atlas: &mut atlas,
+        vector_masks: &mut vector_masks,
+        named: Vec::new(),
+    };
+    assert!(
+        writing.tile_for(&raster, &key_for(4)).is_some(),
+        "the cold generation is freed and the glyph placed, rather than dropped"
+    );
 }

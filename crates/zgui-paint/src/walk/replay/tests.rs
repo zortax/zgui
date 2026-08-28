@@ -67,6 +67,7 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -108,6 +109,7 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -136,6 +138,7 @@ fn a_fragment_moved_twice_replays_with_the_whole_distance() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -173,6 +176,7 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -198,6 +202,7 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -231,6 +236,7 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -259,6 +265,7 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -301,6 +308,7 @@ fn a_still_drawing_replays_its_vector_item_and_a_moved_one_is_encoded() {
         Encoding {
             chunk,
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -361,6 +369,7 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
         Encoding {
             chunk,
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -416,6 +425,7 @@ fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
         Encoding {
             chunk,
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -449,6 +459,7 @@ fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -473,6 +484,7 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -503,6 +515,7 @@ fn a_retired_fragment_loses_its_record() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -541,6 +554,7 @@ fn encode_one_quad(
         Encoding {
             chunk,
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -634,6 +648,7 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             resources: &[],
+            complete: true,
         },
         &NoResources,
     );
@@ -659,4 +674,60 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
         Reuse::Encode,
         "a range recorded under the card was replayed through a slot the card no longer owns",
     );
+}
+
+#[test]
+fn an_encoding_that_could_not_place_everything_is_not_recorded() {
+    // The defect this exists for: a glyph the atlas had no room for is drawn as nothing, and a
+    // record of that painting is replayed until the fragment itself changes — so one crowded
+    // frame takes a letter off the screen for the rest of the session. The frame still shows what
+    // it managed to draw; what it must not do is remember it.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let fragment = fragment(0.0, 0.0);
+
+    cache.encoded(
+        &mut scene,
+        &fragment,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: false,
+        },
+        &NoResources,
+    );
+
+    assert!(cache.is_empty(), "nothing was remembered");
+    assert_eq!(
+        cache.reuse(&scene, &fragment, painted(0)),
+        Reuse::Encode,
+        "so the next frame that reaches it draws it again, with the room eviction has made"
+    );
+}
+
+#[test]
+fn a_record_is_given_up_when_a_later_encoding_falls_short() {
+    // The same, for a fragment that was complete once. The old record still draws the whole word
+    // and is tempting to keep — but it was encoded against tiles the refusal has just evicted, so
+    // what it replays is whatever took their rectangles.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let fragment = fragment(0.0, 0.0);
+
+    for complete in [true, false] {
+        cache.encoded(
+            &mut scene,
+            &fragment,
+            painted(0),
+            Encoding {
+                chunk: zgui_scene::ChunkPrims::default(),
+                resources: &[],
+                complete,
+            },
+            &NoResources,
+        );
+    }
+
+    assert!(cache.is_empty(), "the record that stood was given up");
 }

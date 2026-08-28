@@ -193,6 +193,13 @@ pub struct Encoding<'a> {
     pub chunk: ChunkPrims,
     /// The rasters the encoding named, in the order it named them and with repeats.
     pub resources: &'a [AtlasKey],
+    /// Whether everything the fragment meant to draw was drawn.
+    ///
+    /// False when a raster the encoding asked for could not be placed. The chunk is still drawn —
+    /// what is on the screen this frame is the best there was — but it is not remembered, because
+    /// a record is replayed until the fragment itself changes and the missing letter would never
+    /// come back.
+    pub complete: bool,
 }
 
 /// What a fragment costs this frame.
@@ -459,7 +466,23 @@ impl PaintCache {
         counter::bump(Counter::Repaints);
         self.seen.push(fragment.key);
         self.selections += 1;
-        let Encoding { chunk, resources } = encoding;
+        let Encoding {
+            chunk,
+            resources,
+            complete,
+        } = encoding;
+        if !complete {
+            // Something the fragment draws had nowhere to go, so this painting is a letter short.
+            // Remembering it would replay the gap for as long as the fragment stood; forgetting
+            // what was there costs one re-encoding on the next frame that reaches it, by which
+            // time the eviction the refusal triggered has made room.
+            counter::bump(Counter::ChunksIncomplete);
+            let mut holds = TableHolds::default();
+            if let Some(record) = self.records.remove(&fragment.key) {
+                self.drop_record(record, scene, owner, &mut holds);
+            }
+            return;
+        }
         let mut held: Vec<AtlasKey> = resources.to_vec();
         held.sort_unstable();
         held.dedup();

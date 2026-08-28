@@ -103,6 +103,13 @@ pub struct Atlas {
     pending: Vec<PendingUpload>,
     /// How many bytes those pending writes hold.
     pending_bytes: u64,
+    /// How many insertions have been refused since the atlas was built.
+    ///
+    /// Monotonic and never reset, so a caller that wants "did anything fail to find room while I
+    /// was drawing this" subtracts two readings. It exists because a refusal is invisible
+    /// downstream: what a refused insertion produces is no primitive at all, which is
+    /// indistinguishable from content that was never there.
+    refusals: u64,
     /// Texture creations and destructions waiting for something that has a device.
     device: TextureQueue,
 }
@@ -123,6 +130,7 @@ impl Atlas {
             held_bytes: 0,
             pending: Vec::new(),
             pending_bytes: 0,
+            refusals: 0,
             device: TextureQueue::new(),
         }
     }
@@ -155,6 +163,16 @@ impl Atlas {
     /// The generation entries looked up right now are stamped with.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// How many insertions have been refused since the atlas was built.
+    ///
+    /// A running total rather than a per-frame figure: two readings subtracted answer "did
+    /// anything fail to find room between these two moments", which is what a caller recording a
+    /// range for replay has to ask before it records. A range encoded while something was refused
+    /// draws less than it meant to, and replaying it draws less for ever.
+    pub fn refusals(&self) -> u64 {
+        self.refusals
     }
 
     /// How many lookups have found a cached raster since the atlas was built.
@@ -237,7 +255,13 @@ impl Atlas {
 
         let kind = key.kind();
         let (texture, tile_id, bounds) =
-            self.pools[kind.index()].allocate(size, self.limits, &mut self.device)?;
+            match self.pools[kind.index()].allocate(size, self.limits, &mut self.device) {
+                Ok(placed) => placed,
+                Err(error) => {
+                    self.refusals += 1;
+                    return Err(error);
+                }
+            };
 
         let bytes: UploadBytes = build().into();
         let expected = kind
@@ -245,6 +269,7 @@ impl Atlas {
             .bytes_for(size.width.max(0) as u32, size.height.max(0) as u32);
         if bytes.len() as u64 != expected {
             self.pools[kind.index()].deallocate(texture, tile_id, &mut self.device);
+            self.refusals += 1;
             return Err(AtlasError::WrongByteCount {
                 size,
                 expected,
@@ -309,6 +334,7 @@ impl Atlas {
                 .format()
                 .bytes_for(extent.width.max(0) as u32, extent.height.max(0) as u32);
             if bytes.len() as u64 != expected {
+                self.refusals += 1;
                 return Err(AtlasError::WrongByteCount {
                     size: extent,
                     expected,
@@ -317,12 +343,18 @@ impl Atlas {
             }
         }
 
-        let (texture, tile_id, bounds) = self.pools[kind.index()].allocate_exact(
+        let (texture, tile_id, bounds) = match self.pools[kind.index()].allocate_exact(
             size,
             mip_levels,
             self.limits,
             &mut self.device,
-        )?;
+        ) {
+            Ok(placed) => placed,
+            Err(error) => {
+                self.refusals += 1;
+                return Err(error);
+            }
+        };
         for (mip, bytes) in levels.into_iter().enumerate() {
             let extent = mip_extent(size, mip as u32);
             self.pending_bytes += bytes.len() as u64;
