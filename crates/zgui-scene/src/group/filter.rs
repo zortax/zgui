@@ -38,6 +38,19 @@ pub enum Filter {
     Saturate(f32),
     /// Interpolates towards a sepia-toned copy.
     Sepia(f32),
+    /// An application's own shader, reading the content and writing what replaces it.
+    Custom {
+        /// Which registered effect filters.
+        shader: crate::ShaderId,
+        /// The parameter block it draws with.
+        params: crate::ShaderParamsSlot,
+        /// How far outside its rectangle it reads, in device pixels.
+        ///
+        /// Declared by the effect rather than measured from it: nothing here can look inside a
+        /// shader, and a filter that reads further than it said would be fed the previous frame's
+        /// output wherever the damage set stopped short.
+        reach: f32,
+    },
 }
 
 impl Filter {
@@ -74,6 +87,13 @@ impl Filter {
                     (reach + offset_y).max(0.0),
                 )
             }
+            // An effect reads where it said it would. Nothing here can check that, which is why
+            // the declaration is the contract: reaching further is a filter fed its own previous
+            // output, and the smear that follows is what the extent exists to prevent.
+            Self::Custom { reach, .. } => {
+                let reach = reach.max(0.0);
+                (reach, reach, reach, reach)
+            }
             _ => (0.0, 0.0, 0.0, 0.0),
         }
     }
@@ -81,5 +101,46 @@ impl Filter {
     /// Whether this filter reads only the pixel it writes.
     pub fn is_per_pixel(&self) -> bool {
         self.kernel_support() == (0.0, 0.0, 0.0, 0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Filter;
+    use crate::{ShaderId, ShaderParamsSlot};
+
+    /// An effect that reads only where it writes costs its own rectangle and nothing more.
+    #[test]
+    fn an_effect_that_declared_no_reach_is_per_pixel() {
+        let filter = Filter::Custom {
+            shader: ShaderId(1),
+            params: ShaderParamsSlot(0),
+            reach: 0.0,
+        };
+        assert!(filter.is_per_pixel());
+        assert_eq!(filter.kernel_support(), (0.0, 0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn an_effect_reaches_as_far_as_it_declared_on_every_side() {
+        let filter = Filter::Custom {
+            shader: ShaderId(1),
+            params: ShaderParamsSlot(0),
+            reach: 6.0,
+        };
+        assert!(!filter.is_per_pixel());
+        assert_eq!(filter.kernel_support(), (6.0, 6.0, 6.0, 6.0));
+    }
+
+    /// A negative reach would shrink the region the content is read from, which is a filter reading
+    /// texels the pass never wrote.
+    #[test]
+    fn a_reach_below_zero_is_treated_as_none() {
+        let filter = Filter::Custom {
+            shader: ShaderId(1),
+            params: ShaderParamsSlot(0),
+            reach: -4.0,
+        };
+        assert_eq!(filter.kernel_support(), (0.0, 0.0, 0.0, 0.0));
     }
 }

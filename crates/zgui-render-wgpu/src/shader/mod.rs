@@ -105,7 +105,7 @@ pub fn structures(module: Module) -> Vec<Reflected> {
         };
     }
     let mut structures = vec![
-        reflected!(Globals, "Globals", [viewport, gamma_ratios, text]),
+        reflected!(Globals, "Globals", [viewport, gamma_ratios, text, frame]),
         reflected!(
             GpuClip,
             "Clip",
@@ -135,6 +135,7 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 stroke,
                 clip,
                 transform,
+                shape,
                 paint_origin
             ]
         ),
@@ -152,7 +153,7 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 clip,
                 transform,
                 inset,
-                reserved
+                shape
             ]
         ),
         Module::Decoration => reflected!(

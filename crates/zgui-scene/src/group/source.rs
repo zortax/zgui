@@ -57,3 +57,55 @@ pub fn read_extent(bounds: Rect<DevicePx, Device>, filters: &[Filter]) -> Rect<D
         left: DevicePx(left),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::read_extent;
+    use crate::{Filter, ShaderId, ShaderParamsSlot};
+    use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+
+    /// A box of a hundred device pixels, at the origin.
+    fn bounds() -> Rect<DevicePx, Device> {
+        Rect::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(100.0), DevicePx(100.0)),
+        )
+    }
+
+    /// An effect declaring it reads `reach` device pixels outside its box.
+    fn effect(reach: f32) -> Filter {
+        Filter::Custom {
+            shader: ShaderId(1),
+            params: ShaderParamsSlot(0),
+            reach,
+        }
+    }
+
+    /// The whole reason the reach is declared: a filter that samples a neighbourhood makes the
+    /// group read pixels it never writes, and the damage a partial redraw covers has to include
+    /// them or the filter is fed its own previous output.
+    #[test]
+    fn an_effect_that_declared_a_reach_reads_outside_the_box_it_writes() {
+        let read = read_extent(bounds(), &[effect(8.0)]);
+        assert_eq!(read.origin.x.0, -8.0);
+        assert_eq!(read.origin.y.0, -8.0);
+        assert_eq!(read.size.width.0, 116.0);
+        assert_eq!(read.size.height.0, 116.0);
+    }
+
+    #[test]
+    fn an_effect_that_declared_none_costs_its_own_rectangle_and_nothing_more() {
+        assert_eq!(read_extent(bounds(), &[effect(0.0)]), bounds());
+    }
+
+    /// A chain applies in sequence, so an effect reads outside whatever the step before it reached.
+    #[test]
+    fn an_effect_after_a_blur_reads_outside_what_the_blur_already_reached() {
+        let read = read_extent(bounds(), &[Filter::Blur(2.0), effect(4.0)]);
+        assert_eq!(
+            read.origin.x.0,
+            -(Filter::BLUR_EXTENT * 2.0 + 4.0),
+            "the two supports add rather than taking a maximum"
+        );
+    }
+}

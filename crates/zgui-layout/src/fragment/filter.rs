@@ -15,12 +15,37 @@ pub type FilterChain = SmallVec<[Filter; 2]>;
 
 /// The `filter` chain applied to a box's own content.
 pub fn own(style: &ComputedStyle, scale: f32) -> FilterChain {
-    chain(&style.get_effects().filter.0, scale)
+    let mut chain = chain(&style.get_effects().filter.0, scale);
+    chain.extend(effect(style, zgui_scene::property::FILTER, scale));
+    chain
 }
 
 /// The `backdrop-filter` chain a box samples what is behind it through.
 pub fn backdrop(style: &ComputedStyle, scale: f32) -> FilterChain {
-    chain(&style.get_effects().backdrop_filter.0, scale)
+    let mut chain = chain(&style.get_effects().backdrop_filter.0, scale);
+    chain.extend(effect(style, zgui_scene::property::BACKDROP_FILTER, scale));
+    chain
+}
+
+/// The application effect `property` names, as far as how far it reads.
+///
+/// The parameters are deliberately absent: this conversion exists to answer how far a fragment
+/// reads, which is the effect's own declaration and nothing else. What the effect is *drawn* with
+/// is resolved where it is emitted, against a scene this stage does not have.
+fn effect(style: &ComputedStyle, property: &str, scale: f32) -> Option<Filter> {
+    let name = zgui_css::values::custom::text(style, property)?.trim();
+    if name.is_empty() || name == "none" {
+        return None;
+    }
+    let declared = zgui_scene::shader_named(name)?;
+    if declared.mode != zgui_scene::ShaderMode::Filter {
+        return None;
+    }
+    Some(Filter::Custom {
+        shader: declared.id,
+        params: zgui_scene::ShaderParamsSlot(0),
+        reach: declared.reach * scale,
+    })
 }
 
 /// Whether either chain reaches beyond the rectangle it is applied to.
@@ -31,6 +56,10 @@ pub fn reads_outside(style: &ComputedStyle, scale: f32) -> bool {
     own(style, scale).iter().any(|it| !it.is_per_pixel())
         || backdrop(style, scale).iter().any(|it| !it.is_per_pixel())
         || !style.get_effects().backdrop_filter.0.is_empty()
+        // A backdrop reads what is beneath it whatever its chain does, and an application's is no
+        // different: the copy it samples is a region of the composite, not of anything it wrote.
+        || zgui_css::values::custom::text(style, zgui_scene::property::BACKDROP_FILTER)
+            .is_some_and(|name| !name.trim().is_empty())
 }
 
 /// One computed list, converted entry by entry.

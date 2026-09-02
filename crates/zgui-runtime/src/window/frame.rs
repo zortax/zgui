@@ -187,12 +187,33 @@ impl Window {
         }
     }
 
+    /// Records the moment this frame is for, and how long the previous one took.
+    ///
+    /// The frame *moment* rather than the wall clock: it is the same one the framework's own
+    /// animations are sampled against, so an effect and a CSS animation on one element agree about
+    /// what time it is. Computed here, at the top of the frame, so every stage of the frame is
+    /// told the same moment however long the frame takes.
+    fn note_frame_moment(&mut self, at: zgui_vocab::Timestamp) {
+        let opened = *self.opened_at.get_or_insert(at);
+        let delta = self
+            .painted_at
+            .map_or(0.0, |last| at.saturating_since(last).as_secs_f32());
+        self.painted_at = Some(at);
+        self.frame_clock = zgui_scene::FrameClock {
+            seconds: at.saturating_since(opened).as_secs_f32(),
+            delta,
+            scale: self.scale,
+        };
+    }
+
     /// The frame itself, with the window's scope already current.
     fn run_frame(&mut self, clock: &dyn Clock) -> FrameReport {
         use zgui_profile::latency::mark;
         mark("f.begin");
         let now = clock.now();
         let timestamp = clock.timestamp();
+        // Read before anything this frame does, so every stage of it is told the same moment.
+        self.note_frame_moment(timestamp);
 
         self.frame_started();
         self.gate.begin_frame();
@@ -1304,6 +1325,9 @@ impl Window {
             mark("p.expand");
             zgui_paint::expand(&layout, &mut self.damage, viewport, self.scale);
             self.scene.begin_frame(viewport);
+            // What this frame's application effects are told about it. Nothing the framework draws
+            // reads any of it, so a document with no effect in it pays three floats.
+            self.scene.set_frame_clock(self.frame_clock);
             // After the log has been emptied and before anything is pushed into it, which is the
             // only moment the names can begin being kept. A window that was never asked for them
             // pays a bool and two clears of empty vectors.
@@ -1352,6 +1376,18 @@ impl Window {
                     .custom_paint
                     .as_deref()
                     .unwrap_or(&zgui_paint::content::custom::NoCustom),
+                // The declarations are the process's, so a window installs nothing to reach them.
+                // What is per window is whether this device can draw one at all.
+                shaders: &zgui_paint::content::shader::DeclaredShaders::new(
+                    capabilities.custom_shaders,
+                ),
+                // Read by an effect that declared it, and by nothing else: the fragment's replay
+                // record carries it only for such a box, so a pointer stream over a document with
+                // none replays exactly as it did before.
+                pointer: self
+                    .router
+                    .pointers()
+                    .position_of(zgui_vocab::PointerId::MOUSE),
                 // The same object again, and deliberately: what it answers here is not "give me
                 // this" but "keep this". A range this frame records is replayed by later frames
                 // without any of them looking a glyph up, so the record is what tells the atlas

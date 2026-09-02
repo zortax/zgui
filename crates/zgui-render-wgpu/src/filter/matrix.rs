@@ -47,7 +47,9 @@ impl ColorMatrix {
     /// and both are executed as passes of their own.
     pub fn of(filter: Filter) -> Option<Self> {
         match filter {
-            Filter::Blur(_) | Filter::DropShadow { .. } => None,
+            // An effect is a function nothing here can look inside, so it is executed as a pass
+            // of its own whatever it turns out to do.
+            Filter::Blur(_) | Filter::DropShadow { .. } | Filter::Custom { .. } => None,
             Filter::Brightness(amount) => Some(Self::brightness(amount)),
             Filter::Contrast(amount) => Some(Self::contrast(amount)),
             Filter::Grayscale(amount) => Some(Self::saturate(1.0 - amount.clamp(0.0, 1.0))),

@@ -140,9 +140,16 @@ impl Renderer for WgpuRenderer {
         }
 
         let formats = self.presentation.formats();
+        // Before anything is planned: a display list may name an effect declared since the last
+        // frame, and a pipeline built from it has to exist by the time the batch is issued.
+        self.pipelines.borrow_mut().sync_effects(&self.gpu);
+
         zgui_profile::latency::mark("r.tables");
         self.buffers.prepare_tables(scene);
         self.buffers.begin_frame(&self.gpu);
+        // Staged before the plan, because the plan stages the target blocks into the same frame
+        // and a slot allocator hands out offsets in the order it is asked.
+        self.buffers.stage_effect_params(scene);
 
         // Everything the rasteriser does happens before this frame's encoder exists, because an
         // implementation submits command buffers of its own. Ordering stays exact anyway: nothing
@@ -164,6 +171,8 @@ impl Renderer for WgpuRenderer {
                 &mut self.buffers.blocks,
                 &mut self.buffers.vectors,
                 self.subpixel_order,
+                scene.frame_clock(),
+                &self.buffers.effect_offsets,
                 self.composed.used().size,
                 self.composed.format(),
                 self.composed.allocated(),

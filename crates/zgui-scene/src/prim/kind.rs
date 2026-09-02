@@ -19,6 +19,8 @@ pub enum PrimitiveKind {
     Shadow,
     /// A rounded, bordered rectangle.
     Quad,
+    /// A rectangle an application's own shader draws.
+    Shaded,
     /// A composite of rasterised vector content.
     Vector,
     /// A text decoration line.
@@ -39,10 +41,11 @@ pub enum PrimitiveKind {
 
 impl PrimitiveKind {
     /// Every kind, in tie-break order.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::GroupStart,
         Self::Shadow,
         Self::Quad,
+        Self::Shaded,
         Self::Vector,
         Self::Decoration,
         Self::MonoSprite,

@@ -46,6 +46,8 @@ fn plan_with_vectors(
         &mut blocks,
         &mut instances,
         SubpixelOrder::default(),
+        zgui_scene::FrameClock::default(),
+        &[],
         used().size,
         wgpu::TextureFormat::Bgra8Unorm,
         Size::new(256, 256),

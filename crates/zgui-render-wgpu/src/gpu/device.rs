@@ -209,6 +209,9 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
         mutable_texture_formats: downlevel
             .flags
             .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS),
+        // An effect binds one uniform block beyond what an ordinary instanced draw binds, and
+        // draws through a third bind group. Every device that reaches this far has both.
+        custom_shaders: limits.max_bind_groups >= 3,
         max_texture_size: limits.max_texture_dimension_2d as i32,
     }
 }

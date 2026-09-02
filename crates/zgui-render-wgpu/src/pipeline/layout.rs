@@ -33,6 +33,12 @@ pub struct Layouts {
     /// its own quad and its own clip. The scratch is read one texel at a time with no sampler, so
     /// this layout carries none.
     pub vector: wgpu::BindGroupLayout,
+    /// One application effect's parameters.
+    ///
+    /// A block addressed by a dynamic offset rather than a storage array read per instance,
+    /// because the parameters are the same for every rectangle of a draw: two rectangles that
+    /// disagree about them are two draws, and the batcher breaks the run where they do.
+    pub effect: wgpu::BindGroupLayout,
 }
 
 impl Layouts {
@@ -49,6 +55,10 @@ impl Layouts {
                     storage(3),
                     storage(4),
                 ],
+            }),
+            effect: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("zgui.bind.effect"),
+                entries: &[dynamic_uniform(0)],
             }),
             instances: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.instances"),

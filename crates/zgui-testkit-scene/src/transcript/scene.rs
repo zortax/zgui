@@ -159,6 +159,14 @@ fn write_batch(writer: &mut Writer, scene: &Scene, batch: &Batch) {
                 writer.line(&primitive::quad(scene, &primitives.quads[*slot as usize]));
             }
         }
+        Batch::Shaded { range, .. } => {
+            for slot in &scene.remap(PrimitiveKind::Shaded)[range.clone()] {
+                writer.line(&primitive::shaded(
+                    scene,
+                    &primitives.shaded[*slot as usize],
+                ));
+            }
+        }
         Batch::Shadows(range) => {
             for slot in &scene.remap(PrimitiveKind::Shadow)[range.clone()] {
                 writer.line(&primitive::shadow(

@@ -1,0 +1,5 @@
+error: a `Paint` effect writes `fn shade(in: ShaderInput, params: Params)`, and this shader declares no such function
+ --> tests/refused/no_entry.rs:9:11
+  |
+9 |     mode: Paint,
+  |           ^^^^^

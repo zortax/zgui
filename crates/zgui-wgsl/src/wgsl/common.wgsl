@@ -18,6 +18,14 @@ struct Globals {
     // y: contrast enhancement for per-channel coverage.
     // z: non-zero when the display's subpixels run blue to red.
     text: vec4<f32>,
+    // x: seconds since the document started.
+    // y: seconds the previous frame took.
+    // z: device pixels per CSS pixel.
+    // w: unused.
+    //
+    // Read by application effects and by nothing the framework draws, which is why it is one lane
+    // of the block every pipeline already binds rather than a block of its own.
+    frame: vec4<f32>,
 }
 
 // A box on the device pixel grid: origin then extent.
@@ -103,6 +111,8 @@ struct Tile {
 struct Rounded {
     rect: Bounds,
     radii: Radii,
+    // The superellipse exponent the corners are cut with; two is the ellipse.
+    shape: f32,
 }
 
 // A whole clip chain, flattened into what one draw call applies.

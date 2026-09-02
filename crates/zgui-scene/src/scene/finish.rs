@@ -41,6 +41,11 @@ impl Scene {
         sort_lane(&mut self.remap.quads, &self.primitives.quads, |quad| {
             (quad.order, 0, 0)
         });
+        // The two keys past the order are what a run breaks on: an effect binds a pipeline and a
+        // parameter block, so rectangles that agree about both sort together and become one draw.
+        sort_lane(&mut self.remap.shaded, &self.primitives.shaded, |shaded| {
+            (shaded.order, shaded.shader, shaded.params)
+        });
         sort_lane(
             &mut self.remap.shadows,
             &self.primitives.shadows,

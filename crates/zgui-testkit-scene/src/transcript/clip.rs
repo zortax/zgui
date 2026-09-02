@@ -38,6 +38,7 @@ pub fn link(link: &ClipLink) -> String {
         ClipLink::RoundedRect {
             rect: bounds,
             radii,
+            shape,
             ..
         } => {
             let corners = [
@@ -56,10 +57,17 @@ pub fn link(link: &ClipLink) -> String {
                 bounds.size.width.0,
                 bounds.size.height.0,
             ]);
-            if all_zero(&corners) {
-                bounds
+            // The shape is printed only when it is not the ellipse, so every transcript written
+            // before corner shapes existed still reads the way it did.
+            let cut = if shape.is_round() {
+                String::new()
             } else {
-                format!("{bounds} radii={}", list(&corners))
+                format!(" shape={}", crate::text::number::float(shape.get()))
+            };
+            if all_zero(&corners) {
+                format!("{bounds}{cut}")
+            } else {
+                format!("{bounds} radii={}{cut}", list(&corners))
             }
         }
         ClipLink::Mask {
@@ -122,6 +130,7 @@ mod tests {
             id = table.push(
                 id,
                 ClipLink::RoundedRect {
+                    shape: zgui_scene::CornerShape::ROUND,
                     rect: bounds(0.0, 0.0, 100.0 - step as f32, 100.0),
                     radii: Corners::uniform(radius),
                     space: zgui_scene::SpatialId::VIEWPORT,

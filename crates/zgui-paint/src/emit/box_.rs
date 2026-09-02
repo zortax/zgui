@@ -71,6 +71,9 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
         let spread = if inset { -spec.spread } else { spec.spread };
         shadow.radii = flatten(grow(placement.radii, spread));
         shadow.element_radii = flatten(placement.radii);
+        // A shadow is the box's own shape blurred, so it is cut the same way: a squircle casting a
+        // rounded-rectangle shadow shows the shadow's corners outside its own.
+        shadow.shape = style.corner_shape.get();
         shadow.transform = placement.transform.index();
         pushed += usize::from(scene.push_shadow(shadow.clipped(placement.clip)).is_some());
     }
@@ -85,22 +88,46 @@ pub fn background_and_border(
     scene: &mut Scene,
     style: &PaintStyle,
     placement: BoxPlacement,
+    shaders: &dyn crate::content::shader::ShaderSource,
+    pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
 ) -> usize {
-    let mut pushed = 0;
-    let has_color = style.background.color.alpha() != 0.0;
-    let layers = &style.background.layers;
+    if let Some(pushed) = shaded(scene, style, placement, shaders, pointer) {
+        return pushed;
+    }
+    let (fills, _) = fills_of(scene, style, placement);
     let borders = border_widths(placement.border);
     let stroke = border_stroke(scene, style);
+    let last = fills.len().saturating_sub(1);
+    let mut pushed = 0;
+    for (index, fill) in fills.into_iter().enumerate() {
+        pushed += usize::from(
+            push(
+                scene,
+                placement,
+                style,
+                fill,
+                (index == last).then_some((borders, stroke, style)),
+            )
+            .is_some(),
+        );
+    }
+    pushed
+}
 
-    // The colour first, then each layer over it, last written first — CSS paints the first layer on
-    // top. The border goes on whichever quad is drawn last, so that it is not covered by a fill.
-    //
-    // The fills are collected before any of them is pushed, because which quad carries the border
-    // is not knowable until the last fill has been resolved: a layer that resolves to no paint at
-    // all is not drawn, and a loop that decided from the layer *count* would hang the border on a
-    // quad that never arrives and drop it.
+/// Every paint a box's background resolves to, last written first, and whether it draws a border.
+///
+/// CSS paints the first layer on top, so the list is reversed here and the border goes on whatever
+/// is drawn last — which is not knowable from the layer *count*, because a layer that resolves to
+/// no paint at all is not drawn. It is shared with the shaded path because a box whose shape an
+/// effect decides is filled by exactly the same cascade: a gradient, an image and a colour all keep
+/// working, and a list built twice is a list the two paths can disagree about.
+fn fills_of(
+    scene: &mut Scene,
+    style: &PaintStyle,
+    placement: BoxPlacement,
+) -> (SmallVec<[PaintRef; 2]>, bool) {
     let mut fills: SmallVec<[PaintRef; 2]> = SmallVec::new();
-    if has_color {
+    if style.background.color.alpha() != 0.0 {
         fills.push(
             scene
                 .paints
@@ -117,43 +144,102 @@ pub fn background_and_border(
         Point::new(DevicePx(0.0), DevicePx(0.0)),
         placement.border_box.size,
     );
-    for layer in layers.iter().rev() {
+    for layer in style.background.layers.iter().rev() {
         if let Some(fill) = gradient_paint(scene, layer, local, placement.scale) {
             fills.push(fill);
         }
     }
-    let draws_border = !style.border.invisible && borders.iter().any(|width| *width > 0.0);
+    let draws_border = !style.border.invisible
+        && border_widths(placement.border)
+            .iter()
+            .any(|width| *width > 0.0);
     // A box with a border and no fill at all still draws its border, and that is the case a
     // fill-driven loop misses entirely.
     if fills.is_empty() && draws_border {
         fills.push(PaintRef::NONE);
     }
-    let last = fills.len().saturating_sub(1);
-    for (index, fill) in fills.into_iter().enumerate() {
-        pushed += usize::from(
-            push(
-                scene,
-                placement,
-                fill,
-                (index == last).then_some((borders, stroke, style)),
-            )
-            .is_some(),
-        );
+    (fills, draws_border)
+}
+
+/// Emits the box through the effect a style sheet named, or `None` when it named none.
+///
+/// A coverage effect reshapes the box: the fill and the border are the ordinary paints, and only
+/// which pixels are inside is the effect's. A paint effect replaces the background outright, and
+/// the border is left to the ordinary quad beneath it, so that a shaded box with a border still
+/// has one.
+///
+/// A name nothing answers, or a device that cannot draw an effect at all, falls back to the
+/// ordinary path — a smoothed corner becomes a rounded one, which is the appearance the box would
+/// have had.
+fn shaded(
+    scene: &mut Scene,
+    style: &PaintStyle,
+    placement: BoxPlacement,
+    shaders: &dyn crate::content::shader::ShaderSource,
+    pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
+) -> Option<usize> {
+    let named = style.shader.as_ref()?.named.as_ref()?;
+    let binding = shaders.effect(&named.name)?;
+    if binding.mode != named.mode {
+        // The property said what the effect is expected to do and the effect does something else.
+        // Drawing it anyway would put a colour where a shape was asked for.
+        return None;
     }
-    pushed
+    let params = scene.shader_params.intern(crate::emit::shader::block_at(
+        named,
+        binding,
+        pointer,
+        placement.border_box,
+    ));
+    let shaped = binding.mode == zgui_scene::ShaderMode::Coverage;
+    // A paint effect shades the whole box itself, so it is one rectangle and reads no fill. A
+    // coverage effect decides only which pixels are inside, so it is drawn once per background
+    // layer — the same list, in the same order, with the border on the last — and the cascade goes
+    // on deciding what fills the shape.
+    let (fills, draws_border) = if shaped {
+        fills_of(scene, style, placement)
+    } else {
+        (SmallVec::from_slice(&[PaintRef::NONE]), false)
+    };
+    let borders = border_widths(placement.border);
+    let stroke = draws_border.then(|| border_stroke(scene, style));
+    let last = fills.len().saturating_sub(1);
+    let mut pushed = 0;
+    for (index, fill) in fills.into_iter().enumerate() {
+        let mut shaded = zgui_scene::ShadedQuad::new(placement.border_box, binding.id, params)
+            .clipped(placement.clip)
+            .transformed(placement.transform)
+            .with_radii(placement.radii)
+            .with_fill(fill);
+        if let Some(stroke) = stroke.filter(|_| index == last) {
+            shaded = shaded.with_border(borders, stroke);
+        }
+        // Only a paint that is read at a point has an origin to be read from, which is why a box
+        // filled flat carries none.
+        if shaded.samples_its_paint() {
+            shaded.reanchor_paint(Size::new(
+                placement.border_box.origin.x,
+                placement.border_box.origin.y,
+            ));
+        }
+        pushed += usize::from(scene.push_shaded(shaded).is_some());
+    }
+    Some(pushed)
 }
 
 /// Pushes one quad of a box, optionally carrying the border.
 fn push(
     scene: &mut Scene,
     placement: BoxPlacement,
+    style: &PaintStyle,
     fill: PaintRef,
     border: Option<([f32; 4], PaintRef, &PaintStyle)>,
 ) -> Option<zgui_scene::DrawOrder> {
     let mut quad = Quad::filled(placement.border_box, fill)
         .clipped(placement.clip)
         .transformed(placement.transform)
-        .with_radii(placement.radii);
+        .with_radii(placement.radii)
+        .with_corner_shape(style.corner_shape);
     if let Some((widths, stroke, style)) = border {
         quad = quad.with_border(widths, stroke, style.border.style.to_scene());
     }
@@ -188,6 +274,9 @@ pub fn outline(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement) -
         .clipped(placement.clip)
         .transformed(placement.transform)
         .with_radii(grow(placement.radii, reach))
+        // An outline follows the box it outlines: a squircle with a square outline round it reads
+        // as two boxes rather than one.
+        .with_corner_shape(style.corner_shape)
         .with_border([outline.width; 4], stroke, outline.style.to_scene());
     usize::from(scene.push_quad(quad).is_some())
 }

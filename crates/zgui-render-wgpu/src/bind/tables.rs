@@ -21,6 +21,8 @@ pub struct GpuRounded {
     pub rect: [f32; 4],
     /// Elliptical radii, two per corner, clockwise from the top left.
     pub radii: [f32; 8],
+    /// The superellipse exponent the corners are cut with; two is the ellipse.
+    pub shape: f32,
 }
 
 /// A whole clip chain, flattened into what one draw call applies.
@@ -490,10 +492,7 @@ impl PreparedTables {
         }
         self.tables.clips.resize(table.slots(), freed_clip());
         self.deps.reach(table.slots());
-        if self.changed_clips.is_empty()
-            && self.moved_space_count == 0
-            && !self.dirty.spatial.all
-        {
+        if self.changed_clips.is_empty() && self.moved_space_count == 0 && !self.dirty.spatial.all {
             return;
         }
         if self.deps.wants_rebuild(table.slots()) {
@@ -623,10 +622,12 @@ fn gpu_clip(clip: &ResolvedClip) -> GpuClip {
         first: GpuRounded {
             rect: clip.rounded[0].rect,
             radii: clip.rounded[0].radii,
+            shape: clip.rounded[0].shape,
         },
         second: GpuRounded {
             rect: clip.rounded[1].rect,
             radii: clip.rounded[1].radii,
+            shape: clip.rounded[1].shape,
         },
         count: clip.rounded_count,
         has_mask: u32::from(clip.mask.is_some()),
@@ -915,6 +916,7 @@ mod tests {
             OwnSpace::of(Some(Matrix4::translation(4.0, 0.0, 0.0)), None, false),
         );
         let clip = scene.clips.only(ClipLink::RoundedRect {
+            shape: zgui_scene::CornerShape::ROUND,
             rect: rect(0.0, 0.0, 10.0, 10.0),
             radii: zgui_geom::Corners::default(),
             space,
@@ -980,12 +982,8 @@ mod tests {
     #[test]
     fn a_sweep_that_retracts_the_id_space_is_absorbed() {
         let mut scene = zgui_scene::Scene::new();
-        let kept = scene
-            .clips
-            .only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
-        let doomed = scene
-            .clips
-            .only(ClipLink::rect(rect(5.0, 5.0, 20.0, 20.0)));
+        let kept = scene.clips.only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
+        let doomed = scene.clips.only(ClipLink::rect(rect(5.0, 5.0, 20.0, 20.0)));
         assert!(doomed.0 > kept.0, "the doomed chain holds the tail slot");
         let mut prepared = PreparedTables::default();
         prepared.update(&scene);
@@ -1023,9 +1021,7 @@ mod tests {
     #[test]
     fn a_slot_reused_for_a_different_chain_follows_its_new_space() {
         let mut scene = zgui_scene::Scene::new();
-        let doomed = scene
-            .clips
-            .only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
+        let doomed = scene.clips.only(ClipLink::rect(rect(0.0, 0.0, 10.0, 10.0)));
         let mut prepared = PreparedTables::default();
         prepared.update(&scene);
 
@@ -1041,6 +1037,7 @@ mod tests {
             OwnSpace::of(Some(Matrix4::translation(2.0, 0.0, 0.0)), None, false),
         );
         let reused = scene.clips.only(ClipLink::RoundedRect {
+            shape: zgui_scene::CornerShape::ROUND,
             rect: rect(0.0, 0.0, 10.0, 10.0),
             radii: zgui_geom::Corners::default(),
             space,

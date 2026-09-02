@@ -80,6 +80,13 @@ pub struct Painted {
     /// place, so this is the one field that turns "the implementation says it changed" into a
     /// cache miss — and its absence into a replay.
     pub custom: u64,
+    /// Where the pointer was, for a box whose effect declared it reads it.
+    ///
+    /// Zero for every other box, which is the overwhelming majority: nothing else in this record
+    /// moves when a pointer does, so a box that does not read the pointer replays through a whole
+    /// pointer stream, and one that does misses exactly when the pointer moves. That is the same
+    /// mechanism [`Painted::custom`] is, for the same reason.
+    pub pointer: u64,
     /// The revision of the outside content the fragment draws, and zero for every other kind.
     ///
     /// A replaced fragment names its node and a drawing fragment names its curves' source; both
@@ -519,6 +526,9 @@ impl PaintCache {
         for paint in &holds.paints {
             scene.paints.retain(*paint);
         }
+        for params in &holds.shaders {
+            scene.shader_params.retain(*params);
+        }
         let chunk_bytes = prims.bytes();
         self.bytes += chunk_bytes;
         // A fragment is selected at most once per frame, so nothing selected earlier this frame
@@ -623,6 +633,9 @@ fn release_tables(scene: &mut Scene, holds: &TableHolds) {
     }
     for paint in &holds.paints {
         scene.paints.release(*paint);
+    }
+    for params in &holds.shaders {
+        scene.shader_params.release(*params);
     }
 }
 

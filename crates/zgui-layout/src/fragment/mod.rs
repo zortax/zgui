@@ -11,6 +11,7 @@
 mod anchored;
 pub mod build;
 pub mod clip;
+pub mod corner;
 pub mod diff;
 pub mod filter;
 pub mod hit;

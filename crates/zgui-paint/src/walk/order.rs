@@ -84,6 +84,10 @@ pub struct Emission<'a> {
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
     pub replaced: &'a dyn ReplacedSource,
+    /// Where a style sheet's shader names are resolved.
+    pub shaders: &'a dyn crate::content::shader::ShaderSource,
+    /// Where the pointer is, for an effect that declared it reads it.
+    pub pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
     /// Where the outlines an element draws come from.
     pub vectors: &'a dyn VectorSource,
     /// Where eligible solid paths get cached monochrome coverage.
@@ -128,7 +132,13 @@ pub(crate) fn fragment_tracked(
     // asking once is cheaper than three calls that each resolve a paint and push no primitive.
     if !style.paints_nothing() {
         pushed += box_::outer_shadows(scene, &style, emission.box_placement);
-        pushed += box_::background_and_border(scene, &style, emission.box_placement);
+        pushed += box_::background_and_border(
+            scene,
+            &style,
+            emission.box_placement,
+            emission.shaders,
+            emission.pointer,
+        );
         pushed += box_::inset_shadows(scene, &style, emission.box_placement);
     }
     let content = content_tracked(scene, fragment, &style, emission);

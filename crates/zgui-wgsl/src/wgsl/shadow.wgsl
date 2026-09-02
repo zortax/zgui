@@ -17,7 +17,8 @@ struct Shadow {
     clip: u32,
     transform: u32,
     inset: u32,
-    reserved: u32,
+    // The superellipse exponent the element's corners are cut with; two is the ellipse.
+    shape: f32,
 }
 
 @group(1) @binding(0) var<storage, read> shadows: array<Shadow>;
@@ -71,13 +72,29 @@ fn erf(v: vec2<f32>) -> vec2<f32> {
 //
 // `curved` is where the shape's edge sits on this scanline. With an elliptical corner that is the
 // ellipse equation rather than the circle's, and it reduces to the circular form when the two
-// semi-axes are equal — so the generalisation costs one division and no samples.
-fn blur_along_x(x: f32, y: f32, sigma: f32, corner: vec2<f32>, half_size: vec2<f32>) -> f32 {
+// semi-axes are equal — so the generalisation costs one division and no samples. A corner cut to
+// any other exponent takes the superellipse's own edge, which reduces to the ellipse's at two.
+fn blur_along_x(
+    x: f32,
+    y: f32,
+    sigma: f32,
+    corner: vec2<f32>,
+    half_size: vec2<f32>,
+    shape: f32,
+) -> f32 {
     let delta = min(half_size.y - corner.y - abs(y), 0.0);
     var curved = half_size.x - corner.x;
     if corner.y > 0.0 {
-        let normalised = saturate(1.0 - (delta * delta) / (corner.y * corner.y));
-        curved += corner.x * sqrt(normalised);
+        if shape == CORNER_ROUND {
+            let normalised = saturate(1.0 - (delta * delta) / (corner.y * corner.y));
+            curved += corner.x * sqrt(normalised);
+        } else {
+            // `|x/rx|^n + |y/ry|^n = 1` solved for x, which is the ellipse's own solution at two.
+            let power = clamp(shape, 0.01, 64.0);
+            let along = saturate(abs(delta) / corner.y);
+            let remaining = saturate(1.0 - pow(along, power));
+            curved += corner.x * pow(remaining, 1.0 / power);
+        }
     } else {
         curved += corner.x;
     }
@@ -95,16 +112,16 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
 
     // The blurred shape is the element box, offset and spread; `bounds` is that shape dilated by
     // the blur's reach, so the shape itself has to be recovered from it.
-    let shape = shadow_shape(shadow);
-    let half_size = bounds_size(shape) * 0.5;
-    let center = bounds_origin(shape) + half_size;
+    let casting = shadow_shape(shadow);
+    let half_size = bounds_size(casting) * 0.5;
+    let center = bounds_origin(casting) + half_size;
     let local = in.local - in.shift;
     let center_to_point = local - center;
     let corner = pick_corner_radii(center_to_point, shadow.radii);
 
     var alpha: f32;
     if shadow.blur <= 0.0 {
-        alpha = saturate(0.5 - quad_sdf(local, shape, shadow.radii));
+        alpha = saturate(0.5 - quad_sdf(local, casting, shadow.radii, shadow.shape));
     } else {
         // The gaussian is negligible beyond three standard deviations, and the shape contributes
         // nothing outside its own extent, so the samples are spent only where the two overlap.
@@ -122,6 +139,7 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
                 shadow.blur,
                 corner,
                 half_size,
+                shadow.shape,
             );
             alpha += blurred * gaussian(y, shadow.blur) * step;
             y += step;
@@ -131,13 +149,13 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     if shadow.inset != 0u {
         // An inset shadow is the complement of the blurred hole, clipped to the element it sits in.
         alpha = 1.0 - alpha;
-        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii);
+        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii, shadow.shape);
         alpha *= saturate(0.5 - element_distance);
     } else {
         // An outer shadow is never painted within the box that casts it. Behind a filled box the
         // difference cannot be seen, but a box with no fill of its own — a field that is a hole in
         // the page — would otherwise wear its own shadow as a wash over its whole interior.
-        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii);
+        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii, shadow.shape);
         alpha *= saturate(0.5 + element_distance);
     }
 

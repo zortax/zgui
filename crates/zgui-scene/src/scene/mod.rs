@@ -25,6 +25,7 @@ use crate::pass::ScenePassPlan;
 use crate::place::band::Travels;
 use crate::prim::PrimitiveKind;
 use crate::scene::resolve::Unresolved;
+use crate::shader::{FrameClock, ShaderParamsTable};
 use crate::spatial::{SpatialId, SpatialTree};
 
 pub use crate::scene::chunk::{ChunkPrims, ChunkSlot, ChunkUpload, TableHolds};
@@ -88,6 +89,8 @@ pub struct Scene {
     pub paints: PaintTable,
     /// Every text brush in the document.
     pub text_paints: TextPaintTable,
+    /// Every application effect's parameter block, interned so equal parameters are one draw.
+    pub shader_params: ShaderParamsTable,
     /// Every coordinate system in the document.
     ///
     /// Named by structure rather than interned by content: a primitive names the box whose
@@ -126,7 +129,7 @@ pub struct Scene {
     remap: Remap,
     /// Where each instanced primitive came from, parallel to its array — see
     /// [`Scene::provenance`].
-    provenance: [Vec<crate::scene::chunk::ChunkSlot>; 6],
+    provenance: [Vec<crate::scene::chunk::ChunkSlot>; 7],
     /// Positions pushed under the open capture, awaiting the revision the encoding is stamped
     /// with: (kind, index in the frame array, index in the capture's lane).
     capture_stamped: Vec<(PrimitiveKind, u32, u32)>,
@@ -170,6 +173,8 @@ pub struct Scene {
     pass_plan: ScenePassPlan,
     /// The surface's extent, which pass regions are clamped to.
     viewport: Size<i32, Device>,
+    /// What application effects are told about this frame.
+    frame_clock: FrameClock,
     /// Whether [`Scene::finish`] has run since the last [`Scene::begin_frame`].
     finished: bool,
     /// How many primitives have been pushed that replaying the log would not reproduce.
@@ -191,6 +196,8 @@ pub struct Scene {
 pub(crate) struct Remap {
     /// Rounded, bordered rectangles.
     pub(crate) quads: Vec<u32>,
+    /// Rectangles an application's own shader draws.
+    pub(crate) shaded: Vec<u32>,
     /// Box shadows.
     pub(crate) shadows: Vec<u32>,
     /// Text decoration lines.
@@ -213,6 +220,7 @@ impl Remap {
     /// Empties every list, keeping the allocations for the next frame.
     fn clear(&mut self) {
         self.quads.clear();
+        self.shaded.clear();
         self.shadows.clear();
         self.decorations.clear();
         self.mono_sprites.clear();
@@ -264,6 +272,7 @@ impl Scene {
             clips: ClipTable::rooted(),
             paints: PaintTable::new(),
             text_paints: TextPaintTable::new(),
+            shader_params: ShaderParamsTable::new(),
             spatial: SpatialTree::with_viewport(),
             ops: Vec::new(),
             spaces: Vec::new(),
@@ -284,6 +293,7 @@ impl Scene {
             markers: Markers::default(),
             pass_plan: ScenePassPlan::default(),
             viewport: Size::new(0, 0),
+            frame_clock: FrameClock::default(),
             finished: false,
             unreplayable: 0,
             unresolved: Vec::new(),
@@ -334,12 +344,26 @@ impl Scene {
 
         self.clips.begin_frame();
         self.paints.begin_frame();
+        self.shader_params.begin_frame();
         crate::scene::live::publish(self);
     }
 
     /// The surface extent this frame is being built for.
     pub fn viewport(&self) -> Size<i32, Device> {
         self.viewport
+    }
+
+    /// Tells this frame's application effects what frame they are drawing in.
+    ///
+    /// Set once per frame, from the same timestamp every other stage is handed, so an effect and a
+    /// CSS animation on the same element agree about what moment it is.
+    pub fn set_frame_clock(&mut self, clock: FrameClock) {
+        self.frame_clock = clock;
+    }
+
+    /// What this frame's application effects are told about it.
+    pub fn frame_clock(&self) -> FrameClock {
+        self.frame_clock
     }
 
     /// What was inserted this frame, in the order it was inserted.

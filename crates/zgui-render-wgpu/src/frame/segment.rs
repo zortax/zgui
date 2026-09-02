@@ -27,6 +27,17 @@ pub enum PlannedDraw {
         /// Whether this is the 2:1 downsample rather than one of the two axis passes.
         downsample: bool,
     },
+    /// One filtering pass of an application's own shader, reading `source`.
+    Effect {
+        /// What it reads.
+        source: TargetRef,
+        /// Which registered effect filters.
+        shader: zgui_scene::ShaderId,
+        /// The dynamic offset of the block describing what it reads.
+        params: u32,
+        /// The dynamic offset of the effect's own parameters.
+        block: u32,
+    },
     /// A composite of an isolated target back into the one beneath it.
     Composite {
         /// What it reads.

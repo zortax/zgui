@@ -17,7 +17,8 @@ use crate::id::{ClipId, PaintId};
 use crate::ops::PaintOp;
 use crate::paint::PaintRef;
 use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, Shadow, SubpixelSprite,
+    ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, ShadedQuad, Shadow,
+    SubpixelSprite,
 };
 use crate::scene::Scene;
 use crate::spatial::SpatialId;
@@ -35,6 +36,8 @@ pub struct TableHolds {
     pub clips: Vec<ClipId>,
     /// The paint sources named, distinct.
     pub paints: Vec<PaintId>,
+    /// The application-effect parameter blocks named, distinct.
+    pub shaders: Vec<crate::ShaderParamsSlot>,
 }
 
 impl TableHolds {
@@ -42,6 +45,7 @@ impl TableHolds {
     pub fn clear(&mut self) {
         self.clips.clear();
         self.paints.clear();
+        self.shaders.clear();
     }
 
     /// Notes one clip chain.
@@ -62,6 +66,8 @@ impl TableHolds {
         self.clips.dedup();
         self.paints.sort_unstable();
         self.paints.dedup();
+        self.shaders.sort_unstable();
+        self.shaders.dedup();
     }
 }
 
@@ -114,6 +120,8 @@ pub struct ChunkPrims {
     pub ops: Vec<PaintOp>,
     /// Rounded, bordered rectangles.
     pub quads: Vec<Quad>,
+    /// Rectangles an application's own shader draws.
+    pub shaded: Vec<ShadedQuad>,
     /// Box shadows.
     pub shadows: Vec<Shadow>,
     /// Text decoration lines.
@@ -178,6 +186,7 @@ impl ChunkPrims {
     pub fn bytes(&self) -> usize {
         self.ops.capacity() * size_of::<PaintOp>()
             + self.quads.capacity() * size_of::<Quad>()
+            + self.shaded.capacity() * size_of::<ShadedQuad>()
             + self.shadows.capacity() * size_of::<Shadow>()
             + self.decorations.capacity() * size_of::<Decoration>()
             + self.mono_sprites.capacity() * size_of::<MonoSprite>()
@@ -241,6 +250,16 @@ impl ChunkPrims {
             holds.paint(quad.fill);
             holds.paint(quad.stroke);
         }
+        // A shaded rectangle names everything a quad names and one thing more: the block its
+        // effect is drawn with. Leaving that unheld is a replayed effect drawn with whatever
+        // landed in the slot after its own entry was evicted — for a coverage effect, a shape
+        // whose parameters are zero, which is a box that silently stops being drawn.
+        for shaded in &self.shaded {
+            holds.clip(shaded.clip);
+            holds.paint(shaded.fill);
+            holds.paint(shaded.stroke);
+            holds.shaders.push(shaded.params_slot());
+        }
         for shadow in &self.shadows {
             holds.clip(shadow.clip);
         }
@@ -283,6 +302,7 @@ impl ChunkPrims {
     pub fn clear(&mut self) {
         self.ops.clear();
         self.quads.clear();
+        self.shaded.clear();
         self.shadows.clear();
         self.decorations.clear();
         self.mono_sprites.clear();
@@ -306,6 +326,7 @@ fn order_of(prims: &crate::scene::primitives::Primitives, op: PaintOp) -> DrawOr
     let index = op.index as usize;
     match op.kind {
         PrimitiveKind::Quad => prims.quads.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::Shaded => prims.shaded.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Shadow => prims.shadows.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Decoration => prims.decorations.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::MonoSprite => prims.mono_sprites.get(index).map_or(0, |prim| prim.order),
@@ -325,6 +346,7 @@ fn ink_of(chunk: &ChunkPrims, op: PaintOp) -> Option<Rect<DevicePx, Device>> {
     let index = op.index as usize;
     match op.kind {
         PrimitiveKind::Quad => chunk.quads.get(index).map(Quad::ink),
+        PrimitiveKind::Shaded => chunk.shaded.get(index).map(ShadedQuad::ink),
         PrimitiveKind::Shadow => chunk.shadows.get(index).map(Shadow::ink),
         PrimitiveKind::Decoration => chunk.decorations.get(index).map(Decoration::ink),
         PrimitiveKind::MonoSprite => chunk.mono_sprites.get(index).map(MonoSprite::ink),
@@ -365,6 +387,7 @@ pub(crate) fn provenance_lane_of(kind: PrimitiveKind) -> Option<usize> {
         PrimitiveKind::MonoSprite => 3,
         PrimitiveKind::SubpixelSprite => 4,
         PrimitiveKind::ColorSprite => 5,
+        PrimitiveKind::Shaded => 6,
         _ => return None,
     })
 }
@@ -510,6 +533,7 @@ impl Scene {
             let index = op.index as usize;
             let at = match op.kind {
                 PrimitiveKind::Quad => copied(&self.primitives.quads, index, &mut chunk.quads),
+                PrimitiveKind::Shaded => copied(&self.primitives.shaded, index, &mut chunk.shaded),
                 PrimitiveKind::Shadow => {
                     copied(&self.primitives.shadows, index, &mut chunk.shadows)
                 }
@@ -649,6 +673,16 @@ impl Scene {
                     }
                     if self.push_quad(quad).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::Quad, source, op.index);
+                    }
+                }
+                PrimitiveKind::Shaded => {
+                    let Some(mut shaded) = chunk.shaded.get(index).copied() else {
+                        continue;
+                    };
+                    translate(&mut shaded.bounds, by);
+                    shaded.reanchor_paint(by);
+                    if self.push_shaded(shaded).is_some() && source != 0 {
+                        self.stamp_replayed(PrimitiveKind::Shaded, source, op.index);
                     }
                 }
                 PrimitiveKind::Shadow => {

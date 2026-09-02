@@ -11,6 +11,15 @@ pub enum Step {
     Matrix(ColorMatrix),
     /// A gaussian blur of the given deviation in device pixels.
     Blur(f32),
+    /// An application's own shader, reading the content and writing what replaces it.
+    Custom {
+        /// Which registered effect filters.
+        shader: zgui_scene::ShaderId,
+        /// The parameter block it draws with.
+        params: zgui_scene::ShaderParamsSlot,
+        /// How far outside its rectangle it reads, in device pixels.
+        reach: f32,
+    },
     /// A blurred, displaced copy drawn behind the content.
     DropShadow {
         /// How far right the copy falls, in device pixels.
@@ -60,8 +69,17 @@ impl Chain {
                         blur: blur.max(0.0),
                         color: *color,
                     },
+                    Filter::Custom {
+                        shader,
+                        params,
+                        reach,
+                    } => Step::Custom {
+                        shader: *shader,
+                        params: *params,
+                        reach: reach.max(0.0),
+                    },
                     // Every remaining function has a matrix, so this arm is unreachable in the
-                    // same sense that the two above are exhaustive.
+                    // same sense that the three above are exhaustive.
                     _ => continue,
                 }),
             }

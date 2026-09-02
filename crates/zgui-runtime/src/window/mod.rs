@@ -166,6 +166,16 @@ pub struct Window {
     /// A gap far longer than a refresh interval is a park rather than a slow frame, and buys a
     /// motion nothing: see [`Window::advance_scroll`].
     last_frame: Option<zgui_vocab::Timestamp>,
+    /// The moment the first frame ran at, so an effect can be told how long the window has been up.
+    ///
+    /// Measured from the first frame rather than from the process, because that is the moment an
+    /// effect's own clock should start: a window opened late should not begin its animations part
+    /// of the way through.
+    opened_at: Option<zgui_vocab::Timestamp>,
+    /// The moment the previous frame ran at, so an effect can be told how long the last one took.
+    painted_at: Option<zgui_vocab::Timestamp>,
+    /// What this frame's application effects are told about it, computed once at the frame's top.
+    frame_clock: zgui_scene::FrameClock,
     /// What the running animations wrote on the last frame, and what still owes an undo.
     animator: zgui_anim::Animator,
     /// The moment the running animations owe their next frame at.
@@ -640,6 +650,9 @@ impl Window {
             diff_scratch: zgui_layout::fragment::diff::DiffScratch::default(),
             scroll,
             last_frame: None,
+            opened_at: None,
+            painted_at: None,
+            frame_clock: zgui_scene::FrameClock::default(),
             animator: zgui_anim::Animator::new(),
             animation: crate::window::anim::cadence::AnimationCadence::parked(),
             scene: Scene::new(),

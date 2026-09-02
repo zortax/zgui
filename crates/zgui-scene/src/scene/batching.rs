@@ -19,6 +19,7 @@ impl Scene {
     pub fn remap(&self, kind: PrimitiveKind) -> &[u32] {
         match kind {
             PrimitiveKind::Quad => &self.remap.quads,
+            PrimitiveKind::Shaded => &self.remap.shaded,
             PrimitiveKind::Shadow => &self.remap.shadows,
             PrimitiveKind::Decoration => &self.remap.decorations,
             PrimitiveKind::MonoSprite => &self.remap.mono_sprites,
@@ -44,6 +45,7 @@ impl Scene {
         let index = op.index as usize;
         match op.kind {
             PrimitiveKind::Quad => self.primitives.quads[index].ink(),
+            PrimitiveKind::Shaded => self.primitives.shaded[index].ink(),
             PrimitiveKind::Shadow => self.primitives.shadows[index].ink(),
             PrimitiveKind::Decoration => self.primitives.decorations[index].ink(),
             PrimitiveKind::MonoSprite => self.primitives.mono_sprites[index].ink(),
@@ -67,6 +69,7 @@ impl Scene {
         let index = op.index as usize;
         let slot = match op.kind {
             PrimitiveKind::Quad => self.primitives.quads.get(index)?.transform,
+            PrimitiveKind::Shaded => self.primitives.shaded.get(index)?.transform,
             PrimitiveKind::Shadow => self.primitives.shadows.get(index)?.transform,
             PrimitiveKind::Decoration => self.primitives.decorations.get(index)?.transform,
             PrimitiveKind::MonoSprite => self.primitives.mono_sprites.get(index)?.transform,
@@ -90,6 +93,7 @@ impl Scene {
         let index = op.index as usize;
         match op.kind {
             PrimitiveKind::Quad => self.primitives.quads.get(index).map(|held| held.order),
+            PrimitiveKind::Shaded => self.primitives.shaded.get(index).map(|held| held.order),
             PrimitiveKind::Shadow => self.primitives.shadows.get(index).map(|held| held.order),
             PrimitiveKind::Decoration => self
                 .primitives
@@ -127,6 +131,10 @@ impl Scene {
             PrimitiveKind::Quad => {
                 let slot = self.slot(kind, position)?;
                 self.primitives.quads.get(slot).map(|held| held.order)
+            }
+            PrimitiveKind::Shaded => {
+                let slot = self.slot(kind, position)?;
+                self.primitives.shaded.get(slot).map(|held| held.order)
             }
             PrimitiveKind::Shadow => {
                 let slot = self.slot(kind, position)?;
@@ -189,6 +197,24 @@ impl Scene {
                 let end = self.run_end(kind, start, limit, None);
                 (Batch::Quads(start..end), end)
             }
+            // An effect binds its own pipeline and its own parameter block, so a run breaks where
+            // either changes — the same rule a sprite run follows for its texture.
+            PrimitiveKind::Shaded => {
+                let slot = self
+                    .slot(kind, start)
+                    .expect("the merge peeked this position");
+                let shaded = &self.primitives.shaded[slot];
+                let binding = shaded_binding(shaded);
+                let end = self.run_end(kind, start, limit, Some(binding));
+                (
+                    Batch::Shaded {
+                        shader: shaded.shader_id(),
+                        params: shaded.params_slot(),
+                        range: start..end,
+                    },
+                    end,
+                )
+            }
             PrimitiveKind::Shadow => {
                 let end = self.run_end(kind, start, limit, None);
                 (Batch::Shadows(start..end), end)
@@ -202,7 +228,7 @@ impl Scene {
                     .slot(kind, start)
                     .expect("the merge peeked this position");
                 let texture = self.primitives.mono_sprites[slot].tile.texture;
-                let end = self.run_end(kind, start, limit, Some(texture));
+                let end = self.run_end(kind, start, limit, Some(u64::from(texture)));
                 (
                     Batch::MonoSprites {
                         texture,
@@ -216,7 +242,7 @@ impl Scene {
                     .slot(kind, start)
                     .expect("the merge peeked this position");
                 let texture = self.primitives.subpixel_sprites[slot].tile.texture;
-                let end = self.run_end(kind, start, limit, Some(texture));
+                let end = self.run_end(kind, start, limit, Some(u64::from(texture)));
                 (
                     Batch::SubpixelSprites {
                         texture,
@@ -230,7 +256,7 @@ impl Scene {
                     .slot(kind, start)
                     .expect("the merge peeked this position");
                 let texture = self.primitives.color_sprites[slot].tile.texture;
-                let end = self.run_end(kind, start, limit, Some(texture));
+                let end = self.run_end(kind, start, limit, Some(u64::from(texture)));
                 (
                     Batch::ColorSprites {
                         texture,
@@ -264,21 +290,22 @@ impl Scene {
 
     /// Where a run of `kind` starting at `start` ends.
     ///
-    /// `texture` is the texture every sprite of the run must read, so a run also breaks where a
-    /// draw call would have to bind a different one. `None` for kinds that bind no texture.
+    /// `binding` is what every primitive of the run must be drawn with — a sprite's texture, an
+    /// effect's pipeline and parameter block — so a run also breaks where a draw call would have
+    /// to bind something different. `None` for kinds that bind nothing of their own.
     fn run_end(
         &self,
         kind: PrimitiveKind,
         start: usize,
         limit: (DrawOrder, PrimitiveKind),
-        texture: Option<u32>,
+        binding: Option<u64>,
     ) -> usize {
         let mut end = start;
         while let Some(order) = self.order_at(kind, end) {
             if (order, kind) >= limit {
                 break;
             }
-            if texture.is_some() && self.texture_at(kind, end) != texture {
+            if binding.is_some() && self.binding_at(kind, end) != binding {
                 break;
             }
             end += 1;
@@ -286,25 +313,26 @@ impl Scene {
         end
     }
 
-    /// Which texture the sprite at draw-order `position` of `kind` reads.
-    fn texture_at(&self, kind: PrimitiveKind, position: usize) -> Option<u32> {
+    /// What the primitive at draw-order `position` of `kind` has to be drawn with.
+    fn binding_at(&self, kind: PrimitiveKind, position: usize) -> Option<u64> {
         let slot = self.slot(kind, position)?;
         match kind {
             PrimitiveKind::MonoSprite => self
                 .primitives
                 .mono_sprites
                 .get(slot)
-                .map(|sprite| sprite.tile.texture),
+                .map(|sprite| u64::from(sprite.tile.texture)),
             PrimitiveKind::SubpixelSprite => self
                 .primitives
                 .subpixel_sprites
                 .get(slot)
-                .map(|sprite| sprite.tile.texture),
+                .map(|sprite| u64::from(sprite.tile.texture)),
             PrimitiveKind::ColorSprite => self
                 .primitives
                 .color_sprites
                 .get(slot)
-                .map(|sprite| sprite.tile.texture),
+                .map(|sprite| u64::from(sprite.tile.texture)),
+            PrimitiveKind::Shaded => self.primitives.shaded.get(slot).map(shaded_binding),
             _ => None,
         }
     }
@@ -328,4 +356,12 @@ impl Scene {
             .get(index)
             .map_or(index, |position| *position as usize)
     }
+}
+
+/// What one shaded rectangle has to be drawn with: its effect, then its parameter block.
+///
+/// Two rectangles agreeing on both are one draw call; disagreeing on either is two, because the
+/// pipeline and the block are both bound outside the instance.
+fn shaded_binding(shaded: &crate::prim::ShadedQuad) -> u64 {
+    (u64::from(shaded.shader) << 32) | u64::from(shaded.params)
 }

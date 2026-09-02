@@ -113,5 +113,15 @@ pub fn filter(filter: &Filter) -> String {
         Filter::Opacity(amount) => format!("opacity({})", float(*amount)),
         Filter::Saturate(amount) => format!("saturate({})", float(*amount)),
         Filter::Sepia(amount) => format!("sepia({})", float(*amount)),
+        Filter::Custom {
+            shader,
+            params,
+            reach,
+        } => format!(
+            "shader({}, params={}, reach={})",
+            shader.index(),
+            params.index(),
+            float(*reach)
+        ),
     }
 }

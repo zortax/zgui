@@ -1,0 +1,5 @@
+error: `Backdrop` is nothing an effect can declare it reads; write one of Time, Pointer
+  --> tests/refused/unknown_read.rs:10:13
+   |
+10 |     reads: [Backdrop],
+   |             ^^^^^^^^

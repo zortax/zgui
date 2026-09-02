@@ -2,6 +2,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use zgui_geom::{Device, Size};
+use zgui_scene::FrameClock;
 
 use crate::target::scale::TargetScale;
 
@@ -38,6 +39,14 @@ pub struct Globals {
     pub gamma_ratios: [f32; 4],
     /// Single-channel contrast, per-channel contrast, subpixel order, then one unused lane.
     pub text: [f32; 4],
+    /// Seconds since the document started, the previous frame's duration, the scale factor, then
+    /// one unused lane.
+    ///
+    /// Read by application effects and by nothing the framework draws. It is a lane of the block
+    /// every pipeline already binds rather than a block of its own, because an effect is drawn in
+    /// the same pass as everything around it and a second uniform would be a second dynamic offset
+    /// on every draw that never reads it.
+    pub frame: [f32; 4],
 }
 
 impl Globals {
@@ -66,7 +75,14 @@ impl Globals {
                 f32::from(order == SubpixelOrder::BlueToRed),
                 0.0,
             ],
+            frame: [0.0; 4],
         }
+    }
+
+    /// The same block, telling application effects what frame they are drawing in.
+    pub fn with_frame(mut self, clock: FrameClock) -> Self {
+        self.frame = clock.to_lane();
+        self
     }
 }
 

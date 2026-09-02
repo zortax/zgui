@@ -56,6 +56,6 @@ fn fs_color_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
     // Coverage against the frame rather than the quad: a `cover` picture is cut to its box, a
     // letterboxed one keeps drawing only where it is, and the rounded corners follow the box in
     // both cases.
-    let rounded = rect_coverage(in.local - in.shift, sprite.frame, sprite.radii);
+    let rounded = rect_coverage(in.local - in.shift, sprite.frame, sprite.radii, CORNER_ROUND);
     return texel * sprite.opacity * rounded * clip;
 }

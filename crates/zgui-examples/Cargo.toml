@@ -69,6 +69,10 @@ name = "custom"
 path = "../../examples/custom.rs"
 
 [[example]]
+name = "shader"
+path = "../../examples/shader.rs"
+
+[[example]]
 name = "async"
 path = "../../examples/async.rs"
 

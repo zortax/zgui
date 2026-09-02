@@ -1,6 +1,6 @@
-//! The three rectangle primitives: quads, shadows and decoration lines.
+//! The rectangle primitives: quads, shaded quads, shadows and decoration lines.
 
-use zgui_scene::{ClipId, Decoration, Quad, Scene, Shadow};
+use zgui_scene::{ClipId, Decoration, Quad, Scene, ShadedQuad, Shadow};
 
 use crate::text::number::{all_zero, float, list, rect};
 use crate::transcript::paint;
@@ -34,6 +34,45 @@ pub fn quad(scene: &Scene, quad: &Quad) -> String {
         scene,
         quad.clip_id(),
         scene.spatial.at(quad.transform),
+    ));
+    line
+}
+
+/// A rectangle an application's own shader draws.
+pub fn shaded(scene: &Scene, shaded: &ShadedQuad) -> String {
+    let mut line = format!(
+        "shaded order={} bounds={} shader={} params={}",
+        shaded.order,
+        rect(shaded.bounds),
+        shaded.shader,
+        shaded.params
+    );
+    if !all_zero(&shaded.border) {
+        line.push_str(&format!(
+            " border={} stroke={}",
+            list(&shaded.border),
+            paint::reference(&scene.paints, shaded.stroke)
+        ));
+    }
+    if shaded.fill != zgui_scene::PaintRef::NONE {
+        line.push_str(&format!(
+            " fill={}",
+            paint::reference(&scene.paints, shaded.fill)
+        ));
+    }
+    if !all_zero(&shaded.radii) {
+        line.push_str(&format!(" radii={}", list(&shaded.radii)));
+    }
+    if !all_zero(&shaded.paint_origin) {
+        line.push_str(&format!(" paint_origin={}", list(&shaded.paint_origin)));
+    }
+    if shaded.opacity != 1.0 {
+        line.push_str(&format!(" opacity={}", float(shaded.opacity)));
+    }
+    line.push_str(&suffix(
+        scene,
+        shaded.clip_id(),
+        scene.spatial.at(shaded.transform),
     ));
     line
 }

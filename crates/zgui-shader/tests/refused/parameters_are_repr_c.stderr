@@ -1,0 +1,5 @@
+error: a parameter structure is compared against a shader's declaration field by field, so it must be `#[repr(C)]`
+ --> tests/refused/parameters_are_repr_c.rs:8:8
+  |
+8 | struct Loose {
+  |        ^^^^^

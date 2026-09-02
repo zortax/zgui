@@ -47,6 +47,35 @@ pub fn color(style: &ComputedStyle, name: &str) -> Option<zgui_color::Color> {
     Some(crate::values::color::to_color(&absolute))
 }
 
+/// Every custom property declared on `style`, without its `--` prefix.
+///
+/// The inherited map first and the non-inherited one after, which is the order a lookup resolves
+/// in. Walked by index rather than by iterator because that is what the engine exposes, and a
+/// style with no custom properties at all costs one call.
+///
+/// This is for a reader that has to *discover* which properties were written — an effect's
+/// parameters, say, whose names belong to the effect rather than to this engine. A reader that
+/// knows the name it wants asks for it with [`text`] instead.
+pub fn names(style: &ComputedStyle) -> Vec<String> {
+    let properties = style.custom_properties();
+    let mut found = Vec::new();
+    let mut index = 0;
+    while let Some((name, _)) = properties.property_at(index) {
+        found.push(name.as_ref().to_owned());
+        index += 1;
+    }
+    found
+}
+
+/// The custom property `name` on `style`, read as a plain number.
+///
+/// A number with no unit, which is what a parameter to something outside this engine usually is: a
+/// superellipse's exponent, a strength from zero to one, a count. `None` means the property was not
+/// declared, or its text is not a number.
+pub fn number(style: &ComputedStyle, name: &str) -> Option<f32> {
+    text(style, name)?.trim().parse().ok()
+}
+
 /// The custom property `name` on `style`, read as a length in CSS pixels.
 ///
 /// Only absolute lengths resolve: a font-relative unit would need the element's font, which is a

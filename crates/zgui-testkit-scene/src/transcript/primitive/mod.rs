@@ -18,7 +18,7 @@ use zgui_scene::{ClipId, Scene, SpatialId};
 use crate::text::number::list;
 use crate::transcript::clip;
 
-pub use crate::transcript::primitive::boxes::{decoration, quad, shadow};
+pub use crate::transcript::primitive::boxes::{decoration, quad, shaded, shadow};
 pub use crate::transcript::primitive::group::{backdrop, filter, filters, group};
 pub use crate::transcript::primitive::sprite::{color_sprite, mono_sprite, subpixel_sprite};
 pub use crate::transcript::primitive::vector::{external, vector};

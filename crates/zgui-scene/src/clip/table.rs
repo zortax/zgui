@@ -171,7 +171,12 @@ impl ClipTable {
             };
             let link = *link;
             match link {
-                ClipLink::RoundedRect { rect, radii, space } => {
+                ClipLink::RoundedRect {
+                    rect,
+                    radii,
+                    shape,
+                    space,
+                } => {
                     let (rect, radii) = placed(rect, radii, matrix_of(space));
                     intersect(&mut resolved.aabb, rect);
                     if link.is_rounded() {
@@ -192,6 +197,7 @@ impl ClipTable {
                                 radii.bottom_left.x.0,
                                 radii.bottom_left.y.0,
                             ],
+                            shape: shape.get(),
                         };
                         if rounded == 0 {
                             resolved.rounded[0] = test;
@@ -261,6 +267,7 @@ impl ClipTable {
         let mut cursor = id;
         while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
             if let ClipLink::RoundedRect {
+                shape: crate::prim::CornerShape::ROUND,
                 rect,
                 space: measured,
                 ..

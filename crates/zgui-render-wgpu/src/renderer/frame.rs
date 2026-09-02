@@ -10,6 +10,7 @@ use bytemuck::Pod;
 
 use crate::bind::tables::{DirtySlots, PreparedTables};
 use crate::buffer::instances::StorageBuffer;
+use crate::buffer::persist::LANES;
 use crate::buffer::slots::SlotBuffer;
 use crate::buffer::upload::UploadBelt;
 use crate::buffer::vectors::VectorInstances;
@@ -33,6 +34,13 @@ pub struct FrameBuffers {
     pub globals: SlotBuffer,
     /// One block per draw that reads a texture of its own.
     pub blocks: SlotBuffer,
+    /// One block per distinct set of parameters an application effect draws with this frame.
+    pub effect_params: SlotBuffer,
+    /// Which slot of `effect_params` each interned parameter block was staged into.
+    ///
+    /// Public so that a plan can borrow it beside the block allocators it also borrows: the two
+    /// are disjoint fields, and a method would borrow the whole structure.
+    pub effect_offsets: Vec<u32>,
     /// One quad per vector composite this frame draws.
     pub vectors: VectorInstances,
     /// The clip chains.
@@ -47,17 +55,17 @@ pub struct FrameBuffers {
     /// over them.
     pub chunks: crate::buffer::persist::ChunkStore,
     /// The resolved remap of each instanced kind — packed offset-and-slot entries in draw order.
-    pub remaps: [StorageBuffer; 6],
+    pub remaps: [StorageBuffer; LANES.len()],
     /// What each remap buffer holds, so an unchanged frame skips the upload entirely.
-    last_remaps: [Vec<u32>; 6],
+    last_remaps: [Vec<u32>; LANES.len()],
     /// The frame's chunk offsets, named by the high bits of a remap entry.
     offsets: StorageBuffer,
     /// What the offsets buffer holds, so a frame that moved nothing skips the upload.
     last_offsets: Vec<[f32; 2]>,
     /// Bind groups whose resources are the stable frame side-table buffers.
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
-    /// One bind group per instance, remap and offset buffer allocation epoch.
-    instance_binds: RefCell<HashMap<PipelineKind, ([u64; 3], wgpu::BindGroup)>>,
+    /// One bind group per lane, keyed by its instance, remap and offset allocation epochs.
+    instance_binds: RefCell<HashMap<usize, ([u64; 3], wgpu::BindGroup)>>,
     /// Whether idle trimming replaced the retained side-table buffers with empty allocations.
     tables_released: bool,
 }
@@ -73,6 +81,12 @@ impl FrameBuffers {
                 gpu,
                 "zgui.blocks",
             ),
+            effect_params: SlotBuffer::with_stride(
+                gpu,
+                "zgui.effect.params",
+                zgui_scene::ShaderParams::BYTES as u64,
+            ),
+            effect_offsets: Vec::new(),
             vectors: VectorInstances::new(gpu),
             clips: StorageBuffer::new(gpu, "zgui.clips"),
             paints: StorageBuffer::new(gpu, "zgui.paints"),
@@ -86,6 +100,7 @@ impl FrameBuffers {
                 StorageBuffer::new(gpu, "zgui.remap.mono_sprites"),
                 StorageBuffer::new(gpu, "zgui.remap.subpixel_sprites"),
                 StorageBuffer::new(gpu, "zgui.remap.color_sprites"),
+                StorageBuffer::new(gpu, "zgui.remap.shaded"),
             ],
             last_remaps: Default::default(),
             offsets: StorageBuffer::new(gpu, "zgui.remap.offsets"),
@@ -101,6 +116,8 @@ impl FrameBuffers {
         self.uploader.begin_frame(gpu);
         self.globals.reset();
         self.blocks.reset();
+        self.effect_params.reset();
+        self.effect_offsets.clear();
         self.vectors.begin_frame();
     }
 
@@ -196,6 +213,9 @@ impl FrameBuffers {
         }
         uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
+        uploaded += self
+            .effect_params
+            .upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.vectors.upload_with(gpu, &mut self.uploader, encoder);
         uploaded
     }
@@ -247,6 +267,44 @@ impl FrameBuffers {
         )
     }
 
+    /// Stages one frame's parameter blocks, in the order the scene's table holds them.
+    ///
+    /// One slot per interned block rather than one per rectangle: two rectangles agreeing about
+    /// their parameters are one draw, and interning is what makes them agree.
+    pub fn stage_effect_params(&mut self, scene: &Scene) {
+        self.effect_offsets.clear();
+        for slot in 0..scene.shader_params.slots() {
+            let params = scene
+                .shader_params
+                .get(zgui_scene::ShaderParamsSlot(slot as u32))
+                .copied()
+                .unwrap_or(zgui_scene::ShaderParams::EMPTY);
+            let offset = self.effect_params.stage_bytes(&params.to_bytes());
+            self.effect_offsets.push(offset);
+        }
+    }
+
+    /// The dynamic offset naming the block interned under `slot`.
+    pub fn effect_offset(&self, slot: zgui_scene::ShaderParamsSlot) -> Option<u32> {
+        self.effect_offsets.get(slot.0 as usize).copied()
+    }
+
+    /// The bind group an application effect reads its parameters through.
+    pub fn effect_bind_group(&self, gpu: &Gpu, layouts: &Layouts) -> Option<wgpu::BindGroup> {
+        Some(
+            gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("zgui.bind.effect"),
+                layout: &layouts.effect,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self
+                        .effect_params
+                        .binding_of(zgui_scene::ShaderParams::BYTES as u64)?,
+                }],
+            }),
+        )
+    }
+
     /// The bind group a vector composite reads its instances and the scratch through.
     pub fn vector_bind_group(
         &self,
@@ -271,7 +329,7 @@ impl FrameBuffers {
     }
 
     /// The arena lane a pipeline draws out of.
-    fn lane(kind: PipelineKind) -> Option<usize> {
+    pub fn lane(kind: PipelineKind) -> Option<usize> {
         Some(match kind {
             PipelineKind::Quad => 0,
             PipelineKind::Shadow => 1,
@@ -283,10 +341,14 @@ impl FrameBuffers {
         })
     }
 
+    /// The lane application effects draw out of.
+    pub const SHADED_LANE: usize = 6;
+
     /// How many bytes every buffer holds.
     pub fn bytes(&self) -> u64 {
         self.globals.bytes()
             + self.blocks.bytes()
+            + self.effect_params.bytes()
             + self.vectors.bytes()
             + self.clips.capacity()
             + self.paints.capacity()
@@ -365,27 +427,29 @@ impl FrameBuffers {
         Some(bind)
     }
 
-    /// The bind group naming one pipeline's instances.
+    /// The bind group naming one lane's instances.
+    ///
+    /// Keyed by the lane rather than by the pipeline drawing it, because an application effect
+    /// draws out of a lane through a pipeline this crate never enumerated.
     pub fn instance_bind_group(
         &self,
         gpu: &Gpu,
         layouts: &Layouts,
-        kind: PipelineKind,
+        lane: usize,
     ) -> Option<wgpu::BindGroup> {
-        let lane = Self::lane(kind)?;
-        let remap = &self.remaps[lane];
+        let remap = self.remaps.get(lane)?;
         let signature = [
             self.chunks.generation(lane),
             remap.generation(),
             self.offsets.generation(),
         ];
-        if let Some((held, bind)) = self.instance_binds.borrow().get(&kind)
+        if let Some((held, bind)) = self.instance_binds.borrow().get(&lane)
             && *held == signature
         {
             return Some(bind.clone());
         }
         let bind = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(kind.label()),
+            label: Some(lane_label(lane)),
             layout: &layouts.instances,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -404,8 +468,22 @@ impl FrameBuffers {
         });
         self.instance_binds
             .borrow_mut()
-            .insert(kind, (signature, bind.clone()));
+            .insert(lane, (signature, bind.clone()));
         Some(bind)
+    }
+}
+
+/// A label for one lane's instance bind group, so a driver error names which lane it came from.
+fn lane_label(lane: usize) -> &'static str {
+    match LANES.get(lane) {
+        Some(zgui_scene::PrimitiveKind::Quad) => "zgui.bind.instances.quads",
+        Some(zgui_scene::PrimitiveKind::Shadow) => "zgui.bind.instances.shadows",
+        Some(zgui_scene::PrimitiveKind::Decoration) => "zgui.bind.instances.decorations",
+        Some(zgui_scene::PrimitiveKind::MonoSprite) => "zgui.bind.instances.mono_sprites",
+        Some(zgui_scene::PrimitiveKind::SubpixelSprite) => "zgui.bind.instances.subpixel_sprites",
+        Some(zgui_scene::PrimitiveKind::ColorSprite) => "zgui.bind.instances.color_sprites",
+        Some(zgui_scene::PrimitiveKind::Shaded) => "zgui.bind.instances.shaded",
+        _ => "zgui.bind.instances",
     }
 }
 

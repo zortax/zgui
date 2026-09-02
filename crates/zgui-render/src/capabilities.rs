@@ -25,17 +25,26 @@ pub struct RenderCapabilities {
     /// encode is bypassed by viewing the surface unencoded; without it, it has to be cancelled in
     /// the final copy instead.
     pub mutable_texture_formats: bool,
+    /// Whether the renderer can draw an application's own shader.
+    ///
+    /// Where it cannot, the paint stage emits what the effect degrades to rather than emitting a
+    /// rectangle nothing will draw: a coverage effect falls back to the ordinary rounded
+    /// rectangle, and a paint effect to nothing. That decision belongs above the renderer, which
+    /// is why the flag is read before the display list is built.
+    pub custom_shaders: bool,
     /// The largest texture extent the device will create.
     pub max_texture_size: i32,
 }
 
 impl RenderCapabilities {
     /// The least capable device that is still worth supporting: no subpixel text, no compute, no
-    /// format views, and the smallest texture limit any target device offers.
+    /// format views, no application shaders, and the smallest texture limit any target device
+    /// offers.
     pub const MINIMAL: Self = Self {
         subpixel_text: false,
         vector_compute: false,
         mutable_texture_formats: false,
+        custom_shaders: false,
         max_texture_size: 4096,
     };
 }

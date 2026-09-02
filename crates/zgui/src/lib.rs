@@ -170,6 +170,8 @@ pub use zgui_render as render;
 pub use zgui_runtime as runtime;
 /// The display list a frame is composed into.
 pub use zgui_scene as scene;
+/// Drawing with a shader of one's own: declaring an effect, and the handle it is drawn through.
+pub use zgui_shader as shader;
 /// Faces, shaping, metrics and glyph rasterisation, as seams.
 pub use zgui_text as text;
 /// A tokio runtime, as the executor behind [`task::background`].

@@ -37,8 +37,14 @@ pub struct Shadow {
     pub transform: u32,
     /// One when the shadow is inset, zero when it is cast outwards.
     pub inset: u32,
-    /// Written zero. Present so the struct has no padding and can be copied as bytes.
-    pub reserved: u32,
+    /// The superellipse exponent the element's corners are cut with; two is the ellipse.
+    ///
+    /// A shadow is the element's own shape blurred, so it has to be cut the same way: a squircle
+    /// casting a rounded-rectangle shadow shows the shadow's corners outside its own.
+    ///
+    /// This was the padding word the structure needed to be copied as bytes, which is why adding
+    /// it costs a shadow nothing.
+    pub shape: f32,
 }
 
 impl Shadow {
@@ -88,7 +94,7 @@ impl Shadow {
             clip: ClipId::ROOT.0,
             transform: SpatialId::VIEWPORT.index(),
             inset: 0,
-            reserved: 0,
+            shape: crate::prim::CornerShape::ROUND.get(),
         }
     }
 
@@ -104,6 +110,12 @@ impl Shadow {
         shadow.inset = 1;
         shadow.bounds = shadow.element_bounds;
         shadow
+    }
+
+    /// The same shadow cast by an element whose corners are cut to `shape`.
+    pub fn with_corner_shape(mut self, shape: crate::prim::CornerShape) -> Self {
+        self.shape = shape.get();
+        self
     }
 
     /// The same shadow drawn through `clip`.

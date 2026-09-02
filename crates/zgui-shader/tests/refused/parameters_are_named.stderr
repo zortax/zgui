@@ -1,0 +1,5 @@
+error: shader parameters are compared against a shader's declaration by name, so the fields must be named
+ --> tests/refused/parameters_are_named.rs:9:13
+  |
+9 | struct Tuple(f32, f32);
+  |             ^^^^^^^^^^

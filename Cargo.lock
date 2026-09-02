@@ -5625,6 +5625,8 @@ dependencies = [
  "zgui-render-wgpu",
  "zgui-runtime",
  "zgui-scene",
+ "zgui-shader",
+ "zgui-testkit-scene",
  "zgui-text",
  "zgui-text-parley",
  "zgui-tokio",
@@ -6201,6 +6203,7 @@ dependencies = [
  "zgui-profile",
  "zgui-render",
  "zgui-scene",
+ "zgui-wgsl",
 ]
 
 [[package]]
@@ -6282,6 +6285,40 @@ version = "0.1.0"
 dependencies = [
  "libloading",
  "trybuild",
+]
+
+[[package]]
+name = "zgui-shader"
+version = "0.1.0"
+dependencies = [
+ "trybuild",
+ "zgui-custom",
+ "zgui-elements",
+ "zgui-geom",
+ "zgui-layout",
+ "zgui-paint",
+ "zgui-platform",
+ "zgui-platform-headless",
+ "zgui-render",
+ "zgui-render-wgpu",
+ "zgui-runtime",
+ "zgui-scene",
+ "zgui-shader-macro",
+ "zgui-testkit-scene",
+ "zgui-view",
+ "zgui-wgsl",
+]
+
+[[package]]
+name = "zgui-shader-macro"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "naga",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "zgui-wgsl",
 ]
 
 [[package]]
@@ -6539,6 +6576,13 @@ dependencies = [
  "zgui-testkit-scene",
  "zgui-view",
  "zgui-vocab",
+]
+
+[[package]]
+name = "zgui-wgsl"
+version = "0.1.0"
+dependencies = [
+ "zgui-scene",
 ]
 
 [[package]]

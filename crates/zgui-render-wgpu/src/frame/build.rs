@@ -61,6 +61,10 @@ pub struct PlanBuilder<'gpu> {
     vectors: &'gpu mut VectorInstances,
     /// Which way round the display's subpixels run.
     subpixel_order: SubpixelOrder,
+    /// What this frame's application effects are told about it.
+    frame_clock: zgui_scene::FrameClock,
+    /// Where each interned parameter block was staged, by the slot the scene interned it under.
+    effect_offsets: &'gpu [u32],
     /// The region every target covers.
     region: Size<i32, Device>,
     /// What the composed target holds, which a copy out of it has to match.
@@ -92,6 +96,8 @@ impl<'gpu> PlanBuilder<'gpu> {
         blocks: &'gpu mut SlotBuffer,
         vectors: &'gpu mut VectorInstances,
         subpixel_order: SubpixelOrder,
+        frame_clock: zgui_scene::FrameClock,
+        effect_offsets: &'gpu [u32],
         region: Size<i32, Device>,
         composed_format: wgpu::TextureFormat,
         composed_extent: Size<i32, Device>,
@@ -103,6 +109,8 @@ impl<'gpu> PlanBuilder<'gpu> {
             blocks,
             vectors,
             subpixel_order,
+            frame_clock,
+            effect_offsets,
             region,
             composed_format,
             composed_extent,
@@ -190,6 +198,24 @@ impl<'gpu> PlanBuilder<'gpu> {
         self.blocks.stage(params)
     }
 
+    /// Stages one application filter block and returns the offset naming it.
+    pub fn stage_effect_filter(
+        &mut self,
+        params: &crate::pipeline::effect_filter::EffectFilterParams,
+    ) -> u32 {
+        self.blocks.stage(params)
+    }
+
+    /// What this frame's application effects are told about it.
+    pub fn frame_clock(&self) -> zgui_scene::FrameClock {
+        self.frame_clock
+    }
+
+    /// The dynamic offset naming the parameter block interned under `slot`.
+    pub fn effect_offset(&self, slot: zgui_scene::ShaderParamsSlot) -> Option<u32> {
+        self.effect_offsets.get(slot.0 as usize).copied()
+    }
+
     /// Stages one composite block and returns the offset naming it.
     pub fn stage_composite(&mut self, params: &CompositeParams) -> u32 {
         self.blocks.stage(params)
@@ -214,7 +240,8 @@ impl<'gpu> PlanBuilder<'gpu> {
         match self.staged_globals[index] {
             Some(offset) => offset,
             None => {
-                let block = Globals::for_target(self.region, scale, self.subpixel_order);
+                let block = Globals::for_target(self.region, scale, self.subpixel_order)
+                    .with_frame(self.frame_clock);
                 let offset = self.globals.stage(&block);
                 self.staged_globals[index] = Some(offset);
                 offset

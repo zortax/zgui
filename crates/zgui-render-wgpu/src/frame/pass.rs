@@ -215,6 +215,12 @@ impl Recorder<'_> {
                 };
                 self.textured(pass, kind, *source, *params, None, format)
             }
+            PlannedDraw::Effect {
+                source,
+                shader,
+                params,
+                block,
+            } => self.effect_filter(pass, *source, *shader, *params, *block, format),
             PlannedDraw::Composite { source, params } => self.textured(
                 pass,
                 PipelineKind::Composite,
@@ -302,6 +308,14 @@ impl Recorder<'_> {
             Batch::ColorSprites { texture, range } => {
                 (PipelineKind::ColorSprite, range, Some(texture))
             }
+            // An application effect binds a pipeline this crate never enumerated and a parameter
+            // block of its own, so it is issued on its own path rather than through the table
+            // above.
+            Batch::Shaded {
+                shader,
+                params,
+                range,
+            } => return self.shaded(pass, planned, tables, shader, params, range, format),
             // Group markers, backdrops, vector composites and external quads are planned, not
             // batched: each one changes what is being drawn into or where the pixels come from.
             Batch::Group(_) | Batch::Backdrop(_) | Batch::Vector(_) | Batch::External(_) => {
@@ -314,9 +328,12 @@ impl Recorder<'_> {
         let Some(tables) = tables else {
             return false;
         };
+        let Some(lane) = crate::renderer::frame::FrameBuffers::lane(kind) else {
+            return false;
+        };
         let Some(instances) =
             self.buffers
-                .instance_bind_group(self.gpu, self.pipelines.layouts(), kind)
+                .instance_bind_group(self.gpu, self.pipelines.layouts(), lane)
         else {
             return false;
         };
@@ -340,6 +357,112 @@ impl Recorder<'_> {
             pass.set_bind_group(2, bind_group, &[]);
         }
         pass.draw(0..4, range.start as u32..range.end as u32);
+        true
+    }
+
+    /// Issues one run of rectangles drawn by one application effect with one set of parameters.
+    ///
+    /// It binds what every instanced draw binds — the frame's tables and the lane's instances —
+    /// and one block more. An effect the renderer was never told about draws nothing: the
+    /// alternative is drawing the rectangle with whatever pipeline happened to be bound.
+    #[allow(clippy::too_many_arguments)]
+    fn shaded(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        planned: &PlannedPass,
+        tables: Option<&wgpu::BindGroup>,
+        shader: zgui_scene::ShaderId,
+        params: zgui_scene::ShaderParamsSlot,
+        range: core::ops::Range<usize>,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        if range.is_empty() {
+            return false;
+        }
+        // Every one of these drops a rectangle the display list asked for, so each says once why:
+        // an effect that stops appearing is otherwise indistinguishable from one drawing nothing.
+        let Some(tables) = tables else {
+            self.pipelines
+                .note_undrawable_effect(shader, "the frame's side tables were not bound");
+            return false;
+        };
+        let Some(offset) = self.buffers.effect_offset(params) else {
+            self.pipelines
+                .note_undrawable_effect(shader, "this frame staged no parameters for its block");
+            return false;
+        };
+        let Some(block) = self
+            .buffers
+            .effect_bind_group(self.gpu, self.pipelines.layouts())
+        else {
+            self.pipelines
+                .note_undrawable_effect(shader, "the parameter buffer was never uploaded");
+            return false;
+        };
+        let lane = crate::renderer::frame::FrameBuffers::SHADED_LANE;
+        let Some(instances) =
+            self.buffers
+                .instance_bind_group(self.gpu, self.pipelines.layouts(), lane)
+        else {
+            self.pipelines
+                .note_undrawable_effect(shader, "the instance arena was not bound");
+            return false;
+        };
+        let Some(pipeline) = self.pipelines.effect(self.gpu, shader, format) else {
+            self.pipelines.note_undrawable_effect(
+                shader,
+                "no pipeline: the effect is not registered on this device, or would not build",
+            );
+            return false;
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, tables, &[planned.globals]);
+        pass.set_bind_group(1, &instances, &[]);
+        pass.set_bind_group(2, &block, &[offset]);
+        pass.draw(0..4, range.start as u32..range.end as u32);
+        true
+    }
+
+    /// Issues one filtering pass of an application's own shader.
+    ///
+    /// It binds what the blur chain binds — the block describing what it reads, the source and the
+    /// sampler — and the effect's own parameters beside them. It binds none of the frame's tables:
+    /// a filter is cut to its region by the scissor rather than clipped per fragment, so it reads
+    /// no clip chain and there is nothing for it to index into.
+    #[allow(clippy::too_many_arguments)]
+    fn effect_filter(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        source: TargetRef,
+        shader: zgui_scene::ShaderId,
+        params: u32,
+        block: u32,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        let Some(view) = self.view(source) else {
+            return false;
+        };
+        let Some(read) = self.buffers.filtered_bind_group(
+            self.gpu,
+            self.pipelines.layouts(),
+            view,
+            self.sampler,
+        ) else {
+            return false;
+        };
+        let Some(own) = self
+            .buffers
+            .effect_bind_group(self.gpu, self.pipelines.layouts())
+        else {
+            return false;
+        };
+        let Some(pipeline) = self.pipelines.effect(self.gpu, shader, format) else {
+            return false;
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &read, &[params]);
+        pass.set_bind_group(1, &own, &[block]);
+        pass.draw(0..4, 0..1);
         true
     }
 

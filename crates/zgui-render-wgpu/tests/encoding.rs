@@ -187,7 +187,7 @@ fn compose_into(
         .frame_bind_group(gpu, pipelines.layouts())
         .expect("the block describing the target has just been uploaded");
     let instances = buffers
-        .instance_bind_group(gpu, pipelines.layouts(), PipelineKind::Quad)
+        .instance_bind_group(gpu, pipelines.layouts(), 0)
         .expect("the quad pipeline draws instances");
 
     {

@@ -28,6 +28,7 @@ pub mod custom;
 pub mod glyphs;
 pub mod images;
 pub mod probe;
+pub mod shader;
 pub mod vectors;
 
 pub use crate::content::cache::{ContentCache, FrameContent, TileOwner};

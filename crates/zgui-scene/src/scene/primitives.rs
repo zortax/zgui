@@ -2,7 +2,7 @@
 
 use crate::group::{BackdropFilter, GroupBoundary};
 use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, MonoSprite, Quad, Shadow, SubpixelSprite,
+    ColorSprite, Decoration, ExternalQuad, MonoSprite, Quad, ShadedQuad, Shadow, SubpixelSprite,
 };
 use crate::vector::VectorItem;
 
@@ -15,6 +15,8 @@ use crate::vector::VectorItem;
 pub struct Primitives {
     /// Rounded, bordered rectangles.
     pub quads: Vec<Quad>,
+    /// Rectangles an application's own shader draws.
+    pub shaded: Vec<ShadedQuad>,
     /// Box shadows.
     pub shadows: Vec<Shadow>,
     /// Text decoration lines.
@@ -39,6 +41,7 @@ impl Primitives {
     /// Empties every array, keeping the allocations for the next frame.
     pub fn clear(&mut self) {
         self.quads.clear();
+        self.shaded.clear();
         self.shadows.clear();
         self.decorations.clear();
         self.mono_sprites.clear();
@@ -53,6 +56,7 @@ impl Primitives {
     /// How many primitives there are, across every array.
     pub fn len(&self) -> usize {
         self.quads.len()
+            + self.shaded.len()
             + self.shadows.len()
             + self.decorations.len()
             + self.mono_sprites.len()

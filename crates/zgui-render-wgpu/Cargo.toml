@@ -22,11 +22,14 @@ zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 
-# Parsing the shaders once per build rather than once per launch.
+# Parsing the shaders once per build rather than once per launch. The text comes from zgui-wgsl,
+# which is where an application's own shader reads it from too.
 [build-dependencies]
 bincode.workspace = true
 naga = { workspace = true, features = ["wgsl-in", "serialize"] }
+zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 
 [lints]
 workspace = true

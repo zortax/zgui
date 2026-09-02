@@ -10,6 +10,7 @@ pub mod highlight;
 pub mod paint;
 pub mod replaced;
 pub mod scrollbar;
+pub mod shader;
 pub mod text;
 pub mod vector;
 

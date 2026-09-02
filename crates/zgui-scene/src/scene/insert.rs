@@ -7,7 +7,8 @@ use crate::group::{BackdropFilter, GroupBoundary};
 use crate::id::{ClipId, DrawOrder};
 use crate::ops::PaintOp;
 use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, Shadow, SubpixelSprite,
+    ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, ShadedQuad, Shadow,
+    SubpixelSprite,
 };
 use crate::scene::Scene;
 use crate::spatial::SpatialId;
@@ -105,6 +106,37 @@ impl Scene {
         self.note_pushed(
             PrimitiveKind::Quad,
             self.primitives.quads.len() - 1,
+            capture_intra,
+        );
+        Some(order)
+    }
+
+    /// Pushes a rectangle an application's shader draws, returning the order it took or `None` if
+    /// it was culled.
+    ///
+    /// It goes through this path rather than beside it, so draw-order assignment, clip culling and
+    /// replay accounting hold for an effect exactly as they hold for a background.
+    pub fn push_shaded(&mut self, mut shaded: ShadedQuad) -> Option<DrawOrder> {
+        tee!(
+            self,
+            Shaded,
+            shaded,
+            self.space_at(shaded.transform),
+            shaded.ink(),
+            shaded
+        );
+        let order = self.assign_order(shaded.ink(), shaded.clip_id(), shaded.transform)?;
+        shaded.order = order;
+        let space = self.space_at(shaded.transform);
+        self.record(PrimitiveKind::Shaded, self.primitives.shaded.len(), space);
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.shaded.len() as u32 - 1);
+        self.primitives.shaded.push(shaded);
+        self.note_pushed(
+            PrimitiveKind::Shaded,
+            self.primitives.shaded.len() - 1,
             capture_intra,
         );
         Some(order)

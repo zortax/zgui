@@ -94,15 +94,26 @@ pub fn open(
     style: &PaintStyle,
     fragment: &Fragment,
     clip: ClipId,
+    shaders: &dyn crate::content::shader::ShaderSource,
+    scale: f32,
 ) -> GroupBoundary {
     let bounds = fragment.subtree_ink;
-    let mut boundary = GroupBoundary::start(
-        bounds,
-        style.group.opacity,
-        style.group.blend,
-        style.group.filters.clone(),
-    )
-    .clipped(clip);
+    let mut filters = style.group.filters.clone();
+    // After the chain the `filter` property wrote, rather than among it: the two are separate
+    // properties with no order between them, and the step nothing can look inside goes last.
+    if let Some(step) = crate::emit::shader::filter_step(
+        scene,
+        style
+            .shader
+            .as_ref()
+            .and_then(|shader| shader.filter.as_ref()),
+        shaders,
+        scale,
+    ) {
+        filters.push(step);
+    }
+    let mut boundary =
+        GroupBoundary::start(bounds, style.group.opacity, style.group.blend, filters).clipped(clip);
     boundary.transform = fragment.transform.filter(|id| *id != SpatialId::VIEWPORT);
     counter::bump(Counter::GroupTargets);
     scene.push_group(boundary.clone());
@@ -118,12 +129,32 @@ pub fn close(scene: &mut Scene, boundary: &GroupBoundary) {
 ///
 /// It is pushed *before* the group's own content, because what it reads is what is under the group
 /// and not what the group draws.
-pub fn backdrop(scene: &mut Scene, style: &PaintStyle, fragment: &Fragment, clip: ClipId) -> usize {
-    if style.group.backdrop.is_empty() {
+pub fn backdrop(
+    scene: &mut Scene,
+    style: &PaintStyle,
+    fragment: &Fragment,
+    clip: ClipId,
+    shaders: &dyn crate::content::shader::ShaderSource,
+    scale: f32,
+) -> usize {
+    let mut filters = style.group.backdrop.clone();
+    // After the chain the `backdrop-filter` property wrote, for the reason a filter effect goes
+    // after the `filter` chain: the two are separate properties with no order between them.
+    if let Some(step) = crate::emit::shader::filter_step(
+        scene,
+        style
+            .shader
+            .as_ref()
+            .and_then(|shader| shader.backdrop.as_ref()),
+        shaders,
+        scale,
+    ) {
+        filters.push(step);
+    }
+    if filters.is_empty() {
         return 0;
     }
-    let filter =
-        BackdropFilter::new(fragment.border_box, style.group.backdrop.clone()).clipped(clip);
+    let filter = BackdropFilter::new(fragment.border_box, filters).clipped(clip);
     usize::from(scene.push_backdrop(filter).is_some())
 }
 

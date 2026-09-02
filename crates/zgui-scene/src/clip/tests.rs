@@ -243,6 +243,7 @@ fn a_link_in_a_moved_space_resolves_where_its_box_is_drawn() {
 
     let mut clips = ClipTable::rooted();
     let field = clips.only(ClipLink::RoundedRect {
+        shape: crate::prim::CornerShape::ROUND,
         rect: rect(460.0, 310.0, 63.0, 34.0),
         radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
         space,
@@ -280,6 +281,7 @@ fn a_link_in_a_scaled_space_scales_its_radii() {
 
     let mut clips = ClipTable::rooted();
     let card = clips.only(ClipLink::RoundedRect {
+        shape: crate::prim::CornerShape::ROUND,
         rect: rect(10.0, 10.0, 50.0, 30.0),
         radii: Corners::uniform(Vec2::splat(DevicePx(4.0))),
         space,
@@ -319,6 +321,7 @@ fn a_link_in_another_space_narrows_nothing() {
     let inside = clips.push(
         window,
         ClipLink::RoundedRect {
+            shape: crate::prim::CornerShape::ROUND,
             rect: rect(800.0, 40.0, 900.0, 600.0),
             radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
             space: panel,

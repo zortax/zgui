@@ -19,6 +19,9 @@ struct Quad {
     stroke: PaintRef,
     clip: u32,
     transform: u32,
+    // The superellipse exponent the corners are cut with; two is the ellipse a corner radius has
+    // always drawn.
+    shape: f32,
     // Where the space the two paints were resolved in has its origin, subtracted from the sample
     // point before either is evaluated. Zero for a quad drawn where its paints were resolved.
     paint_origin: Vector2,
@@ -122,7 +125,7 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
     }
 
     // Positive outside the outer edge of the border, negative inside it.
-    let outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radii);
+    let outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radii, quad.shape);
 
     // Positive inside the inner edge of the border, negative within the border itself.
     var inner_sdf = 0.0;
@@ -130,12 +133,15 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
         inner_sdf = -max(straight_inner_corner_to_point.x, straight_inner_corner_to_point.y);
     } else if is_beyond_inner_straight_border {
         inner_sdf = -1.0;
-    } else if reduced_border.x == reduced_border.y && corner_radii.x == corner_radii.y {
+    } else if quad.shape == CORNER_ROUND
+        && reduced_border.x == reduced_border.y
+        && corner_radii.x == corner_radii.y
+    {
         // Circular inner edge: the outer distance shifted inwards is exact.
         inner_sdf = -(outer_sdf + reduced_border.x);
     } else {
         let ellipse_radii = max(vec2<f32>(0.0), corner_radii - reduced_border);
-        inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
+        inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii, quad.shape);
     }
 
     let border_sdf = max(inner_sdf, outer_sdf);

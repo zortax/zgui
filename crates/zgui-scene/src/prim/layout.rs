@@ -59,6 +59,7 @@ macro_rules! assert_instance_layout {
 use crate::paint::PaintRef;
 use crate::prim::decoration::Decoration;
 use crate::prim::quad::Quad;
+use crate::prim::shaded::ShadedQuad;
 use crate::prim::shadow::Shadow;
 use crate::prim::sprite::{ColorSprite, MonoSprite, SpriteTile, SubpixelSprite};
 
@@ -78,7 +79,7 @@ assert_instance_layout!(
 
 assert_instance_layout!(
     Quad,
-    size = 104,
+    size = 108,
     align = 4,
     fields = [
         order @ 0, 4;
@@ -90,7 +91,28 @@ assert_instance_layout!(
         stroke @ 80, 8;
         clip @ 88, 4;
         transform @ 92, 4;
+        shape @ 96, 4;
+        paint_origin @ 100, 8;
+    ],
+);
+
+assert_instance_layout!(
+    ShadedQuad,
+    size = 112,
+    align = 4,
+    fields = [
+        order @ 0, 4;
+        shader @ 4, 4;
+        bounds @ 8, 16;
+        radii @ 24, 32;
+        border @ 56, 16;
+        fill @ 72, 8;
+        stroke @ 80, 8;
+        clip @ 88, 4;
+        transform @ 92, 4;
         paint_origin @ 96, 8;
+        params @ 104, 4;
+        opacity @ 108, 4;
     ],
 );
 
@@ -109,7 +131,7 @@ assert_instance_layout!(
         clip @ 120, 4;
         transform @ 124, 4;
         inset @ 128, 4;
-        reserved @ 132, 4;
+        shape @ 132, 4;
     ],
 );
 
@@ -188,12 +210,15 @@ pub(crate) fn rect_of(bounds: [f32; 4]) -> Rect<DevicePx, Device> {
 mod tests {
     use core::mem::offset_of;
 
-    use crate::prim::{ColorSprite, Decoration, MonoSprite, Quad, Shadow, SubpixelSprite};
+    use crate::prim::{
+        ColorSprite, Decoration, MonoSprite, Quad, ShadedQuad, Shadow, SubpixelSprite,
+    };
 
     /// The table above is compile-time; this is the runtime half, so a failure names the type.
     #[test]
     fn the_table_matches_what_the_compiler_chose() {
-        assert_eq!(size_of::<Quad>(), 104);
+        assert_eq!(size_of::<Quad>(), 108);
+        assert_eq!(size_of::<ShadedQuad>(), 112);
         assert_eq!(size_of::<Shadow>(), 136);
         assert_eq!(size_of::<Decoration>(), 56);
         assert_eq!(size_of::<MonoSprite>(), 72);
@@ -217,7 +242,7 @@ mod tests {
     fn an_instance_round_trips_through_its_bytes() {
         let quad = Quad::default();
         let bytes = bytemuck::bytes_of(&quad);
-        assert_eq!(bytes.len(), 104);
+        assert_eq!(bytes.len(), size_of::<Quad>());
         assert_eq!(bytemuck::pod_read_unaligned::<Quad>(bytes), quad);
     }
 }

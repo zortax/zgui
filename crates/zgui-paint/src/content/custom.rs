@@ -14,7 +14,8 @@ use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_scene::kurbo;
 use zgui_scene::prim::quad::BorderStyle;
 use zgui_scene::{
-    ClipId, ColorSprite, MonoSprite, PaintRef, Quad, Scene, SpatialId, SubpixelSprite, VectorId,
+    ClipId, ColorSprite, MonoSprite, PaintRef, Quad, Scene, ShadedQuad, ShaderId, ShaderParams,
+    SpatialId, SubpixelSprite, VectorId,
 };
 use zgui_text::GlyphFormat;
 
@@ -98,6 +99,15 @@ impl ScenePainter<'_> {
         self.scale
     }
 
+    /// Where the element's content box sits on the surface, in device pixels.
+    ///
+    /// Everything a painter draws is measured from this corner, so an element never needs it to
+    /// draw. It needs it to *convert*: a pointer position, a hit test and a drag all arrive in the
+    /// surface's coordinates, and this is what puts them into the element's own.
+    pub fn origin(&self) -> Point<DevicePx, Device> {
+        self.content_box.origin
+    }
+
     /// The element's computed `color`, for painting content that follows the text around it.
     pub fn current_color(&self) -> Color {
         self.shape_paint.fill
@@ -131,6 +141,37 @@ impl ScenePainter<'_> {
             .with_border([width; 4], stroke, BorderStyle::Solid)
             .clipped(self.clip);
         self.push_quad(quad);
+    }
+
+    /// Fills a rounded rectangle with an application's own shader.
+    ///
+    /// `shader` names an effect the renderer was told about, and `params` is what it draws with.
+    /// The rectangle is the effect's whole world: it is given coordinates measured from that
+    /// rectangle's own corner, and the framework applies the fragment's clip, its transform and its
+    /// folded alpha to whatever the effect returns.
+    ///
+    /// # What replays
+    ///
+    /// The parameters are read here, so an element whose revision is unchanged draws the
+    /// parameters it drew last time. Anything the effect is meant to follow — a pointer, a
+    /// progress value, a phase — has to be part of what the element's revision counts.
+    pub fn shade(
+        &mut self,
+        rect: Rect<DevicePx, Device>,
+        corner_radius: f32,
+        shader: ShaderId,
+        params: ShaderParams,
+    ) {
+        if !shader.is_some() {
+            return;
+        }
+        let slot = self.scene.shader_params.intern(params);
+        let shaded = ShadedQuad::new(self.placed(rect), shader, slot)
+            .with_radii(corners(corner_radius))
+            .clipped(self.clip)
+            .transformed(self.transform)
+            .faded(self.alpha);
+        self.pushed += usize::from(self.scene.push_shaded(shaded).is_some());
     }
 
     /// Draws one shape — a path with its own fill and stroke — through the vector pipeline.

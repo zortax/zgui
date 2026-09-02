@@ -36,8 +36,16 @@ pub struct SlotBuffer {
 impl SlotBuffer {
     /// An allocator over blocks of `T`, aligned as `gpu` requires.
     pub fn new<T: Pod>(gpu: &Gpu, label: &'static str) -> Self {
+        Self::with_stride(gpu, label, size_of::<T>() as u64)
+    }
+
+    /// An allocator over blocks of `size` bytes, aligned as `gpu` requires.
+    ///
+    /// For a block whose Rust spelling is not the block the device reads: an application effect's
+    /// parameters are the framework's half followed by bytes only the application gives meaning
+    /// to, and there is no one Rust type for that.
+    pub fn with_stride(gpu: &Gpu, label: &'static str, size: u64) -> Self {
         let alignment = u64::from(gpu.device().limits().min_uniform_buffer_offset_alignment);
-        let size = size_of::<T>() as u64;
         Self {
             buffer: None,
             label,
@@ -60,9 +68,14 @@ impl SlotBuffer {
     /// a frame plans every block it needs, uploads them together, and only then builds the bind
     /// group that reads them.
     pub fn stage<T: Pod>(&mut self, value: &T) -> u32 {
+        self.stage_bytes(bytemuck::bytes_of(value))
+    }
+
+    /// Stages `bytes` in a fresh slot and returns the dynamic offset that will name it.
+    pub fn stage_bytes(&mut self, bytes: &[u8]) -> u32 {
         let offset = u64::from(self.taken) * self.stride;
         self.staged.resize(offset as usize, 0);
-        self.staged.extend_from_slice(bytemuck::bytes_of(value));
+        self.staged.extend_from_slice(bytes);
         self.staged.resize((offset + self.stride) as usize, 0);
         self.taken += 1;
         offset as u32
@@ -112,6 +125,16 @@ impl SlotBuffer {
             buffer,
             offset: 0,
             size: wgpu::BufferSize::new(size_of::<T>() as u64),
+        }))
+    }
+
+    /// The binding naming one slot of `size` bytes, for a block with no one Rust spelling.
+    pub fn binding_of(&self, size: u64) -> Option<wgpu::BindingResource<'_>> {
+        let buffer = self.buffer.as_ref()?;
+        Some(wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer,
+            offset: 0,
+            size: wgpu::BufferSize::new(size),
         }))
     }
 

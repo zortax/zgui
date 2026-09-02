@@ -15,6 +15,8 @@ pub struct RoundedTest {
     pub rect: [f32; 4],
     /// Elliptical radii, two per corner, clockwise from the top left.
     pub radii: [f32; 8],
+    /// The superellipse exponent the corners are cut with; two is the ellipse.
+    pub shape: f32,
 }
 
 /// A whole clip chain, flattened into what one draw call can apply.

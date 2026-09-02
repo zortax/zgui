@@ -30,16 +30,16 @@ fails the build.
 | `crates/zgui-scene/src/order/tree.rs` | the GPUI project | Apache-2.0 |
 | `crates/zgui-color/src/gamma.rs` | the Windows Terminal project | MIT |
 | `crates/zgui-layout/src/inline/leaf_shell.rs` | the taffy project | MIT |
-| `crates/zgui-render-wgpu/src/shader/sdf.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/blur.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/paint.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/quad.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/shadow.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/sprite.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/sprite_mono.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/sprite_color.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/subpixel.wgsl` | the GPUI project | Apache-2.0 |
-| `crates/zgui-render-wgpu/src/shader/text.wgsl` | the Windows Terminal project | MIT |
+| `crates/zgui-wgsl/src/wgsl/sdf.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/blur.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/paint.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/quad.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/shadow.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/sprite.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/sprite_mono.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/sprite_color.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/subpixel.wgsl` | the GPUI project | Apache-2.0 |
+| `crates/zgui-wgsl/src/wgsl/text.wgsl` | the Windows Terminal project | MIT |
 | `crates/zgui-drm/src/sys.rs` | the Linux kernel DRM uapi headers | MIT |
 
 ## Vendored kernel headers

@@ -4,6 +4,7 @@ pub mod backdrop;
 pub mod blur;
 pub mod chain;
 pub mod drop_shadow;
+pub mod effect;
 pub mod matrix;
 
 use zgui_geom::{Device, Rect};
@@ -68,6 +69,18 @@ pub fn plan(
             Step::Blur(deviation) => {
                 if let Some(blurred) = blur::plan(builder, filtered.target, region, deviation) {
                     replace(builder, &mut filtered, source, blurred.target);
+                }
+            }
+            Step::Custom { shader, params, .. } => {
+                // An effect whose parameters this frame staged nothing for is one the display list
+                // named and the frame did not intern, which cannot happen for a scene that was
+                // finished — and drawing it against whatever block happens to be bound would be a
+                // rectangle full of a stranger's numbers.
+                if let Some(block) = effect::block_of(builder, params)
+                    && let Some(next) =
+                        effect::plan(builder, filtered.target, region, shader, block)
+                {
+                    replace(builder, &mut filtered, source, next);
                 }
             }
             Step::DropShadow {

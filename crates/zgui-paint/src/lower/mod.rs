@@ -21,6 +21,7 @@ pub mod clip;
 pub mod filter;
 pub mod key;
 pub mod outline;
+pub mod shader;
 pub mod shadow;
 pub mod transform;
 
@@ -36,6 +37,7 @@ pub use crate::lower::border::BorderPaint;
 pub use crate::lower::clip::ClipShape;
 pub use crate::lower::filter::GroupPaint;
 pub use crate::lower::outline::OutlinePaint;
+pub use crate::lower::shader::{NamedShader, ShaderStyle};
 pub use crate::lower::shadow::ShadowSpec;
 
 register_properties! {
@@ -83,6 +85,18 @@ pub struct PaintStyle {
     pub group: GroupPaint,
     /// What the box cuts its own painting to.
     pub clip_path: ClipShape,
+    /// The shape the box's corners are cut to.
+    ///
+    /// Read here rather than per fragment because it is a property of the *style*: a page of
+    /// smoothed cards cascades to one lowering and reads the property once between them. It
+    /// reaches the background, the border, the shadow and the outline from here, and the clip a
+    /// box gives its children from layout, which reads the same property through the same parser.
+    pub corner_shape: zgui_scene::CornerShape,
+    /// The application effect the box is drawn with, when a style sheet named one.
+    ///
+    /// Boxed because it is large and almost always absent: a lowering is cloned per fragment, and
+    /// a document naming no effect should pay a pointer rather than the whole structure.
+    pub shader: Option<Box<ShaderStyle>>,
     /// Whether the box's transform properties force it into a target of its own.
     pub transform_forces_group: bool,
     /// How replaced content meets its content box: stretched, fitted, covering, or at its own
@@ -106,7 +120,10 @@ impl PaintStyle {
             || (self.background.is_invisible()
                 && self.border.invisible
                 && self.shadows.is_empty()
-                && self.outline.is_none())
+                && self.outline.is_none()
+                // An effect draws whatever it likes over a box with no background at all, which is
+                // the ordinary way to write one.
+                && self.shader.is_none())
     }
 
     /// Whether this style needs its subtree composited into a target of its own.
@@ -115,7 +132,14 @@ impl PaintStyle {
     /// question about the subtree's *geometry*, answered against the fragment tree, and answering
     /// it here would mean answering it without the information.
     pub fn needs_group(&self) -> bool {
-        self.group.needs_isolation() || self.clip_path.needs_target() || self.transform_forces_group
+        self.group.needs_isolation()
+            || self.clip_path.needs_target()
+            || self.transform_forces_group
+            // A filter effect reads the content, so the content has to exist somewhere first.
+            || self
+                .shader
+                .as_ref()
+                .is_some_and(|shader| shader.needs_isolation())
     }
 }
 
@@ -145,6 +169,8 @@ pub fn lower(style: &ComputedStyle, scale: f32) -> PaintStyle {
         shape: crate::emit::vector::shape_paint(style, scale),
         group: filter::of(style, scale),
         clip_path: clip::of(style),
+        corner_shape: zgui_layout::fragment::corner::shape(style),
+        shader: shader::of(style),
         transform_forces_group: transform::forces_group(style),
         object_fit: style.get_position().object_fit,
         object_position: style.get_position().object_position.clone(),
@@ -153,6 +179,22 @@ pub fn lower(style: &ComputedStyle, scale: f32) -> PaintStyle {
 
 #[cfg(test)]
 mod tests {
+    /// A lowering is cloned for every fragment that carries it, every frame it is painted, so its
+    /// size is a per-fragment cost. The effect a style sheet may name is five hundred bytes and is
+    /// almost always absent, which is why it is behind a pointer rather than in the structure.
+    #[test]
+    fn a_lowering_does_not_carry_the_effect_it_usually_does_not_name() {
+        assert_eq!(
+            size_of::<Option<Box<super::ShaderStyle>>>(),
+            size_of::<usize>(),
+            "an absent effect costs a pointer"
+        );
+        assert!(
+            size_of::<super::PaintStyle>() < size_of::<super::ShaderStyle>() * 3,
+            "and the lowering is not dominated by it"
+        );
+    }
+
     use zgui_css::StyleDraft;
 
     use super::lower;

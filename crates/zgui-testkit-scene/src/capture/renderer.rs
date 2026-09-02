@@ -64,6 +64,8 @@ pub struct CaptureRenderer {
     shifts: bool,
     /// The shift the most recent frame was asked for.
     last_shift: Option<zgui_render::ScrollShift>,
+    /// Whether it claims to draw an application's own shader.
+    custom_shaders: bool,
 }
 
 impl CaptureRenderer {
@@ -83,6 +85,19 @@ impl CaptureRenderer {
     #[must_use]
     pub fn shifting(mut self) -> Self {
         self.shifts = true;
+        self
+    }
+
+    /// The same renderer, claiming to draw an application's own shader.
+    ///
+    /// Off by default, like every other capability, so the fallback a device without one takes is
+    /// what a test gets unless it asks otherwise. It is a truthful claim rather than a convenient
+    /// one: this renderer records what a frame draws instead of drawing it, and an effect's
+    /// rectangle reaches a transcript exactly as any other primitive does. What it would have
+    /// *looked* like needs a real device, and the pixel tests are where that is checked.
+    #[must_use]
+    pub fn shading(mut self) -> Self {
+        self.custom_shaders = true;
         self
     }
 
@@ -124,7 +139,10 @@ impl Renderer for CaptureRenderer {
         // path a machine without dual-source blending or compute would take. A capture renderer
         // claiming capabilities it does not exercise would silently stop those paths being tested
         // anywhere at all.
-        RenderCapabilities::MINIMAL
+        RenderCapabilities {
+            custom_shaders: self.custom_shaders,
+            ..RenderCapabilities::MINIMAL
+        }
     }
 
     fn configure(&mut self, target: RenderTarget) {

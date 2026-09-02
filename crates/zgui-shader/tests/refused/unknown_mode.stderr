@@ -1,0 +1,5 @@
+error: `Refraction` is no shading mode; write one of Paint, Coverage, Filter
+ --> tests/refused/unknown_mode.rs:9:11
+  |
+9 |     mode: Refraction,
+  |           ^^^^^^^^^^

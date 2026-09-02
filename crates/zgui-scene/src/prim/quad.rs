@@ -45,6 +45,12 @@ pub struct Quad {
     pub clip: u32,
     /// The slot of the [`SpatialId`] this draws under.
     pub transform: u32,
+    /// The superellipse exponent its corners are cut with; two is the ellipse.
+    ///
+    /// Beside the radii rather than folded into them because it is the *shape* of the corner and
+    /// they are its size: a squircle of twenty pixels and a circle of twenty pixels differ in this
+    /// and in nothing else.
+    pub shape: f32,
     /// Where the space its paints are described in has its origin, as `[x, y]`.
     ///
     /// A [`Paint`](crate::Paint) states its geometry — a gradient line, a ramp's centre, an image's
@@ -72,6 +78,7 @@ impl Quad {
             border: [0.0; 4],
             fill,
             stroke: PaintRef::NONE,
+            shape: crate::prim::CornerShape::ROUND.get(),
             clip: ClipId::ROOT.0,
             transform: SpatialId::VIEWPORT.index(),
             paint_origin: [0.0, 0.0],
@@ -110,6 +117,17 @@ impl Quad {
     pub fn transformed(mut self, transform: SpatialId) -> Self {
         self.transform = transform.index();
         self
+    }
+
+    /// The same quad with its corners cut to `shape`.
+    pub fn with_corner_shape(mut self, shape: crate::prim::CornerShape) -> Self {
+        self.shape = shape.get();
+        self
+    }
+
+    /// The shape its corners are cut with.
+    pub fn corner_shape(&self) -> crate::prim::CornerShape {
+        crate::prim::CornerShape(self.shape)
     }
 
     /// The same quad with elliptical corner radii.

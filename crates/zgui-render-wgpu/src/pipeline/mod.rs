@@ -2,6 +2,7 @@
 
 pub mod blur;
 pub mod composite;
+pub mod effect_filter;
 pub mod external;
 pub mod kind;
 pub mod layout;
@@ -9,11 +10,13 @@ pub mod vector;
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::effect::{EffectProgram, Effects};
 use crate::gpu::device::Gpu;
 use crate::gpu::pipeline_cache::PipelineCache;
 use crate::pipeline::kind::PipelineKind;
 use crate::pipeline::layout::Layouts;
 use crate::shader::{self, Module};
+use zgui_scene::ShaderId;
 
 /// Every pipeline built so far, and everything they are built from.
 ///
@@ -33,6 +36,14 @@ pub struct Pipelines {
     cache: PipelineCache,
     /// Whether the device can blend against a second colour output.
     dual_source_blending: bool,
+    /// The application effects this device has been told about, and their pipelines.
+    ///
+    /// Held here rather than beside here because an effect's pipeline is built from the same
+    /// layouts and the same compilation cache the framework's own are, and a second owner of
+    /// either would be a second answer to what an effect's clip is.
+    effects: Effects,
+    /// How many of the process's declarations this device has caught up with.
+    declared: usize,
 }
 
 impl Pipelines {
@@ -55,7 +66,90 @@ impl Pipelines {
             built: HashMap::new(),
             cache: PipelineCache::load(gpu),
             dual_source_blending: gpu.capabilities().subpixel_text,
+            effects: Effects::new(),
+            declared: 0,
         }
+    }
+
+    /// Registers every effect the process has declared that this device has not seen.
+    ///
+    /// Called at the top of a frame. On the frame after an application declares nothing new it is
+    /// one comparison, which is what makes it cheap enough to be unconditional — and being
+    /// unconditional is what makes a second window and a rebuilt device end up with the effects
+    /// the first one had.
+    pub fn sync_effects(&mut self, gpu: &Gpu) {
+        let declared = crate::effect::declared_count();
+        if declared == self.declared {
+            return;
+        }
+        let mut pending: Vec<(ShaderId, EffectProgram)> = Vec::new();
+        crate::effect::declared_since(self.declared, |id, program| pending.push((id, program)));
+        for (id, program) in pending {
+            if let Err(error) = self.effects.register(gpu, id, program) {
+                // Drawing nothing is the answer. The alternative is a pipeline built from a
+                // structure the host writes a different shape into, which is a rectangle full of
+                // the wrong numbers and no error anywhere.
+                tracing::error!(effect = program.label, "{error}");
+            }
+        }
+        self.declared = declared;
+    }
+
+    /// Forgets every effect and re-registers them, which is what a lost device needs.
+    pub fn rebuild_effects(&mut self, gpu: &Gpu) {
+        self.effects.clear();
+        self.declared = 0;
+        self.sync_effects(gpu);
+    }
+
+    /// Accepts an application effect under `id`, replacing anything registered under it.
+    pub fn register_effect(
+        &mut self,
+        gpu: &Gpu,
+        id: ShaderId,
+        program: EffectProgram,
+    ) -> Result<(), String> {
+        self.effects.register(gpu, id, program)
+    }
+
+    /// Forgets the application effect registered under `id`.
+    pub fn release_effect(&mut self, id: ShaderId) {
+        self.effects.release(id);
+    }
+
+    /// Forgets every application effect, which is what a lost device leaves behind.
+    pub fn clear_effects(&mut self) {
+        self.effects.clear();
+    }
+
+    /// Whether anything is registered under `id`.
+    pub fn has_effect(&self, id: ShaderId) -> bool {
+        self.effects.contains(id)
+    }
+
+    /// How many application effects are registered.
+    pub fn effect_count(&self) -> usize {
+        self.effects.len()
+    }
+
+    /// Says once that an effect could not be drawn, and why.
+    pub fn note_undrawable_effect(&self, id: ShaderId, why: &'static str) {
+        self.effects.note_undrawable(id, why);
+    }
+
+    /// The pipeline drawing the effect `id` into an attachment of `format`, building it if needed.
+    ///
+    /// `None` for a handle nothing is registered under, which is a display list built against an
+    /// effect that has since been released. Drawing nothing is the answer there: the alternative
+    /// is drawing the rectangle with whatever pipeline happens to be bound.
+    pub fn effect(
+        &mut self,
+        gpu: &Gpu,
+        id: ShaderId,
+        format: wgpu::TextureFormat,
+    ) -> Option<&wgpu::RenderPipeline> {
+        self.effects
+            .pipeline(gpu, &self.layouts, &self.cache, id, format)
     }
 
     /// The bind-group layouts.

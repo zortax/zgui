@@ -26,13 +26,14 @@ use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// The instanced kinds with persistent storage, in lane order.
-pub(crate) const LANES: [PrimitiveKind; 6] = [
+pub(crate) const LANES: [PrimitiveKind; 7] = [
     PrimitiveKind::Quad,
     PrimitiveKind::Shadow,
     PrimitiveKind::Decoration,
     PrimitiveKind::MonoSprite,
     PrimitiveKind::SubpixelSprite,
     PrimitiveKind::ColorSprite,
+    PrimitiveKind::Shaded,
 ];
 
 /// How many low bits of a resolved remap entry name the arena slot.
@@ -53,7 +54,7 @@ struct Resident {
     /// The bytes, shared with the paint cache's record — also the rebuild source.
     prims: Arc<ChunkPrims>,
     /// The element range each lane occupies, where the chunk has elements of that kind.
-    ranges: [Option<Range<u32>>; 6],
+    ranges: [Option<Range<u32>>; LANES.len()],
 }
 
 /// One persistent element arena: a buffer, a bump tail, and ranges given back by the ledger.
@@ -252,7 +253,7 @@ impl RetireLedger {
     }
 
     /// Offers every bucket the device has finished with back to `arenas`.
-    fn reclaim(&mut self, arenas: &mut [Arena; 6]) {
+    fn reclaim(&mut self, arenas: &mut [Arena; LANES.len()]) {
         let mut completed = 0;
         while let Ok(seq) = self.receiver.try_recv() {
             completed = completed.max(seq);
@@ -284,15 +285,15 @@ impl RetireLedger {
 #[derive(Debug)]
 pub struct ChunkStore {
     /// One arena per lane.
-    arenas: [Arena; 6],
+    arenas: [Arena; LANES.len()],
     /// Every chunk the arenas hold, by revision.
     residence: HashMap<u64, Resident>,
     /// Ranges awaiting their submission's completion.
     ledger: RetireLedger,
     /// Per-frame scratch: the resolved remap for each lane.
-    resolved: [Vec<u32>; 6],
+    resolved: [Vec<u32>; LANES.len()],
     /// Per-frame scratch: gathered transient element bytes for each lane.
-    gathered: [Vec<u8>; 6],
+    gathered: [Vec<u8>; LANES.len()],
     /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
     ///
     /// Entry zero is the zero offset every unmoved element names, so a frame with nothing moved
@@ -340,6 +341,11 @@ impl ChunkStore {
                     gpu,
                     "zgui.arena.color_sprites",
                     size_of::<zgui_scene::ColorSprite>() as u32,
+                ),
+                Arena::new(
+                    gpu,
+                    "zgui.arena.shaded",
+                    size_of::<zgui_scene::ShadedQuad>() as u32,
                 ),
             ],
             residence: HashMap::new(),
@@ -426,13 +432,14 @@ impl ChunkStore {
         {
             return 0;
         }
-        let lanes: [&[u8]; 6] = [
+        let lanes: [&[u8]; LANES.len()] = [
             bytemuck::cast_slice(&prims.quads),
             bytemuck::cast_slice(&prims.shadows),
             bytemuck::cast_slice(&prims.decorations),
             bytemuck::cast_slice(&prims.mono_sprites),
             bytemuck::cast_slice(&prims.subpixel_sprites),
             bytemuck::cast_slice(&prims.color_sprites),
+            bytemuck::cast_slice(&prims.shaded),
         ];
         let counts = [
             prims.quads.len() as u32,
@@ -441,10 +448,11 @@ impl ChunkStore {
             prims.mono_sprites.len() as u32,
             prims.subpixel_sprites.len() as u32,
             prims.color_sprites.len() as u32,
+            prims.shaded.len() as u32,
         ];
-        let mut ranges: [Option<Range<u32>>; 6] = Default::default();
+        let mut ranges: [Option<Range<u32>>; LANES.len()] = Default::default();
         let mut uploaded = 0;
-        for lane in 0..6 {
+        for lane in 0..LANES.len() {
             if counts[lane] == 0 {
                 continue;
             }
@@ -685,6 +693,7 @@ fn lane_bytes(scene: &Scene, lane: usize) -> &[u8] {
         2 => bytemuck::cast_slice(&scene.primitives.decorations),
         3 => bytemuck::cast_slice(&scene.primitives.mono_sprites),
         4 => bytemuck::cast_slice(&scene.primitives.subpixel_sprites),
-        _ => bytemuck::cast_slice(&scene.primitives.color_sprites),
+        5 => bytemuck::cast_slice(&scene.primitives.color_sprites),
+        _ => bytemuck::cast_slice(&scene.primitives.shaded),
     }
 }

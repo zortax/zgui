@@ -33,6 +33,12 @@ pub enum ClipLink {
         rect: Rect<DevicePx, Device>,
         /// The elliptical radii of its four corners.
         radii: Corners<Vec2<DevicePx>>,
+        /// The superellipse exponent its corners are cut with; two is the ellipse.
+        ///
+        /// A clip carries the shape for the same reason a quad does: content inside a squircle
+        /// card has to be cut to the squircle, and a chain that only knew the radii would cut it
+        /// to the ellipse those radii describe and let the corners of a child show through.
+        shape: crate::prim::CornerShape,
         /// The coordinate system the rectangle is measured in.
         ///
         /// A clipping box inside a transformed subtree measures its rectangle in its own space,
@@ -71,6 +77,7 @@ impl ClipLink {
         Self::RoundedRect {
             rect,
             radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
+            shape: crate::prim::CornerShape::ROUND,
             space,
         }
     }
@@ -80,7 +87,23 @@ impl ClipLink {
         Self::RoundedRect {
             rect,
             radii: Corners::uniform(radius),
+            shape: crate::prim::CornerShape::ROUND,
             space: SpatialId::VIEWPORT,
+        }
+    }
+
+    /// A rectangular clip whose corners are cut to `shape`, in device pixels.
+    pub fn shaped(
+        rect: Rect<DevicePx, Device>,
+        radii: Corners<Vec2<DevicePx>>,
+        shape: crate::prim::CornerShape,
+        space: SpatialId,
+    ) -> Self {
+        Self::RoundedRect {
+            rect,
+            radii,
+            shape,
+            space,
         }
     }
 
@@ -107,12 +130,18 @@ impl ClipLink {
     /// that answer holds still while the scroll runs.
     pub(crate) fn unshifted(self, shift: Size<DevicePx, Device>) -> Self {
         match self {
-            Self::RoundedRect { rect, radii, space } => Self::RoundedRect {
+            Self::RoundedRect {
+                rect,
+                radii,
+                shape,
+                space,
+            } => Self::RoundedRect {
                 rect: rect.translate(Size::new(
                     DevicePx(-shift.width.0),
                     DevicePx(-shift.height.0),
                 )),
                 radii,
+                shape,
                 space,
             },
             other => other,
@@ -136,8 +165,14 @@ impl Content for ClipLink {
     fn content_hash(&self) -> u64 {
         let hash = ContentHash::new();
         match self {
-            Self::RoundedRect { rect, radii, space } => hash
+            Self::RoundedRect {
+                rect,
+                radii,
+                shape,
+                space,
+            } => hash
                 .u32(0)
+                .f32(shape.get())
                 .f32s(&[
                     rect.origin.x.0,
                     rect.origin.y.0,

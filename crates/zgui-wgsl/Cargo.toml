@@ -1,0 +1,18 @@
+[package]
+name = "zgui-wgsl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
+#
+# The shading vocabulary as text, and the rules for assembling a translation unit from it. It holds
+# no device and no graphics API: what lives here is the source every pipeline is built from, in one
+# copy, so that the backend that compiles the built-in modules and the macro that compiles an
+# application's own shader concatenate the same prelude. A second copy of that text is the one
+# defect the shader-reflection check cannot catch.
+[dependencies]
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+
+[lints]
+workspace = true

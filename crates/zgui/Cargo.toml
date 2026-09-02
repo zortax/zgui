@@ -20,6 +20,7 @@ zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
 zgui-custom = { path = "../zgui-custom", version = "0.1.0" }
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
+zgui-shader = { path = "../zgui-shader", version = "0.1.0" }
 zgui-wgpu = { path = "../zgui-wgpu", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 # The text engine is a shaper wrapped in the measurer layout asks its questions through, and that
@@ -65,6 +66,10 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # stays green while measuring nothing, so this names the feature rather than relying on whatever
 # another crate happened to turn on.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+# Reading back what a frame put in the display list, with no device: the corner-shape wiring is
+# asserted on the primitives and the clip chain rather than on pixels, which the renderer's own
+# tests cover.
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 
 [features]
 # Records which component each part of the document came from, so a development tool can show a

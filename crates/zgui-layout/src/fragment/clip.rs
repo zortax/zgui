@@ -73,6 +73,10 @@ pub fn chain_for_children(
         ClipLink::RoundedRect {
             rect: padding_box,
             radii,
+            // The clip a box gives its children is cut the way the box is: content inside a
+            // squircle card that was clipped to the ellipse those radii describe would show its
+            // own corners past the card's.
+            shape: crate::fragment::corner::shape(style),
             space,
         },
         shift,

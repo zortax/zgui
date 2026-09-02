@@ -1,0 +1,25 @@
+[package]
+name = "zgui-shader-macro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L6 — frontend. Every dependency is inherited: `foo.workspace = true`.
+#
+# The expansion names `zgui-shader` and nothing else, so an application that writes `shader!`
+# depends on that crate rather than on this one's dependency list. What is named here is the shader
+# front end, because this macro compiles an application's WGSL while the application is built —
+# the same thing zgui-render-wgpu's build script does for the framework's own modules.
+[lib]
+proc-macro = true
+
+[dependencies]
+bincode.workspace = true
+naga = { workspace = true, features = ["wgsl-in", "serialize"] }
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
+
+[lints]
+workspace = true

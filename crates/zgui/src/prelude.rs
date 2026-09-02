@@ -83,3 +83,7 @@ pub use zgui_wgpu::{SurfaceElementExt, SurfaceHandle, SurfaceRenderer};
 /// Implementing an element rather than composing one: the trait, its contexts, and the handle
 /// that reaches a mounted one.
 pub use zgui_custom::{CustomElement, CustomHandle, CustomLayoutCx, CustomMeasured, ScenePainter};
+
+/// Drawing with a shader of one's own: declaring an effect, the handle it is drawn through, and
+/// the painter method that draws it.
+pub use zgui_shader::{ShaderEffect, ShaderHandle, ShaderPainterExt, ShaderParams, shader};

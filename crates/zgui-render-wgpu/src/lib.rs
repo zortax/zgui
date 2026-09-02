@@ -48,6 +48,7 @@
 pub mod atlas_backend;
 pub mod bind;
 pub mod buffer;
+pub mod effect;
 pub mod filter;
 pub mod frame;
 pub mod gpu;
@@ -61,6 +62,9 @@ pub mod target;
 pub use wgpu;
 
 pub use crate::bind::globals::SubpixelOrder;
+pub use crate::effect::{
+    EffectProgram, Effects, ParamsField, ParamsLayout, check_params as check_effect, declare,
+};
 pub use crate::gpu::device::Gpu;
 pub use crate::gpu::formats::{Formats, SrgbTier};
 pub use crate::gpu::surface::PresentPacing;

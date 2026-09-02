@@ -42,6 +42,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         // straight into the window carries.
         transform_hash: zgui_scene::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
         custom: 0,
+        pointer: 0,
         content: 0,
         cut: 0,
         scale: 1.0f32.to_bits(),

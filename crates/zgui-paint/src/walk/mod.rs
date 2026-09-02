@@ -74,6 +74,15 @@ pub struct PaintInput<'a> {
     pub vector_masks: &'a dyn VectorMaskSource,
     /// Where a custom element's painting comes from.
     pub custom: &'a dyn crate::content::custom::CustomPaintSource,
+    /// Where a style sheet's shader names are resolved.
+    pub shaders: &'a dyn crate::content::shader::ShaderSource,
+    /// Where the pointer is, in device pixels, for an effect that declared it reads it.
+    ///
+    /// `None` when the pointer is outside the window, which is what an effect is told when nothing
+    /// is over it. Read only by an effect that declared it: an effect that did not is drawn
+    /// identically wherever the pointer is, which is what keeps a pointer move from repainting
+    /// every box that carries one.
+    pub pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
     /// The cache a recorded range's rasters live in, which the record holds them in.
     ///
     /// Separate from [`PaintInput::glyphs`] and [`PaintInput::replaced`] even though one object
@@ -138,6 +147,8 @@ impl<'a> PaintInput<'a> {
             vectors: &NoVectors,
             vector_masks: &NoVectorMasks,
             custom: &crate::content::custom::NoCustom,
+            shaders: &crate::content::shader::NoShaders,
+            pointer: None,
             resources: &NoResources,
             anim: &NoAnim,
             capabilities: RenderCapabilities::MINIMAL,
@@ -462,6 +473,8 @@ impl Pass<'_, '_> {
         );
         Emission {
             style,
+            shaders: self.input.shaders,
+            pointer: self.input.pointer,
             box_placement: BoxPlacement {
                 border_box: fragment.border_box,
                 border: fragment.border,
@@ -539,6 +552,37 @@ impl Pass<'_, '_> {
         }
     }
 
+    /// Where the pointer is, for a box whose effect declared it reads it.
+    ///
+    /// Zero for every other box. That is the whole cost of the feature on a document that does not
+    /// use it: one comparison against a lowered style that already says whether it names an effect
+    /// at all, and no repaint from any pointer stream.
+    fn pointer_signature(&self, style: PaintStyleRef) -> u64 {
+        let Some(at) = self.input.pointer else {
+            return 0;
+        };
+        let Some(style) = self.painter.styles.get(style) else {
+            return 0;
+        };
+        let Some(shader) = style.shader.as_ref() else {
+            return 0;
+        };
+        let named = [shader.named.as_ref(), shader.filter.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|named| {
+                self.input
+                    .shaders
+                    .effect(&named.name)
+                    .is_some_and(|binding| binding.reads.pointer)
+            });
+        if !named {
+            return 0;
+        }
+        // Non-zero wherever the pointer is, so a box that reads it never looks unpainted.
+        (u64::from(at.x.0.to_bits()) << 32) | u64::from(at.y.0.to_bits()) | 1
+    }
+
     /// Fails if the range about to be replayed draws a raster that has been freed underneath it.
     ///
     /// # Panics
@@ -611,6 +655,7 @@ impl Pass<'_, '_> {
                     .map_or(0, |(token, _, _)| self.input.custom.revision(token)),
                 _ => 0,
             },
+            pointer: self.pointer_signature(style_ref),
             content: match fragment.kind {
                 zgui_layout::FragmentKind::Replaced { content } => {
                     self.input.replaced.revision(content)
@@ -782,9 +827,23 @@ impl stacking::Visitor for Pass<'_, '_> {
             self.bands.push(key);
         }
         if let Some(fragment) = own {
-            self.report.primitives += group::backdrop(self.scene, &style, fragment, fragment.clip);
+            self.report.primitives += group::backdrop(
+                self.scene,
+                &style,
+                fragment,
+                fragment.clip,
+                self.input.shaders,
+                self.input.scale,
+            );
             if isolation.needs_target() {
-                let boundary = group::open(self.scene, &style, fragment, fragment.clip);
+                let boundary = group::open(
+                    self.scene,
+                    &style,
+                    fragment,
+                    fragment.clip,
+                    self.input.shaders,
+                    self.input.scale,
+                );
                 self.open.push((key, boundary));
                 self.report.groups += 1;
             }

@@ -85,6 +85,7 @@ pub mod place;
 pub mod prim;
 pub mod resource;
 pub mod scene;
+pub mod shader;
 pub mod spatial;
 pub mod table;
 pub mod vector;
@@ -115,11 +116,16 @@ pub use crate::pass::{Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassP
 pub use crate::place::Placement;
 pub use crate::place::band::{Travel, Travels};
 pub use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, ExternalTextureId, MonoSprite, PrimitiveKind, Quad,
-    Resource, Shadow, SpriteTile, SubpixelSprite,
+    ColorSprite, CornerShape, Decoration, ExternalQuad, ExternalTextureId, MonoSprite,
+    PrimitiveKind, Quad, Resource, ShadedQuad, Shadow, SpriteTile, SubpixelSprite,
 };
 pub use crate::resource::{ResourceGeneration, ResourceKey, ResourceKind, ResourceRegistry};
 pub use crate::scene::{ChunkPrims, ChunkSlot, ChunkUpload, Scene, SpatialFault, TableHolds};
+pub use crate::shader::{
+    FrameClock, MAX_PARAMS_BYTES, ShaderDeclaration, ShaderField, ShaderId, ShaderMode,
+    ShaderParams, ShaderParamsSlot, ShaderParamsTable, ShaderReads, declare_shader, property,
+    shader_declared_by_id, shader_named,
+};
 pub use crate::spatial::{
     Anchoring, OwnSpace, Placements, PropertyId, PropertyNode, PropertyOwner, PropertyTree,
     SPATIAL_DOMAIN, SpatialId, SpatialNode, SpatialTree,

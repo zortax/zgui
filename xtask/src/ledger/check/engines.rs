@@ -207,9 +207,9 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-render-vector-coverage",
         ],
     ),
-    ("syn", &["zgui-view-macro"]),
-    ("quote", &["zgui-view-macro"]),
-    ("proc-macro2", &["zgui-view-macro"]),
+    ("syn", &["zgui-view-macro", "zgui-shader-macro"]),
+    ("quote", &["zgui-view-macro", "zgui-shader-macro"]),
+    ("proc-macro2", &["zgui-view-macro", "zgui-shader-macro"]),
 ];
 
 /// Members outside the ledger, and why.
