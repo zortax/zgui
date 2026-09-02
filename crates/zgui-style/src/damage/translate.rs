@@ -241,6 +241,12 @@ pub fn translate(
         .unwrap_or(zgui_dom::side::paint_key::PaintStyleKey::UNSTYLED);
     if previous != paint {
         out.mark(node, Dirty::REPAINT);
+        // The inherited interaction group holds `pointer-events`, which the hit entry copies
+        // and the engine reports as a repaint alone. The entry is written again whenever the
+        // group moved, which over-fires for a cursor change and never misses a hit change.
+        if previous.inherited_ui != paint.inherited_ui {
+            out.mark(node, Dirty::REHIT);
+        }
         // A generated-content style is cloned into the box that carries it, so a change to one
         // rebuilds that box rather than merely repainting the element it hangs off.
         if paint_key::pseudos_moved(previous, paint) {

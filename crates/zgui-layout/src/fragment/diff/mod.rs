@@ -878,6 +878,9 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             fragment.transform_hash = next.transform_hash;
             fragment.stacking = next.stacking;
             fragment.scroll = next.scroll;
+            // Kept on the fragment because the painter keys its recording on it: a line whose cut
+            // moved while its rectangle stood still is re-encoded only if the fragment says so.
+            fragment.content_hash = next.content_hash;
             fragment.flags = if kept {
                 next.flags.union(FragmentFlags::HAS_BLENDING_DESCENDANT)
             } else {

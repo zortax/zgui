@@ -250,3 +250,60 @@ fn a_probe_over_a_line_box_aligned_atomic_leaves_the_kept_cut_alone() {
     let cut = cut(&store).expect("the cut survived a pass that only probed the label");
     assert!(!cut.at_start, "{cut:?}");
 }
+
+/// The line fragment's stored fingerprint, which is what the painter keys its recording on.
+fn stored_hash(store: &LayoutStore) -> u64 {
+    let root = inline_root(store);
+    store
+        .fragments_of_box(root)
+        .iter()
+        .filter_map(|frag| store.fragment(*frag))
+        .find(|fragment| {
+            matches!(
+                fragment.kind,
+                zgui_layout::fragment::FragmentKind::Line { .. }
+            )
+        })
+        .map(|fragment| fragment.content_hash)
+        .expect("the label has a line fragment")
+}
+
+#[test]
+fn the_fragment_keeps_the_fingerprint_of_its_cut() {
+    // The fingerprint is compared by the fragment pass and read by the painter, and the two read
+    // it from different places: the pass computes it from the lines, the painter takes it off the
+    // fragment. A fragment that never stored it says "not cut" for ever, so a recording of the
+    // cut line is replayed after the cut has gone — and a recording of the whole line after one
+    // has appeared.
+    let fixture = row_fixture("");
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = support::Frame::new();
+    support::relayout(&mut frame, &mut store, &mut content, 240.0, 600.0);
+    assert_eq!(
+        stored_hash(&store),
+        0,
+        "an uncut line stores no fingerprint"
+    );
+
+    support::relayout(&mut frame, &mut store, &mut content, 96.0, 600.0);
+    let expected = zgui_layout::inline::ellipsis::line_hash(
+        &store
+            .inline_resolution(inline_root(&store))
+            .expect("laid out")
+            .lines[0],
+    );
+    assert_ne!(expected, 0, "the narrowed line is cut");
+    assert_eq!(
+        stored_hash(&store),
+        expected,
+        "the fragment carries the cut the pass compared"
+    );
+
+    support::relayout(&mut frame, &mut store, &mut content, 240.0, 600.0);
+    assert_eq!(
+        stored_hash(&store),
+        0,
+        "widened again, the fragment says the line is whole"
+    );
+}

@@ -165,6 +165,29 @@ fn a_transform_change_recalculates_overflow_without_relaying_anything_out() {
 }
 
 #[test]
+fn a_pointer_events_change_rewrites_the_hit_entry_without_touching_the_boxes() {
+    let mut harness = Harness::new();
+    let node = harness.append(harness.root, "box");
+    harness.add_author("box { pointer-events: none }");
+    harness.frame();
+    harness.retire_all();
+
+    harness.replace(0, "box { pointer-events: auto }");
+    harness.frame();
+
+    let owed = harness.owed(node);
+    assert!(
+        owed.contains(Dirty::REHIT | Dirty::REPAINT),
+        "what a hit test answers over the box moved, so its entry is written again: {owed:?}"
+    );
+    assert!(
+        !owed.intersects(Dirty::RELAYOUT | Dirty::REBUILD_BOX | Dirty::RESHAPE),
+        "nothing drawn or laid out moved; a property the classifier does not name is taken at \
+         the widest cost, which rebuilds every box for a hover: {owed:?}"
+    );
+}
+
+#[test]
 fn a_z_index_change_restacks_without_relaying_anything_out() {
     let mut harness = Harness::new();
     let node = harness.append(harness.root, "box");
