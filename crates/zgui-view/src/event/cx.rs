@@ -5,7 +5,9 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 
 use zgui_geom::{Device, DevicePx, Rect};
-use zgui_vocab::{DefaultAction, EventKind, Modifiers, Payload, Phase, Propagation, Timestamp};
+use zgui_vocab::{
+    DefaultAction, EventKind, Modifiers, Payload, Phase, PointerSample, Propagation, Timestamp,
+};
 
 use crate::event::sink::EventSink;
 use crate::event::view::{AnyEvent, EventType, EventView};
@@ -94,6 +96,8 @@ pub struct EventCx<'a, E: EventView = AnyEvent> {
     sink: &'a mut dyn EventSink,
     /// The current node's box as of the last completed frame.
     bounds: Option<Rect<DevicePx, Device>>,
+    /// The pointer moves folded into this one, oldest first. Empty for every other event.
+    samples: &'a [PointerSample],
     /// Which event this context is typed for.
     event: PhantomData<fn() -> E>,
 }
@@ -126,6 +130,7 @@ impl<'a, E: EventView> EventCx<'a, E> {
             control,
             sink,
             bounds: None,
+            samples: &[],
             event: PhantomData,
         }
     }
@@ -135,6 +140,24 @@ impl<'a, E: EventView> EventCx<'a, E> {
     pub fn with_bounds(mut self, bounds: Option<Rect<DevicePx, Device>>) -> Self {
         self.bounds = bounds;
         self
+    }
+
+    /// Records the pointer moves that were folded into this event.
+    #[must_use]
+    pub fn with_samples(mut self, samples: &'a [PointerSample]) -> Self {
+        self.samples = samples;
+        self
+    }
+
+    /// The pointer moves folded into this one, oldest first, and not including this one.
+    ///
+    /// Moves that arrive between two frames are delivered as the last of them, so a frame routes
+    /// one per pointer. A handler that wants the path the pointer took — a stroke drawn by hand —
+    /// reads the samples before the event's own position. Empty for an event nothing was folded
+    /// into.
+    #[must_use]
+    pub fn coalesced(&self) -> &'a [PointerSample] {
+        self.samples
     }
 
     /// The whole payload, whatever kind it is.
@@ -236,6 +259,7 @@ impl<'a, E: EventView> EventCx<'a, E> {
             control: self.control,
             sink: &mut *self.sink,
             bounds: self.bounds,
+            samples: self.samples,
             event: PhantomData,
         }
     }

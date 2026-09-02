@@ -185,3 +185,68 @@ fn a_cut_moves_the_fingerprint_the_fragment_pass_compares() {
     assert_eq!(hash(&plain), 0);
     assert_ne!(hash(&marked), 0);
 }
+
+/// A label that shrinks beside an icon, laid out at one width and then at a narrower one.
+///
+/// The shape of a row in a file tree or a thread list: an icon, then a nowrap label that takes
+/// what is left and is cut off when that is not enough. The second layout is a second frame over
+/// the same store, so every cache the first one filled is still there.
+fn row_fixture(declarations: &str) -> Fixture {
+    let css = format!(
+        "root {{ display: flex; width: 100%; height: 40px }}
+         icon {{ width: 16px; height: 16px; flex: 0 0 auto }}
+         para {{ flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden;
+                 text-overflow: ellipsis; {declarations} }}
+         mark {{ display: inline-block; vertical-align: top; width: 8px; height: 8px }}",
+    );
+    let label = if declarations.contains("with-mark") {
+        Element::new("para")
+            .text("abcdefghijklmnop")
+            .children(vec![Element::new("mark")])
+    } else {
+        Element::new("para").text("abcdefghijklmnop")
+    };
+    Fixture::with_natural_size(
+        Element::new("root").children(vec![Element::new("icon").image(16.0, 16.0), label]),
+        &css,
+        (16.0, 16.0),
+    )
+}
+
+#[test]
+fn narrowing_a_row_cuts_the_label_in_the_same_pass() {
+    let fixture = row_fixture("");
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = support::Frame::new();
+    // Sixteen characters at eight pixels: 128 of label, room for 224 beside the icon.
+    support::relayout(&mut frame, &mut store, &mut content, 240.0, 600.0);
+    assert_eq!(cut(&store), None, "the label fits at the wide width");
+
+    // Room for ten characters beside the icon: the label is cut, and the cut is in the
+    // resolution the very pass that narrowed it left behind.
+    support::relayout(&mut frame, &mut store, &mut content, 96.0, 600.0);
+    let cut = cut(&store).expect("the narrowed label was cut");
+    assert!(!cut.at_start, "the cut is at the trailing edge: {cut:?}");
+}
+
+#[test]
+fn a_probe_over_a_line_box_aligned_atomic_leaves_the_kept_cut_alone() {
+    // A label holding an atomic aligned with the line box's own edges cannot answer a probe from
+    // its recalled break, so the probe falls through to a full pass. That pass must not replace
+    // what the kept pass left: the layout that follows it can be a cache hit, and the cut would
+    // stay gone.
+    let fixture = row_fixture("/* with-mark */");
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = support::Frame::new();
+    support::relayout(&mut frame, &mut store, &mut content, 240.0, 600.0);
+    support::relayout(&mut frame, &mut store, &mut content, 96.0, 600.0);
+    assert!(cut(&store).is_some(), "the narrowed label was cut");
+
+    // A re-run of the row at the same width: the label is probed at the container's width and
+    // its final layout is answered from the cache.
+    support::relayout(&mut frame, &mut store, &mut content, 96.0, 700.0);
+    let cut = cut(&store).expect("the cut survived a pass that only probed the label");
+    assert!(!cut.at_start, "{cut:?}");
+}

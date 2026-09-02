@@ -916,7 +916,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     self.damage_beyond_a_move(next.ink, admitted);
                 }
                 if own.contains(Dirty::REHIT) {
-                    self.touch_hit(frag, change);
+                    self.touch_hit(frag, change, false);
                 }
             }
             Change::TranslatedOnly => {
@@ -928,7 +928,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     self.damage_beyond_a_move(previous.ink, Admitted::everything());
                 }
                 self.damage_beyond_a_move(next.ink, admitted);
-                self.touch_hit(frag, change);
+                self.touch_hit(frag, change, false);
             }
             Change::Changed => {
                 self.dirty
@@ -948,7 +948,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     }
                     self.damage_beyond_a_move(next.ink, admitted);
                 }
-                self.touch_hit(frag, change);
+                // Whether the piece's coordinate space is where it was: only then can an entry
+                // that compares equal be trusted to mean nothing moved under the pointer.
+                let stood = previous.as_ref().is_some_and(|previous| {
+                    previous.transform == next.transform
+                        && previous.transform_hash == next.transform_hash
+                        && previous.clip_transform == next.clip_transform
+                });
+                self.touch_hit(frag, change, stood);
             }
         }
         change
@@ -978,12 +985,17 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// A fragment that only moved goes in through the index's translation path, which does not
     /// count towards the churn that triggers a bulk rebuild — see
     /// [`HitIndex::translate`](crate::fragment::hit::HitIndex::translate).
-    fn touch_hit(&mut self, frag: FragKey, change: Change) {
+    ///
+    /// `stood` says the piece's coordinate space did not move, which is what lets an entry that
+    /// compares equal to the held one be left alone — see
+    /// [`HitIndex::refresh`](crate::fragment::hit::HitIndex::refresh).
+    fn touch_hit(&mut self, frag: FragKey, change: Change, stood: bool) {
         let scale = self.tables.device.scale;
         let held = self.hit.entry(frag).map(|entry| entry.order).unwrap_or(0);
         if let Some(entry) = crate::fragment::hit::entry_for(self.store, frag, held, scale) {
             match change {
                 Change::TranslatedOnly => self.hit.translate(frag, entry),
+                Change::Changed if stood => self.hit.refresh(frag, entry),
                 Change::Identical | Change::Changed => self.hit.update(frag, entry),
             }
         }

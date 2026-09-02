@@ -91,6 +91,7 @@ pub fn run(
     kind: EventKind,
     target: Option<zgui_dom::NodeKey>,
     payload: &Payload,
+    samples: &[zgui_vocab::PointerSample],
     modifiers: Modifiers,
     timestamp: Timestamp,
     sink: &mut dyn EventSink,
@@ -129,7 +130,8 @@ pub fn run(
         let current = zgui_view_dom::id::to_view(step.node);
         let mut cx = EventCx::<zgui_view::event::AnyEvent>::new(
             kind, target, current, step.phase, modifiers, timestamp, payload, &control, sink,
-        );
+        )
+        .with_samples(samples);
         handler(&mut cx);
         called += 1;
     }
@@ -155,7 +157,15 @@ pub fn run_discarding(
 ) -> Dispatched {
     let mut sink = DiscardCommands;
     run(
-        handlers, steps, kind, target, payload, modifiers, timestamp, &mut sink,
+        handlers,
+        steps,
+        kind,
+        target,
+        payload,
+        &[],
+        modifiers,
+        timestamp,
+        &mut sink,
     )
 }
 
@@ -246,6 +256,7 @@ mod tests {
             EventKind::Text,
             Some(target),
             &payload,
+            &[],
             Modifiers::NONE,
             Timestamp::ORIGIN,
             &mut sink,
@@ -418,6 +429,7 @@ mod tests {
             EventKind::Text,
             None,
             &payload,
+            &[],
             Modifiers::NONE,
             Timestamp::ORIGIN,
             &mut sink,

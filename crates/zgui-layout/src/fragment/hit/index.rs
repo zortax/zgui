@@ -47,6 +47,11 @@ pub struct HitIndex {
     /// Held on the index rather than raised at each call site so that the buffer outlives the frame
     /// and a scroll allocates nothing for it.
     carried: Vec<Carried>,
+    /// Moved by every write, removal and rebuild.
+    ///
+    /// What is under a stationary pointer can change only when an entry did, so a reader that
+    /// remembers the generation it last answered against knows whether to ask again.
+    generation: u64,
 }
 
 impl HitIndex {
@@ -63,6 +68,11 @@ impl HitIndex {
     /// Whether nothing is indexed.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// A number that moves with every change to the index, and never otherwise.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// How many entries have been touched since the last bulk build.
@@ -118,6 +128,21 @@ impl HitIndex {
         }
     }
 
+    /// Rewrites one fragment whose coordinate space stood still, when its entry changed at all.
+    ///
+    /// For a fragment the pass found changed in a way the index does not record — a paint flag,
+    /// a cut line — under a transform that did not move. An entry rewritten as exactly what it
+    /// was changes nothing under any point: the hierarchy already holds it where it is, and no
+    /// reader of the generation has anything new to ask. A fragment whose space moved must go
+    /// through [`update`](HitIndex::update) even when its entry compares equal, because the
+    /// entry is in that space and says nothing about where the space went.
+    pub fn refresh(&mut self, frag: FragKey, entry: HitEntry) {
+        if self.entries.get(frag) == Some(&entry) {
+            return;
+        }
+        self.update(frag, entry);
+    }
+
     /// Moves one fragment that has changed position and nothing else.
     ///
     /// The same write, and never counted as churn. Every entry of a scrolled container or a
@@ -143,6 +168,7 @@ impl HitIndex {
     /// before anything queries the index, which for the fragment pass is the same call that ends
     /// the walk.
     pub fn carry(&mut self, frag: FragKey, entry: HitEntry) {
+        self.generation += 1;
         self.carried.push(Carried {
             frag,
             space: entry.space,
@@ -177,6 +203,7 @@ impl HitIndex {
     /// never uncross before the rebuild resets it. A resize frame touches every fragment, and this
     /// is what keeps it from paying one tree surgery each on the way to a rebuild it already owes.
     fn write(&mut self, frag: FragKey, entry: HitEntry) -> Placed {
+        self.generation += 1;
         if self.owes_rebuild() {
             self.entries.insert(frag, entry);
             counter::bump(Counter::HitEntriesUpdated);
@@ -191,6 +218,7 @@ impl HitIndex {
     /// Takes one fragment out.
     pub fn remove(&mut self, frag: FragKey) {
         if self.entries.remove(frag).is_some() {
+            self.generation += 1;
             self.churn = self.churn.saturating_add(1);
             if !self.owes_rebuild() {
                 self.forest.remove(frag);
@@ -217,6 +245,7 @@ impl HitIndex {
     /// entry's order may be different — or when so much has been updated one entry at a time that
     /// the hierarchy is no longer a good one.
     pub fn rebuild(&mut self, store: &LayoutStore, scale: f32) {
+        self.generation += 1;
         self.entries.clear();
         self.forest.clear();
         self.churn = 0;

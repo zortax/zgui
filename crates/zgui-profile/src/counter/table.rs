@@ -210,6 +210,12 @@ counters! {
     /// Times the hit-test index was rebuilt wholesale instead of updated.
     HitIndexRebuilds => hit_index_rebuilds, Group::BackendNeutral;
 
+    /// Frames that re-tested what lies under a stationary pointer, because the hit index moved.
+    HitRetests => hit_retests, Group::BackendNeutral;
+
+    /// Pointer moves folded into the move queued after them, so a frame routes one per pointer.
+    PointerMovesCoalesced => pointer_moves_coalesced, Group::BackendNeutral;
+
     /// Extra passes run to deliver size and position observations and let their handlers settle.
     ObservationPasses => observation_passes, Group::BackendNeutral;
 

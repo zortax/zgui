@@ -59,7 +59,8 @@ pub use zgui_view::prelude::*;
 /// What a listener's payload is read in terms of: which key, which button, which modifiers, and
 /// which of the states a view may assert.
 pub use zgui_vocab::{
-    EventKind, Key, KeyCode, Modifiers, NamedKey, PhysicalKey, PointerButton, ScrollDelta, UiState,
+    EventKind, Key, KeyCode, Modifiers, NamedKey, PhysicalKey, PointerButton, PointerSample,
+    ScrollDelta, UiState,
 };
 
 /// What a `prop:` binding carries. Setting one from a view needs the value type in scope, so it

@@ -25,7 +25,7 @@ pub use crate::event::payload::key::{
     UnknownNamedKey,
 };
 pub use crate::event::payload::pointer::{
-    PointerAction, PointerButton, PointerEvent, PointerId, PointerKind,
+    PointerAction, PointerButton, PointerEvent, PointerId, PointerKind, PointerSample,
 };
 pub use crate::event::payload::scroll::ScrollEvent;
 pub use crate::event::payload::text::TextEvent;

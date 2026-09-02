@@ -39,7 +39,7 @@ use zgui_input::Router;
 use zgui_layout::HitIndex;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::{ContentCache, Painter};
-use zgui_platform::{Surface, SurfaceEvent};
+use zgui_platform::Surface;
 use zgui_render::Renderer;
 use zgui_scene::Scene;
 use zgui_style::{SheetHandle, SheetOrigin, SheetSource, StyleEngine, Viewport};
@@ -144,6 +144,8 @@ pub struct Window {
     layout: Rc<RefCell<LayoutStore>>,
     /// What is under a point.
     hit: HitIndex,
+    /// The hit index generation the stationary pointer was last re-tested against.
+    rehit_seen: u64,
     /// The reusable buffers the fragment walk works in, warm across frames.
     diff_scratch: zgui_layout::fragment::diff::DiffScratch,
     /// Where each scroll container is scrolled to, and everything that moves one over time.
@@ -350,7 +352,7 @@ pub struct Window {
     /// What the surface has been told about text input, and what it is owed.
     ime: zgui_input::Ime,
     /// Platform events that arrived since the last frame.
-    queued: Vec<SurfaceEvent>,
+    queued: Vec<crate::window::input::Queued>,
     /// The window's own reactive scope.
     scope: Option<zgui_reactive::Mounted>,
     /// The mounted view, held because dropping it unmounts the tree.
@@ -647,6 +649,7 @@ impl Window {
             layout_pool: None,
             layout,
             hit: HitIndex::new(),
+            rehit_seen: 0,
             diff_scratch: zgui_layout::fragment::diff::DiffScratch::default(),
             scroll,
             last_frame: None,

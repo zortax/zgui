@@ -32,21 +32,30 @@ const MAX_PASSES: u8 = 2;
 
 impl Window {
     /// Delivers every observed measurement that changed, and re-runs the reactive work if any did.
-    pub(crate) fn deliver_observations(&mut self) {
+    ///
+    /// Answers whether the frame owes another: reactive work the delivery's flush could not
+    /// finish, or a delivery that did not settle inside the pass budget. Both are otherwise
+    /// silent — the flush here runs with wakes folded into the frame, and its outcome is the
+    /// only record of what it left behind.
+    pub(crate) fn deliver_observations(&mut self) -> bool {
         // The registry is the authority on whether anything is watching. The per-node column is
         // the fast path the walk below probes; it is not a second registry.
         if self.dom.observation_count() == 0 {
-            return;
+            return false;
         }
 
+        let mut owed = false;
         for pass in 0..MAX_PASSES {
             counter::bump(Counter::ObservationPasses);
             if !self.deliver_once() {
-                return;
+                return owed;
             }
-            zgui_reactive::flush();
+            owed |= zgui_reactive::flush().needs_another_frame;
             self.restyle_and_relayout_after_delivery();
             if pass + 1 == MAX_PASSES {
+                // The geometry the last relayout produced has not been delivered. The next frame
+                // compares it against what was recorded and delivers it, so one is asked for.
+                owed = true;
                 tracing::warn!(
                     target: "zgui::observe",
                     "geometry observation did not settle in {MAX_PASSES} passes; the frame is \
@@ -54,6 +63,7 @@ impl Window {
                 );
             }
         }
+        owed
     }
 
     /// Delivers what changed, and reports whether anything was delivered at all.

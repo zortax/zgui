@@ -154,7 +154,16 @@ impl Window {
         // settled value — runs handlers, and handlers run in a frame rather than where an event
         // arrives. So it is queued with the input and drained with it.
         if event.is_input() || (wants_a_frame && Self::surface_focus_of(&event).is_some()) {
-            self.queued.push(event);
+            // A move behind a move of the same pointer takes its place: a frame routes and
+            // settles one move per pointer, and the folded positions ride along as samples for
+            // the handler that wants the path rather than the destination.
+            match self.queued.last_mut() {
+                Some(last) if last.folds(&event) => {
+                    last.fold(event);
+                    counter::bump(Counter::PointerMovesCoalesced);
+                }
+                _ => self.queued.push(crate::window::input::Queued::new(event)),
+            }
         }
         wants_a_frame
     }
@@ -369,7 +378,7 @@ impl Window {
         mark("f.dispatch_scroll");
         self.dispatch_scroll(timestamp);
         mark("f.observe");
-        self.deliver_observations();
+        let observed = self.deliver_observations();
         // A second settle, for what the scroll and observation deliveries produced: both flush
         // and relayout mid-frame precisely so a virtualised list renders this frame's rows, and
         // rows born that way write their `src` after the first settle has run. Without this, each
@@ -387,8 +396,15 @@ impl Window {
         {
             self.request_frame();
         }
+        // Only when something under the pointer could have changed: every fragment that moved,
+        // appeared or went wrote the hit index, and a frame that wrote nothing there leaves the
+        // pointer over exactly what it was over.
         mark("f.rehit");
-        self.rehit();
+        if self.hit.generation() != self.rehit_seen {
+            self.rehit_seen = self.hit.generation();
+            counter::bump(Counter::HitRetests);
+            self.rehit();
+        }
         mark("f.publish_brushes");
         self.publish_text_brushes();
         // After layout, because where a caret goes is a question about the lines this frame
@@ -471,7 +487,8 @@ impl Window {
         // this window still owes a frame for something written from over there.
         self.serviced_document();
         let owed = self.gate.end_frame();
-        let needs_another_frame = owed || changed_during || flush.needs_another_frame || drained;
+        let needs_another_frame =
+            owed || changed_during || flush.needs_another_frame || drained || observed;
 
         // The renderer's own answer is a source too, and it is the only one that speaks for the
         // frame *after* the work was submitted. An acquisition that timed out, one against a surface

@@ -193,7 +193,10 @@ pub(crate) fn compute<C: MeasureContent>(
             max_advance,
             indent_basis: max_advance,
             bands: LineBands::new(&bands),
-            probe: false,
+            // A probe that reaches this loop — a line-box-aligned atomic, a float — still must
+            // not move the shaper's laid-out form: that form is what the kept pass's glyphs are
+            // drawn from.
+            probe: !ask.final_pass,
         };
         broken = tree.content().break_lines(summary.key, &request);
         computed = lines::compute(
@@ -280,7 +283,13 @@ pub(crate) fn compute<C: MeasureContent>(
         first_baseline: resolution.first_baseline(),
         last_baseline: resolution.last_baseline(),
     };
-    tree.set_inline_resolution(key, resolution);
+    // The kept pass owns the resolution. A probe may seed one where none is held, so an
+    // intrinsic probe has lines to answer from, and never replaces one: its lines were broken at
+    // a candidate width and carry no overflow marks, and a later kept pass that hits the layout
+    // cache would leave them as what the box is painted from.
+    if ask.final_pass || tree.inline_resolution_of(key).is_none() {
+        tree.set_inline_resolution(key, resolution);
+    }
     measured
 }
 

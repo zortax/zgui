@@ -25,6 +25,60 @@ use crate::dispatch::{self, HostSink};
 use crate::host::Command;
 use crate::window::Window;
 
+/// One event waiting for the frame, with the pointer moves folded into it.
+///
+/// A move that arrives while the last queued event is a move of the same pointer takes that
+/// event's place, and the replaced move is kept here as a sample. A press, a release, a key or a
+/// crossing between them is a barrier, so nothing is delivered out of order.
+pub(crate) struct Queued {
+    /// The event to dispatch.
+    pub(crate) event: SurfaceEvent,
+    /// The moves this one stands for, oldest first, not including itself.
+    pub(crate) samples: Vec<zgui_vocab::PointerSample>,
+}
+
+impl Queued {
+    /// A queue entry for `event`, standing for nothing else yet.
+    pub(crate) fn new(event: SurfaceEvent) -> Self {
+        Self {
+            event,
+            samples: Vec::new(),
+        }
+    }
+
+    /// Whether `event` is a move of the same pointer as the move held here.
+    pub(crate) fn folds(&self, event: &SurfaceEvent) -> bool {
+        match (&self.event, event) {
+            (
+                SurfaceEvent::Pointer {
+                    action: zgui_vocab::PointerAction::Moved,
+                    event: held,
+                    ..
+                },
+                SurfaceEvent::Pointer {
+                    action: zgui_vocab::PointerAction::Moved,
+                    event: next,
+                    ..
+                },
+            ) => held.id == next.id,
+            _ => false,
+        }
+    }
+
+    /// Replaces the held move with `event`, keeping the held one as a sample.
+    pub(crate) fn fold(&mut self, event: SurfaceEvent) {
+        if let SurfaceEvent::Pointer {
+            event: held,
+            timestamp,
+            ..
+        } = &self.event
+        {
+            self.samples.push(held.sample(*timestamp));
+        }
+        self.event = event;
+    }
+}
+
 impl Window {
     /// Dispatches everything that arrived since the last frame, and reports what it left owing.
     ///
@@ -52,8 +106,8 @@ impl Window {
         }
         let events = core::mem::take(&mut self.queued);
         let last = events.len().saturating_sub(1);
-        for (position, event) in events.iter().enumerate() {
-            self.dispatch_one(event, timestamp);
+        for (position, queued) in events.iter().enumerate() {
+            self.dispatch_one(&queued.event, &queued.samples, timestamp);
             if position < last {
                 owed |= self.settle_between_events(timestamp);
             }
@@ -77,8 +131,13 @@ impl Window {
         flush.needs_another_frame
     }
 
-    /// Dispatches one platform event.
-    fn dispatch_one(&mut self, event: &SurfaceEvent, timestamp: Timestamp) {
+    /// Dispatches one platform event, with the pointer moves that were folded into it.
+    fn dispatch_one(
+        &mut self,
+        event: &SurfaceEvent,
+        samples: &[zgui_vocab::PointerSample],
+        timestamp: Timestamp,
+    ) {
         // The surface's own keyboard focus reaches no element and dispatches nothing, so it is
         // taken before the routing: what it changes is what the window is holding on the document's
         // behalf — a composition, a value nobody has been told about, a pointer's leavings.
@@ -180,7 +239,7 @@ impl Window {
             let host = std::rc::Rc::clone(&self.host);
             let mut sink = HostSink::new(&host);
             dispatch::run(
-                self, &steps, kind, target, &payload, modifiers, timestamp, &mut sink,
+                self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
         };
 

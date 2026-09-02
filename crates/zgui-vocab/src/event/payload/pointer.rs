@@ -3,6 +3,7 @@
 use zgui_geom::{Css, CssPx, Point};
 
 use crate::event::kind::EventKind;
+use crate::time::Timestamp;
 
 /// Which physical pointer produced an event.
 ///
@@ -158,6 +159,30 @@ impl PointerEvent {
         self.button = Some(button);
         self
     }
+
+    /// What a move of this pointer keeps when a later move takes its place in a queue.
+    pub fn sample(&self, timestamp: Timestamp) -> PointerSample {
+        PointerSample {
+            position: self.position,
+            pressure: self.pressure,
+            timestamp,
+        }
+    }
+}
+
+/// One pointer position a queue folded into the move delivered after it.
+///
+/// Moves that arrive between two frames are delivered as one, so a frame routes and settles one
+/// event per pointer. What the folded moves carried is kept here, in the order they arrived, for
+/// the one consumer that wants every sample: a stroke drawn by hand.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerSample {
+    /// Where the pointer was, in CSS pixels from the window's top-left corner.
+    pub position: Point<CssPx, Css>,
+    /// How hard it was pressed, when the device reports it.
+    pub pressure: Option<f32>,
+    /// When the sample was taken.
+    pub timestamp: Timestamp,
 }
 
 #[cfg(test)]
