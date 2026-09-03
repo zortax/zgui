@@ -109,7 +109,10 @@ fn write(store: &mut LayoutStore, key: BoxKey, style: &ComputedStyle, relayout: 
     if !store.set_style(key, style) {
         return 0;
     }
-    if relayout {
+    // A custom element reads its style in `layout` and nowhere else: a colour it draws with, a
+    // custom property a theme moved. Any new cascade on its box is a relayout, whatever the
+    // engine classified the change as.
+    if relayout || store.custom_content(key).is_some() {
         mark_dirty(store, key);
     }
     1
@@ -223,6 +226,38 @@ mod tests {
         let key = insert(&mut store, None, BoxKind::Element);
         let held = store.node(key).style.clone();
         assert_eq!(write(&mut store, key, &held, false), 0);
+    }
+
+    #[test]
+    fn a_restyled_custom_box_is_laid_out_again_whatever_the_change_was() {
+        use crate::axis::Axis;
+        use crate::style::convert::length::IntrinsicSizes;
+        use crate::tree::store::content::{BoxContent, CustomBox};
+
+        let mut store = LayoutStore::new(DocumentId::FIRST);
+        let key = store.insert_with_content(
+            BoxNode::new(
+                StyleDraft::initial().build(),
+                BoxKind::Element,
+                FormattingContext::Block,
+            ),
+            BoxContent {
+                custom: Some(CustomBox::from((7, 0, 0))),
+                ..BoxContent::default()
+            },
+        );
+        store.set_intrinsic(key, Axis::Horizontal, IntrinsicSizes::default());
+
+        // A cascade the engine called a repaint: a custom element reads its style only when it
+        // is laid out, so the held answer goes all the same.
+        assert_eq!(
+            write(&mut store, key, &StyleDraft::initial().build(), false),
+            1
+        );
+        assert!(
+            store.intrinsic(key, Axis::Horizontal).is_none(),
+            "the custom box kept a measurement taken against the old style"
+        );
     }
 
     #[test]

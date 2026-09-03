@@ -5965,6 +5965,7 @@ dependencies = [
  "zgui-testkit-scene",
  "zgui-text",
  "zgui-text-style",
+ "zgui-vocab",
 ]
 
 [[package]]

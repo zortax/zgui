@@ -1102,6 +1102,11 @@ impl Window {
             rebuild = zgui_layout::boxtree::patch::retext(&mut layout, &document, root)
                 == zgui_layout::boxtree::patch::Retext::Rebuild;
         }
+        // A custom element that asked to be measured again is measured again: its style did not
+        // move, so no other pass reaches its box.
+        if !rebuild {
+            zgui_layout::boxtree::patch::custom::relayout(&mut layout, &document, root);
+        }
         zgui_profile::latency::note_with("b.why", || {
             format!(
                 "owed={} spliced={spliced:?} noroot={} rebuild={rebuild}",

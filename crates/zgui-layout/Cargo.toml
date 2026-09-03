@@ -40,6 +40,8 @@ tracing.workspace = true
 # green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+# The custom-element reference is a packed property; the relayout test writes one.
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # The box tree is built from computed styles, so the acceptance tests run a real cascade over a
 # real document rather than hand-writing the styles a cascade would have produced.
 zgui-style = { path = "../zgui-style", version = "0.1.0" }

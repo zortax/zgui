@@ -25,6 +25,7 @@
 //! rewritten in place is the same box. And a patch that cannot express what changed has to say so,
 //! so that the caller rebuilds rather than laying out a tree that no longer describes the document.
 
+pub mod custom;
 pub mod structure;
 pub mod style;
 pub mod subtree;
