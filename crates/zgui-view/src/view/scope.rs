@@ -163,6 +163,10 @@ where
         // the scope outlives every run of the body and would otherwise accumulate one run's worth
         // of reactive state per rebuild for as long as the view stays mounted.
         state.owner.with_cleanup(|| {
+            // The cleanup cancelled the previous run's tasks, and the set's cancel went with the
+            // other cleanups. A fresh set arms the scope again, so this run's tasks are cancelled
+            // at the next rebuild or at the unmount, as the first run's were.
+            zgui_reactive::provide_task_set();
             (self.body)()
                 .into_view()
                 .rebuild(&mut state.inner, &mut scoped.cx());
@@ -284,6 +288,52 @@ mod tests {
 
         state.unmount(&fixture.dom);
         assert_eq!(live.get(), 0);
+    }
+
+    /// A rebuild cancels the previous run's tasks, and the scope has to own the next run's just
+    /// the same: a task spawned by the rebuilt body goes with the unmount.
+    #[test]
+    fn a_task_spawned_after_a_rebuild_is_still_cancelled_at_unmount() {
+        struct Guard(Rc<Cell<u32>>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let fixture = Fixture::new();
+        let dropped = Rc::new(Cell::new(0u32));
+        let body = {
+            let dropped = Rc::clone(&dropped);
+            move || {
+                let guard = Guard(Rc::clone(&dropped));
+                zgui_reactive::spawn_local(async move {
+                    let _guard = guard;
+                    std::future::pending::<()>().await;
+                });
+                "body"
+            }
+        };
+
+        let mut state = Scoped::new(body.clone()).build(&mut fixture.cx());
+        state.mount(&fixture.dom, fixture.root, None);
+        flush();
+        assert_eq!(dropped.get(), 0, "the first run's task is pending");
+
+        Scoped::new(body.clone()).rebuild(&mut state, &mut fixture.cx());
+        flush();
+        assert_eq!(
+            dropped.get(),
+            1,
+            "the rebuild cancelled the first run's task"
+        );
+
+        state.unmount(&fixture.dom);
+        assert_eq!(
+            dropped.get(),
+            2,
+            "the unmount cancelled the rebuilt run's task"
+        );
     }
 
     #[test]
