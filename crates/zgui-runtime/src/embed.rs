@@ -86,7 +86,8 @@ pub struct EmbedMaintenanceCx<'a> {
 /// Device texture bytes retained by embeds, split by allocation ownership.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EmbedMemoryReport {
-    /// Textures zgui allocated for callback renderers; included in zgui-owned memory.
+    /// Textures zgui allocated for callback renderers and converted video; included in zgui-owned
+    /// memory.
     pub callback_owned: u64,
     /// Textures supplied by producers; diagnostic only and never automatically released.
     pub producer_owned: u64,
