@@ -11,7 +11,7 @@ use std::os::fd::{AsRawFd, IntoRawFd};
 use ash::vk;
 use zgui_render_wgpu::wgpu;
 
-use super::format::Format;
+use super::format::{self, Format, Support};
 use super::{DmaBuf, DmaBufPlane, Handles};
 use crate::ImportError;
 
@@ -68,6 +68,7 @@ pub(super) fn import(
     format: Format,
     frame: &DmaBuf<'_>,
     disjoint: bool,
+    support: Support,
 ) -> Result<wgpu::Texture, ImportError> {
     let raw = create(handles, format, frame, disjoint)?;
     let mut building = Building {
@@ -113,12 +114,30 @@ pub(super) fn import(
         unsafe { handles.device.bind_image_memory2(&infos) }
             .map_err(|error| refused("binding the planes to their memory", error))?;
     } else {
-        // SAFETY: the image was created on this device immediately above.
-        let requirements = unsafe { handles.device.get_image_memory_requirements(raw) };
-        let memory = allocate(handles, &frame.planes[0], requirements, Some(raw))?;
+        let mut dedication = vk::MemoryDedicatedRequirements::default();
+        let requirements = {
+            let mut requirements = vk::MemoryRequirements2::default().push_next(&mut dedication);
+            let info = vk::ImageMemoryRequirementsInfo2::default().image(raw);
+            // SAFETY: the image was created on this device immediately above.
+            unsafe {
+                handles
+                    .device
+                    .get_image_memory_requirements2(&info, &mut requirements)
+            };
+            requirements.memory_requirements
+        };
+        let dedicated = support.dedicated_only
+            || dedication.requires_dedicated_allocation == vk::TRUE
+            || dedication.prefers_dedicated_allocation == vk::TRUE;
+        let memory = allocate(
+            handles,
+            &frame.planes[0],
+            requirements,
+            dedicated.then_some(raw),
+        )?;
         building.memory.push(memory);
-        // SAFETY: the memory was imported for this image alone; the offset is the dedicated
-        // allocation's start, and each plane's own offset is stated in the image.
+        // SAFETY: the memory was imported for this image alone; the offset is the allocation's
+        // start, and each plane's own offset is stated in the image.
         unsafe { handles.device.bind_image_memory(raw, memory, 0) }
             .map_err(|error| refused("binding the image to its memory", error))?;
     }
@@ -207,15 +226,11 @@ fn create(
         .plane_layouts(&layouts);
     let mut external = vk::ExternalMemoryImageCreateInfo::default()
         .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
-    let flags = if disjoint {
-        vk::ImageCreateFlags::DISJOINT
-    } else {
-        vk::ImageCreateFlags::empty()
-    };
+    let mut list = vk::ImageFormatListCreateInfo::default().view_formats(&format.vulkan);
     let info = vk::ImageCreateInfo::default()
-        .flags(flags)
+        .flags(format::flags(disjoint))
         .image_type(vk::ImageType::TYPE_2D)
-        .format(format.vulkan)
+        .format(format.vulkan[0])
         .extent(vk::Extent3D {
             width: frame.width,
             height: frame.height,
@@ -229,15 +244,16 @@ fn create(
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .initial_layout(vk::ImageLayout::UNDEFINED)
         .push_next(&mut external)
-        .push_next(&mut explicit);
+        .push_next(&mut explicit)
+        .push_next(&mut list);
     // SAFETY: every structure is Vulkan's own with its `sType` set by `default()`, the plane
-    // layouts outlive the call, and the modifier was checked against what the device offers.
+    // layouts and view formats outlive the call, and the device stated it makes this image.
     unsafe { handles.device.create_image(&info, None) }
         .map_err(|error| refused("creating the image", error))
 }
 
 /// Imports `plane`'s descriptor as memory meeting `requirements`, dedicated to `dedicated` when
-/// the image is not disjoint.
+/// the driver asks for that.
 fn allocate(
     handles: &Handles,
     plane: &DmaBufPlane<'_>,
@@ -262,9 +278,20 @@ fn allocate(
         ));
     }
     let index = accepted.trailing_zeros();
-    // The dma-buf's own size, so the allocation covers every plane the descriptor holds.
-    let size = rustix::fs::seek(plane.fd, rustix::fs::SeekFrom::End(0))
-        .map_or(requirements.size, |end| end.max(requirements.size));
+    // A dedicated allocation is exactly the image's size. Any other import is the dma-buf's own
+    // size, which has to hold everything the image needs.
+    let available = rustix::fs::seek(plane.fd, rustix::fs::SeekFrom::End(0)).ok();
+    if available.is_some_and(|available| available < requirements.size) {
+        return Err(ImportError::Platform(format!(
+            "the dma-buf holds {} bytes where the image needs {}",
+            available.unwrap_or(0),
+            requirements.size
+        )));
+    }
+    let size = match (dedicated, available) {
+        (None, Some(available)) => available,
+        _ => requirements.size,
+    };
 
     // Vulkan takes ownership of the descriptor it imports, so it is given a duplicate.
     let owned = rustix::io::fcntl_dupfd_cloexec(plane.fd, 0)

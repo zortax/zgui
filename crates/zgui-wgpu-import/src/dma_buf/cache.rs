@@ -59,6 +59,11 @@ pub(super) struct Cache {
 }
 
 impl Cache {
+    /// Lets every image go.
+    pub(super) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
     /// The image made for `key`, if there is one, marked as just used.
     pub(super) fn get(&mut self, key: &Key) -> Option<Arc<wgpu::Texture>> {
         let index = self.entries.iter().position(|(held, _)| held == key)?;
@@ -69,8 +74,12 @@ impl Cache {
     }
 
     /// Keeps `texture` for `key`, letting the least recently used image go when full.
+    ///
+    /// Images of another format or size go at once: a decoder that changed resolution has a new
+    /// pool, and the old images would pin its old buffers.
     pub(super) fn insert(&mut self, key: Key, texture: Arc<wgpu::Texture>) {
-        self.entries.retain(|(held, _)| *held != key);
+        self.entries
+            .retain(|(held, _)| *held != key && held.layout == key.layout);
         self.entries.push_back((key, texture));
         while self.entries.len() > CAPACITY {
             self.entries.pop_front();

@@ -340,8 +340,9 @@ impl VideoFrame {
     /// Keeps `guard` alive until the device finished reading this frame's planes, then drops it.
     ///
     /// A plane imported from a decoder's own memory is valid only while the decoder's buffer is
-    /// held. Hand that buffer over here, and zgui releases it at the earliest safe moment. A frame
-    /// that is replaced before it is shown releases its guard at once.
+    /// held. Hand that buffer over here, and zgui releases it once the device has finished the
+    /// conversion pass, at the first submission or device poll after that. A frame that is
+    /// replaced before it is shown releases its guard at once.
     #[must_use]
     pub fn with_guard(mut self, guard: impl Send + 'static) -> Self {
         self.guard = Some(Box::new(guard));

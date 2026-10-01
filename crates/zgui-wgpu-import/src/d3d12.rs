@@ -18,10 +18,20 @@ use zgui_wgpu::{ColorSpace, Planes, SampleDepth, VideoFrame};
 use crate::ImportError;
 
 /// A decoded frame shared by NT handles.
+///
+/// The texture is handed over in the `COMMON` state and read in the pixel-shader-resource state,
+/// where it stays. A producer that tracks states transitions it from there before writing it
+/// again; one that creates it with `ALLOW_SIMULTANEOUS_ACCESS`, or shares it from Direct3D 11,
+/// needs nothing, because such a texture decays to `COMMON` after every submission.
 #[derive(Clone, Copy, Debug)]
 pub struct SharedFrame {
     /// The shared `NV12` or `P010` texture.
     pub resource: HANDLE,
+    /// The width of the picture in luma samples, which may be less than the texture's.
+    pub width: u32,
+    /// The height of the picture in luma samples, which may be less than the texture's: decoders
+    /// align it, so 1080p arrives in a texture 1088 rows high.
+    pub height: u32,
     /// The shared fence the producer signals when the frame is written.
     pub fence: HANDLE,
     /// The value the fence reaches once the frame is written.
@@ -166,6 +176,7 @@ impl D3d12Importer {
             _fence: fence,
         };
         let mut frame = VideoFrame::new(Planes::Multiplanar(Arc::new(texture)), color)
+            .with_visible_size(frame.width, frame.height)
             .with_guard((held, guard));
         if let Some(depth) = depth {
             frame = frame.with_depth(depth);

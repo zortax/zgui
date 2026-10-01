@@ -545,6 +545,19 @@ impl EmbedHost for WgpuSurfaces {
                     binding.content_attached = false;
                     match &mut binding.producer {
                         Producer::Handle(state) => {
+                            // Planes made on the old device cannot be converted on the new one.
+                            let stale = {
+                                let mut state = lock(state);
+                                let latest = match state.latest.take() {
+                                    Some(Presented::Video(frame)) => Some(frame),
+                                    other => {
+                                        state.latest = other;
+                                        None
+                                    }
+                                };
+                                (latest, state.queue.clear())
+                            };
+                            drop(stale);
                             if lost {
                                 tell(state, SurfaceEvent::DeviceLost { gpu: share.clone() });
                             }

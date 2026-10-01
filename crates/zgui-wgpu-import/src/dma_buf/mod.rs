@@ -14,12 +14,17 @@
 //!   [`EXTENSIONS`]; the umbrella crate's `App::with_vulkan_extensions` is where they go.
 //! * **The decoder's writes.** The importer waits on each descriptor until every write the kernel
 //!   knows about has finished, so the image never shows a frame half decoded.
+//! * **Plane views.** The image is mutable and lists its two single-plane formats, which is what
+//!   lets the conversion pass view each plane on its own, as wgpu's own multi-planar images do.
 //! * **No compression metadata.** wgpu adopts an image as uninitialised and its first barrier
 //!   leaves `UNDEFINED`. Plain and tiled memory keeps its samples through that, but a modifier
 //!   with compression metadata (AMD DCC, Intel CCS) may have the metadata reset. Such a modifier
 //!   has more memory planes than the format has planes, and the importer refuses it as
 //!   [`ImportError::Format`]; the producer then asks its decoder for an uncompressed surface or
 //!   falls back to a copy.
+//! * **Ownership.** A cached image is read again for every frame the decoder writes into its
+//!   buffer, with no acquire from the foreign queue family between them; wgpu has no way to record
+//!   one. Uncompressed modifiers need none in practice.
 
 mod cache;
 mod format;
@@ -167,22 +172,23 @@ impl DmaBufImporter {
         color: ColorSpace,
         guard: impl Send + 'static,
     ) -> Result<VideoFrame, ImportError> {
-        let format = format::Format::of(frame.fourcc)?;
-        format::check(&self.handles, format, frame)?;
+        let format = format::Format::of(frame.fourcc, device.features())?;
+        let key = cache::Key::of(frame)?;
+        let disjoint = !key.shared();
+        let support = format::check(&self.handles, format, frame, disjoint)?;
         wait::written(frame.planes)?;
 
-        let key = cache::Key::of(frame)?;
         let cached = self.cache().get(&key);
         let texture = match cached {
             Some(texture) => texture,
             None => {
-                let disjoint = !key.shared();
                 let texture = Arc::new(image::import(
                     &self.handles,
                     device,
                     format,
                     frame,
                     disjoint,
+                    support,
                 )?);
                 self.cache().insert(key, Arc::clone(&texture));
                 texture
@@ -193,6 +199,14 @@ impl DmaBufImporter {
             frame = frame.with_depth(depth);
         }
         Ok(frame)
+    }
+
+    /// Lets every cached image go, and with them the decoder buffers they hold.
+    ///
+    /// For a producer that tears its decoder down. A decoder that changes resolution needs no
+    /// call: images of the old size go when the first frame of the new size is imported.
+    pub fn clear(&self) {
+        self.cache().clear();
     }
 
     /// The cache, locked; a poisoned lock is inherited.

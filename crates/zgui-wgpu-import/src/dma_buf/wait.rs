@@ -22,6 +22,17 @@ pub(super) fn written(planes: &[DmaBufPlane<'_>]) -> Result<(), ImportError> {
         .collect();
     loop {
         match poll(&mut fds, Some(&PATIENCE)) {
+            Ok(_)
+                if fds.iter().any(|fd| {
+                    fd.revents()
+                        .intersects(PollFlags::ERR | PollFlags::HUP | PollFlags::NVAL)
+                }) =>
+            {
+                return Err(ImportError::Platform(
+                    "a dma-buf descriptor reported an error while waiting for its writes"
+                        .to_owned(),
+                ));
+            }
             Ok(_) if fds.iter().all(|fd| fd.revents().contains(PollFlags::IN)) => return Ok(()),
             Ok(0) => {
                 return Err(ImportError::Platform(
