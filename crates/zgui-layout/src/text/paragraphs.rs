@@ -18,6 +18,12 @@ use crate::measure::{MeasureContent, MeasureRequest, Measured, NaturalSize, Shap
 /// it made the frame 0.9 times as long.
 const PRE_SHAPE_MIN_MISSES: usize = 16;
 
+/// How many results a pooled worker's cache keeps room for between batches.
+///
+/// A steady frame gives a worker a few paragraphs, and this room takes them without an allocation.
+/// A cold frame can give it hundreds, and the room those took is given back when the worker returns.
+const WORKER_ROOM: usize = 8;
+
 /// A shaper, its shaped paragraphs and its brush table, as one measurer.
 ///
 /// The cache is here rather than inside a shaper because it is what outlives the pass: a paragraph
@@ -113,10 +119,14 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
     /// Entries move whole — break state included — and replace what stands under their keys, so
     /// the lines a worker kept are the lines painting finds. Called in request order, which makes
     /// the winner of a shared key the one a serial pass would have kept.
+    ///
+    /// The worker's cache gives back the room it grew to, down to `WORKER_ROOM`. A pooled worker
+    /// lives as long as this measurer, and a cold batch can move hundreds of results through it.
     pub fn absorb_worker(&mut self, mut worker: Paragraphs<S, NaturalSize>) {
         for shaped in worker.cache.drain_shaped() {
             self.cache.insert(shaped);
         }
+        worker.cache.shrink_to(WORKER_ROOM);
         self.workers.push(worker);
         self.publish_bytes();
     }
