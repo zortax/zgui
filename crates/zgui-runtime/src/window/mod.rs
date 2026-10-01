@@ -290,6 +290,8 @@ pub struct Window {
     pending_crossings: Vec<crate::window::crossing::Crossing>,
     /// What the raw touch stream means: taps, long presses, drags and flicks.
     gestures: zgui_input::Gestures,
+    /// The primary clicks that can still become a double click.
+    clicks: zgui_input::Clicks,
     /// The containers a drag in progress is scrolling, innermost first.
     ///
     /// Latched when the drag begins, because the content moves under the contact: a chain
@@ -693,6 +695,7 @@ impl Window {
             pending_focus: Vec::new(),
             pending_crossings: Vec::new(),
             gestures: zgui_input::Gestures::new(),
+            clicks: zgui_input::Clicks::new(),
             scroll_settings: zgui_platform::ScrollSettings::default(),
             scroll_frozen: false,
             panning: Vec::new(),

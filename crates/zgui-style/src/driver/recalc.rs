@@ -423,7 +423,10 @@ fn compute_style<'doc>(
     // observe of the change, which is the difference between the style they inherited from and
     // the one they will.
     let old_primary = data.styles.primary.clone();
+    // The restyle removes every finished animation. The hold keeps the ones that fill forwards.
+    let held = crate::driver::animations::hold::hold(element, context.shared);
     let hint = element.finish_restyle(context, data, new_styles, important_rules_changed);
+    crate::driver::animations::hold::release(context.shared, held);
     match (old_primary, data.styles.get_primary()) {
         (Some(old), Some(new)) if !engine_hints() => {
             let narrowed = narrowed_children_hint(&old, new, hint);

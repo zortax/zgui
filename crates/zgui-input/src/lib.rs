@@ -32,6 +32,7 @@
 //! | [`normalize`] | what the window said, in units the document can use |
 //! | [`hit`] | which element is under a point, and its path to the root |
 //! | [`capture`] | which element is receiving the pointer regardless of position |
+//! | [`click`] | which clicks make a double click |
 //! | [`state`] | which interaction bits the document now carries |
 //! | [`focus`] | what can be focused, in what order, and what confines it |
 //! | [`gesture`] | what a sequence of raw touches means |
@@ -81,6 +82,7 @@
 #![forbid(unsafe_code)]
 
 pub mod capture;
+pub mod click;
 pub mod dispatch;
 pub mod drag;
 pub mod focus;
@@ -92,6 +94,7 @@ pub mod router;
 pub mod state;
 
 pub use crate::capture::PointerCapture;
+pub use crate::click::Clicks;
 pub use crate::dispatch::{FrameworkDefault, Step};
 pub use crate::drag::{Drag, DragPhase, DragSource, Drags, DropEffect, Dropped};
 pub use crate::focus::{FocusDirection, FocusSource, FocusTrapId, TrapOptions};

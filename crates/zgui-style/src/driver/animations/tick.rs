@@ -483,7 +483,7 @@ fn step(
 }
 
 /// Whether a finished animation's last keyframe stays in force.
-fn fills_forwards(animation: &Animation) -> bool {
+pub(crate) fn fills_forwards(animation: &Animation) -> bool {
     matches!(animation.fill_mode, FillMode::Forwards | FillMode::Both)
 }
 

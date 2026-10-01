@@ -257,13 +257,18 @@ impl Window {
         // text that is still on the screen, and the commit that follows lands in whatever gained
         // the focus.
         let held = composing && matches!(event, SurfaceEvent::Key { .. });
+        let mut activated = None;
         if dispatched.default_allowed
             && !typed
             && !held
             && let Some(default) = default
         {
             self.carry_out_default(default, modifiers, Self::button_of(event), timestamp);
+            if let zgui_input::FrameworkDefault::Activate(node) = default {
+                activated = Some(node);
+            }
         }
+        self.follow_clicks(event, activated, modifiers, timestamp);
         // A handler that clicked its own element on the press has taken the activation, and the
         // release that ends that press must not click it a second time. Forgetting the press is the
         // whole of it: `:active`, the capture and the focus the press moved are all left alone,
@@ -552,6 +557,46 @@ impl Window {
                 zgui_input::ime::Told::Enabled(area) => Some(area),
                 zgui_input::ime::Told::Disabled => None,
             });
+        }
+    }
+
+    /// Dispatches a double click after the click that completes one.
+    ///
+    /// `activated` is the element this event clicked, if it clicked one. A release that clicks
+    /// nothing and a key that clicks something both end the pair.
+    fn follow_clicks(
+        &mut self,
+        event: &SurfaceEvent,
+        activated: Option<zgui_dom::NodeKey>,
+        modifiers: Modifiers,
+        timestamp: Timestamp,
+    ) {
+        let SurfaceEvent::Pointer {
+            action: zgui_vocab::PointerAction::Released,
+            event: pointer,
+            timestamp: sent,
+            ..
+        } = event
+        else {
+            if activated.is_some() {
+                self.clicks.reset();
+            }
+            return;
+        };
+        let Some(node) = activated else {
+            self.clicks.reset();
+            return;
+        };
+        // The event's own stamp, for the reason the gestures use it: every event in one frame
+        // shares the frame's stamp.
+        if self.clicks.click(node, pointer.position, *sent) {
+            self.synthesize_pointer(
+                zgui_view_dom::id::to_view(node),
+                EventKind::DoubleClick,
+                modifiers,
+                pointer.button,
+                timestamp,
+            );
         }
     }
 

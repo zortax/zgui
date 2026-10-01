@@ -16,7 +16,9 @@
 //! | [`set`] | the animations a document is running, and the clock they are read at |
 //! | [`tick`] | advancing them one frame, and the lifecycle edges that produces |
 //! | [`sample`] | what one element's animations currently evaluate to |
+//! | `hold` | keeping a finished animation that fills forwards through a restyle |
 
+pub(crate) mod hold;
 pub mod sample;
 pub mod set;
 pub mod tick;
