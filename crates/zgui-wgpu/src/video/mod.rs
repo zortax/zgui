@@ -19,6 +19,7 @@ mod convert;
 mod frame;
 mod params;
 mod sample;
+mod schedule;
 #[cfg(test)]
 pub(crate) mod testing;
 
@@ -26,3 +27,4 @@ pub use color::{ColorMatrix, ColorPrimaries, ColorRange, ColorSpace, TransferFun
 pub(crate) use convert::Converter;
 pub use frame::{PlaneData, Planes, SampleSize, UnsupportedFormat, VideoFrame};
 pub use sample::{ChromaSiting, Packing, SampleDepth};
+pub(crate) use schedule::Queue;

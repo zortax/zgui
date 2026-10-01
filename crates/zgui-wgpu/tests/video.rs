@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 use zgui_atlas::TextureSink;
 use zgui_bits::DamageSet;
@@ -136,28 +137,66 @@ fn attached(events: &Receiver<SurfaceEvent>) -> GpuShare {
         .expect("the surface was attached")
 }
 
-/// An 8×2 picture: red on the left half, blue on the right.
-fn frame(gpu: &GpuShare) -> VideoFrame {
+/// An 8×2 picture of `left` codes on the left half and `right` codes on the right.
+fn frame(gpu: &GpuShare, left: [u8; 3], right: [u8; 3]) -> VideoFrame {
     let luma: Vec<u8> = (0..16)
-        .map(|i| if i % 8 < 4 { RED[0] } else { BLUE[0] })
+        .map(|i| if i % 8 < 4 { left[0] } else { right[0] })
         .collect();
-    let cb = [RED[1], RED[1], BLUE[1], BLUE[1]];
-    let cr = [RED[2], RED[2], BLUE[2], BLUE[2]];
-    let plane = |bytes: &'static [u8], width: u32, height: u32| PlaneData {
-        bytes,
-        stride: width,
-        width,
-        height,
-    };
-    let (luma, cb, cr) = (luma.leak(), cb.to_vec().leak(), cr.to_vec().leak());
+    let cb = [left[1], left[1], right[1], right[1]];
+    let cr = [left[2], left[2], right[2], right[2]];
+    fn plane(bytes: &[u8], width: u32, height: u32) -> PlaneData<'_> {
+        PlaneData {
+            bytes,
+            stride: width,
+            width,
+            height,
+        }
+    }
     let planes = Planes::upload_triplanar(
         gpu.device(),
         gpu.queue(),
         SampleSize::U8,
-        [plane(luma, 8, 2), plane(cb, 4, 1), plane(cr, 4, 1)],
+        [plane(&luma, 8, 2), plane(&cb, 4, 1), plane(&cr, 4, 1)],
     )
     .expect("8-bit planes are always supported");
     VideoFrame::new(planes, ColorSpace::BT709)
+}
+
+/// A window with one surface, its producer's handle, the device it attached to, and the
+/// pixels the window last drew.
+struct Fixture {
+    app: Harness<Runtime>,
+    handle: SurfaceHandle,
+    gpu: GpuShare,
+    last: Rc<RefCell<Option<Pixels>>>,
+}
+
+fn fixture() -> Option<Fixture> {
+    let handle = SurfaceHandle::new(SurfaceConfig::default());
+    let (tx, events) = std::sync::mpsc::channel();
+    handle.set_events(move |event| {
+        let _ = tx.send(event);
+    });
+    let last = Rc::new(RefCell::new(None));
+    let mut app = app(handle.clone(), Rc::clone(&last))?;
+    app.app_mut().windows_mut()[0].install_embed_host(Box::new(zgui_wgpu::WgpuSurfaces::new()));
+    app.settle(16);
+    let gpu = attached(&events);
+    Some(Fixture {
+        app,
+        handle,
+        gpu,
+        last,
+    })
+}
+
+impl Fixture {
+    /// The left and right halves of the window as last drawn.
+    fn halves(&self) -> ([u8; 4], [u8; 4]) {
+        let last = self.last.borrow();
+        let pixels = last.as_ref().expect("a frame was drawn");
+        (pixels.rgba(10, 10), pixels.rgba(70, 10))
+    }
 }
 
 fn near(actual: [u8; 4], expected: [u8; 3]) -> bool {
@@ -169,24 +208,63 @@ fn near(actual: [u8; 4], expected: [u8; 3]) -> bool {
 
 #[test]
 fn a_presented_video_frame_reaches_the_window_in_colour() {
-    let handle = SurfaceHandle::new(SurfaceConfig::default());
-    let (tx, events) = std::sync::mpsc::channel();
-    handle.set_events(move |event| {
-        let _ = tx.send(event);
-    });
-    let last = Rc::new(RefCell::new(None));
-    let Some(mut app) = app(handle.clone(), Rc::clone(&last)) else {
-        return;
-    };
-    app.app_mut().windows_mut()[0].install_embed_host(Box::new(zgui_wgpu::WgpuSurfaces::new()));
-    app.settle(16);
-
-    let gpu = attached(&events);
-    handle.present_video(frame(&gpu));
-    app.settle(16);
-
-    let pixels = last.borrow_mut().take().expect("a frame was drawn");
-    let (left, right) = (pixels.rgba(10, 10), pixels.rgba(70, 10));
+    let Some(mut fx) = fixture() else { return };
+    fx.handle.present_video(frame(&fx.gpu, RED, BLUE));
+    fx.app.settle(16);
+    let (left, right) = fx.halves();
     assert!(near(left, [255, 0, 0]), "left half: {left:?}");
     assert!(near(right, [0, 0, 255]), "right half: {right:?}");
+}
+
+#[test]
+fn stamped_frames_show_on_the_refresh_nearest_their_stamps_and_wake_the_loop_for_it() {
+    let Some(mut fx) = fixture() else { return };
+    let start = fx.app.now();
+    let at = |ms| start + Duration::from_millis(ms);
+    fx.handle
+        .present_video(frame(&fx.gpu, RED, RED).with_presentation_time(at(100)));
+    fx.handle
+        .present_video(frame(&fx.gpu, BLUE, BLUE).with_presentation_time(at(200)));
+    fx.app.settle(16);
+    assert!(
+        fx.last
+            .borrow()
+            .as_ref()
+            .is_none_or(|p| !near(p.rgba(10, 10), [255, 0, 0])),
+        "nothing shows before its time"
+    );
+
+    // The loop parks until half a refresh before the first stamp, and no earlier.
+    let parked = fx.app.parked_deadline().expect("a wake is owed");
+    assert!(parked > at(80) && parked <= at(100), "{:?}", parked - start);
+
+    fx.app.advance(Duration::from_millis(95));
+    fx.app.settle(16);
+    assert!(near(fx.halves().0, [255, 0, 0]), "{:?}", fx.halves().0);
+
+    fx.app.advance(Duration::from_millis(100));
+    fx.app.settle(16);
+    assert!(near(fx.halves().0, [0, 0, 255]), "{:?}", fx.halves().0);
+    // An empty queue wakes nothing: the next wake is the runtime's own maintenance, seconds out.
+    let now = fx.app.now();
+    assert!(
+        fx.app
+            .parked_deadline()
+            .is_none_or(|d| d >= now + Duration::from_secs(1)),
+        "the loop keeps waking for a queue that is empty"
+    );
+}
+
+#[test]
+fn an_unstamped_frame_empties_the_queue() {
+    let Some(mut fx) = fixture() else { return };
+    let start = fx.app.now();
+    fx.handle.present_video(
+        frame(&fx.gpu, BLUE, BLUE).with_presentation_time(start + Duration::from_millis(50)),
+    );
+    fx.handle.present_video(frame(&fx.gpu, RED, RED));
+    fx.app.settle(16);
+    fx.app.advance(Duration::from_millis(100));
+    fx.app.settle(16);
+    assert!(near(fx.halves().0, [255, 0, 0]), "{:?}", fx.halves().0);
 }

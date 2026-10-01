@@ -213,6 +213,8 @@ struct HandleState {
     config: SurfaceConfig,
     /// The newest presented content, not yet taken by a frame. Latest wins.
     latest: Option<Presented>,
+    /// Video frames stamped for later refreshes.
+    queue: video::Queue,
     /// A natural-size update not yet filed with layout.
     intrinsic_owed: Option<SurfaceIntrinsic>,
     /// Where events go, once the producer said.
@@ -264,6 +266,7 @@ impl SurfaceHandle {
         let state = Arc::new(Mutex::new(HandleState {
             config,
             latest: None,
+            queue: video::Queue::default(),
             intrinsic_owed: Some(config.intrinsic),
             events: None,
             waker: None,
@@ -283,7 +286,10 @@ impl SurfaceHandle {
     pub fn present(&self, texture: Arc<wgpu::Texture>) {
         let (waker, replaced) = {
             let mut state = self.lock();
-            let replaced = state.latest.replace(Presented::Texture(texture));
+            let replaced = (
+                state.latest.replace(Presented::Texture(texture)),
+                state.queue.clear(),
+            );
             (state.waker.clone(), replaced)
         };
         // Dropped outside the lock: a replaced frame's guard drop is the producer's code.
@@ -293,15 +299,23 @@ impl SurfaceHandle {
         }
     }
 
-    /// Presents `frame` as the surface's newest content.
+    /// Presents `frame` as the surface's newest content, or queues it for its presentation time.
     ///
-    /// Latest-wins, as [`present`](Self::present) is. The frame that takes it converts the planes
-    /// to colour on the shared device, into a texture zgui owns and reuses while the picture size
-    /// holds. A frame replaced before it is shown is dropped unconverted, with its guard.
+    /// An unstamped frame is latest-wins, as [`present`](Self::present) is, and empties the queue.
+    /// A frame stamped with [`VideoFrame::with_presentation_time`] waits for the refresh nearest
+    /// its stamp. The frame that shows it converts the planes to colour on the shared device, into
+    /// a texture zgui owns and reuses while the picture size holds. A frame that leaves unshown is
+    /// dropped unconverted, with its guard.
     pub fn present_video(&self, frame: VideoFrame) {
         let (waker, replaced) = {
             let mut state = self.lock();
-            let replaced = state.latest.replace(Presented::Video(frame));
+            let replaced = match frame.at {
+                Some(at) => (None, state.queue.insert(at, frame)),
+                None => (
+                    state.latest.replace(Presented::Video(frame)),
+                    state.queue.clear(),
+                ),
+            };
             (state.waker.clone(), replaced)
         };
         // Dropped outside the lock: a guard's drop is the producer's code.
@@ -557,6 +571,13 @@ impl EmbedHost for WgpuSurfaces {
         for (&node, binding) in &mut self.bindings {
             let outcome = Self::sync_one(node, binding, cx, share.as_ref(), &mut self.converter);
             report.animating |= outcome;
+            if let Producer::Handle(state) = &binding.producer {
+                let wake = lock(state).queue.wake_at(cx.refresh_interval);
+                report.wake_at = match (report.wake_at, wake) {
+                    (Some(earlier), Some(later)) => Some(earlier.min(later)),
+                    (earlier, later) => earlier.or(later),
+                };
+            }
         }
         report
     }
@@ -612,11 +633,16 @@ impl EmbedHost for WgpuSurfaces {
                     {
                         held.push(Arc::clone(attached));
                     }
-                    match &lock(state).latest {
+                    let state = lock(state);
+                    match &state.latest {
                         Some(Presented::Texture(texture)) => held.push(Arc::clone(texture)),
                         Some(Presented::Video(frame)) => held.extend(frame.planes.all().cloned()),
                         None => {}
                     }
+                    for frame in state.queue.frames() {
+                        held.extend(frame.planes.all().cloned());
+                    }
+                    drop(state);
                     for texture in held {
                         if producer_textures.insert(Arc::as_ptr(&texture) as usize) {
                             report.producer_owned += texture_bytes(&texture);
@@ -823,6 +849,23 @@ impl WgpuSurfaces {
                 };
                 tell(state, event);
             }
+        }
+
+        // A queued frame whose refresh came is the newest content, visible or not, so the frames
+        // before it release their guards now rather than when someone looks again.
+        if let Producer::Handle(state) = &binding.producer {
+            let left = {
+                let mut state = lock(state);
+                let (shown, mut left) = state.queue.take_due(cx.presents_at, cx.refresh_interval);
+                if let Some(frame) = shown
+                    && let Some(Presented::Video(old)) =
+                        state.latest.replace(Presented::Video(frame))
+                {
+                    left.push(old);
+                }
+                left
+            };
+            drop(left);
         }
 
         // An intrinsic that changed reaches layout whether or not anything can draw.

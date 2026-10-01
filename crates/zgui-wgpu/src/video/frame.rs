@@ -2,6 +2,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::wgpu;
 
@@ -209,6 +210,8 @@ pub struct VideoFrame {
     pub(crate) peak: Option<f32>,
     /// The visible part of the luma plane, from its top-left corner.
     pub(crate) visible: Option<(u32, u32)>,
+    /// When the frame is meant to be on the screen.
+    pub(crate) at: Option<Instant>,
     /// What the producer keeps alive until the device finished reading the planes.
     pub(crate) guard: Option<Box<dyn Any + Send>>,
 }
@@ -223,6 +226,7 @@ impl VideoFrame {
             siting: ChromaSiting::default(),
             peak: None,
             visible: None,
+            at: None,
             guard: None,
         }
     }
@@ -263,6 +267,21 @@ impl VideoFrame {
     #[must_use]
     pub fn with_visible_size(mut self, width: u32, height: u32) -> Self {
         self.visible = Some((width, height));
+        self
+    }
+
+    /// Stamps the frame with the moment it is meant to be on the screen.
+    ///
+    /// A stamped frame queues: it shows on the refresh nearest its stamp, frames stamped earlier
+    /// leave unshown once it does, and the window wakes for it without running a frame on every
+    /// refresh in between. A late frame shows on the next refresh. Up to eight frames queue per
+    /// surface; the earliest leaves when a ninth arrives. Stamp from the same clock as
+    /// [`Instant::now`], with the playback clock's offset applied.
+    ///
+    /// An unstamped frame shows on the next refresh and empties the queue.
+    #[must_use]
+    pub fn with_presentation_time(mut self, at: Instant) -> Self {
+        self.at = Some(at);
         self
     }
 
@@ -312,6 +331,7 @@ impl std::fmt::Debug for VideoFrame {
             .field("depth", &self.depth())
             .field("siting", &self.siting)
             .field("size", &self.size())
+            .field("at", &self.at)
             .field("guarded", &self.guard.is_some())
             .finish()
     }
