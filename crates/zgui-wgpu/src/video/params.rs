@@ -49,24 +49,18 @@ pub(crate) fn uniform(frame: &VideoFrame) -> Vec<u8> {
 fn rows(frame: &VideoFrame) -> [[f32; 4]; ROWS] {
     let color = frame.color;
     let depth = frame.depth();
-    let luma = frame.planes.luma();
-    let chroma = frame.planes.chroma();
+    let luma = frame.planes.luma_size();
+    let chroma = frame.planes.chroma_size();
     let (width, height) = frame.size();
 
     let [red, green, blue] = affine(color.matrix, color.range, depth.bits);
     let shape = [
-        width as f32 / luma.width() as f32,
-        height as f32 / luma.height() as f32,
-        f32::from(u8::from(matches!(
-            frame.planes,
-            super::Planes::Biplanar { .. }
-        ))),
-        depth.scale(luma.format()),
+        width as f32 / luma.0 as f32,
+        height as f32 / luma.1 as f32,
+        f32::from(u8::from(frame.planes.interleaved())),
+        depth.scale(frame.planes.luma_format()),
     ];
-    let [dx, dy] = frame.siting.offset(
-        (luma.width(), luma.height()),
-        (chroma.width(), chroma.height()),
-    );
+    let [dx, dy] = frame.siting.offset(luma, chroma);
 
     let Gamut(gamut) = Gamut::to_bt709(color.primaries);
     let row3 = |r: [f32; 3]| [r[0], r[1], r[2], 0.0];

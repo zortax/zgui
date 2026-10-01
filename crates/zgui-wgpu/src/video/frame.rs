@@ -14,7 +14,8 @@ use super::sample::{ChromaSiting, SampleDepth};
 /// Each plane is a 2D, single-sampled texture of a filterable float format with
 /// `TEXTURE_BINDING` usage, on the device [`SurfaceEvent::Attached`](crate::SurfaceEvent)
 /// delivered. `R8Unorm` and `Rg8Unorm` carry 8-bit video; `R16Unorm` and `Rg16Unorm` carry
-/// deeper video, described by [`VideoFrame::with_depth`]. Chroma planes may be subsampled in
+/// deeper video, described by [`VideoFrame::with_depth`]. A `P010` texture holds 10-bit codes in
+/// the high bits without being told. Chroma planes may be subsampled in
 /// either direction; the subsampling is read from the plane sizes.
 #[derive(Clone, Debug)]
 pub enum Planes {
@@ -36,6 +37,10 @@ pub enum Planes {
         /// The Cr plane.
         cr: Arc<wgpu::Texture>,
     },
+    /// One texture of format `NV12` or `P010` that holds both planes, read through its
+    /// `Plane0` and `Plane1` aspects. Hardware decoders on Direct3D 12 and Vulkan hand frames
+    /// over in this form.
+    Multiplanar(Arc<wgpu::Texture>),
 }
 
 /// One plane of samples in memory.
@@ -73,28 +78,75 @@ impl std::fmt::Display for UnsupportedFormat {
 impl std::error::Error for UnsupportedFormat {}
 
 impl Planes {
-    /// The luma plane, which sets the frame's sample grid.
-    pub fn luma(&self) -> &Arc<wgpu::Texture> {
-        match self {
+    /// The size of the luma plane, which sets the frame's sample grid.
+    pub fn luma_size(&self) -> (u32, u32) {
+        let luma = match self {
             Self::Biplanar { luma, .. } | Self::Triplanar { luma, .. } => luma,
-        }
+            Self::Multiplanar(texture) => texture,
+        };
+        (luma.width(), luma.height())
     }
 
-    /// The plane that holds Cb.
-    pub(crate) fn chroma(&self) -> &Arc<wgpu::Texture> {
+    /// The size of the plane that holds Cb.
+    pub(crate) fn chroma_size(&self) -> (u32, u32) {
         match self {
-            Self::Biplanar { chroma, .. } => chroma,
-            Self::Triplanar { cb, .. } => cb,
+            Self::Biplanar { chroma, .. } => (chroma.width(), chroma.height()),
+            Self::Triplanar { cb, .. } => (cb.width(), cb.height()),
+            // Both multi-planar formats subsample chroma 2× in each direction.
+            Self::Multiplanar(texture) => {
+                (texture.width().div_ceil(2), texture.height().div_ceil(2))
+            }
         }
     }
 
-    /// Every plane, luma first.
+    /// The format a luma sample is read as.
+    pub(crate) fn luma_format(&self) -> wgpu::TextureFormat {
+        match self {
+            Self::Biplanar { luma, .. } | Self::Triplanar { luma, .. } => luma.format(),
+            Self::Multiplanar(texture) => texture
+                .format()
+                .aspect_specific_format(wgpu::TextureAspect::Plane0)
+                .unwrap_or(wgpu::TextureFormat::R8Unorm),
+        }
+    }
+
+    /// Whether Cr is the second channel of the Cb plane.
+    pub(crate) fn interleaved(&self) -> bool {
+        !matches!(self, Self::Triplanar { .. })
+    }
+
+    /// Every texture, luma first.
     pub(crate) fn all(&self) -> impl Iterator<Item = &Arc<wgpu::Texture>> {
         let (first, second, third) = match self {
-            Self::Biplanar { luma, chroma } => (luma, chroma, None),
-            Self::Triplanar { luma, cb, cr } => (luma, cb, Some(cr)),
+            Self::Biplanar { luma, chroma } => (luma, Some(chroma), None),
+            Self::Triplanar { luma, cb, cr } => (luma, Some(cb), Some(cr)),
+            Self::Multiplanar(texture) => (texture, None, None),
         };
-        [first, second].into_iter().chain(third)
+        std::iter::once(first).chain(second).chain(third)
+    }
+
+    /// Views of the luma, Cb and Cr planes, in that order.
+    pub(crate) fn views(&self) -> [wgpu::TextureView; 3] {
+        let view = |texture: &wgpu::Texture, aspect| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                aspect,
+                ..Default::default()
+            })
+        };
+        let whole = wgpu::TextureAspect::All;
+        match self {
+            Self::Biplanar { luma, chroma } => {
+                [view(luma, whole), view(chroma, whole), view(chroma, whole)]
+            }
+            Self::Triplanar { luma, cb, cr } => {
+                [view(luma, whole), view(cb, whole), view(cr, whole)]
+            }
+            Self::Multiplanar(texture) => [
+                view(texture, wgpu::TextureAspect::Plane0),
+                view(texture, wgpu::TextureAspect::Plane1),
+                view(texture, wgpu::TextureAspect::Plane1),
+            ],
+        }
     }
 
     /// Uploads luma, Cb and Cr planes from memory. Creates new textures on every call.
@@ -308,8 +360,7 @@ impl VideoFrame {
 
     /// The size of the picture this frame shows, in luma samples.
     pub fn size(&self) -> (u32, u32) {
-        let luma = self.planes.luma();
-        let (width, height) = (luma.width(), luma.height());
+        let (width, height) = self.planes.luma_size();
         match self.visible {
             Some((w, h)) => (w.clamp(1, width), h.clamp(1, height)),
             None => (width, height),
@@ -318,8 +369,13 @@ impl VideoFrame {
 
     /// The code depth, stated or read from the luma plane's format.
     pub(crate) fn depth(&self) -> SampleDepth {
+        let multiplanar = match &self.planes {
+            Planes::Multiplanar(texture) => SampleDepth::of_multiplanar(texture.format()),
+            _ => None,
+        };
         self.depth
-            .unwrap_or_else(|| SampleDepth::of_format(self.planes.luma().format()))
+            .or(multiplanar)
+            .unwrap_or_else(|| SampleDepth::of_format(self.planes.luma_format()))
     }
 }
 

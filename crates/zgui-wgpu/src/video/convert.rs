@@ -7,8 +7,8 @@ use rustc_hash::FxHashMap;
 use crate::wgpu;
 use crate::wgpu::util::DeviceExt as _;
 
+use super::VideoFrame;
 use super::params::{self, Variant};
-use super::{Planes, VideoFrame};
 
 /// The shader, layouts and sampler of the conversion, built once per device, and a pipeline per
 /// variant, built when a first frame needs it.
@@ -177,12 +177,7 @@ impl Converter {
             contents: &params::uniform(&frame),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let view =
-            |texture: &wgpu::Texture| texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let (luma, cb, cr) = match &frame.planes {
-            Planes::Biplanar { luma, chroma } => (view(luma), view(chroma), view(chroma)),
-            Planes::Triplanar { luma, cb, cr } => (view(luma), view(cb), view(cr)),
-        };
+        let [luma, cb, cr] = frame.planes.views();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("zgui.video.convert"),
             layout: &self.layout,
@@ -210,7 +205,7 @@ impl Converter {
             ],
         });
 
-        let target_view = view(&output);
+        let target_view = output.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("zgui.video.convert"),
         });
@@ -253,7 +248,7 @@ mod tests {
     use super::*;
     use crate::video::testing::{BLUE, RED, device, halves, i420, plane, read, solid, upload};
     use crate::video::{
-        ChromaSiting, ColorRange, ColorSpace, SampleDepth, SampleSize, TransferFunction,
+        ChromaSiting, ColorRange, ColorSpace, Planes, SampleDepth, SampleSize, TransferFunction,
     };
 
     /// Converts `frame` and reads the picture back as RGBA in [0, 1].
@@ -335,6 +330,63 @@ mod tests {
         )
         .unwrap();
         let pixels = convert(&gpu, VideoFrame::new(planes, ColorSpace::BT709));
+        assert!(near(pixels[0], [255, 0, 0]), "{:?}", pixels[0]);
+        assert!(near(pixels[15], [0, 0, 255]), "{:?}", pixels[15]);
+    }
+
+    #[test]
+    fn a_multiplanar_texture_reads_through_its_plane_aspects() {
+        let Some((gpu, _held)) = device() else { return };
+        if !gpu
+            .device()
+            .features()
+            .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
+        {
+            eprintln!("skipped: the device has no NV12 textures");
+            return;
+        }
+        let [luma, cb, cr] = halves(RED, BLUE);
+        let chroma: Vec<u8> = cb.iter().zip(&cr).flat_map(|(b, r)| [*b, *r]).collect();
+        let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("zgui.video.test.nv12"),
+            size: wgpu::Extent3d {
+                width: 8,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::NV12,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (aspect, bytes, width, height, stride) in [
+            (wgpu::TextureAspect::Plane0, &luma, 8, 2, 8),
+            (wgpu::TextureAspect::Plane1, &chroma, 4, 1, 8),
+        ] {
+            gpu.queue().write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect,
+                },
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let frame = VideoFrame::new(Planes::Multiplanar(Arc::new(texture)), ColorSpace::BT709);
+        let pixels = convert(&gpu, frame);
         assert!(near(pixels[0], [255, 0, 0]), "{:?}", pixels[0]);
         assert!(near(pixels[15], [0, 0, 255]), "{:?}", pixels[15]);
     }

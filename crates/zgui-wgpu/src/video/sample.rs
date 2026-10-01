@@ -50,6 +50,11 @@ impl SampleDepth {
         }
     }
 
+    /// The depth a multi-planar texture of `format` holds.
+    pub(crate) fn of_multiplanar(format: wgpu::TextureFormat) -> Option<Self> {
+        (format == wgpu::TextureFormat::P010).then_some(Self::P010)
+    }
+
     /// What a sampled value of a plane of `format` is multiplied by to read `code / (2^bits − 1)`.
     pub(crate) fn scale(self, format: wgpu::TextureFormat) -> f32 {
         let Some(container) = container_bits(format) else {
