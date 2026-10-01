@@ -22,8 +22,8 @@ use zgui_runtime::{App, AppError, Runtime};
 use zgui_scene::Scene;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 use zgui_wgpu::{
-    ColorSpace, GpuShare, Planes, SurfaceConfig, SurfaceElementExt, SurfaceEvent, SurfaceHandle,
-    VideoFrame,
+    ColorSpace, GpuShare, PlaneData, Planes, SampleSize, SurfaceConfig, SurfaceElementExt,
+    SurfaceEvent, SurfaceHandle, VideoFrame,
 };
 
 /// BT.709 limited-range samples of pure red and pure blue.
@@ -143,15 +143,20 @@ fn frame(gpu: &GpuShare) -> VideoFrame {
         .collect();
     let cb = [RED[1], RED[1], BLUE[1], BLUE[1]];
     let cr = [RED[2], RED[2], BLUE[2], BLUE[2]];
-    let planes = Planes::upload_i420(
+    let plane = |bytes: &'static [u8], width: u32, height: u32| PlaneData {
+        bytes,
+        stride: width,
+        width,
+        height,
+    };
+    let (luma, cb, cr) = (luma.leak(), cb.to_vec().leak(), cr.to_vec().leak());
+    let planes = Planes::upload_triplanar(
         gpu.device(),
         gpu.queue(),
-        8,
-        2,
-        (&luma, 8),
-        (&cb, 4),
-        (&cr, 4),
-    );
+        SampleSize::U8,
+        [plane(luma, 8, 2), plane(cb, 4, 1), plane(cr, 4, 1)],
+    )
+    .expect("8-bit planes are always supported");
     VideoFrame::new(planes, ColorSpace::BT709)
 }
 

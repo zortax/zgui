@@ -65,7 +65,10 @@ pub use zgui_render_wgpu::wgpu;
 
 mod video;
 
-pub use video::{ColorMatrix, ColorRange, ColorSpace, Planes, VideoFrame};
+pub use video::{
+    ChromaSiting, ColorMatrix, ColorPrimaries, ColorRange, ColorSpace, Packing, PlaneData, Planes,
+    SampleDepth, SampleSize, TransferFunction, UnsupportedFormat, VideoFrame,
+};
 
 /// One shared device, plus the epoch that says when it stopped being the one you knew.
 ///
