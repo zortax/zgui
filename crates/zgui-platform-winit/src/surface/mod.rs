@@ -67,6 +67,9 @@ impl WinitSurface {
         if let Some(buttons) = self.title_buttons {
             crate::macos::place_title_buttons(&self.window, buttons);
         }
+        // The other desktops draw their buttons in a frame of their own.
+        #[cfg(not(target_os = "macos"))]
+        let _ = self.title_buttons;
     }
 
     /// The window underneath, for the parts of the loop that have to name it.
