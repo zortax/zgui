@@ -85,7 +85,7 @@ impl Script {
             location: zgui_vocab::KeyLocation::Standard,
             repeat: false,
         };
-        self.press(event, Modifiers::CONTROL);
+        self.press(event, Modifiers::PRIMARY);
     }
 
     /// Delivers one pointer action at a point on the surface, in CSS pixels.

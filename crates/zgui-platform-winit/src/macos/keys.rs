@@ -1,9 +1,9 @@
 //! Which window answers a command chord first.
 //!
-//! AppKit offers a command chord to the menu before the focused view. The framework offers it to
-//! the focused element first, as every other desktop does, so a text field or an editor keeps the
-//! chords it answers. The menu then answers the chords of its actions that nothing claimed. The
-//! chords of the desktop's own roles stay with AppKit.
+//! The framework offers a command chord to the focused element before the application menu, as
+//! every other desktop does, so a text field or an editor keeps the chords it answers. The menu
+//! then answers the chords of its actions that nothing claimed. The chords of the desktop's own
+//! roles stay with AppKit.
 
 use core::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,7 +19,7 @@ use zgui_vocab::{Key, Modifiers};
 /// The chords AppKit keeps: the shortcuts of the desktop roles in the menu, and window cycling.
 static NATIVE: Mutex<Vec<(String, Modifiers)>> = Mutex::new(Vec::new());
 
-/// Whether the content view answers key equivalents, which it does once a menu is installed.
+/// Whether command chords go to the focused window first, which they do once a menu is installed.
 static CLAIMING: AtomicBool = AtomicBool::new(false);
 
 /// Leaves `shortcuts` to AppKit, and gives every other chord to the focused window first.

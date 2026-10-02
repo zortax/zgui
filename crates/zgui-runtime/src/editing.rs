@@ -715,11 +715,11 @@ mod tests {
         let key = document.store().key_of(field);
         let mut editors = Editors::new();
 
-        let all = editors.key(&document, key, &letter("a"), Modifiers::CONTROL);
+        let all = editors.key(&document, key, &letter("a"), Modifiers::PRIMARY);
         assert!(all.handled, "select all is refused");
         assert_eq!(all.selection, Some(0..3));
 
-        let copied = editors.key(&document, key, &letter("c"), Modifiers::CONTROL);
+        let copied = editors.key(&document, key, &letter("c"), Modifiers::PRIMARY);
         assert_eq!(copied.clipboard.as_deref(), Some("abc"));
 
         let placed = editors.select(&document, key, 1..2);
@@ -740,9 +740,9 @@ mod tests {
         editors.select(&document, key, 0..3);
 
         for (event, modifiers) in [
-            (letter("x"), Modifiers::CONTROL),
-            (letter("v"), Modifiers::CONTROL),
-            (letter("z"), Modifiers::CONTROL),
+            (letter("x"), Modifiers::PRIMARY),
+            (letter("v"), Modifiers::PRIMARY),
+            (letter("z"), Modifiers::PRIMARY),
             (letter("q"), Modifiers::NONE),
         ] {
             let edited = editors.key(&document, key, &event, modifiers);
@@ -943,7 +943,7 @@ mod tests {
         let (document, field) = field("field", &["ab"]);
         let key = document.store().key_of(field);
         let mut editors = Editors::new();
-        let edited = editors.key(&document, key, &letter("v"), Modifiers::CONTROL);
+        let edited = editors.key(&document, key, &letter("v"), Modifiers::PRIMARY);
         assert!(edited.handled, "the chord belongs to the field");
         assert!(edited.paste, "and it is a request for the clipboard");
         assert_eq!(edited.value, None, "nothing was typed yet");
