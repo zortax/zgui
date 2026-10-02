@@ -90,6 +90,15 @@ impl Shared {
         Arc::clone(&self.waker) as Arc<dyn Waker>
     }
 
+    /// The surface `id` names, while it still exists.
+    pub(crate) fn by_surface(&self, id: SurfaceId) -> Option<Arc<WinitSurface>> {
+        self.surfaces
+            .borrow()
+            .iter()
+            .find(|surface| surface.id() == id)
+            .map(Arc::clone)
+    }
+
     /// The surface drawn into the window `id` names, while it still exists.
     pub(crate) fn by_window(&self, id: WindowId) -> Option<Arc<WinitSurface>> {
         self.surfaces
@@ -132,6 +141,8 @@ impl Shared {
                 // exists, and letting it go anywhere else would release a window handle from a
                 // thread that has no business touching one.
                 a11y::release(surface.id());
+                #[cfg(target_os = "macos")]
+                crate::macos::forget_surface(surface.id());
                 drop(surface);
                 id
             })
@@ -145,6 +156,8 @@ impl Shared {
             let kept = surface.window().id() != id;
             if !kept {
                 a11y::release(surface.id());
+                #[cfg(target_os = "macos")]
+                crate::macos::forget_surface(surface.id());
             }
             kept
         });
@@ -203,8 +216,11 @@ impl PlatformCx for WinitCx<'_> {
         ));
         surface.place_title_buttons();
         #[cfg(target_os = "macos")]
-        if let Some(view) = crate::macos::ns_view(&window) {
-            crate::macos::answer_key_equivalents(&view);
+        {
+            if let Some(view) = crate::macos::ns_view(&window) {
+                crate::macos::answer_key_equivalents(&view);
+            }
+            crate::macos::observe_fullscreen(&window, id, self.shared.waker());
         }
 
         // Attached here and nowhere else. The adapter refuses a window that has already been shown,

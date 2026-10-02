@@ -1236,6 +1236,14 @@ impl AppHandler for Runtime {
                 self.clipboards.resolve(serial, result);
             }
             WakeReason::App(event) => self.app_event(cx, event),
+            // A resize is where the state is read, and the last resize came before the change
+            // was done.
+            WakeReason::SurfaceStateChanged(surface) => {
+                if let Some(window) = self.window_mut(surface) {
+                    window.refresh_window_state();
+                    window.request_frame();
+                }
+            }
             _ => {}
         }
         self.apply_menu(cx);

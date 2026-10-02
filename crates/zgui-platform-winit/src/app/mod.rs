@@ -241,6 +241,12 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
             UserEvent::A11y(event) => a11y_wake(&self.shared, event),
         };
         let Some(reason) = reason else { return };
+        // The desktop lays the title bar out once more as a change of full screen ends.
+        if let WakeReason::SurfaceStateChanged(id) = &reason
+            && let Some(surface) = self.shared.by_surface(*id)
+        {
+            surface.place_title_buttons();
+        }
         let cx = WinitCx::new(&self.shared, event_loop);
         self.handler.wake(&cx, reason);
     }

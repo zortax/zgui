@@ -131,7 +131,7 @@ smithay-clipboard = "0.7"
 muda = { version = "0.21.0", default-features = false }
 objc2 = "0.6.4"
 block2 = "0.6.2"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSGeometry", "NSObject"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSGeometry", "NSObject", "NSNotification", "NSOperation", "block2"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSView", "NSResponder", "NSButton", "NSControl", "NSGraphics", "NSRunningApplication", "NSEvent", "block2"] }
 zbus = "5.18"
 # The native handles a surface hands a graphics API, named by the platform contract and by both

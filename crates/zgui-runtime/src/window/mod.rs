@@ -1007,6 +1007,11 @@ impl Window {
         self.occluded
     }
 
+    /// Reads again whether the surface is maximised or full screen.
+    pub(crate) fn refresh_window_state(&self) {
+        self.handle.refresh_window_state();
+    }
+
     /// Whether the surface has the keyboard, as the desktop last reported.
     pub const fn is_surface_focused(&self) -> bool {
         self.surface_focused

@@ -5,6 +5,7 @@
 
 mod buttons;
 mod double_click;
+mod fullscreen;
 mod keys;
 mod menu;
 mod reopen;
@@ -12,6 +13,9 @@ mod window;
 
 pub(crate) use crate::macos::buttons::place as place_title_buttons;
 pub(crate) use crate::macos::double_click::perform as title_bar_double_click;
+pub(crate) use crate::macos::fullscreen::{
+    forget as forget_surface, observe as observe_fullscreen,
+};
 pub(crate) use crate::macos::keys::install as answer_key_equivalents;
 pub(crate) use crate::macos::menu::{Menus, install as install_menu};
 pub(crate) use crate::macos::reopen::install as install_reopen;
