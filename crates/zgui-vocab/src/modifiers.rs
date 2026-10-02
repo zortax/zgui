@@ -35,6 +35,20 @@ impl Modifiers {
     /// The platform's command modifier: Super, Command or the Windows key.
     pub const META: Self = Self(1 << 3);
 
+    /// The modifier this platform's shortcuts use: command on macOS, control elsewhere.
+    ///
+    /// ```
+    /// use zgui_vocab::Modifiers;
+    ///
+    /// let expected = if cfg!(target_os = "macos") { Modifiers::META } else { Modifiers::CONTROL };
+    /// assert_eq!(Modifiers::PRIMARY, expected);
+    /// ```
+    pub const PRIMARY: Self = if cfg!(target_os = "macos") {
+        Self::META
+    } else {
+        Self::CONTROL
+    };
+
     /// Every modifier at once, which is also the mask of the bits that are defined.
     pub const ALL: Self = Self(0b1111);
 
@@ -76,6 +90,11 @@ impl Modifiers {
     /// Whether the platform's command modifier is held.
     pub const fn meta(self) -> bool {
         self.contains(Self::META)
+    }
+
+    /// Whether this platform's shortcut modifier is held.
+    pub const fn primary(self) -> bool {
+        self.contains(Self::PRIMARY)
     }
 
     /// The same set with `other` added or removed.

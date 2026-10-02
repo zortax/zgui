@@ -137,7 +137,7 @@ pub fn SidebarProvider(
                 events::KEY_DOWN,
                 zgui::vocab::ListenerOptions::CAPTURE,
                 move |ev: &mut EventCx<'_, events::KeyDown>| {
-                    let asked = ev.modifiers.control()
+                    let asked = ev.modifiers.primary()
                         && matches!(&ev.key, Key::Character(text) if text.eq_ignore_ascii_case("b"));
                     if asked {
                         context.toggle();

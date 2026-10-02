@@ -688,7 +688,7 @@ fn the_shortcut_folds_the_panel_from_anywhere_in_the_window() {
     harness
         .window
         .dispatcher()
-        .with_modifiers(Modifiers::CONTROL)
+        .with_modifiers(Modifiers::PRIMARY)
         .key(elsewhere, Key::Character(SharedString::from("b")));
     harness.window.frame();
 
@@ -700,7 +700,7 @@ fn the_shortcut_folds_the_panel_from_anywhere_in_the_window() {
     harness
         .window
         .dispatcher()
-        .with_modifiers(Modifiers::CONTROL)
+        .with_modifiers(Modifiers::PRIMARY)
         .key(elsewhere, Key::Character(SharedString::from("b")));
     harness.window.frame();
     assert_eq!(

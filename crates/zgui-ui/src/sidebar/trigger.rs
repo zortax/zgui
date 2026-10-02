@@ -54,7 +54,11 @@ pub fn SidebarTrigger(
 
     let mut semantics = A11yBinding::new(Role::Button)
         .label(label)
-        .keyboard_shortcut("Ctrl+B")
+        .keyboard_shortcut(if cfg!(target_os = "macos") {
+            "Cmd+B"
+        } else {
+            "Ctrl+B"
+        })
         .expanded(open);
     if let Some(context) = context {
         semantics = semantics.controls(context.panel());
