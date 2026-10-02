@@ -69,6 +69,7 @@ smithay-clipboard.workspace = true
 
 # The application menu, the reopen request and the title-bar buttons, which only AppKit has.
 [target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
 muda.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true

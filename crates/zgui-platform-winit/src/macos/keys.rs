@@ -1,17 +1,18 @@
-//! Which window answers a key equivalent first.
+//! Which window answers a command chord first.
 //!
 //! AppKit offers a command chord to the menu before the focused view. The framework offers it to
 //! the focused element first, as every other desktop does, so a text field or an editor keeps the
 //! chords it answers. The menu then answers the chords of its actions that nothing claimed. The
 //! chords of the desktop's own roles stay with AppKit.
 
-use std::sync::Mutex;
+use core::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use objc2::encode::{Encode, Encoding};
-use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
-use objc2::{ffi, msg_send, sel};
-use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSView};
+use block2::RcBlock;
+use objc2::runtime::AnyObject;
+use objc2::{MainThreadMarker, msg_send};
+use objc2_app_kit::{NSApplication, NSEvent, NSEventMask, NSEventModifierFlags, NSView};
 use zgui_platform::Shortcut;
 use zgui_vocab::{Key, Modifiers};
 
@@ -20,9 +21,6 @@ static NATIVE: Mutex<Vec<(String, Modifiers)>> = Mutex::new(Vec::new());
 
 /// Whether the content view answers key equivalents, which it does once a menu is installed.
 static CLAIMING: AtomicBool = AtomicBool::new(false);
-
-/// Whether the method is on the content view's class.
-static INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Leaves `shortcuts` to AppKit, and gives every other chord to the focused window first.
 pub(crate) fn keep_native(shortcuts: &[Shortcut]) {
@@ -70,61 +68,89 @@ fn is_native(key: &str, held: Modifiers) -> bool {
     })
 }
 
-/// Answers `performKeyEquivalent:` on the content view.
+/// Takes a command chord to the focused view of the key window, when the framework draws it.
 ///
-/// The view takes the chord as an ordinary key press, so the framework dispatches it to the
-/// focused element. A view whose window is not the key window takes nothing.
-extern "C-unwind" fn perform_key_equivalent(
-    view: &NSView,
-    _selector: Sel,
-    event: &NSEvent,
-) -> Bool {
+/// Reports whether the chord was taken, which keeps it from the menu.
+fn route(event: &NSEvent) -> bool {
     if !CLAIMING.load(Ordering::Relaxed) {
-        return Bool::NO;
-    }
-    let key = view.window().is_some_and(|window| window.isKeyWindow());
-    if !key {
-        return Bool::NO;
+        return false;
     }
     let held = modifiers(event.modifierFlags());
+    if !held.meta() {
+        return false;
+    }
     let characters = event
         .charactersIgnoringModifiers()
         .map(|text| text.to_string())
         .unwrap_or_default();
     if is_native(&characters, held) {
-        return Bool::NO;
+        return false;
+    }
+    let Some(main) = MainThreadMarker::new() else {
+        return false;
+    };
+    let Some(window) = NSApplication::sharedApplication(main).keyWindow() else {
+        return false;
+    };
+    let Some(view) = window.contentView() else {
+        return false;
+    };
+    if !is_framework_view(&view) {
+        return false;
     }
     // SAFETY: the view is winit's content view, which answers `keyDown:` with an event.
-    let _: () = unsafe { msg_send![view, keyDown: event] };
-    Bool::YES
+    let _: () = unsafe { msg_send![&*view, keyDown: event] };
+    true
 }
 
-/// Adds the method to the class of `view`, once.
+/// Whether `view` is a view this backend draws into.
+///
+/// The accessibility adapter gives the view a subclass of its own, so the class is looked for
+/// among the view's superclasses as well.
+fn is_framework_view(view: &NSView) -> bool {
+    let Some(name) = VIEW_CLASS.get() else {
+        return false;
+    };
+    let mut class = Some(AsRef::<AnyObject>::as_ref(view).class());
+    while let Some(held) = class {
+        if held.name().to_bytes() == name.as_bytes() {
+            return true;
+        }
+        class = held.superclass();
+    }
+    false
+}
+
+/// The class of the content views this backend draws into.
+static VIEW_CLASS: OnceLock<String> = OnceLock::new();
+
+/// Starts routing command chords to the focused window, once.
+///
+/// The monitor runs as AppKit receives a key press, before the menu sees it.
 pub(crate) fn install(view: &NSView) {
-    if INSTALLED.swap(true, Ordering::Relaxed) {
+    let name = AsRef::<AnyObject>::as_ref(view)
+        .class()
+        .name()
+        .to_string_lossy()
+        .into_owned();
+    if VIEW_CLASS.set(name).is_err() {
         return;
     }
-    let class: &AnyClass = AsRef::<AnyObject>::as_ref(view).class();
-    let function: extern "C-unwind" fn(&NSView, Sel, &NSEvent) -> Bool = perform_key_equivalent;
-    let types = std::ffi::CString::new(format!(
-        "{}{}{}{}",
-        Bool::ENCODING,
-        Encoding::Object,
-        Encoding::Sel,
-        Encoding::Object,
-    ))
-    .expect("an encoding has no interior nul");
-    // SAFETY: the function has the signature `performKeyEquivalent:` has: an object, a selector
-    // and an event in, a boolean out. The type string says the same.
-    unsafe {
-        let imp: Imp = core::mem::transmute(function);
-        ffi::class_addMethod(
-            core::ptr::from_ref(class).cast_mut(),
-            sel!(performKeyEquivalent:),
-            imp,
-            types.as_ptr(),
-        );
-    }
+    let handler = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+        // SAFETY: AppKit hands the monitor a live event for the length of the call.
+        let taken = route(unsafe { event.as_ref() });
+        if taken {
+            core::ptr::null_mut()
+        } else {
+            event.as_ptr()
+        }
+    });
+    // SAFETY: the handler returns the event it was given or null, as the monitor requires.
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler)
+    };
+    // The monitor stands for the life of the application.
+    core::mem::forget(monitor);
 }
 
 #[cfg(test)]

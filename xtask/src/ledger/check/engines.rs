@@ -79,6 +79,7 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("smithay-clipboard", &["zgui-platform-winit"]),
     ("muda", &["zgui-platform-winit"]),
     ("objc2", &["zgui-platform-winit"]),
+    ("block2", &["zgui-platform-winit"]),
     ("objc2-app-kit", &["zgui-platform-winit"]),
     ("objc2-foundation", &["zgui-platform-winit"]),
     ("zbus", &["zgui-platform-winit", "zgui-platform-wayland"]),
