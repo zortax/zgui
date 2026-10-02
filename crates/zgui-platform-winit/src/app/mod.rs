@@ -239,6 +239,14 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         let reason = match event {
             UserEvent::Wake(reason) => Some(reason),
             UserEvent::A11y(event) => a11y_wake(&self.shared, event),
+            UserEvent::Redraw(window) => {
+                self.window_event(
+                    event_loop,
+                    window,
+                    winit::event::WindowEvent::RedrawRequested,
+                );
+                None
+            }
         };
         let Some(reason) = reason else { return };
         let cx = WinitCx::new(&self.shared, event_loop);

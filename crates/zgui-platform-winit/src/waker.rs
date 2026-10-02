@@ -3,14 +3,16 @@
 use std::sync::Mutex;
 
 use winit::event_loop::EventLoopProxy;
+use winit::window::WindowId;
 use zgui_platform::{WakeReason, Waker};
 
 /// Something delivered to the loop from outside its own event stream.
 ///
-/// Two things arrive this way and they are unrelated: work finishing on another thread, and the
-/// accessibility channel's own connection asking for something. They share this type because the
-/// loop has exactly one way in for anything that is not an event about a window, and keeping that
-/// to one channel is what makes the wake path auditable.
+/// Three things arrive this way and they are unrelated: work finishing on another thread, the
+/// accessibility channel's own connection asking for something, and a frame for a window the
+/// platform does not paint. They share this type because the loop has exactly one way in for
+/// anything the platform does not report itself, and keeping that to one channel is what makes the
+/// wake path auditable.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum UserEvent {
@@ -18,6 +20,9 @@ pub enum UserEvent {
     Wake(WakeReason),
     /// The accessibility adapter has something to say about one window.
     A11y(accesskit_winit::Event),
+    /// A hidden window asks for a frame. Windows sends no paint message to a hidden window, so the
+    /// loop delivers the frame request itself.
+    Redraw(WindowId),
 }
 
 impl From<accesskit_winit::Event> for UserEvent {
@@ -47,6 +52,14 @@ impl ProxyWaker {
     pub fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         Self {
             proxy: Mutex::new(proxy),
+        }
+    }
+
+    /// Asks the loop for a frame of `window` on the loop's own thread.
+    pub fn redraw(&self, window: WindowId) {
+        let proxy = self.proxy.lock().expect("the channel is not poisoned");
+        if proxy.send_event(UserEvent::Redraw(window)).is_err() {
+            tracing::debug!(target: "zgui::platform", "a redraw arrived after the loop had finished");
         }
     }
 }

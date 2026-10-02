@@ -6,6 +6,7 @@ mod chrome;
 mod handles;
 
 pub(crate) use crate::surface::attributes::window as window_attributes;
+use crate::waker::ProxyWaker;
 
 use std::sync::Arc;
 
@@ -40,12 +41,14 @@ pub struct WinitSurface {
     id: SurfaceId,
     /// The window itself.
     window: Arc<Window>,
+    /// How a frame request reaches the loop when the platform does not deliver it.
+    waker: Arc<ProxyWaker>,
 }
 
 impl WinitSurface {
     /// A surface over `window`, numbered `id`, with nothing listening to it yet.
-    pub(crate) const fn new(id: SurfaceId, window: Arc<Window>) -> Self {
-        Self { id, window }
+    pub(crate) const fn new(id: SurfaceId, window: Arc<Window>, waker: Arc<ProxyWaker>) -> Self {
+        Self { id, window, waker }
     }
 
     /// The window underneath, for the parts of the loop that have to name it.
@@ -112,7 +115,13 @@ impl Surface for WinitSurface {
     }
 
     fn request_redraw(&self) {
-        self.window.request_redraw();
+        // Windows paints only visible windows, and a surface stays hidden until its first frame
+        // presents. The loop delivers the request for a hidden window itself.
+        if cfg!(windows) && self.window.is_visible() == Some(false) {
+            self.waker.redraw(self.window.id());
+        } else {
+            self.window.request_redraw();
+        }
     }
 
     fn pre_present_notify(&self) {

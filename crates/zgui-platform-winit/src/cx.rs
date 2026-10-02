@@ -189,7 +189,11 @@ impl PlatformCx for WinitCx<'_> {
 
         let id = SurfaceId::new(self.shared.next.get());
         self.shared.next.set(self.shared.next.get() + 1);
-        let surface = Arc::new(WinitSurface::new(id, Arc::clone(&window)));
+        let surface = Arc::new(WinitSurface::new(
+            id,
+            Arc::clone(&window),
+            Arc::clone(&self.shared.waker),
+        ));
 
         // Attached here and nowhere else. The adapter refuses a window that has already been shown,
         // and a surface is created hidden precisely so that this can happen before the first frame
