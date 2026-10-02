@@ -6,6 +6,7 @@ use crate::capabilities::PlatformCapabilities;
 use crate::clipboard::Clipboard;
 use crate::clock::Clock;
 use crate::error::PlatformError;
+use crate::menu::AppMenu;
 use crate::monitor::MonitorInfo;
 use crate::scroll::ScrollSettings;
 use crate::surface::{Surface, SurfaceAttributes, SurfaceId};
@@ -94,6 +95,14 @@ pub trait PlatformCx {
     /// Shared rather than borrowed, because the whole purpose of it is to be kept by something
     /// that outlives this callback and does not run on this thread.
     fn waker(&self) -> Arc<dyn Waker>;
+
+    /// Shows `menu` as the application menu.
+    ///
+    /// Replaces the menu shown before. A backend whose desktop has no application menu ignores
+    /// it, which is what the default does.
+    fn set_app_menu(&self, menu: &AppMenu) {
+        let _ = menu;
+    }
 
     /// Asks the loop to finish.
     ///

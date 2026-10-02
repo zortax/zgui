@@ -77,6 +77,10 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("accesskit_winit", &["zgui-platform-winit"]),
     ("arboard", &["zgui-platform-winit"]),
     ("smithay-clipboard", &["zgui-platform-winit"]),
+    ("muda", &["zgui-platform-winit"]),
+    ("objc2", &["zgui-platform-winit"]),
+    ("objc2-app-kit", &["zgui-platform-winit"]),
+    ("objc2-foundation", &["zgui-platform-winit"]),
     ("zbus", &["zgui-platform-winit", "zgui-platform-wayland"]),
     // The compositor, spoken to directly. Every one of these names a Wayland protocol or the loop
     // it is read on, and the whole point of a second platform backend is that none of them is

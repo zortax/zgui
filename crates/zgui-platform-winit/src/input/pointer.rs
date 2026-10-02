@@ -3,7 +3,7 @@
 use winit::dpi::PhysicalPosition;
 use winit::event::{Force, MouseButton, Touch, TouchPhase};
 use zgui_geom::{Css, CssPx, Point};
-use zgui_vocab::{PointerAction, PointerButton, PointerEvent, PointerId, PointerKind};
+use zgui_vocab::{Modifiers, PointerAction, PointerButton, PointerEvent, PointerId, PointerKind};
 
 /// Where a pointer is, in the space a layout is written in.
 ///
@@ -36,6 +36,48 @@ pub const fn button(button: MouseButton) -> PointerButton {
         MouseButton::Forward => PointerButton::Forward,
         MouseButton::Other(number) => PointerButton::Other(number),
     }
+}
+
+/// Reads a control-click as a secondary press where the desktop does.
+///
+/// On macOS a primary press with control held opens a context menu, so it reaches the document as
+/// a secondary press without control. Its release follows it whatever control does in between.
+/// `held` records whether the press in progress was read this way.
+pub fn context_click(
+    held: &mut bool,
+    pressed: bool,
+    button: PointerButton,
+    modifiers: Modifiers,
+) -> (PointerButton, Modifiers) {
+    context_click_on(cfg!(target_os = "macos"), held, pressed, button, modifiers)
+}
+
+/// The same, with the desktop's convention named by the caller.
+pub(crate) fn context_click_on(
+    desktop: bool,
+    held: &mut bool,
+    pressed: bool,
+    button: PointerButton,
+    modifiers: Modifiers,
+) -> (PointerButton, Modifiers) {
+    if !desktop || button != PointerButton::Primary {
+        return (button, modifiers);
+    }
+    if pressed {
+        *held = modifiers.control();
+    }
+    let read = if *held {
+        (
+            PointerButton::Secondary,
+            modifiers.with(Modifiers::CONTROL, false),
+        )
+    } else {
+        (button, modifiers)
+    };
+    if !pressed {
+        *held = false;
+    }
+    read
 }
 
 /// A mouse at `position`, optionally carrying the button that was used.
@@ -172,5 +214,54 @@ mod tests {
         assert_eq!(action(TouchPhase::Ended), PointerAction::Released);
         assert_eq!(action(TouchPhase::Started), PointerAction::Pressed);
         assert_eq!(action(TouchPhase::Moved), PointerAction::Moved);
+    }
+
+    #[test]
+    fn a_control_click_is_a_secondary_press_and_so_is_its_release() {
+        use super::context_click_on;
+        use zgui_vocab::{Modifiers, PointerButton};
+
+        let mut held = false;
+        let press = context_click_on(
+            true,
+            &mut held,
+            true,
+            PointerButton::Primary,
+            Modifiers::CONTROL,
+        );
+        assert_eq!(press, (PointerButton::Secondary, Modifiers::NONE));
+        // Control can come up before the button does.
+        let release = context_click_on(
+            true,
+            &mut held,
+            false,
+            PointerButton::Primary,
+            Modifiers::NONE,
+        );
+        assert_eq!(release, (PointerButton::Secondary, Modifiers::NONE));
+        let plain = context_click_on(
+            true,
+            &mut held,
+            true,
+            PointerButton::Primary,
+            Modifiers::NONE,
+        );
+        assert_eq!(plain, (PointerButton::Primary, Modifiers::NONE));
+    }
+
+    #[test]
+    fn a_control_click_stays_a_primary_press_where_the_desktop_has_no_such_convention() {
+        use super::context_click_on;
+        use zgui_vocab::{Modifiers, PointerButton};
+
+        let mut held = false;
+        let press = context_click_on(
+            false,
+            &mut held,
+            true,
+            PointerButton::Primary,
+            Modifiers::CONTROL,
+        );
+        assert_eq!(press, (PointerButton::Primary, Modifiers::CONTROL));
     }
 }

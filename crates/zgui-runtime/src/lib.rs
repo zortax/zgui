@@ -69,6 +69,7 @@ pub mod budget;
 pub mod caret;
 pub mod clipboard;
 pub mod commands;
+pub mod desktop;
 pub mod dispatch;
 pub mod editing;
 pub mod embed;

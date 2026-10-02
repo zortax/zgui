@@ -48,7 +48,7 @@ pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 /// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
 /// overrides one window's.
 pub use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, ResizeEdge, WindowIcon, WindowLevel,
+    CursorStyle, Decorations, FullscreenMode, ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
 };
 pub use zgui_runtime::{CloseResponse, ExitPolicy};
 

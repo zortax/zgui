@@ -12,7 +12,7 @@ mod text_input;
 mod timing;
 mod watchdog;
 
-pub use crate::surface::attributes::SurfaceAttributes;
+pub use crate::surface::attributes::{SurfaceAttributes, TitleButtons};
 pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
@@ -211,6 +211,14 @@ pub trait Surface: Send + Sync + 'static {
     /// entry, an urgency hint.
     fn request_attention(&self, urgent: bool) {
         let _ = urgent;
+    }
+
+    /// Does what a double press on a title bar does.
+    ///
+    /// The default maximises the surface, or restores it. A desktop with a preference for this
+    /// follows the preference.
+    fn title_bar_double_click(&self) {
+        self.set_maximized(!self.is_maximized());
     }
 
     /// Begins a platform-driven move of the surface.

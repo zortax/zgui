@@ -15,7 +15,7 @@ use winit::window::Window;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 use zgui_platform::{
     ColorScheme, CursorStyle, Decorations, FullscreenMode, GpuSurface, ResizeEdge, Surface,
-    SurfaceId, TextInput, Unsupported, WindowIcon, WindowLevel,
+    SurfaceId, TextInput, TitleButtons, Unsupported, WindowIcon, WindowLevel,
 };
 
 /// A window, seen as something to draw into and interact with.
@@ -40,12 +40,33 @@ pub struct WinitSurface {
     id: SurfaceId,
     /// The window itself.
     window: Arc<Window>,
+    /// Where the window buttons sit, when the application placed them.
+    title_buttons: Option<TitleButtons>,
 }
 
 impl WinitSurface {
     /// A surface over `window`, numbered `id`, with nothing listening to it yet.
-    pub(crate) const fn new(id: SurfaceId, window: Arc<Window>) -> Self {
-        Self { id, window }
+    pub(crate) const fn new(
+        id: SurfaceId,
+        window: Arc<Window>,
+        title_buttons: Option<TitleButtons>,
+    ) -> Self {
+        Self {
+            id,
+            window,
+            title_buttons,
+        }
+    }
+
+    /// Puts the window buttons where the application placed them.
+    ///
+    /// The desktop lays its title bar out again after a resize, a change of focus and a change of
+    /// full screen, so the loop calls this after each.
+    pub(crate) fn place_title_buttons(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(buttons) = self.title_buttons {
+            crate::macos::place_title_buttons(&self.window, buttons);
+        }
     }
 
     /// The window underneath, for the parts of the loop that have to name it.
@@ -199,6 +220,11 @@ impl Surface for WinitSurface {
         // something needs the user now; a desktop that draws only one kind of attention draws that.
         self.window
             .request_user_attention(urgent.then_some(winit::window::UserAttentionType::Critical));
+    }
+
+    #[cfg(target_os = "macos")]
+    fn title_bar_double_click(&self) {
+        crate::macos::title_bar_double_click(&self.window);
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

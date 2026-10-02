@@ -125,6 +125,13 @@ accesskit_unix = "0.22.1"
 # unconditionally and the Wayland clipboard goes through smithay-clipboard instead.
 arboard = { version = "3.6", default-features = false }
 smithay-clipboard = "0.7"
+# The macOS application menu, the dock's reopen request and the title-bar buttons. All three are
+# AppKit objects winit does not expose, so `zgui-platform-winit` reaches them through objc2 and
+# builds the menu with muda. `default-features = false` keeps gtk out of every other desktop.
+muda = { version = "0.21.0", default-features = false }
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSGeometry", "NSObject"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSView", "NSResponder", "NSButton", "NSControl", "NSGraphics", "NSRunningApplication"] }
 zbus = "5.18"
 # The native handles a surface hands a graphics API, named by the platform contract and by both
 # backends that implement it.

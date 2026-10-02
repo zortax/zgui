@@ -76,7 +76,7 @@ impl WindowHandle {
                 if again {
                     // The gesture is over either way: a third press is a new one.
                     last.set(None);
-                    window.toggle_maximized();
+                    window.title_bar_double_click();
                 } else {
                     last.set(Some((now, at)));
                     window.begin_move_drag();

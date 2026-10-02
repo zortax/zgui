@@ -69,6 +69,16 @@ pub struct PlatformCapabilities {
     pub native_gestures: bool,
     /// Whether the desktop's light or dark preference can be discovered.
     pub system_color_scheme: bool,
+    /// Whether the desktop shows an application menu outside the windows.
+    ///
+    /// Where it does, [`PlatformCx::set_app_menu`](crate::PlatformCx::set_app_menu) fills it, and
+    /// an application keeps its own in-window menu for the desktops where it does not.
+    pub app_menu: bool,
+    /// Whether the desktop tells the application when the user asks for it again.
+    ///
+    /// Where it does, an application can hide its last window and wait for
+    /// [`AppEvent::Reopen`](crate::AppEvent::Reopen).
+    pub reopen: bool,
 }
 
 impl PlatformCapabilities {
@@ -95,6 +105,8 @@ impl PlatformCapabilities {
             pointer_lock: false,
             native_gestures: false,
             system_color_scheme: false,
+            app_menu: false,
+            reopen: false,
         }
     }
 

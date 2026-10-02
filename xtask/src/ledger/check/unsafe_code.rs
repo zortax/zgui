@@ -36,7 +36,8 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ),
     (
         "zgui-platform-winit",
-        "the Wayland clipboard's unsafe constructor",
+        "the Wayland clipboard's unsafe constructor, and the AppKit calls behind the macOS \
+         application menu, reopen request and title-bar buttons",
     ),
     (
         "zgui-platform-wayland",

@@ -67,6 +67,7 @@ pub mod clipboard;
 pub mod clock;
 pub mod cx;
 pub mod error;
+pub mod menu;
 pub mod monitor;
 pub mod scroll;
 pub mod surface;
@@ -78,7 +79,7 @@ mod api;
 #[cfg(test)]
 mod backends;
 
-pub use crate::app::{AppHandler, IdlePolicy, Install, Park, Parked, WakeReason};
+pub use crate::app::{AppEvent, AppHandler, IdlePolicy, Install, Park, Parked, WakeReason};
 pub use crate::capabilities::PlatformCapabilities;
 pub use crate::clipboard::{
     Clipboard, ClipboardData, ClipboardError, ClipboardFormat, ClipboardKind, ClipboardSerial,
@@ -87,13 +88,15 @@ pub use crate::clipboard::{
 pub use crate::clock::{Clock, VirtualClock};
 pub use crate::cx::PlatformCx;
 pub use crate::error::{PlatformError, Unsupported};
+pub use crate::menu::{AppMenu, MenuAction, MenuEntry, MenuId, MenuRole, Shortcut, Submenu};
 pub use crate::monitor::{MonitorInfo, refresh_interval};
 pub use crate::scroll::ScrollSettings;
 pub use crate::surface::{
     Anchor, BadIcon, Constrain, CursorStyle, DecorationSource, Decorations, DragEvent,
     FullscreenMode, GpuSurface, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement,
     PresentPacing, PresentationTiming, ResizeEdge, Surface, SurfaceAttributes, SurfaceEvent,
-    SurfaceId, SurfaceRole, TextInput, TextInputPurpose, Watchdog, WindowIcon, WindowLevel,
+    SurfaceId, SurfaceRole, TextInput, TextInputPurpose, TitleButtons, Watchdog, WindowIcon,
+    WindowLevel,
 };
 pub use crate::theme::ColorScheme;
 pub use crate::waker::Waker;

@@ -2,6 +2,7 @@
 
 use accesskit::ActionRequest;
 
+use crate::app::event::AppEvent;
 use crate::clipboard::{ClipboardData, ClipboardError, ClipboardSerial};
 use crate::surface::SurfaceId;
 
@@ -53,6 +54,8 @@ pub enum WakeReason {
     DeviceLost,
     /// The desktop's light or dark preference changed.
     ColorSchemeChanged,
+    /// The desktop asked something of the application as a whole.
+    App(AppEvent),
 }
 
 impl WakeReason {

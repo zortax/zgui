@@ -991,6 +991,11 @@ impl Window {
         self.occluded
     }
 
+    /// Whether the surface has the keyboard, as the desktop last reported.
+    pub const fn is_surface_focused(&self) -> bool {
+        self.surface_focused
+    }
+
     /// How many configures moved the window's size without a pipeline run of their own.
     ///
     /// A resize is a level rather than a stream of events, so a configure that arrives before the

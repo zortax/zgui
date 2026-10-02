@@ -2,7 +2,8 @@
 
 use zgui_geom::{CssPx, Point, Size};
 use zgui_platform::{
-    ColorScheme, Decorations, FullscreenMode, SurfaceAttributes, WindowIcon, WindowLevel,
+    ColorScheme, Decorations, FullscreenMode, SurfaceAttributes, TitleButtons, WindowIcon,
+    WindowLevel,
 };
 use zgui_vocab::SharedString;
 
@@ -72,6 +73,14 @@ impl WindowOptions {
     /// edges to resize from, and a way to close it.
     pub fn with_decorations(mut self, decorations: Decorations) -> Self {
         self.attributes.decorations = decorations;
+        self
+    }
+
+    /// Where the desktop's window buttons sit over a window with [`Decorations::NoTitleBar`].
+    ///
+    /// Only macOS draws its buttons over the content. Elsewhere this does nothing.
+    pub fn with_title_buttons(mut self, buttons: TitleButtons) -> Self {
+        self.attributes.title_buttons = Some(buttons);
         self
     }
 

@@ -73,6 +73,8 @@ pub mod clipboard;
 pub mod clock;
 pub mod cx;
 pub mod input;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod monitor;
 pub mod park;
 pub mod surface;

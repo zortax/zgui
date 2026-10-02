@@ -231,6 +231,24 @@ impl App {
         self
     }
 
+    /// Where the desktop's window buttons sit over a window with [`Decorations::NoTitleBar`].
+    ///
+    /// Only macOS draws its buttons over the content. Elsewhere this does nothing.
+    pub fn with_title_buttons(mut self, buttons: zgui_platform::TitleButtons) -> Self {
+        self.inner.attributes_mut().title_buttons = Some(buttons);
+        self
+    }
+
+    /// Gives the application a menu outside its windows.
+    ///
+    /// `build` runs after [`App::with_context`], in the same scope, and runs again whenever a
+    /// signal it read changes. Only a desktop with an application menu shows it. What the user
+    /// picks reaches [`on_menu`](crate::desktop::on_menu).
+    pub fn with_menu(mut self, build: impl Fn() -> zgui_platform::AppMenu + 'static) -> Self {
+        self.inner = self.inner.with_menu(build);
+        self
+    }
+
     /// Whether the window may be partly transparent.
     ///
     /// What a window that draws its own rounded corners needs, so the desktop shows through them.

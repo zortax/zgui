@@ -319,6 +319,14 @@ impl WindowHandle {
         self.act(|surface| surface.set_maximized(!surface.is_maximized()));
     }
 
+    /// Does what a double press on a title bar does on this desktop.
+    ///
+    /// That maximises the window or restores it, unless the desktop has a preference: macOS zooms,
+    /// minimizes or does nothing, as the user set it in System Settings.
+    pub fn title_bar_double_click(&self) {
+        self.act(|surface| surface.title_bar_double_click());
+    }
+
     /// Minimises the window.
     pub fn minimize(&self) {
         self.act(|surface| surface.set_minimized(true));
@@ -337,6 +345,14 @@ impl WindowHandle {
     /// Does nothing where a desktop does not let an application place itself in the stack.
     pub fn set_level(&self, level: WindowLevel) {
         self.act(|surface| surface.set_window_level(level));
+    }
+
+    /// Shows or hides the window.
+    ///
+    /// Hiding keeps the window, its graphics surface and its whole document, so showing it again
+    /// costs one frame.
+    pub fn set_visible(&self, visible: bool) {
+        self.act(|surface| surface.set_visible(visible));
     }
 
     /// Sets the picture the desktop shows for this window.

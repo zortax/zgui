@@ -6,9 +6,9 @@ use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::WindowId;
 use zgui_platform::{
-    Clipboard, ClipboardFormat, Clock, ColorScheme, DecorationSource, FullscreenMode, MonitorInfo,
-    PlatformCapabilities, PlatformCx, PlatformError, ScrollSettings, Surface, SurfaceAttributes,
-    SurfaceId, Waker,
+    AppMenu, Clipboard, ClipboardFormat, Clock, ColorScheme, DecorationSource, FullscreenMode,
+    MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError, ScrollSettings, Surface,
+    SurfaceAttributes, SurfaceId, Waker,
 };
 
 use crate::clipboard::DesktopClipboard;
@@ -41,6 +41,9 @@ pub(crate) struct Shared {
     scheme: Cell<Option<ColorScheme>>,
     /// Windows the application has closed, waiting to be dropped between turns of the loop.
     retiring: RefCell<Vec<Arc<WinitSurface>>>,
+    /// The application menu on show.
+    #[cfg(target_os = "macos")]
+    menus: RefCell<crate::macos::Menus>,
 }
 
 impl Shared {
@@ -56,6 +59,8 @@ impl Shared {
             next: Cell::new(1),
             scheme: Cell::new(None),
             retiring: RefCell::new(Vec::new()),
+            #[cfg(target_os = "macos")]
+            menus: RefCell::new(crate::macos::Menus::default()),
         }
     }
 
@@ -71,6 +76,8 @@ impl Shared {
             .set(capabilities(event_loop, self.scheme.get().is_some()));
         self.clipboard
             .attach(event_loop, Arc::clone(&self.waker) as Arc<dyn Waker>);
+        #[cfg(target_os = "macos")]
+        crate::macos::install_reopen(self.waker());
     }
 
     /// The clock, as the contract's view of it.
@@ -189,7 +196,12 @@ impl PlatformCx for WinitCx<'_> {
 
         let id = SurfaceId::new(self.shared.next.get());
         self.shared.next.set(self.shared.next.get() + 1);
-        let surface = Arc::new(WinitSurface::new(id, Arc::clone(&window)));
+        let surface = Arc::new(WinitSurface::new(
+            id,
+            Arc::clone(&window),
+            title_buttons(attributes),
+        ));
+        surface.place_title_buttons();
 
         // Attached here and nowhere else. The adapter refuses a window that has already been shown,
         // and a surface is created hidden precisely so that this can happen before the first frame
@@ -280,6 +292,17 @@ impl PlatformCx for WinitCx<'_> {
         self.shared.waker()
     }
 
+    fn set_app_menu(&self, menu: &AppMenu) {
+        #[cfg(target_os = "macos")]
+        crate::macos::install_menu(
+            &mut self.shared.menus.borrow_mut(),
+            menu,
+            self.shared.waker(),
+        );
+        #[cfg(not(target_os = "macos"))]
+        let _ = menu;
+    }
+
     fn request_exit(&self) {
         self.event_loop.exit();
     }
@@ -287,6 +310,13 @@ impl PlatformCx for WinitCx<'_> {
     fn is_exiting(&self) -> bool {
         self.event_loop.exiting()
     }
+}
+
+/// Where the window buttons of a window opened with `attributes` sit, when the application says.
+fn title_buttons(attributes: &SurfaceAttributes) -> Option<zgui_platform::TitleButtons> {
+    (attributes.decorations == zgui_platform::Decorations::NoTitleBar)
+        .then_some(attributes.title_buttons)
+        .flatten()
 }
 
 /// What this desktop can actually do.
@@ -322,5 +352,7 @@ fn capabilities(event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCap
     capabilities.window_levels = placed_by_the_application;
     capabilities.decorations = DecorationSource::Platform;
     capabilities.system_color_scheme = knows_scheme;
+    capabilities.app_menu = cfg!(target_os = "macos");
+    capabilities.reopen = cfg!(target_os = "macos");
     capabilities
 }

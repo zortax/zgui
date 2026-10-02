@@ -106,15 +106,25 @@ pub fn translate(
             state: pressed,
             button,
             ..
-        } => Some(SurfaceEvent::Pointer {
-            action: match pressed {
-                winit::event::ElementState::Pressed => PointerAction::Pressed,
-                winit::event::ElementState::Released => PointerAction::Released,
-            },
-            event: pointer::mouse(state.pointer, Some(pointer::button(button))),
-            modifiers: state.modifiers,
-            timestamp,
-        }),
+        } => {
+            let pressed = pressed == winit::event::ElementState::Pressed;
+            let (button, modifiers) = pointer::context_click(
+                &mut state.context_click,
+                pressed,
+                pointer::button(button),
+                state.modifiers,
+            );
+            Some(SurfaceEvent::Pointer {
+                action: if pressed {
+                    PointerAction::Pressed
+                } else {
+                    PointerAction::Released
+                },
+                event: pointer::mouse(state.pointer, Some(button)),
+                modifiers,
+                timestamp,
+            })
+        }
         WindowEvent::MouseWheel { delta, phase, .. } => Some(SurfaceEvent::Wheel {
             event: wheel::event(
                 wheel::delta(delta, scale),

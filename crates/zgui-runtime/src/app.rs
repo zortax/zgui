@@ -148,6 +148,8 @@ pub struct App {
     shared: Option<Box<dyn FnOnce()>>,
     /// When the application stops.
     exit: ExitPolicy,
+    /// What builds the application menu, when the application has one.
+    menu: Option<Box<dyn Fn() -> zgui_platform::AppMenu>>,
     /// How many workers the style cascade may use, when the default is not wanted.
     style_threads: Option<usize>,
     /// How many workers the layout engine may use, when the default is not wanted.
@@ -174,6 +176,7 @@ impl App {
             custom: None,
             shared: None,
             exit: ExitPolicy::default(),
+            menu: None,
             style_threads: None,
             layout_threads: None,
         }
@@ -233,6 +236,17 @@ impl App {
     /// [`ExitPolicy`].
     pub fn with_exit_policy(mut self, exit: ExitPolicy) -> Self {
         self.exit = exit;
+        self
+    }
+
+    /// Gives the application a menu outside its windows.
+    ///
+    /// `build` runs in the scope above every window, after [`App::with_context`], and runs again
+    /// whenever a signal it read changes. Only a desktop with an application menu shows it; see
+    /// [`PlatformCapabilities::app_menu`](zgui_platform::PlatformCapabilities::app_menu). What the
+    /// user picks reaches [`on_menu`](crate::desktop::on_menu).
+    pub fn with_menu(mut self, build: impl Fn() -> zgui_platform::AppMenu + 'static) -> Self {
+        self.menu = Some(Box::new(build));
         self
     }
 
@@ -430,6 +444,10 @@ pub struct Runtime {
     scope: zgui_reactive::Mounted,
     /// When the application stops.
     exit: ExitPolicy,
+    /// What the application asked to hear about outside its windows.
+    hooks: crate::desktop::AppHooks,
+    /// The application menu, when the application has one.
+    menu: Option<crate::desktop::MenuSlot>,
     /// The next document identity to mint.
     next_document: u16,
     /// What the desktop groups this application's windows under.
@@ -533,18 +551,25 @@ impl Runtime {
         let scope = zgui_reactive::Mounted::new();
         let windows_api = crate::windows::Windows::new(commands.clone());
         let shared = app.shared.take();
+        let hooks = crate::desktop::AppHooks::new();
+        let build_menu = app.menu.take();
+        let mut menu = None;
         scope.with(|| {
             zgui_reactive::provide_local_context(commands.clone());
             // How every window reaches the others, and how any of them opens one.
             zgui_reactive::provide_local_context(windows_api.clone());
             // The desktop's clipboards, reachable from every window.
             zgui_reactive::provide_local_context(clipboards.clone());
+            // What the application hears from outside its windows.
+            zgui_reactive::provide_local_context(hooks.clone());
             // Work spawned above the windows dies with the application rather than never.
             zgui_reactive::provide_task_set();
             // The application's own state, provided where every window can resolve it.
             if let Some(setup) = shared {
                 setup();
             }
+            // After the application's own state, which the menu is built from.
+            menu = build_menu.map(crate::desktop::MenuSlot::new);
         });
         let application_id = app.attributes.application_id.clone();
         let primary = commands.mint();
@@ -573,6 +598,8 @@ impl Runtime {
             windows_api,
             scope,
             exit: app.exit,
+            hooks,
+            menu,
             next_document: 0,
             application_id: application_id.clone(),
             renderer: app.renderer.unwrap_or_else(|| {
@@ -835,6 +862,54 @@ impl Runtime {
         }
     }
 
+    /// Gives the desktop the version of the application menu it has not seen.
+    fn apply_menu(&self, cx: &dyn PlatformCx) {
+        let Some(slot) = &self.menu else { return };
+        if !cx.capabilities().app_menu {
+            return;
+        }
+        if let Some(menu) = slot.take() {
+            cx.set_app_menu(&menu);
+        }
+    }
+
+    /// Carries out something the desktop asked of the application as a whole.
+    fn app_event(&mut self, cx: &dyn PlatformCx, event: zgui_platform::AppEvent) {
+        use zgui_platform::AppEvent;
+
+        match event {
+            AppEvent::Reopen => {
+                let hooks = self.hooks.clone();
+                self.scope.with(|| {
+                    let _zone = zgui_reactive::enter_non_reactive_zone();
+                    hooks.reopen();
+                });
+            }
+            AppEvent::Menu(id) => {
+                let hooks = self.hooks.clone();
+                self.scope.with(|| {
+                    let _zone = zgui_reactive::enter_non_reactive_zone();
+                    hooks.menu(&id);
+                });
+            }
+            // The focused window receives the press the menu took from it.
+            AppEvent::Role(role) => {
+                let Some(event) = crate::desktop::replay(role, cx.clock().timestamp()) else {
+                    return;
+                };
+                if let Some(window) = self
+                    .windows
+                    .iter_mut()
+                    .find(|window| window.is_surface_focused())
+                    && window.queue(event)
+                {
+                    window.request_frame();
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Stops the application when its policy says the windows that are left are not enough.
     fn apply_exit_policy(&self, cx: &dyn PlatformCx) {
         let done = match self.exit {
@@ -994,6 +1069,7 @@ impl AppHandler for Runtime {
             }
         }
         self.drain_window_commands(cx);
+        self.apply_menu(cx);
     }
 
     fn surfaces_lost(&mut self, _cx: &dyn PlatformCx) {
@@ -1078,6 +1154,8 @@ impl AppHandler for Runtime {
                 }
             }
         }
+        // A frame just ran, and an effect inside it may have rebuilt the menu.
+        self.apply_menu(cx);
         // A frame just ran, and a listener, an effect or a timer inside it may have asked for a
         // window. This is the first point since then that holds a platform context.
         if !self.commands.is_empty() {
@@ -1146,8 +1224,10 @@ impl AppHandler for Runtime {
             WakeReason::ClipboardRead { serial, result } => {
                 self.clipboards.resolve(serial, result);
             }
+            WakeReason::App(event) => self.app_event(cx, event),
             _ => {}
         }
+        self.apply_menu(cx);
         // Every wake is a turn of the loop with a platform context in hand, which is what carrying
         // out a queued window needs. A wake that queued nothing drains nothing.
         if !self.commands.is_empty() {
@@ -1220,6 +1300,12 @@ impl AppHandler for Runtime {
     }
 
     fn shutting_down(&mut self, _cx: &dyn PlatformCx) {
+        // Before the windows close, so what the callbacks read is still there.
+        let hooks = self.hooks.clone();
+        self.scope.with(|| {
+            let _zone = zgui_reactive::enter_non_reactive_zone();
+            hooks.exit();
+        });
         for window in &mut self.windows {
             window.close();
         }

@@ -60,6 +60,33 @@ pub struct SurfaceAttributes {
     pub icon: Option<WindowIcon>,
     /// A light or dark preference for this surface alone; absent follows the desktop.
     pub theme: Option<ColorScheme>,
+    /// Where the desktop's window buttons sit over the content.
+    ///
+    /// Read only with [`Decorations::NoTitleBar`] on a desktop that draws its buttons over the
+    /// content, which is macOS. Absent leaves them where the desktop puts them.
+    pub title_buttons: Option<TitleButtons>,
+}
+
+/// Where the window buttons sit over a window that has no title bar.
+///
+/// The buttons are centred vertically in a band along the top edge, and the first one starts a
+/// distance in from the left edge. An application draws its own top bar in the same band.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TitleButtons {
+    /// The distance from the left edge to the first button.
+    pub left: CssPx,
+    /// The height of the band along the top edge.
+    pub band: CssPx,
+}
+
+impl TitleButtons {
+    /// Buttons `left` in from the left edge, centred in a band `band` tall.
+    pub const fn new(left: f32, band: f32) -> Self {
+        Self {
+            left: CssPx(left),
+            band: CssPx(band),
+        }
+    }
 }
 
 impl SurfaceAttributes {
@@ -81,6 +108,7 @@ impl SurfaceAttributes {
             level: WindowLevel::Normal,
             icon: None,
             theme: None,
+            title_buttons: None,
         }
     }
 

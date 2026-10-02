@@ -24,6 +24,8 @@ pub struct WindowState {
     pub pointer: Point<CssPx, Css>,
     /// Content being dragged over the window from outside.
     pub drag: Drag,
+    /// Whether the primary press in progress is a control-click read as a secondary press.
+    pub context_click: bool,
 }
 
 #[cfg(test)]
