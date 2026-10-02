@@ -53,6 +53,25 @@ pub(crate) fn install(menus: &mut Menus, menu: &AppMenu, waker: Arc<dyn Waker>) 
     }
     bar.init_for_nsapp();
     menus.current = Some(bar);
+    crate::macos::keys::keep_native(&native_shortcuts(menu));
+}
+
+/// The shortcuts of the desktop roles in `menu`, which AppKit answers itself.
+fn native_shortcuts(menu: &AppMenu) -> Vec<Shortcut> {
+    fn collect(entries: &[MenuEntry], into: &mut Vec<Shortcut>) {
+        for entry in entries {
+            match entry {
+                MenuEntry::Role(role) if !role.is_editing() => into.extend(role.shortcut()),
+                MenuEntry::Submenu(submenu) => collect(&submenu.entries, into),
+                _ => {}
+            }
+        }
+    }
+    let mut shortcuts = Vec::new();
+    for submenu in &menu.menus {
+        collect(&submenu.entries, &mut shortcuts);
+    }
+    shortcuts
 }
 
 /// What a picked muda id means to the application.

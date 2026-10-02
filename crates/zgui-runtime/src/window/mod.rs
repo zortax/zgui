@@ -398,6 +398,10 @@ pub struct Window {
     /// arriving rather than being held, so the alternative is a window that answers its first real
     /// report by doing the work of losing focus it never had.
     surface_focused: bool,
+    /// The shortcuts of the application menu's actions, shared by every window.
+    menu_keys: crate::desktop::MenuKeys,
+    /// The menu actions whose shortcut a key press of this frame ran.
+    menu_fired: Vec<zgui_platform::MenuId>,
     /// Whether the surface has to be reconfigured before the next frame is built.
     reconfigure: bool,
     /// Whether the desktop says the surface is being interactively resized right now.
@@ -717,6 +721,8 @@ impl Window {
             translucent: false,
             occluded: false,
             surface_focused: true,
+            menu_keys: crate::desktop::MenuKeys::default(),
+            menu_fired: Vec::new(),
             extent: None,
             reconfigure: true,
             resizing: false,
@@ -854,6 +860,16 @@ impl Window {
             zgui_profile::latency::mark("req.redraw");
             self.surface.request_redraw();
         }
+    }
+
+    /// Shares the shortcuts of the application menu's actions with this window.
+    pub(crate) fn set_menu_keys(&mut self, keys: crate::desktop::MenuKeys) {
+        self.menu_keys = keys;
+    }
+
+    /// The menu actions whose shortcut a key press ran since the last call.
+    pub(crate) fn take_menu_actions(&mut self) -> Vec<zgui_platform::MenuId> {
+        core::mem::take(&mut self.menu_fired)
     }
 
     /// Takes whatever an editing command asked to be put on the clipboard.

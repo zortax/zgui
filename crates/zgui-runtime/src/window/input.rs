@@ -257,6 +257,10 @@ impl Window {
         // text that is still on the screen, and the commit that follows lands in whatever gained
         // the focus.
         let held = composing && matches!(event, SurfaceEvent::Key { .. });
+        // A chord nothing in the document claimed runs the menu action it is the shortcut of.
+        if dispatched.default_allowed && !typed && !held && default.is_none() {
+            self.note_menu_shortcut(event);
+        }
         if dispatched.default_allowed
             && !typed
             && !held
@@ -309,6 +313,25 @@ impl Window {
         // surface identical to the one just presented. A handler whose work genuinely outlives the
         // frame — a task that finishes later, an effect scheduled from a callback — asks for
         // itself, from where it finishes.
+    }
+
+    /// Records the menu action a key press is the shortcut of.
+    fn note_menu_shortcut(&mut self, event: &SurfaceEvent) {
+        let SurfaceEvent::Key {
+            state: zgui_vocab::KeyState::Pressed,
+            event: key,
+            modifiers,
+            ..
+        } = event
+        else {
+            return;
+        };
+        if key.repeat || modifiers.is_empty() {
+            return;
+        }
+        if let Some(id) = self.menu_keys.action_for(key, *modifiers) {
+            self.menu_fired.push(id);
+        }
     }
 
     /// Types into whatever editable element has focus.

@@ -61,3 +61,29 @@ fn an_editing_role_replays_as_its_shortcut() {
     assert_eq!(event.key_without_modifiers, Key::character("z"));
     assert!(replay(MenuRole::About, Timestamp::ORIGIN).is_none());
 }
+
+#[test]
+fn a_chord_runs_the_enabled_action_it_is_the_shortcut_of() {
+    use zgui_platform::{AppMenu, MenuAction, Shortcut, Submenu};
+    use zgui_vocab::KeyEvent;
+
+    let shortcut = |text: &str| Shortcut::new(Key::character(text), Modifiers::PRIMARY);
+    let menu = AppMenu::new().with(
+        Submenu::new("File")
+            .with(MenuAction::new("save", "Save").with_shortcut(shortcut("s")))
+            .with(
+                MenuAction::new("print", "Print")
+                    .with_shortcut(shortcut("p"))
+                    .with_enabled(false),
+            ),
+    );
+    let keys = crate::desktop::MenuKeys::default();
+    keys.follow(&menu);
+    let press = |text: &str| keys.action_for(&KeyEvent::character(text), Modifiers::PRIMARY);
+    assert_eq!(press("s").as_ref().map(MenuId::as_str), Some("save"));
+    assert_eq!(press("p"), None);
+    assert_eq!(
+        keys.action_for(&KeyEvent::character("s"), Modifiers::NONE),
+        None
+    );
+}

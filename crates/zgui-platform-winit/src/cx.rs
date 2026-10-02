@@ -202,6 +202,10 @@ impl PlatformCx for WinitCx<'_> {
             title_buttons(attributes),
         ));
         surface.place_title_buttons();
+        #[cfg(target_os = "macos")]
+        if let Some(view) = crate::macos::ns_view(&window) {
+            crate::macos::answer_key_equivalents(&view);
+        }
 
         // Attached here and nowhere else. The adapter refuses a window that has already been shown,
         // and a surface is created hidden precisely so that this can happen before the first frame

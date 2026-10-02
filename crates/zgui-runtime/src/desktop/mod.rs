@@ -19,7 +19,7 @@ mod replay;
 pub use crate::desktop::hooks::{AppHookGuard, on_exit, on_menu, on_reopen};
 
 pub(crate) use crate::desktop::hooks::AppHooks;
-pub(crate) use crate::desktop::menu::MenuSlot;
+pub(crate) use crate::desktop::menu::{MenuKeys, MenuSlot};
 pub(crate) use crate::desktop::replay::replay;
 
 #[cfg(test)]

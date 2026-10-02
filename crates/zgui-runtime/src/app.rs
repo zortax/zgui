@@ -448,6 +448,8 @@ pub struct Runtime {
     hooks: crate::desktop::AppHooks,
     /// The application menu, when the application has one.
     menu: Option<crate::desktop::MenuSlot>,
+    /// The shortcuts of the menu's actions, shared with every window.
+    menu_keys: crate::desktop::MenuKeys,
     /// The next document identity to mint.
     next_document: u16,
     /// What the desktop groups this application's windows under.
@@ -600,6 +602,7 @@ impl Runtime {
             exit: app.exit,
             hooks,
             menu,
+            menu_keys: crate::desktop::MenuKeys::default(),
             next_document: 0,
             application_id: application_id.clone(),
             renderer: app.renderer.unwrap_or_else(|| {
@@ -791,6 +794,7 @@ impl Runtime {
             let (layout, paint) = custom(window.document());
             window.install_custom_sources(layout, paint);
         }
+        window.set_menu_keys(self.menu_keys.clone());
         self.windows.push(window);
         self.live[index].surface = Some(surface.id());
         self.commands
@@ -870,6 +874,7 @@ impl Runtime {
         }
         if let Some(menu) = slot.take() {
             cx.set_app_menu(&menu);
+            self.menu_keys.follow(&menu);
         }
     }
 
@@ -1087,6 +1092,7 @@ impl AppHandler for Runtime {
     }
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
+        let mut fired = Vec::new();
         match event {
             SurfaceEvent::RedrawRequested => {
                 let clock = cx.clock();
@@ -1109,6 +1115,7 @@ impl AppHandler for Runtime {
                         window.held_a_frame();
                     } else {
                         window.frame(clock.as_ref());
+                        fired = window.take_menu_actions();
                         // The copies first and the pastes second, so a copy and a paste from the
                         // same batch paste what was just copied rather than what preceded it.
                         Self::put_on_clipboard(cx, window);
@@ -1153,6 +1160,10 @@ impl AppHandler for Runtime {
                     }
                 }
             }
+        }
+        // A chord nothing in the document claimed runs its menu action, after the frame.
+        for id in fired {
+            self.app_event(cx, zgui_platform::AppEvent::Menu(id));
         }
         // A frame just ran, and an effect inside it may have rebuilt the menu.
         self.apply_menu(cx);
