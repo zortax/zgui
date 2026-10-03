@@ -10,7 +10,7 @@ use zgui_platform::{
     Surface, WindowIcon, WindowLevel,
 };
 use zgui_reactive::prelude::*;
-use zgui_reactive::{RwSignal, Signal};
+use zgui_reactive::{ArcRwSignal, Signal};
 
 use crate::commands::{WindowCommands, WindowToken};
 
@@ -37,6 +37,9 @@ pub struct WindowHandle {
 }
 
 /// The state behind every clone of one window's handle.
+///
+/// The signals are reference-counted and have no reactive owner. Thus they stay alive as long as
+/// the handle. The code that opens a window can unmount while the window stays open.
 pub(crate) struct WindowShared {
     /// Which window this is.
     pub(crate) id: WindowId,
@@ -58,17 +61,17 @@ pub(crate) struct WindowShared {
     /// What this desktop can do, once the platform has said.
     pub(crate) capabilities: Rc<RefCell<PlatformCapabilities>>,
     /// The content size, in CSS pixels.
-    pub(crate) size: RwSignal<Size<CssPx, Css>>,
+    pub(crate) size: ArcRwSignal<Size<CssPx, Css>>,
     /// How many physical pixels there are to a CSS pixel.
-    pub(crate) scale: RwSignal<f32>,
+    pub(crate) scale: ArcRwSignal<f32>,
     /// Whether the window holds the keyboard.
-    pub(crate) focused: RwSignal<bool>,
+    pub(crate) focused: ArcRwSignal<bool>,
     /// Whether the desktop says nothing of the window is visible.
-    pub(crate) occluded: RwSignal<bool>,
+    pub(crate) occluded: ArcRwSignal<bool>,
     /// Whether the window is maximised.
-    pub(crate) maximized: RwSignal<bool>,
+    pub(crate) maximized: ArcRwSignal<bool>,
     /// How the window fills the screen, if it does.
-    pub(crate) fullscreen: RwSignal<Option<FullscreenMode>>,
+    pub(crate) fullscreen: ArcRwSignal<Option<FullscreenMode>>,
 }
 
 impl WindowHandle {
@@ -86,14 +89,14 @@ impl WindowHandle {
                 drag_started: Cell::new(false),
                 commands,
                 capabilities,
-                size: RwSignal::new(Size::new(CssPx(0.0), CssPx(0.0))),
-                scale: RwSignal::new(1.0),
+                size: ArcRwSignal::new(Size::new(CssPx(0.0), CssPx(0.0))),
+                scale: ArcRwSignal::new(1.0),
                 // A window is opened focused until the desktop says otherwise, which is the same
                 // assumption the window itself starts from.
-                focused: RwSignal::new(true),
-                occluded: RwSignal::new(false),
-                maximized: RwSignal::new(false),
-                fullscreen: RwSignal::new(None),
+                focused: ArcRwSignal::new(true),
+                occluded: ArcRwSignal::new(false),
+                maximized: ArcRwSignal::new(false),
+                fullscreen: ArcRwSignal::new(None),
             }),
         }
     }
@@ -201,34 +204,34 @@ impl WindowHandle {
 
     /// The content size, in CSS pixels.
     pub fn size(&self) -> Signal<Size<CssPx, Css>> {
-        self.shared.size.into()
+        self.shared.size.clone().into()
     }
 
     /// How many physical pixels there are to a CSS pixel on this window's display.
     pub fn scale(&self) -> Signal<f32> {
-        self.shared.scale.into()
+        self.shared.scale.clone().into()
     }
 
     /// Whether the window holds the keyboard.
     pub fn focused(&self) -> Signal<bool> {
-        self.shared.focused.into()
+        self.shared.focused.clone().into()
     }
 
     /// Whether the desktop says nothing of the window is visible.
     ///
     /// What an application watches to stop animating something nobody can see.
     pub fn occluded(&self) -> Signal<bool> {
-        self.shared.occluded.into()
+        self.shared.occluded.clone().into()
     }
 
     /// Whether the window is maximised.
     pub fn maximized(&self) -> Signal<bool> {
-        self.shared.maximized.into()
+        self.shared.maximized.clone().into()
     }
 
     /// How the window fills the screen, if it does.
     pub fn fullscreen(&self) -> Signal<Option<FullscreenMode>> {
-        self.shared.fullscreen.into()
+        self.shared.fullscreen.clone().into()
     }
 
     /// The surface, while there is one to act on.
