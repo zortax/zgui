@@ -14,6 +14,11 @@
 //! next zgui frame shows the newest texture and earlier ones were simply never shown. This is the
 //! shape for a game or a video player.
 //!
+//! **A video producer presents planes and lets zgui convert them.** It wraps the luma and chroma
+//! planes a decoder produced in a [`VideoFrame`] and calls [`SurfaceHandle::present_video`]. The
+//! same mailbox applies, and the frame that shows the surface converts the planes to colour on the
+//! shared device. [`Planes`] names the plane layouts and [`ColorSpace`] the sample meanings.
+//!
 //! **A producer that draws on demand implements [`SurfaceRenderer`].** zgui owns the texture,
 //! sizes it to the element's content box, and calls
 //! [`render`](SurfaceRenderer::render) on the frames where drawing is owed: the first one, a
@@ -53,6 +58,13 @@ use zgui_vocab::{PropKey, PropValue, Timestamp};
 
 /// The re-exported graphics API, so a producer names the same wgpu the renderer links.
 pub use zgui_render_wgpu::wgpu;
+
+mod video;
+
+pub use video::{
+    ChromaSiting, ColorMatrix, ColorPrimaries, ColorRange, ColorSpace, Packing, PlaneData, Planes,
+    SampleDepth, SampleSize, TransferFunction, UnsupportedFormat, VideoFrame,
+};
 
 /// One shared device, plus the epoch that says when it stopped being the one you knew.
 ///
@@ -183,12 +195,22 @@ pub enum SurfaceEvent {
 /// Where a producer's events go.
 type EventSink = Arc<dyn Fn(SurfaceEvent) + Send + Sync>;
 
+/// What a producer presented and no frame has taken yet.
+enum Presented {
+    /// A colour texture, shown as it is.
+    Texture(Arc<wgpu::Texture>),
+    /// Video planes, converted to colour by the frame that takes them.
+    Video(VideoFrame),
+}
+
 /// The shared half of one handle: what presents, intrinsics and events meet on.
 struct HandleState {
     /// How the producer said its textures should be read.
     config: SurfaceConfig,
-    /// The newest presented texture, not yet taken by a frame. Latest wins.
-    latest: Option<Arc<wgpu::Texture>>,
+    /// The newest presented content, not yet taken by a frame. Latest wins.
+    latest: Option<Presented>,
+    /// Video frames stamped for later refreshes.
+    queue: video::Queue,
     /// A natural-size update not yet filed with layout.
     intrinsic_owed: Option<SurfaceIntrinsic>,
     /// Where events go, once the producer said.
@@ -240,6 +262,7 @@ impl SurfaceHandle {
         let state = Arc::new(Mutex::new(HandleState {
             config,
             latest: None,
+            queue: video::Queue::default(),
             intrinsic_owed: Some(config.intrinsic),
             events: None,
             waker: None,
@@ -257,11 +280,42 @@ impl SurfaceHandle {
     /// single-sampled, and of a filterable colour format. Wakes the UI loop when the element is
     /// bound; before that the texture parks and is shown by the frame that binds it.
     pub fn present(&self, texture: Arc<wgpu::Texture>) {
-        let waker = {
+        let (waker, replaced) = {
             let mut state = self.lock();
-            state.latest = Some(texture);
-            state.waker.clone()
+            let replaced = (
+                state.latest.replace(Presented::Texture(texture)),
+                state.queue.clear(),
+            );
+            (state.waker.clone(), replaced)
         };
+        // Dropped outside the lock: a replaced frame's guard drop is the producer's code.
+        drop(replaced);
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Presents `frame` as the surface's newest content, or queues it for its presentation time.
+    ///
+    /// An unstamped frame is latest-wins, as [`present`](Self::present) is, and empties the queue.
+    /// A frame stamped with [`VideoFrame::with_presentation_time`] waits for the refresh nearest
+    /// its stamp. The frame that shows it converts the planes to colour on the shared device, into
+    /// a texture zgui owns and reuses while the picture size holds. A frame that leaves unshown is
+    /// dropped unconverted, with its guard.
+    pub fn present_video(&self, frame: VideoFrame) {
+        let (waker, replaced) = {
+            let mut state = self.lock();
+            let replaced = match frame.at {
+                Some(at) => (None, state.queue.insert(at, frame)),
+                None => (
+                    state.latest.replace(Presented::Video(frame)),
+                    state.queue.clear(),
+                ),
+            };
+            (state.waker.clone(), replaced)
+        };
+        // Dropped outside the lock: a guard's drop is the producer's code.
+        drop(replaced);
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -402,6 +456,8 @@ struct Binding {
     described: Option<(Size<i32, Device>, bool)>,
     /// The presented texture currently attached, pinned until the next attach.
     attached: Option<Arc<wgpu::Texture>>,
+    /// The texture video frames are converted into, zgui's own and reused while its size holds.
+    picture: Option<Arc<wgpu::Texture>>,
     /// The content box's device-pixel size as of the last sync, for resize edges.
     last_size: Option<Size<u32, Device>>,
     /// Whether the producer was last told it is visible.
@@ -427,6 +483,8 @@ pub struct WgpuSurfaces {
     generation: u64,
     /// The next external-texture name.
     next_external: u64,
+    /// The video conversion for the current device, built when a first frame needs it.
+    converter: Option<video::Converter>,
 }
 
 impl WgpuSurfaces {
@@ -438,6 +496,7 @@ impl WgpuSurfaces {
             device: None,
             generation: 0,
             next_external: 1,
+            converter: None,
         }
     }
 }
@@ -467,6 +526,7 @@ impl EmbedHost for WgpuSurfaces {
                 let lost = self.device.is_some();
                 self.device = Some(identity);
                 self.generation += 1;
+                self.converter = None;
                 let share = GpuShare {
                     gpu: Arc::clone(&share.gpu),
                     generation: self.generation,
@@ -477,9 +537,23 @@ impl EmbedHost for WgpuSurfaces {
                     binding.registered = None;
                     binding.described = None;
                     binding.attached = None;
+                    binding.picture = None;
                     binding.content_attached = false;
                     match &mut binding.producer {
                         Producer::Handle(state) => {
+                            // Planes made on the old device cannot be converted on the new one.
+                            let stale = {
+                                let mut state = lock(state);
+                                let latest = match state.latest.take() {
+                                    Some(Presented::Video(frame)) => Some(frame),
+                                    other => {
+                                        state.latest = other;
+                                        None
+                                    }
+                                };
+                                (latest, state.queue.clear())
+                            };
+                            drop(stale);
                             if lost {
                                 tell(state, SurfaceEvent::DeviceLost { gpu: share.clone() });
                             }
@@ -504,8 +578,15 @@ impl EmbedHost for WgpuSurfaces {
         }
 
         for (&node, binding) in &mut self.bindings {
-            let outcome = Self::sync_one(node, binding, cx, share.as_ref());
+            let outcome = Self::sync_one(node, binding, cx, share.as_ref(), &mut self.converter);
             report.animating |= outcome;
+            if let Producer::Handle(state) = &binding.producer {
+                let wake = lock(state).queue.wake_at(cx.refresh_interval);
+                report.wake_at = match (report.wake_at, wake) {
+                    (Some(earlier), Some(later)) => Some(earlier.min(later)),
+                    (earlier, later) => earlier.or(later),
+                };
+            }
         }
         report
     }
@@ -551,16 +632,30 @@ impl EmbedHost for WgpuSurfaces {
                     report.callback_owned += texture.as_ref().map_or(0, texture_bytes);
                 }
                 Producer::Handle(state) => {
+                    report.callback_owned += binding.picture.as_deref().map_or(0, texture_bytes);
+                    let mut held: Vec<Arc<wgpu::Texture>> = Vec::new();
                     if let Some(attached) = binding.attached.as_ref()
-                        && producer_textures.insert(Arc::as_ptr(attached) as usize)
+                        && !binding
+                            .picture
+                            .as_ref()
+                            .is_some_and(|picture| Arc::ptr_eq(picture, attached))
                     {
-                        report.producer_owned += texture_bytes(attached);
+                        held.push(Arc::clone(attached));
                     }
-                    let latest = lock(state).latest.clone();
-                    if let Some(latest) = latest
-                        && producer_textures.insert(Arc::as_ptr(&latest) as usize)
-                    {
-                        report.producer_owned += texture_bytes(&latest);
+                    let state = lock(state);
+                    match &state.latest {
+                        Some(Presented::Texture(texture)) => held.push(Arc::clone(texture)),
+                        Some(Presented::Video(frame)) => held.extend(frame.planes.all().cloned()),
+                        None => {}
+                    }
+                    for frame in state.queue.frames() {
+                        held.extend(frame.planes.all().cloned());
+                    }
+                    drop(state);
+                    for texture in held {
+                        if producer_textures.insert(Arc::as_ptr(&texture) as usize) {
+                            report.producer_owned += texture_bytes(&texture);
+                        }
                     }
                 }
             }
@@ -643,6 +738,7 @@ impl WgpuSurfaces {
                 registered: None,
                 described: None,
                 attached: None,
+                picture: None,
                 last_size: None,
                 visible: false,
                 invisible_since: Some(cx.timestamp),
@@ -694,6 +790,7 @@ impl WgpuSurfaces {
         binding: &mut Binding,
         cx: &mut EmbedSyncCx<'_>,
         share: Option<&GpuShare>,
+        converter: &mut Option<video::Converter>,
     ) -> bool {
         let id = ReplacedId::new(node);
 
@@ -761,6 +858,23 @@ impl WgpuSurfaces {
             }
         }
 
+        // A queued frame whose refresh came is the newest content, visible or not, so the frames
+        // before it release their guards now rather than when someone looks again.
+        if let Producer::Handle(state) = &binding.producer {
+            let left = {
+                let mut state = lock(state);
+                let (shown, mut left) = state.queue.take_due(cx.presents_at, cx.refresh_interval);
+                if let Some(frame) = shown
+                    && let Some(Presented::Video(old)) =
+                        state.latest.replace(Presented::Video(frame))
+                {
+                    left.push(old);
+                }
+                left
+            };
+            drop(left);
+        }
+
         // An intrinsic that changed reaches layout whether or not anything can draw.
         if let Producer::Handle(state) = &binding.producer {
             let owed = lock(state).intrinsic_owed.take();
@@ -779,6 +893,15 @@ impl WgpuSurfaces {
             Producer::Handle(state) => {
                 let taken = visible.then(|| lock(state).latest.take()).flatten();
                 let premultiplied = lock(state).config.premultiplied;
+                let taken = taken.map(|presented| match presented {
+                    Presented::Texture(texture) => {
+                        binding.picture = None;
+                        texture
+                    }
+                    Presented::Video(frame) => converter
+                        .get_or_insert_with(|| video::Converter::new(gpu.device()))
+                        .convert(gpu.device(), gpu.queue(), frame, &mut binding.picture),
+                });
                 if let Some(texture) = taken {
                     let extent =
                         Size::<i32, Device>::new(texture.width() as i32, texture.height() as i32);
@@ -1039,6 +1162,56 @@ mod tests {
         let lowered = owed.lower();
         assert_eq!(lowered.ratio, Some(16.0 / 9.0));
         assert_eq!(lowered.size, None);
+    }
+
+    #[test]
+    fn a_replaced_video_frame_releases_its_guard_at_once() {
+        let Some((gpu, _held)) = video::testing::device() else {
+            return;
+        };
+        let handle = SurfaceHandle::new(SurfaceConfig::default());
+        let released = Arc::new(AtomicU64::new(0));
+        let frame = |released: &Arc<AtomicU64>| {
+            let released = Arc::clone(released);
+            VideoFrame::new(video::testing::i420(&gpu), ColorSpace::BT709)
+                .with_guard(Drops(released))
+        };
+        struct Drops(Arc<AtomicU64>);
+        impl Drop for Drops {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        handle.present_video(frame(&released));
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            0,
+            "the waiting frame holds its guard"
+        );
+        handle.present_video(frame(&released));
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            1,
+            "the replaced frame let go"
+        );
+        handle.present(Arc::new(gpu.device().create_texture(
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d::default(),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+        )));
+        assert_eq!(
+            released.load(Ordering::SeqCst),
+            2,
+            "a texture replaces a frame too"
+        );
     }
 
     #[test]

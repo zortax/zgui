@@ -70,6 +70,32 @@ bincode = "1.3"
 # would refuse the image. wgpu-hal 29.0.4 asks for `ash = "0.38"`, `Cargo.lock` resolves that to
 # 0.38.0+1.3.281, and the versions ledger holds the graph to one copy.
 ash = "0.38"
+# Apple's frameworks, named only by `zgui-wgpu-import`, at the versions wgpu-hal 29.0.4 links. A
+# decoded frame on macOS is a CoreVideo pixel buffer over an IOSurface, and Metal textures over
+# its planes reach wgpu through its hal. The Metal texture and device types cross between that
+# crate and wgpu-hal, so a second version of `objc2-metal` would be a second, unrelated type.
+objc2 = "0.6.3"
+objc2-core-foundation = "0.3.2"
+objc2-core-video = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2",
+    "objc2-metal",
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVMetalTexture",
+    "CVMetalTextureCache",
+    "CVPixelBuffer",
+    "CVReturn",
+] }
+objc2-metal = "0.3.2"
+# Direct3D 12, named only by `zgui-wgpu-import`, at the version wgpu-hal 29.0.4 links, for the same
+# reason: a shared resource opened here is handed to wgpu-hal as its own `ID3D12Resource`.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi_Common",
+] }
 
 # --- platform, clipboards and accessibility --------------------------------------------------
 # `winit`, `accesskit_winit`, `arboard`, `smithay-clipboard` and `zbus` are the windowing

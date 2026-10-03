@@ -422,7 +422,7 @@ impl Window {
         // to laid-out boxes, attaches whatever they presented, and absorbs the damage the emit
         // walk below is gated on. See the `embed` module for the whole argument.
         mark("f.embed");
-        self.sync_embeds(timestamp);
+        self.sync_embeds(timestamp, now);
 
         self.binding.before_paint(timestamp);
         mark("f.paint");
@@ -674,8 +674,12 @@ impl Window {
         // probe is the only thing that finds out the compositor came back without an event saying
         // so.
         let retry = self.retry_after.filter(|_| !self.occluded);
+        // Content an embed has due later, such as a queued video frame: excluded while nobody can
+        // see it, as an animation is.
+        let embed = self.embed_wake.filter(|_| !(self.occluded || self.starved));
         let render = [
             animation,
+            embed,
             timer,
             self.gesture_deadline(),
             resize,
@@ -740,7 +744,13 @@ impl Window {
     }
 
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
-    fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
+    fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp, now: Instant) {
+        let refresh_interval = self.refresh_interval();
+        let presents_at = self
+            .surface
+            .presentation_timing()
+            .and_then(|timing| timing.refresh_after(now))
+            .unwrap_or(now + refresh_interval);
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
             layout: &self.layout,
@@ -763,10 +773,13 @@ impl Window {
             },
             occluded: self.occluded,
             timestamp,
+            presents_at,
+            refresh_interval,
             waker: &self.waker,
         };
         let report = self.embed.sync(&mut cx);
         self.embed_animating = report.animating;
+        self.embed_wake = report.wake_at;
     }
 
     /// Whether anything in the document is animating.
