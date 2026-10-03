@@ -20,11 +20,13 @@ mod glide;
 mod motion;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_layout::LayoutStore;
 use zgui_layout::scroll_region::ScrollOffsets;
 
+use crate::chain;
 use crate::elastic::Overscroll;
 use crate::motion::Motion;
 use crate::report::Scrolled;
@@ -191,11 +193,54 @@ impl Scroller {
         self.motions.insert(container, motion);
     }
 
-    /// How far one container may be scrolled, which is zero for one that does not scroll.
-    fn limit_for(&self, store: &LayoutStore, container: NodeKey) -> Point<DevicePx, Device> {
+    /// How far a person may scroll one container, which is zero on an axis that does not scroll.
+    fn hand_limit_for(&self, store: &LayoutStore, container: NodeKey) -> Point<DevicePx, Device> {
         zgui_layout::scroll_region::region_of_element(store, container)
-            .map(|region| region.limit())
+            .map(|region| region.hand_limit())
             .unwrap_or(Point::new(DevicePx(0.0), DevicePx(0.0)))
+    }
+
+    /// Pulls the edges of `chain` past their ends by `left`, the part of a scroll no container
+    /// absorbed.
+    ///
+    /// Each axis displaces the outermost container that a person can scroll on that axis. An axis
+    /// that no container in the chain scrolls does not stretch, so content that fits its
+    /// scrollport stays still. Returns the containers that moved.
+    fn stretch_past_end(
+        &mut self,
+        store: &LayoutStore,
+        chain: &[NodeKey],
+        left: Size<DevicePx, Device>,
+    ) -> SmallVec<[NodeKey; 2]> {
+        let mut moved: SmallVec<[NodeKey; 2]> = SmallVec::new();
+        let outermost = |scrolls: &dyn Fn(Point<DevicePx, Device>) -> bool| {
+            chain
+                .iter()
+                .rev()
+                .copied()
+                .find(|container| scrolls(self.hand_limit_for(store, *container)))
+        };
+        let across = outermost(&|limit| limit.x.0 > 0.0);
+        let down = outermost(&|limit| limit.y.0 > 0.0);
+        for (container, pull) in [
+            (across, Size::new(left.width, DevicePx(0.0))),
+            (down, Size::new(DevicePx(0.0), left.height)),
+        ] {
+            let Some(container) = container else {
+                continue;
+            };
+            if chain::negligible(pull) {
+                continue;
+            }
+            let edge = self.overscroll_of(container).pulled_by(pull);
+            if edge != self.overscroll_of(container) {
+                self.displace(container, edge);
+                if !moved.contains(&container) {
+                    moved.push(container);
+                }
+            }
+        }
+        moved
     }
 
     /// Sets one container's displaced edge, forgetting it when it has come all the way back.

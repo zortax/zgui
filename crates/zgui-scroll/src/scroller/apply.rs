@@ -15,7 +15,8 @@ impl Scroller {
     /// Shares `delta` out along `chain`, innermost container first.
     ///
     /// Each container takes what it has room for and hands the rest outwards; what survives the
-    /// outermost one displaces that container past its end, elastically. The result names every
+    /// outermost one displaces an edge past its end, elastically, on each axis some container in
+    /// the chain scrolls. The result names every
     /// container whose *composed* position changed, which is what the caller marks — and that
     /// includes one displaced past its end, because the content is drawn somewhere else even though
     /// its reported offset did not move.
@@ -35,9 +36,9 @@ impl Scroller {
         if chain::negligible(left) {
             return moved;
         }
-        for (depth, container) in chain.iter().copied().enumerate() {
+        for container in chain.iter().copied() {
             let at = self.offset_of(container);
-            let share = chain::absorb(at, self.limit_for(store, container), left);
+            let share = chain::absorb(at, self.hand_limit_for(store, container), left);
             left = share.left;
             if !chain::negligible(share.taken) {
                 self.motions.remove(&container);
@@ -50,18 +51,15 @@ impl Scroller {
                 self.record(container, at, landed);
                 moved.push(container);
             }
-            let outermost = depth + 1 == chain.len();
-            if outermost && stretch.is_permitted() && !chain::negligible(left) {
-                let edge = self.overscroll_of(container).pulled_by(left);
-                if edge != self.overscroll_of(container) {
-                    self.displace(container, edge);
-                    if !moved.contains(&container) {
-                        moved.push(container);
-                    }
-                }
-            }
             if chain::negligible(left) {
                 break;
+            }
+        }
+        if stretch.is_permitted() && !chain::negligible(left) {
+            for container in self.stretch_past_end(store, chain, left) {
+                if !moved.contains(&container) {
+                    moved.push(container);
+                }
             }
         }
         moved
@@ -122,7 +120,7 @@ impl Scroller {
             return;
         }
         let at = self.offset_of(container);
-        let share = chain::absorb(at, self.limit_for(store, container), velocity);
+        let share = chain::absorb(at, self.hand_limit_for(store, container), velocity);
         if chain::negligible(share.taken) {
             return;
         }
