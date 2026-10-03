@@ -94,7 +94,7 @@ impl Scroller {
     /// Both a running motion and a displacement waiting to relax count. Leaving the second out is
     /// a list that stays stretched past its end until something else happens to ask for a frame.
     pub fn is_animating(&self) -> bool {
-        !self.motions.is_empty() || !self.elastic.is_empty()
+        !self.motions.is_empty() || self.elastic.values().any(|edge| !edge.is_gripped())
     }
 
     /// Whether nothing is displaced past its end.
@@ -200,6 +200,42 @@ impl Scroller {
             .unwrap_or(Point::new(DevicePx(0.0), DevicePx(0.0)))
     }
 
+    /// The size of one container's scrollport, which the elastic band is measured against.
+    fn extent_for(&self, store: &LayoutStore, container: NodeKey) -> Size<DevicePx, Device> {
+        zgui_layout::scroll_region::region_of_element(store, container)
+            .map(|region| region.scrollport.size)
+            .unwrap_or(Size::new(DevicePx(0.0), DevicePx(0.0)))
+    }
+
+    /// Gives `delta` to the edges of `chain` that it pulls back towards their ends.
+    ///
+    /// Returns what is left of `delta` for the offsets, and adds each container whose edge moved
+    /// to `moved`.
+    fn unwind(
+        &mut self,
+        store: &LayoutStore,
+        chain: &[NodeKey],
+        delta: Size<DevicePx, Device>,
+        moved: &mut SmallVec<[NodeKey; 2]>,
+    ) -> Size<DevicePx, Device> {
+        let mut left = delta;
+        for container in chain.iter().copied() {
+            let edge = self.overscroll_of(container);
+            if edge.arrived() && !edge.is_gripped() {
+                continue;
+            }
+            let (unwound, rest) = edge.unwound_by(left, self.extent_for(store, container));
+            left = rest;
+            if unwound != edge {
+                self.displace(container, unwound);
+                if !moved.contains(&container) {
+                    moved.push(container);
+                }
+            }
+        }
+        left
+    }
+
     /// Pulls the edges of `chain` past their ends by `left`, the part of a scroll no container
     /// absorbed.
     ///
@@ -232,7 +268,9 @@ impl Scroller {
             if chain::negligible(pull) {
                 continue;
             }
-            let edge = self.overscroll_of(container).pulled_by(pull);
+            let edge = self
+                .overscroll_of(container)
+                .pulled_by(pull, self.extent_for(store, container));
             if edge != self.overscroll_of(container) {
                 self.displace(container, edge);
                 if !moved.contains(&container) {
@@ -261,6 +299,9 @@ mod tests {
 
     use super::{Overscroll, Scroller};
 
+    /// A scrollport 600 device pixels tall.
+    const PORT: Size<DevicePx, Device> = Size::new(DevicePx(400.0), DevicePx(600.0));
+
     fn key(index: u32) -> NodeKey {
         NodeKey::new(
             index,
@@ -285,7 +326,7 @@ mod tests {
     fn a_displacement_is_carried_per_container_and_not_shared() {
         let mut scroller = Scroller::new();
         let pull =
-            |by: f32| Overscroll::default().pulled_by(Size::new(DevicePx(0.0), DevicePx(by)));
+            |by: f32| Overscroll::default().pulled_by(Size::new(DevicePx(0.0), DevicePx(by)), PORT);
         scroller.displace(key(1), pull(20.0));
         scroller.displace(key(2), pull(30.0));
         assert!(scroller.elastic_of(key(1)).height.0 > 0.0);
@@ -313,7 +354,7 @@ mod tests {
         let frame = core::time::Duration::from_micros(4_167);
         scroller.displace(
             container,
-            Overscroll::default().pulled_by(Size::new(DevicePx(0.0), DevicePx(400.0))),
+            Overscroll::default().pulled_by(Size::new(DevicePx(0.0), DevicePx(400.0)), PORT),
         );
 
         let mut composed = vec![scroller.composed().of(container).y];
@@ -354,7 +395,7 @@ mod tests {
             .place(container, Point::new(DevicePx(0.0), DevicePx(120.4)));
         scroller.displace(
             container,
-            Overscroll::default().pulled_by(Size::new(DevicePx(0.0), DevicePx(50.0))),
+            Overscroll::default().pulled_by(Size::new(DevicePx(0.0), DevicePx(50.0)), PORT),
         );
         assert_ne!(
             scroller.composed().of(container).y.0.fract(),

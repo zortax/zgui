@@ -1,124 +1,165 @@
-//! The spring that carries a displaced edge back, one frame's worth at a time.
+//! The return that carries a displaced edge back to its end.
+//!
+//! The curve is the one AppKit and WebKit use for a rubber band: `(x₀ + A·v₀·t)·e^(−ω·t)`. With no
+//! speed it is an exponential decay, so the edge starts back fast and slows as it arrives. With a
+//! speed it first travels on past the end, then comes back. The curve is a function of the time
+//! since the return started, so the frame rate cannot change its shape.
 
-use core::time::Duration;
-
-/// How stiff the return is, in radians per second.
+/// How fast the return decays, in radians per second.
 ///
-/// A critically damped spring at this rate is visually settled in about a third of a second: fast
-/// enough that the edge reads as springy rather than as slow, slow enough that the return can be
-/// seen happening rather than appearing as a jump between two frames.
-const RATE: f32 = 20.0;
+/// AppKit's rubber-band stiffness of 20 over its period of 1.6. An edge released 100 device pixels
+/// out is within 2 pixels after about 0.3 seconds.
+const RATE: f32 = 12.5;
+
+/// How much of a thrown speed becomes travel past the end.
+///
+/// AppKit's rubber-band amplitude. A momentum scroll at 3000 device pixels per second that reaches
+/// an end travels about 27 pixels past it.
+const AMPLITUDE: f32 = 0.31;
 
 /// Below this the displacement has arrived, in device pixels.
 ///
-/// A quarter of a device pixel is under what the fragment pass's device-grid snap can express, so
-/// the last step is invisible. Without a floor a spring never reaches zero and a container that is a
-/// ten-thousandth of a pixel out is a container that asks for a frame for ever.
+/// A quarter of a device pixel is below what the device-grid snap can show, so the last step is
+/// invisible. Without a floor the return never reaches zero and asks for a frame for ever.
 const ARRIVED: f32 = 0.25;
 
-/// Below this the edge has stopped moving, in device pixels per second.
-///
-/// Tested *with* the displacement rather than instead of it: an edge passing through zero at speed
-/// has not arrived, and one that has crept to a standstill a pixel out has not either.
+/// Below this the edge is still, in device pixels per second.
 const STILL: f32 = 4.0;
 
-/// The longest step the spring is integrated over at once.
-///
-/// A frame that took a quarter of a second — a stall, a breakpoint, a laptop coming back from
-/// sleep — integrated in one go is a spring that overshoots or diverges outright, which is a
-/// container that flies off the screen for a frame. Splitting it keeps the result the same as the
-/// one a smooth frame rate would have produced, which is precisely what "driven by the frame clock"
-/// has to mean if it is to be honest.
-const LONGEST_STEP: f32 = 1.0 / 120.0;
+/// One axis of a return: where it started, the speed it started at, and how long it has run.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Return {
+    /// The displacement when the return started, in device pixels.
+    from: f32,
+    /// The speed away from the end when the return started, in device pixels per second.
+    thrown: f32,
+    /// The time since the return started, in seconds.
+    elapsed: f32,
+}
 
-/// Where one axis of a displacement, and its speed, are after `elapsed`.
-///
-/// Critically damped: the edge returns as fast as it can without crossing zero and coming back,
-/// because an overscroll that visibly bounces twice reads as a bug rather than as an edge.
-pub(crate) fn advance(held: f32, speed: f32, elapsed: Duration) -> (f32, f32) {
-    let mut held = held;
-    let mut speed = speed;
-    let mut left = elapsed.as_secs_f32();
-    while left > 0.0 {
-        let step = left.min(LONGEST_STEP);
-        left -= step;
-        // Semi-implicit Euler: the velocity is advanced first and the position with the velocity it
-        // now has, which is what keeps a spring integrated in small steps from gaining energy.
-        speed += (-RATE * RATE * held - 2.0 * RATE * speed) * step;
-        held += speed * step;
+impl Return {
+    /// A return that starts at `from`, moving at `thrown`.
+    pub(crate) fn start(from: f32, thrown: f32) -> Self {
+        Self {
+            from,
+            thrown,
+            elapsed: 0.0,
+        }
     }
-    if held.abs() < ARRIVED && speed.abs() < STILL {
-        return (0.0, 0.0);
+
+    /// The displacement now.
+    pub(crate) fn at(self) -> f32 {
+        (self.from + AMPLITUDE * self.thrown * self.elapsed) * (-RATE * self.elapsed).exp()
     }
-    (held, speed)
+
+    /// The speed now, in device pixels per second.
+    fn speed(self) -> f32 {
+        let lead = AMPLITUDE * self.thrown;
+        (lead - RATE * (self.from + lead * self.elapsed)) * (-RATE * self.elapsed).exp()
+    }
+
+    /// The same return, `seconds` later.
+    pub(crate) fn advanced(self, seconds: f32) -> Self {
+        let advanced = Self {
+            elapsed: self.elapsed + seconds,
+            ..self
+        };
+        if advanced.arrived() {
+            Self::default()
+        } else {
+            advanced
+        }
+    }
+
+    /// The same return measured in units `by` times smaller.
+    pub(crate) fn scaled(self, by: f32) -> Self {
+        Self {
+            from: self.from * by,
+            thrown: self.thrown * by,
+            elapsed: self.elapsed,
+        }
+    }
+
+    /// Whether the edge is back at its end.
+    ///
+    /// An edge near zero on its way out has not arrived: it must also move back towards zero, or
+    /// be still.
+    pub(crate) fn arrived(self) -> bool {
+        let at = self.at();
+        let speed = self.speed();
+        at.abs() < ARRIVED && (at * speed < 0.0 || speed.abs() < STILL)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::time::Duration;
+    use super::Return;
 
-    use super::advance;
+    /// One frame at sixty hertz, in seconds.
+    const FRAME: f32 = 1.0 / 60.0;
 
-    /// One frame at sixty hertz.
-    const FRAME: Duration = Duration::from_millis(16);
-
-    #[test]
-    fn a_displaced_edge_comes_back_and_stops() {
-        let (mut held, mut speed) = (100.0, 0.0);
-        for _ in 0..40 {
-            (held, speed) = advance(held, speed, FRAME);
+    /// The displacements of a return at sixty hertz, until it arrives.
+    fn run(mut edge: Return) -> Vec<f32> {
+        let mut seen = vec![edge.at()];
+        while !edge.arrived() && seen.len() < 600 {
+            edge = edge.advanced(FRAME);
+            seen.push(edge.at());
         }
-        assert_eq!((held, speed), (0.0, 0.0), "the edge never settled");
+        seen
     }
 
     #[test]
-    fn it_returns_within_about_a_third_of_a_second() {
-        let (mut held, mut speed) = (120.0, 0.0);
-        let mut frames = 0;
-        while held != 0.0 && frames < 200 {
-            (held, speed) = advance(held, speed, FRAME);
-            frames += 1;
-        }
+    fn a_released_edge_comes_back_in_about_half_a_second() {
+        let seen = run(Return::start(100.0, 0.0));
+        let frames = seen.len() - 1;
         assert!(
-            (10..=30).contains(&frames),
-            "the return took {frames} frames at sixty hertz, which is not a third of a second"
+            (20..=40).contains(&frames),
+            "the return took {frames} frames at sixty hertz"
+        );
+        let visible = seen.iter().position(|at| at.abs() < 2.0).expect("arrived");
+        assert!(
+            (15..=22).contains(&visible),
+            "the edge was within two pixels after {visible} frames"
         );
     }
 
     #[test]
-    fn it_never_crosses_the_edge_and_comes_back() {
-        // A spring that is not critically damped bounces, and an edge that bounces twice reads as
-        // a defect rather than as an edge.
-        let (mut held, mut speed) = (100.0, 0.0);
-        for _ in 0..60 {
-            (held, speed) = advance(held, speed, FRAME);
-            assert!(held >= -0.5, "the displacement overshot to {held}");
-        }
-    }
-
-    #[test]
-    fn a_frame_that_took_a_quarter_of_a_second_settles_rather_than_exploding() {
-        // Integrated in one step this spring diverges: the container would be thrown thousands of
-        // pixels off its own edge for a frame, which a park that missed its deadline is enough to
-        // produce.
-        let (held, speed) = advance(120.0, 0.0, Duration::from_millis(250));
+    fn a_released_edge_starts_back_fast_and_never_crosses_its_end() {
+        let seen = run(Return::start(100.0, 0.0));
+        assert!(seen[1] < 85.0, "the first frame moved only to {}", seen[1]);
         assert!(
-            held.abs() <= 120.0 && speed.abs() < 1_000.0,
-            "one long frame left the edge at {held} moving at {speed}"
+            seen.windows(2)
+                .all(|pair| pair[1] <= pair[0] && pair[1] >= 0.0),
+            "{seen:?}"
         );
     }
 
     #[test]
-    fn the_same_time_in_one_step_and_in_several_reaches_the_same_place() {
-        let whole = advance(80.0, 0.0, Duration::from_millis(48));
-        let (mut held, mut speed) = (80.0, 0.0);
-        for _ in 0..3 {
-            (held, speed) = advance(held, speed, Duration::from_millis(16));
-        }
+    fn a_thrown_edge_travels_past_its_end_then_comes_back() {
+        let seen = run(Return::start(0.0, 3000.0));
+        let peak = seen.iter().copied().fold(0.0, f32::max);
         assert!(
-            (whole.0 - held).abs() < 0.5,
-            "a frame rate that varies would change where the edge is: {} against {held}",
-            whole.0
+            (15.0..=40.0).contains(&peak),
+            "a throw at 3000 pixels per second travelled {peak}"
         );
+        assert_eq!(*seen.last().expect("frames"), 0.0, "it never came back");
+        assert!(seen.len() < 60, "the bounce took {} frames", seen.len());
+    }
+
+    #[test]
+    fn the_frame_rate_does_not_change_where_the_edge_is() {
+        let whole = Return::start(80.0, 0.0).advanced(0.048);
+        let mut steps = Return::start(80.0, 0.0);
+        for _ in 0..6 {
+            steps = steps.advanced(0.008);
+        }
+        assert!((whole.at() - steps.at()).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_long_frame_brings_the_edge_home_rather_than_throwing_it() {
+        let after = Return::start(120.0, 0.0).advanced(2.0);
+        assert_eq!(after.at(), 0.0);
+        assert!(after.arrived());
     }
 }

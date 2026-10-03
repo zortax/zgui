@@ -186,8 +186,10 @@ mod tests {
         let mut scroller = Scroller::new();
         scroller.displace(
             container,
-            crate::elastic::Overscroll::default()
-                .pulled_by(zgui_geom::Size::new(DevicePx(0.0), DevicePx(60.0))),
+            crate::elastic::Overscroll::default().pulled_by(
+                zgui_geom::Size::new(DevicePx(0.0), DevicePx(60.0)),
+                zgui_geom::Size::new(DevicePx(400.0), DevicePx(600.0)),
+            ),
         );
         let before = scroller.elastic_of(container).height.0;
         scroller.rescale(2.0);

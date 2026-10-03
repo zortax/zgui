@@ -1,30 +1,19 @@
 //! What happens to a delta no container could absorb.
 //!
-//! Content dragged past its end does not stop dead: it follows the gesture with diminishing
-//! returns and springs back when the gesture ends. That is the affordance that says "this is the
-//! end" without a message, and it is also the reason a pull-to-refresh gesture is expressible at
-//! all — the displacement past the end *is* the gesture's progress.
+//! Content dragged past its end follows the gesture with diminishing returns and springs back when
+//! the gesture ends. That says "this is the end" without a message, and the displacement past the
+//! end is also the progress of a pull-to-refresh gesture.
 //!
-//! The displacement is deliberately not a scroll offset. An offset is clamped to what the content
-//! allows, because everything downstream of it — the scrollbar thumb, `scrollTop`, the observation
-//! a virtualiser reads — is a statement about content that exists. The elastic displacement is a
-//! separate, transient quantity composed on top at paint time and sprung away over the following
-//! frames.
+//! The displacement is a separate quantity from the scroll offset. An offset is clamped to what the
+//! content allows, because the scrollbar thumb, `scrollTop` and a virtualiser's observation all
+//! describe content that exists. The displacement is composed on top at paint time.
 //!
-//! # It is an animation, and it is driven by the frame clock
+//! # A finger holds the edge, the frame clock returns it
 //!
-//! The return carries a *speed* as well as a position, and both are advanced by however long the
-//! last frame took. That is what distinguishes it from a decay evaluated whenever an event happens
-//! to arrive, and the difference is visible: an edge whose position is a function of event arrival
-//! moves in the bursts the events arrive in, so a wheel held against the bottom of a list stutters
-//! — the edge is yanked out, released from a standstill, and yanked out again, at whatever rate the
-//! mouse reports. Here a detent adds to a spring that is already moving and the spring keeps
-//! running at the refresh rate, so what is seen is one continuous stretch and one continuous
-//! return.
-//!
-//! [`Scroller::is_animating`](crate::Scroller::is_animating) counts a displacement that has not yet
-//! come back, so the park installs a deadline for it exactly as it does for a smooth scroll. Without
-//! that the edge would stay stretched until something else happened to ask for a frame.
+//! While a touchpad gesture has its fingers down, the edge is *gripped*: it stays where the finger
+//! put it and no return runs. When the fingers lift, the return runs on the frame clock.
+//! [`Scroller::is_animating`](crate::Scroller::is_animating) counts an edge that returns, so the
+//! park installs a deadline for it. A gripped edge does not move, so it asks for no frames.
 
 mod resist;
 mod spring;
@@ -33,30 +22,22 @@ use core::time::Duration;
 
 use zgui_geom::{Device, DevicePx, Size};
 
-/// How far past its end a container may be dragged, in device pixels.
-///
-/// Pulling harder past this stops moving anything rather than dragging the content off the screen.
-pub const BAND: f32 = resist::BAND;
+use crate::elastic::spring::Return;
 
-/// One container's displacement past its end, and how fast it is coming back.
-///
-/// The speed is state and not a derived quantity, which is the whole of why this is a type rather
-/// than a pair of free functions over a displacement. A spring's position at the next frame is a
-/// function of where it is *and how fast it is going*, and a return that recomputed its speed from
-/// its position each frame is a return whose shape changes with the frame rate.
+/// One container's displacement past its end, and how it returns.
 ///
 /// ```
 /// use core::time::Duration;
 /// use zgui_geom::{Device, DevicePx, Size};
 /// use zgui_scroll::elastic::Overscroll;
 ///
-/// let pulled = Overscroll::default().pulled_by(Size::<DevicePx, Device>::new(
-///     DevicePx(0.0),
-///     DevicePx(100.0),
-/// ));
+/// let port = Size::<DevicePx, Device>::new(DevicePx(400.0), DevicePx(600.0));
+/// let pulled = Overscroll::default().pulled_by(
+///     Size::new(DevicePx(0.0), DevicePx(100.0)),
+///     port,
+/// );
 /// assert!(pulled.held().height.0 > 0.0, "it follows the gesture");
 /// assert!(pulled.held().height.0 < 100.0, "with resistance");
-/// assert!(!pulled.arrived());
 ///
 /// // And comes back on its own, given frames.
 /// let mut edge = pulled;
@@ -67,73 +48,145 @@ pub const BAND: f32 = resist::BAND;
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Overscroll {
-    /// How far past its end the content is being drawn.
-    held: Size<DevicePx, Device>,
-    /// How fast that is changing, in device pixels per second.
-    speed: Size<DevicePx, Device>,
+    /// The horizontal displacement and its return.
+    across: Return,
+    /// The vertical displacement and its return.
+    down: Return,
+    /// Whether a finger holds the edge where it is.
+    gripped: bool,
 }
 
 impl Overscroll {
-    /// How far past its end the content is being drawn.
+    /// How far past its end the content is drawn.
     pub fn held(self) -> Size<DevicePx, Device> {
-        self.held
+        Size::new(DevicePx(self.across.at()), DevicePx(self.down.at()))
     }
 
-    /// Whether the edge is back where it belongs and no longer moving.
+    /// Whether the edge is back at its end and no longer moving.
     pub fn arrived(self) -> bool {
-        self.held.width.0 == 0.0
-            && self.held.height.0 == 0.0
-            && self.speed.width.0 == 0.0
-            && self.speed.height.0 == 0.0
+        self.across.arrived() && self.down.arrived()
     }
 
-    /// The displacement after `unabsorbed` has been pulled into it.
-    ///
-    /// The resistance is what makes the band finite: each further pixel of gesture moves the
-    /// content less than the one before it, asymptotically to the edge of the band. So dragging
-    /// twice as hard does not go twice as far, and no gesture, however long, drags the content out
-    /// of the window.
-    ///
-    /// The speed is left where it was rather than zeroed. A detent that arrives while the edge is
-    /// already returning adds to a moving spring, which is what makes a run of detents against the
-    /// bottom of a list one continuous stretch instead of a series of jerks.
-    pub fn pulled_by(self, unabsorbed: Size<DevicePx, Device>) -> Self {
+    /// Whether a finger holds the edge.
+    pub fn is_gripped(self) -> bool {
+        self.gripped
+    }
+
+    /// The same edge, held where it is by a finger.
+    pub fn gripped(self) -> Self {
         Self {
-            held: Size::new(
-                DevicePx(resist::resist(self.held.width.0, unabsorbed.width.0)),
-                DevicePx(resist::resist(self.held.height.0, unabsorbed.height.0)),
-            ),
-            speed: self.speed,
+            across: Return::start(self.across.at(), 0.0),
+            down: Return::start(self.down.at(), 0.0),
+            gripped: true,
         }
+    }
+
+    /// The same edge, let go so that it returns.
+    pub fn released(self) -> Self {
+        Self {
+            gripped: false,
+            ..self.gripped()
+        }
+    }
+
+    /// The same edge, thrown at `speed` device pixels per second on each axis that has one.
+    ///
+    /// This is a momentum scroll that reaches the end: the edge travels on past it, then returns.
+    pub fn thrown(self, speed: Size<DevicePx, Device>) -> Self {
+        let throw = |edge: Return, speed: f32| {
+            if speed == 0.0 {
+                edge
+            } else {
+                Return::start(edge.at(), speed)
+            }
+        };
+        Self {
+            across: throw(self.across, speed.width.0),
+            down: throw(self.down, speed.height.0),
+            gripped: false,
+        }
+    }
+
+    /// The displacement after `unabsorbed` has been pulled into it, against a scrollport of
+    /// `extent`.
+    ///
+    /// The band makes each further pixel of pull move the content less than the one before, so no
+    /// pull drags the content a full scrollport. An axis with no pull keeps its return.
+    pub fn pulled_by(
+        self,
+        unabsorbed: Size<DevicePx, Device>,
+        extent: Size<DevicePx, Device>,
+    ) -> Self {
+        let pull = |edge: Return, by: f32, extent: f32| {
+            if by == 0.0 {
+                return edge;
+            }
+            let held = resist::band(resist::unband(edge.at(), extent) + by, extent);
+            Return::start(held, 0.0)
+        };
+        Self {
+            across: pull(self.across, unabsorbed.width.0, extent.width.0),
+            down: pull(self.down, unabsorbed.height.0, extent.height.0),
+            gripped: self.gripped,
+        }
+    }
+
+    /// The displacement after `delta` has pulled it back towards its end, and what is left of
+    /// `delta` once it is there.
+    ///
+    /// A finger that moves back first undoes the stretch, then scrolls the content. An axis with
+    /// no displacement, or one that `delta` pulls further out, passes its whole delta on.
+    pub fn unwound_by(
+        self,
+        delta: Size<DevicePx, Device>,
+        extent: Size<DevicePx, Device>,
+    ) -> (Self, Size<DevicePx, Device>) {
+        let unwind = |edge: Return, by: f32, extent: f32| {
+            let held = edge.at();
+            if held == 0.0 || by == 0.0 || held.signum() == by.signum() {
+                return (edge, by);
+            }
+            let pulled = resist::unband(held, extent) + by;
+            if pulled.signum() == held.signum() {
+                (Return::start(resist::band(pulled, extent), 0.0), 0.0)
+            } else {
+                (Return::default(), pulled)
+            }
+        };
+        let (across, left_x) = unwind(self.across, delta.width.0, extent.width.0);
+        let (down, left_y) = unwind(self.down, delta.height.0, extent.height.0);
+        (
+            Self {
+                across,
+                down,
+                gripped: self.gripped,
+            },
+            Size::new(DevicePx(left_x), DevicePx(left_y)),
+        )
     }
 
     /// The same displacement measured on a device with `by` times as many pixels per CSS pixel.
     ///
-    /// Both halves are device-pixel quantities — a displacement and a speed in device pixels per
-    /// second — so a surface that changed its ratio has changed the number that stands for the same
-    /// physical stretch. Scaling the speed with the displacement is what keeps the return the same
-    /// length of time: a spring whose position was rescaled and whose velocity was not is one that
-    /// crawls back at double the ratio and snaps back at half it.
+    /// The displacement and the thrown speed are both in device pixels, so both scale. The return
+    /// then takes the same time as before.
     pub fn scaled(self, by: f32) -> Self {
         Self {
-            held: Size::new(
-                DevicePx(self.held.width.0 * by),
-                DevicePx(self.held.height.0 * by),
-            ),
-            speed: Size::new(
-                DevicePx(self.speed.width.0 * by),
-                DevicePx(self.speed.height.0 * by),
-            ),
+            across: self.across.scaled(by),
+            down: self.down.scaled(by),
+            gripped: self.gripped,
         }
     }
 
-    /// The displacement after `elapsed` of the spring.
+    /// The displacement after `elapsed` of its return. A gripped edge does not move.
     pub fn advanced(self, elapsed: Duration) -> Self {
-        let (width, speed_x) = spring::advance(self.held.width.0, self.speed.width.0, elapsed);
-        let (height, speed_y) = spring::advance(self.held.height.0, self.speed.height.0, elapsed);
+        if self.gripped {
+            return self;
+        }
+        let seconds = elapsed.as_secs_f32();
         Self {
-            held: Size::new(DevicePx(width), DevicePx(height)),
-            speed: Size::new(DevicePx(speed_x), DevicePx(speed_y)),
+            across: self.across.advanced(seconds),
+            down: self.down.advanced(seconds),
+            gripped: false,
         }
     }
 }
@@ -144,7 +197,10 @@ mod tests {
 
     use zgui_geom::{Device, DevicePx, Size};
 
-    use super::{BAND, Overscroll};
+    use super::Overscroll;
+
+    /// A scrollport 600 device pixels tall.
+    const PORT: Size<DevicePx, Device> = Size::new(DevicePx(400.0), DevicePx(600.0));
 
     fn down(by: f32) -> Size<DevicePx, Device> {
         Size::new(DevicePx(0.0), DevicePx(by))
@@ -153,52 +209,68 @@ mod tests {
     #[test]
     fn a_displacement_that_was_never_made_is_already_arrived() {
         assert!(Overscroll::default().arrived());
-        assert!(!Overscroll::default().pulled_by(down(1.0)).arrived());
+        assert!(!Overscroll::default().pulled_by(down(1.0), PORT).arrived());
     }
 
     #[test]
-    fn the_band_is_never_left_however_hard_it_is_pulled() {
+    fn the_port_is_never_left_however_hard_it_is_pulled() {
         let mut edge = Overscroll::default();
         for _ in 0..200 {
-            edge = edge.pulled_by(down(50.0));
+            edge = edge.pulled_by(down(50.0), PORT);
         }
-        assert!(
-            edge.held().height.0 < BAND,
-            "ten thousand pixels of gesture dragged the content {} past its end",
-            edge.held().height.0
-        );
+        assert!(edge.held().height.0 < PORT.height.0);
     }
 
     #[test]
-    fn a_pull_during_a_return_keeps_the_speed_the_return_had() {
-        // The stutter this replaces: an edge whose speed is thrown away at every arriving detent
-        // restarts its return from a standstill each time, so a wheel held against the bottom of a
-        // list produces one visible jerk per detent instead of one continuous stretch.
-        let moving = Overscroll::default()
-            .pulled_by(down(100.0))
-            .advanced(Duration::from_millis(16));
-        assert!(
-            moving.advanced(Duration::ZERO) == moving,
-            "no time passing must move nothing"
-        );
-        let pulled = moving.pulled_by(down(10.0));
-        assert!(pulled.held().height.0 > moving.held().height.0);
-        assert!(
-            pulled.advanced(Duration::from_millis(16)).held().height.0 < pulled.held().height.0,
-            "the spring did not carry on returning after the pull"
-        );
+    fn a_gripped_edge_stays_where_the_finger_put_it() {
+        let edge = Overscroll::default().pulled_by(down(100.0), PORT).gripped();
+        let later = edge.advanced(Duration::from_secs(1));
+        assert_eq!(later.held(), edge.held());
+        assert!(!later.arrived());
+        let mut let_go = later.released();
+        for _ in 0..60 {
+            let_go = let_go.advanced(Duration::from_millis(16));
+        }
+        assert!(let_go.arrived());
     }
 
     #[test]
-    fn a_pull_in_the_other_direction_displaces_the_other_way() {
-        let up = Overscroll::default().pulled_by(down(-40.0));
-        assert!(up.held().height.0 < 0.0);
-        assert!(up.pulled_by(down(40.0)).held().height.0.abs() < 1e-3);
+    fn moving_back_undoes_the_stretch_before_anything_else() {
+        let edge = Overscroll::default()
+            .pulled_by(down(-100.0), PORT)
+            .gripped();
+        let (partly, left) = edge.unwound_by(down(40.0), PORT);
+        assert_eq!(left, down(0.0));
+        assert!(partly.held().height.0 < 0.0 && partly.held().height.0 > edge.held().height.0);
+
+        let (home, left) = edge.unwound_by(down(130.0), PORT);
+        assert_eq!(home.held().height.0, 0.0);
+        assert!((left.height.0 - 30.0).abs() < 0.01, "{left:?}");
     }
 
     #[test]
-    fn each_axis_springs_back_on_its_own() {
-        let edge = Overscroll::default().pulled_by(Size::new(DevicePx(40.0), DevicePx(0.0)));
+    fn a_pull_further_out_is_passed_on_to_the_band() {
+        let edge = Overscroll::default().pulled_by(down(-100.0), PORT);
+        let (same, left) = edge.unwound_by(down(-10.0), PORT);
+        assert_eq!(same, edge);
+        assert_eq!(left, down(-10.0));
+    }
+
+    #[test]
+    fn a_throw_travels_past_the_end_and_comes_back() {
+        let mut edge = Overscroll::default().thrown(down(3000.0));
+        let mut peak: f32 = 0.0;
+        for _ in 0..120 {
+            edge = edge.advanced(Duration::from_millis(8));
+            peak = peak.max(edge.held().height.0);
+        }
+        assert!(peak > 10.0, "{peak}");
+        assert!(edge.arrived());
+    }
+
+    #[test]
+    fn each_axis_returns_on_its_own() {
+        let edge = Overscroll::default().pulled_by(Size::new(DevicePx(40.0), DevicePx(0.0)), PORT);
         assert!(edge.held().width.0 > 0.0);
         assert_eq!(edge.held().height.0, 0.0);
         let mut edge = edge;

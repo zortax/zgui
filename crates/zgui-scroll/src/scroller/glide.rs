@@ -43,10 +43,10 @@ impl Scroller {
         stretch: Stretch,
     ) -> SmallVec<[NodeKey; 2]> {
         let mut moved: SmallVec<[NodeKey; 2]> = SmallVec::new();
-        let mut left = delta;
-        if chain::negligible(left) {
+        if chain::negligible(delta) {
             return moved;
         }
+        let mut left = self.unwind(store, chain, delta, &mut moved);
         for container in chain.iter().copied() {
             let at = self.offset_of(container);
             // Where this container is *going*, not where it is. A detent that arrives mid-flight

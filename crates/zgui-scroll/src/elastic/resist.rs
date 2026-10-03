@@ -1,57 +1,58 @@
-//! How far the content actually moves for a delta that has nowhere to go.
+//! How far the content moves for a delta that has nowhere to go.
+//!
+//! The curve is the rubber band of AppKit and UIKit: `d·(1 − 1/(c·x/d + 1))`, where `x` is the
+//! distance pulled and `d` the extent of the scrollport on that axis. The first pixels move the
+//! content at `c` of the finger's speed, and no pull, however long, moves it a full scrollport.
 
-/// How far past its end a container may be dragged, in device pixels.
-///
-/// The band is finite, so pulling harder stops moving anything rather than dragging the content off
-/// the screen. Below the resistance curve it is what makes the edge feel like a limit rather than
-/// like more content.
-pub(crate) const BAND: f32 = 120.0;
+/// How stiff the band is: the share of the first pixels pulled that move the content.
+const COEFFICIENT: f32 = 0.55;
 
-/// The displacement reached by adding `added` to a container already displaced by `held`.
+/// The smallest extent the band is measured against, in device pixels.
 ///
-/// The displacement is carried as the *un*-resisted distance pulled so far and mapped through
-/// `band * x / (band + x)` on the way out, so that adding to it is addition rather than an inverse
-/// of the curve — and so that pulling and releasing repeatedly does not accumulate rounding.
-pub(crate) fn resist(held: f32, added: f32) -> f32 {
-    let pulled = unresist(held) + added;
+/// A scrollport with no size would divide by zero.
+const SMALLEST_EXTENT: f32 = 1.0;
+
+/// The displacement reached by pulling `pulled` device pixels against a port `extent` long.
+pub(crate) fn band(pulled: f32, extent: f32) -> f32 {
+    let extent = extent.max(SMALLEST_EXTENT);
     let magnitude = pulled.abs();
-    pulled.signum() * (BAND * magnitude / (BAND + magnitude))
+    pulled.signum() * extent * (1.0 - 1.0 / (COEFFICIENT * magnitude / extent + 1.0))
 }
 
-/// The distance that was pulled to reach a displacement of `held`.
-fn unresist(held: f32) -> f32 {
-    let magnitude = held.abs().min(BAND - 0.001);
-    held.signum() * (BAND * magnitude / (BAND - magnitude))
+/// The distance that was pulled to reach a displacement of `held`, the inverse of [`band`].
+pub(crate) fn unband(held: f32, extent: f32) -> f32 {
+    let extent = extent.max(SMALLEST_EXTENT);
+    let magnitude = held.abs().min(extent * 0.999);
+    held.signum() * extent / COEFFICIENT * (1.0 / (1.0 - magnitude / extent) - 1.0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BAND, resist};
+    use super::{band, unband};
 
     #[test]
-    fn the_band_is_never_left_however_hard_it_is_pulled() {
-        let mut held = 0.0;
-        for _ in 0..200 {
-            held = resist(held, 50.0);
+    fn no_pull_leaves_the_scrollport() {
+        let held = band(1.0e7, 600.0);
+        assert!(held < 600.0, "a long pull moved the content {held}");
+    }
+
+    #[test]
+    fn the_first_pixels_move_at_about_half_speed_and_the_later_ones_slower() {
+        let early = band(2.0, 600.0);
+        let late = band(602.0, 600.0) - band(600.0, 600.0);
+        assert!((early - 1.1).abs() < 0.01, "{early}");
+        assert!(late < early / 2.0, "{late}");
+    }
+
+    #[test]
+    fn a_larger_port_stretches_further_for_the_same_pull() {
+        assert!(band(200.0, 1200.0) > band(200.0, 300.0));
+    }
+
+    #[test]
+    fn the_inverse_finds_the_pull_again() {
+        for pulled in [-300.0, -3.0, 0.0, 5.0, 250.0] {
+            assert!((unband(band(pulled, 600.0), 600.0) - pulled).abs() < 1e-2);
         }
-        assert!(
-            held < BAND,
-            "ten thousand pixels of gesture dragged the content {held} past its end"
-        );
-    }
-
-    #[test]
-    fn the_first_pixels_move_almost_one_for_one_and_the_later_ones_do_not() {
-        let early = resist(0.0, 2.0);
-        let late = resist(80.0, 2.0) - 80.0;
-        assert!(early > 1.9, "the edge does not feel stuck: {early}");
-        assert!(late < early / 2.0, "and it stiffens as it goes: {late}");
-    }
-
-    #[test]
-    fn a_pull_in_the_other_direction_displaces_the_other_way() {
-        let up = resist(0.0, -40.0);
-        assert!(up < 0.0);
-        assert!(resist(up, 40.0).abs() < 1e-3);
     }
 }
