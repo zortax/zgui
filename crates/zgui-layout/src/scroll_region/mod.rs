@@ -40,6 +40,10 @@ pub struct ScrollRegion {
     pub scrollport: Rect<DevicePx, Device>,
     /// How far the content reaches inside it.
     pub content: Size<DevicePx, Device>,
+    /// Whether a person may scroll the horizontal axis: its overflow is `auto` or `scroll`.
+    pub scrolls_x: bool,
+    /// Whether a person may scroll the vertical axis: its overflow is `auto` or `scroll`.
+    pub scrolls_y: bool,
 }
 
 impl ScrollRegion {
@@ -51,6 +55,18 @@ impl ScrollRegion {
         Point::new(
             DevicePx((self.content.width.0 - self.scrollport.size.width.0).max(0.0)),
             DevicePx((self.content.height.0 - self.scrollport.size.height.0).max(0.0)),
+        )
+    }
+
+    /// The largest offset a person can scroll the region to.
+    ///
+    /// An axis with `overflow: hidden` clips its content. A script can scroll it, a person cannot,
+    /// so its limit here is zero.
+    pub fn hand_limit(&self) -> Point<DevicePx, Device> {
+        let limit = self.limit();
+        Point::new(
+            DevicePx(if self.scrolls_x { limit.x.0 } else { 0.0 }),
+            DevicePx(if self.scrolls_y { limit.y.0 } else { 0.0 }),
         )
     }
 }
@@ -66,9 +82,12 @@ pub fn region_of(store: &LayoutStore, key: BoxKey) -> Option<ScrollRegion> {
     }
     let layout = store.layout_of(key)?;
     let scrollport = layout.content_box();
+    let box_ = node.style.get_box();
     Some(ScrollRegion {
         scrollport: Rect::new(Point::new(DevicePx(0.0), DevicePx(0.0)), scrollport.size),
         content: layout.content_size,
+        scrolls_x: scrolls(box_.overflow_x),
+        scrolls_y: scrolls(box_.overflow_y),
     })
 }
 
@@ -192,6 +211,8 @@ mod tests {
                 Size::new(DevicePx(100.0), DevicePx(100.0)),
             ),
             content: Size::new(DevicePx(40.0), DevicePx(40.0)),
+            scrolls_x: true,
+            scrolls_y: true,
         };
         assert_eq!(region.limit(), Point::new(DevicePx(0.0), DevicePx(0.0)));
     }
@@ -204,7 +225,27 @@ mod tests {
                 Size::<DevicePx, Device>::new(DevicePx(100.0), DevicePx(50.0)),
             ),
             content: Size::new(DevicePx(100.0), DevicePx(400.0)),
+            scrolls_x: true,
+            scrolls_y: true,
         };
         assert_eq!(region.limit(), Point::new(DevicePx(0.0), DevicePx(350.0)));
+    }
+
+    #[test]
+    fn a_person_cannot_scroll_a_hidden_axis() {
+        let region = ScrollRegion {
+            scrollport: Rect::new(
+                Point::new(DevicePx(0.0), DevicePx(0.0)),
+                Size::new(DevicePx(100.0), DevicePx(50.0)),
+            ),
+            content: Size::new(DevicePx(300.0), DevicePx(400.0)),
+            scrolls_x: false,
+            scrolls_y: true,
+        };
+        assert_eq!(region.limit(), Point::new(DevicePx(200.0), DevicePx(350.0)));
+        assert_eq!(
+            region.hand_limit(),
+            Point::new(DevicePx(0.0), DevicePx(350.0))
+        );
     }
 }
