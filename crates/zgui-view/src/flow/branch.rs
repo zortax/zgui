@@ -139,6 +139,16 @@ impl<K: PartialEq + 'static> Branch<K> {
     }
 }
 
+/// Drops the content together with the state, for the reason given on
+/// [`ReactiveState`](crate::view::ReactiveState).
+impl<K: 'static> Drop for Branch<K> {
+    fn drop(&mut self) {
+        if let Ok(mut hole) = self.hole.try_borrow_mut() {
+            drop(hole.take());
+        }
+    }
+}
+
 impl<K: 'static> Anchor for Branch<K> {
     fn mount(&mut self, dom: &DomHandle, parent: NodeId, before: Option<NodeId>) {
         self.hole.borrow_mut().mount(dom, parent, before);

@@ -75,6 +75,13 @@ impl<S: Anchor> Hole<S> {
     }
 }
 
+impl<S> Hole<S> {
+    /// Takes the content out without unmounting it.
+    pub(crate) fn take(&mut self) -> Option<S> {
+        self.content.take()
+    }
+}
+
 impl<S: Anchor> Anchor for Hole<S> {
     fn mount(&mut self, dom: &DomHandle, parent: NodeId, before: Option<NodeId>) {
         dom.insert(parent, self.marker, before);

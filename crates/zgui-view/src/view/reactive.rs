@@ -108,6 +108,19 @@ impl<S: Anchor> Anchor for ReactiveState<S> {
     }
 }
 
+/// Drops the content together with the state.
+///
+/// The effect's task also holds the hole, until the executor polls that task again. Without this,
+/// the content and its bindings stay alive until that poll. A binding that a scope cleanup wakes
+/// before that poll then reads signals that the scope disposed of.
+impl<S> Drop for ReactiveState<S> {
+    fn drop(&mut self) {
+        if let Ok(mut hole) = self.hole.try_borrow_mut() {
+            drop(hole.take());
+        }
+    }
+}
+
 impl<F, V> View for F
 where
     F: FnMut() -> V + 'static,
@@ -127,7 +140,7 @@ where
 #[cfg(test)]
 mod tests {
     use zgui_reactive::prelude::*;
-    use zgui_reactive::{RwSignal, flush};
+    use zgui_reactive::{RwSignal, flush, on_cleanup_local};
 
     use crate::fixture::Fixture;
     use crate::view::anchor::Anchor;
@@ -196,7 +209,6 @@ mod tests {
     fn the_scope_under_a_hole_is_disposed_of_synchronously_on_unmount() {
         use std::cell::Cell;
         use std::rc::Rc;
-        use zgui_reactive::on_cleanup_local;
 
         let f = Fixture::new();
         let cleaned = Rc::new(Cell::new(false));
@@ -216,5 +228,21 @@ mod tests {
         state.unmount(&f.dom);
         assert!(cleaned.get(), "the cleanup ran before unmount returned");
         f.window.unmount();
+    }
+
+    #[test]
+    fn a_dropped_hole_drops_its_content_at_once() {
+        // The window closes this way: it drops the view, then disposes of its scope. A cleanup that
+        // writes a signal wakes the innermost effect, and the next flush must not run it.
+        let f = Fixture::new();
+        let source = f.window.with(|| RwSignal::new(0));
+        f.window.with(|| on_cleanup_local(move || source.set(1)));
+        let state = f
+            .window
+            .with(|| (move || move || move || source.get().to_string()).build(&mut f.cx()));
+
+        drop(state);
+        f.window.unmount();
+        flush();
     }
 }
