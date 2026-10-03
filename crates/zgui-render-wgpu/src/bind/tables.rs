@@ -153,7 +153,8 @@ impl Tables {
 /// Slots of one GPU table that need to be copied this frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DirtySlots {
-    /// Every slot is dirty. Used for the first frame, a journal miss, or a non-append paint edit.
+    /// Every slot is dirty. Used for the first frame, a journal miss, or a paint table that shrank
+    /// or is half orphaned stops.
     pub all: bool,
     /// Individual changed slots when a full copy is unnecessary.
     pub slots: Vec<u32>,
@@ -232,6 +233,11 @@ pub struct PreparedTables {
     moved_spaces: Vec<bool>,
     /// How many space slots moved this frame, so an untouched frame skips the clip refresh.
     moved_space_count: usize,
+    /// How many entries of the stop table no paint names any more.
+    ///
+    /// A paint slot rewritten in place leaves the stops it named behind. They cost upload space
+    /// and nothing else, and the table is flattened again when they are half of it.
+    orphaned_stops: usize,
     /// Which clip slots depend on which, so a frame refreshes the dependents of what changed
     /// rather than walking every chain in the id space.
     deps: ClipDependents,
@@ -446,33 +452,35 @@ impl PreparedTables {
 
     fn update_paints(&mut self, table: &PaintTable, coverage: ChangeCoverage) {
         if coverage == ChangeCoverage::All {
-            let rebuilt = paints(table);
-            self.tables.paints = rebuilt.paints;
-            self.tables.stops = rebuilt.stops;
-            self.dirty.paints.mark_all();
-            self.dirty.stops.mark_all();
+            self.rebuild_paints(table);
             return;
         }
         if self.changed_paints.is_empty() {
             return;
         }
 
+        // A sweep that retracted the id space leaves the copy longer than the table, and a copy
+        // that is half orphaned stops is worth flattening again.
         let old_paints = self.tables.paints.len();
-        let append_only = table.slots() >= old_paints
-            && self
-                .changed_paints
-                .iter()
-                .all(|id| id.0 as usize >= old_paints);
-        if !append_only {
-            let rebuilt = paints(table);
-            self.tables.paints = rebuilt.paints;
-            self.tables.stops = rebuilt.stops;
-            self.dirty.paints.mark_all();
-            self.dirty.stops.mark_all();
+        if table.slots() < old_paints || self.orphaned_stops * 2 > self.tables.stops.len() {
+            self.rebuild_paints(table);
             return;
         }
 
+        // A slot below the old end was freed by a sweep or reused by a new paint. It is rewritten
+        // in place, and a gradient written there appends its stops.
         let old_stops = self.tables.stops.len();
+        self.changed_paints.sort_unstable_by_key(|id| id.0);
+        self.changed_paints.dedup();
+        for id in &self.changed_paints {
+            let slot = id.0 as usize;
+            if slot >= old_paints {
+                break;
+            }
+            self.orphaned_stops += self.tables.paints[slot].stop_count as usize;
+            self.tables.paints[slot] = gpu_paint(&mut self.tables.stops, table.get(*id));
+            self.dirty.paints.slots.push(id.0);
+        }
         for index in old_paints..table.slots() {
             push_paint(&mut self.tables, table.get(PaintId(index as u32)));
             self.dirty.paints.slots.push(index as u32);
@@ -481,6 +489,16 @@ impl PreparedTables {
             .stops
             .slots
             .extend((old_stops..self.tables.stops.len()).map(|index| index as u32));
+    }
+
+    /// Flattens the paint table again, and marks every paint and stop slot dirty.
+    fn rebuild_paints(&mut self, table: &PaintTable) {
+        let rebuilt = paints(table);
+        self.tables.paints = rebuilt.paints;
+        self.tables.stops = rebuilt.stops;
+        self.orphaned_stops = 0;
+        self.dirty.paints.mark_all();
+        self.dirty.stops.mark_all();
     }
 
     fn update_clips(&mut self, table: &ClipTable, coverage: ChangeCoverage) {
@@ -663,11 +681,16 @@ fn paints(table: &PaintTable) -> Tables {
 
 /// Appends one paint and any stops it owns.
 fn push_paint(tables: &mut Tables, paint: Option<&Paint>) {
+    let gpu = gpu_paint(&mut tables.stops, paint);
+    tables.paints.push(gpu);
+}
+
+/// One paint as the shader reads it, with any stops it owns appended to `stops`.
+fn gpu_paint(stops: &mut Vec<GpuStop>, paint: Option<&Paint>) -> GpuPaint {
     let Some(paint) = paint else {
-        tables.paints.push(GpuPaint::default());
-        return;
+        return GpuPaint::default();
     };
-    let gpu = match paint {
+    match paint {
         Paint::Solid(color) => GpuPaint {
             kind: kind::SOLID,
             color: color.to_premultiplied_srgb(),
@@ -675,14 +698,14 @@ fn push_paint(tables: &mut Tables, paint: Option<&Paint>) {
         },
         Paint::Gradient {
             kind: shape,
-            stops,
+            stops: ramp_stops,
             space: interpolation_space,
             hue,
             repeating,
         } => {
-            let start = tables.stops.len() as u32;
-            let (encoding, written) = ramp(stops, *interpolation_space, *hue);
-            tables.stops.extend(written);
+            let start = stops.len() as u32;
+            let (encoding, written) = ramp(ramp_stops, *interpolation_space, *hue);
+            stops.extend(written);
             GpuPaint {
                 kind: kind::GRADIENT,
                 gradient: gradient_tag(shape),
@@ -691,7 +714,7 @@ fn push_paint(tables: &mut Tables, paint: Option<&Paint>) {
                 geometry: gradient_geometry(shape),
                 color: [0.0; 4],
                 stop_start: start,
-                stop_count: tables.stops.len() as u32 - start,
+                stop_count: stops.len() as u32 - start,
                 pad0: 0,
                 pad1: 0,
             }
@@ -700,8 +723,7 @@ fn push_paint(tables: &mut Tables, paint: Option<&Paint>) {
             kind: kind::IMAGE,
             ..GpuPaint::default()
         },
-    };
-    tables.paints.push(gpu);
+    }
 }
 
 /// Which shape a ramp follows.
@@ -904,6 +926,125 @@ mod tests {
         assert_eq!(prepared.dirty().paints.slots, vec![id.0]);
         assert!(!prepared.dirty().paints.all);
         assert_eq!(prepared.tables().paints[id.0 as usize].kind, kind::SOLID);
+    }
+
+    /// A scene whose paint table holds three solid paints, with the middle one freed by a sweep.
+    fn paints_with_a_freed_middle_slot() -> (zgui_scene::Scene, PreparedTables, zgui_scene::PaintId)
+    {
+        let mut scene = zgui_scene::Scene::new();
+        let colour = |red| zgui_color::Color::srgb(red, 0.0, 0.0, 1.0);
+        scene.paints.begin_frame();
+        let first = scene.paints.solid(colour(0.1));
+        let middle = scene.paints.solid(colour(0.2));
+        let last = scene.paints.solid(colour(0.3));
+        scene.paints.retain(first);
+        scene.paints.retain(last);
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        for _ in 0..=8 {
+            scene.paints.begin_frame();
+        }
+        assert_eq!(scene.paints.evict_unused_paints(8, usize::MAX), 1);
+        assert!(!scene.paints.contains(middle));
+        (scene, prepared, middle)
+    }
+
+    #[test]
+    fn a_freed_paint_slot_dirties_only_that_slot() {
+        let (scene, mut prepared, middle) = paints_with_a_freed_middle_slot();
+        prepared.update(&scene);
+
+        assert!(
+            !prepared.dirty().paints.all,
+            "one slot changed, so one slot is prepared"
+        );
+        assert_eq!(prepared.dirty().paints.slots, vec![middle.0]);
+        assert_eq!(prepared.tables().paints[middle.0 as usize].kind, kind::NONE);
+    }
+
+    #[test]
+    fn a_reused_paint_slot_is_rewritten_in_place() {
+        let (mut scene, mut prepared, middle) = paints_with_a_freed_middle_slot();
+        prepared.update(&scene);
+
+        let reused = scene
+            .paints
+            .solid(zgui_color::Color::srgb(0.0, 1.0, 0.0, 1.0));
+        assert_eq!(reused, middle, "a new paint takes the freed slot");
+        prepared.update(&scene);
+
+        assert!(!prepared.dirty().paints.all);
+        assert_eq!(prepared.dirty().paints.slots, vec![middle.0]);
+        let written = prepared.tables().paints[middle.0 as usize];
+        assert_eq!(written.kind, kind::SOLID);
+        assert_eq!(written.color, [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(prepared.tables().paints, paints(&scene.paints).paints);
+    }
+
+    #[test]
+    fn a_gradient_in_a_reused_slot_appends_its_stops() {
+        let (mut scene, mut prepared, middle) = paints_with_a_freed_middle_slot();
+        prepared.update(&scene);
+
+        let ramp = zgui_scene::Paint::Gradient {
+            kind: zgui_scene::GradientKind::Linear {
+                start: Point::new(DevicePx(0.0), DevicePx(0.0)),
+                end: Point::new(DevicePx(10.0), DevicePx(0.0)),
+            },
+            stops: vec![
+                zgui_color::GradientStop {
+                    offset: 0.0,
+                    color: zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0),
+                },
+                zgui_color::GradientStop {
+                    offset: 1.0,
+                    color: zgui_color::Color::srgb(0.0, 0.0, 1.0, 1.0),
+                },
+            ]
+            .into(),
+            space: zgui_color::ColorSpace::Srgb,
+            hue: zgui_color::HueInterpolation::Shorter,
+            repeating: false,
+        };
+        assert_eq!(scene.paints.intern(ramp), middle);
+        prepared.update(&scene);
+
+        let written = prepared.tables().paints[middle.0 as usize];
+        assert_eq!(written.kind, kind::GRADIENT);
+        assert_eq!(written.stop_start, 0, "the first stops in the table");
+        assert!(written.stop_count >= 2);
+        assert!(!prepared.dirty().stops.all);
+        assert_eq!(
+            prepared.dirty().stops.slots,
+            (0..written.stop_count).collect::<Vec<_>>(),
+            "only the appended stops are prepared"
+        );
+    }
+
+    #[test]
+    fn a_paint_table_that_shrank_is_flattened_again() {
+        let mut scene = zgui_scene::Scene::new();
+        scene.paints.begin_frame();
+        let kept = scene
+            .paints
+            .solid(zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0));
+        scene.paints.retain(kept);
+        scene
+            .paints
+            .solid(zgui_color::Color::srgb(0.0, 1.0, 0.0, 1.0));
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        for _ in 0..=8 {
+            scene.paints.begin_frame();
+        }
+        assert_eq!(scene.paints.evict_unused_paints(8, usize::MAX), 1);
+        assert_eq!(scene.paints.slots(), 1, "the sweep retracted the id space");
+        prepared.update(&scene);
+
+        assert!(prepared.dirty().paints.all);
+        assert_eq!(prepared.tables().paints.len(), 1);
     }
 
     #[test]

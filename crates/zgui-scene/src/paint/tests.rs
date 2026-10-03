@@ -77,6 +77,33 @@ fn the_interpolation_space_is_part_of_the_content() {
 }
 
 #[test]
+fn a_sweep_frees_the_paints_nothing_holds_or_used_recently() {
+    let mut paints = PaintTable::new();
+    paints.begin_frame();
+    let held = paints.solid(Color::srgb(1.0, 0.0, 0.0, 1.0));
+    paints.retain(held);
+    // The colours a transition drew on its way, one per frame.
+    let faded: Vec<_> = (0..64)
+        .map(|step| paints.solid(Color::srgb(0.0, 0.0, 0.0, step as f32 / 64.0)))
+        .collect();
+    for _ in 0..=8 {
+        paints.begin_frame();
+    }
+    let recent = paints.solid(Color::srgb(0.0, 0.0, 1.0, 1.0));
+
+    let freed = paints.evict_unused_paints(8, usize::MAX);
+
+    assert_eq!(
+        freed, 64,
+        "every paint nothing holds and no recent frame used went"
+    );
+    assert!(faded.iter().all(|id| !paints.contains(*id)));
+    assert!(paints.contains(held), "a record's hold keeps a paint");
+    assert!(paints.contains(recent), "a paint a recent frame used stays");
+    assert_eq!(paints.len(), 2);
+}
+
+#[test]
 fn a_reference_to_nothing_names_nothing() {
     let mut paints = PaintTable::new();
     let id = paints.solid(Color::srgb(0.0, 0.0, 0.0, 1.0));

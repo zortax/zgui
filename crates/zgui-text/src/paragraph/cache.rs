@@ -111,6 +111,19 @@ impl<E> ParagraphCache<E> {
         self.entries.drain().map(|(_, entry)| entry.shaped)
     }
 
+    /// How many results the cache can hold before it must grow.
+    pub fn capacity(&self) -> usize {
+        self.entries.capacity()
+    }
+
+    /// Gives back the storage beyond room for `entries` results.
+    ///
+    /// A drained cache keeps the room it grew to. A cache that is drained after each use holds
+    /// that room for nothing until the next use, so it gives the room back here.
+    pub fn shrink_to(&mut self, entries: usize) {
+        self.entries.shrink_to(entries);
+    }
+
     /// Takes one shaped result out, if it is held.
     ///
     /// The ownership move a batch worker needs: breaking mutates the entry, so the worker that
@@ -202,6 +215,25 @@ mod tests {
             [],
             (),
         )
+    }
+
+    #[test]
+    fn a_drained_cache_gives_back_its_room() {
+        let mut cache = ParagraphCache::new();
+        for key in 0..512 {
+            cache.insert(shaped(key));
+        }
+        assert_eq!(cache.drain_shaped().count(), 512);
+        assert!(cache.capacity() >= 512, "draining keeps the room");
+
+        cache.shrink_to(8);
+        assert!(cache.is_empty());
+        assert!(cache.capacity() >= 8);
+        assert!(
+            cache.capacity() < 64,
+            "the room beyond the kept entries is given back: {}",
+            cache.capacity()
+        );
     }
 
     #[test]
