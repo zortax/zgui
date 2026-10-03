@@ -211,9 +211,12 @@ impl Window {
                     zgui_view::ScrollBehavior::default(),
                 );
             }
-            Intent::Scroll { node, by } => {
-                self.scroll_by(node, delta_for(by), zgui_vocab::ScrollPhase::Discrete)
-            }
+            Intent::Scroll { node, by } => self.scroll_by(
+                node,
+                delta_for(by),
+                zgui_vocab::ScrollPhase::Discrete,
+                timestamp,
+            ),
         }
     }
 

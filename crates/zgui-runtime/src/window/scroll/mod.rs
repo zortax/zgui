@@ -27,7 +27,7 @@ pub(crate) mod shift;
 use zgui_dom::NodeKey;
 use zgui_geom::{CssPx, Point, Scale};
 use zgui_scroll::{Align, Behavior, Stretch};
-use zgui_vocab::{EventKind, Payload, ScrollDelta, ScrollPhase, Timestamp};
+use zgui_vocab::{EventKind, Payload, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
 
 use crate::window::Window;
 
@@ -59,47 +59,134 @@ impl Window {
     /// the applications beside this one move; and *how tall a line is* is the scrolled container's
     /// own. A constant standing in for any one of them is a wheel that feels wrong somewhere and is
     /// never obviously broken anywhere.
-    pub(crate) fn scroll_by(&mut self, container: NodeKey, delta: ScrollDelta, phase: ScrollPhase) {
+    ///
+    /// A touchpad gesture that reports its phases goes to [`zgui_scroll::Scroller::drag_by`]
+    /// instead: it latches to one container and holds its stretch while the fingers are down.
+    /// `at` is the event's own stamp, which the gesture measures its speed with.
+    pub(crate) fn scroll_by(
+        &mut self,
+        container: NodeKey,
+        delta: ScrollDelta,
+        phase: ScrollPhase,
+        at: Timestamp,
+    ) {
         let chain = self.scroll_chain(container);
         let Some(&innermost) = chain.first() else {
             return;
         };
-        let units = self.scroll_units(innermost);
-        let asked = self.asked_for(delta);
-        let moved_by =
-            zgui_input::normalize::scroll::to_device(asked, units, Scale::new(self.scale));
+        let moved_by = self.device_delta(innermost, delta);
         // A detent arrived whole and has to be carried; a continuous surface's deltas are already
         // a motion, and a second animation over them is what makes a trackpad feel like treacle.
         let settings = self.scroll_settings();
         let discrete = phase == ScrollPhase::Discrete;
         let travels = discrete && settings.wheel.framework_animates();
-        // Whether the end of the content may be pulled past. A detent has no gesture behind it to
-        // follow, so an edge that springs there bounces once per click at an end the person has
-        // already arrived at and is only pushing against.
-        let stretch = if if discrete {
-            settings.elastic.admits_a_detent()
-        } else {
-            settings.elastic.admits_a_gesture()
-        } {
-            Stretch::Permitted
-        } else {
-            Stretch::Refused
-        };
-        let touched = {
+        let stretch = self.stretch_for(phase);
+        let at = at.since_origin();
+        let (touched, returning) = {
             let layout = self.layout.borrow();
             let mut scroller = self.scroll.borrow_mut();
-            if travels {
-                scroller.glide_by(&layout, &chain, moved_by, stretch)
-            } else {
-                scroller.scroll_by(&layout, &chain, moved_by, stretch)
+            match phase {
+                ScrollPhase::Started => {
+                    scroller.touch(&chain);
+                    let touched = scroller.drag_by(&layout, &chain, moved_by, at, stretch);
+                    (touched, false)
+                }
+                ScrollPhase::Moved if scroller.is_touching() => {
+                    let touched = scroller.drag_by(&layout, &chain, moved_by, at, stretch);
+                    (touched, false)
+                }
+                ScrollPhase::Ended if scroller.is_touching() => {
+                    let touched = scroller.drag_by(&layout, &chain, moved_by, at, stretch);
+                    (touched, !scroller.lift().is_empty())
+                }
+                _ => {
+                    let returning = discrete && !scroller.forget_gesture().is_empty();
+                    let touched = if travels {
+                        scroller.glide_by(&layout, &chain, moved_by, stretch)
+                    } else {
+                        scroller.scroll_by(&layout, &chain, moved_by, stretch)
+                    };
+                    (touched, returning)
+                }
             }
         };
         // A glide's own movement is reported by the frames that carry it, but the frame it was
         // asked in still has to be one of them, or the wheel does nothing until something else
-        // happens to wake the loop.
+        // happens to wake the loop. An edge that was let go also needs frames to return.
         self.mark_scrolled(&touched);
-        if travels {
+        if travels || returning {
             self.request_scroll_frame();
+        }
+    }
+
+    /// Carries out the part of a wheel event that does not depend on its default.
+    ///
+    /// The end of a gesture always lets go of its edges, even over nothing that scrolls or when a
+    /// listener refused the default: an edge held after the fingers lift stays stretched for ever.
+    /// When the default was `allowed` and found no container, a gesture that is latched keeps
+    /// moving its container, because the pointer may leave a container while a gesture moves it.
+    pub(crate) fn scroll_without_default(
+        &mut self,
+        wheel: &WheelEvent,
+        at: Timestamp,
+        allowed: bool,
+    ) {
+        let latched = self.scroll.borrow().latched();
+        match wheel.phase {
+            ScrollPhase::Ended => {
+                if !self.scroll.borrow_mut().lift().is_empty() {
+                    self.request_scroll_frame();
+                }
+            }
+            ScrollPhase::Started if allowed => self.scroll.borrow_mut().touch(&[]),
+            ScrollPhase::Moved if allowed => {
+                let Some(container) = latched else {
+                    return;
+                };
+                let moved_by = self.device_delta(container, wheel.delta);
+                let stretch = self.stretch_for(wheel.phase);
+                let touched = {
+                    let layout = self.layout.borrow();
+                    self.scroll.borrow_mut().drag_by(
+                        &layout,
+                        &[container],
+                        moved_by,
+                        at.since_origin(),
+                        stretch,
+                    )
+                };
+                self.mark_scrolled(&touched);
+            }
+            _ => {}
+        }
+    }
+
+    /// `delta` in device pixels, measured against the line height of `container`.
+    fn device_delta(
+        &mut self,
+        container: NodeKey,
+        delta: ScrollDelta,
+    ) -> zgui_geom::Size<zgui_geom::DevicePx, zgui_geom::Device> {
+        let units = self.scroll_units(container);
+        let asked = self.asked_for(delta);
+        zgui_input::normalize::scroll::to_device(asked, units, Scale::new(self.scale))
+    }
+
+    /// Whether a scroll in `phase` may pull the end of the content past its end.
+    ///
+    /// A detent has no gesture behind it to follow, so an edge that springs there bounces once per
+    /// click at an end the person has already arrived at and is only pushing against.
+    fn stretch_for(&self, phase: ScrollPhase) -> Stretch {
+        let elastic = self.scroll_settings().elastic;
+        let admitted = if phase == ScrollPhase::Discrete {
+            elastic.admits_a_detent()
+        } else {
+            elastic.admits_a_gesture()
+        };
+        if admitted {
+            Stretch::Permitted
+        } else {
+            Stretch::Refused
         }
     }
 

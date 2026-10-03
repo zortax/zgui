@@ -16,6 +16,7 @@
 
 mod apply;
 pub mod extent;
+mod gesture;
 mod glide;
 mod motion;
 
@@ -57,6 +58,8 @@ pub struct Scroller {
     motions: FxHashMap<NodeKey, Motion>,
     /// What has moved since the last drain.
     moved: Vec<Scrolled>,
+    /// The touchpad gesture in progress, if one is.
+    gesture: Option<gesture::Gesture>,
 }
 
 impl Scroller {

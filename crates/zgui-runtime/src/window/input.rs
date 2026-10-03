@@ -261,12 +261,22 @@ impl Window {
         if dispatched.default_allowed && !typed && !held && default.is_none() {
             self.note_menu_shortcut(event);
         }
+        let defaulted = dispatched.default_allowed && !typed && !held && default.is_some();
         if dispatched.default_allowed
             && !typed
             && !held
             && let Some(default) = default
         {
-            self.carry_out_default(default, modifiers, Self::button_of(event), timestamp);
+            self.carry_out_default(default, modifiers, Self::button_of(event), timestamp, event);
+        }
+        if !defaulted
+            && let SurfaceEvent::Wheel {
+                event: wheel,
+                timestamp: sent,
+                ..
+            } = event
+        {
+            self.scroll_without_default(wheel, *sent, dispatched.default_allowed);
         }
         // A handler that clicked its own element on the press has taken the activation, and the
         // release that ends that press must not click it a second time. Forgetting the press is the
@@ -593,6 +603,7 @@ impl Window {
         modifiers: Modifiers,
         button: Option<zgui_vocab::PointerButton>,
         timestamp: Timestamp,
+        event: &SurfaceEvent,
     ) {
         use zgui_input::FrameworkDefault;
         match default {
@@ -610,7 +621,14 @@ impl Window {
                 container,
                 delta,
                 phase,
-            } => self.scroll_by(container, delta, phase),
+            } => {
+                // The event's own stamp, which a gesture measures its speed with.
+                let sent = match event {
+                    SurfaceEvent::Wheel { timestamp, .. } => *timestamp,
+                    _ => timestamp,
+                };
+                self.scroll_by(container, delta, phase, sent);
+            }
             FrameworkDefault::ScrollAlong {
                 container,
                 axis,
