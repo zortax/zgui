@@ -220,6 +220,7 @@ impl PlatformCx for WinitCx<'_> {
             if let Some(view) = crate::macos::ns_view(&window) {
                 crate::macos::answer_key_equivalents(&view);
             }
+            crate::macos::read_scroll_phases();
             crate::macos::observe_fullscreen(&window, id, self.shared.waker());
         }
 

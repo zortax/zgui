@@ -128,7 +128,7 @@ pub fn translate(
         WindowEvent::MouseWheel { delta, phase, .. } => Some(SurfaceEvent::Wheel {
             event: wheel::event(
                 wheel::delta(delta, scale),
-                wheel::phase(delta, phase),
+                scroll_phase(delta, phase, scale),
                 state.pointer,
             ),
             modifiers: state.modifiers,
@@ -162,6 +162,26 @@ pub fn translate(
         // synthesises from the pointer stream instead.
         _ => None,
     }
+}
+
+/// Where in a gesture a scroll sits, with the momentum phase AppKit reports.
+#[cfg(target_os = "macos")]
+fn scroll_phase(
+    delta: winit::event::MouseScrollDelta,
+    phase: winit::event::TouchPhase,
+    scale: f64,
+) -> zgui_vocab::ScrollPhase {
+    crate::macos::scroll_phase(delta, phase, scale)
+}
+
+/// Where in a gesture a scroll sits.
+#[cfg(not(target_os = "macos"))]
+fn scroll_phase(
+    delta: winit::event::MouseScrollDelta,
+    phase: winit::event::TouchPhase,
+    _scale: f64,
+) -> zgui_vocab::ScrollPhase {
+    wheel::phase(delta, phase)
 }
 
 #[cfg(test)]
