@@ -325,3 +325,50 @@ fn the_end_of_a_gesture_over_nothing_that_scrolls_still_lets_go() {
         "the edge stayed stretched after the fingers lifted"
     );
 }
+
+#[test]
+fn momentum_that_reaches_the_end_bounces_once_and_the_rest_is_dropped() {
+    let mut pad = Pad::new(LIST, 10);
+    let port = pad.port();
+    // The list scrolls 80 pixels. A flick downwards, then the platform's momentum.
+    pad.drag(&[(0.0, 10.0), (0.0, 10.0)]);
+    pad.lift();
+    for _ in 0..4 {
+        pad.send(0.0, 20.0, ScrollPhase::Momentum);
+    }
+    assert_eq!(pad.offset_of(port).y.0, 80.0);
+
+    let mut peak: f32 = pad.stretch_of(port).height.0;
+    for _ in 0..10 {
+        pad.send(0.0, 20.0, ScrollPhase::Momentum);
+        pad.run(1);
+        peak = peak.max(pad.stretch_of(port).height.0);
+    }
+    assert!(
+        peak > 2.0 && peak < 60.0,
+        "the bounce off the end travelled {peak}"
+    );
+    pad.send(0.0, 0.0, ScrollPhase::Ended);
+    pad.run(40);
+    assert!(pad.settled(), "the bounce never came back");
+    assert_eq!(pad.offset_of(port).y.0, 80.0);
+}
+
+#[test]
+fn momentum_after_a_lift_with_the_edge_stretched_is_dropped() {
+    let mut pad = Pad::new(LIST, 10);
+    let port = pad.port();
+    pad.drag(&[(0.0, -60.0)]);
+    pad.lift();
+    let returning = pad.stretch_of(port).height.0;
+    for _ in 0..5 {
+        pad.send(0.0, -20.0, ScrollPhase::Momentum);
+    }
+    assert!(
+        pad.stretch_of(port).height.0 >= returning,
+        "the momentum pulled the edge further out"
+    );
+    pad.send(0.0, 0.0, ScrollPhase::Ended);
+    pad.run(40);
+    assert!(pad.settled());
+}

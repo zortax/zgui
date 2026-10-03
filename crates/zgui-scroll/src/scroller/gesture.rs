@@ -202,6 +202,70 @@ impl Scroller {
         }
     }
 
+    /// Moves the latched container of the gesture by a momentum `delta`, which arrived at `at`.
+    ///
+    /// The platform carries the content on after the fingers lift, and this follows it. When the
+    /// momentum reaches an end, the edge travels on past it at the speed of the gesture and
+    /// returns, and the rest of the momentum is dropped. Momentum after a lift with a displaced
+    /// edge is also dropped. Returns the containers whose composed position changed.
+    pub fn coast_by(
+        &mut self,
+        store: &LayoutStore,
+        chain: &[NodeKey],
+        delta: Size<DevicePx, Device>,
+        at: Duration,
+        stretch: Stretch,
+    ) -> SmallVec<[NodeKey; 2]> {
+        let Some(mut gesture) = self.gesture else {
+            return self.scroll_by(store, chain, delta, Stretch::Refused);
+        };
+        if gesture.stage == Stage::Touching {
+            self.lift();
+            gesture.stage = self.gesture.map_or(Stage::Lifted, |lifted| lifted.stage);
+        }
+        if gesture.stage == Stage::Spent {
+            return SmallVec::new();
+        }
+        let delta = gesture.moved(delta, at);
+        if gesture.latched.is_none() && !chain::negligible(delta) {
+            gesture.latched = self.latch(store, chain, delta);
+        }
+        let Some(container) = gesture.latched.filter(|_| !chain::negligible(delta)) else {
+            self.gesture = Some(gesture);
+            return SmallVec::new();
+        };
+        let limit = self.hand_limit_for(store, container);
+        let share = chain::absorb(self.offset_of(container), limit, delta);
+        let mut moved = self.move_latched(store, container, delta, Stretch::Refused, false);
+        let past = Size::new(
+            DevicePx(if limit.x.0 > 0.0 {
+                share.left.width.0
+            } else {
+                0.0
+            }),
+            DevicePx(if limit.y.0 > 0.0 {
+                share.left.height.0
+            } else {
+                0.0
+            }),
+        );
+        if !chain::negligible(past) {
+            gesture.stage = Stage::Spent;
+            if stretch.is_permitted() {
+                let speed = Size::new(
+                    DevicePx(throw(past.width.0, gesture.velocity.width.0)),
+                    DevicePx(throw(past.height.0, gesture.velocity.height.0)),
+                );
+                self.displace(container, self.overscroll_of(container).thrown(speed));
+                if !moved.contains(&container) {
+                    moved.push(container);
+                }
+            }
+        }
+        self.gesture = Some(gesture);
+        moved
+    }
+
     /// Ends the touch of a gesture: the fingers lifted.
     ///
     /// Lets go of every gripped edge so that it returns. An edge still displaced at the lift
@@ -316,6 +380,20 @@ impl Scroller {
             }
         }
         moved
+    }
+}
+
+/// The speed an edge is thrown at when momentum carries `past` beyond its end.
+///
+/// The speed of the gesture, in the direction of `past`. A gesture with no measured speed throws
+/// at the speed of one frame of `past` at sixty hertz.
+fn throw(past: f32, velocity: f32) -> f32 {
+    if past == 0.0 {
+        0.0
+    } else if velocity == 0.0 {
+        past * 60.0
+    } else {
+        past.signum() * velocity.abs()
     }
 }
 

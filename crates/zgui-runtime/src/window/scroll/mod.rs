@@ -95,6 +95,10 @@ impl Window {
                     let touched = scroller.drag_by(&layout, &chain, moved_by, at, stretch);
                     (touched, false)
                 }
+                ScrollPhase::Momentum => {
+                    let touched = scroller.coast_by(&layout, &chain, moved_by, at, stretch);
+                    (touched, false)
+                }
                 ScrollPhase::Ended if scroller.is_touching() => {
                     let touched = scroller.drag_by(&layout, &chain, moved_by, at, stretch);
                     (touched, !scroller.lift().is_empty())
@@ -139,21 +143,21 @@ impl Window {
                 }
             }
             ScrollPhase::Started if allowed => self.scroll.borrow_mut().touch(&[]),
-            ScrollPhase::Moved if allowed => {
+            ScrollPhase::Moved | ScrollPhase::Momentum if allowed => {
                 let Some(container) = latched else {
                     return;
                 };
                 let moved_by = self.device_delta(container, wheel.delta);
                 let stretch = self.stretch_for(wheel.phase);
+                let at = at.since_origin();
                 let touched = {
                     let layout = self.layout.borrow();
-                    self.scroll.borrow_mut().drag_by(
-                        &layout,
-                        &[container],
-                        moved_by,
-                        at.since_origin(),
-                        stretch,
-                    )
+                    let mut scroller = self.scroll.borrow_mut();
+                    if wheel.phase == ScrollPhase::Momentum {
+                        scroller.coast_by(&layout, &[container], moved_by, at, stretch)
+                    } else {
+                        scroller.drag_by(&layout, &[container], moved_by, at, stretch)
+                    }
                 };
                 self.mark_scrolled(&touched);
             }
