@@ -542,15 +542,9 @@ fn scaled(
     target: TargetRef,
     extent: zgui_geom::Size<i32, Device>,
 ) -> Rect<i32, Device> {
-    let scale = target.scale();
-    let scaled = Rect::from_corners(
-        zgui_geom::Point::new(scale.texel(rect.left()), scale.texel(rect.top())),
-        zgui_geom::Point::new(
-            scale.texel(rect.right().max(rect.left())),
-            scale.texel(rect.bottom().max(rect.top())),
-        ),
-    );
-    scaled
+    target
+        .scale()
+        .texels(rect)
         .intersection(Rect::new(zgui_geom::Point::new(0, 0), extent))
         .unwrap_or(Rect::ZERO)
 }

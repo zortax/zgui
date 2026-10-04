@@ -1,6 +1,6 @@
 //! How many texels of a target one device pixel covers.
 
-use zgui_geom::{Device, Size};
+use zgui_geom::{Device, Point, Rect, Size};
 
 /// The resolution a target is held at, relative to the device pixel grid.
 ///
@@ -44,11 +44,32 @@ impl TargetScale {
         }
     }
 
-    /// The texel a device pixel coordinate falls in, rounded towards zero.
+    /// The texel a device pixel coordinate falls in, rounded down.
     pub fn texel(self, pixels: i32) -> i32 {
         match self {
             Self::Full => pixels,
             Self::Half => pixels.div_euclid(2),
+        }
+    }
+
+    /// The texels that hold any pixel of a device-pixel rectangle.
+    ///
+    /// The near edges round down and the far edges round up, so a rectangle that ends on an odd
+    /// pixel keeps the texel holding that pixel.
+    pub fn texels(self, rect: Rect<i32, Device>) -> Rect<i32, Device> {
+        let right = rect.right().max(rect.left());
+        let bottom = rect.bottom().max(rect.top());
+        Rect::from_corners(
+            Point::new(self.texel(rect.left()), self.texel(rect.top())),
+            Point::new(self.texel_end(right), self.texel_end(bottom)),
+        )
+    }
+
+    /// The texel edge a device pixel edge lies on or inside, rounded up.
+    fn texel_end(self, pixels: i32) -> i32 {
+        match self {
+            Self::Full => pixels,
+            Self::Half => (pixels + 1).div_euclid(2),
         }
     }
 }
@@ -61,7 +82,7 @@ fn half_up(length: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::TargetScale;
-    use zgui_geom::Size;
+    use zgui_geom::{Point, Rect, Size};
 
     #[test]
     fn halving_an_odd_extent_rounds_up_so_the_last_half_pixel_has_a_texel() {
@@ -80,5 +101,15 @@ mod tests {
             let extent = scale.extent(Size::new(64, 64));
             assert_eq!(extent.width as f32, 64.0 * scale.factor());
         }
+    }
+
+    #[test]
+    fn a_rectangle_ending_on_an_odd_pixel_keeps_the_texel_holding_that_pixel() {
+        let rect = Rect::from_corners(Point::new(3, 1), Point::new(11, 9));
+        assert_eq!(
+            TargetScale::Half.texels(rect),
+            Rect::from_corners(Point::new(1, 0), Point::new(6, 5))
+        );
+        assert_eq!(TargetScale::Full.texels(rect), rect);
     }
 }

@@ -101,11 +101,12 @@ impl BlurParams {
 
 /// A device-pixel region in a target's own texels, as the block holds it.
 fn valid(written: Rect<i32, Device>, scale: TargetScale) -> [f32; 4] {
+    let texels = scale.texels(written);
     [
-        scale.texel(written.left()) as f32,
-        scale.texel(written.top()) as f32,
-        scale.texel(written.right().max(written.left())) as f32,
-        scale.texel(written.bottom().max(written.top())) as f32,
+        texels.left() as f32,
+        texels.top() as f32,
+        texels.right() as f32,
+        texels.bottom() as f32,
     ]
 }
 

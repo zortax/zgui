@@ -427,3 +427,38 @@ fn a_group_animated_under_partial_damage_composites_as_a_fresh_renderer_does() {
         "the animated renderer's last frame differs from a fresh renderer's only frame"
     );
 }
+
+#[test]
+fn a_half_resolution_group_ending_on_an_odd_pixel_keeps_its_last_row_and_column() {
+    // A group from x = 32 to x = 95 ends half way through a half-resolution texel. That texel holds
+    // the group's last column, and the pass that fills the target has to reach it.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    quad(&mut scene, (0.0, 0.0, SIDE as f32, SIDE as f32), [255; 3]);
+    grouped(&mut scene, (32.0, 32.0, 63.0, 63.0), 1.0, &[], |scene| {
+        quad(scene, (32.0, 32.0, 63.0, 63.0), [0, 0, 0]);
+    });
+    scene.finish(&DamageSet::full());
+
+    let allocated: Size<i32, zgui_geom::Device> = Size::new(256, 256);
+    let one_half_res = u64::from(GroupPool::FORMAT.block_copy_size(None).unwrap_or(8))
+        * TargetScale::Half.extent(allocated).width as u64
+        * TargetScale::Half.extent(allocated).height as u64;
+    renderer.set_group_budget(one_half_res);
+    let reduced = present(&mut renderer, &scene);
+    assert_eq!(
+        renderer.groups().degraded(),
+        1,
+        "the group is at half resolution"
+    );
+
+    let column = reduced.rgba(94, 64)[0];
+    let row = reduced.rgba(64, 94)[0];
+    assert!(
+        column < 128 && row < 128,
+        "the last column and row of a black group are mostly black: {column} and {row}"
+    );
+}
