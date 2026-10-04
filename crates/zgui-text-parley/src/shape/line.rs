@@ -132,7 +132,7 @@ pub(crate) fn shape(
     };
     let metrics = *line.metrics();
     let left = metrics.offset + metrics.inline_min_coord;
-    let top = metrics.block_min_coord;
+    let top = crate::shape::lines::top(&metrics);
 
     let mut runs = Vec::new();
     for item in line.items() {

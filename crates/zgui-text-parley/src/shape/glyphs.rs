@@ -26,7 +26,7 @@ pub(crate) fn visit_line(
     };
     let metrics = *line.metrics();
     let left = metrics.offset + metrics.inline_min_coord;
-    let top = metrics.block_min_coord;
+    let top = crate::shape::lines::top(&metrics);
 
     // One buffer for the whole line rather than one per run: a line of prose is a handful of runs
     // and every one of them would otherwise allocate.

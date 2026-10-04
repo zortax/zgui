@@ -6,6 +6,19 @@ use zgui_text::{BrokenParagraph, InlineBoxPlacement, LineGeometry, TextGeometry}
 
 use crate::shape::brush::SlotBrush;
 
+/// Where a line starts, with a negative leading kept.
+///
+/// The engine clamps a negative leading to zero for `block_min_coord`. CSS keeps it: a line height
+/// tighter than the face puts the glyphs outside the line box, above and below alike. The engine
+/// quantizes, so it rounds the ascent and the descent and gives the smaller half of the leading to
+/// the space above, and this repeats that arithmetic.
+pub(crate) fn top(metrics: &parley::LineMetrics) -> f32 {
+    let ascent = metrics.ascent.round();
+    let descent = metrics.descent.round();
+    let above = ((metrics.line_height - (ascent + descent)) * 0.5).floor();
+    metrics.baseline - ascent - above
+}
+
 /// The lines and the box they fill, plus where the atomic inlines landed.
 ///
 /// # Where a line actually starts
@@ -42,7 +55,7 @@ pub(crate) fn read(
         let metrics = line.metrics();
         lines.push(LineGeometry {
             text: without_prefix(line.text_range(), prefix),
-            top: CssPx(metrics.block_min_coord),
+            top: CssPx(top(metrics)),
             baseline: CssPx(metrics.baseline),
             height: CssPx(metrics.line_height),
             width: CssPx(metrics.advance),
