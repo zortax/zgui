@@ -757,6 +757,7 @@ impl Scene {
                         continue;
                     };
                     translate(&mut shadow.bounds, by);
+                    translate(&mut shadow.shape_bounds, by);
                     translate(&mut shadow.element_bounds, by);
                     if self.push_shadow(shadow).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::Shadow, source, op.index);

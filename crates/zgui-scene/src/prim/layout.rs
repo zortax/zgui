@@ -118,20 +118,21 @@ assert_instance_layout!(
 
 assert_instance_layout!(
     Shadow,
-    size = 136,
+    size = 152,
     align = 4,
     fields = [
         order @ 0, 4;
         blur @ 4, 4;
         bounds @ 8, 16;
-        radii @ 24, 32;
-        element_bounds @ 56, 16;
-        element_radii @ 72, 32;
-        color @ 104, 16;
-        clip @ 120, 4;
-        transform @ 124, 4;
-        inset @ 128, 4;
-        shape @ 132, 4;
+        shape_bounds @ 24, 16;
+        radii @ 40, 32;
+        element_bounds @ 72, 16;
+        element_radii @ 88, 32;
+        color @ 120, 16;
+        clip @ 136, 4;
+        transform @ 140, 4;
+        inset @ 144, 4;
+        shape @ 148, 4;
     ],
 );
 
@@ -219,7 +220,7 @@ mod tests {
     fn the_table_matches_what_the_compiler_chose() {
         assert_eq!(size_of::<Quad>(), 108);
         assert_eq!(size_of::<ShadedQuad>(), 112);
-        assert_eq!(size_of::<Shadow>(), 136);
+        assert_eq!(size_of::<Shadow>(), 152);
         assert_eq!(size_of::<Decoration>(), 56);
         assert_eq!(size_of::<MonoSprite>(), 72);
         assert_eq!(size_of::<SubpixelSprite>(), 72);

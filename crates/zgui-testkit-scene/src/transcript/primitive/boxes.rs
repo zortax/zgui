@@ -94,7 +94,9 @@ pub fn shadow(scene: &Scene, shadow: &Shadow) -> String {
         line.push_str(&format!(" element_radii={}", list(&shadow.element_radii)));
     }
     if shadow.inset != 0 {
-        line.push_str(" inset");
+        // A drop shadow's shape is its bounds less the blur's reach. An inset shadow's hole is
+        // independent of its bounds, so it is printed.
+        line.push_str(&format!(" inset hole={}", rect(shadow.shape_bounds)));
     }
     line.push_str(&suffix(
         scene,

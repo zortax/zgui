@@ -10,6 +10,7 @@ struct Shadow {
     order: u32,
     blur: f32,
     bounds: Bounds,
+    shape_bounds: Bounds,
     radii: Radii,
     element_bounds: Bounds,
     element_radii: Radii,
@@ -110,9 +111,9 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    // The blurred shape is the element box, offset and spread; `bounds` is that shape dilated by
-    // the blur's reach, so the shape itself has to be recovered from it.
-    let casting = shadow_shape(shadow);
+    // The blurred shape: the element box offset and grown by the spread for a drop shadow, and the
+    // hole the shadow leaves open for an inset one.
+    let casting = shadow.shape_bounds;
     let half_size = bounds_size(casting) * 0.5;
     let center = bounds_origin(casting) + half_size;
     let local = in.local - in.shift;
@@ -162,20 +163,3 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     return rgba_of(shadow.color) * alpha * clip;
 }
 
-// The rectangle the blur is applied to.
-//
-// A drop shadow's `bounds` is the shape dilated by the blur's reach on every side, so the shape is
-// recovered by removing it. An inset shadow paints only inside the box that casts it, so its
-// `bounds` is that box and is already the shape the blur is applied to.
-fn shadow_shape(shadow: Shadow) -> Bounds {
-    if shadow.inset != 0u {
-        return shadow.bounds;
-    }
-    let reach = 3.0 * shadow.blur;
-    return Bounds(
-        shadow.bounds.x + reach,
-        shadow.bounds.y + reach,
-        max(shadow.bounds.w - 2.0 * reach, 0.0),
-        max(shadow.bounds.h - 2.0 * reach, 0.0),
-    );
-}

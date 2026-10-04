@@ -146,6 +146,7 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 order,
                 blur,
                 bounds,
+                shape_bounds,
                 radii,
                 element_bounds,
                 element_radii,

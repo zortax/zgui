@@ -246,7 +246,7 @@ fn every_field_that_is_printed_only_when_it_is_set_is_printed_when_it_is_set() {
     let text = transcript::of(&scene, &DamageSet::full()).into_string();
 
     for field in [
-        " inset",
+        " inset hole=rect(9, 9, 64, 32)",
         "opacity=0.25",
         "grayscale",
         "opacity=0.5",

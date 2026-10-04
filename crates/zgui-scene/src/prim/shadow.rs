@@ -10,10 +10,11 @@ use crate::spatial::SpatialId;
 
 /// A blurred rounded rectangle, cast by a box.
 ///
-/// One struct serves both `box-shadow` forms. A drop shadow paints outside the box that cast it, so
-/// its `bounds` is the box dilated by the blur; an inset shadow paints inside, so its `bounds` is
-/// the box itself. Either way `bounds` is what the primitive paints, which is what draw order and
-/// culling are computed from.
+/// One struct serves both `box-shadow` forms. The blurred shape is `shape_bounds` with `radii`. A
+/// drop shadow paints that shape outside the box that cast it, so its `bounds` is the shape dilated
+/// by the blur. An inset shadow paints the complement of that shape inside the box, so its `bounds`
+/// is the box itself. Either way `bounds` is what the primitive paints, which is what draw order
+/// and culling are computed from.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Shadow {
@@ -23,6 +24,11 @@ pub struct Shadow {
     pub blur: f32,
     /// Everything this paints, as `[x, y, width, height]`.
     pub bounds: [f32; 4],
+    /// The shape the blur is applied to, as `[x, y, width, height]`.
+    ///
+    /// It is the casting box offset and grown by the spread for a drop shadow, and the hole the
+    /// shadow leaves open for an inset one: the box offset and shrunk by the spread.
+    pub shape_bounds: [f32; 4],
     /// The shadow shape's elliptical corner radii, two per corner, clockwise from the top left.
     pub radii: [f32; 8],
     /// The casting box, as `[x, y, width, height]`.
@@ -82,6 +88,7 @@ impl Shadow {
                 shape[2] + 2.0 * reach,
                 shape[3] + 2.0 * reach,
             ],
+            shape_bounds: shape,
             radii: [0.0; 8],
             element_bounds: [
                 element.origin.x.0,
@@ -98,7 +105,11 @@ impl Shadow {
         }
     }
 
-    /// A shadow cast inwards, which paints only inside the box.
+    /// A shadow cast inwards, which paints only inside `element`.
+    ///
+    /// `element` is the box the shadow is clipped to, which is the padding box in CSS. The hole is
+    /// that box offset and shrunk by `spread`. A spread past the box's half extent closes the hole,
+    /// and the shadow then covers the whole box.
     pub fn inset_shadow(
         element: Rect<DevicePx, Device>,
         offset: (f32, f32),
@@ -106,7 +117,17 @@ impl Shadow {
         blur: f32,
         color: Color,
     ) -> Self {
-        let mut shadow = Self::drop_shadow(element, offset, spread, blur, color);
+        let mut shadow = Self::drop_shadow(element, offset, 0.0, blur, color);
+        let width = (element.size.width.0 - 2.0 * spread).max(0.0);
+        let height = (element.size.height.0 - 2.0 * spread).max(0.0);
+        let center_x = element.origin.x.0 + offset.0 + element.size.width.0 * 0.5;
+        let center_y = element.origin.y.0 + offset.1 + element.size.height.0 * 0.5;
+        shadow.shape_bounds = [
+            center_x - width * 0.5,
+            center_y - height * 0.5,
+            width,
+            height,
+        ];
         shadow.inset = 1;
         shadow.bounds = shadow.element_bounds;
         shadow

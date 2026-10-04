@@ -42,7 +42,21 @@ pub fn inset_shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacem
 }
 
 /// Emits one direction's shadows, last written first so the first written ends up on top.
+///
+/// A drop shadow is cast by the border box. An inset shadow is clipped to the padding box, so it
+/// never covers the border, and its hole is concentric with the padding box's corners.
 fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset: bool) -> usize {
+    let (element, element_radii) = if inset {
+        (
+            placement.border_box.inset(placement.border),
+            inner_radii(placement.radii, placement.border),
+        )
+    } else {
+        (placement.border_box, placement.radii)
+    };
+    if inset && element.is_empty() {
+        return 0;
+    }
     let mut pushed = 0;
     for spec in style.shadows.iter().rev() {
         if spec.inset != inset || spec.is_invisible() {
@@ -50,7 +64,7 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
         }
         let mut shadow = if inset {
             Shadow::inset_shadow(
-                placement.border_box,
+                element,
                 (spec.offset_x, spec.offset_y),
                 spec.spread,
                 spec.deviation,
@@ -58,7 +72,7 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
             )
         } else {
             Shadow::drop_shadow(
-                placement.border_box,
+                element,
                 (spec.offset_x, spec.offset_y),
                 spec.spread,
                 spec.deviation,
@@ -69,8 +83,8 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
         // open, so the corners of the two move in opposite directions: an inset shadow's shape is
         // concentric inside the box, and growing its radii would round the hole the wrong way.
         let spread = if inset { -spec.spread } else { spec.spread };
-        shadow.radii = flatten(grow(placement.radii, spread));
-        shadow.element_radii = flatten(placement.radii);
+        shadow.radii = flatten(grow(element_radii, spread));
+        shadow.element_radii = flatten(element_radii);
         // A shadow is the box's own shape blurred, so it is cut the same way: a squircle casting a
         // rounded-rectangle shadow shows the shadow's corners outside its own.
         shadow.shape = style.corner_shape.get();
@@ -407,6 +421,46 @@ mod tests {
         // wrong way, by twice the spread.
         assert_eq!(only_shadow_radius(&with_shadow(6.0, false), false), 16.0);
         assert_eq!(only_shadow_radius(&with_shadow(6.0, true), true), 4.0);
+    }
+
+    /// The only inset shadow a 48-pixel box with a two-pixel border and six-pixel corners emits.
+    fn bordered_inset(offset: (f32, f32), spread: f32) -> zgui_scene::Shadow {
+        let mut style = with_shadow(spread, true);
+        style.shadows[0].offset_x = offset.0;
+        style.shadows[0].offset_y = offset.1;
+        let placement = BoxPlacement {
+            border_box: Rect::new(
+                Point::new(DevicePx(10.0), DevicePx(10.0)),
+                Size::new(DevicePx(48.0), DevicePx(48.0)),
+            ),
+            border: zgui_geom::Edges::uniform(DevicePx(2.0)),
+            radii: Corners::uniform(Vec2::new(DevicePx(6.0), DevicePx(6.0))),
+            ..placement()
+        };
+        let mut scene = zgui_scene::Scene::new();
+        scene.begin_frame(Size::<i32, Device>::new(256, 256));
+        assert_eq!(inset_shadows(&mut scene, &style, placement), 1);
+        scene.primitives.shadows[0]
+    }
+
+    #[test]
+    fn an_inset_spread_shrinks_the_hole_inside_the_padding_box() {
+        let shadow = bordered_inset((0.0, 0.0), 2.0);
+        assert_eq!(shadow.inset, 1);
+        // The padding box: the border box less the two-pixel border.
+        assert_eq!(shadow.bounds, [12.0, 12.0, 44.0, 44.0]);
+        assert_eq!(shadow.element_bounds, [12.0, 12.0, 44.0, 44.0]);
+        assert_eq!(shadow.element_radii, [4.0; 8]);
+        // The hole: the padding box less the spread, with concentric corners.
+        assert_eq!(shadow.shape_bounds, [14.0, 14.0, 40.0, 40.0]);
+        assert_eq!(shadow.radii, [2.0; 8]);
+    }
+
+    #[test]
+    fn an_inset_offset_moves_the_hole_and_keeps_the_painted_box() {
+        let shadow = bordered_inset((0.0, 2.0), 0.0);
+        assert_eq!(shadow.bounds, [12.0, 12.0, 44.0, 44.0]);
+        assert_eq!(shadow.shape_bounds, [12.0, 14.0, 44.0, 44.0]);
     }
 
     #[test]

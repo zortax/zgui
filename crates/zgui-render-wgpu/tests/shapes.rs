@@ -211,6 +211,73 @@ fn an_inset_shadow_darkens_the_inside_edge_and_leaves_the_middle_alone() {
     assert_eq!(outside, 0, "an inset shadow paints nothing outside its box");
 }
 
+/// The alpha of a 48-pixel box at `(40, 40)` wearing one inset shadow, once rendered.
+fn inset_alpha(offset: (f32, f32), spread: f32, blur: f32) -> Option<zgui_render_wgpu::Pixels> {
+    let mut renderer = plain_renderer()?;
+    let mut scene = scene();
+    let mut shadow = Shadow::inset_shadow(
+        rect(40.0, 40.0, 48.0, 48.0),
+        offset,
+        spread,
+        blur,
+        Color::srgb_u8(255, 0, 0, 255),
+    );
+    shadow.element_radii = [6.0; 8];
+    shadow.radii = [(6.0 - spread).max(0.0); 8];
+    scene.push_shadow(shadow);
+    scene.finish(&DamageSet::full());
+    Some(present(&mut renderer, &scene))
+}
+
+#[test]
+fn an_inset_spread_with_no_blur_paints_a_ring_inside_the_box() {
+    let Some(pixels) = inset_alpha((0.0, 0.0), 2.0, 0.0) else {
+        return;
+    };
+    for (x, y) in [(41, 64), (64, 41), (86, 64), (64, 86)] {
+        let alpha = pixels.rgba(x, y)[3];
+        assert_eq!(alpha, 255, "the ring covers ({x}, {y}): {alpha}");
+    }
+    for (x, y) in [(43, 64), (64, 43), (64, 64)] {
+        let alpha = pixels.rgba(x, y)[3];
+        assert_eq!(alpha, 0, "the hole leaves ({x}, {y}) alone: {alpha}");
+    }
+    assert_eq!(pixels.rgba(38, 64)[3], 0, "nothing outside the box");
+}
+
+#[test]
+fn an_inset_offset_with_no_blur_paints_only_the_side_it_uncovers() {
+    let Some(pixels) = inset_alpha((0.0, 2.0), 0.0, 0.0) else {
+        return;
+    };
+    assert_eq!(pixels.rgba(64, 40)[3], 255, "the top line is painted");
+    assert_eq!(
+        pixels.rgba(64, 41)[3],
+        255,
+        "the top line is two pixels deep"
+    );
+    for (x, y) in [(64, 43), (64, 87), (40, 64), (87, 64), (64, 64)] {
+        let alpha = pixels.rgba(x, y)[3];
+        assert_eq!(alpha, 0, "the hole covers ({x}, {y}): {alpha}");
+    }
+}
+
+#[test]
+fn an_inset_spread_moves_a_blurred_edge_inwards() {
+    let Some(pixels) = inset_alpha((0.0, 0.0), 6.0, 1.0) else {
+        return;
+    };
+    let rim = pixels.rgba(42, 64)[3];
+    let edge = pixels.rgba(46, 64)[3];
+    let middle = pixels.rgba(64, 64)[3];
+    assert!(rim > 240, "inside the spread the shadow is solid: {rim}");
+    assert!(
+        (40..=215).contains(&edge),
+        "at the hole's edge the blur is half way: {edge}"
+    );
+    assert_eq!(middle, 0, "the middle of the hole is untouched");
+}
+
 /// The rows and the ink of a decoration line drawn in `style`.
 ///
 /// The line occupies `(8, 56)` to `(108, 68)` with a two-pixel stroke, so a style that inks the
