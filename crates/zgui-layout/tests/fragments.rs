@@ -7,6 +7,7 @@
 //! | `hits` | what answers at a point |
 //! | `bounds` | where an element is, across every piece it was painted as |
 //! | `probe` | finding the box and the fragment a fixture element produced |
+//! | `spaces` | which coordinate system a fragment names |
 
 mod support;
 
@@ -20,3 +21,5 @@ mod hits;
 mod place;
 #[path = "fragments/probe.rs"]
 mod probe;
+#[path = "fragments/spaces.rs"]
+mod spaces;

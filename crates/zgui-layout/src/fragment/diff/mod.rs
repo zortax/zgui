@@ -473,14 +473,17 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
 
         let owed = self.owed_by(key, generator);
         let own = owed.own;
-        // Read before the write replaces it: whether the matrix this box's children are drawn
-        // through is the one they were composed under.
-        let transform_stable = self
+        // Read before the write replaces them: whether the matrix this box's children are drawn
+        // through is the one they were composed under, and whether the coordinate system they are
+        // drawn in is still the one they name.
+        let previous = self
             .store
             .fragments_of_box(key)
             .first()
-            .and_then(|frag| self.store.fragment(*frag))
-            .is_some_and(|fragment| fragment.transform_hash == placed.transform_hash);
+            .and_then(|frag| self.store.fragment(*frag));
+        let transform_stable =
+            previous.is_some_and(|fragment| fragment.transform_hash == placed.transform_hash);
+        let space_stable = previous.is_some_and(|fragment| fragment.transform == placed.transform);
         // A stacking change reorders what this box's children are painted after; the keys the
         // index carries for them are then numbered for an order that no longer holds.
         if own.contains(Dirty::RESTACK) {
@@ -575,6 +578,18 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             let next = self.next_indexed_after(index + 1, children_end, between.1);
             let child_between = (cursor, next);
             let folded = match movement {
+                // Every shortcut below keeps the name of the coordinate system a child's pieces are
+                // drawn in. A box that gave its own system back or took one, or whose parent's
+                // system changed name, hands its children a different name, so they are composed
+                // again and take it. A kept name draws them in the wrong system, and a name given
+                // back stops resolving when the frame ends.
+                _ if !space_stable => self.visit(
+                    child,
+                    placed.descent,
+                    first_fragment,
+                    owed.node,
+                    child_between,
+                ),
                 _ if settled && clean && (size_stable || self.can_translate(child)) => {
                     self.cached(child)
                 }
