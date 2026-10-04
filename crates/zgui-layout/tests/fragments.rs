@@ -8,6 +8,7 @@
 //! | `bounds` | where an element is, across every piece it was painted as |
 //! | `probe` | finding the box and the fragment a fixture element produced |
 //! | `spaces` | which coordinate system a fragment names |
+//! | `snapped` | which device pixel a translated box is drawn at |
 
 mod support;
 
@@ -21,5 +22,7 @@ mod hits;
 mod place;
 #[path = "fragments/probe.rs"]
 mod probe;
+#[path = "fragments/snapped.rs"]
+mod snapped;
 #[path = "fragments/spaces.rs"]
 mod spaces;

@@ -18,6 +18,11 @@ use zgui_ui_tokens::prelude::*;
 
 use crate::desktop::stage::{HEIGHT, Stage};
 
+/// How long a fixture waits after a push, longer than the 400 ms `--zui-toast-move`.
+///
+/// A toast read before its arrival ends is read part way along it.
+const ARRIVED: Duration = Duration::from_millis(500);
+
 const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-family: sans-serif }
                      .page { padding: 40px; gap: 12px; align-items: flex-start }
                      .low { padding-top: 400px }";
@@ -167,7 +172,7 @@ fn stacked(titles: &[&str]) -> Stage {
     let mut stage = Stage::open(SHEET, || view! { Page() });
     for title in titles {
         stage.click_saying(&format!("push {title}"));
-        stage.hold(Duration::from_millis(300));
+        stage.hold(ARRIVED);
     }
     stage
 }
@@ -372,9 +377,9 @@ fn a_stack_in_the_opposite_corner_grows_the_other_way_and_still_lets_go() {
     // second later by a deadline rather than when it finishes — which is what this timing catches.
     let mut stage = Stage::open(SHEET, || view! { UpsideDown() });
     stage.click_saying("push one");
-    stage.hold(Duration::from_millis(300));
+    stage.hold(ARRIVED);
     stage.click_saying("push two");
-    stage.hold(Duration::from_millis(300));
+    stage.hold(ARRIVED);
 
     let one = toast_of(&stage, "one").expect("the first is on the screen");
     let two = toast_of(&stage, "two").expect("the second is on the screen");

@@ -37,6 +37,9 @@ pub fn is_transformed(box_: &style_structs::Box) -> bool {
 /// The rectangle is in device pixels and absolute, and the matrix maps that space to itself, so a
 /// caller composes it with an ancestor's matrix by ordinary multiplication and never has to know
 /// where either box sits.
+///
+/// A matrix that only translates moves the box by whole device pixels, as layout rounds the box's
+/// own edges. Content drawn from pixel-aligned tiles then stays on the pixel grid.
 pub fn matrix_of(
     box_: &style_structs::Box,
     border_box: Rect<DevicePx, Device>,
@@ -62,7 +65,19 @@ pub fn matrix_of(
     let (origin_x, origin_y, origin_z) = origin(box_, border_box, scale);
     let to_origin = Matrix4::translation(origin_x, origin_y, origin_z);
     let back = Matrix4::translation(-origin_x, -origin_y, -origin_z);
-    Some(back.then(&matrix).then(&to_origin))
+    Some(snapped(back.then(&matrix).then(&to_origin)))
+}
+
+/// `matrix` with its translation rounded to whole device pixels when it only translates.
+///
+/// Every other matrix is returned unchanged.
+fn snapped(matrix: Matrix4) -> Matrix4 {
+    match matrix.to_affine2() {
+        Some(affine) if affine.is_translation() => {
+            Matrix4::translation(affine.tx.round(), affine.ty.round(), 0.0)
+        }
+        _ => matrix,
+    }
 }
 
 /// Where a box's transform origin sits, in the same absolute space as its border box.

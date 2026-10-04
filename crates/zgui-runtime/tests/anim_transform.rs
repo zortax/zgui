@@ -112,7 +112,12 @@ fn pointer_at(action: PointerAction, x: f32, y: f32) -> SurfaceEvent {
     }
 }
 
-/// The device-space ink rectangle of the first fragment of every element carrying `class`.
+/// The device-space ink rectangle of the first fragment of every element carrying `class`, where the
+/// frame that was just drawn puts it.
+///
+/// The fragment's own-space ink through the matrix its coordinate system resolves to now. A frame
+/// that moves a box by writing its matrix composes no fragment, so the device rectangle a fragment
+/// recorded is where the box was when it was last composed.
 fn inks(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     class: &str,
@@ -124,6 +129,7 @@ fn inks(
         .expect("the application opened a window");
     let document = window.document().borrow();
     let layout = window.layout().borrow();
+    let spatial = &window.scene().spatial;
     let mut found = Vec::new();
     for index in 0..document.store().slot_count() {
         let index = zgui_dom::NodeIndex::new(index as u32);
@@ -146,7 +152,10 @@ fn inks(
             let Some(fragment) = layout.fragment(frag) else {
                 continue;
             };
-            let ink = fragment.ink;
+            let ink = match fragment.transform.and_then(|space| spatial.resolve(space)) {
+                Some(matrix) => zgui_geom::transformed_bounds(&matrix, fragment.local_ink),
+                None => fragment.local_ink,
+            };
             found.push((
                 ink.origin.x.0 as i32,
                 ink.origin.y.0 as i32,
