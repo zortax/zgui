@@ -153,7 +153,6 @@ fn draw(harness: &mut Harness, text: &str, size: f32, origin: (f32, f32)) -> Dra
                 transform: SpatialId::VIEWPORT,
                 opaque_target: true,
                 subpixel_capable: false,
-                upright: true,
                 scale: 1.0,
                 ellipsis: None,
             },

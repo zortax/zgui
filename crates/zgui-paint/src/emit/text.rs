@@ -309,14 +309,6 @@ pub struct TextPlacement {
     pub opaque_target: bool,
     /// Whether the device can antialias per colour channel at all.
     pub subpixel_capable: bool,
-    /// Whether the run is drawn with no transform over it.
-    ///
-    /// Subpixel coverage is three side-by-side answers about thirds of one physical pixel, and it
-    /// survives only when the sprite lands on the pixels it was rasterised for. A turned or scaled
-    /// run is resampled on its way to the surface, which smears the per-channel stripes into
-    /// coloured fringes — so a transformed run is drawn with whole-pixel coverage instead, which
-    /// is what every browser does to text on a composited transform.
-    pub upright: bool,
     /// How many device pixels one CSS pixel is, for a brush whose ramp is measured in lengths.
     pub scale: f32,
     /// Where this line was cut off, when it reaches past its box and the box marks the cut.
@@ -344,10 +336,28 @@ impl TextPlacement {
     ///
     /// All three are needed and none implies the others: a device without dual-source blending
     /// has no pipeline to draw one with, a destination that is not opaque has no meaning for
-    /// per-channel coverage whatever the device can do, and a transformed run is resampled out of
-    /// the pixel grid its stripes were measured against.
-    pub fn keeps_subpixel(&self) -> bool {
-        self.subpixel_capable && self.opaque_target && self.upright
+    /// per-channel coverage whatever the device can do, and a run off the pixel grid is resampled
+    /// out of the grid its stripes were measured against.
+    pub fn keeps_subpixel(&self, scene: &Scene) -> bool {
+        self.subpixel_capable && self.opaque_target && self.on_pixel_grid(scene)
+    }
+
+    /// Whether the run's matrix moves it by whole device pixels and does nothing else.
+    ///
+    /// Subpixel coverage is three side-by-side answers about thirds of one physical pixel, and it
+    /// survives only when the sprite lands on the pixels it was rasterised for. A turned, scaled or
+    /// fractionally moved run is resampled on its way to the surface, which smears the per-channel
+    /// stripes into coloured fringes, so it is drawn with whole-pixel coverage instead. A name the
+    /// frame no longer resolves answers no.
+    fn on_pixel_grid(&self, scene: &Scene) -> bool {
+        scene
+            .spatial
+            .resolve(self.transform)
+            .as_ref()
+            .and_then(zgui_geom::Matrix4::to_affine2)
+            .is_some_and(|affine| {
+                affine.is_translation() && affine.tx.fract() == 0.0 && affine.ty.fract() == 0.0
+            })
     }
 
     /// The two-dimensional transform in force, or the identity for one that leaves the plane.
@@ -629,7 +639,7 @@ fn runs(
         origin: placement.line.origin,
         // A shadowed copy is coverage tinted with one colour, so it is never asked for per-channel
         // coverage: subpixel antialiasing of a blurred silhouette is fringing.
-        subpixel: placement.keeps_subpixel() && !painting.force_mono,
+        subpixel: placement.keeps_subpixel(scene) && !painting.force_mono,
         surface,
     };
     // Collected rather than drawn as they are visited: a source holds the atlas and the glyph
@@ -931,21 +941,36 @@ mod tests {
             transform: SpatialId::VIEWPORT,
             opaque_target: true,
             subpixel_capable: true,
-            upright: true,
             scale: 1.0,
             ellipsis: None,
         }
     }
 
+    /// A scene holding one coordinate system under the viewport, at `local`.
+    fn under(local: zgui_geom::Matrix4) -> (zgui_scene::Scene, SpatialId) {
+        let mut scene = zgui_scene::Scene::new();
+        let owner = zgui_scene::PropertyOwner::new(7).expect("a handle is never the empty word");
+        let space = scene.spatial.space_of(
+            SpatialId::VIEWPORT,
+            owner,
+            Some(zgui_scene::OwnSpace {
+                local,
+                anchoring: zgui_scene::Anchoring::Scrolling,
+            }),
+        );
+        (scene, space)
+    }
+
     #[test]
-    fn subpixel_needs_a_capable_device_an_opaque_target_and_no_transform() {
-        assert!(placement().keeps_subpixel());
+    fn subpixel_needs_a_capable_device_an_opaque_target_and_the_pixel_grid() {
+        let scene = zgui_scene::Scene::new();
+        assert!(placement().keeps_subpixel(&scene));
         assert!(
             !TextPlacement {
                 opaque_target: false,
                 ..placement()
             }
-            .keeps_subpixel(),
+            .keeps_subpixel(&scene),
             "per-channel coverage against a transparent destination is meaningless"
         );
         assert!(
@@ -953,17 +978,38 @@ mod tests {
                 subpixel_capable: false,
                 ..placement()
             }
-            .keeps_subpixel(),
+            .keeps_subpixel(&scene),
             "a device with no dual-source blending has no pipeline to draw one with"
         );
+    }
+
+    #[test]
+    fn a_run_moved_by_whole_pixels_keeps_subpixel_and_any_other_matrix_loses_it() {
+        use zgui_geom::Matrix4;
+
+        let (scene, space) = under(Matrix4::translation(3.0, -4.0, 0.0));
+        let moved = TextPlacement {
+            transform: space,
+            ..placement()
+        };
         assert!(
-            !TextPlacement {
-                upright: false,
-                ..placement()
-            }
-            .keeps_subpixel(),
-            "a resampled sprite smears the per-channel stripes into coloured fringes"
+            moved.keeps_subpixel(&scene),
+            "a whole-pixel move lands the stripes on the pixels they were measured for"
         );
+        for local in [
+            Matrix4::translation(3.5, 0.0, 0.0),
+            Matrix4::scale(1.5, 1.5, 1.0),
+        ] {
+            let (scene, space) = under(local);
+            let placed = TextPlacement {
+                transform: space,
+                ..placement()
+            };
+            assert!(
+                !placed.keeps_subpixel(&scene),
+                "a resampled sprite smears the per-channel stripes into coloured fringes: {local:?}"
+            );
+        }
     }
 
     /// A source of one glyph of a chosen format.

@@ -518,10 +518,6 @@ impl Pass<'_, '_> {
                 transform: crate::lower::transform::of(fragment),
                 opaque_target: self.opaque(),
                 subpixel_capable: self.input.capabilities.subpixel_text,
-                // A fragment with no matrix over it is drawn on the pixels it was measured for;
-                // one with any matrix at all is resampled on its way to the surface, which is
-                // what per-channel coverage does not survive.
-                upright: fragment.transform.is_none(),
                 scale: self.input.scale,
                 ellipsis: self.ellipsis(fragment),
             },

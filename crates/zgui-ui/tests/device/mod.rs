@@ -170,3 +170,14 @@ pub fn available() -> bool {
         }
     })
 }
+
+/// Whether this machine's device draws text with per-channel coverage.
+pub fn subpixel_text() -> bool {
+    static ANSWER: OnceLock<bool> = OnceLock::new();
+    *ANSWER.get_or_init(|| {
+        let target = RenderTarget::new(zgui::geom::Size::new(64, 64), zgui::geom::Scale::new(1.0));
+        Builder::new()
+            .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
+            .is_ok_and(|renderer| renderer.capabilities().subpixel_text)
+    })
+}

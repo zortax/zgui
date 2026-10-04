@@ -295,6 +295,9 @@ fn content_tracked(
             let Some((token, _, _)) = emission.custom_reference else {
                 return FragmentEmission::default();
             };
+            // The same question the text stage asks of this fragment: per-channel coverage
+            // survives an opaque destination on the pixel grid, and nothing else.
+            let text_subpixel = emission.text_placement.keeps_subpixel(scene);
             let mut painter = crate::content::custom::ScenePainter {
                 scene,
                 content_box: fragment.content_box,
@@ -305,9 +308,7 @@ fn content_tracked(
                 shape_paint: style.shape,
                 vector_masks: emission.vector_masks,
                 glyph_placements: emission.glyph_placements,
-                // The same question the text stage asks of this fragment: per-channel coverage
-                // survives an opaque destination under no transform, and nothing else.
-                text_subpixel: emission.text_placement.keeps_subpixel(),
+                text_subpixel,
                 vector_id: VectorId(fragment.key.index()),
                 shapes_pushed: 0,
                 vector_routes: vector::VectorRoutes::NONE,

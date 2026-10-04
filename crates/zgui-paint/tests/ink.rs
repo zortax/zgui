@@ -185,7 +185,6 @@ fn a_wavy_underline_is_given_a_band_and_stays_inside_the_line_box() {
         transform: SpatialId::VIEWPORT,
         opaque_target: true,
         subpixel_capable: false,
-        upright: true,
         scale: 1.0,
         ellipsis: None,
     };
@@ -308,7 +307,6 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
             transform: SpatialId::VIEWPORT,
             opaque_target: true,
             subpixel_capable: true,
-            upright: true,
             scale: 1.0,
             ellipsis: None,
         },

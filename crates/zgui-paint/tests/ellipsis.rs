@@ -67,7 +67,6 @@ fn placement(ellipsis: Option<EllipsisPaint>) -> TextPlacement {
         transform: SpatialId::VIEWPORT,
         opaque_target: true,
         subpixel_capable: false,
-        upright: true,
         scale: 1.0,
         ellipsis,
     }
