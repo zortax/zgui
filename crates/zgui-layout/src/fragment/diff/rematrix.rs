@@ -95,11 +95,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 continue;
             };
             fragment.transform_hash = hash;
+            // Every piece is drawn through the box's matrix: its own, its lines and its bars.
+            fragment.ink = match matrix {
+                Some(matrix) => transform::transformed_bounds(&matrix, fragment.local_ink),
+                None => fragment.local_ink,
+            };
             if position == 0 {
-                fragment.ink = match matrix {
-                    Some(matrix) => transform::transformed_bounds(&matrix, fragment.local_ink),
-                    None => fragment.local_ink,
-                };
                 ink = fragment.ink;
             } else {
                 inks.push(fragment.ink);

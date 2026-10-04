@@ -39,6 +39,56 @@ pub fn of(
     ink
 }
 
+/// How far a glyph can lean past its advance, as a part of its content area's height.
+///
+/// The tangent of the fourteen degrees a synthesized italic leans at. A designed italic leans less.
+const LEAN: f32 = 0.25;
+
+/// Everything one line of text paints, in the space its box is laid out in.
+///
+/// `line` is the line box, `extents` is how far it reaches either side of its baseline, and `ink`
+/// is how far its glyphs reach. A glyph leans past its advance, and painting rounds its baseline
+/// and its pen to whole pixels, so the rectangle grows by the lean and by one device pixel on every
+/// side. Text shadows add their own offset copies. Every side grows by a whole number of pixels, so
+/// the rectangle moves by exactly what the line box moves by.
+pub fn of_line(
+    style: &ComputedStyle,
+    line: Rect<DevicePx, Device>,
+    extents: crate::inline::strut::Extents,
+    ink: crate::inline::strut::Extents,
+    scale: f32,
+) -> Rect<DevicePx, Device> {
+    let lean = LEAN * ink.height() + 1.0;
+    let glyphs = [
+        ink.above - extents.above + 1.0,
+        lean,
+        ink.below - extents.below + 1.0,
+        lean,
+    ];
+    let mut reach = glyphs;
+    for shadow in &*style.get_inherited_text().text_shadow.0 {
+        let blur = Filter::BLUR_EXTENT * (shadow.blur.0.px() * scale).max(0.0) / 2.0;
+        let x = shadow.horizontal.px() * scale;
+        let y = shadow.vertical.px() * scale;
+        let copy = [
+            glyphs[0] + blur - y,
+            glyphs[1] + blur + x,
+            glyphs[2] + blur + y,
+            glyphs[3] + blur - x,
+        ];
+        for (side, copied) in reach.iter_mut().zip(copy) {
+            *side = side.max(copied);
+        }
+    }
+    let [top, right, bottom, left] = reach.map(|side| DevicePx(side.max(0.0).ceil()));
+    line.outset(Edges {
+        top,
+        right,
+        bottom,
+        left,
+    })
+}
+
 /// How far a filter chain spreads what it is applied to.
 ///
 /// The same reach that decides which pixels a chain *reads* also decides how far the result of

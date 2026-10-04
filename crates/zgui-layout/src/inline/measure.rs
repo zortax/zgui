@@ -120,7 +120,7 @@ pub(crate) struct ProbeMemo {
     generated: Arc<Generated>,
     root_strut: zgui_text::StrutMetrics,
     boxes: boxes::Boxes,
-    run_extents: Vec<crate::inline::strut::Extents>,
+    run_extents: Vec<crate::inline::strut::RunExtents>,
     summary: crate::measure::ShapedSummary,
     computed: Vec<LineBox>,
 }

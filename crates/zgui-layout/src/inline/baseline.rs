@@ -39,6 +39,10 @@ mod tests {
                     above: 16.0,
                     below: 4.0,
                 },
+                ink: Extents {
+                    above: 16.0,
+                    below: 4.0,
+                },
                 width: 40.0,
                 offset: 0.0,
                 ellipsis: None,
@@ -47,6 +51,10 @@ mod tests {
                 text: 4..9,
                 top: 20.0,
                 extents: Extents {
+                    above: 24.0,
+                    below: 6.0,
+                },
+                ink: Extents {
                     above: 24.0,
                     below: 6.0,
                 },

@@ -35,6 +35,15 @@ impl Extents {
         }
     }
 
+    /// The content area of a strut: its face's ascent and descent, which is where its glyphs are
+    /// drawn whatever its line height.
+    pub fn content_of(strut: &StrutMetrics) -> Self {
+        Self {
+            above: strut.font_ascent.0,
+            below: strut.font_descent.0,
+        }
+    }
+
     /// The pair that covers both of two contributions.
     #[must_use]
     pub fn union(self, other: Self) -> Self {
@@ -50,15 +59,34 @@ impl Extents {
     }
 }
 
-/// The strut each run contributes, in the units layout works in.
+/// What one run contributes to the line it is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RunExtents {
+    /// Its strut, which the line box is at least as tall as.
+    pub line: Extents,
+    /// Its content area, which its glyphs are drawn in.
+    pub content: Extents,
+}
+
+/// What each run contributes, in the units layout works in.
 ///
 /// One entry per run, in the runs' own order, so the answer for a line is a walk over the runs that
 /// overlap it. Measuring is asked of the content rather than derived from the style, because the
 /// numbers are the face's; two runs in one style cost one measurement, since the measurer holds the
 /// answers against the style they came from.
-pub fn of_runs<C: MeasureContent>(content: &mut C, runs: &[StyledRun], scale: f32) -> Vec<Extents> {
+pub fn of_runs<C: MeasureContent>(
+    content: &mut C,
+    runs: &[StyledRun],
+    scale: f32,
+) -> Vec<RunExtents> {
     runs.iter()
-        .map(|run| Extents::of(&scale_strut(content.strut(&run.style), scale)))
+        .map(|run| {
+            let strut = scale_strut(content.strut(&run.style), scale);
+            RunExtents {
+                line: Extents::of(&strut),
+                content: Extents::content_of(&strut),
+            }
+        })
         .collect()
 }
 

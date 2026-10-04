@@ -19,7 +19,7 @@ use core::ops::Range;
 
 use zgui_text::{BrokenParagraph, InlineBoxGeometry, InlineBoxPlacement, StrutMetrics, StyledRun};
 
-use crate::inline::strut::Extents;
+use crate::inline::strut::{Extents, RunExtents};
 
 /// One line of an inline formatting context, in the units layout works in.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +30,11 @@ pub struct LineBox {
     pub top: f32,
     /// How far the line reaches either side of its baseline.
     pub extents: Extents,
+    /// How far its glyphs can reach either side of its baseline.
+    ///
+    /// The line extents and the content area of every run on the line. A line height tighter than
+    /// the face puts the glyphs outside the line box.
+    pub ink: Extents,
     /// The advance the line's content occupies.
     pub width: f32,
     /// How far in from the context's start edge the content begins.
@@ -61,7 +66,7 @@ impl LineBox {
 pub fn compute(
     broken: &BrokenParagraph,
     runs: &[StyledRun],
-    run_extents: &[Extents],
+    run_extents: &[RunExtents],
     strut: &StrutMetrics,
     boxes: &[InlineBoxGeometry],
     placements: &[InlineBoxPlacement],
@@ -70,9 +75,11 @@ pub fn compute(
     let mut top = 0.0;
     for (index, line) in broken.geometry.lines.iter().enumerate() {
         let mut extents = Extents::of(strut);
+        let mut content = Extents::content_of(strut);
         for (run, run_extent) in runs.iter().zip(run_extents) {
             if overlaps(&run.text, &line.text) {
-                extents = extents.union(*run_extent);
+                extents = extents.union(run_extent.line);
+                content = content.union(run_extent.content);
             }
         }
         for placement in placements.iter().filter(|placed| placed.line == index) {
@@ -88,6 +95,7 @@ pub fn compute(
             text: line.text.clone(),
             top,
             extents,
+            ink: extents.union(content),
             width: line.width.0,
             offset: line.offset.0,
             ellipsis: None,
@@ -145,7 +153,7 @@ mod tests {
     use zgui_geom::{Css, CssPx, Size};
     use zgui_text::{BrokenParagraph, LineGeometry, StrutMetrics, TextGeometry};
 
-    use crate::inline::strut::Extents;
+    use crate::inline::strut::{Extents, RunExtents};
 
     use super::{compute, height};
 
@@ -214,9 +222,15 @@ mod tests {
             style: Arc::new(TextStyle::initial()),
             brush: zgui_scene::PaintSlot(0),
         }];
-        let extents = vec![Extents {
-            above: 30.0,
-            below: 6.0,
+        let extents = vec![RunExtents {
+            line: Extents {
+                above: 30.0,
+                below: 6.0,
+            },
+            content: Extents {
+                above: 24.0,
+                below: 6.0,
+            },
         }];
         let lines = compute(&broken(), &runs, &extents, &strut(), &[], &[]);
         assert_eq!(
@@ -227,5 +241,42 @@ mod tests {
         assert_eq!(lines[1].height(), 36.0);
         assert_eq!(lines[1].top, 16.0);
         assert_eq!(lines[1].baseline(), 46.0);
+    }
+
+    #[test]
+    fn a_line_tighter_than_its_face_reports_the_glyphs_outside_it() {
+        use std::sync::Arc;
+        use zgui_text::StyledRun;
+        use zgui_text_style::TextStyle;
+
+        let runs = vec![StyledRun {
+            text: 0..5,
+            style: Arc::new(TextStyle::initial()),
+            brush: zgui_scene::PaintSlot(0),
+        }];
+        // A 10 px line height on a face 12 above and 4 below.
+        let extents = vec![RunExtents {
+            line: Extents {
+                above: 9.0,
+                below: 1.0,
+            },
+            content: Extents {
+                above: 12.0,
+                below: 4.0,
+            },
+        }];
+        let tight = StrutMetrics {
+            line_height: CssPx(10.0),
+            ..strut()
+        };
+        let lines = compute(&broken(), &runs, &extents, &tight, &[], &[]);
+        assert_eq!(lines[0].height(), 10.0);
+        assert_eq!(
+            lines[0].ink,
+            Extents {
+                above: 12.0,
+                below: 4.0
+            }
+        );
     }
 }

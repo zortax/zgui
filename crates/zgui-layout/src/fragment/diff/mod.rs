@@ -214,6 +214,14 @@ pub fn rebuild_in(
     moves
 }
 
+/// Where a rectangle in a box's own space is drawn on the device, through the box's matrix.
+fn on_device(placed: &Placed, rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
+    match placed.descent.matrix {
+        Some(matrix) => crate::fragment::transform::transformed_bounds(&matrix, rect),
+        None => rect,
+    }
+}
+
 /// The viewport a subtree is composed inside, taken from the document's own root box.
 fn viewport_of(store: &LayoutStore, fallback: BoxKey) -> Size<DevicePx, Device> {
     let key = store.root().unwrap_or(fallback);
@@ -1057,7 +1065,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 content_box: rect,
                 border: zgui_geom::Edges::ZERO,
                 padding: zgui_geom::Edges::ZERO,
-                ink: rect,
+                ink: on_device(placed, rect),
                 local_ink: rect,
                 flags: FragmentFlags::EMPTY,
                 clip: placed.clip,
@@ -1081,6 +1089,15 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let rect = resolved
             .map(|line| build::line_rect(placed.content_box, line))
             .unwrap_or(Rect::ZERO);
+        let local_ink = resolved.map_or(Rect::ZERO, |line| {
+            crate::fragment::ink::of_line(
+                &self.store.node(key).style,
+                rect,
+                line.extents,
+                line.ink,
+                self.tables.device.scale,
+            )
+        });
         let content_hash = resolved.map_or(0, crate::inline::ellipsis::line_hash);
         Geometry {
             border_box: rect,
@@ -1088,8 +1105,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             content_box: rect,
             border: zgui_geom::Edges::ZERO,
             padding: zgui_geom::Edges::ZERO,
-            ink: rect,
-            local_ink: rect,
+            ink: on_device(placed, local_ink),
+            local_ink,
             // A line is drawn inside its own box's clip and transform, and establishes neither.
             flags: FragmentFlags::EMPTY,
             clip: placed.descent.clip,
