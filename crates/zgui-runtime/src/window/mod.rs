@@ -1225,7 +1225,11 @@ impl Window {
     pub fn close(&mut self) {
         self.binding.shutting_down();
         self.embed.shutting_down();
-        self.view = None;
+        // Unmounting disposes of every scope the view made, in tree order, before this returns. A
+        // scope that a rebuild reused is reachable only through the view that holds it.
+        if let Some(mut view) = self.view.take() {
+            view.unmount(&self.dom_handle);
+        }
         self.timers.borrow_mut().forget(self.dom.document_id());
         if let Some(scope) = self.scope.take() {
             scope.unmount();
