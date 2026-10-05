@@ -207,6 +207,15 @@ impl NodeRef {
             .is_some_and(|bound| bound.host.contains(bound.node, other))
     }
 
+    /// Whether this node is `ancestor` or sits inside it.
+    ///
+    /// The reverse of [`NodeRef::contains`]: a registry of parts asks it to find the parts inside
+    /// a node it only knows by id, such as the element that holds focus.
+    pub fn is_within(&self, ancestor: NodeId) -> bool {
+        self.bound()
+            .is_some_and(|bound| bound.host.contains(ancestor, bound.node))
+    }
+
     /// Whether this node comes before `other` in tree order.
     ///
     /// What a set of items registered from anywhere is put back into document order with: a keyed
@@ -631,6 +640,7 @@ mod tests {
         assert_eq!(node_ref.bounds(), None);
         assert_eq!(node_ref.focusables(), Vec::new());
         assert!(!node_ref.contains(a_box(&f)));
+        assert!(!node_ref.is_within(a_box(&f)));
         f.window.unmount();
     }
 
