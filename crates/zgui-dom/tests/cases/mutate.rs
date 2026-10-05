@@ -412,6 +412,42 @@ fn moving_the_start_of_a_dirty_run_to_the_back_keeps_it_reachable() {
     }
 }
 
+/// Edits a document when it is dropped, as a cleanup that runs during an unwind does.
+struct EditsOnDrop<'doc> {
+    /// The document it edits.
+    document: &'doc Document,
+    /// The node it marks.
+    node: NodeIndex,
+}
+
+impl Drop for EditsOnDrop<'_> {
+    fn drop(&mut self) {
+        let _ = self.document.edit(&EverythingMatters, |batch| {
+            batch.set_state(self.node, zgui_vocab::UiState::HOVER, true);
+        });
+    }
+}
+
+/// A batch that a drop opens while the thread unwinds from a panic outside any batch. Its body
+/// returns, so the document stays usable.
+#[test]
+fn a_batch_opened_during_an_unrelated_unwind_does_not_poison() {
+    let (document, root, _) = tree(1);
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _edits = EditsOnDrop {
+            document: &document,
+            node: root,
+        };
+        panic!("a panic outside any batch");
+    }));
+    assert!(unwound.is_err());
+
+    assert!(!document.is_editing());
+    assert!(!document.is_poisoned());
+    assert_eq!(document.edit(&EverythingMatters, |_| ()), Ok(()));
+}
+
 /// A batch nested inside another, whose body panics, where the unwind is caught before it leaves the
 /// outer batch. The depth never returns to zero on the way out, so a poison conditional on that
 /// would let the outer batch close over a document with half of a change applied and records

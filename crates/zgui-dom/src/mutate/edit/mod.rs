@@ -160,6 +160,7 @@ impl Document {
         let guard = PoisonOnUnwind {
             document: self,
             entered_at: core::panic::Location::caller(),
+            unwinding: std::thread::panicking(),
         };
         let outcome = body();
         drop(guard);

@@ -41,11 +41,13 @@ pub(crate) struct PoisonOnUnwind<'doc> {
     pub(crate) document: &'doc Document,
     /// Where the guarded scope was entered, for the report it leaves behind.
     pub(crate) entered_at: &'static core::panic::Location<'static>,
+    /// Whether the thread was already unwinding when the scope was entered.
+    pub(crate) unwinding: bool,
 }
 
 impl Drop for PoisonOnUnwind<'_> {
     fn drop(&mut self) {
-        if std::thread::panicking() && self.document.edit_state().poison() {
+        if body_panicked(self.unwinding) && self.document.edit_state().poison() {
             tracing::error!(
                 scope = %self.entered_at,
                 "work over a document panicked; the document is poisoned and will accept no \
@@ -63,6 +65,17 @@ pub(crate) struct BatchGuard<'doc> {
     outermost: bool,
     /// Where the batch was opened, for the report a panicking batch leaves behind.
     opened_at: &'static core::panic::Location<'static>,
+    /// Whether the thread was already unwinding when the batch was opened.
+    unwinding: bool,
+}
+
+/// Whether the body of a guard panicked.
+///
+/// A guard opened while the thread unwinds from an earlier panic runs its body as part of that
+/// unwinding, a cleanup that edits the document for example. Such a body that returns is complete.
+/// The thread can also be in its thread-local teardown there, where a report cannot be written.
+fn body_panicked(unwinding_at_open: bool) -> bool {
+    std::thread::panicking() && !unwinding_at_open
 }
 
 impl<'doc> BatchGuard<'doc> {
@@ -96,6 +109,7 @@ impl<'doc> BatchGuard<'doc> {
             document,
             outermost,
             opened_at,
+            unwinding: std::thread::panicking(),
         })
     }
 }
@@ -112,7 +126,7 @@ impl Drop for BatchGuard<'_> {
             batch.depth == 0
         };
 
-        if std::thread::panicking() {
+        if body_panicked(self.unwinding) {
             // Whatever the depth: a body that unwound left its changes half applied and its records
             // describing neither state, and a caller that catches the unwind inside the batch that
             // encloses it would otherwise close that batch over the wreckage. Only the first call
