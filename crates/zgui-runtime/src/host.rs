@@ -670,18 +670,18 @@ impl ViewHost for RuntimeHost {
             return;
         };
         let length = self.text_length(key);
-        self.selections.set(key, range, length);
+        self.selections.set(key, range.clone(), length);
         // The model has to hear about it too, because the caret it types at is its own. Issued
         // rather than written: the model is the window's, and this is called from inside handlers
         // that run in the middle of a frame.
         //
+        // The command carries the range as asked. A value written in the same frame reaches the
+        // model first, and the model clamps the range against that text when the command lands.
+        //
         // What is selected changed, so the frame that shows it is owed. Nothing is marked on the
         // document here: this is called from inside handlers, which run inside an open batch of
         // changes, and the frame that follows is where a caret and a highlight are drawn.
-        self.issue(Command::Select {
-            node,
-            range: self.selections.of(key).unwrap_or(0..0),
-        });
+        self.issue(Command::Select { node, range });
     }
 
     fn select_all(&self, node: NodeId) {

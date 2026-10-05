@@ -309,6 +309,24 @@ fn a_selection_written_from_a_view_is_what_the_next_keystroke_replaces() {
 }
 
 #[test]
+fn a_caret_put_after_a_value_written_in_the_same_frame_lands_in_the_new_text() {
+    // What a completion does: it writes the longer text and puts the caret after it, before a
+    // frame has loaded the text into the model.
+    let mut script = scripted("ab", false);
+    script.editor.set_value("abcdef");
+    script.editor.set_selection(6..6);
+    script.harness.settle(4);
+    assert_eq!(script.selection(), Some(6..6));
+
+    script.press(letter("z"), Modifiers::NONE);
+    assert_eq!(
+        script.text(),
+        "abcdefz",
+        "the next key lands after the new text"
+    );
+}
+
+#[test]
 fn a_composition_that_ends_without_committing_leaves_the_window_working() {
     // Both Linux backends end a composition that produced nothing with an empty preedit and
     // nothing behind it — no commit, no dismissal, ever. A window that went on treating that as a
