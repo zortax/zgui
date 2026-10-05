@@ -1,6 +1,6 @@
 //! The wait after which a toast asks to go, and what stops it.
 
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::time::Duration;
 use std::rc::Rc;
 
@@ -19,7 +19,7 @@ use zgui::view::{TimeoutHandle, Timers};
 #[derive(Clone)]
 pub(crate) struct Expiry {
     /// How long the wait is, or `None` for a toast that waits to be dismissed.
-    after: Option<Duration>,
+    after: Rc<Cell<Option<Duration>>>,
     /// The window's clock, taken in the component's body because a listener runs outside it.
     clock: Option<Timers>,
     /// What is pending, held so that dropping it cancels the wait.
@@ -32,7 +32,7 @@ impl Expiry {
     /// A deadline of `after` that calls `ask` when it runs out.
     pub(crate) fn new(after: Option<Duration>, ask: impl Fn() + 'static) -> Self {
         Self {
-            after,
+            after: Rc::new(Cell::new(after)),
             clock: Timers::current(),
             pending: Rc::new(RefCell::new(None)),
             ask: Rc::new(ask),
@@ -41,7 +41,7 @@ impl Expiry {
 
     /// Starts the wait, if it is not already running.
     pub(crate) fn start(&self) {
-        let (Some(after), Some(clock)) = (self.after, self.clock.clone()) else {
+        let (Some(after), Some(clock)) = (self.after.get(), self.clock.clone()) else {
             return;
         };
         let mut pending = self.pending.borrow_mut();
@@ -50,6 +50,16 @@ impl Expiry {
         }
         let ask = Rc::clone(&self.ask);
         *pending = Some(clock.set_timeout(after, move || ask()));
+    }
+
+    /// Makes the wait `after` long from its next start. A wait that is running stops, so the
+    /// caller starts it again by the new length.
+    pub(crate) fn wait(&self, after: Option<Duration>) {
+        if self.after.get() == after {
+            return;
+        }
+        self.after.set(after);
+        self.stop();
     }
 
     /// Takes the wait away.

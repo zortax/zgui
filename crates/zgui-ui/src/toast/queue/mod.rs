@@ -138,6 +138,36 @@ impl ToastQueue {
         id
     }
 
+    /// Puts `toast` in the place of the toast called `id`, and reports whether one was there.
+    ///
+    /// The toast keeps its place on the stack, its name and its slot, so one run of work reports
+    /// its progress in one toast that changes rather than in a new toast per step. Its wait starts
+    /// again, by the new toast's duration. A toast already on its way out stays as it was.
+    pub fn replace(self, id: ToastId, toast: Toast) -> bool {
+        let mut found = false;
+        self.items.try_update(|items| {
+            if let Some(entry) = items
+                .iter_mut()
+                .find(|entry| entry.id == id && !entry.is_leaving())
+            {
+                entry.toast = toast;
+                found = true;
+            }
+        });
+        found
+    }
+
+    /// What the toast called `id` says now, while it is on the screen.
+    #[must_use]
+    pub fn toast_of(self, id: ToastId) -> Option<Toast> {
+        self.items.with(|items| {
+            items
+                .iter()
+                .find(|entry| entry.id == id)
+                .map(|entry| entry.toast.clone())
+        })
+    }
+
     /// Asks the toast called `id` to go.
     ///
     /// It stays on the screen until its exit animation has finished, and stops taking up room on the
@@ -328,6 +358,38 @@ mod tests {
             assert_eq!(queue.live().len(), 1);
             assert_eq!(queue.live()[0].toast.title(), "second");
             assert!(queue.is_leaving(first));
+        });
+    }
+
+    #[test]
+    fn a_replaced_toast_keeps_its_place_and_says_the_new_thing() {
+        mounted(|| {
+            let queue = ToastQueue::new(5);
+            let first = queue.push(Toast::new("Restarting 3"));
+            queue.push(Toast::new("other"));
+            assert!(queue.replace(first, Toast::new("2 of 3 rolled out")));
+            let showing = queue.showing();
+            assert_eq!(showing.len(), 2);
+            assert_eq!(showing[1].id, first, "the toast keeps its place");
+            assert_eq!(showing[1].toast.title(), "2 of 3 rolled out");
+            assert_eq!(
+                queue.toast_of(first).map(|toast| toast.title().to_owned()),
+                Some("2 of 3 rolled out".to_owned())
+            );
+        });
+    }
+
+    #[test]
+    fn a_toast_on_its_way_out_is_not_replaced() {
+        mounted(|| {
+            let queue = ToastQueue::new(5);
+            let only = queue.push(Toast::new("first"));
+            queue.dismiss(only);
+            assert!(!queue.replace(only, Toast::new("again")));
+            assert_eq!(queue.showing()[0].toast.title(), "first");
+            queue.remove(only);
+            assert!(!queue.replace(only, Toast::new("gone")));
+            assert!(queue.toast_of(only).is_none());
         });
     }
 

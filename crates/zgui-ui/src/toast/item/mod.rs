@@ -83,7 +83,17 @@ pub fn ToastItem(
     install_stylesheet(SHEET, ToastStyle::CSS);
     let queue = ToastQueue::current();
     let id = queued.id;
-    let toast = queued.toast;
+    let first = queued.toast;
+    // What the toast says now: a queue may put another message in its place, and the slot stays.
+    let current = {
+        let first = first.clone();
+        Signal::derive_local(move || {
+            queue
+                .and_then(|queue| queue.toast_of(id))
+                .unwrap_or_else(|| first.clone())
+        })
+    };
+    let toast = first;
     let kind = toast.what();
 
     let dismiss = move || {
@@ -129,6 +139,7 @@ pub fn ToastItem(
     let waiting = {
         let expiry = expiry.clone();
         RenderEffect::new(move |_| {
+            expiry.wait(current.with(crate::toast::message::Toast::stays_for));
             let held = queue.is_some_and(ToastQueue::is_held);
             if held || leaving() {
                 expiry.stop();
@@ -191,7 +202,9 @@ pub fn ToastItem(
         );
 
     let own = Attrs::new()
-        .attribute(zgui::view::AttrName::new("data-kind"), kind.name())
+        .attribute(zgui::view::AttrName::new("data-kind"), move || {
+            Some(current.with(|toast| toast.what().name().to_owned()))
+        })
         .attribute(zgui::view::AttrName::new("data-state"), move || {
             Some(if leaving() { "closed" } else { "open" }.to_owned())
         })
@@ -201,12 +214,18 @@ pub fn ToastItem(
                 .label(toast.title().to_owned()),
         );
 
-    let body = toast
-        .body()
-        .map(|text| view! { text(class = "zui-toast__description") {{text.to_owned()}} });
-    let mark = kind.mark().map(
-        |icon| view! { box(class = "zui-toast__icon", a11y:hidden = true) { Icon(icon = icon) } },
-    );
+    let body = move || {
+        current.with(|toast| {
+            toast
+                .body()
+                .map(|text| view! { text(class = "zui-toast__description") {{text.to_owned()}} })
+        })
+    };
+    let mark = move || {
+        current.with(|toast| toast.what().mark()).map(
+            |icon| view! { box(class = "zui-toast__icon", a11y:hidden = true) { Icon(icon = icon) } },
+        )
+    };
 
     // The two buttons a message can carry. Built from what the message holds rather than from props,
     // because the message is written where something happened and read where the stack is drawn.
@@ -286,7 +305,7 @@ pub fn ToastItem(
             ) {
                 {mark}
                 column(class = "zui-toast__text") {
-                    text(class = "zui-toast__title") {{toast.title().to_owned()}}
+                    text(class = "zui-toast__title") {{move || current.with(|toast| toast.title().to_owned())}}
                     {body}
                 }
                 {cancel}
