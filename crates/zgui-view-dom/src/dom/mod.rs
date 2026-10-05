@@ -280,6 +280,22 @@ impl DocumentDom {
             .expect("the document has not been poisoned")
     }
 
+    /// Runs `body` as a batch of changes on the document, unless the document is poisoned.
+    ///
+    /// For the changes a teardown makes: taking a node out and taking a listener off. A batch
+    /// that panicked has already been reported, and the scopes it leaves behind still dispose of
+    /// their views on the way out. Each of those removals finds a document that accepts nothing,
+    /// and a second panic from inside a cleanup aborts the process before the first report is
+    /// read. A teardown on a poisoned document therefore changes nothing and returns None.
+    pub(crate) fn edit_unless_poisoned<R>(
+        &self,
+        body: impl FnOnce(&mut zgui_dom::Edit<'_>) -> R,
+    ) -> Option<R> {
+        self.revision.set(self.revision.get().wrapping_add(1));
+        let filter = Rc::clone(&self.filter.borrow());
+        self.document.borrow().edit(filter.as_ref(), body).ok()
+    }
+
     /// The handlers, for the methods that add and remove them.
     pub(crate) fn handlers(&self) -> &RefCell<Handlers> {
         &self.handlers

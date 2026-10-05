@@ -37,11 +37,12 @@ impl DocumentDom {
     /// A node that is already gone is left gone. A teardown can reach the same element twice —
     /// once from its own view and once from an ancestor whose whole subtree went — and the second
     /// arrival has nothing left to remove; unwinding over it would poison the document mid-batch.
+    /// A poisoned document keeps the node.
     pub(crate) fn unlink(&self, node: NodeId) {
         let Some(node) = self.live_index_of(node) else {
             return;
         };
-        self.edit(|edit| edit.remove(node));
+        self.edit_unless_poisoned(|edit| edit.remove(node));
     }
 
     /// What `node` currently sits under, or nothing when it sits under the document itself.
