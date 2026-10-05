@@ -148,6 +148,17 @@ impl RecordingDom {
         })
     }
 
+    /// Puts the selection of `node`'s model at `range`, as its application asked. The model
+    /// clamps it into the text.
+    pub fn load_selection(&self, node: NodeId, range: Range<usize>) {
+        if !self.holds_text(node) {
+            return;
+        }
+        self.with_model(node, move |editor| {
+            editor.set_selection(Selection::new(range.start, range.end));
+        });
+    }
+
     /// Runs `act` against `node`'s model and writes the paragraphs it left behind into the tree.
     ///
     /// The model is taken out of the map for the duration. Writing a text node runs whatever is

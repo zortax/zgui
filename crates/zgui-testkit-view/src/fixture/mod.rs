@@ -140,11 +140,15 @@ impl Window {
         for _ in 0..8u8 {
             zgui_reactive::flush();
             let written = self.host.take_written_values();
-            if written.is_empty() {
+            let selected = self.host.take_written_selections();
+            if written.is_empty() && selected.is_empty() {
                 return;
             }
             for (node, text) in written {
                 self.dom.load_value(node, &text);
+            }
+            for (node, range) in selected {
+                self.dom.load_selection(node, range);
             }
         }
     }

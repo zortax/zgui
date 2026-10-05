@@ -47,6 +47,9 @@ pub struct ScriptedHost {
     /// frame. A harness that wrote through immediately would let a component pass while relying on
     /// an ordering no window offers.
     written: RefCell<Vec<(NodeId, String)>>,
+    /// Selections an application asked of fields, waiting for a frame to carry them out after the
+    /// values.
+    selected: RefCell<Vec<(NodeId, Range<usize>)>>,
 }
 
 impl Default for ScriptedHost {
@@ -67,6 +70,7 @@ impl ScriptedHost {
             inner: StubHost::new(),
             transcript,
             written: RefCell::new(Vec::new()),
+            selected: RefCell::new(Vec::new()),
         }
     }
 
@@ -80,6 +84,14 @@ impl ScriptedHost {
     /// What a frame carries out. Draining it is what closes the loop of a controlled field.
     pub fn take_written_values(&self) -> Vec<(NodeId, String)> {
         core::mem::take(&mut self.written.borrow_mut())
+    }
+
+    /// Every selection asked of a field since this was last asked, in order.
+    ///
+    /// A frame carries these out after the values, so a view that writes a value and then puts the
+    /// caret in it finds the caret where it asked.
+    pub fn take_written_selections(&self) -> Vec<(NodeId, Range<usize>)> {
+        core::mem::take(&mut self.selected.borrow_mut())
     }
 
     /// Records where an edit left the caret.
@@ -277,11 +289,13 @@ impl ViewHost for ScriptedHost {
             start: range.start,
             end: range.end,
         });
+        self.selected.borrow_mut().push((node, range.clone()));
         self.inner.set_selection(node, range);
     }
 
     fn select_all(&self, node: NodeId) {
         self.transcript.push(Op::SelectAll { node });
+        self.selected.borrow_mut().push((node, 0..usize::MAX));
         self.inner.select_all(node);
     }
 

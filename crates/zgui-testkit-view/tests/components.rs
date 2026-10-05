@@ -312,3 +312,22 @@ fn an_element_that_left_the_tree_reaches_nothing() {
         "a click reached an element outside the tree"
     );
 }
+
+#[test]
+fn a_caret_a_view_puts_in_a_field_is_where_the_next_key_lands() {
+    use zgui_view::ViewHost;
+    use zgui_vocab::Key;
+
+    let window = Window::open();
+    let field = window.dom.create_element(ElementName::new("field"));
+    window.dom.insert(window.root, field, None);
+
+    window.host.set_value(field, "resta");
+    window.frame();
+    window.host.set_selection(field, 2..2);
+    window.frame();
+    window.dispatcher().key(field, Key::Character("-".into()));
+
+    assert_eq!(window.dom.editing_selection(field), Some(3..3));
+    assert_eq!(window.dom.text_content(field), "re-sta");
+}
