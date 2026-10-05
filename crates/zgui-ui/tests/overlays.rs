@@ -318,6 +318,47 @@ fn an_alert_dialog_is_announced_as_one_and_still_answers_escape() {
 }
 
 #[test]
+fn the_answers_of_an_alert_dialog_run_the_callers_click_while_it_is_still_open() {
+    let harness = Harness::open();
+    let open = RwSignal::new_local(true);
+    let seen = RwSignal::new_local(Vec::<(&'static str, bool)>::new());
+    harness.mount(move || {
+        view! {
+            AlertDialog(open = open) {
+                AlertDialogContent {
+                    AlertDialogTitle {"Delete this project?"}
+                    AlertDialogFooter {
+                        AlertDialogCancel(
+                            on:click = move |_| seen.update(|s| s.push(("cancel", open.get_untracked())))
+                        ) {"Keep it"}
+                        AlertDialogAction(
+                            on:click = move |_| seen.update(|s| s.push(("action", open.get_untracked())))
+                        ) {"Delete"}
+                    }
+                }
+            }
+        }
+    });
+    let answer = |label: &str| {
+        every(&harness, "zui-button")
+            .into_iter()
+            .find(|node| harness.window.dom.tree().text_content(*node) == label)
+            .expect("the answer stands")
+    };
+    harness.click(answer("Delete"));
+    assert!(!open.get_untracked());
+    open.set(true);
+    settle(&harness);
+    harness.click(answer("Keep it"));
+    assert!(!open.get_untracked());
+    assert_eq!(
+        seen.get_untracked(),
+        [("action", true), ("cancel", true)],
+        "each answer acts on the dialog that is still open, then closes it"
+    );
+}
+
+#[test]
 fn a_control_inside_a_dialog_closes_it_without_anything_being_threaded_down_to_it() {
     let harness = Harness::open();
     harness.mount(|| view! { ADialog() });

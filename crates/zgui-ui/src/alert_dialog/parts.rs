@@ -113,8 +113,7 @@ pub fn AlertDialogTrigger(
 /// The answer that goes ahead, and closes the alert dialog.
 ///
 /// Whatever it is that is going ahead is the caller's `on:click`; this closes the surface. Both
-/// run, the caller's first, because a component's own listener and a caller's accumulate rather
-/// than replacing each other.
+/// run, the caller's first, so the caller still reads the state that opened the dialog.
 ///
 /// ```
 /// # use zgui::prelude::*;
@@ -155,12 +154,12 @@ pub fn AlertDialogAction(
             node_ref = node_ref.unwrap_or_default(),
             variant = variant,
             size = size,
+            {..attrs},
             on:click = move |_| {
                 if let Some(state) = state {
                     state.close();
                 }
             },
-            {..attrs},
             class = class
         ) {
             {children.into_view_once()}
@@ -168,7 +167,8 @@ pub fn AlertDialogAction(
     }
 }
 
-/// The answer that changes nothing, and closes the alert dialog.
+/// The answer that changes nothing, and closes the alert dialog. A caller's `on:click` runs
+/// before it closes.
 ///
 /// ```
 /// # use zgui::prelude::*;
@@ -205,12 +205,12 @@ pub fn AlertDialogCancel(
         Button(
             variant = variant,
             size = size,
+            {..attrs},
             on:click = move |_| {
                 if let Some(state) = state {
                     state.close();
                 }
             },
-            {..attrs},
             class = class
         ) {
             {children.into_view_once()}
