@@ -19,6 +19,16 @@ use crate::budget::report::{BudgetReport, CacheId};
 use crate::budget::{CacheLimits, SceneEpoch};
 use crate::window::Window;
 
+/// How many frames pass between sweeps of the scene's side tables.
+const SWEEP_STRIDE: u64 = 64;
+
+/// How many frames an entry must go unused before a sweep may free it.
+const SWEEP_KEEP_GENERATIONS: u64 = 128;
+
+/// The most entries one sweep of a side table frees, so its change journal stays a delta for its
+/// readers.
+const SWEEP_CAP: usize = 2_048;
+
 impl CacheRegistry for Window {
     fn for_each(&mut self, visit: &mut dyn FnMut(&mut dyn Budgeted)) {
         let embed_memory = self.embed.memory();
@@ -126,6 +136,7 @@ impl Window {
         manager::enforce(self, &report, epoch);
         self.budgets.record(report);
         self.sweep_clip_chains(epoch);
+        self.sweep_paints(epoch);
     }
 
     /// Frees the clip chains nothing can reach any more, on a stride of frames.
@@ -142,16 +153,10 @@ impl Window {
     /// counts. The stride keeps the walk off ordinary frames, and the floor skips documents whose
     /// table never grew.
     fn sweep_clip_chains(&mut self, epoch: crate::budget::SceneEpoch) {
-        /// How many frames pass between sweeps.
-        const STRIDE: u64 = 64;
         /// The id-space extent below which sweeping buys nothing.
         const FLOOR: usize = 1_024;
-        /// How many frames of not being touched make a chain old enough to go.
-        const KEEP_GENERATIONS: u64 = 128;
-        /// The most chains one sweep frees, so the change journal stays a delta for its readers.
-        const CAP: usize = 2_048;
 
-        if !epoch.get().is_multiple_of(STRIDE) || self.scene.clips.slots() < FLOOR {
+        if !epoch.get().is_multiple_of(SWEEP_STRIDE) || self.scene.clips.slots() < FLOOR {
             return;
         }
         let scene = &mut self.scene;
@@ -160,7 +165,31 @@ impl Window {
             scene.clips.use_of(fragment.clip);
         });
         drop(layout);
-        scene.clips.evict_unreachable_chains(KEEP_GENERATIONS, CAP);
+        scene
+            .clips
+            .evict_unreachable_chains(SWEEP_KEEP_GENERATIONS, SWEEP_CAP);
+    }
+
+    /// Frees the paints nothing holds and no recent frame used, on the same stride of frames.
+    ///
+    /// The paint table interns a paint per distinct content, and content that moves mints new
+    /// paints: a colour transition interns one on each frame it draws, and a gradient in device
+    /// space interns one at each scroll position. Each one the table keeps costs the renderer a
+    /// slot each time it flattens the table, so without the sweep the table grows for as long as
+    /// the window animates.
+    ///
+    /// No fragment stores a paint id, so nothing has to be touched before the sweep. The floor is
+    /// lower than the clip table's because a paint has no chain to climb.
+    fn sweep_paints(&mut self, epoch: crate::budget::SceneEpoch) {
+        /// The id-space extent below which sweeping buys nothing.
+        const FLOOR: usize = 256;
+
+        if !epoch.get().is_multiple_of(SWEEP_STRIDE) || self.scene.paints.slots() < FLOOR {
+            return;
+        }
+        self.scene
+            .paints
+            .evict_unused_paints(SWEEP_KEEP_GENERATIONS, SWEEP_CAP);
     }
 
     /// Drops everything every budgeted cache holds.
