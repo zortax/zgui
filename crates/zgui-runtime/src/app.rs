@@ -388,7 +388,11 @@ impl App {
         // machine with no usable graphics device runs a loop that opens nothing, draws nothing and
         // exits reporting success.
         let failure = handler.failure();
-        driver(Box::new(handler))?;
+        let ran = driver(Box::new(handler));
+        // The runtime is gone with the driver. Whatever is left in the task pool is dropped now,
+        // while the thread's other state is alive.
+        zgui_reactive::shutdown();
+        ran?;
         failure.take().map_or(Ok(()), Err)
     }
 }
@@ -1039,6 +1043,18 @@ impl Runtime {
                 window.request_frame();
             }
         }
+    }
+}
+
+impl Drop for Runtime {
+    /// Closes every window that is still open, then lets the tasks the windows left run to their
+    /// end while the application's scope is alive.
+    fn drop(&mut self) {
+        for window in &mut self.windows {
+            window.close();
+        }
+        self.windows.clear();
+        zgui_reactive::flush();
     }
 }
 

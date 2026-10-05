@@ -16,7 +16,9 @@ thread_local! {
     /// re-entrant poll a no-op instead of a panic.
     static POOL: RefCell<LocalPool> = RefCell::new(LocalPool::new());
     /// A handle that queues tasks without borrowing the pool, so a task may spawn a task.
-    static SPAWNER: LocalSpawner = POOL.with_borrow(LocalPool::spawner);
+    static SPAWNER: RefCell<LocalSpawner> = RefCell::new(POOL.with_borrow(LocalPool::spawner));
+    /// How many tasks this thread has queued.
+    static QUEUED: Cell<u64> = const { Cell::new(0) };
     /// Where the next spawn came from, when it came from this crate's own API.
     static SPAWNED_AT: Cell<Option<&'static Location<'static>>> = const { Cell::new(None) };
 }
@@ -77,11 +79,31 @@ fn push<F>(task: WakeThrough<F>)
 where
     F: Future<Output = ()> + Unpin + 'static,
 {
-    SPAWNER.with(|spawner| {
+    SPAWNER.with_borrow(|spawner| {
         spawner
             .spawn_local(task)
             .expect("the task pool outlives the thread that owns it");
     });
+    QUEUED.set(QUEUED.get() + 1);
+}
+
+/// Drops every task the pool holds.
+///
+/// The pool is replaced before the old one is dropped, so a task that a drop spawns lands in the
+/// new pool. Returns `false` when a drop spawned a task, or when a poll holds the pool.
+pub(crate) fn clear() -> bool {
+    let queued = QUEUED.get();
+    let old = POOL.with(|pool| {
+        pool.try_borrow_mut()
+            .ok()
+            .map(|mut pool| std::mem::replace(&mut *pool, LocalPool::new()))
+    });
+    let Some(old) = old else {
+        return false;
+    };
+    SPAWNER.with_borrow_mut(|spawner| *spawner = POOL.with_borrow(LocalPool::spawner));
+    drop(old);
+    QUEUED.get() == queued
 }
 
 /// Polls every ready task to a stall.

@@ -107,7 +107,7 @@ pub use context::{
 };
 pub use executor::{
     FlushOutcome, FrameWaker, InstallError, PollContext, TestWaker, assert_owner, assert_ui_thread,
-    flush, install, is_ui_thread, set_frame_waker, set_poll_context,
+    flush, install, is_ui_thread, set_frame_waker, set_poll_context, shutdown,
 };
 pub use own::{Mounted, Owner, Scope, StoredValue, on_cleanup_local};
 pub use reexport::{

@@ -20,6 +20,7 @@ mod budget;
 mod context;
 pub(crate) mod frame;
 pub(crate) mod pool;
+mod shutdown;
 mod through;
 mod ui_thread;
 pub(crate) mod wake;
@@ -29,6 +30,7 @@ use thiserror::Error;
 pub use assert::{assert_owner, assert_ui_thread};
 pub use context::{PollContext, set_poll_context};
 pub use frame::{FlushOutcome, flush};
+pub use shutdown::shutdown;
 pub use ui_thread::is_ui_thread;
 pub use wake::{FrameWaker, TestWaker, set_frame_waker};
 

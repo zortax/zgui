@@ -639,7 +639,11 @@ impl Handler {
     {
         // Taken before the runtime is handed over, because the driver consumes it.
         let failure = self.runtime.failure();
-        driver(Box::new(self.runtime))?;
+        let ran = driver(Box::new(self.runtime));
+        // The runtime is gone with the driver. Whatever is left in the task pool is dropped now,
+        // while the thread's other state is alive.
+        zgui_reactive::shutdown();
+        ran?;
         failure.take().map_or(Ok(()), Err)
     }
 }
