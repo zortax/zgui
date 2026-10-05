@@ -337,6 +337,10 @@ impl Dom for RecordingDom {
         self.tree.text_content(node)
     }
 
+    fn is_live(&self, node: NodeId) -> bool {
+        self.tree.is_live(node)
+    }
+
     fn observe(&self, node: NodeId, what: Observed, sink: ObservationSink) -> ObservationHandle {
         self.transcript.push(Op::Observe {
             node,

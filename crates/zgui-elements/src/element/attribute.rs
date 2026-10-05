@@ -51,12 +51,14 @@ impl Attribute {
     ///
     /// A listener's registration goes into `listeners` rather than coming back as a binding: it is
     /// not kept alive by being held, it is *removed* by being held, and the element has to take
-    /// its previous listeners off before it registers this description's.
+    /// its previous listeners off before it registers this description's. A handle goes into
+    /// `handles`, so that the element can release it when its view goes away.
     pub(crate) fn apply(
         self,
         cx: &BuildCx<'_>,
         el: NodeId,
         listeners: &mut Vec<ListenerRegistration>,
+        handles: &mut Vec<NodeRef>,
     ) -> Option<Binding> {
         match self {
             Self::ClassToggle(class, on) => Some(bind_class(cx, el, class, on)),
@@ -88,6 +90,7 @@ impl Attribute {
             }
             Self::NodeRef(handle) => {
                 handle.bind(el, cx.dom(), cx.host());
+                handles.push(handle);
                 None
             }
         }

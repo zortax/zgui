@@ -81,6 +81,12 @@ pub trait Dom {
     /// The node `node` currently sits under.
     fn parent(&self, node: NodeId) -> Option<NodeId>;
 
+    /// Whether `node` still exists in this tree.
+    ///
+    /// A detached node exists until the tree drops it. A handle that outlives its node asks this
+    /// before it hands the node to anything that insists on a live one.
+    fn is_live(&self, node: NodeId) -> bool;
+
     /// Sets or removes one attribute, which is visible to selector matching.
     fn set_attribute(&self, el: NodeId, name: AttrName, value: Option<&str>);
 

@@ -3,7 +3,7 @@
 use zgui_view::view::AnyViewState;
 use zgui_view::{
     A11yBinding, Anchor, AnyView, Binding, BuildCx, Classes, DomHandle, ListenerRegistration,
-    NodeId, View,
+    NodeId, NodeRef, View,
 };
 
 use crate::element::attribute::Attribute;
@@ -12,7 +12,8 @@ use crate::element::attribute::Attribute;
 ///
 /// Held by whatever built the element. Dropping it stops the bindings; it does not remove the node,
 /// because a view's nodes are taken away by [`Anchor::unmount`] and a state that removed them on
-/// drop would take them away twice.
+/// drop would take them away twice. Dropping it releases every handle bound to the element, so a
+/// handle that outlives this view never names a node the document has dropped.
 pub struct ElementState {
     /// The element itself.
     node: NodeId,
@@ -21,6 +22,8 @@ pub struct ElementState {
     /// One entry per listener this description registered, so that describing the element again
     /// replaces them instead of leaving a second copy of each attached.
     listeners: Vec<ListenerRegistration>,
+    /// The handles the description bound to the element.
+    handles: Vec<NodeRef>,
     /// The children, in order.
     children: Vec<AnyViewState>,
 }
@@ -32,6 +35,7 @@ impl ElementState {
             node,
             bindings: Vec::new(),
             listeners: Vec::new(),
+            handles: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -70,9 +74,17 @@ impl ElementState {
         if !classes.is_empty() {
             cx.dom().set_classes(self.node, classes.names());
         }
+        let previous = core::mem::take(&mut self.handles);
         for attribute in attributes {
-            if let Some(binding) = attribute.apply(cx, self.node, &mut self.listeners) {
+            if let Some(binding) =
+                attribute.apply(cx, self.node, &mut self.listeners, &mut self.handles)
+            {
                 self.bindings.push(binding);
+            }
+        }
+        for handle in previous {
+            if !self.handles.contains(&handle) {
+                handle.release(self.node);
             }
         }
         if let Some(a11y) = a11y {
@@ -110,6 +122,14 @@ impl ElementState {
         }
         for mut extra in self.children.drain(kept..) {
             extra.unmount(cx.dom());
+        }
+    }
+}
+
+impl Drop for ElementState {
+    fn drop(&mut self) {
+        for handle in &self.handles {
+            handle.release(self.node);
         }
     }
 }

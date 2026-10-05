@@ -44,6 +44,10 @@ impl Dom for DocumentDom {
         self.parent_of(node)
     }
 
+    fn is_live(&self, node: NodeId) -> bool {
+        self.live_index_of(node).is_some()
+    }
+
     // Every writer from here down resolves through `live_index_of` and quietly does nothing when
     // the node is gone, rather than insisting it is still there. A binding's effect can fire one
     // frame after its element was removed — the record drops when the frame ends, the scope that

@@ -544,6 +544,10 @@ impl Dom for StubDom {
         Self::text_content(self, node)
     }
 
+    fn is_live(&self, node: NodeId) -> bool {
+        self.tree.borrow().nodes.contains_key(&node)
+    }
+
     fn observe(&self, node: NodeId, what: Observed, sink: ObservationSink) -> ObservationHandle {
         self.check(node);
         let key = {

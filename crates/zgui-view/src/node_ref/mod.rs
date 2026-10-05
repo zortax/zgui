@@ -70,7 +70,7 @@ struct Bound {
 /// window.unmount();
 /// assert_eq!(node_ref.get(), None, "and reading it afterwards is not a panic");
 /// ```
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct NodeRef(RwSignal<Option<Bound>, LocalStorage>);
 
 impl NodeRef {
@@ -91,9 +91,24 @@ impl NodeRef {
         }));
     }
 
-    /// Unbinds this handle, which is what a view does as it unmounts the element.
+    /// Unbinds this handle.
     pub fn unbind(&self) {
         self.0.try_set(None);
+    }
+
+    /// Unbinds this handle while it is bound to `node`.
+    ///
+    /// An element calls this as the view that built it goes away. A handle that a newer element
+    /// bound in the meantime keeps that element, so the order in which an old build is dropped and
+    /// a new one is built does not matter.
+    pub fn release(&self, node: NodeId) {
+        let bound_here = self
+            .0
+            .try_with_untracked(|bound| bound.as_ref().is_some_and(|bound| bound.node == node))
+            .unwrap_or(false);
+        if bound_here {
+            self.0.try_set(None);
+        }
     }
 
     /// The node, once it exists — and `None` after the view that made it went away.
@@ -111,9 +126,15 @@ impl NodeRef {
         self.get_untracked().is_some()
     }
 
-    /// What is bound, when anything is.
+    /// What is bound, when anything is and its node still exists.
+    ///
+    /// A node the document has dropped reads as unbound, so no imperative call hands the backend
+    /// a node it no longer knows.
     fn bound(&self) -> Option<Bound> {
-        self.0.try_get_untracked().flatten()
+        self.0
+            .try_get_untracked()
+            .flatten()
+            .filter(|bound| bound.dom.is_live(bound.node))
     }
 
     // ---- one-shot reads, from the last completed frame ------------------------------------
@@ -654,6 +675,27 @@ mod tests {
 
         component.unmount();
         assert_eq!(node_ref.get(), None);
+        f.window.unmount();
+    }
+
+    #[test]
+    fn releasing_a_node_unbinds_only_a_handle_still_bound_to_it() {
+        let f = Fixture::new();
+        let (old, new) = (a_box(&f), a_box(&f));
+        let node_ref = f.window.with(NodeRef::new);
+
+        node_ref.bind(old, &f.dom, f.cx.host());
+        node_ref.release(old);
+        assert_eq!(
+            node_ref.get(),
+            None,
+            "the handle was bound to the released node"
+        );
+
+        node_ref.bind(old, &f.dom, f.cx.host());
+        node_ref.bind(new, &f.dom, f.cx.host());
+        node_ref.release(old);
+        assert_eq!(node_ref.get(), Some(new), "a newer node keeps its handle");
         f.window.unmount();
     }
 
