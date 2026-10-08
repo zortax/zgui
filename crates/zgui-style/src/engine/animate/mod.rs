@@ -54,11 +54,10 @@ impl StyleEngine {
     ///
     /// The hint asks for the animation and transition declarations to be replaced and for nothing
     /// else, so the element's selector matches are kept and the frame costs a cascade rather than a
-    /// match. Only the animation-only traversal will process it, so the same call records that the
-    /// next restyle owes one, and raises the descent flag that traversal reads on every ancestor —
-    /// the flag is how the traversal gets from the root to an element that could be anywhere, and
-    /// the hint alone reaches nothing. The restyle raises the flags again from wherever the element
-    /// stands by then, because a view can move it in between.
+    /// match. Only the animation-only traversal processes it, so the call records the element for
+    /// the next restyle, which raises the descent flag that traversal reads on every ancestor of
+    /// wherever the element stands by then. The flag is how the traversal gets from the root to an
+    /// element that could be anywhere, and the hint alone reaches nothing.
     pub fn mark_animation_restyle(&mut self, document: &Document, index: NodeIndex) {
         let node = document.node(index);
         let Some(element) = node.as_element() else {
@@ -73,8 +72,13 @@ impl StyleEngine {
             data.hint
                 .insert(RestyleHint::RESTYLE_CSS_ANIMATIONS | RestyleHint::RESTYLE_CSS_TRANSITIONS);
         }
-        descent::raise_to_root(node);
         self.animation_marks.push(node.key());
+    }
+
+    /// How many marked elements wait out of the document for a restyle that finds them in it.
+    #[must_use]
+    pub fn animation_waiting(&self) -> usize {
+        self.animation_waiting.len()
     }
 
     /// Raises the descent flags from where every marked element stands now, and answers whether

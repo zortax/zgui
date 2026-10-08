@@ -95,3 +95,60 @@ fn a_field_taken_out_and_put_back_after_its_mark_is_cascaded() {
         "the field put back is styled from its transition: {before} then {after}"
     );
 }
+
+#[test]
+fn a_field_taken_out_and_dropped_after_its_mark_is_forgotten() {
+    let (mut harness, field, right) = document();
+    tick(&mut harness, FRAME);
+    restyle(&mut harness);
+
+    tick(&mut harness, 3.0 * FRAME);
+    harness.edit(|edit| edit.remove(field));
+    restyle(&mut harness);
+    assert_eq!(
+        harness.engine.animation_waiting(),
+        1,
+        "the field waits out of the document"
+    );
+
+    // The frame ends with the field still out, so the document drops it. The next restyle, here
+    // one a class change asks for, lets go of it.
+    zgui_dom::arena::end_frame(&mut harness.document);
+    tick(&mut harness, 4.0 * FRAME);
+    harness.set_classes(right, &["field"]);
+    restyle(&mut harness);
+    assert_eq!(
+        harness.engine.animation_waiting(),
+        0,
+        "a dropped field waits for nothing"
+    );
+}
+
+#[test]
+fn a_field_out_of_the_document_for_several_restyles_waits_and_is_cascaded_when_it_returns() {
+    let (mut harness, field, right) = document();
+    tick(&mut harness, FRAME);
+    restyle(&mut harness);
+    let before = width(&harness, field);
+
+    tick(&mut harness, 2.0 * FRAME);
+    harness.edit(|edit| edit.remove(field));
+    for frame in 3..6u32 {
+        restyle(&mut harness);
+        tick(&mut harness, f64::from(frame) * FRAME);
+        assert_eq!(
+            harness.engine.animation_waiting(),
+            1,
+            "the field waits, once, while it is out"
+        );
+    }
+    harness.edit(|edit| edit.insert_before(right, field, None));
+    restyle(&mut harness);
+
+    assert_eq!(harness.engine.animation_waiting(), 0);
+    let after = width(&harness, field);
+    assert!(
+        after > before && after <= 300.0,
+        "the field that returned is styled from its transition: {before} then {after}"
+    );
+}

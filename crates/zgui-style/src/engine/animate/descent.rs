@@ -8,9 +8,10 @@
 //! never restyles, and the hint it is still carrying is what the *ordinary* traversal then refuses
 //! to process.
 //!
-//! Raising the flag is therefore part of asking for an animation restyle, not a separate step a
-//! caller may forget. It is cleared by the traversal that reads it, which is what makes storing it
-//! safe: one storage, one retirement, inside one traversal.
+//! The restyle raises the flag from every element marked since the last restyle, from where the
+//! element stands at that moment, so an element a view moved in between is reached in its new
+//! place. It is cleared by the traversal that reads it, which is what makes storing it safe: one
+//! storage, one retirement, inside one traversal.
 
 use style::dom::TNode;
 use zgui_dom::Node;
