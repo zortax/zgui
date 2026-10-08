@@ -6,6 +6,7 @@
 //! | `moved` | an element that moved between its animation mark and the restyle |
 //! | `scope` | the marks a restyle never turns into engine work |
 //! | `settling` | where a transition leaves the element's own style once it has finished |
+//! | `fill` | what a finished animation that fills forwards holds through a later restyle |
 //! | `damage` | what each damage level the engine produces makes the frame owe |
 //! | `pass` | the shape of one pass: what it collects, how wide it runs, what it retires |
 //! | `throughput` | how fast a restyle runs, recorded rather than asserted |
@@ -17,6 +18,8 @@ mod support;
 mod animation;
 #[path = "restyle/damage.rs"]
 mod damage;
+#[path = "restyle/fill.rs"]
+mod fill;
 #[path = "restyle/moved.rs"]
 mod moved;
 #[path = "restyle/pass.rs"]

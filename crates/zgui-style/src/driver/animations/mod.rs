@@ -14,9 +14,11 @@
 //! | Module | Contents |
 //! |---|---|
 //! | [`set`] | the animations a document is running, and the clock they are read at |
+//! | [`fill`] | finished animations that fill forwards, kept in the table across a traversal |
 //! | [`tick`] | advancing them one frame, and the lifecycle edges that produces |
 //! | [`sample`] | what one element's animations currently evaluate to |
 
+pub(crate) mod fill;
 pub mod sample;
 pub mod set;
 pub mod tick;

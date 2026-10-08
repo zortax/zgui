@@ -24,7 +24,7 @@ use style::traversal::DomTraversal;
 use style::traversal_flags::TraversalFlags;
 use zgui_dom::{Document, Node};
 
-use crate::driver::animations::AnimationTime;
+use crate::driver::animations::{AnimationTime, fill};
 use crate::driver::traversal::{RecalcStyle, Restyled};
 use crate::engine::guards;
 
@@ -150,6 +150,7 @@ pub(crate) fn run_pass(
     });
 
     let read = lock.read();
+    let table = animations.clone();
     let context = context::build(
         stylist,
         guards::guards(&read),
@@ -169,6 +170,9 @@ pub(crate) fn run_pass(
         return (Vec::new(), 0, false, start.elapsed());
     }
 
+    // The traversal styles each element against the table it drops a finished animation from,
+    // so the animations that fill forwards are held running for its length.
+    let held = fill::hold(&table);
     let traverser = RecalcStyle::new(context);
     // A worker that panics leaves per-element bookkeeping in a state no later traversal can
     // interpret, and the worker that panicked holds nothing anyone can inspect, so the document is
@@ -177,6 +181,7 @@ pub(crate) fn run_pass(
         .guarded(|| style::driver::traverse_dom(&traverser, token, pool))
         .expect("the document is not poisoned");
     let (records, workers) = traverser.finish();
+    held.release(&table, now.seconds());
     drop(read);
     (records, workers, true, start.elapsed())
 }
