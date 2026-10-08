@@ -40,6 +40,11 @@ use crate::overlay::{Delayed, OverlayState};
 /// # }
 /// ```
 ///
+/// # Pointer
+///
+/// Resting on it opens the submenu after [`OPEN_DELAY`](crate::menu::sub::OPEN_DELAY). A press
+/// opens it at once, and a press on an open one keeps it open.
+///
 /// # Why leaving it does not always close the submenu
 ///
 /// The path from this item to the submenu crosses the items below it, because that is the shape of
@@ -133,6 +138,8 @@ pub fn MenuSubTrigger(
 
     let enter_opening = opening.clone();
     let enter_closing = closing.clone();
+    let press_opening = opening.clone();
+    let press_closing = closing.clone();
     let own = Attrs::new()
         .class_toggle(zgui::view::ClassName::new("zui-menu__item"), true)
         .class_toggle(zgui::view::ClassName::new("zui-menu__item--inset"), inset)
@@ -162,6 +169,15 @@ pub fn MenuSubTrigger(
                 }
                 node.focus();
                 enter_opening.after(OPEN_DELAY, move || state.open());
+            },
+            on:click = move |_| {
+                // A press opens the submenu at once and keeps it open, as Enter does.
+                if disabled.get_untracked() {
+                    return;
+                }
+                press_opening.cancel();
+                press_closing.cancel();
+                state.open();
             },
             on:pointer_move = on_move,
             on:pointer_leave = on_leave,

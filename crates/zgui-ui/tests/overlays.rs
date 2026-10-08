@@ -1013,6 +1013,49 @@ fn a_submenu_opens_on_the_right_arrow_and_closes_on_the_left_without_closing_the
 }
 
 #[test]
+fn a_press_on_a_submenu_trigger_opens_it_at_once_and_keeps_it_open() {
+    let harness = Harness::open();
+    harness.mount(|| {
+        view! {
+            DropdownMenu(default_open = true) {
+                DropdownMenuContent {
+                    MenuSub {
+                        MenuSubTrigger {"Export as"}
+                        MenuSubContent {MenuItem {"PDF"}}
+                    }
+                }
+            }
+        }
+    });
+    let trigger = every(&harness, "zui-menu__item")
+        .into_iter()
+        .find(|node| {
+            harness
+                .window
+                .dom
+                .tree()
+                .text_content(*node)
+                .starts_with("Export as")
+        })
+        .expect("the submenu's trigger");
+    assert!(find(&harness, "zui-menu--sub").is_none());
+
+    harness.click(trigger);
+    harness.window.frame();
+    expect(&harness, "zui-menu--sub");
+    assert_eq!(harness.semantics(trigger).expanded, Some(true));
+
+    harness.click(trigger);
+    harness.window.advance(Duration::from_millis(500));
+    settle(&harness);
+    assert!(
+        find(&harness, "zui-menu--sub").is_some(),
+        "a second press keeps the branch open"
+    );
+    assert!(find(&harness, "zui-menu").is_some(), "and the menu with it");
+}
+
+#[test]
 fn a_pointer_cutting_the_corner_toward_a_submenu_does_not_close_it() {
     // The safe corridor, driven rather than computed: the pointer leaves the trigger heading for
     // the submenu, and the submenu is still there afterwards.
