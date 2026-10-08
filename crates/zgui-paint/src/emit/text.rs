@@ -339,25 +339,12 @@ impl TextPlacement {
     /// per-channel coverage whatever the device can do, and a run off the pixel grid is resampled
     /// out of the grid its stripes were measured against.
     pub fn keeps_subpixel(&self, scene: &Scene) -> bool {
-        self.subpixel_capable && self.opaque_target && self.on_pixel_grid(scene)
-    }
-
-    /// Whether the run's matrix moves it by whole device pixels and does nothing else.
-    ///
-    /// Subpixel coverage is three side-by-side answers about thirds of one physical pixel, and it
-    /// survives only when the sprite lands on the pixels it was rasterised for. A turned, scaled or
-    /// fractionally moved run is resampled on its way to the surface, which smears the per-channel
-    /// stripes into coloured fringes, so it is drawn with whole-pixel coverage instead. A name the
-    /// frame no longer resolves answers no.
-    fn on_pixel_grid(&self, scene: &Scene) -> bool {
-        scene
-            .spatial
-            .resolve(self.transform)
-            .as_ref()
-            .and_then(zgui_geom::Matrix4::to_affine2)
-            .is_some_and(|affine| {
-                affine.is_translation() && affine.tx.fract() == 0.0 && affine.ty.fract() == 0.0
-            })
+        keeps_subpixel(
+            scene,
+            self.transform,
+            self.subpixel_capable,
+            self.opaque_target,
+        )
     }
 
     /// The two-dimensional transform in force, or the identity for one that leaves the plane.
@@ -381,6 +368,33 @@ impl TextPlacement {
             scale: self.scale,
         }
     }
+}
+
+/// Whether a run drawn through `transform` keeps per-channel coverage: the device can draw it
+/// (`capable`), the target it lands in is opaque (`opaque`), and the run sits on the pixel grid.
+///
+/// See [`TextPlacement::keeps_subpixel`] for why each of the three is needed.
+pub fn keeps_subpixel(scene: &Scene, transform: SpatialId, capable: bool, opaque: bool) -> bool {
+    capable && opaque && on_pixel_grid(scene, transform)
+}
+
+/// Whether the matrix `transform` resolves to moves a run by whole device pixels and does nothing
+/// else.
+///
+/// Subpixel coverage is three side-by-side answers about thirds of one physical pixel, and it
+/// survives only when the sprite lands on the pixels it was rasterised for. A turned, scaled or
+/// fractionally moved run is resampled on its way to the surface, which smears the per-channel
+/// stripes into coloured fringes, so it is drawn with whole-pixel coverage instead. A name the
+/// frame no longer resolves answers no.
+fn on_pixel_grid(scene: &Scene, transform: SpatialId) -> bool {
+    scene
+        .spatial
+        .resolve(transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2)
+        .is_some_and(|affine| {
+            affine.is_translation() && affine.tx.fract() == 0.0 && affine.ty.fract() == 0.0
+        })
 }
 
 /// What paints a run's glyphs.

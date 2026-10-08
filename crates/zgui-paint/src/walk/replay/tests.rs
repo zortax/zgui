@@ -50,7 +50,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         text_fill: 0,
         anim: 0,
         alpha: 1.0f32.to_bits(),
-        opaque: true,
+        subpixel: true,
         corners: 0,
         highlights: 0,
     }
@@ -220,11 +220,12 @@ fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
 }
 
 #[test]
-fn a_fragment_moved_into_a_transparent_target_is_encoded_again() {
-    // An ancestor that turns translucent and takes a target of its own leaves the folded alpha at
-    // one, so the opacity of the target is the only field that moves. A line encoded for an
-    // opaque target carries per-channel coverage, which a transparent target composites as
-    // nothing: replayed there, the line vanishes.
+fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
+    // A group target opened by a translucent ancestor, and a pan by a fraction of a pixel, each
+    // change whether a run keeps per-channel coverage and move no other field: the folded alpha
+    // stays one and the shape hash leaves the translation out. A line encoded for one answer
+    // and replayed under the other draws nothing on a transparent target, or coloured fringes
+    // off the grid.
     let mut cache = PaintCache::new();
     let mut scene = scene();
     let same = fragment(0.0, 0.0);
@@ -240,11 +241,11 @@ fn a_fragment_moved_into_a_transparent_target_is_encoded_again() {
         &NoResources,
     );
     scene.begin_frame(Size::new(256, 256));
-    let grouped = crate::walk::replay::Painted {
-        opaque: false,
+    let resampled = crate::walk::replay::Painted {
+        subpixel: false,
         ..painted(0)
     };
-    assert_eq!(cache.reuse(&scene, &same, grouped), Reuse::Encode);
+    assert_eq!(cache.reuse(&scene, &same, resampled), Reuse::Encode);
     assert_ne!(cache.reuse(&scene, &same, painted(0)), Reuse::Encode);
 }
 
