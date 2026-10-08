@@ -4,8 +4,8 @@
 //! two schemes — [`ColorTokens::border`](crate::ColorTokens) is a pale grey in one and a
 //! translucent white in the other, but it is *the border* in both, and a sheet says
 //! `var(--zui-color-border)` once. This group holds the handful of places where that is not true:
-//! where a control is filled in one scheme and unfilled in the other, or takes a different token
-//! entirely rather than a different value of the same one.
+//! where a control takes a different token in each scheme rather than a different value of the same
+//! one.
 //!
 //! # Why these are tokens rather than a media query
 //!
@@ -24,16 +24,6 @@ use crate::token::group::group;
 group! {
     /// The colours that differ between the schemes by more than a value.
     ControlTokens, prefix = "color-control", {
-        /// What a text field, a chooser or a checkbox is filled with at rest.
-        ///
-        /// Nothing in the light scheme — the field is the page, held in by its border. A dark
-        /// interface has too little contrast between a border and the surface behind it for that
-        /// to read, so the field is washed slightly lighter than what it sits on.
-        field => "field", light = "transparent",
-            dark = "color-mix(in oklab, var(--zui-color-input) 30%, transparent)";
-        /// The same, under the pointer.
-        field_hover => "field-hover", light = "transparent",
-            dark = "color-mix(in oklab, var(--zui-color-input) 50%, transparent)";
         /// The halo around a control the keyboard is on that has something wrong with it.
         ///
         /// Weaker than the ordinary focus ring in either scheme, and stronger in the dark one,
@@ -53,13 +43,8 @@ group! {
         /// The border of a control that carries one but no fill.
         outline_border => "outline-border", light = "var(--zui-color-border)",
             dark = "var(--zui-color-input)";
-        /// What that control is filled with.
-        ///
-        /// The page's own colour rather than nothing, so an outlined control keeps its own surface
-        /// when it is standing on a card or in a filled strip.
-        outline_fill => "outline-fill", light = "var(--zui-color-background)",
-            dark = "color-mix(in oklab, var(--zui-color-input) 30%, transparent)";
-        /// The same, under the pointer.
+        /// What that control is filled with under the pointer. At rest it has no fill: it takes
+        /// the tone of the surface it stands on.
         outline_hover => "outline-hover", light = "var(--zui-color-accent)",
             dark = "color-mix(in oklab, var(--zui-color-input) 50%, transparent)";
 

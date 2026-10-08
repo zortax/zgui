@@ -19,9 +19,8 @@ style! { pub RadioItemStyle =>
         flex: none;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-full);
-        background-color: var(--zui-color-control-field);
+        background-color: transparent;
         color: var(--zui-color-primary);
-        box-shadow: var(--zui-shadow-xs);
         outline: none;
         transition-property: color, box-shadow, border-color;
         transition-duration: var(--zui-motion-duration-normal);
@@ -29,14 +28,12 @@ style! { pub RadioItemStyle =>
     }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
 ":scope:invalid { border-color: var(--zui-color-destructive); }"
 ":scope:invalid:focus-visible {
         border-color: var(--zui-color-destructive);
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
 // The dot the reference draws is eight pixels across, and the disc glyph inks half its own box —

@@ -20,9 +20,8 @@ style! { pub CheckboxStyle =>
         flex: none;
         border: 1px solid var(--zui-color-input);
         border-radius: 4px;
-        background-color: var(--zui-color-control-field);
+        background-color: transparent;
         color: var(--zui-color-primary-foreground);
-        box-shadow: var(--zui-shadow-xs);
         outline: none;
         transition-property: box-shadow, background-color, border-color;
         transition-duration: var(--zui-motion-duration-normal);
@@ -36,14 +35,12 @@ style! { pub CheckboxStyle =>
     }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
 ":scope:invalid { border-color: var(--zui-color-destructive); }"
 ":scope:invalid:focus-visible {
         border-color: var(--zui-color-destructive);
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
 // The mark is drawn always and revealed by state, so ticking one does not build a subtree.
@@ -52,7 +49,6 @@ style! { pub CheckboxStyle =>
 ":scope > .zui-icon { grid-area: 1 / 1; opacity: 0; --zui-icon-size: 14px; }"
 ":scope:checked > .zui-checkbox__tick { opacity: 1; }"
 ":scope:indeterminate > .zui-checkbox__dash { opacity: 1; }"
-// Faintly filled on a dark page, where an unticked box drawn in a hairline alone is a box
-// nobody finds. The ticked fill is the same either way — it is the tint, and the tint is what
-// *ticked* means.
+// The ticked fill is the same in either scheme: it is the tint, and the tint is what *ticked*
+// means.
 }

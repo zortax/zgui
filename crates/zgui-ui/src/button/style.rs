@@ -4,9 +4,9 @@ use zgui::style;
 
 style! { pub ButtonStyle =>
 // The ring and the lift are two custom properties composed into one `box-shadow` rather than
-// one declaration each state overwrites. An outlined button carries a shadow at rest and grows
-// a focus ring on top of it; a single `box-shadow` would make those two mutually exclusive,
-// and whichever rule cascaded last would silently delete the other.
+// one declaration each state overwrites. A caller that raises a button grows a focus ring on top
+// of the lift; a single `box-shadow` would make those two mutually exclusive, and whichever rule
+// cascaded last would silently delete the other.
 ":scope {
         display: inline-flex;
         flex-direction: row;
@@ -131,10 +131,11 @@ style! { pub ButtonStyle =>
             var(--zui-color-control-ring-invalid);
     }"
 
+// An outlined button has no fill and no lift of its own: it takes the tone of the popover, the
+// card or the strip it stands on, and its border is what makes it a button. The pointer gives it
+// a tint.
 ":scope[data-variant=\"outline\"] {
         border-color: var(--zui-color-control-outline-border);
-        background-color: var(--zui-color-control-outline-fill);
-        --zui-button-lift: var(--zui-shadow-xs);
     }"
 ":scope[data-variant=\"outline\"]:hover {
         background-color: var(--zui-color-control-outline-hover);
@@ -177,7 +178,4 @@ style! { pub ButtonStyle =>
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
 
-// The dark scheme softens the two fills that would otherwise glare and gives the outlined
-// button a filled body instead of a bare one. It is behind the desktop's own setting, which is
-// the answer whenever the theme is left to follow it.
 }

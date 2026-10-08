@@ -21,8 +21,7 @@ style! { pub DatePickerStyle =>
         padding: 0 var(--zui-space-md);
         border: 1px solid var(--zui-color-border);
         border-radius: var(--zui-radius-md);
-        background-color: var(--zui-color-background);
-        box-shadow: var(--zui-shadow-xs);
+        background-color: transparent;
         color: var(--zui-color-foreground);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);

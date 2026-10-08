@@ -31,12 +31,11 @@ style! { pub InputOtpStyle =>
         height: 34px;
         border: 1px solid var(--zui-color-input);
         border-left-width: 0;
-        background-color: var(--zui-color-control-field);
+        background-color: transparent;
         color: var(--zui-color-foreground);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);
         line-height: var(--zui-type-leading-sm);
-        box-shadow: var(--zui-shadow-xs);
         outline: none;
         transition-property: box-shadow, border-color;
         transition-duration: var(--zui-motion-duration-normal);
@@ -58,13 +57,11 @@ style! { pub InputOtpStyle =>
 ":scope:focus .zui-otp__slot[data-active] {
         z-index: 1;
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
 ":scope:invalid .zui-otp__slot { border-color: var(--zui-color-destructive); }"
 ":scope:invalid:focus .zui-otp__slot[data-active] {
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 // A caret this component draws, unlike every other field here: there is no editing model behind
 // these boxes to draw one from, because the value is held whole and typed at from a key

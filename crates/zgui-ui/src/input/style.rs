@@ -9,15 +9,15 @@
 //!
 //! A focused field is marked twice: its border takes the ring colour, and a three-pixel band of the
 //! same colour at half strength is drawn just outside it. That band is a shadow rather than an
-//! outline, so that it stacks with the field's own lift instead of replacing it and so that it can
-//! be moved through — an outline arrives at full strength on the frame focus lands.
+//! outline, so that it can be moved through — an outline arrives at full strength on the frame
+//! focus lands.
 
 use zgui::style;
 
 style! { pub InputStyle =>
-// No fill of its own on a light page: the field is a hole in whatever it sits on, and its
-// border is what makes it a field. The dark scheme fills it faintly instead, because a hairline
-// border alone disappears against a dark surface.
+// No fill and no lift of its own in either scheme: the field is a hole in whatever it sits on, and
+// its border is what makes it a field. It takes the tone of the card, the popover or the strip it
+// stands on, so one field reads the same on every plane.
 ":scope {
         position: relative;
         display: flex;
@@ -30,12 +30,11 @@ style! { pub InputStyle =>
         padding: 4px 12px;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-md);
-        background-color: var(--zui-color-control-field);
+        background-color: transparent;
         color: var(--zui-color-foreground);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);
         line-height: var(--zui-type-leading-sm);
-        box-shadow: var(--zui-shadow-xs);
         outline: none;
         white-space: pre;
         transition-property: color, box-shadow, border-color;
@@ -44,8 +43,7 @@ style! { pub InputStyle =>
     }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
 // Wrong shows without focus — the border alone — and gains a ring of its own once focus
 // arrives, in the destructive colour rather than the neutral one. A wrong field wearing the
@@ -53,8 +51,7 @@ style! { pub InputStyle =>
 ":scope:invalid { border-color: var(--zui-color-destructive); }"
 ":scope:invalid:focus-visible {
         border-color: var(--zui-color-destructive);
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
 // `:empty` is *this field holds no text*, answered by the document itself: the element's only
@@ -84,12 +81,11 @@ style! { pub TextareaStyle =>
         padding: 8px 12px;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-md);
-        background-color: var(--zui-color-control-field);
+        background-color: transparent;
         color: var(--zui-color-foreground);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);
         line-height: var(--zui-type-leading-sm);
-        box-shadow: var(--zui-shadow-xs);
         outline: none;
         white-space: pre-wrap;
         transition-property: color, box-shadow, border-color;
@@ -98,14 +94,12 @@ style! { pub TextareaStyle =>
     }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
 ":scope:invalid { border-color: var(--zui-color-destructive); }"
 ":scope:invalid:focus-visible {
         border-color: var(--zui-color-destructive);
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
 ":scope:empty::before {

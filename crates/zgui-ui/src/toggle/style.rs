@@ -39,10 +39,7 @@ style! { pub ToggleStyle =>
         padding: 0 calc(var(--zui-space-base) * 2.5);
     }"
 
-    ":scope[data-variant=\"outline\"] {
-        border-color: var(--zui-color-input);
-        box-shadow: var(--zui-shadow-xs);
-    }"
+    ":scope[data-variant=\"outline\"] { border-color: var(--zui-color-input); }"
 
     // Off and hovered is the muted pair; on is the accent pair. The two are different colours on
     // purpose: a toggle that lit up under the pointer the same way it does when it is pressed

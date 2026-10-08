@@ -74,8 +74,4 @@ style! { pub ToggleGroupStyle =>
         > .zui-toggle-group__item[data-variant=\"outline\"]:first-child {
         border-top-width: 1px;
     }"
-    // The shadow the items gave up belongs to the strip instead, once rather than per item.
-    ":scope[data-spacing=\"0\"][data-variant=\"outline\"] {
-        box-shadow: var(--zui-shadow-xs);
-    }"
 }

@@ -20,8 +20,7 @@ style! { pub InputGroupStyle =>
         flex-wrap: wrap;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-md);
-        background-color: var(--zui-color-control-field);
-        box-shadow: var(--zui-shadow-xs);
+        background-color: transparent;
         outline: none;
         transition-property: color, box-shadow, border-color;
         transition-duration: var(--zui-motion-duration-normal);
@@ -32,13 +31,11 @@ style! { pub InputGroupStyle =>
 // that is.
 ":scope:focus-within {
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
 ":scope[data-invalid=\"true\"] {
         border-color: var(--zui-color-destructive);
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope[data-disabled=\"true\"] { opacity: 0.5; pointer-events: none; }"
 }
@@ -125,7 +122,7 @@ style! { pub InputGroupPartStyle =>
         border-color: transparent;
     }"
 // A group's own controls are smaller than a button in a page and carry no lift of their own,
-// because they sit inside a box that is already raised. The lift is cleared through the
+// because they sit inside the group's frame. The lift is cleared through the
 // button's own custom property rather than through `box-shadow`, which the same declaration
 // draws its focus ring with.
 ".zui-button.zui-input-group__button { --zui-button-lift: 0 0 transparent; }"
@@ -155,6 +152,4 @@ style! { pub InputGroupPartStyle =>
         padding: 0;
         border-radius: var(--zui-radius-md);
     }"
-// The group has the fill on a dark page, so the field inside it keeps none: two faint fills one
-// inside the other read as a box with a lighter box in it.
 }

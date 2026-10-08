@@ -17,13 +17,12 @@ style! { pub SelectStyle =>
         padding: 8px 12px;
         border: 1px solid var(--zui-color-input);
         border-radius: var(--zui-radius-md);
-        background-color: var(--zui-color-control-field);
+        background-color: transparent;
         color: var(--zui-color-foreground);
         font-family: var(--zui-type-family-sans);
         font-size: var(--zui-type-size-sm);
         line-height: var(--zui-type-leading-sm);
         white-space: nowrap;
-        box-shadow: var(--zui-shadow-xs);
         outline: none;
         transition-property: color, box-shadow, border-color;
         transition-duration: var(--zui-motion-duration-normal);
@@ -32,15 +31,12 @@ style! { pub SelectStyle =>
 ":scope[data-size=\"sm\"] { height: 30px; }"
 ":scope:focus-visible {
         border-color: var(--zui-color-ring);
-        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px color-mix(in oklab, var(--zui-color-ring) 50%, transparent);
     }"
-":scope:hover { background-color: var(--zui-color-control-field-hover); }"
 ":scope:invalid { border-color: var(--zui-color-destructive); }"
 ":scope:invalid:focus-visible {
         border-color: var(--zui-color-destructive);
-        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid),
-                    var(--zui-shadow-xs);
+        box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
 // The chevron sits still while the list opens. It marks *this control opens something*, which
