@@ -250,6 +250,42 @@ fn two_panels_share_the_group_out_between_them() {
 }
 
 #[test]
+fn a_panel_that_goes_gives_its_share_back() {
+    let harness = Harness::open();
+    let reading = RwSignal::new_local(true);
+    harness.mount(move || {
+        view! {
+            ResizablePanelGroup(label = "Split") {
+                ResizablePanel(default_size = 100.0, min_size = 20.0, label = "List") {
+                    text {"Inbox"}
+                }
+                Show(when = move || reading.get()) {
+                    ResizableHandle(label = "Resize")
+                    ResizablePanel(default_size = 100.0, min_size = 20.0, label = "Reading") {
+                        text {"Message"}
+                    }
+                }
+            }
+        }
+    });
+    let group = harness.only_child();
+    harness.window.place(group, 0.0, 0.0, 400.0, 300.0);
+    let list = all_with(&harness, "zui-resizable__panel")[0];
+    assert_eq!(
+        custom(&harness, list, "zui-panel-size").as_deref(),
+        Some("50.0000%")
+    );
+
+    reading.set(false);
+    harness.window.frame();
+    assert_eq!(
+        custom(&harness, list, "zui-panel-size").as_deref(),
+        Some("100.0000%"),
+        "the panel that stays fills the group again"
+    );
+}
+
+#[test]
 fn dragging_a_divider_takes_from_one_panel_and_gives_to_the_other() {
     let harness = Harness::open();
     let (handle, panels) = split(&harness);
