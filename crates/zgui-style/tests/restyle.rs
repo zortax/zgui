@@ -3,6 +3,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | `animation` | the second descent an animation that cannot repaint is serviced by |
+//! | `moved` | an element that moved between its animation mark and the restyle |
 //! | `scope` | the marks a restyle never turns into engine work |
 //! | `settling` | where a transition leaves the element's own style once it has finished |
 //! | `damage` | what each damage level the engine produces makes the frame owe |
@@ -16,6 +17,8 @@ mod support;
 mod animation;
 #[path = "restyle/damage.rs"]
 mod damage;
+#[path = "restyle/moved.rs"]
+mod moved;
 #[path = "restyle/pass.rs"]
 mod pass;
 #[path = "restyle/scope.rs"]

@@ -97,7 +97,7 @@ impl StyleEngine {
             // still outstanding. It runs before the ordinary passes, so what it computes is the
             // input the rest of the frame — including a descendant that inherits from it — is
             // styled and laid out against.
-            if std::mem::take(&mut self.animation_restyle_owed) {
+            if self.settle_animation_marks(document) {
                 let (records, workers, traversed, time) = driver::run_pass(
                     &mut self.stylist,
                     &self.lock,

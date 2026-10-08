@@ -28,6 +28,16 @@ pub fn raise_to_root(node: Node<'_>) {
     }
 }
 
+/// The element at the top of `node`'s chain of traversal parents: the root for a node in the
+/// document, the top of the fragment for a node taken out of it.
+pub fn top_of(node: Node<'_>) -> Option<zgui_dom::NodeIndex> {
+    let mut top = node.as_element()?;
+    while let Some(parent) = top.traversal_parent() {
+        top = parent;
+    }
+    Some(top.index())
+}
+
 /// Forgets that an animation-only restyle is pending below `element`.
 ///
 /// Called by the animation-only traversal on each element it has finished visiting, after the

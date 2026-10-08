@@ -67,12 +67,16 @@ pub struct StyleEngine {
     /// between two cascade results — and reads it, and because it has to survive the frame that
     /// created it.
     animations: Animations,
-    /// Whether some element is waiting for the animation-only traversal.
+    /// The elements marked for the animation-only traversal since the last restyle.
     ///
     /// The traversal that services those elements is a second, separate descent that no other
     /// input asks for, so a frame that would otherwise have nothing to do still has to run it —
     /// and a frame that has nothing waiting must not, because the descent is not free.
-    animation_restyle_owed: bool,
+    animation_marks: Vec<zgui_dom::NodeKey>,
+    /// Marked elements that were out of the document when a restyle ran.
+    ///
+    /// Each keeps its hint until a restyle finds it in the document again.
+    animation_waiting: Vec<zgui_dom::NodeKey>,
     /// The user-agent sheet, held so that it stays installed.
     _user_agent: SheetHandle,
 }
@@ -117,7 +121,8 @@ impl StyleEngine {
             root_metrics: stylist::RootMetrics::default(),
             text_paint_updates: Vec::new(),
             animations: Animations::new(),
-            animation_restyle_owed: false,
+            animation_marks: Vec::new(),
+            animation_waiting: Vec::new(),
             _user_agent: user_agent,
         }
     }
@@ -198,7 +203,7 @@ impl StyleEngine {
 
     /// Whether a restyle would do anything this frame.
     pub fn needs_restyle(&mut self, document: &Document) -> bool {
-        self.animation_restyle_owed
+        !self.animation_marks.is_empty()
             || driver::document_owes_restyle(document)
             || self.sheets_have_changed()
     }
