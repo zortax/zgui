@@ -45,10 +45,13 @@ pub(crate) fn hold(table: &DocumentAnimationSet) -> Held {
 }
 
 impl Held {
-    /// Finishes again every held animation that is still running and has ended at `now`.
+    /// Finishes again every held animation that is still running or that the traversal paused,
+    /// and that has ended at `now`. A paused one stays finished, so a later resume reports no
+    /// second end.
     ///
-    /// An animation the traversal cancelled, or one a new style moved away from its end, keeps the
-    /// state the traversal left it in, and the next tick reports what happens to it.
+    /// An animation the traversal cancelled goes from the table without a cancel, since it stood
+    /// after its end. One a new style moved away from its end keeps the state the traversal left it
+    /// in, and the next tick reports what happens to it.
     pub(crate) fn release(self, table: &DocumentAnimationSet, now: f64) {
         if self.rows.is_empty() {
             return;
@@ -58,11 +61,17 @@ impl Held {
             let Some(set) = sets.get_mut(&key) else {
                 continue;
             };
+            // A held animation had finished, so it stood after its end. One the traversal cancelled
+            // goes without a cancel: an animation after its end leaves no event behind.
+            set.animations.retain(|animation| {
+                !(animation.state == AnimationState::Canceled && names.contains(&animation.name))
+            });
             for animation in &mut set.animations {
-                if animation.state == AnimationState::Running
-                    && names.contains(&animation.name)
-                    && animation.has_ended(now)
-                {
+                let held = matches!(
+                    animation.state,
+                    AnimationState::Running | AnimationState::Paused(_)
+                );
+                if held && names.contains(&animation.name) && animation.has_ended(now) {
                     animation.state = AnimationState::Finished;
                 }
             }

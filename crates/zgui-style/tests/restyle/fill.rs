@@ -7,7 +7,7 @@
 
 use style::values::computed::Transform;
 use zgui_dom::NodeIndex;
-use zgui_style::AnimationTime;
+use zgui_style::{AnimationEdge, AnimationTime, Lifecycle};
 
 use crate::support::{Harness, animation_frame};
 
@@ -21,8 +21,14 @@ const LIGHT: &str = "root { display: block; --tone: rgb(250, 250, 250) }
                                 --place: translate(-50%, -50%);
                                 animation: enter 100ms linear both }
                      .surface.busy { color: rgb(1, 2, 3) }
+                     .surface.paused { animation-play-state: paused }
+                     .surface.other { animation: other 100ms linear both }
                      .reference { display: block;
                                   transform: translate(-50%, -50%) translate(0px, 0px) scale(1) }
+                     @keyframes other {
+                         from { opacity: 0 }
+                         to { opacity: 1 }
+                     }
                      @keyframes enter {
                          from { transform: var(--place, translate(0px, 0px)) translate(0px, 8px)
                                            scale(0.95) }
@@ -139,4 +145,61 @@ fn a_held_fill_reports_no_second_end_and_lets_the_loop_sleep() {
         "a finished fill asks the loop to come back for it: {:?}",
         report.elements
     );
+}
+
+/// The edges the animations of the document cross over the frames `frames`, as name and edge.
+fn edges(harness: &mut Harness, frames: std::ops::RangeInclusive<u32>) -> Vec<(String, Lifecycle)> {
+    let mut crossed = Vec::new();
+    for frame in frames {
+        let now = AnimationTime(f64::from(frame) * FRAME);
+        let report = harness.engine.animation_tick(&harness.document, now);
+        crossed.extend(
+            report
+                .edges
+                .iter()
+                .map(|edge: &AnimationEdge| (edge.name.clone(), edge.lifecycle)),
+        );
+        animation_frame(harness, f64::from(frame) * FRAME);
+    }
+    crossed
+}
+
+#[test]
+fn a_held_fill_that_a_restyle_pauses_ends_once_and_resumes_finished() {
+    let (mut harness, surface, reference) = settled();
+
+    harness.set_classes(surface, &["surface", "paused"]);
+    harness.frame();
+    harness.retire_all();
+    assert_eq!(edges(&mut harness, 17..=20), []);
+    assert_eq!(transform(&harness, surface), transform(&harness, reference));
+
+    harness.set_classes(surface, &["surface"]);
+    harness.frame();
+    harness.retire_all();
+    assert_eq!(
+        edges(&mut harness, 21..=30),
+        [],
+        "the resumed animation ended a second time"
+    );
+    assert_eq!(transform(&harness, surface), transform(&harness, reference));
+}
+
+#[test]
+fn a_new_animation_name_on_a_held_fill_runs_its_own_course_once() {
+    let (mut harness, surface, _reference) = settled();
+
+    harness.set_classes(surface, &["surface", "other"]);
+    harness.frame();
+    harness.retire_all();
+    let crossed = edges(&mut harness, 17..=40);
+    assert!(
+        crossed.iter().all(|(name, _)| name == "other"),
+        "the old animation crossed an edge again: {crossed:?}"
+    );
+    let ends = crossed
+        .iter()
+        .filter(|(_, lifecycle)| *lifecycle == Lifecycle::Ended)
+        .count();
+    assert_eq!(ends, 1, "the new animation ends once: {crossed:?}");
 }
