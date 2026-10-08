@@ -50,6 +50,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         text_fill: 0,
         anim: 0,
         alpha: 1.0f32.to_bits(),
+        opaque: true,
         corners: 0,
         highlights: 0,
     }
@@ -215,6 +216,35 @@ fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
         ..painted(0)
     };
     assert_eq!(cache.reuse(&scene, &same, squared), Reuse::Encode);
+    assert_ne!(cache.reuse(&scene, &same, painted(0)), Reuse::Encode);
+}
+
+#[test]
+fn a_fragment_moved_into_a_transparent_target_is_encoded_again() {
+    // An ancestor that turns translucent and takes a target of its own leaves the folded alpha at
+    // one, so the opacity of the target is the only field that moves. A line encoded for an
+    // opaque target carries per-channel coverage, which a transparent target composites as
+    // nothing: replayed there, the line vanishes.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let same = fragment(0.0, 0.0);
+    cache.encoded(
+        &mut scene,
+        &same,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    let grouped = crate::walk::replay::Painted {
+        opaque: false,
+        ..painted(0)
+    };
+    assert_eq!(cache.reuse(&scene, &same, grouped), Reuse::Encode);
     assert_ne!(cache.reuse(&scene, &same, painted(0)), Reuse::Encode);
 }
 

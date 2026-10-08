@@ -697,6 +697,7 @@ impl Pass<'_, '_> {
             text_fill: fill::signature(text_fill.as_ref()),
             anim,
             alpha: self.alpha().to_bits(),
+            opaque: self.opaque(),
             corners: corners::signature(crate::lower::border::radii_of(
                 &store.node(fragment.box_).style,
                 fragment.border_box,

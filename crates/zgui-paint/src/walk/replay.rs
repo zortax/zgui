@@ -138,6 +138,14 @@ pub struct Painted {
     /// not `Eq`. Two alphas that differ only in the sign of a zero compare unequal here, and the
     /// cost of that is one re-encoded fragment.
     pub alpha: u32,
+    /// Whether the target the fragment lands in is opaque.
+    ///
+    /// A run on an opaque target is drawn with per-channel coverage, and a run inside a group's
+    /// transparent target is drawn with one coverage for all three channels. A group opens over a
+    /// subtree when an ancestor turns translucent, and the alpha folded into the run stays one,
+    /// so nothing else in this record moves. Without it, a button that turns disabled replays its
+    /// per-channel label into the group target, and the target composites no label.
+    pub opaque: bool,
     /// A fingerprint of the corner radii the fragment was encoded with.
     ///
     /// The lowered style holds no radii, so a restyle that rounds or squares a corner and changes
