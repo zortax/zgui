@@ -10,6 +10,7 @@ pub mod anim;
 mod brushes;
 mod budget;
 pub mod caret;
+mod clicks;
 mod crossing;
 mod cursor;
 pub mod frame;
@@ -147,6 +148,8 @@ pub struct Window {
     hit: HitIndex,
     /// The hit index generation the stationary pointer was last re-tested against.
     rehit_seen: u64,
+    /// The last pointer activation, which a second one near it turns into a double click.
+    clicks: crate::window::clicks::ClickCount,
     /// The reusable buffers the fragment walk works in, warm across frames.
     diff_scratch: zgui_layout::fragment::diff::DiffScratch,
     /// Where each scroll container is scrolled to, and everything that moves one over time.
@@ -658,6 +661,7 @@ impl Window {
             layout,
             hit: HitIndex::new(),
             rehit_seen: 0,
+            clicks: crate::window::clicks::ClickCount::default(),
             diff_scratch: zgui_layout::fragment::diff::DiffScratch::default(),
             scroll,
             last_frame: None,

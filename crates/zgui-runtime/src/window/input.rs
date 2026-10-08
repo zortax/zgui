@@ -616,6 +616,28 @@ impl Window {
                     button,
                     timestamp,
                 );
+                // A second press of the pointer on the same element, soon and near, is a double
+                // click as well. A key that activates starts the count again.
+                let double = match event {
+                    SurfaceEvent::Pointer {
+                        event: pointer,
+                        timestamp: sent,
+                        ..
+                    } => self.clicks.note(node, *sent, pointer.position),
+                    _ => {
+                        self.clicks.forget();
+                        false
+                    }
+                };
+                if double {
+                    self.synthesize_pointer(
+                        zgui_view_dom::id::to_view(node),
+                        EventKind::DoubleClick,
+                        modifiers,
+                        button,
+                        timestamp,
+                    );
+                }
             }
             FrameworkDefault::Scroll {
                 container,
