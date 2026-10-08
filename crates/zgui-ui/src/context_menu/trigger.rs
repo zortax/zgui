@@ -7,6 +7,7 @@ use zgui::vocab::{HasPopup, PointerButton};
 use zgui::{component, view};
 
 use crate::context_menu::SHEET;
+use crate::context_menu::place::ContextMenuPlace;
 use crate::context_menu::style::ContextMenuStyle;
 use crate::overlay::OverlayState;
 
@@ -49,24 +50,14 @@ pub fn ContextMenuTrigger(
     let left = RwSignal::new_local(0.0f32);
     let top = RwSignal::new_local(0.0f32);
 
-    let ask = move |position: zgui::geom::Point<CssPx, zgui::geom::Css>| {
-        // The region's box is in device pixels and a pointer position is in CSS pixels, so one of
-        // them has to be converted — and getting that wrong is a menu that lands further from the
-        // pointer the higher the display's scale is.
-        //
-        // The *window's* box and not the region's own, for the same reason: a pointer reports where
-        // it is in the window, so subtracting where the region sits inside its parent leaves the
-        // difference between those two spaces in the answer — which is a menu that opens further
-        // from the pointer the deeper in the page the region is, and further still once anything
-        // has been scrolled.
-        let scale = area.scale();
-        let origin = area
-            .window_bounds()
-            .map_or((0.0, 0.0), |box_| (box_.origin.x.0, box_.origin.y.0));
-        left.set(position.x.0 - origin.0 / scale);
-        top.set(position.y.0 - origin.1 / scale);
-        state.open();
+    let place = ContextMenuPlace {
+        area,
+        left,
+        top,
+        state,
     };
+    provide_local_context(place);
+    let ask = move |position: zgui::geom::Point<CssPx, zgui::geom::Css>| place.open_at(position);
 
     let on_context_menu = handler(
         events::CONTEXT_MENU,

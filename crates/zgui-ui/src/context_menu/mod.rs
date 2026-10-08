@@ -1,10 +1,12 @@
 //! A menu that opens where the pointer asked for one.
 
 mod content;
+mod place;
 mod style;
 mod trigger;
 
 pub use crate::context_menu::content::{ContextMenuContent, ContextMenuContentProps};
+pub use crate::context_menu::place::ContextMenuPlace;
 pub use crate::context_menu::style::ContextMenuStyle;
 pub use crate::context_menu::trigger::{ContextMenuTrigger, ContextMenuTriggerProps};
 
@@ -52,9 +54,9 @@ pub(crate) const SHEET: &str = "zui-context-menu";
 /// # Keyboard
 ///
 /// Once it is open it is a menu like any other: the arrows walk it, typing jumps, <kbd>Escape</kbd>
-/// closes it and gives the caret back. Opening it from the keyboard is the platform's business
-/// rather than this component's, and a region whose actions are *only* reachable here is a region
-/// a keyboard user cannot use — so put them somewhere else as well.
+/// closes it and gives the caret back. Opening it from the keyboard is the region's business: the
+/// region names the point through [`ContextMenuPlace::open_at`]. A region whose actions are *only*
+/// reachable here is a region a keyboard user cannot use — so put them somewhere else as well.
 #[component]
 pub fn ContextMenu(
     /// Whether it is open, when the caller holds it.

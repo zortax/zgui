@@ -272,8 +272,8 @@ pub use crate::command::{
     CommandShortcutProps, CommandStyle,
 };
 pub use crate::context_menu::{
-    ContextMenu, ContextMenuContent, ContextMenuContentProps, ContextMenuProps, ContextMenuStyle,
-    ContextMenuTrigger, ContextMenuTriggerProps,
+    ContextMenu, ContextMenuContent, ContextMenuContentProps, ContextMenuPlace, ContextMenuProps,
+    ContextMenuStyle, ContextMenuTrigger, ContextMenuTriggerProps,
 };
 pub use crate::data_table::{
     CellOrder, CellText, Column, ColumnResizer, ColumnResizerProps, DataModel, DataTable,

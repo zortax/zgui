@@ -1127,6 +1127,46 @@ fn a_press_of_the_secondary_button_asks_for_a_context_menu_too() {
     assert!(find(&harness, "zui-menu").is_some());
 }
 
+/// A row inside a context menu region that hands out the place of the region's menu.
+#[component]
+fn PlacedRow(
+    /// Where the row puts the place.
+    held: std::rc::Rc<std::cell::Cell<Option<ContextMenuPlace>>>,
+) -> impl IntoView {
+    held.set(ContextMenuPlace::current());
+    view! { text {"A row"} }
+}
+
+#[test]
+fn a_region_opens_its_context_menu_at_a_point_it_names() {
+    // A key opens no menu by itself. The region names the item the keyboard is on, so the menu
+    // stands beside that item.
+    let harness = Harness::open();
+    let held = std::rc::Rc::new(std::cell::Cell::new(None));
+    let handed = std::rc::Rc::clone(&held);
+    harness.mount(move || {
+        let handed = std::rc::Rc::clone(&handed);
+        view! {
+            ContextMenu {
+                ContextMenuTrigger {PlacedRow(held = handed)}
+                ContextMenuContent {MenuItem {"Copy"}}
+            }
+        }
+    });
+    let area = harness.find("zui-context-menu__area");
+    harness.window.place(area, 40.0, 20.0, 400.0, 200.0);
+    assert!(find(&harness, "zui-menu").is_none());
+
+    let place = held.get().expect("the trigger provides its place");
+    place.open_at(Point::new(zgui::geom::CssPx(90.0), zgui::geom::CssPx(50.0)));
+    harness.window.frame();
+    assert!(find(&harness, "zui-menu").is_some());
+    let anchor = harness.find("zui-context-menu__anchor");
+    let tree = harness.window.dom.tree();
+    assert_eq!(tree.style_property(anchor, "left").as_deref(), Some("50px"));
+    assert_eq!(tree.style_property(anchor, "top").as_deref(), Some("30px"));
+}
+
 // ---- select, combobox, command --------------------------------------------------------------------
 
 /// A select over three currencies, one of which cannot be chosen.
