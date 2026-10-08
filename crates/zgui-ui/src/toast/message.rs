@@ -69,7 +69,30 @@ impl ToastKind {
     }
 }
 
-/// A button on a toast: what it says, and what pressing it does.
+/// What pressing a toast's action does to the thing the message is about.
+///
+/// A sheet selects on it through `data-tone` on `.zui-toast__action`.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, Default)]
+pub enum ToastActionTone {
+    /// An ordinary action: undo, retry, open.
+    #[default]
+    Default,
+    /// An action that destroys something, such as deleting what the message names.
+    Destructive,
+}
+
+impl ToastActionTone {
+    /// How this is written as an attribute value, which is what a style sheet selects on.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Destructive => "destructive",
+        }
+    }
+}
+
+/// A button on a toast: what it says, what pressing it does, and its tone.
 ///
 /// The work is held as a shared closure rather than as a callback prop, because the button belongs
 /// to the message and the message travels: it is written where something happened and read where the
@@ -80,6 +103,8 @@ pub struct ToastAction {
     label: String,
     /// What pressing it does.
     run: Rc<dyn Fn()>,
+    /// Whether pressing it destroys something.
+    tone: ToastActionTone,
 }
 
 impl ToastAction {
@@ -89,7 +114,21 @@ impl ToastAction {
         Self {
             label: label.into(),
             run: Rc::new(run),
+            tone: ToastActionTone::Default,
         }
+    }
+
+    /// The same button, in `tone`.
+    #[must_use]
+    pub const fn toned(mut self, tone: ToastActionTone) -> Self {
+        self.tone = tone;
+        self
+    }
+
+    /// Whether pressing it destroys something.
+    #[must_use]
+    pub const fn tone(&self) -> ToastActionTone {
+        self.tone
     }
 
     /// What the button says.
@@ -109,7 +148,7 @@ impl ToastAction {
 /// and there is no other answer a function has.
 impl PartialEq for ToastAction {
     fn eq(&self, other: &Self) -> bool {
-        self.label == other.label && Rc::ptr_eq(&self.run, &other.run)
+        self.label == other.label && self.tone == other.tone && Rc::ptr_eq(&self.run, &other.run)
     }
 }
 
@@ -120,6 +159,7 @@ impl fmt::Debug for ToastAction {
         formatter
             .debug_struct("ToastAction")
             .field("label", &self.label)
+            .field("tone", &self.tone)
             .finish_non_exhaustive()
     }
 }
@@ -204,6 +244,17 @@ impl Toast {
         self
     }
 
+    /// Adds the button that destroys what the message is about, in the destructive tone.
+    #[must_use]
+    pub fn destructive_action(
+        mut self,
+        label: impl Into<String>,
+        run: impl Fn() + 'static,
+    ) -> Self {
+        self.action = Some(ToastAction::new(label, run).toned(ToastActionTone::Destructive));
+        self
+    }
+
     /// Adds the button that puts the message away without doing anything.
     #[must_use]
     pub fn cancel(mut self, label: impl Into<String>, run: impl Fn() + 'static) -> Self {
@@ -250,7 +301,20 @@ impl Toast {
 
 #[cfg(test)]
 mod tests {
-    use super::{Toast, ToastKind};
+    use super::{Toast, ToastActionTone, ToastKind};
+
+    #[test]
+    fn an_action_is_ordinary_unless_it_destroys_something() {
+        let undo = Toast::new("Scaled").action("Undo", || {});
+        assert_eq!(
+            undo.action_button().map(|action| action.tone()),
+            Some(ToastActionTone::Default)
+        );
+        let delete = Toast::new("Left behind").destructive_action("Delete them", || {});
+        let tone = delete.action_button().map(|action| action.tone());
+        assert_eq!(tone, Some(ToastActionTone::Destructive));
+        assert_eq!(ToastActionTone::Destructive.name(), "destructive");
+    }
 
     #[test]
     fn only_an_error_interrupts() {

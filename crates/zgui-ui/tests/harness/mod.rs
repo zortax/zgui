@@ -82,6 +82,15 @@ impl Harness {
             .unwrap_or_else(|| panic!("nothing under the root carries `{class}`"))
     }
 
+    /// Every element under the root carrying `class`, in tree order.
+    pub fn find_all(&self, class: &str) -> Vec<NodeId> {
+        let name = zgui::view::ClassName::new(class);
+        self.all()
+            .into_iter()
+            .filter(|node| self.window.dom.tree().classes(*node).contains(&name))
+            .collect()
+    }
+
     /// What an element means to an accessibility tree.
     ///
     /// # Panics

@@ -204,8 +204,8 @@ pub use crate::tabs::{
 };
 pub use crate::textarea::{Textarea, TextareaProps};
 pub use crate::toast::{
-    Toast, ToastAction, ToastCorner, ToastItem, ToastItemProps, ToastKind, ToastQueue, Toaster,
-    ToasterProps, use_toaster,
+    Toast, ToastAction, ToastActionTone, ToastCorner, ToastItem, ToastItemProps, ToastKind,
+    ToastQueue, Toaster, ToasterProps, use_toaster,
 };
 pub use crate::toggle::{Toggle, ToggleProps, ToggleSize, ToggleVariant};
 pub use crate::tooltip::{

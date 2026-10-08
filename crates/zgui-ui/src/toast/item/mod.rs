@@ -231,9 +231,11 @@ pub fn ToastItem(
     // because the message is written where something happened and read where the stack is drawn.
     let action = toast.action_button().cloned().map(|button| {
         let label = button.label().to_owned();
+        let tone = button.tone().name();
         AnyView::new(view! {
             control(
                 class = "zui-toast__action",
+                attr:data-tone = Some(tone.to_owned()),
                 tabindex = {Focus::Sequential},
                 on:click = move |_| {
                     button.run();

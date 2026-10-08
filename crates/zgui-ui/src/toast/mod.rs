@@ -6,7 +6,7 @@ mod queue;
 mod style;
 
 pub use crate::toast::item::{ToastItem, ToastItemProps};
-pub use crate::toast::message::{Toast, ToastAction, ToastKind};
+pub use crate::toast::message::{Toast, ToastAction, ToastActionTone, ToastKind};
 pub use crate::toast::queue::{Queued, ToastId, ToastQueue};
 pub use crate::toast::style::ToastStyle;
 

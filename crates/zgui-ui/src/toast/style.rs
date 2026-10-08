@@ -212,6 +212,12 @@ style! { pub ToastStyle =>
         background-color: var(--zui-color-popover-foreground);
         color: var(--zui-color-popover);
     }"
+    // An action that destroys something takes the destructive fill, with the word in white as on a
+    // destructive button.
+    ".zui-toast__action[data-tone=\"destructive\"] {
+        background-color: var(--zui-color-control-destructive-fill);
+        color: #ffffff;
+    }"
     ".zui-toast__cancel {
         background-color: color-mix(in oklab, var(--zui-color-foreground) 8%, transparent);
         color: var(--zui-color-popover-foreground);
