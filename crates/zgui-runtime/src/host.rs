@@ -635,14 +635,18 @@ impl ViewHost for RuntimeHost {
 
     fn pop_focus_trap(&self, id: FocusTrapId) {
         self.entering.borrow_mut().forget(id);
-        let removed = self
-            .traps
-            .borrow_mut()
-            .pop(zgui_input::FocusTrapId::new(id.get()));
+        let (removed, topmost) = {
+            let mut traps = self.traps.borrow_mut();
+            let id = zgui_input::FocusTrapId::new(id.get());
+            let topmost = traps.is_topmost(id);
+            (traps.pop(id), topmost)
+        };
         let Some(trap) = removed else {
             return;
         };
-        if !trap.options.restore {
+        // A trap under a newer one leaves focus where the newer one holds it, and hands it the
+        // place it restores to.
+        if !trap.options.restore || !topmost {
             return;
         }
         // Focus goes back to whatever opened the dialog. Dropping it instead leaves the whole

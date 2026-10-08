@@ -139,9 +139,24 @@ impl FocusTraps {
     /// Removing one that is not the topmost is allowed and leaves the rest of the stack in place:
     /// two overlays can be dismissed in either order, and refusing the unusual one would leave a
     /// window that cannot be tabbed out of again.
+    ///
+    /// A trap that is not the topmost gives the place it restores to to the trap installed right
+    /// after it, which took focus from inside it. When that trap goes, focus returns to where it
+    /// was before either of them, since the element it took focus from may be gone.
     pub fn pop(&mut self, id: FocusTrapId) -> Option<Trap> {
         let position = self.stack.iter().position(|trap| trap.id == id)?;
-        Some(self.stack.remove(position))
+        let removed = self.stack.remove(position);
+        if removed.options.restore
+            && let Some(above) = self.stack.get_mut(position)
+        {
+            above.restore_to = removed.restore_to;
+        }
+        Some(removed)
+    }
+
+    /// Whether the trap named `id` is the one in force.
+    pub fn is_topmost(&self, id: FocusTrapId) -> bool {
+        self.topmost().is_some_and(|trap| trap.id == id)
     }
 
     /// The trap in force, which is the most recently installed one.
@@ -335,6 +350,23 @@ mod tests {
         assert!(traps.pop(outer).is_some());
         assert_eq!(traps.topmost().map(|trap| trap.id), Some(top));
         assert!(traps.pop(outer).is_none(), "and a name is never reused");
+    }
+
+    #[test]
+    fn a_trap_that_goes_under_a_newer_one_hands_its_return_to_it() {
+        // A dialog whose answer opens a second dialog goes while the second one stands. The
+        // second one took focus from inside the first, which is gone; it gives focus back to
+        // where the first one came from.
+        let (_document, [root, first, inner, second]) = document();
+        let mut traps = FocusTraps::default();
+        let outer = traps.push(first, TrapOptions::MODAL, Some(root));
+        let top = traps.push(second, TrapOptions::MODAL, Some(inner));
+        assert!(!traps.is_topmost(outer));
+        assert!(traps.is_topmost(top));
+
+        traps.pop(outer);
+        let removed = traps.pop(top).expect("it was installed");
+        assert_eq!(removed.restore_to, Some(root));
     }
 
     #[test]

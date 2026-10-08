@@ -36,6 +36,10 @@ struct Script {
     dialog: NodeRef,
     /// The three controls inside it, in document order.
     inside: [NodeRef; 3],
+    /// A second dialog, which the answer of the first one opens.
+    later: NodeRef,
+    /// The one control inside the second dialog.
+    fourth: NodeRef,
     /// The installed trap, shared with the handler that dismisses it.
     guard: Rc<RefCell<Option<FocusTrap>>>,
 }
@@ -75,6 +79,8 @@ impl Script {
             "second"
         } else if at == self.inside[2].get() {
             "third"
+        } else if at == self.fourth.get() {
+            "fourth"
         } else if at.is_none() {
             "nothing"
         } else {
@@ -88,6 +94,7 @@ fn scripted() -> Script {
     let trigger = NodeRef::new();
     let dialog = NodeRef::new();
     let inside = [NodeRef::new(), NodeRef::new(), NodeRef::new()];
+    let (later, fourth) = (NodeRef::new(), NodeRef::new());
     let guard: Rc<RefCell<Option<FocusTrap>>> = Rc::new(RefCell::new(None));
 
     let dismisser = Rc::clone(&guard);
@@ -116,6 +123,11 @@ fn scripted() -> Script {
                         .child(zgui_elements::control().node_ref(inside[1]))
                         .child(zgui_elements::control().node_ref(inside[2])),
                 )
+                .child(
+                    zgui_elements::column()
+                        .node_ref(later)
+                        .child(zgui_elements::control().node_ref(fourth)),
+                )
                 .into_view()
                 .build(cx),
         )
@@ -126,6 +138,8 @@ fn scripted() -> Script {
         trigger,
         dialog,
         inside,
+        later,
+        fourth,
         guard,
     }
 }
@@ -195,4 +209,34 @@ fn tab_never_leaves_the_trap_shift_tab_wraps_backwards_and_escape_restores_focus
         "trigger",
         "and traversal crosses back out of the dialog, which a live trap would have refused"
     );
+}
+
+#[test]
+fn a_dialog_that_goes_under_a_newer_one_leaves_it_the_keyboard() {
+    // The answer of the first dialog opens the second one, and the first one finishes going only
+    // after the second one stands. The second one keeps the keyboard; once it goes too, focus is
+    // back where the first one came from.
+    let mut script = scripted();
+    script.harness.settle(8);
+    script.press(NamedKey::Tab, KeyCode::Tab, Modifiers::NONE);
+    assert_eq!(script.where_focus_is(), "trigger");
+
+    *script.guard.borrow_mut() = script.dialog.trap_focus(FocusTrapOptions::MODAL);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "first");
+    let second = script.later.trap_focus(FocusTrapOptions::MODAL);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "fourth");
+
+    script.guard.borrow_mut().take();
+    script.harness.settle(8);
+    assert_eq!(
+        script.where_focus_is(),
+        "fourth",
+        "the dialog underneath took the keyboard back from the one in force"
+    );
+
+    drop(second);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "trigger");
 }
