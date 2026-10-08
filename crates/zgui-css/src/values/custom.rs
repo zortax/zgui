@@ -163,7 +163,7 @@ fn parse_color(text: &str) -> Option<style::values::specified::Color> {
 }
 
 /// The base a colour's URL-valued components would resolve against, of which a colour has none.
-fn url_data() -> style::stylesheets::UrlExtraData {
+pub(crate) fn url_data() -> style::stylesheets::UrlExtraData {
     use core::str::FromStr;
     fn parsed<T: FromStr>(text: &str) -> T
     where

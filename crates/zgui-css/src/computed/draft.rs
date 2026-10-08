@@ -10,7 +10,10 @@
 //! no rules, so the values written into it must already be computed ones.
 
 use servo_arc::Arc as ServoArc;
-use style::properties::{ComputedValues, style_structs};
+use style::Atom;
+use style::custom_properties::VariableValue;
+use style::properties::{ComputedValues, ComputedValuesInner, style_structs};
+use style::properties_and_values::value::ComputedValue as ComputedRegisteredValue;
 use zgui_geom::CssPx;
 
 use crate::computed::style::ComputedStyle;
@@ -97,6 +100,56 @@ impl StyleDraft {
         self
     }
 
+    /// Declares the inheriting custom property `--name` with the value `value`, as written.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value` is no custom property value at all, such as an unbalanced bracket.
+    pub fn with_custom_property(mut self, name: &str, value: &str) -> Self {
+        let mut input = cssparser::ParserInput::new(value);
+        let mut parser = cssparser::Parser::new(&mut input);
+        let parsed = VariableValue::parse(&mut parser, None, &crate::values::custom::url_data())
+            .expect("a custom property value");
+        let mut custom = self.values.custom_properties().clone();
+        custom.inherited.insert(
+            &Atom::from(name),
+            ComputedRegisteredValue::universal(servo_arc::Arc::new(parsed)),
+        );
+        let held: &ComputedValuesInner = &self.values;
+        let values = ComputedValues::new(
+            None,
+            custom,
+            Default::default(),
+            held.writing_mode,
+            held.effective_zoom,
+            held.flags,
+            None,
+            None,
+            held.clone_background(),
+            held.clone_border(),
+            held.clone_box(),
+            held.clone_column(),
+            held.clone_counters(),
+            held.clone_effects(),
+            held.clone_font(),
+            held.clone_inherited_box(),
+            held.clone_inherited_table(),
+            held.clone_inherited_text(),
+            held.clone_inherited_ui(),
+            held.clone_list(),
+            held.clone_margin(),
+            held.clone_outline(),
+            held.clone_padding(),
+            held.clone_position(),
+            held.clone_svg(),
+            held.clone_table(),
+            held.clone_text(),
+            held.clone_ui(),
+        );
+        self.values = (*values).clone();
+        self
+    }
+
     /// Finishes the draft.
     pub fn build(mut self) -> ComputedStyle {
         self.values.mutate_font().compute_font_hash();
@@ -115,4 +168,21 @@ fn initial_font() -> style_structs::Font {
     let mut font = style_structs::Font::initial_values();
     font.compute_font_hash();
     font
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StyleDraft;
+
+    #[test]
+    fn a_draft_declares_a_custom_property_a_reader_finds() {
+        let style = StyleDraft::initial()
+            .with_custom_property("syntax-keyword", "rgb(255, 0, 0)")
+            .build();
+        assert_eq!(
+            crate::values::custom::text(&style, "syntax-keyword"),
+            Some("rgb(255, 0, 0)")
+        );
+        assert!(crate::values::custom::color(&style, "syntax-keyword").is_some());
+    }
 }
