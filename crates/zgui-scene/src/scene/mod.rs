@@ -9,6 +9,7 @@ pub(crate) mod live;
 pub mod ordering;
 pub mod primitives;
 pub mod resolve;
+pub mod run;
 
 #[cfg(test)]
 mod tests;
@@ -159,6 +160,8 @@ pub struct Scene {
     /// where the chunk now sits is a question. Set and taken once per push, so nothing can leak
     /// past the primitive it was reserved for.
     pub(crate) replay_order: Option<DrawOrder>,
+    /// The orders of the run being pushed, while [`Scene::begin_run`] has one open.
+    run: Option<crate::scene::run::RunOrders>,
     /// Every order a layer forced this frame, so a check knows which classes it does not own.
     forced_orders: Vec<DrawOrder>,
     /// Where the nth marker of each direction sits in [`Primitives::groups`].
@@ -279,6 +282,7 @@ impl Scene {
             capture: None,
             capture_order: BoundsTree::new(),
             replay_order: None,
+            run: None,
             checking: crate::invariant::enabled(),
             remap: Remap::default(),
             provenance: Default::default(),
@@ -335,6 +339,7 @@ impl Scene {
         // clears them once a draw has retired its damage.
         self.order.clear();
         self.layer_stack.clear();
+        self.run = None;
         self.forced_orders.clear();
         self.markers.clear();
         self.pass_plan.clear();

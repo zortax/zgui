@@ -248,32 +248,47 @@ impl ScenePainter<'_> {
 
         let color = self.faded(color);
         let format = crate::content::glyphs::format_of(style);
-        for glyph in &placed {
-            let landed = match format {
+        let transform = self.transform.index();
+        let sprites: Vec<GlyphSprite> = placed
+            .iter()
+            .map(|glyph| match format {
                 // A colour glyph is a picture rather than a coverage mask, so it carries its own
                 // colours and is not tinted.
                 GlyphFormat::Color => {
                     let mut sprite =
                         ColorSprite::new(glyph.bounds, glyph.resource).clipped(self.clip);
-                    sprite.transform = self.transform.index();
+                    sprite.transform = transform;
                     sprite.opacity = color.alpha();
-                    self.scene.push_color_sprite(sprite).is_some()
+                    GlyphSprite::Color(sprite)
                 }
                 GlyphFormat::Subpixel => {
                     let mut sprite =
                         SubpixelSprite::new(glyph.bounds, glyph.resource, color).clipped(self.clip);
-                    sprite.transform = self.transform.index();
-                    self.scene.push_subpixel_sprite(sprite).is_some()
+                    sprite.transform = transform;
+                    GlyphSprite::Subpixel(sprite)
                 }
                 GlyphFormat::Mono => {
                     let mut sprite =
                         MonoSprite::new(glyph.bounds, glyph.resource, color).clipped(self.clip);
-                    sprite.transform = self.transform.index();
-                    self.scene.push_mono_sprite(sprite).is_some()
+                    sprite.transform = transform;
+                    GlyphSprite::Mono(sprite)
                 }
+            })
+            .collect();
+
+        // The glyphs of one run sit side by side in one colour, so the scene orders them as one
+        // group: one question to its tree for the run rather than one per glyph.
+        let inks: Vec<Rect<DevicePx, Device>> = sprites.iter().map(GlyphSprite::ink).collect();
+        self.scene.begin_run(&inks, self.clip, transform);
+        for sprite in sprites {
+            let landed = match sprite {
+                GlyphSprite::Color(sprite) => self.scene.push_color_sprite(sprite),
+                GlyphSprite::Subpixel(sprite) => self.scene.push_subpixel_sprite(sprite),
+                GlyphSprite::Mono(sprite) => self.scene.push_mono_sprite(sprite),
             };
-            self.pushed += usize::from(landed);
+            self.pushed += usize::from(landed.is_some());
         }
+        self.scene.end_run();
     }
 
     /// A path convenience over [`ScenePainter::shape`]: fills `path` with one colour.
@@ -311,6 +326,39 @@ impl ScenePainter<'_> {
         self.pushed += usize::from(self.scene.push_quad(quad).is_some());
     }
 }
+
+/// One glyph of a run, built before the run is pushed.
+enum GlyphSprite {
+    /// A colour glyph.
+    Color(ColorSprite),
+    /// A glyph with per-channel coverage.
+    Subpixel(SubpixelSprite),
+    /// A glyph with one coverage channel.
+    Mono(MonoSprite),
+}
+
+impl GlyphSprite {
+    /// The rectangle the glyph paints.
+    fn ink(&self) -> Rect<DevicePx, Device> {
+        match self {
+            Self::Color(sprite) => sprite.ink(),
+            Self::Subpixel(sprite) => sprite.ink(),
+            Self::Mono(sprite) => sprite.ink(),
+        }
+    }
+}
+
+/// Uniform corner radii in the shape quads carry them.
+fn corners(radius: f32) -> Corners<Vec2<DevicePx>> {
+    let corner = Vec2::new(DevicePx(radius), DevicePx(radius));
+    Corners {
+        top_left: corner,
+        top_right: corner,
+        bottom_left: corner,
+        bottom_right: corner,
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -534,16 +582,5 @@ mod tests {
 
         assert_eq!(painter.pushed, 0);
         assert!(scene.primitives.mono_sprites.is_empty());
-    }
-}
-
-/// Uniform corner radii in the shape quads carry them.
-fn corners(radius: f32) -> Corners<Vec2<DevicePx>> {
-    let corner = Vec2::new(DevicePx(radius), DevicePx(radius));
-    Corners {
-        top_left: corner,
-        top_right: corner,
-        bottom_left: corner,
-        bottom_right: corner,
     }
 }

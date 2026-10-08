@@ -31,7 +31,10 @@ macro_rules! tee {
             let space = $space;
             let checking = $self.checking;
             let placed = $self.on_device($slot, $ink);
-            let order = $self.capture_order.insert(placed);
+            let order = match $self.run_capture_order() {
+                Some(order) => order,
+                None => $self.capture_order.insert(placed),
+            };
             if let Some(capture) = &mut $self.capture {
                 let at = capture.$lane.len() as u32;
                 capture.ops.push(PaintOp::new(PrimitiveKind::$kind, at));
@@ -464,6 +467,7 @@ impl Scene {
         clip: ClipId,
         space: u32,
     ) -> Option<DrawOrder> {
+        let from_run = self.run_order();
         let admitted = self.clips.bounds_in(clip, space);
         let Some(clipped) = ink.intersection(admitted) else {
             counter::bump(Counter::PrimitivesCulled);
@@ -481,7 +485,7 @@ impl Scene {
             // A replay carries the order this primitive already had among its chunk's, moved to
             // wherever the chunk as a whole now sits. Asking the tree again per primitive
             // rediscovers an order that did not change.
-            None => match self.replay_order.take() {
+            None => match self.replay_order.take().or(from_run) {
                 Some(order) => order,
                 None => {
                     let placed = self.on_device(space, clipped);
