@@ -7,9 +7,9 @@
 //! overlaps, and each glyph takes the block's base plus its local order. This is the rule a
 //! replayed chunk already follows, applied to content that is painted fresh.
 //!
-//! The result is coarse in the safe direction only. A glyph can come out higher than a query of
-//! its own would have placed it, never lower, and two glyphs that overlap never share an order, so
-//! the invariant the batching leans on holds.
+//! The result errs upward only: a glyph may take a higher order than a query of its own would give
+//! it, and two glyphs that overlap take distinct orders, so the invariant the batching leans on
+//! holds.
 
 use zgui_geom::{Device, DevicePx, Rect};
 
@@ -25,13 +25,24 @@ pub(crate) struct RunOrders {
     capture: Option<DrawOrder>,
     /// Each primitive's order among the run's own, counting from one.
     local: Vec<DrawOrder>,
+    /// The rectangles the run was opened over, which the pushes have to match.
+    inks: Vec<Rect<DevicePx, Device>>,
     /// How many primitives of the run were pushed so far.
     next: usize,
 }
 
 impl RunOrders {
-    /// The frame order of the primitive about to be pushed, and a step to the next one.
-    fn step(&mut self) -> Option<DrawOrder> {
+    /// The frame order of the primitive of rectangle `ink` about to be pushed, and a step to the
+    /// next one.
+    fn step(&mut self, ink: Rect<DevicePx, Device>) -> Option<DrawOrder> {
+        debug_assert!(
+            self.inks
+                .get(self.next)
+                .is_none_or(|expected| *expected == ink),
+            "push {} of a run paints {ink:?}, and the run was opened over {:?}",
+            self.next,
+            self.inks.get(self.next)
+        );
         let local = self.local.get(self.next).copied();
         self.next += 1;
         Some(self.frame? + local? - 1)
@@ -49,17 +60,15 @@ impl Scene {
     /// `inks` are the primitives' rectangles in pushing order, `clip` and `space` the clip and the
     /// coordinate system all of them are pushed under. The pushes that follow must be those
     /// primitives, in that order; [`Scene::end_run`] closes the run. A push past the end of the
-    /// run, or a run whose rectangles do not advance from left to right, is ordered one primitive
-    /// at a time as before.
+    /// run, and every push of a run whose rectangles do not advance from left to right, asks the
+    /// tree for its own order.
     pub fn begin_run(&mut self, inks: &[Rect<DevicePx, Device>], clip: ClipId, space: u32) {
         self.run = None;
         if inks.len() < 2 {
             return;
         }
-        let placed: Vec<Rect<DevicePx, Device>> = inks
-            .iter()
-            .map(|ink| self.on_device(space, *ink))
-            .collect();
+        let placed: Vec<Rect<DevicePx, Device>> =
+            inks.iter().map(|ink| self.on_device(space, *ink)).collect();
         let Some(local) = local_orders(&placed) else {
             return;
         };
@@ -87,6 +96,7 @@ impl Scene {
             frame,
             capture,
             local,
+            inks: inks.to_vec(),
             next: 0,
         });
     }
@@ -96,11 +106,12 @@ impl Scene {
         self.run = None;
     }
 
-    /// The frame order the run holds for the primitive being pushed now, and a step past it.
+    /// The frame order the run holds for the primitive of rectangle `ink` being pushed now, and a
+    /// step past it.
     ///
     /// Called once per push, culled or not, so the run's count stays with its primitives.
-    pub(crate) fn run_order(&mut self) -> Option<DrawOrder> {
-        self.run.as_mut().and_then(RunOrders::step)
+    pub(crate) fn run_order(&mut self, ink: Rect<DevicePx, Device>) -> Option<DrawOrder> {
+        self.run.as_mut().and_then(|run| run.step(ink))
     }
 
     /// The capture order the run holds for the primitive being pushed now.
@@ -214,7 +225,11 @@ mod tests {
         let caret = scene.push_quad(Quad::filled(rect(31.0, 1.0), fill));
         assert_eq!(caret, Some(3), "the run's leaf carries its highest order");
         let elsewhere = scene.push_quad(Quad::filled(rect(200.0, 10.0), fill));
-        assert_eq!(elsewhere, Some(1), "content beside the run keeps the low order");
+        assert_eq!(
+            elsewhere,
+            Some(1),
+            "content beside the run keeps the low order"
+        );
     }
 
     #[test]
@@ -229,7 +244,11 @@ mod tests {
         );
         assert_eq!(orders, [Some(1), None, None]);
         let after = scene.push_quad(Quad::filled(rect(40.0, 10.0), fill));
-        assert_eq!(after, Some(1), "nothing past the run takes one of its orders");
+        assert_eq!(
+            after,
+            Some(1),
+            "nothing past the run takes one of its orders"
+        );
     }
 
     #[test]
@@ -264,13 +283,23 @@ mod tests {
 
     #[test]
     fn a_rectangle_sorts_above_every_earlier_one_it_overlaps() {
-        let placed = [rect(0.0, 10.0), rect(8.0, 10.0), rect(16.0, 10.0), rect(30.0, 4.0)];
+        let placed = [
+            rect(0.0, 10.0),
+            rect(8.0, 10.0),
+            rect(16.0, 10.0),
+            rect(30.0, 4.0),
+        ];
         assert_eq!(local_orders(&placed), Some(vec![1, 2, 3, 1]));
     }
 
     #[test]
     fn a_wide_rectangle_is_reached_past_its_narrow_neighbours() {
-        let placed = [rect(0.0, 40.0), rect(10.0, 2.0), rect(20.0, 2.0), rect(30.0, 2.0)];
+        let placed = [
+            rect(0.0, 40.0),
+            rect(10.0, 2.0),
+            rect(20.0, 2.0),
+            rect(30.0, 2.0),
+        ];
         assert_eq!(local_orders(&placed), Some(vec![1, 2, 2, 2]));
     }
 
@@ -278,5 +307,99 @@ mod tests {
     fn a_run_that_steps_back_is_no_run() {
         let placed = [rect(10.0, 8.0), rect(0.0, 8.0)];
         assert_eq!(local_orders(&placed), None);
+    }
+
+    #[test]
+    fn a_run_in_a_capture_carries_its_local_orders_into_the_replay() {
+        use zgui_bits::DamageSet;
+
+        use crate::scene::chunk::ChunkPrims;
+
+        let (mut scene, fill) = scene();
+        scene.begin_chunk_capture(ChunkPrims::default());
+        let pushed = run(
+            &mut scene,
+            fill,
+            &[rect(0.0, 10.0), rect(8.0, 10.0), rect(30.0, 4.0)],
+            ClipId::ROOT,
+        );
+        let chunk = scene.take_chunk_capture();
+        assert_eq!(pushed, [Some(1), Some(2), Some(1)]);
+        assert_eq!(
+            chunk.orders,
+            vec![1, 2, 1],
+            "the capture keeps the run's own orders"
+        );
+        scene.finish(&DamageSet::full());
+
+        scene.begin_frame(Size::new(400, 400));
+        scene.push_quad(Quad::filled(rect(0.0, 50.0), fill));
+        scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)), 0);
+        let replayed: Vec<_> = scene.primitives.quads[1..]
+            .iter()
+            .map(|quad| quad.order)
+            .collect();
+        assert_eq!(
+            replayed,
+            vec![2, 3, 2],
+            "the replay stands above the quad under it"
+        );
+        assert_eq!(scene.order_overlaps().map(|found| found.len()), Ok(0));
+    }
+
+    #[test]
+    fn a_run_in_a_layer_takes_the_layers_order_and_files_nothing() {
+        let (mut scene, fill) = scene();
+        scene.push_layer(9);
+        let pushed = run(
+            &mut scene,
+            fill,
+            &[rect(0.0, 10.0), rect(8.0, 10.0)],
+            ClipId::ROOT,
+        );
+        scene.pop_layer();
+        assert_eq!(pushed, [Some(9), Some(9)]);
+        assert!(scene.order.is_empty(), "a layer asks the tree nothing");
+    }
+
+    #[test]
+    fn a_run_in_a_moved_space_is_ordered_where_it_is_drawn() {
+        use zgui_geom::Matrix4;
+
+        use crate::spatial::{OwnSpace, PropertyOwner};
+
+        let (mut scene, fill) = scene();
+        let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+        let viewport = scene.spatial.viewport();
+        let moved = scene.spatial.space_of(
+            viewport,
+            owner,
+            OwnSpace::of(Some(Matrix4::translation(100.0, 0.0, 0.0)), None, false),
+        );
+        // Drawn at 100..130 on the device, over a quad that stands there already.
+        scene.push_quad(Quad::filled(rect(100.0, 30.0), fill));
+        let rects = [rect(0.0, 10.0), rect(20.0, 10.0)];
+        scene.begin_run(&rects, ClipId::ROOT, moved.index());
+        let pushed: Vec<_> = rects
+            .iter()
+            .map(|placed| {
+                let mut quad = Quad::filled(*placed, fill);
+                quad.transform = moved.index();
+                scene.push_quad(quad)
+            })
+            .collect();
+        scene.end_run();
+        assert_eq!(pushed, [Some(2), Some(2)]);
+        assert_eq!(scene.order_overlaps().map(|found| found.len()), Ok(0));
+    }
+
+    #[test]
+    fn a_run_leaves_no_two_overlapping_primitives_at_one_order() {
+        let (mut scene, fill) = scene();
+        scene.push_quad(Quad::filled(rect(0.0, 200.0), fill));
+        let rects: Vec<_> = (0..30).map(|at| rect(at as f32 * 6.0, 8.0)).collect();
+        run(&mut scene, fill, &rects, ClipId::ROOT);
+        scene.push_quad(Quad::filled(rect(50.0, 4.0), fill));
+        assert_eq!(scene.order_overlaps().map(|found| found.len()), Ok(0));
     }
 }

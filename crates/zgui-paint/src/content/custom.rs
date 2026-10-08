@@ -277,7 +277,7 @@ impl ScenePainter<'_> {
             .collect();
 
         // The glyphs of one run sit side by side in one colour, so the scene orders them as one
-        // group: one question to its tree for the run rather than one per glyph.
+        // group: one question to its tree for the whole run.
         let inks: Vec<Rect<DevicePx, Device>> = sprites.iter().map(GlyphSprite::ink).collect();
         self.scene.begin_run(&inks, self.clip, transform);
         for sprite in sprites {
@@ -358,7 +358,6 @@ fn corners(radius: f32) -> Corners<Vec2<DevicePx>> {
         bottom_right: corner,
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -582,5 +581,43 @@ mod tests {
 
         assert_eq!(painter.pushed, 0);
         assert!(scene.primitives.mono_sprites.is_empty());
+    }
+
+    #[test]
+    fn a_run_of_glyphs_stands_above_its_band_at_one_order_without_overlaps() {
+        let mut scene = Scene::new();
+        scene.begin_frame(zgui_geom::Size::new(400, 400));
+        let band = scene.paints.solid(Color::srgb(0.2, 0.2, 0.2, 1.0));
+        scene.push_quad(zgui_scene::Quad::filled(
+            Rect::new(
+                Point::new(DevicePx(0.0), DevicePx(0.0)),
+                Size::new(DevicePx(200.0), DevicePx(60.0)),
+            ),
+            zgui_scene::PaintRef::solid(band),
+        ));
+        let placements = FixedTiles {
+            tiles: 4,
+            ..FixedTiles::default()
+        };
+        let mut painter = painter(&mut scene, &placements, false, 1.0);
+        painter.clip = ClipId::ROOT;
+        painter.glyphs(
+            &run(false),
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Color::srgb(1.0, 1.0, 1.0, 1.0),
+        );
+
+        let orders: Vec<_> = scene
+            .primitives
+            .mono_sprites
+            .iter()
+            .map(|sprite| sprite.order)
+            .collect();
+        assert_eq!(
+            orders,
+            [2, 2, 2, 2],
+            "the run stands above the band, side by side"
+        );
+        assert_eq!(scene.order_overlaps().map(|found| found.len()), Ok(0));
     }
 }

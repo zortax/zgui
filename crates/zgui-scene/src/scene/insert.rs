@@ -467,7 +467,7 @@ impl Scene {
         clip: ClipId,
         space: u32,
     ) -> Option<DrawOrder> {
-        let from_run = self.run_order();
+        let from_run = self.run_order(ink);
         let admitted = self.clips.bounds_in(clip, space);
         let Some(clipped) = ink.intersection(admitted) else {
             counter::bump(Counter::PrimitivesCulled);
