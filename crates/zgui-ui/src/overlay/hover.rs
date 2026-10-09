@@ -55,10 +55,22 @@ impl Handoff {
         use_local_context::<Self>()
     }
 
+    /// The surface that opened last, while its scope still stands.
+    ///
+    /// A trigger that went away — a row a list unmounted — takes its surface with it, and nothing
+    /// tells the group; its signals are simply gone.
+    fn last(self) -> Option<Showing> {
+        let last = self.showing.try_get_value().flatten()?;
+        if last.instant.try_get_untracked().is_none() {
+            self.showing.try_set_value(None);
+            return None;
+        }
+        Some(last)
+    }
+
     /// Whether a surface other than `id` is showing.
     fn another_showing(self, id: u64) -> bool {
-        self.showing
-            .get_value()
+        self.last()
             .is_some_and(|other| other.id != id && other.state.is_open_untracked())
     }
 
@@ -68,7 +80,7 @@ impl Handoff {
     /// ordinary case when the pointer leaves one trigger before it reaches the next: its exit is
     /// cut short too.
     fn take_over(self, next: Showing) {
-        if let Some(other) = self.showing.get_value()
+        if let Some(other) = self.last()
             && other.id != next.id
         {
             other.instant.set(true);
@@ -76,7 +88,7 @@ impl Handoff {
                 other.state.close();
             }
         }
-        self.showing.set_value(Some(next));
+        self.showing.try_set_value(Some(next));
     }
 }
 

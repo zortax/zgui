@@ -592,6 +592,52 @@ fn a_tooltip_costs_one_timer_and_appears_only_once_the_delay_has_run_out() {
 }
 
 #[test]
+fn a_tooltip_hands_over_after_the_one_showing_has_gone_with_its_trigger() {
+    // The group remembers the surface that opened last. A list that re-renders takes that
+    // surface's trigger away, and the next tooltip to open must find nothing to hand over from
+    // rather than reach into a scope that is gone.
+    let harness = Harness::open();
+    let first = RwSignal::new(true);
+    harness.mount(move || {
+        view! {
+            TooltipProvider(delay = Duration::ZERO, close_delay = Duration::ZERO) {
+                if move || first.get() {
+                    Tooltip {
+                        TooltipTrigger {Button {"A"}}
+                        TooltipContent {"Alpha"}
+                    }
+                } else {}
+                Tooltip {
+                    TooltipTrigger {Button {"B"}}
+                    TooltipContent {"Beta"}
+                }
+            }
+        }
+    });
+    let triggers = harness.find_all("zui-tooltip__trigger");
+    point_at(&harness, triggers[0], EventKind::PointerEnter, 0.0, 0.0);
+    assert!(
+        find(&harness, "zui-tooltip").is_some(),
+        "the first one opened"
+    );
+
+    first.set(false);
+    harness.window.frame();
+    let triggers = harness.find_all("zui-tooltip__trigger");
+    assert_eq!(triggers.len(), 1, "the first trigger went away");
+    point_at(&harness, triggers[0], EventKind::PointerEnter, 0.0, 0.0);
+    assert!(
+        harness
+            .window
+            .dom
+            .tree()
+            .text_content(expect(&harness, "zui-tooltip"))
+            .contains("Beta"),
+        "the second one opened"
+    );
+}
+
+#[test]
 fn a_pointer_that_leaves_before_the_delay_runs_out_raises_no_tooltip_at_all() {
     let harness = Harness::open();
     harness.mount(|| {
