@@ -731,6 +731,11 @@ impl Window {
     pub(crate) fn maintain(&mut self, timestamp: zgui_vocab::Timestamp) {
         self.maintenance_due = None;
         self.renderer.release_idle_resources();
+        // The release gave back the chunks the renderer held resident, and a chunk is made
+        // resident again only when it is noted. Content that never encodes again would otherwise
+        // be uploaded afresh by every frame that draws it, for the rest of the window's life; noted
+        // here, the next drawn frame makes the whole cache resident in one pass.
+        self.painter.renote_chunks(&mut self.scene);
         let mut cx = crate::embed::EmbedMaintenanceCx {
             renderer: &mut *self.renderer,
             content: &mut self.content,
