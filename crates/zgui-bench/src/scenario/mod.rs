@@ -1,13 +1,13 @@
-//! The six end-to-end scenarios, and the ratchet around them.
+//! The seven end-to-end scenarios, and the ratchet around them.
 //!
 //! A scenario is one interaction driven over one document, and everything it reports carries a
-//! [`Band`](band::Band). The gate runs all six, compares every number against its band and fails
+//! [`Band`](band::Band). The gate runs all seven, compares every number against its band and fails
 //! on the first that is outside — so "performance is good" stops being a claim somebody made once
 //! and becomes a thing the definition of done re-establishes on every run.
 //!
 //! # Why each scenario is its own process
 //!
-//! Two of the six would be measuring something else otherwise. **Cold start** is only cold once:
+//! Two of the seven would be measuring something else otherwise. **Cold start** is only cold once:
 //! the second application built on a thread finds the font stack enumerated, the interned names
 //! populated and the process's own pages faulted in, so a cold start measured after any other
 //! scenario is a warm one wearing the name. And every scenario mounts an application through
@@ -29,16 +29,18 @@ use crate::scenario::band::{Measurement, Pace};
 pub(crate) use crate::scenario::record::write;
 
 mod kitchen;
+mod shell;
 mod thread;
 
 /// Every scenario, in the order a report lists them.
-pub(crate) const ALL: [&str; 6] = [
+pub(crate) const ALL: [&str; 7] = [
     "idle",
     "hover-storm",
     "scroll",
     "cold-start",
     "kitchen-sink",
     "thread-resize",
+    "app-shell",
 ];
 
 /// What one scenario measured.
@@ -149,6 +151,7 @@ pub(crate) fn run(name: &str) -> Outcome {
         "cold-start" => cold::run(),
         "kitchen-sink" => kitchen::run(),
         "thread-resize" => thread::run(),
+        "app-shell" => shell::run(),
         other => panic!("unknown scenario `{other}`; one of {ALL:?}"),
     }
 }
