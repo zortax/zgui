@@ -4,6 +4,10 @@ use rustc_hash::FxHashSet;
 use zgui_dom::{Document, NodeIndex, NodeKind};
 
 use crate::boxtree::build::Owed;
+use crate::boxtree::classify::classify;
+use crate::boxtree::patch::subtree::place;
+use crate::style::convert::display::Participation;
+use crate::tree::store::LayoutStore;
 
 /// How many *containers* are worth splicing one at a time.
 ///
@@ -72,6 +76,64 @@ pub(super) fn containers(document: &Document, owed: &Owed) -> Option<Vec<NodeInd
         return None;
     }
     Some(outermost)
+}
+
+/// The containers a splice can stand on: each one in `containers`, or the box-generating element
+/// that stands in for it.
+///
+/// A container with no element box of its own cannot be spliced, because a splice replaces that
+/// box. A `display: contents` container gives its children to the nearest ancestor that generates
+/// a box, so that ancestor is rebuilt in its place. A container under `display: none` generates
+/// nothing below it, so it owes nothing and is dropped.
+///
+/// The answer keeps the outermost containers only, because two containers can meet at one
+/// ancestor.
+///
+/// `None` when a container has no box-generating ancestor below the document node.
+pub(super) fn with_boxes(
+    store: &LayoutStore,
+    document: &Document,
+    containers: Vec<NodeIndex>,
+) -> Option<Vec<NodeIndex>> {
+    if containers
+        .iter()
+        .all(|&node| place::primary_box(store, document, node).is_some())
+    {
+        return Some(containers);
+    }
+    let core = document.store();
+    let mut set: FxHashSet<NodeIndex> = FxHashSet::default();
+    'containers: for node in containers {
+        let mut current = node;
+        loop {
+            if place::primary_box(store, document, current).is_some() {
+                set.insert(current);
+                continue 'containers;
+            }
+            if generates_nothing(document, current) {
+                continue 'containers;
+            }
+            let parent = core.core(current).parent()?;
+            if core.core(parent).kind() != NodeKind::Element {
+                return None;
+            }
+            current = parent;
+        }
+    }
+    Some(
+        set.iter()
+            .copied()
+            .filter(|&node| !has_ancestor_in(document, node, &set))
+            .collect(),
+    )
+}
+
+/// Whether `node` is `display: none`, so that nothing at or below it generates a box.
+fn generates_nothing(document: &Document, node: NodeIndex) -> bool {
+    document
+        .node(node)
+        .primary_style()
+        .is_some_and(|style| classify(&style).participation == Participation::None)
 }
 
 /// Whether `container`'s own child list is among what it owes.

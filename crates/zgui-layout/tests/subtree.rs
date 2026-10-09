@@ -335,3 +335,140 @@ fn the_root_element_has_no_container_to_splice_it_into() {
         "the root element's container is the document node, which generates no box"
     );
 }
+
+/// A panel beside a band that holds its content through a `display: contents` wrapper.
+///
+/// The shape of an overlay layer: the wrapper carries behaviour and an inherited custom property,
+/// and generates no box, so whatever is mounted under it hangs under the band's box.
+fn band_with_wrapper(css: &str) -> Fixture {
+    Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("panel").children(vec![Element::new("second").text("two")]),
+            Element::new("band").children(vec![
+                Element::new("wrapper").children(vec![Element::new("first").text("one")]),
+            ]),
+        ]),
+        css,
+    )
+}
+
+#[test]
+fn a_child_mounted_under_a_wrapper_with_no_box_rebuilds_the_box_that_holds_it() {
+    let mut recording = Recording::begin();
+    let mut fixture = band_with_wrapper(
+        "root { display: block; width: 400px; position: relative }
+         panel, first, second { display: block }
+         band { display: block; position: absolute; inset: 0 }
+         wrapper { display: contents }",
+    );
+    let mut store = fixture.box_tree();
+    let untouched = boxes(&store, &fixture, "panel");
+    let root = store.root().expect("the fixture generates a tree");
+
+    let wrapper = element(&fixture, "wrapper");
+    fixture.edit_and_restyle(|edit| {
+        let child = edit.create_element(zgui_interned::ElementName::new("first"));
+        let text = edit.create_text("three");
+        edit.insert_before(child, text, None);
+        edit.insert_before(wrapper, child, None);
+    });
+
+    let owed = Owed {
+        rebuilt: Vec::new(),
+        children: vec![wrapper],
+    };
+    let spliced = recording.measure(|| {
+        let done = patch::rebuild(&mut store, &fixture.document, &owed)
+            .expect("the band that holds the wrapper's children is confined");
+        assert_eq!(done.subtrees, 1, "one box-generating ancestor was rebuilt");
+    });
+    let band = boxes(&store, &fixture, "band")
+        .first()
+        .copied()
+        .expect("`band` generates a box");
+    assert_eq!(
+        spliced.get(Counter::BoxesRebuilt),
+        under(&store, band),
+        "the splice built something other than the band's own subtree"
+    );
+    assert_eq!(
+        boxes(&store, &fixture, "panel"),
+        untouched,
+        "a panel beside the band was given new boxes for a child mounted in the band"
+    );
+    assert_eq!(
+        store.root(),
+        Some(root),
+        "the document's root box was replaced"
+    );
+    assert_eq!(
+        shape(&to_text(&store)),
+        shape(&to_text(&fixture.box_tree())),
+        "the spliced tree does not hold the child mounted under the wrapper"
+    );
+}
+
+#[test]
+fn a_child_removed_from_under_a_wrapper_with_no_box_leaves_the_tree_a_build_produces() {
+    let _recording = Recording::begin();
+    let mut fixture = band_with_wrapper(
+        "root { display: block; width: 400px; position: relative }
+         panel, first, second { display: block }
+         band { display: block; position: absolute; inset: 0 }
+         wrapper { display: contents }",
+    );
+    let mut store = fixture.box_tree();
+    let untouched = boxes(&store, &fixture, "panel");
+
+    let wrapper = element(&fixture, "wrapper");
+    let first = element(&fixture, "first");
+    fixture.edit_and_restyle(|edit| edit.remove(first));
+
+    let owed = Owed {
+        rebuilt: Vec::new(),
+        children: vec![wrapper],
+    };
+    patch::rebuild(&mut store, &fixture.document, &owed)
+        .expect("removing a child from under the wrapper is confined to the band");
+    assert_eq!(boxes(&store, &fixture, "panel"), untouched);
+    assert_eq!(
+        shape(&to_text(&store)),
+        shape(&to_text(&fixture.box_tree())),
+        "the spliced tree still holds the child that was removed"
+    );
+}
+
+#[test]
+fn a_child_mounted_under_an_element_that_is_not_displayed_owes_no_boxes() {
+    let mut recording = Recording::begin();
+    let mut fixture = band_with_wrapper(
+        "root { display: block; width: 400px }
+         panel, band, first, second { display: block }
+         wrapper { display: none }",
+    );
+    let mut store = fixture.box_tree();
+    let before = shape(&to_text(&store));
+
+    let wrapper = element(&fixture, "wrapper");
+    fixture.edit_and_restyle(|edit| {
+        let child = edit.create_element(zgui_interned::ElementName::new("first"));
+        edit.insert_before(wrapper, child, None);
+    });
+
+    let owed = Owed {
+        rebuilt: Vec::new(),
+        children: vec![wrapper],
+    };
+    let spliced = recording.measure(|| {
+        let done = patch::rebuild(&mut store, &fixture.document, &owed)
+            .expect("a change nothing generates boxes for is local");
+        assert_eq!(done.subtrees, 0, "nothing was rebuilt");
+    });
+    assert_eq!(spliced.get(Counter::BoxesRebuilt), 0);
+    assert_eq!(shape(&to_text(&store)), before);
+    assert_eq!(
+        before,
+        shape(&to_text(&fixture.box_tree())),
+        "the tree a build produces differs, so something under `display: none` generates a box"
+    );
+}

@@ -69,6 +69,7 @@ pub struct Rebuilt {
 /// Panics if `owed` names a node that is not live in `document`.
 pub fn rebuild(store: &mut LayoutStore, document: &Document, owed: &Owed) -> Option<Rebuilt> {
     let targets = target::containers(document, owed)?;
+    let targets = target::with_boxes(store, document, targets)?;
     let mut done = Rebuilt::default();
     for target in targets {
         // A container whose child list moved is asked the narrower question first: make the boxes of

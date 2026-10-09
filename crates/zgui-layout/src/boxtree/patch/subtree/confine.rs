@@ -29,16 +29,19 @@ pub(super) struct Held {
 /// parent inside the subtree, or something out there is holding a name that is about to be removed.
 ///
 /// **Nothing outside is written inside.** Every box in the subtree that names an element must name
-/// `target` or an element below it, or an absolutely positioned box written somewhere else has been
-/// positioned into this subtree and is about to be destroyed with it.
+/// `target`, an element below it or an element that has left the document, or an absolutely
+/// positioned box written somewhere else has been positioned into this subtree and is about to be
+/// destroyed with it.
 pub(super) fn confined(
     store: &LayoutStore,
     document: &Document,
     target: NodeIndex,
     old: BoxKey,
 ) -> Option<Held> {
+    // An element that has left the document is admitted too: its boxes go with the subtree, and
+    // nothing the document still reaches can name them.
     proved(store, document, old, &|index| {
-        target::is_at_or_below(document, index, target)
+        target::is_at_or_below(document, index, target) || gone(document, index)
     })
 }
 

@@ -217,22 +217,26 @@ fn a_pane_holding_a_run_of_text_beside_its_rows_is_rebuilt_whole() {
          cell { display: block }",
     );
     let mut store = fixture.box_tree();
-    let before = shape(&to_text(&store));
+    let scroller = boxes(&store, &fixture, "scroller");
     let pane = shift(&mut fixture, "row0", "row8");
-    assert!(
-        patch::rebuild(&mut store, &fixture.document, &owes_children(pane)).is_none(),
-        "a row was spliced into a container whose anonymous boxes it re-breaks"
+    // The narrow path declines, and the pane is made again whole: the change stays inside it.
+    let done = patch::rebuild(&mut store, &fixture.document, &owes_children(pane))
+        .expect("the pane's own subtree is confined");
+    assert_eq!(done.subtrees, 1, "the pane was not rebuilt as one subtree");
+    assert_eq!(
+        boxes(&store, &fixture, "scroller"),
+        scroller,
+        "the scroller was given new boxes for a change inside the pane"
     );
     assert_eq!(
         shape(&to_text(&store)),
-        before,
-        "a refused splice left the tree changed, so the build that follows it starts from a tree \
-         that is neither the old one nor the new one"
+        shape(&to_text(&fixture.box_tree())),
+        "the rebuilt pane is not the pane a build produces"
     );
 }
 
 #[test]
-fn a_row_that_arrives_inline_level_is_refused_rather_than_left_unwrapped() {
+fn a_row_that_arrives_inline_level_rebuilds_its_pane_rather_than_staying_unwrapped() {
     let _recording = Recording::begin();
     // An inline-level child of a block container is swept into an anonymous inline box with whatever
     // inline siblings it has. The rows already in the pane carry no mark, so a splice that put this
@@ -253,21 +257,26 @@ fn a_row_that_arrives_inline_level_is_refused_rather_than_left_unwrapped() {
          cell { display: block }",
     );
     let mut store = fixture.box_tree();
-    let before = shape(&to_text(&store));
+    let scroller = boxes(&store, &fixture, "scroller");
     let pane = shift(&mut fixture, "row0", "row8");
-    assert!(
-        patch::rebuild(&mut store, &fixture.document, &owes_children(pane)).is_none(),
-        "an inline-level row was spliced in beside blocks with no anonymous box around it"
+    // The narrow path declines, and the pane is made again whole: the change stays inside it.
+    let done = patch::rebuild(&mut store, &fixture.document, &owes_children(pane))
+        .expect("the pane's own subtree is confined");
+    assert_eq!(done.subtrees, 1, "the pane was not rebuilt as one subtree");
+    assert_eq!(
+        boxes(&store, &fixture, "scroller"),
+        scroller,
+        "the scroller was given new boxes for a change inside the pane"
     );
     assert_eq!(
         shape(&to_text(&store)),
-        before,
-        "a refused splice left the tree changed"
+        shape(&to_text(&fixture.box_tree())),
+        "the rebuilt pane is not the pane a build produces"
     );
 }
 
 #[test]
-fn a_row_whose_children_take_its_place_is_refused_rather_than_dropped() {
+fn a_row_whose_children_take_its_place_rebuilds_its_pane_rather_than_being_dropped() {
     let _recording = Recording::begin();
     // `display: contents` puts the arriving row's *cell* into the pane's child list and the row
     // itself nowhere. One child is then not one box, which is the correspondence the narrow path
@@ -288,16 +297,21 @@ fn a_row_whose_children_take_its_place_is_refused_rather_than_dropped() {
          cell { display: block }",
     );
     let mut store = fixture.box_tree();
-    let before = shape(&to_text(&store));
+    let scroller = boxes(&store, &fixture, "scroller");
     let pane = shift(&mut fixture, "row0", "row8");
-    assert!(
-        patch::rebuild(&mut store, &fixture.document, &owes_children(pane)).is_none(),
-        "a row whose children take its place was spliced in as one box of its own"
+    // The narrow path declines, and the pane is made again whole: the change stays inside it.
+    let done = patch::rebuild(&mut store, &fixture.document, &owes_children(pane))
+        .expect("the pane's own subtree is confined");
+    assert_eq!(done.subtrees, 1, "the pane was not rebuilt as one subtree");
+    assert_eq!(
+        boxes(&store, &fixture, "scroller"),
+        scroller,
+        "the scroller was given new boxes for a change inside the pane"
     );
     assert_eq!(
         shape(&to_text(&store)),
-        before,
-        "a refused splice left the tree changed"
+        shape(&to_text(&fixture.box_tree())),
+        "the rebuilt pane is not the pane a build produces"
     );
 }
 
