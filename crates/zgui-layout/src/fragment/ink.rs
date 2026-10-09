@@ -190,6 +190,63 @@ fn outline_extent(
     }))
 }
 
+/// How far from an edge that moved a box's own painting changes, when a change of size changes
+/// nothing else about it.
+///
+/// That holds for a box that paints a uniform fill, a border and corners whose radii stay the same
+/// at both sizes: away from its edges it paints the same pixels however large it is, so a resize
+/// owes only strips along the edges that moved, this wide on either side of them. `None` for
+/// anything whose painting depends on the size elsewhere — an image or a gradient, a shadow, an
+/// outline, a filter, a blend, a framework shape or shader, or content that is not the box's own
+/// background. A scroll container's bars are pieces of their own and owe their own damage.
+pub fn edge_reach(
+    style: &ComputedStyle,
+    painted: crate::node::kind::PaintedContent,
+    was: Rect<DevicePx, Device>,
+    is: Rect<DevicePx, Device>,
+    border: Edges<DevicePx>,
+    scale: f32,
+) -> Option<f32> {
+    if painted != crate::node::kind::PaintedContent::Box || filter::reads_outside(style, scale) {
+        return None;
+    }
+    let background = style.get_background();
+    let effects = style.get_effects();
+    let outline = style.get_outline();
+    let plain = background
+        .background_image
+        .0
+        .iter()
+        .all(|image| matches!(image, ImageValue::None))
+        && effects.box_shadow.0.is_empty()
+        && effects.mix_blend_mode == zgui_css::values::effect::MixBlendModeValue::Normal
+        && (outline.outline_style == OutlineStyleValue::none()
+            || outline.outline_width.0.to_f32_px() == 0.0)
+        && zgui_css::values::custom::WILDCARD_DECLARERS
+            .iter()
+            .all(|name| zgui_css::values::custom::text(style, name).is_none());
+    if !plain {
+        return None;
+    }
+    let before = crate::fragment::clip::radii(style, was, scale);
+    let after = crate::fragment::clip::radii(style, is, scale);
+    if before != after {
+        return None;
+    }
+    let widest = [
+        after.top_left,
+        after.top_right,
+        after.bottom_right,
+        after.bottom_left,
+    ]
+    .iter()
+    .flat_map(|radius| [radius.x.0, radius.y.0])
+    .chain([border.top.0, border.right.0, border.bottom.0, border.left.0])
+    .fold(0.0_f32, f32::max);
+    // One more pixel for the antialiased edge a fill is drawn with.
+    Some(widest.ceil() + 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};

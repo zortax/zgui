@@ -1288,10 +1288,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                         .as_ref()
                         .is_some_and(|previous| repositioned_within(previous, next));
                 if !repositioned {
-                    if let Some(previous) = &previous {
-                        self.damage_beyond_a_move(previous.ink, Admitted::everything());
+                    match previous
+                        .as_ref()
+                        .and_then(|previous| self.resized_edges(previous, kind, next))
+                    {
+                        // Only the strips along the edges that moved paint anything different.
+                        Some(strips) => {
+                            for strip in strips.into_iter().flatten() {
+                                self.damage_beyond_a_move(strip, Admitted::everything());
+                            }
+                        }
+                        None => {
+                            if let Some(previous) = &previous {
+                                self.damage_beyond_a_move(previous.ink, Admitted::everything());
+                            }
+                            self.damage_beyond_a_move(next.ink, admitted);
+                        }
                     }
-                    self.damage_beyond_a_move(next.ink, admitted);
                 }
                 // Whether the piece's coordinate space is where it was: only then can an entry
                 // that compares equal be trusted to mean nothing moved under the pointer.
@@ -1304,6 +1317,49 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             }
         }
         change
+    }
+
+    /// The strips a box that changed only its size owes, when its painting changes only near the
+    /// edges that moved.
+    ///
+    /// `None` sends the box down the ordinary path, where its whole ink before and after is owed.
+    /// That is every case whose painting depends on its size elsewhere (see
+    /// [`ink::edge_reach`](crate::fragment::ink::edge_reach)), and every case where the device
+    /// rectangle is not simply the border box moved: a decoration reaching outside it, a matrix of
+    /// its own or a different one, a border of a different width.
+    fn resized_edges(
+        &self,
+        previous: &crate::fragment::Fragment,
+        kind: FragmentKind,
+        next: &Geometry,
+    ) -> Option<[Option<Rect<DevicePx, Device>>; 4]> {
+        let unflagged =
+            |flags: FragmentFlags| flags.without(FragmentFlags::HAS_BLENDING_DESCENDANT);
+        if kind != FragmentKind::Box
+            || previous.kind != kind
+            || unflagged(previous.flags) != unflagged(next.flags)
+            || next.flags.contains(FragmentFlags::HAS_TRANSFORM)
+            || next.flags.contains(FragmentFlags::HAS_READ_EXTENT)
+            || previous.border != next.border
+            || previous.transform != next.transform
+            || previous.transform_hash != next.transform_hash
+            || previous.clip_transform != next.clip_transform
+            || previous.content_hash != next.content_hash
+            || previous.ink.size != previous.border_box.size
+            || next.ink.size != next.border_box.size
+        {
+            return None;
+        }
+        let node = self.store.get(previous.box_)?;
+        let reach = crate::fragment::ink::edge_reach(
+            &node.style,
+            node.painted,
+            previous.border_box,
+            next.border_box,
+            next.border,
+            self.tables.device.scale,
+        )?;
+        Some(edge_strips(previous.ink, next.ink, reach))
     }
 
     /// The accessibility bit a moved fragment owes, which is none unless its node means something.
@@ -1377,6 +1433,84 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     .flags
                     .without(FragmentFlags::HAS_BLENDING_DESCENDANT)
             };
+        }
+    }
+}
+
+/// The strips along every edge that differs between `was` and `is`, each reaching `reach` to
+/// either side of both positions of its edge and spanning both rectangles across it.
+///
+/// Together they cover everything one rectangle holds and the other does not, and the band inside
+/// each moved edge where a border or a corner is drawn.
+fn edge_strips(
+    was: Rect<DevicePx, Device>,
+    is: Rect<DevicePx, Device>,
+    reach: f32,
+) -> [Option<Rect<DevicePx, Device>>; 4] {
+    let span = was.union(is);
+    let across = |from: f32, to: f32| (from.min(to) - reach, from.max(to) + reach);
+    let vertical = |from: f32, to: f32| {
+        (from != to).then(|| {
+            let (left, right) = across(from, to);
+            Rect::new(
+                zgui_geom::Point::new(DevicePx(left), span.origin.y),
+                Size::new(DevicePx(right - left), span.size.height),
+            )
+        })
+    };
+    let horizontal = |from: f32, to: f32| {
+        (from != to).then(|| {
+            let (top, bottom) = across(from, to);
+            Rect::new(
+                zgui_geom::Point::new(span.origin.x, DevicePx(top)),
+                Size::new(span.size.width, DevicePx(bottom - top)),
+            )
+        })
+    };
+    [
+        vertical(was.left().0, is.left().0),
+        vertical(was.right().0, is.right().0),
+        horizontal(was.top().0, is.top().0),
+        horizontal(was.bottom().0, is.bottom().0),
+    ]
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+
+    use super::edge_strips;
+
+    fn at(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
+        Rect::new(
+            Point::new(DevicePx(x), DevicePx(y)),
+            Size::new(DevicePx(width), DevicePx(height)),
+        )
+    }
+
+    #[test]
+    fn a_box_whose_bottom_edge_moved_owes_one_strip_around_that_edge() {
+        let strips = edge_strips(at(0.0, 0.0, 100.0, 50.0), at(0.0, 0.0, 100.0, 60.0), 2.0);
+        let owed: Vec<_> = strips.into_iter().flatten().collect();
+        assert_eq!(owed, [at(0.0, 48.0, 100.0, 14.0)]);
+    }
+
+    #[test]
+    fn the_strips_cover_everything_either_rectangle_holds_alone() {
+        let was = at(10.0, 20.0, 100.0, 50.0);
+        let is = at(5.0, 30.0, 140.0, 30.0);
+        let strips: Vec<_> = edge_strips(was, is, 1.0).into_iter().flatten().collect();
+        assert_eq!(strips.len(), 4);
+        for x in (0..160).map(|x| x as f32 + 0.5) {
+            for y in (0..80).map(|y| y as f32 + 0.5) {
+                let point = Point::new(DevicePx(x), DevicePx(y));
+                if was.contains(point) != is.contains(point) {
+                    assert!(
+                        strips.iter().any(|strip| strip.contains(point)),
+                        "({x}, {y}) is in one rectangle only and in no strip"
+                    );
+                }
+            }
         }
     }
 }
