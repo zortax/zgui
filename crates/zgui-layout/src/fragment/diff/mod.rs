@@ -124,10 +124,16 @@ pub fn rebuild_in(
     // that are there now, so it never reaches one of these, and the rectangle a departed piece
     // covered is nobody's ink from here on: it is absorbed here or last frame's pixels stay on the
     // screen. [`Pass::retire`] does the same for a box that kept its name and lost a piece.
+    //
+    // A box that painted nothing leaves nothing behind of its own: the pieces below it left with
+    // it and are in this list too. Its subtree's rectangle would add only what lay between them —
+    // for the band an overlay is mounted on, the whole window.
     let vacated: Vec<Rect<DevicePx, Device>> = store
         .retired_fragments()
         .iter()
-        .filter_map(|frag| store.fragment(*frag).map(|piece| piece.subtree_ink))
+        .filter_map(|frag| store.fragment(*frag))
+        .filter(|piece| !paints_nothing_itself(piece.kind, piece.flags))
+        .map(|piece| piece.subtree_ink)
         .collect();
     // Deliberately *not* seeded with what the set already holds. A frame runs this walk more than
     // once — a scroll is delivered to the document between two of them — and the damage standing at
