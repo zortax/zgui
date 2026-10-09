@@ -19,7 +19,8 @@
 //!   never settle. Each watched quantity is compared on its own, and an unwatched one is never
 //!   measured.
 //! * **It is bounded at two passes.** A popover converges in one: the first lays the positioner
-//!   out, the second places it. A cycle is warned about once and truncated.
+//!   out, the second places it. What the last pass laid out is compared once more without being
+//!   delivered, and only a value that still moved is warned about and left to the next frame.
 
 use zgui_bits::Dirty;
 use zgui_dom::side::observed::{ObservationSlots, ObservedMask};
@@ -46,7 +47,7 @@ impl Window {
         }
 
         let mut owed = false;
-        for pass in 0..MAX_PASSES {
+        for _ in 0..MAX_PASSES {
             counter::bump(Counter::ObservationPasses);
             if !self.deliver_once() {
                 return owed;
@@ -56,36 +57,44 @@ impl Window {
             self.gate.requests_serviced();
             owed |= zgui_reactive::flush().needs_another_frame;
             self.restyle_and_relayout_after_delivery();
-            if pass + 1 == MAX_PASSES {
-                // The geometry the last relayout produced has not been delivered. The next frame
-                // compares it against what was recorded and delivers it, so one is asked for.
-                counter::bump(Counter::ObservationsTruncated);
-                owed = true;
-                tracing::warn!(
-                    target: "zgui::observe",
-                    "geometry observation did not settle in {MAX_PASSES} passes; the frame is \
-                     painted against the second one"
-                );
-            }
+        }
+        // The last pass delivered and laid out again. Whether that moved anything watched is a
+        // comparison and no delivery: a chain that settled in exactly the budget owes nothing.
+        if self.watched().iter().any(|&(key, held)| {
+            self.measure(key, held)
+                .is_some_and(|measured| measured != held)
+        }) {
+            // The geometry the last relayout produced has not been delivered. The next frame
+            // compares it against what was recorded and delivers it, so one is asked for.
+            counter::bump(Counter::ObservationsTruncated);
+            owed = true;
+            tracing::warn!(
+                target: "zgui::observe",
+                "geometry observation did not settle in {MAX_PASSES} passes; the frame is \
+                 painted against the last one"
+            );
         }
         owed
     }
 
+    /// Every watched node, and what its watchers were last told.
+    fn watched(&self) -> Vec<(zgui_dom::NodeKey, ObservationSlots)> {
+        let document = self.document.borrow();
+        let store = document.store();
+        self.dom
+            .observed_nodes()
+            .into_iter()
+            .filter_map(|node| {
+                let key = zgui_view_dom::id::to_document(node)?;
+                let slots = store.columns().observed.get(key)?;
+                slots.is_watched().then_some((key, *slots))
+            })
+            .collect()
+    }
+
     /// Delivers what changed, and reports whether anything was delivered at all.
     fn deliver_once(&mut self) -> bool {
-        let watched: Vec<(zgui_dom::NodeKey, ObservationSlots)> = {
-            let document = self.document.borrow();
-            let store = document.store();
-            self.dom
-                .observed_nodes()
-                .into_iter()
-                .filter_map(|node| {
-                    let key = zgui_view_dom::id::to_document(node)?;
-                    let slots = store.columns().observed.get(key)?;
-                    slots.is_watched().then_some((key, *slots))
-                })
-                .collect()
-        };
+        let watched = self.watched();
 
         let mut delivered = false;
         for (key, held) in watched {
