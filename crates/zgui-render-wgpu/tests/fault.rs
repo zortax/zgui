@@ -40,7 +40,7 @@ fn moving_square(step: i32) -> Scene {
 
 /// The rectangle the square moved through between two steps.
 fn moved(before: i32, after: i32) -> DamageSet {
-    let mut damage = DamageSet::<4>::new();
+    let mut damage: DamageSet = DamageSet::new();
     for step in [before, after] {
         damage.absorb(Rect::new(Point::new(7 + step * 8, 39), Size::new(34, 34)));
     }

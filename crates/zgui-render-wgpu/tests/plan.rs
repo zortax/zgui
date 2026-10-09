@@ -99,7 +99,7 @@ fn every_damaged_rectangle_is_cleared_before_anything_is_drawn_into_it() {
     };
     let scene = scene_of(None, None);
 
-    let mut two = DamageSet::<4>::new();
+    let mut two: DamageSet = DamageSet::new();
     two.absorb(Rect::new(Point::new(0, 0), Size::new(32, 32)));
     two.absorb(Rect::new(Point::new(80, 80), Size::new(32, 32)));
     let planned = plan(renderer.gpu(), &scene, &two);

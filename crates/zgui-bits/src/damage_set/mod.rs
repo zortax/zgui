@@ -19,14 +19,16 @@ pub use crate::damage_set::override_env::full_damage_forced;
 /// anything. Lowering it merges sooner, so a frame that touched two corners of the surface redraws
 /// the whole of it.
 ///
-/// Four is where restricting the redraw still deletes real work and the pass count is still
-/// negligible beside it.
+/// Six is where a panel's edge dragged through a page with two scroll bars and a dock still fits
+/// in strips: at four, the strips along the moved edge and the bars beside it merged into the
+/// whole page on every step (a measured third more primitives a step), and eight bought nothing
+/// over six while a resize that re-wraps a long thread paid for the extra rectangles.
 ///
 /// The rule for changing it is in `CONTRIBUTING.md`, and it is a measurement rather than an
 /// argument: a change to this number is a change to how many passes every frame in the workspace
 /// costs, so it is made with the scenario evidence that a different number is better and not
 /// without.
-pub const MAX_DAMAGE: usize = 4;
+pub const MAX_DAMAGE: usize = 6;
 
 /// A bounded set of **pairwise disjoint** rectangles covering everything that must be redrawn.
 ///

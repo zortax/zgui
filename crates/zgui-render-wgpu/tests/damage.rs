@@ -156,7 +156,7 @@ fn whole(bounds: Rect<DevicePx, Device>) -> Rect<i32, Device> {
 /// its own output, so the panel smears a little further every frame. It runs to a fixpoint,
 /// because one grown rectangle can reach another composite's source.
 fn damage_between(before: &[Item], after: &[Item]) -> DamageSet {
-    let mut damage = DamageSet::new();
+    let mut damage: DamageSet = DamageSet::new();
     let common = before.len().min(after.len());
     for index in 0..common {
         if before[index] != after[index] {
@@ -362,7 +362,7 @@ fn nothing_outside_a_damage_rectangle_is_touched() {
     let mut moved = items.clone();
     moved[2].color = [10, 10, 10];
     let corner: Rect<i32, Device> = Rect::new(Point::new(0, 0), Size::new(16, 16));
-    let mut damage = DamageSet::<4>::new();
+    let mut damage: DamageSet = DamageSet::new();
     damage.absorb(corner);
     let scene = build(&moved);
     renderer.draw(&scene, &damage);
@@ -382,7 +382,7 @@ fn nothing_outside_a_damage_rectangle_is_touched() {
     );
 
     // Now damage the rectangle the changed item is in, and it changes.
-    let mut wide = DamageSet::<4>::new();
+    let mut wide: DamageSet = DamageSet::new();
     wide.absorb(whole(moved[2].ink()));
     renderer.draw(&scene, &wide);
     let third = renderer
@@ -425,7 +425,7 @@ fn a_group_inside_a_damage_rectangle_is_composited_from_what_the_rectangle_holds
     scene.push_group(boundary.end());
     scene.finish(&DamageSet::full());
 
-    let mut halves = DamageSet::<4>::new();
+    let mut halves: DamageSet = DamageSet::new();
     halves.absorb(Rect::new(Point::new(0, 0), Size::new(SIDE, 64)));
     halves.absorb(Rect::new(Point::new(0, 64), Size::new(SIDE, 64)));
     assert_eq!(halves.len(), 2, "the two halves are disjoint rectangles");
@@ -483,7 +483,7 @@ fn a_group_inside_a_filtered_group_is_composited_over_all_of_what_the_filter_rea
     scene.finish(&DamageSet::full());
 
     // Two disjoint halves, so the boundary between them runs straight through the blurred group.
-    let mut halves = DamageSet::<4>::new();
+    let mut halves: DamageSet = DamageSet::new();
     halves.absorb(Rect::new(Point::new(0, 0), Size::new(SIDE, 64)));
     halves.absorb(Rect::new(Point::new(0, 64), Size::new(SIDE, 64)));
     assert_eq!(halves.len(), 2, "the two halves are disjoint rectangles");
@@ -530,7 +530,7 @@ fn a_target_that_was_thrown_away_is_redrawn_whole_however_small_the_next_damage_
 
     // 128 and 300 are in different size classes, so the target is thrown away rather than reused.
     renderer.configure(RenderTarget::new(Size::new(300, 300), Scale::new(1.0)));
-    let mut corner = DamageSet::<4>::new();
+    let mut corner: DamageSet = DamageSet::new();
     corner.absorb(Rect::new(Point::new(0, 0), Size::new(16, 16)));
     let outcome = renderer.draw(&scene(300), &corner);
     assert_eq!(

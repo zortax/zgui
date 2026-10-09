@@ -312,7 +312,7 @@ fn a_backdrop_filter_damages_its_source_rect_and_not_the_window() {
     let backdrop = BackdropFilter::new(panel, [Filter::Blur(6.0)].into_iter().collect());
     assert!(!backdrop.reads_only_what_it_writes());
 
-    let mut damage = DamageSet::<4>::new();
+    let mut damage: DamageSet = DamageSet::new();
     damage.absorb(Rect::new(Point::new(60, 60), Size::new(4, 4)));
     assert!(damage.intersects(source_rect(&backdrop)));
     damage.absorb(source_rect(&backdrop));

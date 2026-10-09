@@ -171,7 +171,7 @@ Lowering a budget needs no ceremony.
 ### `MAX_DAMAGE`
 
 `zgui_bits::MAX_DAMAGE` is how many disjoint rectangles a `DamageSet` holds before it merges to
-stay inside itself. It is four, and it is a trade with a cost on both sides. Raising it lets a frame
+stay inside itself. It is six, and it is a trade with a cost on both sides. Raising it lets a frame
 that changed several unrelated places redraw each of them separately instead of redrawing their
 bounding box — but every rectangle is its own render pass, with its own clear, its own scissor and
 its own state changes, and those are paid for on every frame whether or not the extra precision
