@@ -269,3 +269,34 @@ fn a_layer_that_has_unmounted_hears_nothing() {
         "the listeners on the window's root went with it"
     );
 }
+
+#[test]
+fn escape_with_the_keyboard_nowhere_closes_only_the_innermost_layer() {
+    // With no element focused, a key goes to the window's root. The layers listen there on the
+    // way down, and the application's own Escape listens there on the way up: both stand on the
+    // target, so only a stop that cuts the target's later listeners keeps one press from closing
+    // the menu and the page behind the dialog.
+    let (harness, seen, _dialog, menu, _open) = nested();
+    let root = menu.window_root().expect("a window root");
+    let page = Rc::new(std::cell::Cell::new(0));
+    let heard = Rc::clone(&page);
+    let _guard = root.listen(
+        zgui::view::events::KEY_DOWN,
+        ListenerOptions::DEFAULT,
+        move |ev: &mut EventCx<'_, zgui::view::events::KeyDown>| {
+            if ev.key == Key::Named(NamedKey::Escape) {
+                heard.set(heard.get() + 1);
+            }
+        },
+    );
+    escape(&harness, root);
+    assert_eq!(
+        seen.borrow().as_slice(),
+        [("menu", DismissReason::EscapeKey)]
+    );
+    assert_eq!(
+        page.get(),
+        0,
+        "the Escape the menu took reached the window too"
+    );
+}

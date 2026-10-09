@@ -221,8 +221,11 @@ pub fn DismissableLayer(
                         return;
                     }
                     // Escape belongs to exactly one surface, and swallowing it here is what stops
-                    // one press closing a menu and the dialog behind it in the same breath.
-                    ev.stop_propagation();
+                    // one press closing a menu and the dialog behind it in the same breath. The
+                    // stop is immediate: with no element focused the key's target is the window
+                    // root itself, where an application's own Escape listens too, and a plain stop
+                    // still lets the target's later listeners run.
+                    ev.stop_immediate_propagation();
                     ev.prevent_default();
                     note!("layer.dismiss", "id={} reason=escape", id.get());
                     dismiss.run(DismissReason::EscapeKey);
