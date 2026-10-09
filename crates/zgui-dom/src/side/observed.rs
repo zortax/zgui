@@ -29,6 +29,8 @@ bitflags::bitflags! {
         const SCROLL_OFFSET = 1 << 2;
         /// The visible extent of this node's scrollable area.
         const SCROLLPORT    = 1 << 3;
+        /// The size of the border box, in device pixels.
+        const BORDER_SIZE   = 1 << 4;
     }
 }
 
@@ -42,6 +44,8 @@ pub struct ObservationSlots {
     pub mask: ObservedMask,
     /// The border box last delivered.
     pub border_box: Rect<DevicePx, Device>,
+    /// The border box size last delivered.
+    pub border_size: Size<DevicePx, Device>,
     /// The content size last delivered.
     pub content_size: Size<DevicePx, Device>,
     /// The scroll offset last delivered.
@@ -58,6 +62,7 @@ impl ObservationSlots {
             Point::new(DevicePx::ZERO, DevicePx::ZERO),
             Size::new(DevicePx::ZERO, DevicePx::ZERO),
         ),
+        border_size: Size::new(DevicePx::ZERO, DevicePx::ZERO),
         content_size: Size::new(DevicePx::ZERO, DevicePx::ZERO),
         scroll_offset: Point::new(DevicePx::ZERO, DevicePx::ZERO),
         scrollport: Size::new(DevicePx::ZERO, DevicePx::ZERO),

@@ -65,13 +65,13 @@ fn focus_in(harness: &Harness, node: NodeId) {
     harness.window.frame();
 }
 
-/// Delivers a border box to `node`, exactly as a completed layout does.
+/// Delivers a border box size to `node`, exactly as a completed layout does.
 fn measure(harness: &Harness, node: NodeId, height: f32) {
     harness.window.dom.deliver(
         node,
-        zgui::view::ObservedValue::BorderBox(zgui::geom::Rect::new(
-            zgui::geom::Point::new(zgui::geom::DevicePx(0.0), zgui::geom::DevicePx(0.0)),
-            zgui::geom::Size::new(zgui::geom::DevicePx(300.0), zgui::geom::DevicePx(height)),
+        zgui::view::ObservedValue::BorderSize(zgui::geom::Size::new(
+            zgui::geom::DevicePx(300.0),
+            zgui::geom::DevicePx(height),
         )),
     );
     harness.window.frame();

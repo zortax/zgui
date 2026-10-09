@@ -75,16 +75,16 @@ pub fn ResizablePanel(
     let floor = match (context, id) {
         (Some(context), Some(id)) if min_pixels > 0.0 => {
             let group = context.group();
-            let watching = group.observe_border_box();
+            let watching = group.observe_border_size();
             let vertical = matches!(context.direction(), Orientation::Vertical);
             Some(RenderEffect::new(move |_| {
                 let Some(measured) = watching.get() else {
                     return;
                 };
                 let length = if vertical {
-                    measured.size.height.0
+                    measured.height.0
                 } else {
-                    measured.size.width.0
+                    measured.width.0
                 };
                 if length <= 0.0 {
                     return;

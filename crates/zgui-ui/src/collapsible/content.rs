@@ -56,7 +56,7 @@ pub fn CollapsibleContent(
     let open = move || context.is_some_and(|context| context.is_open());
 
     let inner = NodeRef::new();
-    let measured = inner.observe_border_box();
+    let measured = inner.observe_border_size();
     let scale = move || {
         let scale = inner.scale();
         if scale > 0.0 { scale } else { 1.0 }
@@ -71,7 +71,7 @@ pub fn CollapsibleContent(
             move || {
                 measured
                     .get()
-                    .map(|box_| format!("{}px", (box_.size.height.0 / scale()).ceil()))
+                    .map(|size| format!("{}px", (size.height.0 / scale()).ceil()))
             },
         )
         // Hidden content is hidden from a reader too. Without this the section would be clipped to

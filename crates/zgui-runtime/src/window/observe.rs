@@ -105,6 +105,12 @@ impl Window {
                 self.dom
                     .deliver(node, ObservedValue::BorderBox(measured.border_box));
             }
+            if held.mask.contains(ObservedMask::BORDER_SIZE)
+                && measured.border_size != held.border_size
+            {
+                self.dom
+                    .deliver(node, ObservedValue::BorderSize(measured.border_size));
+            }
             if held.mask.contains(ObservedMask::CONTENT_SIZE)
                 && measured.content_size != held.content_size
             {
@@ -152,15 +158,23 @@ impl Window {
         let resolved = layout.layout_of(first)?;
         let mask = held.mask;
         let scrolls = mask.intersects(ObservedMask::SCROLL_OFFSET | ObservedMask::SCROLLPORT);
-        let border_box = if mask.contains(ObservedMask::BORDER_BOX) {
-            zgui_layout::fragment::transform::placed::window_box(
-                &layout,
-                first,
-                &self.host.placements(),
-            )
-            .unwrap_or_else(|| resolved.border_box())
-        } else {
-            held.border_box
+        let placed = mask
+            .intersects(ObservedMask::BORDER_BOX | ObservedMask::BORDER_SIZE)
+            .then(|| {
+                zgui_layout::fragment::transform::placed::window_box(
+                    &layout,
+                    first,
+                    &self.host.placements(),
+                )
+                .unwrap_or_else(|| resolved.border_box())
+            });
+        let border_box = match placed {
+            Some(rect) if mask.contains(ObservedMask::BORDER_BOX) => rect,
+            _ => held.border_box,
+        };
+        let border_size = match placed {
+            Some(rect) if mask.contains(ObservedMask::BORDER_SIZE) => rect.size,
+            _ => held.border_size,
         };
         let (content_size, scroll_offset, scrollport) =
             if scrolls || mask.contains(ObservedMask::CONTENT_SIZE) {
@@ -181,6 +195,7 @@ impl Window {
         Some(ObservationSlots {
             mask,
             border_box,
+            border_size,
             content_size,
             scroll_offset,
             scrollport,

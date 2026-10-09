@@ -343,6 +343,15 @@ impl NodeRef {
         self.observe_border_box_while(|| true)
     }
 
+    /// Observes the size of this node's border box.
+    ///
+    /// The size [`NodeRef::observe_border_box`] carries, without the position, so a node that
+    /// only moves wakes nothing. Prefer it whenever the position is not read: moving one edge of a
+    /// panel moves everything inside the panel.
+    pub fn observe_border_size(&self) -> Signal<Option<Size<DevicePx, Device>>, LocalStorage> {
+        self.observe_border_size_while(|| true)
+    }
+
     /// Observes the size of this node's content area.
     pub fn observe_content_size(&self) -> Signal<Size<DevicePx, Device>, LocalStorage> {
         self.observe_content_size_while(|| true)
@@ -367,6 +376,17 @@ impl NodeRef {
     ) -> Signal<Option<Rect<DevicePx, Device>>, LocalStorage> {
         let value = self.observe(Observed::BorderBox, active);
         Signal::derive_local(move || value.get().and_then(|value| value.as_border_box()))
+    }
+
+    /// Observes the size of this node's border box for as long as `active` answers true.
+    ///
+    /// Until the first value of a new watch arrives the signal reads `None`.
+    pub fn observe_border_size_while(
+        &self,
+        active: impl Fn() -> bool + 'static,
+    ) -> Signal<Option<Size<DevicePx, Device>>, LocalStorage> {
+        let value = self.observe(Observed::BorderSize, active);
+        Signal::derive_local(move || value.get().and_then(|value| value.as_border_size()))
     }
 
     /// Observes the size of this node's content area for as long as `active` answers true.

@@ -146,6 +146,7 @@ impl Observations {
         let mut mask = ObservedMask::empty();
         for what in [
             Observed::BorderBox,
+            Observed::BorderSize,
             Observed::ContentSize,
             Observed::ScrollPosition,
         ] {
@@ -161,6 +162,7 @@ impl Observations {
 fn bit(what: Observed) -> ObservedMask {
     match what {
         Observed::BorderBox => ObservedMask::BORDER_BOX,
+        Observed::BorderSize => ObservedMask::BORDER_SIZE,
         Observed::ContentSize => ObservedMask::CONTENT_SIZE,
         // A scroll position is an offset and a scrollport together, so watching it watches both.
         Observed::ScrollPosition => ObservedMask::SCROLL_OFFSET | ObservedMask::SCROLLPORT,

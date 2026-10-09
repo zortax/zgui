@@ -18,6 +18,11 @@ use crate::scroll::ScrollPosition;
 pub enum Observed {
     /// The node's border box, in device pixels, relative to the window.
     BorderBox,
+    /// The size of the node's border box, in device pixels.
+    ///
+    /// The same size [`Observed::BorderBox`] carries, without the position: a node that only moves
+    /// delivers nothing.
+    BorderSize,
     /// The size of the node's content area.
     ContentSize,
     /// The node's scroll offset, content extent and visible extent.
@@ -34,6 +39,8 @@ pub enum Observed {
 pub enum ObservedValue {
     /// A border box.
     BorderBox(Rect<DevicePx, Device>),
+    /// The size of a border box.
+    BorderSize(Size<DevicePx, Device>),
     /// A content size.
     ContentSize(Size<DevicePx, Device>),
     /// A scroll position.
@@ -45,6 +52,7 @@ impl ObservedValue {
     pub const fn observed(self) -> Observed {
         match self {
             Self::BorderBox(_) => Observed::BorderBox,
+            Self::BorderSize(_) => Observed::BorderSize,
             Self::ContentSize(_) => Observed::ContentSize,
             Self::ScrollPosition(_) => Observed::ScrollPosition,
         }
@@ -54,6 +62,14 @@ impl ObservedValue {
     pub const fn as_border_box(self) -> Option<Rect<DevicePx, Device>> {
         match self {
             Self::BorderBox(rect) => Some(rect),
+            _ => None,
+        }
+    }
+
+    /// The size of a border box, when this is one.
+    pub const fn as_border_size(self) -> Option<Size<DevicePx, Device>> {
+        match self {
+            Self::BorderSize(size) => Some(size),
             _ => None,
         }
     }

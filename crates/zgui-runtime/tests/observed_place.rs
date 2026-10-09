@@ -208,3 +208,60 @@ fn an_observed_box_follows_its_own_transform_frame_after_frame_while_it_animates
          following it"
     );
 }
+
+#[test]
+fn a_box_that_only_moves_wakes_a_size_observer_once() {
+    // The control is the border box observed beside it: the slide moves it on every frame, so a
+    // size observer that is woken as often as that one is watching the position after all.
+    let sizes = Rc::new(Cell::new(0_u32));
+    let boxes = Rc::new(Cell::new(0_u32));
+    let (seen_sizes, seen_boxes) = (Rc::clone(&sizes), Rc::clone(&boxes));
+    let mut app = support::app(SLIDING_CSS, move |cx: &mut BuildCx<'_>| {
+        let handle = NodeRef::new();
+        // Observed at once: the share is taken when the handle binds, and each effect below is
+        // made exactly once, so every run it counts is a value that was delivered.
+        let size_of = handle.observe_border_size();
+        let box_of = handle.observe_border_box();
+        let (seen_sizes, seen_boxes) = (Rc::clone(&seen_sizes), Rc::clone(&seen_boxes));
+        core::mem::forget(zgui_reactive::RenderEffect::new(move |_| {
+            use zgui_reactive::prelude::Get;
+            if size_of.get().is_some() {
+                seen_sizes.set(seen_sizes.get() + 1);
+            }
+        }));
+        core::mem::forget(zgui_reactive::RenderEffect::new(move |_| {
+            use zgui_reactive::prelude::Get;
+            if box_of.get().is_some() {
+                seen_boxes.set(seen_boxes.get() + 1);
+            }
+        }));
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(
+                    zgui_elements::column()
+                        .class("box")
+                        .class("slides")
+                        .node_ref(handle),
+                )
+                .into_view()
+                .build(cx),
+        )
+    });
+    app.pump();
+    for _ in 0..30 {
+        app.advance(core::time::Duration::from_millis(16));
+        app.pump();
+    }
+    app.shut_down();
+    assert!(
+        boxes.get() > 20,
+        "the border box was delivered {} times over thirty frames of a slide",
+        boxes.get()
+    );
+    assert_eq!(
+        sizes.get(),
+        1,
+        "the size never changed, so it is delivered once, when the watch starts"
+    );
+}

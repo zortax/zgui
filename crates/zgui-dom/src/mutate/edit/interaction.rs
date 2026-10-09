@@ -131,6 +131,7 @@ impl Edit<'_> {
         let key = store.key_of(node);
         let slots = store.columns_mut().observed.get_mut(key);
         slots.border_box = delivered.border_box;
+        slots.border_size = delivered.border_size;
         slots.content_size = delivered.content_size;
         slots.scroll_offset = delivered.scroll_offset;
         slots.scrollport = delivered.scrollport;
