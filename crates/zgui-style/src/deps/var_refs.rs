@@ -20,6 +20,11 @@ pub(crate) struct RuleRefs {
     /// A declarer builds its map from the parent's and its own declarations, so a moved parent
     /// map is a moved map of its own however its declarations read; it cascades again.
     pub(crate) declares: bool,
+    /// The custom properties the chain declares, without their `--` prefix.
+    ///
+    /// With the names its parent's map changed by, these are every name a declarer's own map can
+    /// change by when nothing else about it moved.
+    pub(crate) declared: Vec<String>,
     /// The Bloom set of `reads`, or every name for a declarer.
     ///
     /// What the document's readers column files for the element, so that a change tests a whole
@@ -50,6 +55,7 @@ pub(crate) fn refs_of(rules: &StrongRuleNode, guards: &StylesheetGuards<'_>) -> 
             match declaration {
                 PropertyDeclaration::Custom(custom) => {
                     refs.declares = true;
+                    refs.declared.push(custom.name.to_string());
                     if let CustomDeclarationValue::Unparsed(value) = &custom.value {
                         scan_var_names(&value.css, &mut refs.reads);
                     }
@@ -66,6 +72,8 @@ pub(crate) fn refs_of(rules: &StrongRuleNode, guards: &StylesheetGuards<'_>) -> 
     }
     refs.reads.sort_unstable();
     refs.reads.dedup();
+    refs.declared.sort_unstable();
+    refs.declared.dedup();
     refs.bloom = if refs.declares {
         zgui_dom::side::readers::ALL
     } else {

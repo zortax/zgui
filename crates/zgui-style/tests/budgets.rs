@@ -392,6 +392,39 @@ fn a_declarer_chain_reaches_the_readers_at_its_end() {
     }
 }
 
+/// A declarer that sets the changed name itself keeps the change from everything below it, and one
+/// that declares an unrelated name passes the change on.
+#[test]
+fn a_declarer_passes_on_only_what_its_own_map_changed_by() {
+    let _guard = measuring();
+    let (mut harness, rows) = themed(
+        100,
+        4,
+        "row { --spare: 1px } row.own { --accent: rgb(5, 5, 5) } \
+         cell { color: var(--accent, rgb(1, 1, 1)) }",
+    );
+    for row in rows.iter().take(50) {
+        harness.set_classes(*row, &["own"]);
+    }
+    harness.frame();
+
+    counter::reset();
+    let root = harness.root;
+    set_custom(&mut harness, root, "accent", "rgb(0, 9, 0)");
+    harness.frame();
+    let frame = counter::snapshot();
+
+    assert_eq!(color(&harness, first_cell(&harness, rows[10])), (5, 5, 5));
+    assert_eq!(color(&harness, first_cell(&harness, rows[60])), (0, 9, 0));
+    if COUNTERS_ENABLED {
+        assert_eq!(
+            frame.elements_recascaded + frame.elements_restyled,
+            1 + 100 + 200,
+            "the root, every declaring row, and the cells of the fifty rows that pass the change on"
+        );
+    }
+}
+
 /// An element that becomes a reader after the change cascades against the map as it is now.
 ///
 /// Its parent took the map without a cascade, so the trap would be a cascade that reads the map

@@ -80,6 +80,27 @@ impl ChangedNames {
                 names.push(name.to_string());
             }
         }
+        Self::named(names)
+    }
+
+    /// The names among `candidates` whose values differ between the two maps.
+    ///
+    /// The same answer as [`Self::between`] when every name the maps differ by is a candidate, at
+    /// the cost of the candidates rather than of the maps.
+    fn among(old: &CustomPropertiesMap, new: &CustomPropertiesMap, candidates: &[String]) -> Self {
+        let names = candidates
+            .iter()
+            .filter(|candidate| {
+                let name = style::custom_properties::Name::from(candidate.as_str());
+                old.get(&name) != new.get(&name)
+            })
+            .cloned()
+            .collect();
+        Self::named(names)
+    }
+
+    /// The change made of `names`.
+    fn named(names: Vec<String>) -> Self {
         let wildcard = names.len() > NAMED_AT_MOST
             || names.iter().any(|name| name.starts_with(FRAMEWORK_PREFIX));
         let bloom = if wildcard {
@@ -125,6 +146,9 @@ pub(super) fn recalc_style_at<'doc, F>(
     // decided here, before the element's own kind of restyle is asked for, because the answer
     // may be to cascade after all.
     let mut custom_changed: Option<Arc<ChangedNames>> = None;
+    // Every name the element's own map can change by, when the only reason it cascades is that the
+    // map it inherits from moved.
+    let mut candidates: Option<Vec<String>> = None;
     let map_changed = !flags.for_animation_only() && element.take_custom_map_changed();
     if map_changed
         && data.has_styles()
@@ -156,6 +180,7 @@ pub(super) fn recalc_style_at<'doc, F>(
             }
         } else if reads_custom_properties(traversal, data, &names) {
             data.hint.insert(RestyleHint::RECASCADE_SELF);
+            candidates = narrowed_candidates(traversal, context, element, data, &names);
         } else if let Some(old) = data.styles.get_primary() {
             data.styles.primary = Some(with_inherited_map(old, &parent_style));
             counter::bump(Counter::CustomMapsRefreshed);
@@ -167,7 +192,14 @@ pub(super) fn recalc_style_at<'doc, F>(
     let mut child_restyle_hint = RestyleHint::empty();
 
     if let Some(restyle_kind) = restyle_kind {
-        let (hint, changed) = compute_style(traversal_data, context, element, data, restyle_kind);
+        let (hint, changed) = compute_style(
+            traversal_data,
+            context,
+            element,
+            data,
+            restyle_kind,
+            candidates.as_deref(),
+        );
         child_restyle_hint = hint;
         if let Some(changed) = changed {
             custom_changed = Some(changed);
@@ -271,6 +303,30 @@ fn reads_custom_properties(
     })
 }
 
+/// Every name an element's map can change by when it cascades only because its parent's map
+/// changed by `names`: those names, and the ones its own rules declare.
+///
+/// `None` when that cannot be said: a change too wide to name, an element with no rules to read,
+/// or one whose animations write custom properties of their own.
+fn narrowed_candidates(
+    traversal: &RecalcStyle<'_>,
+    context: &StyleContext<E<'_>>,
+    element: E<'_>,
+    data: &ElementData,
+    names: &ChangedNames,
+) -> Option<Vec<String>> {
+    if names.wildcard || element.has_animations(context.shared) {
+        return None;
+    }
+    let rules = data.styles.get_primary()?.rules.clone()?;
+    let refs = traversal.refs_of(&rules);
+    let mut candidates = names.names.clone();
+    candidates.extend(refs.declared.iter().cloned());
+    candidates.sort_unstable();
+    candidates.dedup();
+    Some(candidates)
+}
+
 /// Whether `style` holds any of `names` in either of its custom property maps.
 pub(super) fn declares_any(
     style: &ComputedValues,
@@ -330,6 +386,7 @@ fn compute_style<'doc>(
     element: E<'doc>,
     data: &mut ElementData,
     kind: RestyleKind,
+    candidates: Option<&[String]>,
 ) -> (RestyleHint, Option<Arc<ChangedNames>>) {
     context.thread_local.statistics.elements_styled += 1;
 
@@ -429,10 +486,14 @@ fn compute_style<'doc>(
             let narrowed = narrowed_children_hint(&old, new, hint);
             let changed = (old.custom_properties().inherited != new.custom_properties().inherited)
                 .then(|| {
-                    Arc::new(ChangedNames::between(
+                    let (old, new) = (
                         &old.custom_properties().inherited,
                         &new.custom_properties().inherited,
-                    ))
+                    );
+                    Arc::new(match candidates {
+                        Some(candidates) => ChangedNames::among(old, new, candidates),
+                        None => ChangedNames::between(old, new),
+                    })
                 });
             (narrowed, changed)
         }
