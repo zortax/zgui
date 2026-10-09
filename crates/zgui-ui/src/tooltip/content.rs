@@ -2,7 +2,7 @@
 
 use zgui::prelude::*;
 use zgui::reactive::LocalStorage;
-use zgui::view::ClassName;
+use zgui::view::{AttrName, ClassName};
 use zgui::{component, view};
 use zgui_ui_primitives::Placement;
 
@@ -63,9 +63,16 @@ pub fn TooltipContent(
 
     let on_enter = intent.clone();
     let on_leave = intent.clone();
+    let instant = intent.as_ref().map(HoverIntent::instant);
     let own = Attrs::new()
         .class_toggle(ClassName::new(TooltipStyle::CLASS), true)
         .class_toggle(ClassName::new("zui-tooltip"), true)
+        // Set on a tooltip taken down to show the next one, which then goes with no exit.
+        .attribute(AttrName::new("data-instant"), move || {
+            instant
+                .is_some_and(|instant| instant.get())
+                .then(String::new)
+        })
         .listener(
             events::POINTER_ENTER,
             zgui::vocab::ListenerOptions::DEFAULT,

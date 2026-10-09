@@ -5,6 +5,8 @@ use core::time::Duration;
 use zgui::prelude::*;
 use zgui::{component, view};
 
+use crate::overlay::Handoff;
+
 /// The two delays every [`Tooltip`](crate::Tooltip) under a [`TooltipProvider`] uses unless it
 /// says otherwise.
 ///
@@ -56,6 +58,9 @@ impl TooltipDelays {
 /// once, around whatever region shares a feel, and a tooltip that genuinely differs still overrides
 /// it with its own `delay`.
 ///
+/// One tooltip under it shows at a time. When the pointer moves from one trigger to the next, the
+/// next tooltip opens with no delay and the one it replaces goes with no exit animation.
+///
 /// It renders no element of its own.
 ///
 /// ```
@@ -94,5 +99,6 @@ pub fn TooltipProvider(
     children: Children,
 ) -> impl IntoView {
     TooltipDelays::new(delay, close_delay).provide();
+    Handoff::new().provide();
     view! { {children.into_view_once()} }
 }

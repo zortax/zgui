@@ -103,6 +103,9 @@ style! { pub TooltipStyle =>
             var(--zui-surface-exit-duration, var(--zui-motion-duration-normal))
             var(--zui-surface-exit-ease, ease) both;
     }"
+    // A tooltip taken down to show the next one goes at once, and so does its arrow.
+    ":scope.zui-surface[data-instant] { animation: none; }"
+    ":scope.zui-surface[data-instant] .zui-tooltip__arrow { animation: none; }"
     "@keyframes zui-tooltip-arrow-enter { from { opacity: 0; } to { opacity: 1; } }"
     "@keyframes zui-tooltip-arrow-exit { from { opacity: 1; } to { opacity: 0; } }"
 }

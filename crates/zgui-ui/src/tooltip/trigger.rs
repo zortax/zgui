@@ -92,8 +92,7 @@ pub fn TooltipTrigger(
                     return;
                 }
                 if let Some(intent) = &on_focus {
-                    intent.close_now();
-                    intent.state().open();
+                    intent.open_now();
                 }
             },
             on:focus_out = move |_| { if let Some(intent) = &on_blur { intent.close_now() } },

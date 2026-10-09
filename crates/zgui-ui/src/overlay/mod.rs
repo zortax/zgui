@@ -88,7 +88,7 @@ pub use crate::overlay::anchored::{
 pub use crate::overlay::content::{OverlaySurface, OverlaySurfaceProps};
 pub use crate::overlay::delay::Delayed;
 pub use crate::overlay::elevation::{Elevated, ElevatedProps, SurfaceElevation};
-pub use crate::overlay::hover::HoverIntent;
+pub use crate::overlay::hover::{Handoff, HoverIntent};
 pub use crate::overlay::labels::SurfaceLabels;
 pub use crate::overlay::lock::{ScrollLock, ScrollLockGuard, use_scroll_lock};
 pub use crate::overlay::modal::{ModalSurface, ModalSurfaceProps, Scrim, ScrimProps};
