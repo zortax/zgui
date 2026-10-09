@@ -64,6 +64,20 @@ pub trait Renderer {
         false
     }
 
+    /// Whether the picture composed before the last [`Renderer::configure`] is still there to draw
+    /// over.
+    ///
+    /// A renderer answering true keeps its composed target through a change of size whenever it
+    /// still fits, so the caller damages what the new extent exposes and what the layout moved,
+    /// and leaves the rest of the picture standing. One answering false is drawn for in full after
+    /// every configure — and so is one that had to allocate its target again, which is why this is
+    /// asked after each configure and not once.
+    ///
+    /// False by default, so a renderer that has not thought about it is correct.
+    fn composed_survives_configure(&self) -> bool {
+        false
+    }
+
     /// Moves the still-valid pixels of a composed region, before the next [`Renderer::draw`].
     ///
     /// Only ever called on a renderer that answered true to

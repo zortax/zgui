@@ -304,6 +304,10 @@ impl Renderer for DrmRenderer {
         self.inner.shifts_composed_pixels()
     }
 
+    fn composed_survives_configure(&self) -> bool {
+        self.inner.composed_survives_configure()
+    }
+
     fn shift_composed(&mut self, shift: ScrollShift) {
         self.inner.shift_composed(shift);
     }

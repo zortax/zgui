@@ -877,12 +877,28 @@ impl Window {
             Size::new(size.width.0 as i32, size.height.0 as i32),
             zgui_geom::Scale::new(self.scale),
         );
-        self.renderer.configure(if self.translucent {
+        let target = if self.translucent {
             target.translucent()
         } else {
             target
-        });
-        self.damage = DamageSet::full();
+        };
+        let was = self.renderer.target();
+        self.renderer.configure(target);
+        // What a resize changes is what the layout moves, which damages itself, and the band the
+        // larger extent exposes. A change of scale or opacity changes every pixel there is, and so
+        // does a first configure, which has no picture to keep.
+        match was {
+            Some(was)
+                if was.scale == target.scale
+                    && was.opaque == target.opaque
+                    && self.renderer.composed_survives_configure() =>
+            {
+                for band in exposed(was.size, target.size) {
+                    self.damage.absorb(band);
+                }
+            }
+            _ => self.damage = DamageSet::full(),
+        }
     }
 
     /// Rebuilds the device the cascade is matched against, when the surface moved.
@@ -1624,6 +1640,28 @@ impl Window {
         }
         outcome
     }
+}
+
+/// The parts of `is` that `was` did not cover: a band down the right where the surface widened, and
+/// one across the bottom where it grew taller.
+fn exposed(
+    was: Size<i32, zgui_geom::Device>,
+    is: Size<i32, zgui_geom::Device>,
+) -> impl Iterator<Item = zgui_geom::Rect<i32, zgui_geom::Device>> {
+    let right = (is.width > was.width).then(|| {
+        zgui_geom::Rect::new(
+            zgui_geom::Point::new(was.width, 0),
+            Size::new(is.width - was.width, is.height),
+        )
+    });
+    // Up to where the right band starts, so the two are disjoint.
+    let bottom = (is.height > was.height).then(|| {
+        zgui_geom::Rect::new(
+            zgui_geom::Point::new(0, was.height),
+            Size::new(is.width.min(was.width), is.height - was.height),
+        )
+    });
+    right.into_iter().chain(bottom)
 }
 
 /// Whether layout batches ride the pool, which `ZGUI_LAYOUT_BATCHES=0` opts a run out of.

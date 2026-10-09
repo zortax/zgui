@@ -60,6 +60,12 @@ impl Renderer for NullRenderer {
         true
     }
 
+    /// Yes, for the same reason: a resize that a real renderer answers from the picture it kept
+    /// narrows the frame's damage, and what follows from that is what this harness measures.
+    fn composed_survives_configure(&self) -> bool {
+        true
+    }
+
     fn capabilities(&self) -> zgui::render::RenderCapabilities {
         zgui::render::RenderCapabilities::MINIMAL
     }

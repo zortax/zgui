@@ -71,6 +71,10 @@ impl Renderer for Recording {
         Renderer::configure(&mut self.renderer, target);
     }
 
+    fn composed_survives_configure(&self) -> bool {
+        real_damage() && self.renderer.composed_survives_configure()
+    }
+
     fn target(&self) -> Option<RenderTarget> {
         self.renderer.target()
     }

@@ -23,11 +23,12 @@ impl Renderer for WgpuRenderer {
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        // Every trigger for this — a reconfiguration, a resize, a change of scale factor — changes
-        // what the surface is, so the frame after it cannot rely on what the composed target holds
-        // relative to it. A change of scale alone moves no allocation and would otherwise pass
-        // through here unnoticed.
-        self.full_damage_next |= self.target != target;
+        // A change of scale or of opacity changes what every composed pixel means, and moves no
+        // allocation that would otherwise say so. A change of size alone keeps the composed target
+        // whenever it still fits, and the pixels in it are the last frame's: the caller damages
+        // what the new extent exposes, and a target that had to be allocated again says so below.
+        self.full_damage_next |=
+            self.target.scale != target.scale || self.target.opaque != target.opaque;
         self.target = target;
         self.resize(target.size);
     }
@@ -61,6 +62,12 @@ impl Renderer for WgpuRenderer {
     /// scroll moves are already here.
     fn shifts_composed_pixels(&self) -> bool {
         true
+    }
+
+    /// Yes, unless the configure moved the scale or the opacity or outgrew the target, each of
+    /// which leaves the next frame owing every pixel.
+    fn composed_survives_configure(&self) -> bool {
+        !self.full_damage_next
     }
 
     fn shift_composed(&mut self, shift: zgui_render::ScrollShift) {
