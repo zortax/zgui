@@ -394,15 +394,15 @@ impl RuntimeHost {
                     let restore = trap
                         .restore_to
                         .filter(|node| document.store().index_of(*node).is_some());
-                    (trap.id, trap.options.restore, restore)
+                    (trap.id, trap.options.restore, trap.root, restore)
                 })
                 .collect::<Vec<_>>()
         };
-        for (id, restore, node) in stranded {
+        for (id, restore, root, node) in stranded {
             self.entering
                 .borrow_mut()
                 .forget(FocusTrapId::new(id.get()));
-            if restore {
+            if restore && !self.focus_left(root) {
                 self.issue(Command::Focus(node.map(zgui_view_dom::id::to_view)));
             }
         }
