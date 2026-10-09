@@ -51,6 +51,9 @@ impl Window {
             if !self.deliver_once() {
                 return owed;
             }
+            // The handlers' wakes are answered by this flush, as the frame's own flush answers
+            // the ones before it.
+            self.gate.requests_serviced();
             owed |= zgui_reactive::flush().needs_another_frame;
             self.restyle_and_relayout_after_delivery();
             if pass + 1 == MAX_PASSES {
@@ -199,6 +202,10 @@ impl Window {
     /// is owed anywhere, and the frame's own layout — which ran before this, with this frame's
     /// scroll offsets in it — is the answer.
     pub(crate) fn restyle_and_relayout_after_delivery(&mut self) {
+        // Every change made so far is serviced by this frame: the style and layout ones below, and
+        // the rest by the paint and accessibility stages that still run after this. Left standing,
+        // the flag a handler raised here buys a second frame that damages nothing.
+        self.document.borrow().changes_serviced();
         if !self.owes_further_work() {
             return;
         }

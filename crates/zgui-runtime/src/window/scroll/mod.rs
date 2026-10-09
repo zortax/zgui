@@ -499,6 +499,7 @@ impl Window {
         }
         // A handler's writes have to settle in this frame, exactly as an observation delivery's do,
         // or a virtualised list renders the rows it had before the scroll for one frame.
+        self.gate.requests_serviced();
         zgui_reactive::flush();
         self.carry_out_commands(timestamp);
         self.restyle_and_relayout_after_delivery();
