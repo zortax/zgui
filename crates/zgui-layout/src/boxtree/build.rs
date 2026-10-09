@@ -105,6 +105,7 @@ pub fn retire(document: &mut Document, root: NodeIndex) -> Owed {
 /// document whose root element is hidden both do.
 pub fn build(store: &mut LayoutStore, document: &Document) -> Option<BoxKey> {
     let root = document.root_index()?;
+    counter::bump(Counter::BoxTreeBuilds);
     // The tree that was there is removed before the new one is built. A rebuild issues fresh keys
     // for every box, so leaving the old ones live leaves each element listing boxes from both
     // trees — and every question answered by unioning an element's pieces ("where is this",

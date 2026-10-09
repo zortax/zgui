@@ -48,6 +48,13 @@ counters! {
     /// Boxes rebuilt from their element.
     BoxesRebuilt => boxes_rebuilt, Group::BackendNeutral;
 
+    /// Times the whole document's box tree was built, the first build included.
+    ///
+    /// A whole build gives every box a new name, so every fragment, recorded painting and hit
+    /// entry of the window is made again. A frame that changed one region and counts one here paid
+    /// for the whole window.
+    BoxTreeBuilds => box_tree_builds, Group::BackendNeutral;
+
     /// Nodes whose size or position was computed again.
     NodesRelaidOut => nodes_relaid_out, Group::BackendNeutral;
     /// Boxes whose unrounded layout result moved in the last pass.
@@ -237,6 +244,11 @@ counters! {
 
     /// Extra passes run to deliver size and position observations and let their handlers settle.
     ObservationPasses => observation_passes, Group::BackendNeutral;
+
+    /// Deliveries that still changed a watched value when the pass budget ran out.
+    ///
+    /// Each one costs the window a frame that delivers the rest and paints again.
+    ObservationsTruncated => observations_truncated, Group::BackendNeutral;
 
     /// Timers whose deadline passed and whose callback ran.
     TimersFired => timers_fired, Group::BackendNeutral;

@@ -56,6 +56,7 @@ impl Window {
             if pass + 1 == MAX_PASSES {
                 // The geometry the last relayout produced has not been delivered. The next frame
                 // compares it against what was recorded and delivers it, so one is asked for.
+                counter::bump(Counter::ObservationsTruncated);
                 owed = true;
                 tracing::warn!(
                     target: "zgui::observe",
