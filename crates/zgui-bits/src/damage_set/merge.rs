@@ -12,6 +12,7 @@ pub(super) fn area(rect: Rect<i32, Device>) -> i64 {
 
 /// The pixels a merge of two disjoint rectangles would newly cover, which is the pixels it would
 /// cause to be redrawn for nothing.
+#[cfg(test)]
 fn wasted(left: Rect<i32, Device>, right: Rect<i32, Device>) -> i64 {
     area(left.union(right))
         .saturating_sub(area(left))
@@ -91,6 +92,11 @@ pub(super) fn remainder(
 /// Picks the two rectangles whose union wastes the fewest pixels, out of `existing` plus
 /// `incoming`.
 ///
+/// What a union costs is everything it pulls in: a union that meets a third rectangle is merged
+/// with that one too, so the pixels wasted are counted over the whole closure. Two thin pieces
+/// either side of a column merge into a strip across it, and the column with it, which is the
+/// waste a pair-wise count would miss.
+///
 /// The returned indices are into `existing`, except that `existing.len()` stands for `incoming`.
 /// They are ordered, so the larger can be removed first without disturbing the smaller.
 ///
@@ -118,7 +124,7 @@ pub(super) fn least_wasted_pair(
     let mut best_waste = i64::MAX;
     for left in 0..count {
         for right in (left + 1)..count {
-            let waste = wasted(at(left), at(right));
+            let waste = closure_waste(count, &at, left, right);
             if waste < best_waste {
                 best_waste = waste;
                 best = (left, right);
@@ -128,11 +134,66 @@ pub(super) fn least_wasted_pair(
     best
 }
 
+/// The pixels merging the rectangles at `left` and `right` would redraw for nothing, counting every
+/// other rectangle the union grows over.
+fn closure_waste(
+    count: usize,
+    at: &dyn Fn(usize) -> Rect<i32, Device>,
+    left: usize,
+    right: usize,
+) -> i64 {
+    let mut union = at(left).union(at(right));
+    // The common case, answered without building anything: a union that meets nothing else.
+    if !(0..count).any(|index| index != left && index != right && at(index).intersects(union)) {
+        return area(union)
+            .saturating_sub(area(at(left)))
+            .saturating_sub(area(at(right)));
+    }
+    let mut taken = vec![false; count];
+    taken[left] = true;
+    taken[right] = true;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for (index, held) in taken.iter_mut().enumerate() {
+            if !*held && at(index).intersects(union) {
+                union = union.union(at(index));
+                *held = true;
+                grew = true;
+            }
+        }
+    }
+    let covered = taken
+        .iter()
+        .enumerate()
+        .filter(|(_, held)| **held)
+        .fold(0_i64, |sum, (index, _)| sum.saturating_add(area(at(index))));
+    area(union).saturating_sub(covered)
+}
+
 #[cfg(test)]
 mod tests {
     use zgui_geom::{Device, Point, Rect, Size};
 
     use super::{area, least_wasted_pair, outside, wasted, worth_merging};
+
+    #[test]
+    fn a_merge_that_would_swallow_a_third_rectangle_is_counted_with_it() {
+        // Two slivers either side of a column: merged pair-wise they waste a pixel, and merged in
+        // the set they take the column and everything around it with them.
+        let existing = [
+            rect(1985, 74, 15, 1049),
+            rect(319, 1123, 2241, 18),
+            rect(319, 1122, 1666, 1),
+            rect(2000, 1122, 560, 1),
+        ];
+        let (left, right) = least_wasted_pair(&existing, rect(2545, 116, 15, 1023));
+        assert_ne!(
+            (left, right),
+            (2, 3),
+            "the slivers' union crosses the column"
+        );
+    }
 
     /// A rectangle in whole device pixels.
     fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect<i32, Device> {

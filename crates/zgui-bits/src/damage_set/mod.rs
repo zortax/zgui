@@ -201,6 +201,11 @@ impl<const N: usize> DamageSet<N> {
             self.remove(index);
             rect = held.union(rect);
         }
+        // The common case, answered without carving anything: it meets nothing held.
+        if !self.rects().iter().any(|held| held.intersects(rect)) {
+            self.push(rect);
+            return;
+        }
         // Two rectangles meeting at a corner — the band a widened window exposes down its right
         // and the one across its bottom — would merge into everything between them. What is left
         // of this one outside every held rectangle is added in disjoint pieces instead.
