@@ -127,12 +127,8 @@ pub(crate) struct RecalcStyle<'a> {
     workers: AtomicU32,
     /// Which custom properties each visited element's inherited map changed by, for its children.
     pub(super) custom_changes: Mutex<FxHashMap<NodeIndex, Arc<ChangedNames>>>,
-    /// What each rule chain reads and declares, by a hash of the declaration blocks it names.
-    ///
-    /// The node is held beside the answer so the blocks it names stay allocated while the answer
-    /// is filed under their addresses. Lives for one traversal: a chain is shared by every element
-    /// that matched the same rules, which is what makes the scan cheap.
-    pub(super) refs: Mutex<FxHashMap<u64, (StrongRuleNode, Arc<RuleRefs>)>>,
+    /// What each rule chain reads and declares, held by the engine across traversals.
+    pub(super) refs: &'a RefsCache,
     /// The custom properties whose presence makes an element read custom properties by any name.
     ///
     /// A shader or filter takes its parameters from custom properties named after itself, so an
@@ -140,15 +136,51 @@ pub(crate) struct RecalcStyle<'a> {
     pub(super) wildcard_names: [style::custom_properties::Name; 4],
 }
 
+/// What each rule chain reads and declares, by a hash of the declaration blocks it names.
+///
+/// The node is held beside the answer so the blocks it names stay allocated while the answer is
+/// filed under their addresses, and no other block can take an address a key names. A chain is
+/// shared by every element that matched the same rules, and the declarations it names never
+/// change, so an answer stays true for as long as it is held. The engine bounds how many it holds.
+#[derive(Default)]
+pub(crate) struct RefsCache {
+    /// The answers.
+    held: Mutex<FxHashMap<u64, (StrongRuleNode, Arc<RuleRefs>)>>,
+}
+
+impl RefsCache {
+    /// How many chains are held before the answers are given back.
+    ///
+    /// Every element whose inline style changed brings a chain of its own, so a window that keeps
+    /// writing one would otherwise hold a chain for every value it ever wrote.
+    const KEPT: usize = 4096;
+
+    /// Gives every answer back, which also lets the rule tree free the chains they held.
+    pub(crate) fn clear(&self) {
+        self.held
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .clear();
+    }
+
+    /// Gives every answer back once more than [`Self::KEPT`] are held.
+    pub(crate) fn trim(&self) {
+        let mut held = self.held.lock().unwrap_or_else(|held| held.into_inner());
+        if held.len() > Self::KEPT {
+            held.clear();
+        }
+    }
+}
+
 impl<'a> RecalcStyle<'a> {
     /// A traversal over `context`.
-    pub(crate) fn new(context: SharedStyleContext<'a>) -> Self {
+    pub(crate) fn new(context: SharedStyleContext<'a>, refs: &'a RefsCache) -> Self {
         Self {
             context,
             restyled: PerWorker::new(),
             workers: AtomicU32::new(0),
             custom_changes: Mutex::new(FxHashMap::default()),
-            refs: Mutex::new(FxHashMap::default()),
+            refs,
             wildcard_names: zgui_css::values::custom::WILDCARD_DECLARERS
                 .map(style::custom_properties::Name::from),
         }
@@ -205,7 +237,11 @@ impl<'a> RecalcStyle<'a> {
             address.hash(&mut hasher);
         }
         let key = hasher.finish();
-        let mut cache = self.refs.lock().unwrap_or_else(|held| held.into_inner());
+        let mut cache = self
+            .refs
+            .held
+            .lock()
+            .unwrap_or_else(|held| held.into_inner());
         if let Some((_, refs)) = cache.get(&key) {
             return Arc::clone(refs);
         }

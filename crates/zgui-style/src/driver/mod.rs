@@ -112,6 +112,8 @@ pub(crate) struct Pass<'a> {
     pub(crate) animations: DocumentAnimationSet,
     /// The instant animation-derived values are resolved at.
     pub(crate) now: AnimationTime,
+    /// What each rule chain reads and declares, as far as earlier traversals found out.
+    pub(crate) refs: &'a traversal::RefsCache,
 }
 
 /// Runs one traversal over the document and reports what it styled.
@@ -136,6 +138,7 @@ pub(crate) fn run_pass(
         pool,
         animations,
         now,
+        refs,
     } = pass;
     let Some(root) = document.root() else {
         return (Vec::new(), 0, false, Duration::ZERO);
@@ -173,7 +176,7 @@ pub(crate) fn run_pass(
     // The traversal styles each element against the table it drops a finished animation from,
     // so the animations that fill forwards are held running for its length.
     let held = fill::hold(&table);
-    let traverser = RecalcStyle::new(context);
+    let traverser = RecalcStyle::new(context, refs);
     // A worker that panics leaves per-element bookkeeping in a state no later traversal can
     // interpret, and the worker that panicked holds nothing anyone can inspect, so the document is
     // poisoned on the way out and the panic keeps going.

@@ -77,6 +77,8 @@ pub struct StyleEngine {
     ///
     /// Each keeps its hint until a restyle finds it in the document again.
     animation_waiting: Vec<zgui_dom::NodeKey>,
+    /// What each rule chain reads and declares, kept from one restyle to the next.
+    refs: crate::driver::traversal::RefsCache,
     /// The user-agent sheet, held so that it stays installed.
     _user_agent: SheetHandle,
 }
@@ -123,6 +125,7 @@ impl StyleEngine {
             animations: Animations::new(),
             animation_marks: Vec::new(),
             animation_waiting: Vec::new(),
+            refs: crate::driver::traversal::RefsCache::default(),
             _user_agent: user_agent,
         }
     }

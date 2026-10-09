@@ -81,6 +81,12 @@ impl StyleEngine {
         // recomputed first.
         let from = document.document_index();
         zgui_dom::side::readers::settle(document.store_mut(), from);
+        // A changed sheet set leaves the held chains naming rules no element matches any more.
+        if self.deps.is_disabled() {
+            self.refs.clear();
+        } else {
+            self.refs.trim();
+        }
 
         let snapshots = crate::driver::snapshots::RestyleSnapshots::take(document);
         let mut report = Restyle {
@@ -107,6 +113,7 @@ impl StyleEngine {
                         pool,
                         animations: self.animations.shared(),
                         now: self.animations.now(),
+                        refs: &self.refs,
                     },
                     TraversalFlags::AnimationOnly,
                 );
@@ -132,6 +139,7 @@ impl StyleEngine {
                         pool,
                         animations: self.animations.shared(),
                         now: self.animations.now(),
+                        refs: &self.refs,
                     },
                     TraversalFlags::empty(),
                 );
