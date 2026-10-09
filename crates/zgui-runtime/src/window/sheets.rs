@@ -19,10 +19,19 @@ impl Window {
     pub(crate) fn install_view_sheet(&mut self, name: &str, css: &str) {
         let document = self.document.borrow();
         let diagnostics = match self.view_sheets.get(name) {
-            Some(handle) => self
-                .engine
-                .replace_sheet(&document, handle, SheetSource::Text(css)),
+            Some(handle) => {
+                let diagnostics =
+                    self.engine
+                        .replace_sheet(&document, handle, SheetSource::Text(css));
+                // Replaced rules may have styled any element in the tree, and rules that are gone
+                // leave no selector to invalidate by.
+                self.engine.force_author_rules_dirty();
+                diagnostics
+            }
             None => {
+                // An added sheet is appended to the rule set and invalidates by its own
+                // selectors. The elements the component that installs it is building have no
+                // style yet, so they are styled against it in this frame whatever it invalidates.
                 let (handle, diagnostics) =
                     self.engine
                         .add_sheet(&document, SheetOrigin::Author, SheetSource::Text(css));
@@ -31,9 +40,6 @@ impl Window {
             }
         };
         drop(document);
-        // The elements the sheet styles may already be in the tree: a component installs its own
-        // rules while it is being built, and the rule set receives them after the build.
-        self.engine.force_author_rules_dirty();
         for report in diagnostics.iter() {
             tracing::warn!(
                 target: "zgui::css",
