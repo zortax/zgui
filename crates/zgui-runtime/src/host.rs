@@ -411,9 +411,11 @@ impl RuntimeHost {
     /// Whether focus stands on a node of the document outside the subtree of `root`.
     fn focus_left(&self, root: NodeKey) -> bool {
         use zgui_reactive::prelude::GetUntracked;
+        // A window that is closing has no focus left to keep.
         let Some(focused) = self
             .focused
-            .get_untracked()
+            .try_get_untracked()
+            .flatten()
             .and_then(|node| self.key_of(node))
         else {
             return false;
