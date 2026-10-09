@@ -10,7 +10,7 @@ style! { pub ResizableStyle =>
     ".zui-resizable__panel {
         display: flex;
         flex-direction: column;
-        flex: 0 0 var(--zui-panel-size, auto);
+        flex: 0 0 auto;
         overflow: hidden;
     }"
 

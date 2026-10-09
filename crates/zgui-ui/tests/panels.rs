@@ -24,6 +24,11 @@ fn all_with(harness: &Harness, class: &str) -> Vec<NodeId> {
         .collect()
 }
 
+/// The basis a panel publishes for its share of the group.
+fn basis(harness: &Harness, node: NodeId) -> Option<String> {
+    harness.window.dom.tree().style_property(node, "flex-basis")
+}
+
 /// What a node is publishing for one custom property.
 fn custom(harness: &Harness, node: NodeId, property: &str) -> Option<String> {
     harness
@@ -239,14 +244,8 @@ fn two_panels_share_the_group_out_between_them() {
     let harness = Harness::open();
     let (_, panels) = split(&harness);
 
-    assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("50.0000%")
-    );
-    assert_eq!(
-        custom(&harness, panels[1], "zui-panel-size").as_deref(),
-        Some("50.0000%")
-    );
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("50.0000%"));
+    assert_eq!(basis(&harness, panels[1]).as_deref(), Some("50.0000%"));
 }
 
 #[test]
@@ -271,15 +270,12 @@ fn a_panel_that_goes_gives_its_share_back() {
     let group = harness.only_child();
     harness.window.place(group, 0.0, 0.0, 400.0, 300.0);
     let list = all_with(&harness, "zui-resizable__panel")[0];
-    assert_eq!(
-        custom(&harness, list, "zui-panel-size").as_deref(),
-        Some("50.0000%")
-    );
+    assert_eq!(basis(&harness, list).as_deref(), Some("50.0000%"));
 
     reading.set(false);
     harness.window.frame();
     assert_eq!(
-        custom(&harness, list, "zui-panel-size").as_deref(),
+        basis(&harness, list).as_deref(),
         Some("100.0000%"),
         "the panel that stays fills the group again"
     );
@@ -306,12 +302,9 @@ fn dragging_a_divider_takes_from_one_panel_and_gives_to_the_other() {
     );
 
     // 80 of 400 CSS pixels is a fifth of the group.
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("70.0000%"));
     assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("70.0000%")
-    );
-    assert_eq!(
-        custom(&harness, panels[1], "zui-panel-size").as_deref(),
+        basis(&harness, panels[1]).as_deref(),
         Some("30.0000%"),
         "the group is no longer accounted for"
     );
@@ -337,12 +330,9 @@ fn a_divider_stops_at_the_minimum_of_the_panel_it_is_squeezing() {
         0.0,
     );
 
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("80.0000%"));
     assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("80.0000%")
-    );
-    assert_eq!(
-        custom(&harness, panels[1], "zui-panel-size").as_deref(),
+        basis(&harness, panels[1]).as_deref(),
         Some("20.0000%"),
         "the panel beside it was squeezed past its declared minimum"
     );
@@ -358,23 +348,14 @@ fn a_divider_can_be_moved_from_the_keyboard_and_says_where_it_is() {
     assert_eq!(harness.semantics(handle).numeric.min, Some(20.0));
 
     harness.press(handle, NamedKey::ArrowRight);
-    assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("60.0000%")
-    );
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("60.0000%"));
     assert_eq!(harness.semantics(handle).numeric.value, Some(60.0));
 
     harness.press(handle, NamedKey::Home);
-    assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("20.0000%")
-    );
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("20.0000%"));
 
     harness.press(handle, NamedKey::End);
-    assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("80.0000%")
-    );
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("80.0000%"));
 }
 
 #[test]
@@ -383,20 +364,14 @@ fn enter_folds_the_panel_before_the_divider_and_brings_it_back_where_it_was() {
     let (handle, panels) = split(&harness);
 
     harness.press(handle, NamedKey::ArrowRight);
-    assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("60.0000%")
-    );
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("60.0000%"));
+
+    harness.press(handle, NamedKey::Enter);
+    assert_eq!(basis(&harness, panels[0]).as_deref(), Some("20.0000%"));
 
     harness.press(handle, NamedKey::Enter);
     assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
-        Some("20.0000%")
-    );
-
-    harness.press(handle, NamedKey::Enter);
-    assert_eq!(
-        custom(&harness, panels[0], "zui-panel-size").as_deref(),
+        basis(&harness, panels[0]).as_deref(),
         Some("60.0000%"),
         "it came back at some other size than the one it had"
     );

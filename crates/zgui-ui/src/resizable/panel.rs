@@ -30,8 +30,7 @@ use crate::resizable::{ResizableContext, SHEET};
 /// ```
 ///
 /// Sizes are percentages of the group, and the group shares out whatever the declared numbers do
-/// not add up to. A panel's own share reaches the layout as `--zui-panel-size`, so a caller who
-/// wants a different flex rule writes one in CSS without any of this changing.
+/// not add up to. A panel's own share reaches the layout as its `flex-basis`.
 #[component]
 pub fn ResizablePanel(
     /// What share of the group this panel starts with, as a percentage.
@@ -115,11 +114,10 @@ pub fn ResizablePanel(
     if let Some(text) = label {
         semantics = semantics.label(text);
     }
+    // A basis on the panel itself rather than an inherited custom property: a step of a drag then
+    // restyles the panel, and nothing inside it inherits a new value.
     let own = Attrs::new()
-        .custom_property(
-            zgui::view::CustomPropertyName::new("zui-panel-size"),
-            move || Some(format!("{:.4}%", share())),
-        )
+        .style_property("flex-basis", move || Some(format!("{:.4}%", share())))
         .a11y_from(semantics);
 
     view! {
