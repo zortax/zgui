@@ -408,14 +408,26 @@ impl RuntimeHost {
         }
     }
 
-    /// Whether focus stands on a node of the document outside the subtree of `root`.
+    /// Whether focus stands, or is on its way, to a node of the document outside the subtree of
+    /// `root`.
+    ///
+    /// A focus request issued in the same turn and not yet carried out counts as where focus goes:
+    /// an entry of a menu that opens a tab asks for the tab's focus before the menu finishes going,
+    /// and the request lands after the menu's trap has come down.
     fn focus_left(&self, root: NodeKey) -> bool {
         use zgui_reactive::prelude::GetUntracked;
+        let asked = self
+            .commands
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|command| match command {
+                Command::Focus(node) => Some(*node),
+                _ => None,
+            });
         // A window that is closing has no focus left to keep.
-        let Some(focused) = self
-            .focused
-            .try_get_untracked()
-            .flatten()
+        let Some(focused) = asked
+            .unwrap_or_else(|| self.focused.try_get_untracked().flatten())
             .and_then(|node| self.key_of(node))
         else {
             return false;

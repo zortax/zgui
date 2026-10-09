@@ -266,3 +266,41 @@ fn focus_that_left_a_going_surface_stays_where_it_went() {
         "the surface took the keyboard back from where it went"
     );
 }
+
+#[test]
+fn focus_asked_for_in_the_turn_a_surface_goes_stays_where_it_was_asked() {
+    // An entry of a menu opens a tab and asks for the tab's focus, and the menu goes in the same
+    // turn, before the request is carried out. The tab gets the keyboard.
+    let mut script = scripted();
+    script.harness.settle(8);
+    script.press(NamedKey::Tab, KeyCode::Tab, Modifiers::NONE);
+    assert_eq!(script.where_focus_is(), "trigger");
+
+    *script.guard.borrow_mut() = script.dialog.trap_focus(FocusTrapOptions::MODAL);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "first");
+
+    script.fourth.focus();
+    script.guard.borrow_mut().take();
+    script.harness.settle(8);
+    assert_eq!(
+        script.where_focus_is(),
+        "fourth",
+        "the going surface put focus back over the request made before it went"
+    );
+}
+
+#[test]
+fn a_surface_that_goes_with_focus_asked_inside_it_still_restores() {
+    // A request for a control inside the going surface is no place to stay.
+    let mut script = scripted();
+    script.harness.settle(8);
+    script.press(NamedKey::Tab, KeyCode::Tab, Modifiers::NONE);
+
+    *script.guard.borrow_mut() = script.dialog.trap_focus(FocusTrapOptions::MODAL);
+    script.harness.settle(8);
+    script.inside[2].focus();
+    script.guard.borrow_mut().take();
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "trigger");
+}
