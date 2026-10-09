@@ -377,11 +377,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: crossing.p50,
                 band: Band::Time {
-                    baseline: 2_000.0,
+                    baseline: 1_250.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "one tooltip mounted on its band and one unmounted; the page is not \
-                            built again for either",
+                rationale: "measured at 1.24 ms; one tooltip mounted on its band and the last \
+                            one handed over, and the page built again for neither (10-11 ms \
+                            while every mount rebuilt the document's boxes)",
                 budget: Some(4_000.0),
                 spread: Some(crossing),
             },
@@ -410,11 +411,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: step.p50,
                 band: Band::Time {
-                    baseline: 3_000.0,
+                    baseline: 300.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "one edge moved: two panels sized, the page's rows moved, the log's \
-                            newly exposed lines built",
+                rationale: "measured at 0.30 ms; one edge moved: two panels sized, the strips \
+                            along the edge repainted, the log's newly exposed lines built",
                 budget: Some(8_333.0),
                 spread: Some(step),
             },
@@ -451,9 +452,9 @@ pub(crate) fn run() -> Outcome {
                 name: "shell.drag_primitives_emitted",
                 unit: "prims",
                 value: dragged.emitted,
-                band: Band::Count { ceiling: 100_000 },
-                rationale: "recorded to show what a drag step paints; banded loosely until the \
-                            damage of a resized box is narrowed",
+                band: Band::Count { ceiling: 1_000 },
+                rationale: "measured at 864: the strips along the moved edge and the log's \
+                            lines, never the page above it",
                 budget: None,
                 spread: None,
             },
@@ -462,10 +463,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: size.p50,
                 band: Band::Time {
-                    baseline: 8_000.0,
+                    baseline: 2_000.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "every box is asked again at a new size, once, in one frame",
+                rationale: "measured at 1.2-2.1 ms; every box is asked again at a new size, \
+                            once, in one frame, and only what moved and what is exposed is \
+                            painted",
                 budget: None,
                 spread: Some(size),
             },
