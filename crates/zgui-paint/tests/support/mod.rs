@@ -231,7 +231,8 @@ impl Harness {
 
     /// Rebuilds the box tree and recomposes, which is what a structural change costs.
     pub(crate) fn rebuild(&mut self, width: f32, height: f32) {
-        self.store = LayoutStore::new(self.document.store().document());
+        // In the same store, as a frame does: the pieces the old tree had are retired, and the
+        // rectangles they covered reach the damage through the fragment pass.
         zgui_layout::boxtree::build(&mut self.store, &self.document);
         self.compose(width, height);
     }

@@ -1287,7 +1287,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     && previous
                         .as_ref()
                         .is_some_and(|previous| repositioned_within(previous, next));
-                if !repositioned {
+                // A box born painting nothing owes nothing of its own: whatever is drawn inside it
+                // belongs to pieces born with it, which damage themselves, and what stood there
+                // before is damaged by the pieces that left.
+                let born_empty =
+                    self.born_order.is_some() && paints_nothing_itself(kind, next.flags);
+                if !repositioned && !born_empty {
                     match previous
                         .as_ref()
                         .and_then(|previous| self.resized_edges(previous, kind, next))
@@ -1435,6 +1440,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             };
         }
     }
+}
+
+/// Whether a piece is a box whose own painting is nothing.
+fn paints_nothing_itself(kind: FragmentKind, flags: FragmentFlags) -> bool {
+    kind == FragmentKind::Box && flags.contains(FragmentFlags::PAINTS_NOTHING)
 }
 
 /// The strips along every edge that differs between `was` and `is`, each reaching `reach` to
