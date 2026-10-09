@@ -240,3 +240,29 @@ fn a_dialog_that_goes_under_a_newer_one_leaves_it_the_keyboard() {
     script.harness.settle(8);
     assert_eq!(script.where_focus_is(), "trigger");
 }
+
+#[test]
+fn focus_that_left_a_going_surface_stays_where_it_went() {
+    // An entry of a menu opens a panel and hands it the keyboard while the menu is still going.
+    // The menu then finishes going, and the panel keeps the keyboard.
+    let mut script = scripted();
+    script.harness.settle(8);
+    script.press(NamedKey::Tab, KeyCode::Tab, Modifiers::NONE);
+    assert_eq!(script.where_focus_is(), "trigger");
+
+    *script.guard.borrow_mut() = script.dialog.trap_focus(FocusTrapOptions::MODAL);
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "first");
+
+    script.fourth.focus();
+    script.harness.settle(8);
+    assert_eq!(script.where_focus_is(), "fourth");
+
+    script.guard.borrow_mut().take();
+    script.harness.settle(8);
+    assert_eq!(
+        script.where_focus_is(),
+        "fourth",
+        "the surface took the keyboard back from where it went"
+    );
+}

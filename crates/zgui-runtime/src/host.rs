@@ -408,6 +408,25 @@ impl RuntimeHost {
         }
     }
 
+    /// Whether focus stands on a node of the document outside the subtree of `root`.
+    fn focus_left(&self, root: NodeKey) -> bool {
+        use zgui_reactive::prelude::GetUntracked;
+        let Some(focused) = self
+            .focused
+            .get_untracked()
+            .and_then(|node| self.key_of(node))
+        else {
+            return false;
+        };
+        let document = self.document.borrow();
+        let store = document.store();
+        let Some(top) = document.root_index().map(|index| store.key_of(index)) else {
+            return false;
+        };
+        let chain = zgui_input::HitChain::to_root(store, focused);
+        chain.contains(top) && !chain.contains(root)
+    }
+
     /// Whether any self-focusing trap is still waiting to be entered.
     pub fn owes_focus(&self) -> bool {
         !self.entering.borrow().is_empty()
@@ -647,6 +666,11 @@ impl ViewHost for RuntimeHost {
         // A trap under a newer one leaves focus where the newer one holds it, and hands it the
         // place it restores to.
         if !trap.options.restore || !topmost {
+            return;
+        }
+        // Focus that moved out of the surface while it went, to a tab a menu entry opened or to
+        // the control a press outside landed on, stays where it went.
+        if self.focus_left(trap.root) {
             return;
         }
         // Focus goes back to whatever opened the dialog. Dropping it instead leaves the whole
