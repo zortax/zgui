@@ -96,7 +96,8 @@ pub fn expand(
             if !damage.intersects(source) || contains(damage, source) {
                 continue;
             }
-            damage.absorb(source);
+            // Whole, because the test above asks whether one rectangle covers the source.
+            damage.absorb_whole(source);
             report.absorbed += 1;
             grew = true;
         }

@@ -166,8 +166,13 @@ impl<const N: usize> DamageSet<N> {
         self.full = false;
     }
 
-    /// Unions `rect` in and merges into it every existing rectangle it touches, so afterwards a
-    /// single rectangle of the set contains all of `rect`.
+    /// Adds `rect`, keeping the set disjoint.
+    ///
+    /// A rectangle that overlaps a held one is merged with it when their union adds at most a
+    /// quarter of its own area to what the two cover. One that only meets a held one at a corner
+    /// is kept apart instead: the part of it outside the held one is added in disjoint pieces, as
+    /// long as they fit the set's room. Otherwise the two merge, so the set still never grows past
+    /// its bound.
     ///
     /// Empty rectangles are ignored, and a full set stays full and stays as it is.
     ///
@@ -182,10 +187,51 @@ impl<const N: usize> DamageSet<N> {
     /// optimisation of the merge loop: it is the case a scroll produces thousands of times per
     /// frame, once for every piece of a list that moved inside a scrollport already damaged whole.
     pub fn absorb(&mut self, rect: Rect<i32, Device>) {
-        if self.full || rect.is_empty() {
+        if self.full || rect.is_empty() || self.contains(rect) {
             return;
         }
-        if self.contains(rect) {
+        // The held rectangles that overlap it closely enough to be one region with it.
+        let mut rect = rect;
+        while let Some(index) = self
+            .rects()
+            .iter()
+            .position(|held| held.intersects(rect) && merge::worth_merging(*held, rect))
+        {
+            let held = self.rects[index];
+            self.remove(index);
+            rect = held.union(rect);
+        }
+        // Two rectangles meeting at a corner — the band a widened window exposes down its right
+        // and the one across its bottom — would merge into everything between them. What is left
+        // of this one outside every held rectangle is added in disjoint pieces instead.
+        match merge::remainder(rect, self.rects(), N) {
+            // Past the room, each piece makes room for itself by merging whichever two
+            // rectangles waste the least, which is rarely the two arms of a corner.
+            Some(pieces) => {
+                for piece in pieces {
+                    // A merge made room for an earlier piece may have grown over this one.
+                    if self.rects().iter().any(|held| held.intersects(piece)) {
+                        self.absorb_whole(piece);
+                    } else {
+                        self.push(piece);
+                    }
+                }
+            }
+            None => self.absorb_whole(rect),
+        }
+    }
+
+    /// Adds `rect` so that one held rectangle contains the whole of it.
+    ///
+    /// [`DamageSet::absorb`] may keep a rectangle that meets another at a corner in pieces. A
+    /// caller that asks afterwards whether one rectangle covers what it added — a fixpoint that
+    /// stops once every source it grows by is inside the set — needs it whole.
+    ///
+    /// Every held rectangle it touches is merged into it, and the union absorbed again, so the
+    /// merge is transitively closed: `A ∪ B` can meet a third rectangle that lay between them and
+    /// touched neither.
+    pub fn absorb_whole(&mut self, rect: Rect<i32, Device>) {
+        if self.full || rect.is_empty() || self.contains(rect) {
             return;
         }
         let mut merged = rect;
@@ -279,13 +325,13 @@ impl<const N: usize> DamageSet<N> {
         if right == self.len {
             let union = self.rects[left].union(rect);
             self.remove(left);
-            self.absorb(union);
+            self.absorb_whole(union);
         } else {
             let union = self.rects[left].union(self.rects[right]);
             self.remove(right);
             self.remove(left);
             self.push(rect);
-            self.absorb(union);
+            self.absorb_whole(union);
         }
     }
 

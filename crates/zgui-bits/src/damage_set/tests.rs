@@ -78,15 +78,20 @@ proptest! {
         prop_assert!(set.area().expect("not full") >= expected.len() as i64);
     }
 
-    /// After absorbing a rectangle, one single rectangle of the set contains all of it — which is
-    /// what a plain push cannot promise and what the read-extent expansion depends on.
+    /// After absorbing a rectangle whole, one single rectangle of the set contains all of it —
+    /// which is what a plain push cannot promise and what the read-extent expansion depends on.
     #[test]
-    fn absorbing_leaves_one_rectangle_containing_the_whole_input(
+    fn absorbing_whole_leaves_one_rectangle_containing_the_whole_input(
         inputs in prop::collection::vec(any_rect(), 1..24),
     ) {
         let mut set = DamageSet::<4>::new();
-        for input in inputs {
-            set.absorb(input);
+        for (index, input) in inputs.into_iter().enumerate() {
+            // Mixed with ordinary absorbs, which may have left pieces for this one to meet.
+            if index % 2 == 0 {
+                set.absorb(input);
+                continue;
+            }
+            set.absorb_whole(input);
             if input.is_empty() {
                 continue;
             }
