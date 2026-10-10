@@ -38,9 +38,10 @@ use zgui_profile::{Counter, Counters};
 use crate::scenario::vector::timing::Frames;
 
 /// Every (scenario, variant) pair, in the order `all` runs them.
-pub(crate) const ALL: [(&str, &str); 8] = [
+pub(crate) const ALL: [(&str, &str); 9] = [
     ("scatter-pan", "mask-512"),
     ("scatter-pan", "mask-2k"),
+    ("scatter-pan", "markers-200"),
     ("scatter-pan", "10k"),
     ("scatter-pan", "100k"),
     ("icons-scroll", "icons"),

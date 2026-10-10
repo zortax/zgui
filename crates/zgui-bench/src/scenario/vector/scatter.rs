@@ -4,8 +4,9 @@
 //! circle of four cubic segments, all of them in one path with one solid fill. The pan moves the
 //! range, so every frame draws a path nothing has drawn before.
 //!
-//! `mask-512` and `mask-2k` are small enough for the mask route. `10k` and `100k` are plot-sized and
-//! take the general route.
+//! `mask-512` and `mask-2k` are small enough for the mask route. `markers-200` is a grid of circles
+//! far enough apart for the analytic route. `10k` and `100k` are plot-sized and take the general
+//! route.
 
 use std::rc::Rc;
 
@@ -54,15 +55,18 @@ struct Plot {
     height: f32,
     /// How many points the range shows.
     visible: usize,
+    /// Whether the points stand on a grid rather than at random.
+    grid: bool,
 }
 
 /// The variant's plot.
 fn plot(variant: &str) -> Plot {
-    let (class, width, height, visible) = match variant {
-        "mask-512" => ("plot-small", 240.0, 180.0, 512),
-        "mask-2k" => ("plot-small", 240.0, 180.0, 2_048),
-        "10k" => ("plot-large", 960.0, 540.0, 10_000),
-        "100k" => ("plot-large", 960.0, 540.0, 100_000),
+    let (class, width, height, visible, grid) = match variant {
+        "mask-512" => ("plot-small", 240.0, 180.0, 512, false),
+        "mask-2k" => ("plot-small", 240.0, 180.0, 2_048, false),
+        "markers-200" => ("plot-small", 240.0, 180.0, 200, true),
+        "10k" => ("plot-large", 960.0, 540.0, 10_000, false),
+        "100k" => ("plot-large", 960.0, 540.0, 100_000, false),
         other => panic!("unknown scatter-pan variant `{other}`"),
     };
     Plot {
@@ -70,14 +74,32 @@ fn plot(variant: &str) -> Plot {
         width,
         height,
         visible,
+        grid,
     }
 }
 
-/// Twice the visible points, over `x` in `0..2` and `y` in `0..1`.
-fn data(visible: usize) -> Rc<Vec<(f64, f64)>> {
+/// The points over `x` in `0..2` and `y` in `0..1`.
+///
+/// At random, twice the visible points. On a grid, 40 columns and 10 rows, so a range of width one
+/// shows about 210 points, 12 pixels apart across and 18 down on the small plot.
+fn data(plot: Plot) -> Rc<Vec<(f64, f64)>> {
+    if plot.grid {
+        return Rc::new(
+            (0..40)
+                .flat_map(|column| {
+                    (0..10).map(move |row| {
+                        (
+                            (f64::from(column) + 0.5) / 20.0,
+                            (f64::from(row) + 0.5) / 10.0,
+                        )
+                    })
+                })
+                .collect(),
+        );
+    }
     let mut random = Lcg::new(0x5CA7_7E12);
     Rc::new(
-        (0..visible * 2)
+        (0..plot.visible * 2)
             .map(|_| (random.next() * 2.0, random.next()))
             .collect(),
     )
@@ -109,7 +131,7 @@ fn scatter_path(points: &[(f64, f64)], low: f64, width: f64, height: f64) -> Bez
 
 /// The document: the canvas and sixteen tick labels.
 fn view(plot: Plot) -> impl IntoView {
-    let points = data(plot.visible);
+    let points = data(plot);
     let low = RwSignal::new_local(1.0_f64);
     let grab: RwSignal<Option<f32>, zgui::reactive::LocalStorage> = RwSignal::new_local(None);
     let canvas = zgui::elements::canvas()
