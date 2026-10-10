@@ -1,6 +1,6 @@
 use zgui_scene::kurbo::{BezPath, PathEl};
 
-use super::{MAX_GEOMETRIES, SplitDeclined, Winding, geometry_of, phase_of, split};
+use super::{MAX_GEOMETRIES, SplitDeclined, Winding, geometry_of, split};
 
 /// The identity map.
 const IDENTITY: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
@@ -233,34 +233,4 @@ fn an_outline_that_crosses_itself_winds_both_ways() {
         &[(4.0, 4.0), (12.0, 4.0), (12.0, 12.0), (4.0, 12.0)],
     );
     assert!(winding(&overlapping).mixed());
-}
-
-#[test]
-fn the_phase_split_errs_at_most_an_eighth_of_a_pixel() {
-    let mut state = 0x2545_F491_4F6C_DD1Du64;
-    let mut next = || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        (state >> 11) as f64 / (1u64 << 53) as f64
-    };
-    for _ in 0..100_000 {
-        let device = ((next() - 0.5) * 4096.0) as f32;
-        let (pixel, phase) = phase_of(device);
-        assert!(phase < 4);
-        let quantised = pixel as f32 + f32::from(phase) / 4.0;
-        assert!(
-            (quantised - device).abs() <= 0.125 + 1.0e-4,
-            "{device} splits into {pixel} and {phase}"
-        );
-        // A tie rounds up here and away from zero for a pen; every other position agrees.
-        let ties = (4.0 * device).fract().abs() == 0.5;
-        if !ties {
-            let pen = zgui_text::PenPosition::of(device);
-            assert_eq!(pen.pen(), pixel as f32, "{device}");
-            assert_eq!(pen.offset().0, phase, "{device}");
-        }
-    }
-    assert_eq!(phase_of(-0.3), (-1, 3));
-    assert_eq!(phase_of(2.9), (3, 0));
 }

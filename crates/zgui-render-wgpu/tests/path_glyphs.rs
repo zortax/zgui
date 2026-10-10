@@ -107,6 +107,80 @@ fn the_glyph_lane_draws_the_cell_of_the_device_phase() {
     }
 }
 
+/// The fractions an anchor is placed at: every 32nd of a pixel, and a 256th either side of each
+/// boundary between two phases.
+fn fractions() -> Vec<f32> {
+    let mut fractions: Vec<f32> = (0..32).map(|step| step as f32 / 32.0).collect();
+    for boundary in [0.125f32, 0.375, 0.625, 0.875] {
+        fractions.push(boundary - 1.0 / 256.0);
+        fractions.push(boundary + 1.0 / 256.0);
+    }
+    fractions
+}
+
+#[test]
+fn the_drawn_phase_lies_within_an_eighth_of_the_anchor() {
+    // Each copy lights one pixel with the level of its phase, so the readback names the pixel and
+    // the phase the shader chose on each axis.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let (table, texture) = sheet(&mut renderer);
+    let fractions = fractions();
+    let base = |index: usize| (10 + 12 * (index % 9), 10 + 12 * (index / 9));
+    let anchors: Vec<[f32; 2]> = (0..fractions.len())
+        .map(|index| {
+            let (x, y) = base(index);
+            let fy = fractions[(index * 7 + 3) % fractions.len()];
+            [x as f32 + fractions[index], y as f32 + fy]
+        })
+        .collect();
+    let mut glyphs = table.clone();
+    for anchor in &anchors {
+        let offset = glyphs.len() as u32;
+        glyphs.push([anchor[0].to_bits(), anchor[1].to_bits(), 0, offset]);
+    }
+    let payload = MarkPayload {
+        glyphs,
+        ..MarkPayload::default()
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let white = PaintRef::solid(scene.paints.solid(Color::srgb_u8(255, 255, 255, 255)));
+    let mut item = MarkItem::new(rect(0.0, 0.0, 128.0, 128.0), white, payload.counts());
+    item.tiles = table.len() as u32;
+    item.texture = texture;
+    scene.push_marks(item, Arc::new(payload));
+    scene.finish(&DamageSet::full());
+    let pixels = present(&mut renderer, &scene);
+
+    for (index, anchor) in anchors.iter().enumerate() {
+        let (x, y) = base(index);
+        let lit: Vec<(i32, i32, u8)> = (-1..3)
+            .flat_map(|dy| (-1..3).map(move |dx| (x as i32 + dx, y as i32 + dy)))
+            .filter_map(|(px, py)| {
+                let alpha = pixels.rgba(px, py)[3];
+                (alpha > 0).then_some((px, py, alpha))
+            })
+            .collect();
+        let [(px, py, alpha)] = lit.as_slice() else {
+            panic!("the copy at {anchor:?} lit {lit:?}");
+        };
+        let phase = (f32::from(*alpha) / 15.0).round() as i32 - 1;
+        assert!((0..16).contains(&phase), "level {alpha} at {anchor:?}");
+        let drawn = [
+            *px as f32 + (phase % 4) as f32 / 4.0,
+            *py as f32 + (phase / 4) as f32 / 4.0,
+        ];
+        for axis in 0..2 {
+            assert!(
+                (drawn[axis] - anchor[axis]).abs() <= 0.125,
+                "the copy at {anchor:?} is drawn at {drawn:?}"
+            );
+        }
+    }
+}
+
 /// Uploads one solid cell of `side` texels square, and returns a table that names it at every
 /// phase and the packed texture.
 fn solid(renderer: &mut zgui_render_wgpu::WgpuRenderer, side: u32) -> (Vec<[u32; 4]>, u32) {
