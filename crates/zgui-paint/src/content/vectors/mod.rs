@@ -48,7 +48,11 @@ pub struct Drawing {
     pub shapes: Vec<zgui_svg::Shape>,
     /// What places [`shapes`](Self::shapes) in the fragment's space: the identity for shapes
     /// already placed.
+    ///
+    /// For a canvas, the box fit times the scene's view transform.
     pub fit: Affine,
+    /// The series of a canvas, each with the number of shapes painted under it.
+    pub series: Arc<[zgui_canvas::SeriesAt]>,
     /// Each shape placed by `fit`, made on first use and shared by every clone.
     placed: Arc<[OnceLock<zgui_svg::Shape>]>,
 }
@@ -59,6 +63,7 @@ impl Drawing {
         Self {
             shapes,
             fit: Affine::IDENTITY,
+            series: Arc::from([]),
             placed: Arc::from([]),
         }
     }
@@ -73,7 +78,19 @@ impl Drawing {
         Self {
             shapes,
             fit,
+            series: Arc::from([]),
             placed,
+        }
+    }
+
+    /// The drawing of a canvas scene, placed by `fit` times the scene's view transform.
+    ///
+    /// The shapes and the series keep their source allocations, so a change of the view alone
+    /// recognises nothing again and builds no new series payload.
+    pub fn canvas(scene: &zgui_canvas::CanvasScene, fit: Affine) -> Self {
+        Self {
+            series: Arc::from(scene.series()),
+            ..Self::fitted(scene.shapes().to_vec(), fit * scene.transform())
         }
     }
 

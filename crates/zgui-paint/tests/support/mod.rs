@@ -37,8 +37,8 @@ pub(crate) struct Element {
     pub(crate) replaced: bool,
     /// The outlines it draws, as path notation, and the space they are written in.
     pub(crate) drawing: Option<(&'static str, Option<&'static str>)>,
-    /// The retained canvas it shows, as the packed token-and-revision reference.
-    pub(crate) canvas: Option<i64>,
+    /// The retained canvas it shows, as the packed token-and-revision reference and the view.
+    pub(crate) canvas: Option<(i64, u64)>,
     /// Its children.
     pub(crate) children: Vec<Element>,
 }
@@ -76,9 +76,9 @@ impl Element {
 
     /// The same element, showing a retained canvas scene.
     pub(crate) fn canvas(mut self, handle: &zgui_canvas::SceneHandle) -> Self {
-        self.canvas = Some(zgui_vocab::prop::drawing::canvas_value(
-            handle.token().0,
-            handle.revision(),
+        self.canvas = Some((
+            zgui_vocab::prop::drawing::canvas_value(handle.token().0, handle.revision()),
+            handle.view(),
         ));
         self
     }
@@ -359,6 +359,19 @@ impl Harness {
         report
     }
 
+    /// Writes the view of `handle` onto the element `name`, as the canvas binding would.
+    pub(crate) fn write_canvas_view(&mut self, name: &str, handle: &zgui_canvas::SceneHandle) {
+        let index = self.element(name);
+        let view = handle.view() as i64;
+        self.edit_and_restyle(|edit| {
+            edit.set_property(
+                index,
+                zgui_vocab::PropKey::new(zgui_vocab::prop::drawing::CANVAS_VIEW),
+                Some(zgui_vocab::PropValue::Integer(view)),
+            );
+        });
+    }
+
     /// The document, for a test that changes a property a view would have written.
     pub(crate) fn document(&self) -> &Document {
         &self.document
@@ -578,13 +591,18 @@ fn append(document: &mut Document, parent: NodeIndex, element: &Element) -> Node
             })
             .expect("the fixture document is not poisoned");
     }
-    if let Some(reference) = element.canvas {
+    if let Some((reference, view)) = element.canvas {
         document
             .edit(&zgui_dom::EverythingMatters, |edit| {
                 edit.set_property(
                     index,
                     zgui_vocab::PropKey::new(zgui_vocab::prop::drawing::CANVAS),
                     Some(zgui_vocab::PropValue::Integer(reference)),
+                );
+                edit.set_property(
+                    index,
+                    zgui_vocab::PropKey::new(zgui_vocab::prop::drawing::CANVAS_VIEW),
+                    Some(zgui_vocab::PropValue::Integer(view as i64)),
                 );
             })
             .expect("the fixture document is not poisoned");

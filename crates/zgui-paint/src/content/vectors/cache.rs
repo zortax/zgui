@@ -152,8 +152,9 @@ impl VectorCache {
     ///
     /// The scene is resolved by token out of the paint-side registry. Its shapes are held as they
     /// are, and placed by the same fit a document's are only where a route asks for the placed
-    /// path. The revision rides in the data key, so a mutated scene misses the cache once and an
-    /// untouched one hands back the same allocations for the encoding caches to recognise.
+    /// path. The revision and the view ride in the data key, so a mutated or panned scene misses
+    /// the cache once and an untouched one hands back the same allocations for the encoding caches
+    /// to recognise.
     ///
     /// A token whose scene has died draws nothing: the application dropped every handle while an
     /// element still named it, and inventing a picture for it would be worse than a blank.
@@ -162,17 +163,18 @@ impl VectorCache {
         node: NodeKey,
         token: u32,
         revision: u32,
+        view: u64,
         view_box: Option<[f32; 4]>,
         box_: Placement,
     ) -> Option<Drawing> {
         let scene = zgui_canvas::resolve(zgui_canvas::CanvasToken(token))?;
         let placed = fit::onto(box_.content_box, view_box, box_.scale);
-        let data = format!("canvas:{token}:{revision}");
+        let data = format!("canvas:{token}:{revision}:{view}");
         Some(self.store(node, &data, placed, None, || {
             let scene = scene
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Drawing::fitted(scene.shapes().to_vec(), placed)
+            Drawing::canvas(&scene, placed)
         }))
     }
 
@@ -219,7 +221,8 @@ impl VectorSource for Vectors<'_> {
             hash = hash.f32s(&view_box);
         }
         if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
-            return hash.u32(1).u32(token).u32(revision).finish();
+            let view = zgui_dom::side::drawing::canvas_view(store, node).unwrap_or(0);
+            return hash.u32(1).u32(token).u32(revision).u64(view).finish();
         }
         if let Some(source) = zgui_dom::side::drawing::document(store, node) {
             return hash.u32(2).bytes(source.as_bytes()).finish();
@@ -240,9 +243,10 @@ impl VectorSource for Vectors<'_> {
         let store = self.document.store();
         if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
             let view_box = zgui_dom::side::drawing::view_box(store, node);
+            let view = zgui_dom::side::drawing::canvas_view(store, node).unwrap_or(0);
             return self
                 .cache
-                .canvas(node, token, revision, view_box, placement);
+                .canvas(node, token, revision, view, view_box, placement);
         }
         if let Some(source) = zgui_dom::side::drawing::document(store, node) {
             return self.cache.documented(node, source, placement);
@@ -405,7 +409,8 @@ mod tests {
         (document, key)
     }
 
-    /// Writes the scene's current token-and-revision onto the element, as the binding would.
+    /// Writes the scene's current token-and-revision and its view onto the element, as the
+    /// binding would.
     fn write_reference(
         document: &Document,
         index: zgui_dom::NodeIndex,
@@ -420,6 +425,11 @@ mod tests {
                         handle.token().0,
                         handle.revision(),
                     ))),
+                );
+                edit.set_property(
+                    index,
+                    PropKey::new(drawing::CANVAS_VIEW),
+                    Some(PropValue::Integer(handle.view() as i64)),
                 );
             })
             .expect("not poisoned");
@@ -533,6 +543,74 @@ mod tests {
         assert_eq!(cache.len(), 1);
         cache.retain(|_| false);
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn a_view_change_composes_into_the_fit() {
+        let handle = zgui_canvas::SceneHandle::new();
+        handle.edit(|scene| scene.push(triangle()));
+        let source = handle.edit(|scene| std::sync::Arc::clone(&scene.shapes()[0].path));
+        let (document, node) = canvas_document(&handle);
+        let cache = VectorCache::new();
+        let mut box_ = placement(24.0);
+        box_.content_box.origin.x = DevicePx(10.0);
+        let before = cache.frame(&document).drawing(node, box_).expect("draws");
+        assert_eq!(
+            before.fit,
+            zgui_scene::kurbo::Affine::translate((10.0, 0.0))
+        );
+
+        let view = zgui_scene::kurbo::Affine::translate((3.0, 4.0))
+            * zgui_scene::kurbo::Affine::scale(2.0);
+        let revision = handle.revision();
+        assert!(handle.set_transform(view));
+        assert_eq!(handle.revision(), revision, "a view moves no revision");
+        let index = document.store().index_of(node).expect("live");
+        let signature = cache.frame(&document).revision(node);
+        write_reference(&document, index, &handle);
+        assert_ne!(
+            cache.frame(&document).revision(node),
+            signature,
+            "a pan is a new record signature"
+        );
+        let after = cache.frame(&document).drawing(node, box_).expect("draws");
+        assert_eq!(
+            after.fit,
+            zgui_scene::kurbo::Affine::translate((10.0, 0.0)) * view,
+            "the fit is the box fit times the view"
+        );
+        assert!(
+            std::sync::Arc::ptr_eq(&after.shapes[0].path, &source),
+            "the view keeps the source path"
+        );
+    }
+
+    #[test]
+    fn a_canvas_drawing_carries_its_series() {
+        let handle = zgui_canvas::SceneHandle::new();
+        let data: std::sync::Arc<[[f32; 2]]> = std::sync::Arc::from([[0.0, 0.0], [1.0, 2.0]]);
+        handle.edit(|scene| {
+            scene.push(triangle());
+            scene.push_series(zgui_canvas::Series::Points {
+                data: std::sync::Arc::clone(&data),
+                to_canvas: zgui_scene::kurbo::Affine::IDENTITY,
+                marker: zgui_canvas::Marker::Circle { radius: 2.0 },
+                fill: Some(zgui_canvas::Brush::Inherited { alpha: 1.0 }),
+                stroke: None,
+            });
+        });
+        let (document, node) = canvas_document(&handle);
+        let cache = VectorCache::new();
+        let drawing = cache
+            .frame(&document)
+            .drawing(node, placement(24.0))
+            .expect("draws");
+        assert_eq!(drawing.series.len(), 1);
+        assert_eq!(drawing.series[0].before, 1);
+        let zgui_canvas::Series::Points { data: held, .. } = &drawing.series[0].series else {
+            panic!("a points series");
+        };
+        assert!(std::sync::Arc::ptr_eq(held, &data), "the data is shared");
     }
 
     #[test]
