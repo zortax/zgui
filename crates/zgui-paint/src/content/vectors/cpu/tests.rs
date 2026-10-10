@@ -248,12 +248,17 @@ const SOURCES: [&str; 4] = [
 /// Measures the painter on the static SVG bench documents at three scales and fits the two cost
 /// constants of the layer cache to the times.
 ///
+/// A measurement, so it runs only when `ZGUI_CALIBRATE` is set:
+///
 /// ```text
-/// cargo test -p zgui-paint --release calibrate_the_cost_model -- --ignored --nocapture
+/// ZGUI_CALIBRATE=1 cargo test -p zgui-paint --release calibrate_the_cost_model -- --nocapture
 /// ```
 #[test]
-#[ignore = "a measurement, run by hand in release"]
 fn calibrate_the_cost_model() {
+    if std::env::var_os("ZGUI_CALIBRATE").is_none() {
+        eprintln!("calibrate_the_cost_model: set ZGUI_CALIBRATE to measure the layer cost model");
+        return;
+    }
     let mut rows = Vec::new();
     let mut painter = Zeno::default();
     for source in SOURCES {
