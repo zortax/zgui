@@ -182,7 +182,9 @@ pub(super) fn of_color(color: Color) -> Look {
 /// Emits a shape whose parts are recognised analytic shapes as quads, or declines the route.
 ///
 /// Nothing is pushed unless every part and every clip is recognised, and the primitives of each
-/// part are apart.
+/// part are apart. With `decide_only`, nothing is pushed at all, and `Some(0)` says the route
+/// would take the shape.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_analytic(
     scene: &mut Scene,
     id: VectorId,
@@ -191,6 +193,7 @@ pub(super) fn emit_analytic(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
     affine: Option<zgui_geom::Affine2>,
+    decide_only: bool,
 ) -> Option<usize> {
     if !masks.analytic(id) {
         return None;
@@ -314,6 +317,9 @@ pub(super) fn emit_analytic(
     };
 
     // Everything is decided. From here on, the shape is drawn.
+    if decide_only {
+        return Some(0);
+    }
     let mut clip = placement.clip;
     for link in links {
         clip = scene.clips.push(clip, link);

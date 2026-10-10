@@ -39,6 +39,8 @@ pub(crate) struct Element {
     pub(crate) drawing: Option<(&'static str, Option<&'static str>)>,
     /// The retained canvas it shows, as the packed token-and-revision reference and the view.
     pub(crate) canvas: Option<(i64, u64)>,
+    /// The vector document it draws.
+    pub(crate) document: Option<&'static str>,
     /// Its children.
     pub(crate) children: Vec<Element>,
 }
@@ -52,6 +54,7 @@ impl Element {
             replaced: false,
             drawing: None,
             canvas: None,
+            document: None,
             children: Vec::new(),
         }
     }
@@ -80,6 +83,12 @@ impl Element {
             zgui_vocab::prop::drawing::canvas_value(handle.token().0, handle.revision()),
             handle.view(),
         ));
+        self
+    }
+
+    /// The same element, drawing a vector document.
+    pub(crate) fn document(mut self, source: &'static str) -> Self {
+        self.document = Some(source);
         self
     }
 
@@ -588,6 +597,17 @@ fn append(document: &mut Document, parent: NodeIndex, element: &Element) -> Node
                         Some(zgui_vocab::PropValue::from(view_box)),
                     );
                 }
+            })
+            .expect("the fixture document is not poisoned");
+    }
+    if let Some(source) = element.document {
+        document
+            .edit(&zgui_dom::EverythingMatters, |edit| {
+                edit.set_property(
+                    index,
+                    zgui_vocab::PropKey::new(zgui_vocab::prop::drawing::DOCUMENT),
+                    Some(zgui_vocab::PropValue::from(source)),
+                );
             })
             .expect("the fixture document is not poisoned");
     }

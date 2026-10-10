@@ -71,14 +71,14 @@ pub(crate) fn emit_tracked(
         .resolve(placement.transform)
         .as_ref()
         .and_then(zgui_geom::Matrix4::to_affine2);
-    if let Some(pushed) = emit_analytic(scene, id, source, paint, masks, placement, affine) {
+    if let Some(pushed) = emit_analytic(scene, id, source, paint, masks, placement, affine, false) {
         counter::bump(Counter::VectorRouteAnalytic);
         return ShapeEmission {
             pushed,
             route: Some(VectorRoute::Analytic),
         };
     }
-    if let Some(pushed) = emit_marks(scene, id, source, paint, masks, placement, affine) {
+    if let Some(pushed) = emit_marks(scene, id, source, paint, masks, placement, affine, false) {
         counter::bump(Counter::VectorRouteMarks);
         return ShapeEmission {
             pushed,

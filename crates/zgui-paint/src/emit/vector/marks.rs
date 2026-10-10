@@ -57,7 +57,9 @@ struct Lowered {
 
 /// Emits a shape whose parts are recognised prims as one mark per part, or declines the route.
 ///
-/// Nothing is pushed unless every part and every clip is recognised.
+/// Nothing is pushed unless every part and every clip is recognised. With `decide_only`, nothing
+/// is pushed at all, and `Some(0)` says the route would take the shape.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn emit_marks(
     scene: &mut Scene,
     id: VectorId,
@@ -66,6 +68,7 @@ pub(super) fn emit_marks(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
     affine: Option<zgui_geom::Affine2>,
+    decide_only: bool,
 ) -> Option<usize> {
     if !masks.marks(id) {
         return None;
@@ -167,6 +170,9 @@ pub(super) fn emit_marks(
     };
 
     // Everything is decided. From here on, the shape is drawn.
+    if decide_only {
+        return Some(0);
+    }
     let mut clip = placement.clip;
     for link in links {
         clip = scene.clips.push(clip, link);

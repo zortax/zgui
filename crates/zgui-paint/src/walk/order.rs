@@ -110,6 +110,8 @@ pub(crate) struct FragmentEmission {
     pub(crate) pushed: usize,
     /// Every vector path selected by the fragment's own content.
     pub(crate) vector_routes: vector::VectorRoutes,
+    /// What the layer route did for the fragment's drawing.
+    pub(crate) layer: vector::LayerOutcome,
 }
 
 /// Emits one fragment's own primitives, and returns how many were pushed.
@@ -146,6 +148,7 @@ pub(crate) fn fragment_tracked(
     FragmentEmission {
         pushed,
         vector_routes: content.vector_routes,
+        layer: content.layer,
     }
 }
 
@@ -186,6 +189,7 @@ fn content_tracked(
         return FragmentEmission::default();
     }
     let mut routes = vector::VectorRoutes::NONE;
+    let mut layer = vector::LayerOutcome::default();
     let pushed = match fragment.kind {
         FragmentKind::Box => 0,
         FragmentKind::Line { paragraph, line } => {
@@ -273,6 +277,7 @@ fn content_tracked(
             ) else {
                 return FragmentEmission::default();
             };
+            // The layer reads the unfaded paint, and the sprite carries the folded opacity.
             let emitted = vector::draw_drawing_tracked(
                 scene,
                 VectorId(fragment.key.index()),
@@ -284,8 +289,14 @@ fn content_tracked(
                     transform: emission.box_placement.transform,
                     scale: emission.scale,
                 },
+                Some(vector::LayerInput {
+                    revision: emission.vectors.revision(node),
+                    paint: emission.style.shape,
+                    alpha: emission.alpha,
+                }),
             );
             routes = emitted.routes;
+            layer = emitted.layer;
             emitted.pushed
         }
         // A custom element's primitives land here for the reason the vector arm's do: inside the
@@ -329,6 +340,7 @@ fn content_tracked(
     FragmentEmission {
         pushed,
         vector_routes: routes,
+        layer,
     }
 }
 

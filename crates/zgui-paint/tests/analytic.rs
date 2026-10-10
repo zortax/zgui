@@ -442,6 +442,7 @@ fn a_rotated_canvas_circle_takes_another_route() {
 /// second frame's report, the counters it moved, and how far the first quad moved.
 fn moved(
     shapes: Vec<zgui_canvas::Shape>,
+    turned: bool,
 ) -> (
     PaintReport,
     zgui_testkit_scene::counters::Measurement,
@@ -450,13 +451,17 @@ fn moved(
     let css = "root { display: block; width: 400px; height: 200px }
                spacer { display: block; height: 10px }
                spacer.tall { height: 30px }
-               mark { display: block; width: 240px; height: 48px; color: rgb(0, 128, 255) }";
+               mark { display: block; width: 240px; height: 48px; color: rgb(0, 128, 255) }
+               mark.turned { transform: rotate(1deg) }";
     let handle = SceneHandle::new();
     handle.edit(|scene| scene.replace(shapes));
-    let tree = Element::new("root").children(vec![
-        Element::new("spacer"),
-        Element::new("mark").canvas(&handle),
-    ]);
+    let mark = Element::new("mark").canvas(&handle);
+    let mark = if turned {
+        mark.classes(&["turned"])
+    } else {
+        mark
+    };
+    let tree = Element::new("root").children(vec![Element::new("spacer"), mark]);
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
@@ -496,11 +501,14 @@ fn moved(
 
 #[test]
 fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
-    let (report, measured, shift) = moved(vec![
-        ShapeBuilder::new(circle(24.0, 24.0, 10.0))
-            .fill(Brush::Solid(opaque(255, 0, 0)))
-            .build(),
-    ]);
+    let (report, measured, shift) = moved(
+        vec![
+            ShapeBuilder::new(circle(24.0, 24.0, 10.0))
+                .fill(Brush::Solid(opaque(255, 0, 0)))
+                .build(),
+        ],
+        false,
+    );
     assert!(
         report.vector_routes.is_empty(),
         "the canvas was encoded again: {:?}",
@@ -510,18 +518,22 @@ fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
     assert_eq!(measured.get(Counter::VectorReplaysMoved), 0);
     assert_eq!(shift, Some(20.0), "the replayed quad moved with its box");
 
-    // A vector item holds its path in path space, so its record moves its placement.
+    // A vector item holds its path in path space, so its record moves its placement. Turned, so
+    // the drawing is no CPU layer.
     let gradient = Brush::Linear {
         start: kurbo::Point::new(0.0, 0.0),
         end: kurbo::Point::new(40.0, 0.0),
         stops: vec![(0.0, opaque(255, 0, 0)), (1.0, opaque(0, 0, 255))],
         repeating: false,
     };
-    let (report, measured, _) = moved(vec![
-        ShapeBuilder::new(BezPath::from_svg("M4 4 L40 4 L4 40 Z").expect("a path"))
-            .fill(gradient)
-            .build(),
-    ]);
+    let (report, measured, _) = moved(
+        vec![
+            ShapeBuilder::new(BezPath::from_svg("M4 4 L40 4 L4 40 Z").expect("a path"))
+                .fill(gradient)
+                .build(),
+        ],
+        true,
+    );
     assert!(
         report.vector_routes.is_empty(),
         "the drawing was encoded again: {:?}",

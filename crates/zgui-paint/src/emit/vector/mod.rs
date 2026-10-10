@@ -45,6 +45,7 @@ use zgui_css::ComputedStyle;
 use zgui_css::values::color::{current, to_color};
 use zgui_css::values::custom;
 use zgui_geom::{Device, DevicePx, Rect};
+use zgui_profile::{Counter, counter};
 use zgui_scene::{ClipId, Paint, PaintRef, Scene, SpatialId, VectorId, VectorItem};
 
 use crate::content::vectors::VectorMaskSource;
@@ -209,6 +210,35 @@ pub(crate) struct DrawingEmission {
     pub(crate) pushed: usize,
     /// Every raster path selected by the drawing's shapes.
     pub(crate) routes: VectorRoutes,
+    /// What the layer route did.
+    pub(crate) layer: LayerOutcome,
+}
+
+/// What a drawing asks of the layer route, beside its shapes.
+#[derive(Clone, Copy, Debug)]
+pub struct LayerInput {
+    /// The revision of the drawing's source.
+    pub revision: u64,
+    /// What an inherited paint resolves to, before any folded opacity.
+    pub paint: ShapePaint,
+    /// The folded opacity, which the sprite carries.
+    pub alpha: f32,
+}
+
+/// What the layer route did for one drawing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LayerOutcome {
+    /// Whether a layer sprite was pushed.
+    pub(crate) sprite: bool,
+    /// Whether that sprite stretches a raster of another scale or phase.
+    pub(crate) provisional: bool,
+    /// Whether the drawing drew nothing, to be drawn on a later frame.
+    pub(crate) deferred: bool,
+    /// Whether the drawing fell back to its shapes for the budget or a demotion, and may take a
+    /// layer later.
+    pub(crate) promote: bool,
+    /// The device pixels a provisional or deferred drawing is owed a frame for.
+    pub(crate) owed: Option<Rect<i32, Device>>,
 }
 
 /// Resolves how a shape carrying `style` is painted.
@@ -373,7 +403,64 @@ pub fn draw_drawing(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
-    draw_drawing_tracked(scene, base, drawing, paint, masks, placement).pushed
+    draw_drawing_tracked(scene, base, drawing, paint, masks, placement, None).pushed
+}
+
+/// The same as [`draw_drawing`], letting a candidate drawing take the layer route of `masks`.
+#[doc(hidden)]
+pub fn draw_drawing_layered(
+    scene: &mut Scene,
+    base: VectorId,
+    drawing: &crate::content::Drawing,
+    paint: ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+    layer: LayerInput,
+) -> usize {
+    draw_drawing_tracked(scene, base, drawing, paint, masks, placement, Some(layer)).pushed
+}
+
+/// Whether a drawing may take the layer route: it has no series, and some shape with a gradient
+/// or a clip would take the general route.
+///
+/// A shape the analytic or the marks route takes is exact at every scale and costs no raster, so a
+/// drawing whose every such shape goes there stays on its shapes. The question is asked without
+/// pushing anything, and the recognitions it makes are kept for the shapes' own emission.
+fn candidate(
+    scene: &mut Scene,
+    base: VectorId,
+    drawing: &crate::content::Drawing,
+    paint: &ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> bool {
+    if !drawing.series.is_empty() {
+        return false;
+    }
+    let gradient = |paint: &zgui_svg::Paint| matches!(paint, zgui_svg::Paint::Gradient(_));
+    let affine = scene
+        .spatial
+        .resolve(placement.transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2);
+    drawing.shapes.iter().enumerate().any(|(index, shape)| {
+        let general = !shape.clips.is_empty()
+            || shape.fill.as_ref().is_some_and(|fill| gradient(&fill.paint))
+            || shape
+                .stroke
+                .as_ref()
+                .is_some_and(|stroke| gradient(&stroke.paint));
+        if !general {
+            return false;
+        }
+        let id = outline_id(base, index);
+        let source = ShapeSource::of(drawing, index);
+        let analytic =
+            analytic::emit_analytic(scene, id, &source, paint, masks, placement, affine, true);
+        analytic.is_none()
+            && marks::emit_marks(scene, id, &source, paint, masks, placement, affine, true)
+                .is_none()
+    })
 }
 
 /// Emits every shape and series of a drawing from its source, and records all raster paths
@@ -382,6 +469,9 @@ pub fn draw_drawing(
 /// No route places a shape, except recognition under a fit that scales its axes differently. A
 /// series is drawn before the shape its position names, and after the last shape when it names
 /// none.
+///
+/// With `layer`, a candidate drawing asks the layer route first. A layer is one colour sprite
+/// carrying the box's clip and transform and the folded opacity, and replaces every shape.
 pub(crate) fn draw_drawing_tracked(
     scene: &mut Scene,
     base: VectorId,
@@ -389,8 +479,79 @@ pub(crate) fn draw_drawing_tracked(
     paint: ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
+    layer: Option<LayerInput>,
 ) -> DrawingEmission {
     let mut emitted = DrawingEmission::default();
+    let layers = layer
+        .zip(masks.layers())
+        .filter(|_| candidate(scene, base, drawing, &paint, masks, placement));
+    if let Some((input, layers)) = layers {
+        let spatial = scene
+            .spatial
+            .resolve(placement.transform)
+            .as_ref()
+            .and_then(zgui_geom::Matrix4::to_affine2);
+        let answer = layers.layer(crate::content::vectors::LayerRequest {
+            owner: base,
+            revision: input.revision,
+            drawing,
+            paint: input.paint,
+            spatial,
+        });
+        // The ink under the transform, rounded out: what a provisional or deferred drawing is owed.
+        let owed = |scene: &Scene, local: Rect<DevicePx, Device>| {
+            let ink = under(scene, placement.transform, local);
+            let left = ink.left().0.floor();
+            let top = ink.top().0.floor();
+            let right = ink.right().0.ceil();
+            let bottom = ink.bottom().0.ceil();
+            [left, top, right, bottom]
+                .iter()
+                .all(|edge| edge.is_finite())
+                .then(|| {
+                    Rect::new(
+                        zgui_geom::Point::new(left as i32, top as i32),
+                        zgui_geom::Size::new((right - left) as i32, (bottom - top) as i32),
+                    )
+                })
+        };
+        match answer {
+            crate::content::vectors::LayerAnswer::Sprite {
+                tile,
+                local,
+                provisional,
+                ..
+            } => {
+                let mut sprite = zgui_scene::ColorSprite::new(local, tile).clipped(placement.clip);
+                sprite.transform = placement.transform.index();
+                sprite.opacity = input.alpha;
+                emitted.pushed += usize::from(scene.push_color_sprite(sprite).is_some());
+                emitted.routes.insert(VectorRoute::CpuLayer);
+                emitted.layer.sprite = true;
+                counter::bump(Counter::VectorRouteLayer);
+                if provisional {
+                    counter::bump(Counter::VectorLayersProvisional);
+                    emitted.layer.provisional = true;
+                    emitted.layer.owed = owed(scene, local);
+                }
+                return emitted;
+            }
+            crate::content::vectors::LayerAnswer::Defer { local } => {
+                counter::bump(Counter::VectorLayersDeferred);
+                emitted.routes.insert(VectorRoute::CpuLayer);
+                emitted.layer.deferred = true;
+                emitted.layer.owed = owed(scene, local);
+                return emitted;
+            }
+            crate::content::vectors::LayerAnswer::Items(why) => {
+                use crate::content::vectors::LayerFallback;
+                if why != LayerFallback::PerShape {
+                    counter::bump(Counter::VectorLayerFallbacks);
+                }
+                emitted.layer.promote = matches!(why, LayerFallback::Budget | LayerFallback::Demoted);
+            }
+        }
+    }
     let mut note = |shape: ShapeEmission| {
         emitted.pushed += shape.pushed;
         if let Some(route) = shape.route {
@@ -427,6 +588,12 @@ pub(crate) fn draw_drawing_tracked(
             masks,
             placement,
         ));
+    }
+    // A candidate whose shapes all found a route of their own needs no layer.
+    if let Some((_, layers)) = layers
+        && !emitted.routes.contains(VectorRoute::GeneralRaster)
+    {
+        layers.per_shape_suffices(base);
     }
     emitted
 }
