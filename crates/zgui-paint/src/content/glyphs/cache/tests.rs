@@ -219,6 +219,7 @@ fn a_full_atlas_makes_room_rather_than_dropping_the_glyph() {
     let raster = Counting::new(Size::new(32, 32));
     let mut glyphs = GlyphCache::default();
     let mut vector_masks = VectorMaskCache::default();
+    let mut vector_layers = crate::content::vectors::VectorLayerCache::default();
 
     atlas.begin_frame();
     for glyph in 0..4 {
@@ -226,6 +227,7 @@ fn a_full_atlas_makes_room_rather_than_dropping_the_glyph() {
             glyphs: &mut glyphs,
             atlas: &mut atlas,
             vector_masks: &mut vector_masks,
+            vector_layers: &mut vector_layers,
             named: Vec::new(),
         };
         assert!(
@@ -240,6 +242,7 @@ fn a_full_atlas_makes_room_rather_than_dropping_the_glyph() {
         glyphs: &mut glyphs,
         atlas: &mut atlas,
         vector_masks: &mut vector_masks,
+        vector_layers: &mut vector_layers,
         named: Vec::new(),
     };
     assert!(

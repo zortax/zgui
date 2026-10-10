@@ -34,7 +34,7 @@ use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_profile::{Counter, counter};
 use zgui_text::{AtlasGlyph, GlyphKey, GlyphRaster};
 
-use crate::content::vectors::VectorMaskCache;
+use crate::content::vectors::{VectorLayerCache, VectorMaskCache};
 
 /// A tile, what the atlas holds it under, and where the pixels in it sit relative to the glyph's
 /// origin.
@@ -118,6 +118,8 @@ pub(crate) struct Rasterising<'a> {
     pub(crate) atlas: &'a mut Atlas,
     /// Geometry identities for small solid shapes stored in the monochrome atlas.
     pub(crate) vector_masks: &'a mut VectorMaskCache,
+    /// Whole drawings rasterised into the image pool.
+    pub(crate) vector_layers: &'a mut VectorLayerCache,
     /// Every atlas key handed out since the list was last drained.
     ///
     /// The list is how what a fragment *drew* becomes something that can be held: a primitive
@@ -139,6 +141,7 @@ impl Rasterising<'_> {
             glyphs,
             atlas,
             vector_masks,
+            vector_layers,
             named,
         } = self;
         let rasterised = match glyphs.tile_for(atlas, raster, key) {
@@ -152,6 +155,7 @@ impl Rasterising<'_> {
                 let freed = atlas.evict_least_recently_used_into(&mut removed);
                 glyphs.forget_tiles(&removed);
                 vector_masks.forget_tiles(&removed);
+                vector_layers.forget_tiles(&removed);
                 counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
                 match glyphs.tile_for(atlas, raster, key) {
                     Placed::Tile(rasterised) => rasterised,

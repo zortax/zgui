@@ -98,6 +98,12 @@ pub trait VectorMaskSource {
     fn payloads(&self) -> Option<core::cell::RefMut<'_, super::payloads::MarkPayloads>> {
         None
     }
+
+    /// Where whole drawings are rasterised on the CPU, if anywhere.
+    #[doc(hidden)]
+    fn layers(&self) -> Option<&dyn super::layer::VectorLayerSource> {
+        None
+    }
 }
 
 /// A source that declines every mask request, the analytic route and the marks route.

@@ -16,7 +16,10 @@ use zgui_text::{GlyphRaster, RasterPath, ShapedGlyphs};
 use crate::content::glyphs::OutlineGlyph;
 use crate::content::glyphs::{GlyphCache, Rasterising};
 use crate::content::images::{Content, ImageError};
-use crate::content::vectors::{VectorMaskCache, VectorMaskRequest, VectorMaskSource};
+use crate::content::vectors::{
+    LayerAnswer, LayerRequest, VectorLayerCache, VectorLayerSource, VectorMaskCache,
+    VectorMaskRequest, VectorMaskSource,
+};
 use crate::emit::replaced::Source;
 use crate::emit::text::{
     GlyphPlacementSource, GlyphRequest, GlyphRun, GlyphSource, PlacedGlyph, RunContent,
@@ -41,6 +44,8 @@ pub struct ContentCache {
     glyphs: GlyphCache,
     /// Geometry identities for small solid vector masks in the monochrome atlas.
     vector_masks: VectorMaskCache,
+    /// Whole drawings rasterised on the CPU into the image pool.
+    vector_layers: VectorLayerCache,
     /// What is attached to each replaced node.
     images: FxHashMap<ReplacedId, Content>,
     /// How many times each replaced node's attachment has changed.
@@ -79,6 +84,7 @@ impl ContentCache {
             atlas: Atlas::new(limits),
             glyphs: GlyphCache::default(),
             vector_masks: VectorMaskCache::default(),
+            vector_layers: VectorLayerCache::default(),
             images: FxHashMap::default(),
             image_revisions: FxHashMap::default(),
             image_hits: Cell::new(0),
@@ -115,6 +121,7 @@ impl ContentCache {
     pub fn begin_frame(&mut self) {
         self.atlas.begin_frame();
         self.vector_masks.begin_frame();
+        self.vector_layers.begin_frame();
         // What the frame inherited, published before it adds anything. A cache that is supposed to
         // reach a working set and stay there says so here; one that never stops growing says that
         // here too, and says it as a count rather than as a byte figure an allocator has smeared.
@@ -130,6 +137,7 @@ impl ContentCache {
     /// keeps every shape it can take. A cache that is never told assumes cold.
     pub fn set_vector_raster_ready(&mut self, ready: bool) {
         self.vector_masks.set_raster_ready(ready);
+        self.vector_layers.set_raster_ready(ready);
     }
 
     /// Ends a frame.
@@ -139,6 +147,30 @@ impl ContentCache {
     /// [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`] gives.
     pub fn end_frame(&mut self) {
         self.vector_masks.end_frame(&mut self.atlas);
+        self.vector_layers.end_frame(&mut self.atlas);
+    }
+
+    /// How many bytes the CPU vector layers hold in the atlas, levels of detail included.
+    pub fn layer_bytes(&self) -> u64 {
+        self.vector_layers.bytes()
+    }
+
+    /// How many of those bytes a paint record holds or this frame drew.
+    pub fn layer_pinned_bytes(&self) -> u64 {
+        self.vector_layers.pinned_bytes(&self.atlas)
+    }
+
+    /// How many CPU vector layers are held.
+    pub fn layers_held(&self) -> usize {
+        self.vector_layers.len()
+    }
+
+    /// Removes the least recently drawn CPU vector layers nothing holds until `bytes` have gone,
+    /// and reports how many went.
+    ///
+    /// Call it after [`ContentCache::flush`]: a removal discards the tile's queued upload.
+    pub fn evict_layers(&mut self, bytes: u64) -> u64 {
+        self.vector_layers.evict(&mut self.atlas, bytes)
     }
 
     /// What the cache is holding.
@@ -400,6 +432,7 @@ impl ContentCache {
                 glyphs: &mut self.glyphs,
                 atlas: &mut self.atlas,
                 vector_masks: &mut self.vector_masks,
+                vector_layers: &mut self.vector_layers,
                 named: Vec::new(),
             }),
         }
@@ -431,6 +464,7 @@ impl ContentCache {
         let freed = self.atlas.evict_least_recently_used_into(&mut removed);
         self.glyphs.forget_tiles(&removed);
         self.vector_masks.forget_tiles(&removed);
+        self.vector_layers.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -451,6 +485,7 @@ impl ContentCache {
         let freed = self.atlas.evict_to_soft_limit_into(&mut removed);
         self.glyphs.forget_tiles(&removed);
         self.vector_masks.forget_tiles(&removed);
+        self.vector_layers.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -463,6 +498,7 @@ impl ContentCache {
         self.atlas.clear();
         self.glyphs.clear();
         self.vector_masks.clear();
+        self.vector_layers.clear();
         // Every name handed out before now pointed into a texture that is about to stop existing,
         // so they stop being names. A sprite still carrying one resolves to nothing rather than to
         // whatever has since taken that content's place.
@@ -634,6 +670,7 @@ impl ReplacedSource for FrameContent<'_> {
             glyphs,
             atlas,
             vector_masks,
+            vector_layers,
             named,
         } = &mut *writing;
         let mut resolved = crate::content::images::source_of(atlas, content);
@@ -645,6 +682,7 @@ impl ReplacedSource for FrameContent<'_> {
             let freed = atlas.evict_least_recently_used_into(&mut removed);
             glyphs.forget_tiles(&removed);
             vector_masks.forget_tiles(&removed);
+            vector_layers.forget_tiles(&removed);
             counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
             resolved = crate::content::images::source_of(atlas, content);
         }
@@ -694,6 +732,7 @@ impl VectorMaskSource for FrameContent<'_> {
             glyphs,
             atlas,
             vector_masks,
+            vector_layers,
             named,
         } = &mut *writing;
         let before = atlas.refusals();
@@ -707,6 +746,7 @@ impl VectorMaskSource for FrameContent<'_> {
                 let freed = atlas.evict_least_recently_used_into(&mut removed);
                 glyphs.forget_tiles(&removed);
                 vector_masks.forget_tiles(&removed);
+                vector_layers.forget_tiles(&removed);
                 counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
                 vector_masks.tile_for(atlas, request)?
             }
@@ -748,6 +788,41 @@ impl VectorMaskSource for FrameContent<'_> {
         Some(RefMut::map(self.writing.borrow_mut(), |writing| {
             &mut writing.vector_masks.payloads
         }))
+    }
+
+    fn layers(&self) -> Option<&dyn VectorLayerSource> {
+        Some(self)
+    }
+}
+
+impl VectorLayerSource for FrameContent<'_> {
+    fn layer(&self, request: LayerRequest<'_>) -> LayerAnswer {
+        let mut writing = self.writing.borrow_mut();
+        let Rasterising {
+            glyphs,
+            atlas,
+            vector_masks,
+            vector_layers,
+            named,
+        } = &mut *writing;
+        // One eviction step spares everything this frame has drawn and everything anything holds,
+        // so a single retry is safe.
+        let mut evict = |atlas: &mut zgui_atlas::Atlas| {
+            let mut removed = Vec::new();
+            let freed = atlas.evict_least_recently_used_into(&mut removed);
+            glyphs.forget_tiles(&removed);
+            vector_masks.forget_tiles(&removed);
+            counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+            removed
+        };
+        vector_layers.layer(atlas, request, named, &mut evict)
+    }
+
+    fn per_shape_suffices(&self, owner: zgui_scene::VectorId) {
+        self.writing
+            .borrow_mut()
+            .vector_layers
+            .per_shape_suffices(owner);
     }
 }
 

@@ -17,6 +17,7 @@
 
 mod cache;
 mod cpu;
+mod layer;
 mod mask;
 pub(crate) mod payloads;
 mod recognitions;
@@ -24,6 +25,11 @@ mod recognitions;
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
 #[doc(hidden)]
 pub use crate::content::vectors::mask::CachedMarks;
+pub(crate) use crate::content::vectors::layer::VectorLayerCache;
+#[doc(hidden)]
+pub use crate::content::vectors::layer::{
+    LayerAnswer, LayerFallback, LayerRequest, VectorLayerSource,
+};
 pub(crate) use crate::content::vectors::mask::VectorMaskCache;
 pub use crate::content::vectors::mask::{
     AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,

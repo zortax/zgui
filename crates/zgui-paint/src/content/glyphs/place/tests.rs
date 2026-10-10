@@ -80,6 +80,7 @@ fn placed(origin: (f32, f32), positions: &[f32]) -> Vec<(PlacedGlyph, SubpixelOf
     let raster = Recording::default();
     let mut cache = GlyphCache::default();
     let mut vector_masks = VectorMaskCache::default();
+    let mut vector_layers = crate::content::vectors::VectorLayerCache::default();
     let mut atlas = Atlas::new(AtlasLimits::default());
     let mut out = Vec::new();
     super::place(
@@ -87,6 +88,7 @@ fn placed(origin: (f32, f32), positions: &[f32]) -> Vec<(PlacedGlyph, SubpixelOf
             glyphs: &mut cache,
             atlas: &mut atlas,
             vector_masks: &mut vector_masks,
+            vector_layers: &mut vector_layers,
             named: Vec::new(),
         },
         &raster,
