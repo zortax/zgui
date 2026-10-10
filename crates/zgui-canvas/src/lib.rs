@@ -116,9 +116,40 @@ impl CanvasScene {
     /// handle.set_transform(kurbo::Affine::translate((-40.0, 0.0)));
     /// ```
     pub fn push_series(&mut self, series: Series) {
+        self.push_series_lod(series, Lod::Exact);
+    }
+
+    /// Adds `series` above every shape so far, drawn at the level of detail `lod`.
+    ///
+    /// [`Lod::Columns`] reduces a long [`Series::Line`] whose points run left to right to the
+    /// first, lowest, highest and last point of each device column. The line is then a little
+    /// different under antialiasing, so this is never automatic.
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use zgui_canvas::{Brush, Lod, SceneHandle, Series};
+    /// use zgui_color::Color;
+    ///
+    /// let handle = SceneHandle::new();
+    /// let data: Arc<[[f32; 2]]> = (0..1_000_000)
+    ///     .map(|i| [i as f32 / 1e6, (i as f32 / 997.0).sin()])
+    ///     .collect();
+    /// handle.edit(|scene| {
+    ///     let series = Series::Line {
+    ///         data,
+    ///         to_canvas: kurbo::Affine::new([800.0, 0.0, 0.0, -100.0, 0.0, 150.0]),
+    ///         stroke: kurbo::Stroke::new(1.0),
+    ///         brush: Brush::Solid(Color::srgb(0.2, 0.5, 0.9, 1.0)),
+    ///     };
+    ///     scene.push_series_lod(series, Lod::Columns);
+    /// });
+    /// ```
+    pub fn push_series_lod(&mut self, series: Series, lod: Lod) {
         self.series.push(SeriesAt {
             before: self.shapes.len(),
             series,
+            lod,
         });
     }
 
@@ -164,6 +195,24 @@ pub struct SeriesAt {
     pub before: usize,
     /// The series.
     pub series: Series,
+    /// The level of detail it is drawn at.
+    pub lod: Lod,
+}
+
+/// The level of detail a series is drawn at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lod {
+    /// Every point.
+    #[default]
+    Exact,
+    /// A line whose points run left to right, with more than four points per device column,
+    /// reduced to the first, lowest, highest and last point of each column. Any other series is
+    /// drawn exactly.
+    ///
+    /// The reduction is built once per data and per power-of-two range of columns per data unit,
+    /// so a pan builds nothing and a zoom builds again only past twice or half the scale.
+    Columns,
 }
 
 /// Plot data in data space, drawn with markers or a line of a fixed size in CSS pixels.
@@ -716,6 +765,15 @@ mod tests {
         assert!(scene.shapes().is_empty() && scene.series().is_empty());
         assert_eq!(scene.transform(), kurbo::Affine::scale(3.0));
         assert_eq!(scene.view(), 1);
+    }
+
+    #[test]
+    fn push_series_lod_marks_the_series() {
+        let mut scene = CanvasScene::default();
+        scene.push_series(series());
+        scene.push_series_lod(series(), Lod::Columns);
+        let lods: Vec<Lod> = scene.series().iter().map(|at| at.lod).collect();
+        assert_eq!(lods, [Lod::Exact, Lod::Columns]);
     }
 
     #[test]

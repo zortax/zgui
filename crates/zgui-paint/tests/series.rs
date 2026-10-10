@@ -42,11 +42,16 @@ struct Fixture {
 impl Fixture {
     /// A canvas over a scene `draw` fills.
     fn new(draw: impl FnOnce(&mut zgui_canvas::CanvasScene)) -> Self {
+        Self::styled(CSS, draw)
+    }
+
+    /// A canvas over a scene `draw` fills, under `css`.
+    fn styled(css: &str, draw: impl FnOnce(&mut zgui_canvas::CanvasScene)) -> Self {
         let handle = SceneHandle::new();
         handle.edit(draw);
         let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
         Self {
-            harness: Harness::new(tree, CSS),
+            harness: Harness::new(tree, css),
             handle,
             vectors: VectorCache::new(),
             content: ContentCache::new(AtlasLimits::default()),
@@ -216,6 +221,40 @@ fn a_line_series_is_one_polyline_mark_with_its_caps() {
         (0, 22),
         "one run and two separators"
     );
+}
+
+/// A dense zigzag of `count` points, left to right over 0..1.
+fn dense(count: usize) -> Arc<[[f32; 2]]> {
+    (0..count)
+        .map(|i| [i as f32 / count as f32, if i % 2 == 0 { 0.1 } else { 0.9 }])
+        .collect()
+}
+
+#[test]
+fn the_lod_property_reduces_a_line_series_per_column() {
+    let line = || Series::Line {
+        data: dense(20_000),
+        to_canvas: Affine::new([200.0, 0.0, 0.0, -100.0, 0.0, 110.0]),
+        stroke: kurbo::Stroke::new(1.0),
+        brush: Brush::Solid(opaque(255, 0, 0)),
+    };
+    let reduced_css = "root { display: block; width: 400px; height: 200px }
+                       mark { display: block; width: 240px; height: 120px;
+                              --zgui-vector-lod: columns }";
+    let mut whole = Fixture::new(|scene| scene.push_series(line()));
+    whole.paint();
+    let [mark] = marks(whole.scene()) else {
+        panic!("one mark");
+    };
+    assert_eq!(mark.vertices, 20_002, "every point");
+    drop(whole);
+    let mut reduced = Fixture::styled(reduced_css, |scene| scene.push_series(line()));
+    reduced.paint();
+    let [mark] = marks(reduced.scene()) else {
+        panic!("one mark");
+    };
+    // 200 device columns a unit is a bucket of 256 columns: at most four points in each.
+    assert!(mark.vertices <= 4 * 257 + 2, "{} vertices", mark.vertices);
 }
 
 #[test]

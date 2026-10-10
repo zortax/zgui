@@ -74,6 +74,18 @@ pub const STROKE: &str = "zgui-stroke";
 /// The custom property that says how wide that stroke is, as an absolute length.
 pub const STROKE_WIDTH: &str = "zgui-stroke-width";
 
+/// The custom property that reduces a drawing's long line series per device column.
+///
+/// `--zgui-vector-lod: columns` draws each line series whose points run left to right, with more
+/// than four points per device column, through the first, lowest, highest and last point of each
+/// column. Shapes are always drawn exactly.
+pub const LOD: &str = "zgui-vector-lod";
+
+/// Whether `style` asks for line series reduced per device column.
+pub fn vector_lod(style: &ComputedStyle) -> bool {
+    custom::text(style, LOD).is_some_and(|value| value.trim() == "columns")
+}
+
 /// The raster path selected for one vector shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VectorRoute {
@@ -412,7 +424,7 @@ pub fn draw_drawing(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
-    draw_drawing_tracked(scene, base, drawing, paint, masks, placement, None).pushed
+    draw_drawing_tracked(scene, base, drawing, paint, masks, placement, None, false).pushed
 }
 
 /// The same as [`draw_drawing`], letting a candidate drawing take the layer route of `masks`.
@@ -426,7 +438,17 @@ pub fn draw_drawing_layered(
     placement: VectorPlacement,
     layer: LayerInput,
 ) -> usize {
-    draw_drawing_tracked(scene, base, drawing, paint, masks, placement, Some(layer)).pushed
+    draw_drawing_tracked(
+        scene,
+        base,
+        drawing,
+        paint,
+        masks,
+        placement,
+        Some(layer),
+        false,
+    )
+    .pushed
 }
 
 /// The sprite one CPU layer is drawn as: the tile at `local`, through the placement's clip and
@@ -515,6 +537,12 @@ fn candidate(
 ///
 /// With `layer`, a candidate drawing asks the layer route first. A layer is one colour sprite
 /// carrying the box's clip and transform and the folded opacity, and replaces every shape.
+///
+/// With `lod`, every line series is reduced per device column, as [`LOD`] says.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the drawing, where it goes and the two routes it may ask for"
+)]
 pub(crate) fn draw_drawing_tracked(
     scene: &mut Scene,
     base: VectorId,
@@ -523,6 +551,7 @@ pub(crate) fn draw_drawing_tracked(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
     layer: Option<LayerInput>,
+    lod: bool,
 ) -> DrawingEmission {
     let mut emitted = DrawingEmission::default();
     let layers = layer
@@ -638,6 +667,7 @@ pub(crate) fn draw_drawing_tracked(
                 &paint,
                 masks,
                 placement,
+                lod || at.lod == zgui_canvas::Lod::Columns,
             ));
         }
         note(document::emit_tracked(
@@ -658,6 +688,7 @@ pub(crate) fn draw_drawing_tracked(
             &paint,
             masks,
             placement,
+            lod || at.lod == zgui_canvas::Lod::Columns,
         ));
     }
     // A candidate whose shapes all found a route of their own needs no layer.

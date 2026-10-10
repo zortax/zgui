@@ -81,6 +81,9 @@ pub struct PaintStyle {
     /// icons resolve one paint between them, and so that the same custom-property lookups are not
     /// repeated per outline of a chart with two hundred marks.
     pub shape: crate::emit::vector::ShapePaint,
+    /// Whether a drawing's line series are reduced per device column, from
+    /// [`LOD`](crate::emit::vector::LOD).
+    pub vector_lod: bool,
     /// What makes the box composite on its own.
     pub group: GroupPaint,
     /// What the box cuts its own painting to.
@@ -167,6 +170,7 @@ pub fn lower(style: &ComputedStyle, scale: f32) -> PaintStyle {
         decoration: crate::emit::text::DecorationStyle::of(style, scale),
         text_fill,
         shape: crate::emit::vector::shape_paint(style, scale),
+        vector_lod: crate::emit::vector::vector_lod(style),
         group: filter::of(style, scale),
         clip_path: clip::of(style),
         corner_shape: zgui_layout::fragment::corner::shape(style),

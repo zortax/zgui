@@ -295,6 +295,7 @@ fn content_tracked(
                     paint: emission.style.shape,
                     alpha: emission.alpha,
                 }),
+                style.vector_lod,
             );
             routes = emitted.routes;
             layer = emitted.layer;

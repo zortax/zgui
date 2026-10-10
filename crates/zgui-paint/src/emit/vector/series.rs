@@ -19,7 +19,7 @@ use super::document::{density_of, reference};
 use super::marks::MAX_MARK_PRIMS;
 use super::split::geometry_of;
 use super::{ShapeEmission, ShapePaint, VectorPlacement, VectorRoute, under};
-use crate::content::vectors::payloads::{SeriesPart, series_payload};
+use crate::content::vectors::payloads::{SeriesPart, lod_bucket, series_payload};
 use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
 
 /// One part of a series before its payload is found.
@@ -44,6 +44,13 @@ struct Part<'a> {
 /// `fit` places canvas units in the fragment's space. A series whose matrix is not finite or has
 /// no area draws nothing. Only a path marker takes another route, the general one, and `id` names
 /// its items there.
+///
+/// With `lod`, a line whose points run left to right, with more than four points per device
+/// column, is drawn through the first, lowest, highest and last point of each column.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the series, where it goes, and its level of detail"
+)]
 pub(super) fn emit_series(
     scene: &mut Scene,
     id: VectorId,
@@ -52,6 +59,7 @@ pub(super) fn emit_series(
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
+    lod: bool,
 ) -> ShapeEmission {
     let (data, to_canvas) = match series {
         zgui_canvas::Series::Points {
@@ -143,8 +151,14 @@ pub(super) fn emit_series(
         }
         zgui_canvas::Series::Line { stroke, brush, .. } => {
             let half = stroke.width / 2.0 * scale;
+            let part = if lod {
+                columns(scene, data, to_local, placement, masks)
+                    .map_or(SeriesPart::Line, |bucket| SeriesPart::Columns { bucket })
+            } else {
+                SeriesPart::Line
+            };
             parts.push(Part {
-                part: SeriesPart::Line,
+                part,
                 reach: half * core::f64::consts::SQRT_2,
                 half_width: half as f32,
                 flags: MarkFlags::caps(cap(stroke.start_cap), cap(stroke.end_cap)),
@@ -208,6 +222,41 @@ pub(super) fn emit_series(
         pushed,
         route: Some(VectorRoute::Marks),
     }
+}
+
+/// The column bucket a line over `data` is reduced at, or `None` when it is drawn whole.
+///
+/// The data must run left to right, and the line must map data x to device x alone, under an
+/// upright transform. `None` when a device column holds four points or fewer.
+fn columns(
+    scene: &Scene,
+    data: &Arc<[[f32; 2]]>,
+    to_local: Affine,
+    placement: VectorPlacement,
+    masks: &dyn VectorMaskSource,
+) -> Option<i32> {
+    let [a, b, c, d, _, _] = to_local.as_coeffs();
+    let upright = |b: f64, c: f64, scale: f64| b.abs() <= 1e-9 * scale && c.abs() <= 1e-9 * scale;
+    if !upright(b, c, a.abs().max(d.abs())) {
+        return None;
+    }
+    let spatial = scene
+        .spatial
+        .resolve(placement.transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2)?;
+    let (sa, sb, sc, sd) = (
+        f64::from(spatial.a),
+        f64::from(spatial.b),
+        f64::from(spatial.c),
+        f64::from(spatial.d),
+    );
+    if !upright(sb, sc, sa.abs().max(sd.abs())) {
+        return None;
+    }
+    let per_unit = (a * sa).abs();
+    let mut cache = masks.payloads();
+    lod_bucket(cache.as_deref_mut(), data, per_unit)
 }
 
 /// One part of a path marker: its fill, or its stroke of a width in CSS pixels.

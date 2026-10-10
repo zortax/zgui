@@ -560,3 +560,191 @@ fn marks_through_a_fit_draw_as_the_placed_shapes() {
         through.max_difference(&expected)
     );
 }
+
+/// A random walk of `count` points left to right over x in 0..1, its y within 0..1.
+fn walk(count: usize) -> Arc<[[f32; 2]]> {
+    let mut state = 0x0057_A1C5_u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut y = 0.5_f64;
+    (0..count)
+        .map(|i| {
+            // About a fifth of a pixel a step on a 100 pixel tall plot.
+            y = (y + (next() - 0.5) * 0.007).clamp(0.05, 0.95);
+            [(i as f64 / count as f64) as f32, y as f32]
+        })
+        .collect()
+}
+
+/// Three periods of a sine sampled `count` times left to right over x in 0..1.
+fn sine(count: usize) -> Arc<[[f32; 2]]> {
+    (0..count)
+        .map(|i| {
+            let x = i as f64 / count as f64;
+            let y = 0.5 + 0.4 * (std::f64::consts::TAU * 3.0 * x).sin();
+            [x as f32, y as f32]
+        })
+        .collect()
+}
+
+/// Data to the 128 pixel surface: 120 device columns a unit.
+const PLOT: Affine = Affine::new([120.0, 0.0, 0.0, -100.0, 4.0, 114.0]);
+
+/// The pixels of `data` as one stroked shape on the general route: the exact union of the line.
+fn exact_line(data: &[[f32; 2]]) -> Option<Pixels> {
+    let mut path = BezPath::new();
+    for (index, &[x, y]) in data.iter().enumerate() {
+        let point = PLOT * kurbo::Point::new(f64::from(x), f64::from(y));
+        if index == 0 {
+            path.move_to(point);
+        } else {
+            path.line_to(point);
+        }
+    }
+    let shape = Shape {
+        path: Arc::new(path),
+        fill: None,
+        stroke: Some(Stroke {
+            paint: Paint::Solid(Ink::Solid(Color::WHITE)),
+            style: kurbo::Stroke::new(1.0),
+        }),
+        clips: Vec::new(),
+    };
+    let mut harness = harness(Which::Vello)?;
+    let mut scene = support::scene();
+    quad(
+        &mut scene,
+        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        opaque(0, 0, 0),
+    );
+    draw_with_masks(
+        &mut scene,
+        VectorId(1),
+        &[shape],
+        PAINT,
+        &zgui_paint::content::NoVectorMasks,
+        PLACEMENT,
+    );
+    scene.finish(&DamageSet::full());
+    Some(present(&mut harness.renderer, &scene))
+}
+
+/// How two readbacks of one line differ, in the red channel.
+#[derive(Debug)]
+struct Difference {
+    /// Pixels more than one level apart.
+    off: usize,
+    /// Pixels more than sixteen levels apart.
+    far: usize,
+    /// Pixels either side inks.
+    inked: usize,
+    /// The mean difference over those.
+    mean: f64,
+    /// Pixels `ours` inks by more than sixteen levels where `reference` inks nothing.
+    spurious: usize,
+}
+
+fn difference(reference: &Pixels, ours: &Pixels) -> Difference {
+    let (mut off, mut far, mut inked, mut summed, mut spurious) = (0, 0, 0, 0_u64, 0);
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let (a, b) = (reference.rgba(x, y)[0], ours.rgba(x, y)[0]);
+            let d = a.abs_diff(b);
+            off += usize::from(d > 1);
+            far += usize::from(d > 16);
+            spurious += usize::from(a == 0 && b > 16);
+            if a > 0 || b > 0 {
+                inked += 1;
+                summed += u64::from(d);
+            }
+        }
+    }
+    Difference {
+        off,
+        far,
+        inked,
+        mean: summed as f64 / inked.max(1) as f64,
+        spurious,
+    }
+}
+
+/// The reduced and the whole line series over `data` on the marks route, and the exact line.
+fn lines(data: &Arc<[[f32; 2]]>) -> Option<(Pixels, Pixels, Pixels)> {
+    let line = || Series::Line {
+        data: Arc::clone(data),
+        to_canvas: PLOT,
+        stroke: kurbo::Stroke::new(1.0),
+        brush: white(),
+    };
+    let mut whole = CanvasScene::default();
+    whole.push_series(line());
+    let mut reduced = CanvasScene::default();
+    reduced.push_series_lod(line(), zgui_canvas::Lod::Columns);
+    let reduced = Drawing::canvas(&reduced, Affine::IDENTITY);
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    draw_drawing(
+        &mut scene,
+        VectorId(1),
+        &reduced,
+        PAINT,
+        &CachedMarks::new(),
+        PLACEMENT,
+    );
+    let vertices = scene.primitives.marks[0].vertices;
+    assert!(
+        vertices <= 4 * 129 + 2,
+        "four points a column at most: {vertices} vertices"
+    );
+    let exact = exact_line(data)?;
+    let whole = fresh(&Drawing::canvas(&whole, Affine::IDENTITY))?;
+    let reduced = fresh(&reduced)?;
+    Some((reduced, whole, exact))
+}
+
+#[test]
+fn a_reduced_dense_line_stays_close_to_the_exact_line() {
+    // 333 points a device column, smooth within each.
+    let Some((reduced, whole, exact)) = lines(&sine(40_000)) else {
+        return;
+    };
+    let ours = difference(&exact, &reduced);
+    let theirs = difference(&exact, &whole);
+    let against_whole = difference(&whole, &reduced);
+    println!("reduced against exact: {ours:?}");
+    println!("whole against exact: {theirs:?}");
+    println!("reduced against whole: {against_whole:?}");
+    assert!(coverage(&exact) > 200.0, "the line draws");
+    assert!(ours.mean <= 4.0, "{ours:?}");
+    assert!(
+        ours.far as f64 <= 0.005 * f64::from(SIDE * SIDE),
+        "{ours:?}"
+    );
+    assert_eq!(ours.spurious, 0);
+    // Every overlapping segment of the whole line adds to the union bin, so on dense data the whole
+    // line saturates a halo the exact line leaves light. The reduced line has four points a column
+    // and stays close.
+    assert!(ours.mean < theirs.mean);
+}
+
+#[test]
+fn a_reduced_random_walk_keeps_its_envelope() {
+    // 333 points a device column, a fifth of a pixel apart in y: under antialiasing the whole
+    // line covers each column between its lowest and highest point, and the reduced line covers it
+    // with three strokes. This is why the reduction is never automatic.
+    let Some((reduced, whole, exact)) = lines(&walk(40_000)) else {
+        return;
+    };
+    let ours = difference(&exact, &reduced);
+    let theirs = difference(&exact, &whole);
+    println!("reduced against exact: {ours:?}");
+    println!("whole against exact: {theirs:?}");
+    println!("reduced against whole: {:?}", difference(&whole, &reduced));
+    // The whole line strays as far: a few pixels of round joins past the exact outline.
+    assert!(ours.spurious <= 4, "{ours:?}");
+    assert!(ours.mean <= 64.0, "{ours:?}");
+}

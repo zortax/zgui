@@ -56,6 +56,12 @@ pub(crate) enum SeriesPart {
     },
     /// The polyline through the points.
     Line,
+    /// The polyline through the first, lowest, highest and last point of each column `2^-bucket`
+    /// data units wide.
+    Columns {
+        /// The base-two logarithm of the columns per data unit.
+        bucket: i32,
+    },
     /// Copies of one outline, drawn from the cells of this sheet.
     Glyph {
         /// The atlas handle of the sheet, which the payload's table names.
@@ -96,6 +102,49 @@ struct SeriesEntry {
     touched: u32,
 }
 
+/// What one scan of a series' data found.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DataFacts {
+    /// Whether x never decreases over the finite points.
+    pub(crate) monotone: bool,
+    /// How many points are finite.
+    pub(crate) finite: usize,
+    /// The least and the greatest finite x.
+    pub(crate) x: [f64; 2],
+}
+
+impl DataFacts {
+    /// Scans `data`.
+    pub(crate) fn of(data: &[[f32; 2]]) -> Self {
+        let mut facts = Self {
+            monotone: true,
+            finite: 0,
+            x: [f64::INFINITY, f64::NEG_INFINITY],
+        };
+        let mut last = f32::NEG_INFINITY;
+        for &[x, y] in data {
+            if !(x.is_finite() && y.is_finite()) {
+                continue;
+            }
+            facts.monotone &= x >= last;
+            last = x;
+            facts.finite += 1;
+            facts.x = [facts.x[0].min(f64::from(x)), facts.x[1].max(f64::from(x))];
+        }
+        facts
+    }
+}
+
+/// The facts of one data allocation.
+#[derive(Debug)]
+struct FactsEntry {
+    /// The data, held so no other data takes its address.
+    data: Weak<[[f32; 2]]>,
+    facts: DataFacts,
+    /// The frame it was last looked up in.
+    touched: u32,
+}
+
 /// One shape's payload.
 #[derive(Debug)]
 struct ShapeEntry {
@@ -118,6 +167,8 @@ pub struct MarkPayloads {
     shapes: FxHashMap<(usize, bool), ShapeEntry>,
     /// Series payloads.
     series: FxHashMap<SeriesKey, SeriesEntry>,
+    /// What each series' data is, by its address and length.
+    facts: FxHashMap<(usize, usize), FactsEntry>,
     /// The current frame.
     frame: u32,
     /// Whether the shape map was full with every entry pinned this frame.
@@ -148,12 +199,60 @@ impl MarkPayloads {
         self.series.retain(|_, entry| {
             entry.data.strong_count() > 0 && frame.wrapping_sub(entry.touched) < SERIES_FRAMES
         });
+        self.facts.retain(|_, entry| {
+            entry.data.strong_count() > 0 && frame.wrapping_sub(entry.touched) < SERIES_FRAMES
+        });
     }
 
     /// Forgets everything.
     pub(crate) fn clear(&mut self) {
         self.shapes.clear();
         self.series.clear();
+        self.facts.clear();
+    }
+
+    /// The facts of `data`, scanned once per allocation.
+    fn facts(&mut self, data: &Arc<[[f32; 2]]>) -> DataFacts {
+        let key = (Arc::as_ptr(data) as *const u8 as usize, data.len());
+        let frame = self.frame;
+        if let Some(entry) = self.facts.get_mut(&key)
+            && entry
+                .data
+                .upgrade()
+                .is_some_and(|held| Arc::ptr_eq(&held, data))
+        {
+            entry.touched = frame;
+            return entry.facts;
+        }
+        let facts = DataFacts::of(data);
+        if self.facts.len() >= MAX_SERIES && !self.facts.contains_key(&key) {
+            let oldest = self
+                .facts
+                .iter()
+                .max_by_key(|(_, entry)| frame.wrapping_sub(entry.touched))
+                .map(|(key, _)| *key);
+            if let Some(oldest) = oldest {
+                self.facts.remove(&oldest);
+            }
+        }
+        self.facts.insert(
+            key,
+            FactsEntry {
+                data: Arc::downgrade(data),
+                facts,
+                touched: frame,
+            },
+        );
+        facts
+    }
+
+    /// Whether a reduced payload of `data` at `bucket` is held.
+    fn holds_columns(&self, data: &Arc<[[f32; 2]]>, bucket: i32) -> bool {
+        self.series.contains_key(&SeriesKey {
+            data: Arc::as_ptr(data) as *const u8 as usize,
+            len: data.len(),
+            part: SeriesPart::Columns { bucket },
+        })
     }
 
     /// The payload and flags lowered from `found` before, if `found` is still that recognition.
@@ -294,6 +393,90 @@ pub(crate) fn series_payload(
     Some(payload)
 }
 
+/// The most points per device column a line is drawn with whole.
+const POINTS_PER_COLUMN: f64 = 4.0;
+
+/// The column bucket a line over `data` is reduced at, when the device draws `per_unit` columns per
+/// data unit, or `None` when it is drawn whole.
+///
+/// The data must run left to right and hold more than [`POINTS_PER_COLUMN`] finite points per
+/// column over its x range. The bucket is `ceil(log2(per_unit))`, so a column is never wider than a
+/// device pixel. A payload already built one bucket finer is kept, so a zoom builds again only when
+/// it passes twice or half the scale it was built for.
+pub(crate) fn lod_bucket(
+    cache: Option<&mut MarkPayloads>,
+    data: &Arc<[[f32; 2]]>,
+    per_unit: f64,
+) -> Option<i32> {
+    if !(per_unit.is_finite() && per_unit > 0.0) {
+        return None;
+    }
+    let need = per_unit.log2().ceil();
+    if !(-1000.0..=1000.0).contains(&need) {
+        return None;
+    }
+    let need = need as i32;
+    let (facts, finer) = match cache {
+        Some(cache) => (cache.facts(data), cache.holds_columns(data, need + 1)),
+        None => (DataFacts::of(data), false),
+    };
+    if !facts.monotone || facts.finite == 0 {
+        return None;
+    }
+    let columns = ((facts.x[1] - facts.x[0]) * per_unit).max(1.0);
+    if facts.finite as f64 / columns <= POINTS_PER_COLUMN {
+        return None;
+    }
+    Some(if finer { need + 1 } else { need })
+}
+
+/// `data` reduced to the first, lowest, highest and last point of each column `2^-bucket` data
+/// units wide, from data x = 0, in data order. A non-finite point ends a run, and is kept as its
+/// end.
+pub(crate) fn m4(data: &[[f32; 2]], bucket: i32) -> Vec<[f32; 2]> {
+    let scale = 2f64.powi(bucket);
+    let mut out = Vec::new();
+    // The column and the indices of its first, lowest, highest and last point.
+    let mut open: Option<(i64, [usize; 4])> = None;
+    let flush = |out: &mut Vec<[f32; 2]>, open: &mut Option<(i64, [usize; 4])>| {
+        if let Some((_, mut picked)) = open.take() {
+            picked.sort_unstable();
+            let mut last = usize::MAX;
+            for index in picked {
+                if index != last {
+                    out.push(data[index]);
+                    last = index;
+                }
+            }
+        }
+    };
+    for (index, &[x, y]) in data.iter().enumerate() {
+        if !(x.is_finite() && y.is_finite()) {
+            flush(&mut out, &mut open);
+            out.push([x, y]);
+            continue;
+        }
+        let column = (f64::from(x) * scale).floor() as i64;
+        match &mut open {
+            Some((held, picked)) if *held == column => {
+                if y < data[picked[1]][1] {
+                    picked[1] = index;
+                }
+                if y > data[picked[2]][1] {
+                    picked[2] = index;
+                }
+                picked[3] = index;
+            }
+            _ => {
+                flush(&mut out, &mut open);
+                open = Some((column, [index; 4]));
+            }
+        }
+    }
+    flush(&mut out, &mut open);
+    out
+}
+
 /// The bounds of the finite points of `data`, or `None` when it holds none.
 fn bounds_of(data: &[[f32; 2]]) -> Option<[f64; 4]> {
     let mut bounds: Option<[f64; 4]> = None;
@@ -320,6 +503,14 @@ fn build(
     table: &[[u32; 4]],
 ) -> SeriesPayload {
     counter::bump(Counter::SeriesPayloadsBuilt);
+    let reduced;
+    let data = match part {
+        SeriesPart::Columns { bucket } => {
+            reduced = m4(data, bucket);
+            &reduced[..]
+        }
+        _ => data,
+    };
     let at = |[x, y]: [f32; 2]| {
         [
             (f64::from(x) - centre[0]) as f32,
@@ -365,7 +556,7 @@ fn build(
                 }));
             }
         }
-        SeriesPart::Line => {
+        SeriesPart::Line | SeriesPart::Columns { .. } => {
             let separator = [f32::NAN, f32::NAN];
             let mut vertices = vec![separator];
             let mut run = 0usize;
@@ -426,7 +617,9 @@ mod tests {
     use zgui_scene::kurbo::{Affine, BezPath, Circle, Shape as _};
     use zgui_scene::{ClipId, MarkPayload, Scene, SpatialId, VectorId};
 
-    use super::{EVICTED_SHAPES, MAX_SHAPES, MarkPayloads, SeriesPart, series_payload};
+    use super::{
+        EVICTED_SHAPES, MAX_SHAPES, MarkPayloads, SeriesPart, lod_bucket, m4, series_payload,
+    };
     use crate::content::Drawing;
     use crate::content::vectors::recognitions::MAX_ENTRIES;
     use crate::content::vectors::{CachedMarks, PartKey};
@@ -543,6 +736,120 @@ mod tests {
             Arc::ptr_eq(&moved.payloads[0], &again.payloads[0]),
             "the rebased payload replaces the entry"
         );
+    }
+
+    #[test]
+    fn m4_keeps_first_lowest_highest_last_per_column() {
+        // Two columns of width one half, a NaN, and a third column.
+        let data = [
+            [0.0, 1.0],
+            [0.1, -3.0],
+            [0.2, 0.5],
+            [0.3, 4.0],
+            [0.4, 2.0],
+            [0.6, 0.0],
+            [0.7, 0.0],
+            [f32::NAN, f32::NAN],
+            [1.1, 5.0],
+            [1.2, 6.0],
+            [1.3, 7.0],
+            [1.4, 8.0],
+            [1.45, 7.5],
+        ];
+        let reduced = m4(&data, 1);
+        let expected = [
+            [0.0, 1.0],
+            [0.1, -3.0],
+            [0.3, 4.0],
+            [0.4, 2.0],
+            [0.6, 0.0],
+            [0.7, 0.0],
+        ];
+        assert_eq!(&reduced[..6], &expected, "first, lowest, highest, last");
+        assert!(reduced[6][0].is_nan(), "the run ends where it ended");
+        assert_eq!(
+            &reduced[7..],
+            &[[1.1, 5.0], [1.4, 8.0], [1.45, 7.5]],
+            "the first is the lowest here"
+        );
+    }
+
+    /// `count` points of a zigzag over x in 0..1, left to right.
+    fn dense(count: usize) -> Arc<[[f32; 2]]> {
+        (0..count)
+            .map(|i| {
+                let x = i as f32 / count as f32;
+                [x, if i % 2 == 0 { 0.0 } else { 1.0 } + x]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_line_that_turns_back_is_not_reduced() {
+        let mut data: Vec<[f32; 2]> = dense(10_000).to_vec();
+        data.swap(10, 20);
+        let data: Arc<[[f32; 2]]> = data.into();
+        assert_eq!(lod_bucket(None, &data, 100.0), None);
+    }
+
+    #[test]
+    fn a_sparse_line_is_not_reduced() {
+        let data = dense(390);
+        assert_eq!(lod_bucket(None, &data, 100.0), None, "four points a column");
+        assert_eq!(
+            lod_bucket(None, &data, 50.0),
+            Some(6),
+            "eight points a column"
+        );
+    }
+
+    /// Draws `canvas` once through `source` and returns how many payloads were built.
+    fn built(canvas: &CanvasScene, source: &CachedMarks) -> u64 {
+        let before = zgui_profile::counter::get(Counter::SeriesPayloadsBuilt);
+        let drawing = Drawing::canvas(canvas, Affine::IDENTITY);
+        draw(&drawing, source);
+        source.end_frame();
+        zgui_profile::counter::get(Counter::SeriesPayloadsBuilt) - before
+    }
+
+    #[test]
+    fn a_pan_and_a_small_zoom_keep_the_reduced_payload() {
+        let _turn = zgui_profile::counter::exclusive();
+        let data = dense(10_000);
+        let mut canvas = CanvasScene::default();
+        canvas.push_series_lod(
+            zgui_canvas::Series::Line {
+                data: Arc::clone(&data),
+                to_canvas: Affine::scale_non_uniform(100.0, 20.0),
+                stroke: zgui_scene::kurbo::Stroke::new(1.0),
+                brush: Brush::Solid(Color::WHITE),
+            },
+            zgui_canvas::Lod::Columns,
+        );
+        let source = CachedMarks::new();
+        assert_eq!(built(&canvas, &source), 1);
+        let reduced = {
+            let drawing = Drawing::canvas(&canvas, Affine::IDENTITY);
+            draw(&drawing, &source).vertices.len()
+        };
+        assert!(
+            reduced <= 4 * 129 + 2,
+            "four points a column at most: {reduced}"
+        );
+        // 100 columns a unit needs 128; 120 too; 140 needs 256; back to 100 keeps the finer one;
+        // 40 needs 64 and keeps 128, which is twice as fine.
+        let views = [
+            (Affine::translate((13.0, 0.0)), 0),
+            (Affine::scale(1.2), 0),
+            (Affine::scale(1.4), 1),
+            (Affine::IDENTITY, 0),
+            (Affine::scale(0.4), 0),
+            (Affine::scale(0.2), 1),
+        ];
+        for (view, expected) in views {
+            canvas.set_transform(view);
+            assert_eq!(built(&canvas, &source), expected, "{view:?}");
+        }
     }
 
     #[test]
