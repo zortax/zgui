@@ -28,6 +28,7 @@ use zgui_scene::{
 use crate::content::vectors::{VectorMaskRequest, VectorMaskSource, VectorMaskStyle};
 use crate::emit::vector::{ShapePaint, VectorPlacement, under};
 
+use super::analytic::emit_analytic;
 use super::{ShapeEmission, VectorRoute};
 
 /// Emits one shape, and returns how many primitives were pushed.
@@ -51,6 +52,13 @@ pub(crate) fn emit_tracked(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> ShapeEmission {
+    if let Some(pushed) = emit_analytic(scene, id, shape, paint, masks, placement) {
+        counter::bump(Counter::VectorRouteAnalytic);
+        return ShapeEmission {
+            pushed,
+            route: Some(VectorRoute::Analytic),
+        };
+    }
     if let Some(pushed) = emit_mask(scene, id, shape, paint, masks, placement) {
         counter::bump(Counter::VectorRouteMask);
         return ShapeEmission {
@@ -166,7 +174,7 @@ fn flattened(scene: &Scene, placement: VectorPlacement) -> bool {
 ///
 /// A pure rotation gives a density of one on both axes, so a shape that turns rasterises once and
 /// shares that tile at every angle.
-fn density_of(affine: &zgui_geom::Affine2, stroked: bool) -> Option<[f32; 2]> {
+pub(super) fn density_of(affine: &zgui_geom::Affine2, stroked: bool) -> Option<[f32; 2]> {
     let kx = affine.a.hypot(affine.b);
     let ky = affine.c.hypot(affine.d);
     const MIN_DENSITY: f32 = 1.0e-4;
@@ -335,7 +343,7 @@ fn mask_sprite(
 /// A shape that named no stroke is stroked only when the element asked for one through
 /// `--zgui-stroke`. That is what makes a bare outline strokeable from a stylesheet without giving
 /// every shape of a vector document a stroke it never asked for.
-fn stroke_of(
+pub(super) fn stroke_of(
     scene: &mut Scene,
     shape: &zgui_svg::Shape,
     paint: &ShapePaint,
@@ -366,7 +374,7 @@ fn ink_of(shape: &zgui_svg::Shape, stroke: Option<&VectorStroke>) -> Rect<Device
 }
 
 /// The interned paint one of a document's paints becomes, given the inherited colour.
-fn reference(scene: &mut Scene, paint: &zgui_svg::Paint, inherited: Color) -> PaintRef {
+pub(super) fn reference(scene: &mut Scene, paint: &zgui_svg::Paint, inherited: Color) -> PaintRef {
     match paint {
         zgui_svg::Paint::Solid(ink) => PaintRef::solid(scene.paints.solid(ink.resolve(inherited))),
         zgui_svg::Paint::Gradient(ramp) => {

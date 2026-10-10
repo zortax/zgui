@@ -384,8 +384,9 @@ fn icon_box(window: &zgui_runtime::Window) -> (i32, i32) {
 /// the only place all four are on at once.
 #[test]
 fn swapping_the_outlines_redraws_the_icon_and_damages_no_more_than_it() {
-    /// The second icon: the same twenty-four unit square, filled rather than halved.
-    const SQUARE: &str = "M0 0 L24 0 L24 24 L0 24 Z";
+    /// The second icon: the same twenty-four unit square, nearly filled rather than halved. One
+    /// edge leans, so it stays a mask: a filled square is drawn as a quad.
+    const SQUARE: &str = "M0 0 L24 0 L23 24 L0 24 Z";
     let swapped = zgui_reactive::RwSignal::new(false);
     let log: Log = Rc::default();
     let mut app = mount(CSS, &log, move |cx| {

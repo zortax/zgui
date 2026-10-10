@@ -119,9 +119,10 @@ fn an_eligible_canvas_fill_uses_the_same_mask_route() {
 fn a_small_solid_canvas_stroke_uses_a_mask_instead_of_the_vector_rasteriser() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
+        // Diagonal, because a horizontal or vertical one is a quad on the analytic route.
         let mut path = zgui_scene::kurbo::BezPath::new();
-        path.move_to((3.0, 12.0));
-        path.line_to((21.0, 12.0));
+        path.move_to((3.0, 3.0));
+        path.line_to((21.0, 21.0));
         scene.push(
             zgui_canvas::ShapeBuilder::new(path)
                 .stroke(zgui_canvas::Brush::Inherited { alpha: 1.0 }, 2.0)
@@ -870,9 +871,13 @@ fn a_drawing_scaled_to_nothing_reaches_neither_rasteriser() {
 }
 
 /// A bar with no view box, `width` by `height` CSS pixels, filled.
+///
+/// Its right edge leans by one pixel, so it has the bounds of a rectangle and stays off the
+/// analytic route.
 fn bar_tree(width: u32, height: u32) -> (Element, String) {
-    let path: &'static str =
-        Box::leak(format!("M0 0 L{width} 0 L{width} {height} L0 {height} Z").into_boxed_str());
+    let path: &'static str = Box::leak(
+        format!("M0 0 L{width} 0 L{} {height} L0 {height} Z", width - 1).into_boxed_str(),
+    );
     let css = format!(
         "root {{ display: block; width: 1400px; height: 1400px }}
          mark {{ display: block; width: {width}px; height: {height}px; color: rgb(0, 128, 255) }}"

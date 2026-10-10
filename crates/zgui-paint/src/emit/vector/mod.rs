@@ -30,6 +30,7 @@
 //! here rather than written again — the same curve drawn as a box and as a path has to be the same
 //! curve.
 
+mod analytic;
 pub mod document;
 pub mod fit;
 pub(crate) mod recognise;
