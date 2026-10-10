@@ -83,9 +83,9 @@ pub fn pass(
             scene.push_clip_layer(Fill::NonZero, shift * *placement, shape);
             encoded.clip_layers += 1;
         }
-        // The item's own shape clips are in the item's own space, so they go *inside* the item's
-        // transform: a clipped drawing that is rotated has its clip rotated with it.
-        let placement = shift * transform;
+        // The item's own shape clips are in the item's path space, so they go *inside* the item's
+        // placement and transform: a clipped drawing that is rotated has its clip rotated with it.
+        let placement = shift * transform * item.placement;
         for clip in &item.clips {
             scene.push_clip_layer(clip.rule, placement, clip.path.as_ref());
             encoded.clip_layers += 1;
@@ -138,16 +138,16 @@ fn encode_item(
     if fill.is_none() && stroke.is_none() {
         return false;
     }
-    // Encoded once at the item's own coordinates and re-placed every frame with a copy, rather than
-    // re-flattened: curves are flattened on the device, so what is cached here is the encoding and
-    // not a polyline.
+    // Encoded once in path space and re-placed every frame with a copy, rather than re-flattened:
+    // curves are flattened on the device, so what is cached here is the encoding and not a
+    // polyline.
     let encoding = cache.get(item, paints, |into| {
         if let Some(painted) = &fill {
             into.fill(
                 item.fill_rule,
                 Affine::IDENTITY,
                 &painted.brush,
-                painted.transform,
+                brush_transform(item.brush, painted.transform),
                 item.path.as_ref(),
             );
         }
@@ -156,13 +156,19 @@ fn encode_item(
                 style,
                 Affine::IDENTITY,
                 &painted.brush,
-                painted.transform,
+                brush_transform(item.brush, painted.transform),
                 item.path.as_ref(),
             );
         }
     });
     scene.append(encoding, Some(placement));
     true
+}
+
+/// What maps a brush into path space: the item's brush after the paint's own transform.
+fn brush_transform(brush: Affine, paint: Option<Affine>) -> Option<Affine> {
+    let paint = paint.unwrap_or(Affine::IDENTITY);
+    (brush != Affine::IDENTITY || paint != Affine::IDENTITY).then_some(brush * paint)
 }
 
 /// The item's own transform, or the identity when it is not one this can apply.

@@ -140,7 +140,7 @@ impl CoverageRaster {
         let (layer_width, layer_height) = self.scratch.extent();
         let extent = [layer_width as f32, layer_height as f32, 0.0, 0.0];
         // Nothing at all: a layer is in the surface's own coordinates, which is what lets two passes
-        // that do not meet on the screen share it. An outline is already in device space and stays
+        // that do not meet on the screen share it. An outline is placed on the device and stays
         // there.
         let shift = Affine::translate((
             f64::from(pass.raster_region.origin.x - pass.region.origin.x),
@@ -166,18 +166,21 @@ impl CoverageRaster {
             let clip_first = self.runs.len();
             for shape in &shapes {
                 let start = self.segments.len();
-                geometry::flatten(shape, shift, &mut self.segments);
+                geometry::flatten(shape, shift, geometry::TOLERANCE, &mut self.segments);
                 self.runs.push(Run::new(start, self.segments.len() - start));
                 self.last.clip_layers += 1;
             }
 
-            let placement = shift * self.transform_of(item, frame);
-            // The item's own shape clips are in the item's own space, so unlike the residual they
-            // go through the item's transform: a clipped drawing that is rotated has its clip
-            // rotated with it.
+            let placement = shift * self.transform_of(item, frame) * item.placement;
+            // A path in path space flattened to a tenth of a device pixel, however far the
+            // placement scales it.
+            let tolerance = geometry::tolerance(placement);
+            // The item's own shape clips are in the item's path space, so unlike the residual
+            // they go through the item's placement and transform: a clipped drawing that is
+            // rotated has its clip rotated with it.
             for clip in &item.clips {
                 let start = self.segments.len();
-                geometry::flatten(&clip.path, placement, &mut self.segments);
+                geometry::flatten(&clip.path, placement, tolerance, &mut self.segments);
                 self.runs.push(Run::of(
                     start,
                     self.segments.len() - start,
@@ -198,7 +201,7 @@ impl CoverageRaster {
             let mut painted = false;
             if let Some(color) = flat(item.fill, frame.paints) {
                 let start = self.segments.len();
-                geometry::flatten(&item.path, placement, &mut self.segments);
+                geometry::flatten(&item.path, placement, tolerance, &mut self.segments);
                 self.items.push(Item {
                     bounds,
                     viewport: extent,
@@ -217,7 +220,13 @@ impl CoverageRaster {
                 && let Some(color) = flat(Some(stroke.paint), frame.paints)
             {
                 let start = self.segments.len();
-                geometry::flatten_stroke(&item.path, &stroke.style, placement, &mut self.segments);
+                geometry::flatten_stroke(
+                    &item.path,
+                    &stroke.style,
+                    placement,
+                    tolerance,
+                    &mut self.segments,
+                );
                 self.items.push(Item {
                     bounds,
                     viewport: extent,

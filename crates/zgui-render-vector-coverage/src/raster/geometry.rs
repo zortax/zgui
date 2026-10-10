@@ -11,15 +11,26 @@ pub const TOLERANCE: f64 = 0.1;
 /// One line segment of an outline: two endpoints, in the space the samples are taken in.
 pub type Segment = [f32; 4];
 
+/// The tolerance in path units that keeps a path drawn under `transform` within [`TOLERANCE`]
+/// device pixels of its curve.
+///
+/// The largest axis scale of the transform divides it, so a small path drawn large is flattened
+/// finely enough. A transform that scales by almost nothing is read as one that scales by a
+/// thousandth, so the tolerance stays finite.
+pub fn tolerance(transform: Affine) -> f64 {
+    let [a, b, c, d, _, _] = transform.as_coeffs();
+    TOLERANCE / a.hypot(b).max(c.hypot(d)).max(1.0e-3)
+}
+
 /// Appends `path`'s outline to `into` as closed polylines, transformed by `transform`.
 ///
-/// Every subpath is closed whether or not it was written closed, because the winding test a sample
-/// runs is only defined on closed outlines: an open one would leave a ray able to escape through the
-/// gap and the interior would be undecided.
-pub fn flatten(path: &BezPath, transform: Affine, into: &mut Vec<Segment>) {
+/// `tolerance` is in the units of `path`. Every subpath is closed whether or not it was written
+/// closed, because the winding test a sample runs is only defined on closed outlines: an open one
+/// would leave a ray able to escape through the gap and the interior would be undecided.
+pub fn flatten(path: &BezPath, transform: Affine, tolerance: f64, into: &mut Vec<Segment>) {
     let mut start: Option<Point> = None;
     let mut cursor = Point::ZERO;
-    kurbo::flatten(path.iter(), TOLERANCE, |element| match element {
+    kurbo::flatten(path.iter(), tolerance, |element| match element {
         PathEl::MoveTo(point) => {
             close(start, cursor, transform, into);
             start = Some(point);
@@ -49,18 +60,27 @@ pub fn flatten(path: &BezPath, transform: Affine, into: &mut Vec<Segment>) {
 /// is expanded and not the width alone: caps, joins, the miter limit and the dash pattern are all
 /// part of the outline a stroke stands for, and a stroker given only the width would draw a dashed
 /// round-capped line as a solid butt-capped one.
-pub fn flatten_stroke(path: &BezPath, style: &Stroke, transform: Affine, into: &mut Vec<Segment>) {
+///
+/// The stroke is expanded in the units of `path` and then mapped by `transform`, so a transform
+/// that stretches one axis stretches the pen with it.
+pub fn flatten_stroke(
+    path: &BezPath,
+    style: &Stroke,
+    transform: Affine,
+    tolerance: f64,
+    into: &mut Vec<Segment>,
+) {
     let widened = Stroke {
         width: style.width.max(0.0),
         ..style.clone()
     };
     let stroked = kurbo::stroke(
-        path.path_elements(TOLERANCE),
+        path.path_elements(tolerance),
         &widened,
         &StrokeOpts::default(),
-        TOLERANCE,
+        tolerance,
     );
-    flatten(&stroked, transform, into);
+    flatten(&stroked, transform, tolerance, into);
 }
 
 /// Closes an open subpath back to where it began.
@@ -86,7 +106,7 @@ fn push(from: Point, to: Point, transform: Affine, into: &mut Vec<Segment>) {
 mod tests {
     use kurbo::{Affine, BezPath, Circle, Shape as _, Stroke};
 
-    use super::{flatten, flatten_stroke};
+    use super::{TOLERANCE, flatten, flatten_stroke, tolerance};
 
     #[test]
     fn an_unclosed_subpath_is_closed_before_it_becomes_segments() {
@@ -95,7 +115,7 @@ mod tests {
         path.line_to((10.0, 0.0));
         path.line_to((10.0, 10.0));
         let mut segments = Vec::new();
-        flatten(&path, Affine::IDENTITY, &mut segments);
+        flatten(&path, Affine::IDENTITY, TOLERANCE, &mut segments);
         // The horizontal edge is dropped, so what is left is the right edge and the closing
         // diagonal — and the outline is closed, which is what makes an inside/outside test defined.
         assert_eq!(segments.len(), 2);
@@ -112,9 +132,15 @@ mod tests {
             path
         };
         let mut centre = Vec::new();
-        flatten(&line, Affine::IDENTITY, &mut centre);
+        flatten(&line, Affine::IDENTITY, TOLERANCE, &mut centre);
         let mut outline = Vec::new();
-        flatten_stroke(&line, &Stroke::new(4.0), Affine::IDENTITY, &mut outline);
+        flatten_stroke(
+            &line,
+            &Stroke::new(4.0),
+            Affine::IDENTITY,
+            TOLERANCE,
+            &mut outline,
+        );
         assert!(
             outline.len() > centre.len(),
             "a stroked line has two sides and two caps, not one segment"
@@ -137,12 +163,19 @@ mod tests {
         line.line_to((0.0, 40.0));
 
         let mut solid = Vec::new();
-        flatten_stroke(&line, &Stroke::new(4.0), Affine::IDENTITY, &mut solid);
+        flatten_stroke(
+            &line,
+            &Stroke::new(4.0),
+            Affine::IDENTITY,
+            TOLERANCE,
+            &mut solid,
+        );
         let mut dashed = Vec::new();
         flatten_stroke(
             &line,
             &Stroke::new(4.0).with_dashes(0.0, [4.0, 4.0]),
             Affine::IDENTITY,
+            TOLERANCE,
             &mut dashed,
         );
         assert!(
@@ -157,11 +190,31 @@ mod tests {
     fn a_curve_is_flattened_finely_enough_to_be_a_circle() {
         let circle = Circle::new((0.0, 0.0), 50.0).into_path(0.01);
         let mut segments = Vec::new();
-        flatten(&circle, Affine::IDENTITY, &mut segments);
+        flatten(&circle, Affine::IDENTITY, TOLERANCE, &mut segments);
         let radius = segments
             .iter()
             .map(|s| (s[0] * s[0] + s[1] * s[1]).sqrt())
             .fold(f32::MIN, f32::max);
         assert!((radius - 50.0).abs() < 0.25, "{radius}");
+    }
+
+    /// A small path drawn large is flattened against the device pixel, so its edge is as close to
+    /// the curve as the edge of a path drawn at its own size.
+    #[test]
+    fn the_tolerance_follows_the_scale() {
+        let circle = Circle::new((0.0, 0.0), 1.0).into_path(1.0e-6);
+        let scale = Affine::scale(64.0);
+        let mut segments = Vec::new();
+        flatten(&circle, scale, tolerance(scale), &mut segments);
+        let worst = segments
+            .iter()
+            .map(|s| {
+                // The middle of a chord is where a flattened circle strays furthest inside.
+                let x = f64::from(s[0] + s[2]) / 2.0;
+                let y = f64::from(s[1] + s[3]) / 2.0;
+                (64.0 - x.hypot(y)).abs()
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(worst <= 0.1, "a chord strays {worst} px from the curve");
     }
 }

@@ -283,3 +283,54 @@ fn an_item_whose_residual_clip_has_no_shape_is_left_out_and_counted() {
         "and the fallback made the same decision, which is what makes it one contract"
     );
 }
+
+/// A placement that stretches one axis stretches the pen with it, on both rasterisers.
+///
+/// A stroke is in path space with the path, so a circle stroked two units wide under a placement
+/// that doubles the horizontal axis draws a band four pixels wide at its left and right and two
+/// pixels wide at its top and bottom.
+#[test]
+fn a_stretched_stroke_matches_on_both_rasterisers() {
+    let Some((mut compute, mut coverage)) = both() else {
+        return;
+    };
+    let mut scene = scene();
+    quad(&mut scene, rect(0.0, 0.0, 128.0, 128.0), opaque(0, 0, 0));
+    let paint = support::solid(&mut scene, opaque(255, 255, 255));
+    let item = zgui_scene::VectorItem::stroked(
+        zgui_scene::VectorId(0),
+        circle(0.0, 0.0, 10.0),
+        paint,
+        2.0,
+    )
+    .placed(kurbo::Affine::translate((40.0, 40.0)) * kurbo::Affine::scale_non_uniform(2.0, 1.0));
+    scene.push_vector(item);
+    scene.finish(&DamageSet::full());
+    let by_compute = present(&mut compute.renderer, &scene);
+    let by_coverage = present(&mut coverage, &scene);
+
+    // Whole pixels the band covers to at least half, along each centre line before the centre.
+    let across = |pixels: &zgui_render_wgpu::Pixels| {
+        (0..40).filter(|x| pixels.rgba(*x, 40)[0] >= 128).count()
+    };
+    let down = |pixels: &zgui_render_wgpu::Pixels| {
+        (0..40).filter(|y| pixels.rgba(40, *y)[0] >= 128).count()
+    };
+    for (name, pixels) in [("vello", &by_compute), ("coverage", &by_coverage)] {
+        let (across, down) = (across(pixels), down(pixels));
+        println!("{name}: across {across}, down {down}");
+        assert!(
+            across.abs_diff(4) <= 1,
+            "{name} draws the stretched side {across} px wide"
+        );
+        assert!(
+            down.abs_diff(2) <= 1,
+            "{name} draws the unstretched side {down} px wide"
+        );
+    }
+    let (worst, _, _) = compare(&by_compute, &by_coverage);
+    assert!(
+        worst <= 72,
+        "the two rasterisers disagree by {worst} on a stretched stroke"
+    );
+}

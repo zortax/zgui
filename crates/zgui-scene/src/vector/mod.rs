@@ -164,9 +164,8 @@ impl VectorItem {
     /// The placement and both inks move. The path allocation stays the same, so a rasteriser
     /// keeps its encoding of it.
     pub fn translate(&mut self, by: Size<DevicePx, Device>) {
-        self.placement =
-            kurbo::Affine::translate((f64::from(by.width.0), f64::from(by.height.0)))
-                * self.placement;
+        self.placement = kurbo::Affine::translate((f64::from(by.width.0), f64::from(by.height.0)))
+            * self.placement;
         self.local_ink = self.local_ink.translate(by);
         self.ink = self.ink.translate(by);
     }
