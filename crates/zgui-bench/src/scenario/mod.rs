@@ -21,6 +21,7 @@ mod hover;
 mod idle;
 mod record;
 mod scroll;
+pub(crate) mod vector;
 
 use zgui::runtime::Runtime;
 use zgui_platform_headless::Harness;

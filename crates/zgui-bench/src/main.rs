@@ -151,6 +151,13 @@ fn main() {
         }
         return;
     }
+    // The vector scenarios, which print and write nothing: their numbers move by orders of
+    // magnitude as the routes they measure change, so no band is drawn around them yet.
+    if phase == "vector" {
+        let variant = std::env::args().nth(3);
+        crate::scenario::vector::main(&size, variant.as_deref());
+        return;
+    }
     if phase == "scenario" {
         zgui_profile::latency::start_epoch();
         let outcome = crate::scenario::run(&size);
