@@ -225,6 +225,11 @@ impl CachedMarks {
         payloads.end_frame();
         payloads.begin_frame();
     }
+
+    /// Waits for every series payload build, and keeps what it built.
+    pub fn settle(&self) {
+        self.payloads.borrow_mut().settle();
+    }
 }
 
 impl VectorMaskSource for CachedMarks {

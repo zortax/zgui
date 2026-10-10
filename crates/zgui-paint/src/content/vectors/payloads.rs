@@ -7,11 +7,17 @@
 //! again, which is a new path and a new payload. A series keeps its payload under any view until
 //! a far pan measures it from a new centre.
 //!
+//! A series of [`WORKER_POINTS`] points or more builds a new payload on a worker thread. Until the
+//! build ends, the frame draws the nearest payload held for the same data and part: the old centre,
+//! or another level of detail. Such a draw is provisional, and the frame that draws it is owed a
+//! frame of its own.
+//!
 //! No picture depends on an entry: a source with none is lowered again, to a new allocation that
 //! uploads once more. So a full map drops the entries touched least recently, and when paint
 //! records pin every shape entry, it lowers new shapes with no entry until a pin drops.
 
 use std::sync::{Arc, Weak};
+use std::thread::JoinHandle;
 
 use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
@@ -38,9 +44,13 @@ const SERIES_FRAMES: u32 = 600;
 /// The most series entries held. A full map drops the entry touched least recently.
 const MAX_SERIES: usize = 64;
 
-/// How far from the local origin, in local units, an item origin may lie before its payload is
-/// measured from a new centre. An `f32` there is exact to 2^16 · 2^-23 = 1/128 of a unit.
+/// How far from the local origin, in device pixels, an item origin may lie before its payload is
+/// measured from a new centre. An `f32` there is exact to 2^16 · 2^-23 = 1/128 of a pixel.
 const FAR: f64 = 65_536.0;
+
+/// The fewest points of a series whose new payloads are built on a worker thread. A smaller
+/// series builds in well under a millisecond, in the frame that asks.
+pub(crate) const WORKER_POINTS: usize = 1 << 16;
 
 /// One part of a series, as its payload is keyed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -78,6 +88,61 @@ pub(crate) struct SeriesKey {
     pub(crate) len: usize,
     /// The part.
     pub(crate) part: SeriesPart,
+}
+
+impl SeriesKey {
+    /// The key of `part` of `data`.
+    fn of(data: &Arc<[[f32; 2]]>, part: SeriesPart) -> Self {
+        Self {
+            data: Arc::as_ptr(data) as *const u8 as usize,
+            len: data.len(),
+            part,
+        }
+    }
+
+    /// The key every payload that can stand in for this one shares: a line and its reductions
+    /// share one, and every other part has its own.
+    fn family(self) -> Self {
+        let part = match self.part {
+            SeriesPart::Columns { .. } => SeriesPart::Line,
+            part => part,
+        };
+        Self { part, ..self }
+    }
+}
+
+/// How far a payload of `held` is from one of `wanted`, as a stand-in: lower is nearer. The
+/// nearest reduction comes first, a finer one before a coarser one as far away, and the whole line
+/// last. The finest reduction stands in for the whole line.
+fn distance(wanted: SeriesPart, held: SeriesPart) -> i64 {
+    match (wanted, held) {
+        (SeriesPart::Columns { bucket }, SeriesPart::Columns { bucket: other }) => {
+            2 * (i64::from(other) - i64::from(bucket)).abs() + i64::from(other < bucket)
+        }
+        (SeriesPart::Line, SeriesPart::Columns { bucket }) => (1 << 40) - i64::from(bucket),
+        _ => 1 << 41,
+    }
+}
+
+/// A series payload being built on a worker thread.
+#[derive(Debug)]
+struct Build {
+    /// What the payload is for.
+    key: SeriesKey,
+    /// The data, held weakly so the build of dead data is let go.
+    data: Weak<[[f32; 2]]>,
+    /// The worker, which returns the payload.
+    worker: JoinHandle<Option<SeriesPayload>>,
+}
+
+/// A series payload found for a frame.
+#[derive(Clone, Debug)]
+pub(crate) struct SeriesLookup {
+    /// The payload.
+    pub(crate) payload: SeriesPayload,
+    /// Whether it stands in for the payload a build makes. The frame that draws it is owed a
+    /// frame.
+    pub(crate) provisional: bool,
 }
 
 /// One part of a series as payloads.
@@ -169,6 +234,8 @@ pub struct MarkPayloads {
     series: FxHashMap<SeriesKey, SeriesEntry>,
     /// What each series' data is, by its address and length.
     facts: FxHashMap<(usize, usize), FactsEntry>,
+    /// The series payloads being built on worker threads, at most one by family.
+    builds: FxHashMap<SeriesKey, Build>,
     /// The current frame.
     frame: u32,
     /// Whether the shape map was full with every entry pinned this frame.
@@ -202,13 +269,130 @@ impl MarkPayloads {
         self.facts.retain(|_, entry| {
             entry.data.strong_count() > 0 && frame.wrapping_sub(entry.touched) < SERIES_FRAMES
         });
+        // A build whose data died is let go: its worker ends on its own.
+        self.builds.retain(|_, build| build.data.strong_count() > 0);
     }
 
-    /// Forgets everything.
+    /// Forgets everything. A running build is let go.
     pub(crate) fn clear(&mut self) {
         self.shapes.clear();
         self.series.clear();
         self.facts.clear();
+        self.builds.clear();
+    }
+
+    /// Waits for every series build and keeps what it built.
+    #[doc(hidden)]
+    pub fn settle(&mut self) {
+        let builds: Vec<Build> = self.builds.drain().map(|(_, build)| build).collect();
+        for build in builds {
+            self.finish(build);
+        }
+    }
+
+    /// Whether a series build runs.
+    #[doc(hidden)]
+    pub fn building(&self) -> bool {
+        !self.builds.is_empty()
+    }
+
+    /// Keeps the payload of the build of `family`, if the build ended.
+    fn adopt(&mut self, family: SeriesKey) {
+        if !self
+            .builds
+            .get(&family)
+            .is_some_and(|build| build.worker.is_finished())
+        {
+            return;
+        }
+        if let Some(build) = self.builds.remove(&family) {
+            self.finish(build);
+        }
+    }
+
+    /// Waits for `build` and keeps its payload while its data lives.
+    fn finish(&mut self, build: Build) {
+        // A worker that panicked built nothing; a later frame asks again.
+        let Ok(Some(payload)) = build.worker.join() else {
+            return;
+        };
+        let Some(data) = build.data.upgrade() else {
+            return;
+        };
+        counter::bump(Counter::SeriesPayloadsBuilt);
+        self.insert_series(build.key, &data, payload);
+    }
+
+    /// Starts a build of `request` on a worker, unless one of its family runs. Builds it here when
+    /// no thread starts.
+    fn request(&mut self, data: &Arc<[[f32; 2]]>, request: Request) {
+        let key = SeriesKey::of(data, request.part);
+        let family = key.family();
+        if self.builds.contains_key(&family) {
+            return;
+        }
+        let held = Arc::clone(data);
+        let table = request.table.to_vec();
+        let Request {
+            part,
+            to_local,
+            far,
+            bounds,
+            max_prims,
+            ..
+        } = request;
+        let spawned = std::thread::Builder::new()
+            .name("zgui-series".into())
+            .spawn(move || {
+                let request = Request {
+                    part,
+                    to_local,
+                    far,
+                    bounds,
+                    max_prims,
+                    table: &table,
+                };
+                build(&held, request)
+            });
+        match spawned {
+            Ok(worker) => {
+                counter::bump(Counter::SeriesBuildsAsync);
+                self.builds.insert(
+                    family,
+                    Build {
+                        key,
+                        data: Arc::downgrade(data),
+                        worker,
+                    },
+                );
+            }
+            Err(_) => {
+                if let Some(payload) = build(data, request) {
+                    counter::bump(Counter::SeriesPayloadsBuilt);
+                    self.insert_series(key, data, payload);
+                }
+            }
+        }
+    }
+
+    /// The held payload of `data` nearest to the one `key` names, among those of its family.
+    fn nearest(&mut self, key: SeriesKey, data: &Arc<[[f32; 2]]>) -> Option<SeriesPayload> {
+        let family = key.family();
+        let (nearest, _) = self
+            .series
+            .iter()
+            .filter(|(held, entry)| {
+                held.family() == family
+                    && **held != key
+                    && entry
+                        .data
+                        .upgrade()
+                        .is_some_and(|alive| Arc::ptr_eq(&alive, data))
+            })
+            .map(|(held, _)| (*held, distance(key.part, held.part)))
+            .filter(|(_, distance)| *distance < 1 << 41)
+            .min_by_key(|(_, distance)| *distance)?;
+        self.series(nearest, data)
     }
 
     /// The facts of `data`, scanned once per allocation.
@@ -338,59 +522,99 @@ impl MarkPayloads {
     }
 }
 
+/// What one series payload is built from, besides the data.
+#[derive(Clone, Copy, Debug)]
+struct Request<'a> {
+    /// The part.
+    part: SeriesPart,
+    /// The data to the fragment's space, at the frame that asked.
+    to_local: Affine,
+    /// How far from the local origin an item origin may lie, in local units.
+    far: f64,
+    /// The bounds of the finite points, when known.
+    bounds: Option<[f64; 4]>,
+    /// The most prims a payload holds.
+    max_prims: usize,
+    /// The tile table a glyph payload starts with.
+    table: &'a [[u32; 4]],
+}
+
 /// The payloads of `part` of the series over `data`, which `to_local` maps to the fragment's
 /// space, or `None` for data with no finite point.
 ///
-/// Built once per data allocation, measured from the centre of the data's bounds, and held in
-/// `cache`. A payload whose centre `to_local` takes more than [`FAR`] from the local origin is
-/// built again around the point `to_local` takes to the origin, which keeps every position within
-/// 1/128 of a unit. Each payload holds at most `max_prims` prims. A glyph payload starts with
-/// `table`, the tile table of its sheet.
+/// Built once per data allocation, and held in `cache`. A payload is measured from the centre of
+/// the data's bounds, or from the point `to_local` takes to the origin when that centre lands more
+/// than half of [`FAR`] device pixels from it. `device` is how many device pixels a local unit
+/// spans. A payload whose centre lands farther than [`FAR`] device pixels is measured again, which
+/// keeps every position within 1/128 of a pixel.
+///
+/// A series of [`WORKER_POINTS`] points or more builds a new payload on a worker, and draws the
+/// nearest held payload of its family meanwhile as a provisional one. It starts the build as its
+/// centre passes half of [`FAR`], so a steady pan seldom draws a provisional payload. Only a series
+/// with no payload of its family held builds in the frame.
+///
+/// Each payload holds at most `max_prims` prims. A glyph payload starts with `table`, the tile
+/// table of its sheet.
 pub(crate) fn series_payload(
-    mut cache: Option<&mut MarkPayloads>,
+    cache: Option<&mut MarkPayloads>,
     data: &Arc<[[f32; 2]]>,
     part: SeriesPart,
     to_local: Affine,
+    device: f64,
     max_prims: usize,
     table: &[[u32; 4]],
-) -> Option<SeriesPayload> {
-    let key = SeriesKey {
-        data: Arc::as_ptr(data) as *const u8 as usize,
-        len: data.len(),
-        part,
+) -> Option<SeriesLookup> {
+    let far = FAR / device.clamp(1e-3, 1e3);
+    let off = |payload: &SeriesPayload| {
+        let origin = to_local * Point::new(payload.centre[0], payload.centre[1]);
+        origin.x.abs().max(origin.y.abs())
     };
-    let held = cache
-        .as_deref_mut()
-        .and_then(|cache| cache.series(key, data));
-    let payload = match held {
-        Some(payload) => payload,
-        None => {
-            let bounds = bounds_of(data)?;
-            let centre = [(bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0];
-            let payload = build(data, part, centre, bounds, max_prims, table);
-            if let Some(cache) = cache.as_deref_mut() {
-                cache.insert_series(key, data, payload.clone());
-            }
-            payload
-        }
+    let exact = |payload: SeriesPayload| SeriesLookup {
+        payload,
+        provisional: false,
     };
-    let origin = to_local * Point::new(payload.centre[0], payload.centre[1]);
-    if origin.x.abs().max(origin.y.abs()) <= FAR {
-        return Some(payload);
-    }
-    let centre = to_local.inverse() * Point::ORIGIN;
-    let payload = build(
-        data,
+    let mut request = Request {
         part,
-        [centre.x, centre.y],
-        payload.bounds,
+        to_local,
+        far,
+        bounds: None,
         max_prims,
         table,
-    );
-    if let Some(cache) = cache {
-        cache.insert_series(key, data, payload.clone());
+    };
+    let Some(cache) = cache else {
+        return build(data, request).map(exact);
+    };
+    let key = SeriesKey::of(data, part);
+    cache.adopt(key.family());
+    let held = cache.series(key, data);
+    let worker = data.len() >= WORKER_POINTS;
+    if let Some(payload) = &held {
+        let off = off(payload);
+        request.bounds = Some(payload.bounds);
+        if off <= far / 2.0 || (off <= far && !worker) {
+            return held.map(exact);
+        }
+        if off <= far {
+            cache.request(data, request);
+            return held.map(exact);
+        }
     }
-    Some(payload)
+    if worker {
+        let standing = held.or_else(|| cache.nearest(key, data));
+        if let Some(payload) = standing {
+            request.bounds = Some(payload.bounds);
+            cache.request(data, request);
+            counter::bump(Counter::SeriesDrawsProvisional);
+            return Some(SeriesLookup {
+                payload,
+                provisional: true,
+            });
+        }
+    }
+    let payload = build(data, request)?;
+    counter::bump(Counter::SeriesPayloadsBuilt);
+    cache.insert_series(key, data, payload.clone());
+    Some(exact(payload))
 }
 
 /// The most points per column of the reduction a line is drawn with whole.
@@ -509,16 +733,34 @@ fn bounds_of(data: &[[f32; 2]]) -> Option<[f64; 4]> {
     bounds
 }
 
-/// The payloads of `part` of `data`, measured from `centre`, a glyph payload after `table`.
-fn build(
-    data: &[[f32; 2]],
-    part: SeriesPart,
-    centre: [f64; 2],
-    bounds: [f64; 4],
-    max_prims: usize,
-    table: &[[u32; 4]],
-) -> SeriesPayload {
-    counter::bump(Counter::SeriesPayloadsBuilt);
+/// The point a payload of data within `bounds` is measured from: the centre of the bounds, or the
+/// point `to_local` takes to the origin when the centre lands more than half of `far` from it.
+fn centre_of(bounds: [f64; 4], to_local: Affine, far: f64) -> [f64; 2] {
+    let centre = Point::new((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0);
+    let origin = to_local * centre;
+    if origin.x.abs().max(origin.y.abs()) <= far / 2.0 {
+        return [centre.x, centre.y];
+    }
+    let centre = to_local.inverse() * Point::ORIGIN;
+    [centre.x, centre.y]
+}
+
+/// The payloads `request` asks for, of `data`, or `None` for data with no finite point. A glyph
+/// payload starts with the table.
+fn build(data: &[[f32; 2]], request: Request<'_>) -> Option<SeriesPayload> {
+    let Request {
+        part,
+        to_local,
+        far,
+        bounds,
+        max_prims,
+        table,
+    } = request;
+    let bounds = match bounds {
+        Some(bounds) => bounds,
+        None => bounds_of(data)?,
+    };
+    let centre = centre_of(bounds, to_local, far);
     let reduced;
     let data = match part {
         SeriesPart::Columns { bucket } => {
@@ -615,11 +857,11 @@ fn build(
             }
         }
     }
-    SeriesPayload {
+    Some(SeriesPayload {
         centre,
         bounds,
         payloads,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -634,7 +876,8 @@ mod tests {
     use zgui_scene::{ClipId, MarkPayload, Scene, SpatialId, VectorId};
 
     use super::{
-        EVICTED_SHAPES, MAX_SHAPES, MarkPayloads, SeriesPart, lod_bucket, m4, series_payload,
+        EVICTED_SHAPES, MAX_SHAPES, MarkPayloads, SeriesLookup, SeriesPart, WORKER_POINTS,
+        lod_bucket, m4, series_payload,
     };
     use crate::content::Drawing;
     use crate::content::vectors::recognitions::MAX_ENTRIES;
@@ -672,22 +915,26 @@ mod tests {
             &data,
             DISC,
             Affine::IDENTITY,
+            1.0,
             1 << 22,
             &[],
         )
-        .expect("finite points");
+        .expect("finite points")
+        .payload;
         assert_eq!(
             first.payloads[0].discs.len(),
             10,
             "the NaN point is skipped"
         );
         let pan = Affine::translate((-40.0, 7.0)) * Affine::scale(3.0);
-        let second = series_payload(Some(&mut cache), &data, DISC, pan, 1 << 22, &[])
-            .expect("finite points");
+        let second = series_payload(Some(&mut cache), &data, DISC, pan, 1.0, 1 << 22, &[])
+            .expect("finite points")
+            .payload;
         assert!(Arc::ptr_eq(&first.payloads[0], &second.payloads[0]));
         let other: Arc<[[f32; 2]]> = data.iter().copied().collect();
-        let third =
-            series_payload(Some(&mut cache), &other, DISC, pan, 1 << 22, &[]).expect("points");
+        let third = series_payload(Some(&mut cache), &other, DISC, pan, 1.0, 1 << 22, &[])
+            .expect("points")
+            .payload;
         assert!(
             !Arc::ptr_eq(&first.payloads[0], &third.payloads[0]),
             "equal data in another allocation is another payload"
@@ -697,8 +944,9 @@ mod tests {
     #[test]
     fn a_series_payload_is_rebased_on_its_data() {
         let data = data();
-        let built =
-            series_payload(None, &data, DISC, Affine::IDENTITY, 1 << 22, &[]).expect("points");
+        let built = series_payload(None, &data, DISC, Affine::IDENTITY, 1.0, 1 << 22, &[])
+            .expect("points")
+            .payload;
         assert_eq!(built.bounds, [1000.0, -4.0, 1010.0, 4.0]);
         assert_eq!(built.centre, [1005.0, 0.0]);
         for &[x, y, outer, _] in &built.payloads[0].discs {
@@ -713,10 +961,12 @@ mod tests {
             &data,
             SeriesPart::Line,
             Affine::IDENTITY,
+            1.0,
             1 << 22,
             &[],
         )
-        .expect("points");
+        .expect("points")
+        .payload;
         let vertices = &line.payloads[0].vertices;
         assert!(vertices[0][0].is_nan() && vertices[vertices.len() - 1][0].is_nan());
         assert_eq!(vertices.len(), 13, "two runs of five, three separators");
@@ -732,22 +982,26 @@ mod tests {
             &data,
             DISC,
             Affine::translate((-1000.0, 0.0)),
+            1.0,
             1 << 22,
             &[],
         )
-        .expect("points");
+        .expect("points")
+        .payload;
         assert_eq!(near.centre, [1005.0, 0.0]);
         let far = Affine::translate((70_000.0, 0.0));
-        let moved =
-            series_payload(Some(&mut cache), &data, DISC, far, 1 << 22, &[]).expect("points");
+        let moved = series_payload(Some(&mut cache), &data, DISC, far, 1.0, 1 << 22, &[])
+            .expect("points")
+            .payload;
         assert_eq!(
             moved.centre,
             [-70_000.0, 0.0],
             "the centre is where the origin lands"
         );
         assert!(!Arc::ptr_eq(&near.payloads[0], &moved.payloads[0]));
-        let again =
-            series_payload(Some(&mut cache), &data, DISC, far, 1 << 22, &[]).expect("points");
+        let again = series_payload(Some(&mut cache), &data, DISC, far, 1.0, 1 << 22, &[])
+            .expect("points")
+            .payload;
         assert!(
             Arc::ptr_eq(&moved.payloads[0], &again.payloads[0]),
             "the rebased payload replaces the entry"
@@ -889,6 +1143,99 @@ mod tests {
         }
     }
 
+    /// Looks up `part` of `data` under `view` at one device pixel a unit.
+    fn look(
+        cache: &mut MarkPayloads,
+        data: &Arc<[[f32; 2]]>,
+        part: SeriesPart,
+        view: Affine,
+    ) -> SeriesLookup {
+        series_payload(Some(cache), data, part, view, 1.0, 1 << 22, &[]).expect("points")
+    }
+
+    #[test]
+    fn a_held_payload_stands_in_while_a_worker_builds() {
+        let _turn = zgui_profile::counter::exclusive();
+        let (started, standing) = (
+            zgui_profile::counter::get(Counter::SeriesBuildsAsync),
+            zgui_profile::counter::get(Counter::SeriesDrawsProvisional),
+        );
+        let mut cache = MarkPayloads::default();
+        cache.begin_frame();
+        let data = dense(WORKER_POINTS + 4);
+
+        // The first payload of a part is built in the frame.
+        let first = look(&mut cache, &data, DISC, Affine::IDENTITY);
+        assert!(!first.provisional && !cache.building());
+        // A far pan draws it while a worker measures it from a new centre.
+        let far = Affine::translate((200_000.0, 0.0));
+        let held = look(&mut cache, &data, DISC, far);
+        assert!(held.provisional && cache.building());
+        assert!(Arc::ptr_eq(
+            &held.payload.payloads[0],
+            &first.payload.payloads[0]
+        ));
+        cache.settle();
+        let built = look(&mut cache, &data, DISC, far);
+        assert!(!built.provisional);
+        assert_eq!(built.payload.centre, [-200_000.0, 0.0]);
+
+        // A reduction stands in for another one.
+        let coarse = look(
+            &mut cache,
+            &data,
+            SeriesPart::Columns { bucket: 8 },
+            Affine::IDENTITY,
+        );
+        assert!(!coarse.provisional);
+        let finer = SeriesPart::Columns { bucket: 10 };
+        let held = look(&mut cache, &data, finer, Affine::IDENTITY);
+        assert!(held.provisional);
+        assert!(Arc::ptr_eq(
+            &held.payload.payloads[0],
+            &coarse.payload.payloads[0]
+        ));
+        cache.settle();
+        let built = look(&mut cache, &data, finer, Affine::IDENTITY);
+        assert!(!built.provisional);
+        assert!(
+            built.payload.payloads[0].vertices.len() > coarse.payload.payloads[0].vertices.len()
+        );
+        if zgui_profile::COUNTERS_ENABLED {
+            assert_eq!(
+                zgui_profile::counter::get(Counter::SeriesBuildsAsync) - started,
+                2
+            );
+            assert_eq!(
+                zgui_profile::counter::get(Counter::SeriesDrawsProvisional) - standing,
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn a_pan_past_half_the_limit_builds_ahead_and_draws_exact() {
+        // Its build moves the counters another test reads.
+        let _turn = zgui_profile::counter::exclusive();
+        let mut cache = MarkPayloads::default();
+        cache.begin_frame();
+        let data = dense(WORKER_POINTS + 4);
+        let first = look(&mut cache, &data, DISC, Affine::IDENTITY);
+        // Past half the limit and within it: the held payload is still exact.
+        let pan = Affine::translate((40_000.0, 0.0));
+        let held = look(&mut cache, &data, DISC, pan);
+        assert!(!held.provisional);
+        assert!(Arc::ptr_eq(
+            &held.payload.payloads[0],
+            &first.payload.payloads[0]
+        ));
+        assert!(cache.building(), "the next centre is built ahead");
+        cache.settle();
+        let built = look(&mut cache, &data, DISC, pan);
+        assert!(!built.provisional);
+        assert_eq!(built.payload.centre, [-40_000.0, 0.0]);
+    }
+
     #[test]
     fn a_series_entry_dies_with_its_data() {
         let mut cache = MarkPayloads::default();
@@ -899,6 +1246,7 @@ mod tests {
             &data,
             DISC,
             Affine::IDENTITY,
+            1.0,
             1 << 22,
             &[],
         )

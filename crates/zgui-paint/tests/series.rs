@@ -360,3 +360,58 @@ fn a_turned_view_keeps_the_marker_size() {
         "a turn keeps the length of an axis"
     );
 }
+
+#[test]
+fn a_far_pan_draws_the_held_payload_and_owes_a_frame_until_its_build_ends() {
+    // 70 000 points over x in 0..70 000, four device pixels apart: past the size a frame builds.
+    let data: Arc<[[f32; 2]]> = (0..70_000)
+        .map(|i| [i as f32, (i % 7) as f32 * 0.1])
+        .collect();
+    let series = Series::Points {
+        data,
+        to_canvas: Affine::new([4.0, 0.0, 0.0, -100.0, 0.0, 110.0]),
+        marker: Marker::Circle { radius: 1.0 },
+        fill: Some(Brush::Solid(opaque(255, 0, 0))),
+        stroke: None,
+    };
+    let mut fixture = Fixture::new(|scene| scene.push_series(series));
+    let first = fixture.paint();
+    assert!(first.layers_owed.is_empty());
+    let payload = Arc::clone(&fixture.scene().primitives.mark_payloads[0]);
+
+    // The payload centre lands 200 000 pixels away, while points still cover the canvas.
+    fixture.view(Affine::translate((-200_000.0, 0.0)));
+    fixture.recording.reset();
+    let report = fixture.paint();
+    assert!(Arc::ptr_eq(
+        &fixture.scene().primitives.mark_payloads[0],
+        &payload
+    ));
+    assert!(!report.layers_owed.is_empty(), "the frame owes a frame");
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(
+            zgui_profile::counter::get(Counter::SeriesDrawsProvisional),
+            1
+        );
+        assert_eq!(zgui_profile::counter::get(Counter::SeriesBuildsAsync), 1);
+    }
+
+    // Each owed frame encodes the canvas again, until the built payload stands.
+    let mut owed = report.layers_owed;
+    for _ in 0..400 {
+        if owed.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        owed = fixture.paint().layers_owed;
+    }
+    assert!(owed.is_empty(), "the build ends and nothing more is owed");
+    let built = &fixture.scene().primitives.mark_payloads[0];
+    assert!(!Arc::ptr_eq(built, &payload));
+    let mark = marks(fixture.scene())[0];
+    assert!(
+        mark.origin[0].abs() <= 1.0,
+        "the payload is measured from the view: {:?}",
+        mark.origin
+    );
+}

@@ -7,6 +7,9 @@
 //! A path marker is drawn as glyphs: its outline is rasterised once per device scale into the cells
 //! of one sheet, and the payload holds the sheet's table and one anchor per point. A marker the
 //! glyph route cannot take draws through the general route, placed at every point.
+//!
+//! A part drawn from a provisional payload owes the frame its ink on the device, so a later frame
+//! draws it again from the payload its build makes.
 
 use std::sync::Arc;
 
@@ -19,7 +22,7 @@ use super::document::{density_of, reference};
 use super::marks::MAX_MARK_PRIMS;
 use super::split::geometry_of;
 use super::{ShapeEmission, ShapePaint, VectorPlacement, VectorRoute, under};
-use crate::content::vectors::payloads::{SeriesPart, lod_bucket, series_payload};
+use crate::content::vectors::payloads::{SeriesLookup, SeriesPart, lod_bucket, series_payload};
 use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
 
 /// One part of a series before its payload is found.
@@ -38,8 +41,13 @@ struct Part<'a> {
     inherited: zgui_color::Color,
 }
 
+/// The device pixels a series drawn from a provisional payload is owed a frame for, if the viewport
+/// shows any.
+pub(super) type Owed = Option<Rect<i32, Device>>;
+
 /// Emits one series as one union mark per part, and reports the marks route, or the path glyph
-/// route for a path marker.
+/// route for a path marker. With a provisional payload, it also reports the device pixels the
+/// series is owed a frame for.
 ///
 /// `fit` places canvas units in the fragment's space. A series whose matrix is not finite or has
 /// no area draws nothing. Only a path marker takes another route, the general one, and `id` names
@@ -60,7 +68,7 @@ pub(super) fn emit_series(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
     lod: bool,
-) -> ShapeEmission {
+) -> (ShapeEmission, Option<Owed>) {
     let (data, to_canvas) = match series {
         zgui_canvas::Series::Points {
             data, to_canvas, ..
@@ -72,7 +80,7 @@ pub(super) fn emit_series(
     let to_local = fit * to_canvas;
     let coefficients = to_local.as_coeffs();
     if !coefficients.iter().all(|value| value.is_finite()) || to_local.determinant().abs() < 1e-12 {
-        return ShapeEmission::default();
+        return (ShapeEmission::default(), None);
     }
     let scale = f64::from(placement.scale);
     let stroke_colour = paint.stroke.unwrap_or(paint.fill);
@@ -113,11 +121,11 @@ pub(super) fn emit_series(
                     };
                     return match emit_path_markers(scene, id, &markers, masks, placement) {
                         Some(emitted) => emitted,
-                        None => emit_placed_markers(scene, id, &markers, placement),
+                        None => (emit_placed_markers(scene, id, &markers, placement), None),
                     };
                 }
                 // A marker this lowering does not know draws nothing.
-                _ => return ShapeEmission::default(),
+                _ => return (ShapeEmission::default(), None),
             };
             let flags = if square { MarkFlags::SQUARE_DISCS } else { 0 };
             let disc = |outer: f64, inner: f64| SeriesPart::Disc {
@@ -169,8 +177,10 @@ pub(super) fn emit_series(
     }
 
     let [a, b, c, d, _, _] = coefficients;
+    let device = device_scale(scene, placement);
     let mut pushed = 0;
     let mut drew = false;
+    let mut owed = None;
     for part in parts {
         let payloads = {
             let mut cache = masks.payloads();
@@ -179,11 +189,16 @@ pub(super) fn emit_series(
                 data,
                 part.part,
                 to_local,
+                device,
                 MAX_MARK_PRIMS,
                 &[],
             )
         };
-        let Some(built) = payloads else {
+        let Some(SeriesLookup {
+            payload: built,
+            provisional,
+        }) = payloads
+        else {
             continue;
         };
         let origin = to_local * kurbo::Point::new(built.centre[0], built.centre[1]);
@@ -191,6 +206,9 @@ pub(super) fn emit_series(
         let ink = to_local
             .transform_rect_bbox(kurbo::Rect::new(x0, y0, x1, y1))
             .inflate(part.reach, part.reach);
+        if provisional {
+            owed = Some(union(owed.flatten(), owed_of(scene, placement, ink)));
+        }
         let bounds = zgui_geom::Rect::new(
             zgui_geom::Point::new(
                 zgui_geom::DevicePx(ink.x0 as f32),
@@ -215,12 +233,58 @@ pub(super) fn emit_series(
         }
     }
     if !drew {
-        return ShapeEmission::default();
+        return (ShapeEmission::default(), None);
     }
     counter::bump(Counter::VectorRouteMarks);
-    ShapeEmission {
+    let emitted = ShapeEmission {
         pushed,
         route: Some(VectorRoute::Marks),
+    };
+    (emitted, owed)
+}
+
+/// How many device pixels one local unit spans at most under the placement's transform, or one
+/// when the transform does not resolve to a plane.
+fn device_scale(scene: &Scene, placement: VectorPlacement) -> f64 {
+    scene
+        .spatial
+        .resolve(placement.transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2)
+        .map_or(1.0, |affine| {
+            let (a, b, c, d) = (
+                f64::from(affine.a),
+                f64::from(affine.b),
+                f64::from(affine.c),
+                f64::from(affine.d),
+            );
+            a.hypot(b).max(c.hypot(d))
+        })
+}
+
+/// The device pixels of `ink`, in local units, that the viewport shows, rounded out.
+fn owed_of(scene: &Scene, placement: VectorPlacement, ink: kurbo::Rect) -> Owed {
+    let ink = under(scene, placement.transform, rect_of(ink));
+    let edges = [
+        ink.left().0.floor(),
+        ink.top().0.floor(),
+        ink.right().0.ceil(),
+        ink.bottom().0.ceil(),
+    ];
+    if !edges.iter().all(|edge| edge.is_finite()) {
+        return None;
+    }
+    let viewport = scene.viewport();
+    let [left, top, right, bottom] = edges.map(|edge| edge.clamp(-1.0, f32::from(i16::MAX)) as i32);
+    let rect = Rect::new(Point::new(left, top), Size::new(right - left, bottom - top));
+    rect.intersection(Rect::new(Point::new(0, 0), viewport))
+}
+
+/// The union of two owed rectangles.
+pub(super) fn union(held: Owed, more: Owed) -> Owed {
+    match (held, more) {
+        (Some(held), Some(more)) => Some(held.union(more)),
+        (held, more) => held.or(more),
     }
 }
 
@@ -292,7 +356,7 @@ fn emit_path_markers(
     markers: &Markers<'_>,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
-) -> Option<ShapeEmission> {
+) -> Option<(ShapeEmission, Option<Owed>)> {
     if !masks.path_glyphs(id) {
         return None;
     }
@@ -331,8 +395,10 @@ fn emit_path_markers(
     }
 
     let [a, b, c, d, _, _] = markers.to_local.as_coeffs();
+    let device = device_scale(scene, placement);
     let mut pushed = 0;
     let mut drew = false;
+    let mut owed = None;
     for (sheets, part) in drawn {
         let reach = sheets.reach[0];
         let sheet = sheets.keys[0].handle();
@@ -343,11 +409,16 @@ fn emit_path_markers(
                 markers.data,
                 SeriesPart::Glyph { sheet },
                 markers.to_local,
+                device,
                 MAX_MARK_PRIMS,
                 &sheets.table,
             )
         };
-        let Some(built) = built else {
+        let Some(SeriesLookup {
+            payload: built,
+            provisional,
+        }) = built
+        else {
             continue;
         };
         // Every copy lies within its cells from the pixel of its anchor, and that pixel within a
@@ -364,6 +435,9 @@ fn emit_path_markers(
             .to_local
             .transform_rect_bbox(kurbo::Rect::new(x0, y0, x1, y1))
             .inflate(margin, margin);
+        if provisional {
+            owed = Some(union(owed.flatten(), owed_of(scene, placement, ink)));
+        }
         let bounds = Rect::new(
             Point::new(DevicePx(ink.x0 as f32), DevicePx(ink.y0 as f32)),
             Size::new(DevicePx(ink.width() as f32), DevicePx(ink.height() as f32)),
@@ -383,13 +457,14 @@ fn emit_path_markers(
         }
     }
     if !drew {
-        return Some(ShapeEmission::default());
+        return Some((ShapeEmission::default(), None));
     }
     counter::bump(Counter::VectorRoutePathGlyphs);
-    Some(ShapeEmission {
+    let emitted = ShapeEmission {
         pushed,
         route: Some(VectorRoute::PathGlyphs),
-    })
+    };
+    Some((emitted, owed))
 }
 
 /// Emits a path marker series through the general route: one item per part, the marker placed

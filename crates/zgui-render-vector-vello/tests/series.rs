@@ -580,6 +580,79 @@ fn walk(count: usize) -> Arc<[[f32; 2]]> {
         .collect()
 }
 
+/// Draws `canvas` at its own view, then at `far` while its builds run, then at `far` once they
+/// end, with one cache and one renderer, and returns the last frame and its drawing.
+fn settled(canvas: &mut CanvasScene, far: Affine) -> Option<(Pixels, Drawing)> {
+    let mut harness = harness(Which::Vello)?;
+    let masks = CachedMarks::new();
+    let mut scene = Scene::new();
+    let mut revision = 0;
+    let mut frame = |canvas: &CanvasScene, masks: &CachedMarks| {
+        revision += 1;
+        let drawing = Drawing::canvas(canvas, Affine::IDENTITY);
+        encode(
+            &mut scene,
+            &drawing,
+            masks,
+            revision,
+            (revision > 1).then(|| revision - 1),
+        );
+        let standing = zgui_profile::counter::get(Counter::SeriesDrawsProvisional);
+        let pixels = draw(&mut harness.renderer, &mut scene).1;
+        masks.end_frame();
+        (pixels, standing, drawing)
+    };
+    frame(canvas, &masks);
+    canvas.set_transform(far);
+    let (_, standing, _) = frame(canvas, &masks);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(
+            standing, 2,
+            "both parts draw a held payload while they build"
+        );
+    }
+    masks.settle();
+    let (pixels, standing, drawing) = frame(canvas, &masks);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(standing, 0, "the built payloads stand");
+    }
+    Some((pixels, drawing))
+}
+
+#[test]
+fn a_far_zoom_settles_to_a_fresh_encoding() {
+    // Past the size a frame builds: 2 000 000 line points and 100 000 discs over x in 0..1.
+    let line = Series::Line {
+        data: walk(2_000_000),
+        to_canvas: PLOT,
+        stroke: kurbo::Stroke::new(1.0),
+        brush: white(),
+    };
+    let dots = Series::Points {
+        data: walk(100_000),
+        to_canvas: PLOT,
+        marker: Marker::Circle { radius: 1.5 },
+        fill: Some(Brush::Solid(Color::srgb(1.0, 1.0, 1.0, 0.5))),
+        stroke: None,
+    };
+    let mut canvas = CanvasScene::default();
+    canvas.push_series_lod(line, zgui_canvas::Lod::Columns);
+    canvas.push_series(dots);
+    // 1 200 times wider along x, with data x 0.98 at the centre: the payload centres land about
+    // 69 000 pixels away, and the line takes a reduction ten buckets finer.
+    let at = 120.0 * 0.98 + 4.0;
+    let far = Affine::new([1200.0, 0.0, 0.0, 1.0, 64.0 - 1200.0 * at, 0.0]);
+
+    let Some((pixels, drawing)) = settled(&mut canvas, far) else {
+        return;
+    };
+    let Some(expected) = fresh(&drawing) else {
+        return;
+    };
+    assert!(coverage(&pixels) > 100.0, "the series draw");
+    assert_eq!(pixels.max_difference(&expected), 0);
+}
+
 /// Three periods of a sine sampled `count` times left to right over x in 0..1.
 fn sine(count: usize) -> Arc<[[f32; 2]]> {
     (0..count)

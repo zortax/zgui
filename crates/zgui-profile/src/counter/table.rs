@@ -469,6 +469,12 @@ counters! {
     /// Series payloads built.
     SeriesPayloadsBuilt => series_payloads_built, Group::BackendNeutral;
 
+    /// Series payload builds started on a worker thread.
+    SeriesBuildsAsync => series_builds_async, Group::BackendNeutral;
+
+    /// Series parts drawn from a payload that stands in for one a build makes.
+    SeriesDrawsProvisional => series_draws_provisional, Group::BackendNeutral;
+
     /// Recognitions and shape mark payloads kept nowhere, because every entry of their full cache
     /// was pinned.
     MarksUncached => marks_uncached, Group::BackendNeutral;

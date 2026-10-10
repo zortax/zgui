@@ -644,10 +644,19 @@ pub(crate) fn draw_drawing_tracked(
             }
         }
     }
-    let mut note = |shape: ShapeEmission| {
+    let note = |emitted: &mut DrawingEmission, shape: ShapeEmission| {
         emitted.pushed += shape.pushed;
         if let Some(route) = shape.route {
             emitted.routes.insert(route);
+        }
+    };
+    // A series drawn from a provisional payload is owed a frame, as a provisional layer is.
+    let series_note = |emitted: &mut DrawingEmission,
+                       (shape, owed): (ShapeEmission, Option<series::Owed>)| {
+        note(emitted, shape);
+        if let Some(owed) = owed {
+            emitted.layer.provisional = true;
+            emitted.layer.owed = series::union(emitted.layer.owed, owed);
         }
     };
     // A series that draws through the general route takes an identity past every shape's.
@@ -659,7 +668,36 @@ pub(crate) fn draw_drawing_tracked(
         .peekable();
     for index in 0..drawing.shapes.len() {
         while let Some((id, at)) = series.next_if(|(_, at)| at.before <= index) {
-            note(series::emit_series(
+            series_note(
+                &mut emitted,
+                series::emit_series(
+                    scene,
+                    id,
+                    &at.series,
+                    drawing.fit,
+                    &paint,
+                    masks,
+                    placement,
+                    lod || at.lod == zgui_canvas::Lod::Columns,
+                ),
+            );
+        }
+        note(
+            &mut emitted,
+            document::emit_tracked(
+                scene,
+                outline_id(base, index),
+                &ShapeSource::of(drawing, index),
+                &paint,
+                masks,
+                placement,
+            ),
+        );
+    }
+    for (id, at) in series {
+        series_note(
+            &mut emitted,
+            series::emit_series(
                 scene,
                 id,
                 &at.series,
@@ -668,28 +706,8 @@ pub(crate) fn draw_drawing_tracked(
                 masks,
                 placement,
                 lod || at.lod == zgui_canvas::Lod::Columns,
-            ));
-        }
-        note(document::emit_tracked(
-            scene,
-            outline_id(base, index),
-            &ShapeSource::of(drawing, index),
-            &paint,
-            masks,
-            placement,
-        ));
-    }
-    for (id, at) in series {
-        note(series::emit_series(
-            scene,
-            id,
-            &at.series,
-            drawing.fit,
-            &paint,
-            masks,
-            placement,
-            lod || at.lod == zgui_canvas::Lod::Columns,
-        ));
+            ),
+        );
     }
     // A candidate whose shapes all found a route of their own needs no layer.
     if let Some((input, layers)) = layers
