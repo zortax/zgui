@@ -23,6 +23,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::mpsc;
 
+use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
 use zgui_scene::{ChunkPrims, PrimitiveKind, Scene};
 
@@ -361,7 +362,7 @@ pub struct ChunkStore {
     /// Every chunk the arenas hold, by revision.
     residence: HashMap<u64, Resident>,
     /// Every mark payload the arenas hold, by [`payload_key`].
-    shared: HashMap<usize, Shared>,
+    shared: FxHashMap<usize, Shared>,
     /// Per-frame scratch: the payload keys of the chunks retired this frame, one per mark.
     released: Vec<usize>,
     /// Ranges awaiting their submission's completion.
@@ -443,7 +444,7 @@ impl ChunkStore {
                 ),
             ],
             residence: HashMap::new(),
-            shared: HashMap::new(),
+            shared: FxHashMap::default(),
             released: Vec::new(),
             ledger: RetireLedger::new(),
             resolved: Default::default(),
@@ -570,7 +571,11 @@ impl ChunkStore {
             uploaded += self.arenas[lane].upload(gpu, belt, encoder, range.start, bytes);
             *held = Some(range);
         }
+        // The payloads no resident mark holds yet are placed one after another in one range per
+        // payload kind, and uploaded in one write each.
         let mut payloads = Vec::with_capacity(prims.mark_payloads.len());
+        let mut fresh = Vec::new();
+        let mut totals = [0u32; PAYLOAD_LANES];
         for payload in &prims.mark_payloads {
             let key = payload_key(payload);
             payloads.push(key);
@@ -578,32 +583,42 @@ impl ChunkStore {
                 shared.holders += 1;
                 continue;
             }
-            let mut held: [Option<Range<u32>>; PAYLOAD_LANES] = Default::default();
-            for (kind, count) in payload.counts().into_iter().enumerate() {
-                if count == 0 {
-                    continue;
-                }
-                let arena = payload_arena(kind);
-                let range = self.alloc(gpu, belt, encoder, arena, count, &mut uploaded);
-                let written = self.arenas[arena].upload(
-                    gpu,
-                    belt,
-                    encoder,
-                    range.start,
-                    payload_slice(payload, kind),
-                );
-                counter::add(Counter::MarksPayloadBytes, written);
-                uploaded += written;
-                held[kind] = Some(range);
-            }
             self.shared.insert(
                 key,
                 Shared {
                     payload: Arc::clone(payload),
-                    ranges: held,
+                    ranges: Default::default(),
                     holders: 1,
                 },
             );
+            fresh.push(key);
+            for (kind, count) in payload.counts().into_iter().enumerate() {
+                totals[kind] += count;
+            }
+        }
+        for (kind, &total) in totals.iter().enumerate() {
+            if total == 0 {
+                continue;
+            }
+            let arena = payload_arena(kind);
+            let range = self.alloc(gpu, belt, encoder, arena, total, &mut uploaded);
+            let mut bytes =
+                Vec::with_capacity(total as usize * self.arenas[arena].element as usize);
+            let mut start = range.start;
+            for key in &fresh {
+                let shared = self.shared.get_mut(key).expect("inserted above");
+                let slice = payload_slice(&shared.payload, kind);
+                let count = (slice.len() / self.arenas[arena].element as usize) as u32;
+                if count == 0 {
+                    continue;
+                }
+                bytes.extend_from_slice(slice);
+                shared.ranges[kind] = Some(start..start + count);
+                start += count;
+            }
+            let written = self.arenas[arena].upload(gpu, belt, encoder, range.start, &bytes);
+            counter::add(Counter::MarksPayloadBytes, written);
+            uploaded += written;
         }
         self.residence.insert(
             revision,
@@ -695,7 +710,8 @@ impl ChunkStore {
             for shared in self.shared.values_mut() {
                 let bytes = payload_slice(&shared.payload, kind);
                 let count = (bytes.len() as u32) / arena.element;
-                if count == 0 {
+                // A payload being inserted has no range yet, and takes one after the growth.
+                if count == 0 || shared.ranges[kind].is_none() {
                     continue;
                 }
                 let range = arena

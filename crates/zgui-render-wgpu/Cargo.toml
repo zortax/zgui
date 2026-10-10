@@ -12,6 +12,7 @@ futures.workspace = true
 # Named only to turn on the decoding of a shader representation. The type itself is reached through
 # `wgpu::naga`, so if the two ever resolved to different builds of it this crate would not compile.
 naga = { workspace = true, features = ["deserialize"] }
+rustc-hash.workspace = true
 tracing.workspace = true
 # `naga-ir` is what lets a pipeline be built from a representation rather than from WGSL text.
 wgpu = { workspace = true, features = ["naga-ir"] }
