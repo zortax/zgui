@@ -8,7 +8,7 @@ use zgui_render_wgpu::{Pixels, WgpuRenderer};
 /// One drawing the display list held, and where it claimed its ink would land.
 #[derive(Clone, Copy, Debug)]
 pub struct Drawing {
-    /// Its place in the painting order.
+    /// Its index in the array of its kind.
     pub order: usize,
     /// What it paints, in device pixels, as the display list measured it.
     pub ink: Rect<DevicePx, Device>,
@@ -54,7 +54,7 @@ pub struct Glyph {
 pub struct Frame {
     /// The composed target, read back off the device.
     pub pixels: Pixels,
-    /// Every vector item the display list held, in painting order.
+    /// Every vector item the display list held, in painting order, then every colour sprite.
     pub drawings: Vec<Drawing>,
     /// Every filled rectangle it held, in painting order.
     pub quads: Vec<Filled>,
@@ -76,7 +76,7 @@ impl Frame {
     /// Reads back what `renderer` just drew, beside what `scene` said would be in it.
     pub fn record(renderer: &mut WgpuRenderer, scene: &Scene, outcome: &FrameOutcome) -> Self {
         let plan = scene.pass_plan();
-        let drawings = scene
+        let mut drawings: Vec<Drawing> = scene
             .primitives
             .vectors
             .iter()
@@ -88,6 +88,15 @@ impl Frame {
                 painted: (item.fill.is_some(), item.stroke.is_some()),
             })
             .collect();
+        // A drawing on the CPU layer route arrives as one colour sprite.
+        drawings.extend(scene.primitives.color_sprites.iter().enumerate().map(
+            |(order, sprite)| Drawing {
+                order,
+                ink: placed(scene, sprite.bounds, sprite.transform),
+                clip: sprite.clip,
+                painted: (true, false),
+            },
+        ));
         let quads = scene
             .primitives
             .quads
