@@ -33,15 +33,26 @@ struct Window {
     vectors: VectorCache,
     content: ContentCache,
     raster: zgui_testkit_scene::MonoRaster,
+    /// The extent a restyle lays the document out in.
+    extent: (f32, f32),
 }
 
 impl Window {
     fn new(tree: Element, css: &str) -> Self {
         Self {
-            harness: Harness::new(tree, css),
+            extent: (400.0, 200.0),
+            ..Self::sized(tree, css, (400.0, 400.0))
+        }
+    }
+
+    /// The same, over a surface of `size`.
+    fn sized(tree: Element, css: &str, size: (f32, f32)) -> Self {
+        Self {
+            harness: Harness::sized(tree, css, size.0, size.1),
             vectors: VectorCache::new(),
             content: ContentCache::new(AtlasLimits::default()),
             raster: zgui_testkit_scene::MonoRaster::new(),
+            extent: size,
         }
     }
 
@@ -77,7 +88,8 @@ impl Window {
             &self.harness.document,
             [spacer],
         );
-        self.harness.compose_from_marks(400.0, 200.0);
+        self.harness
+            .compose_from_marks(self.extent.0, self.extent.1);
     }
 
     /// The one colour sprite's rectangle.
@@ -448,46 +460,153 @@ fn a_huge_drawing_draws_named_tiles_and_no_vector_item() {
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 0);
     assert_eq!(measured.get(Counter::VectorRouteLayer), 1);
 
-    // The next frames replay the drawing, and rasterise the tiles one tile beyond the root with
-    // budget the first frame did not have. Then a still frame rasterises nothing.
-    let mut ahead = 0;
-    for _ in 0..2 {
+    // The next frames replay the drawing and rasterise no tile the surface does not show.
+    for _ in 0..3 {
         let mut report = None;
-        ahead += recording
-            .measure(|| report = Some(window.paint(false)))
-            .get(Counter::VectorLayerTilesRasterised);
+        let measured = recording.measure(|| report = Some(window.paint(false)));
+        assert_eq!(measured.get(Counter::VectorLayerTilesRasterised), 0);
         assert!(report.expect("a frame").vector_routes.is_empty());
     }
-    let measured = recording.measure(|| {
-        window.paint(false);
-    });
-    assert_eq!(measured.get(Counter::VectorLayerTilesRasterised), 0);
-    assert_eq!(drawn_sprites(&window) as u64, rasterised + ahead);
+    assert_eq!(drawn_sprites(&window) as u64, rasterised);
+}
+
+/// The port a huge drawing is shown in, on a 1600 by 1000 surface.
+const PORT: (f32, f32) = (1000.0, 600.0);
+
+/// How far the drawing in the port is moved left, through a transform of its own.
+const PORT_SHIFT: f32 = 300.0;
+
+/// A huge drawing below a spacer, moved left by a transform, in a port that clips it.
+///
+/// The port's clip is measured outside the drawing's transform, so the scene names every tile and
+/// leaves the clip to the shader.
+fn huge_in_port() -> Window {
+    let css = "root { display: block; width: 1000px; height: 600px; overflow: hidden }
+               spacer { display: block; height: 10px }
+               spacer.up { height: 10px; margin-top: -600px }
+               mark { display: block; width: 3000px; height: 3000px;
+                      transform: translateX(-300px) }";
+    Window::sized(
+        Element::new("root").children(vec![
+            Element::new("spacer"),
+            Element::new("mark").document(HUGE),
+        ]),
+        css,
+        (1600.0, 1000.0),
+    )
+}
+
+/// The cells of the 512 px grid of the drawing in the port that the port shows, when the drawing
+/// is laid out at `top`.
+fn cells_in_port(top: f32) -> Vec<(i32, i32)> {
+    let side = 512.0;
+    let mut cells = Vec::new();
+    for row in 0..6 {
+        for column in 0..6 {
+            let x0 = side * column as f32 - PORT_SHIFT;
+            let x1 = (x0 + side).min(3000.0 - PORT_SHIFT);
+            let y0 = top + side * row as f32;
+            let y1 = (y0 + side).min(top + 3000.0);
+            if x0 < PORT.0 && x1 > 0.0 && y0 < PORT.1 && y1 > 0.0 {
+                cells.push((column, row));
+            }
+        }
+    }
+    cells.sort_unstable();
+    cells
+}
+
+/// The cells whose sprites draw something, when the drawing is laid out at `top`.
+fn placed_cells(window: &Window, top: f32) -> Vec<(i32, i32)> {
+    let mut cells: Vec<(i32, i32)> = window
+        .harness
+        .scene()
+        .primitives
+        .color_sprites
+        .iter()
+        .filter(|sprite| sprite.bounds != [0.0; 4])
+        .map(|sprite| {
+            // The frame is the sprite's own rectangle grown by one pixel.
+            let x = sprite.frame[0] + 1.0;
+            let y = sprite.frame[1] + 1.0 - top;
+            ((x / 512.0).round() as i32, (y / 512.0).round() as i32)
+        })
+        .collect();
+    cells.sort_unstable();
+    cells
+}
+
+/// Paints `frames` frames and returns how many tiles they rasterised, checking that every owed
+/// rectangle is in the port.
+fn paint_tiles(window: &mut Window, recording: &mut Recording, frames: usize) -> u64 {
+    let mut rasterised = 0;
+    for _ in 0..frames {
+        let mut report = None;
+        rasterised += recording
+            .measure(|| report = Some(window.paint(false)))
+            .get(Counter::VectorLayerTilesRasterised);
+        for owed in report.expect("a frame").layers_owed {
+            assert!(
+                owed.origin.x < PORT.0 as i32
+                    && owed.origin.y < PORT.1 as i32
+                    && owed.origin.x + owed.size.width <= PORT.0 as i32
+                    && owed.origin.y + owed.size.height <= PORT.1 as i32,
+                "an owed tile is in the port: {owed:?}"
+            );
+        }
+    }
+    rasterised
+}
+
+#[test]
+fn a_huge_drawing_in_a_port_rasterises_only_the_tiles_the_port_shows() {
+    let mut window = huge_in_port();
+    let mut recording = Recording::begin();
+    let rasterised = paint_tiles(&mut window, &mut recording, 4);
+    let shown = cells_in_port(10.0);
+    assert_eq!(shown.len(), 6, "three columns and two rows");
+    assert_eq!(
+        rasterised,
+        shown.len() as u64,
+        "no tile outside the port is rasterised"
+    );
+    assert_eq!(placed_cells(&window, 10.0), shown);
 }
 
 #[test]
 fn a_scrolled_huge_drawing_rasterises_only_the_exposed_tiles() {
-    let mut window = huge();
+    let mut window = huge_in_port();
     let mut recording = Recording::begin();
-    window.paint(false);
-    let before = drawn_sprites(&window);
-    // 400 px up: the second row of tiles enters the root.
+    paint_tiles(&mut window, &mut recording, 4);
+    let before = placed_cells(&window, 10.0);
+    // 600 px up: the first row of tiles leaves the port and the third enters it.
     window.restyle("spacer", "up");
     let mut report = None;
     let measured = recording.measure(|| report = Some(window.paint(false)));
-    let report = report.expect("a frame");
     assert!(
-        report.vector_routes.is_empty(),
+        report.expect("a frame").vector_routes.is_empty(),
         "the drawing replays at its new place"
     );
     assert!(measured.get(Counter::ChunksTranslated) > 0);
-    let exposed = measured.get(Counter::VectorLayerTilesRasterised);
-    assert_eq!(
-        exposed as usize,
-        drawn_sprites(&window) - before,
-        "only the tiles that entered"
-    );
-    assert!(exposed >= 1);
+    let exposed = measured.get(Counter::VectorLayerTilesRasterised)
+        + paint_tiles(&mut window, &mut recording, 3);
+    let top = 10.0 - 600.0;
+    let entered: Vec<(i32, i32)> = cells_in_port(top)
+        .into_iter()
+        .filter(|cell| !cells_in_port(10.0).contains(cell))
+        .collect();
+    assert_eq!(entered.len(), 3, "one row of three");
+    assert_eq!(exposed, entered.len() as u64, "only the tiles that entered");
+    let placed = placed_cells(&window, top);
+    for cell in placed.iter().filter(|cell| !before.contains(cell)) {
+        assert!(
+            entered.contains(cell),
+            "{cell:?} was rasterised outside the port"
+        );
+    }
+    for cell in &entered {
+        assert!(placed.contains(cell), "{cell:?} entered and is drawn");
+    }
 }
 
 #[test]

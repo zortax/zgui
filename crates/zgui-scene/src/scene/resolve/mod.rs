@@ -76,18 +76,24 @@ impl Scene {
         fixed
     }
 
-    /// Every color sprite still waiting for a placement: its name and its rectangle on the surface.
+    /// Every color sprite still waiting for a placement: its name and the part of its rectangle on
+    /// the surface that its clip admits, or `None` when the clip admits none of it.
     ///
-    /// The rectangle is the sprite's own, under its transform. A producer that rasterises on demand
+    /// The rectangle is the sprite's own, under its transform, cut to the bounds of its clip chain
+    /// with each link where its coordinate system now is. A producer that rasterises on demand
     /// reads it to decide what the frame needs.
-    pub fn named_color_sprites(&self) -> Vec<(ResourceKey, Rect<DevicePx, Device>)> {
+    pub fn named_color_sprites(&self) -> Vec<(ResourceKey, Option<Rect<DevicePx, Device>>)> {
         self.unresolved
             .iter()
             .filter(|entry| entry.kind == PrimitiveKind::ColorSprite)
             .filter_map(|entry| {
                 let sprite = self.primitives.color_sprites.get(entry.index as usize)?;
                 let key = sprite.tile.key()?;
-                Some((key, self.on_device(sprite.transform, sprite.ink())))
+                let on_device = self.on_device(sprite.transform, sprite.ink());
+                let admitted = self
+                    .clips
+                    .bounds_placed(sprite.clip_id(), &|space| self.spatial.resolve(space));
+                Some((key, on_device.intersection(admitted)))
             })
             .collect()
     }

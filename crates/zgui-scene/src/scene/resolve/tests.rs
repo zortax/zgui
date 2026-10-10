@@ -179,7 +179,7 @@ fn settle_named_places_blanks_and_keeps() {
     assert_eq!(named[1].0, image_name(2));
     assert_eq!(
         named[1].1,
-        rect(20.0, 4.0, 16.0, 16.0),
+        Some(rect(20.0, 4.0, 16.0, 16.0)),
         "the rectangle on the surface"
     );
 
@@ -200,4 +200,44 @@ fn settle_named_places_blanks_and_keeps() {
     registry.place(image_name(3), image_tile(64));
     assert_eq!(scene.resolve_resources(&registry), 1);
     scene.finish(&DamageSet::full());
+}
+
+#[test]
+fn a_named_sprite_is_cut_to_its_clip_where_the_clip_is_drawn() {
+    use zgui_geom::{Corners, Matrix4, Vec2};
+
+    use crate::clip::ClipLink;
+    use crate::spatial::{OwnSpace, PropertyOwner};
+
+    let mut scene = scene();
+    // A port in the viewport's space, and content under a transform that moves it left.
+    let viewport = scene.spatial.viewport();
+    let port = scene.clips.only(ClipLink::RoundedRect {
+        shape: crate::prim::CornerShape::ROUND,
+        rect: rect(0.0, 0.0, 100.0, 100.0),
+        radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
+        space: viewport,
+    });
+    let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    let moved = scene.spatial.space_of(
+        viewport,
+        owner,
+        OwnSpace::of(Some(Matrix4::translation(-300.0, 0.0, 0.0)), None, false),
+    );
+    for (x, hash) in [(250.0, 1_u64), (500.0, 2)] {
+        let mut sprite = ColorSprite::new(rect(x, 0.0, 100.0, 100.0), image_name(hash));
+        sprite.clip = port.0;
+        sprite.transform = moved.index();
+        assert!(
+            scene.push_color_sprite(sprite).is_some(),
+            "the clip of another space is left to the shader"
+        );
+    }
+    let named = scene.named_color_sprites();
+    assert_eq!(
+        named[0].1,
+        Some(rect(0.0, 0.0, 50.0, 100.0)),
+        "the part in the port"
+    );
+    assert_eq!(named[1].1, None, "wholly outside the port");
 }

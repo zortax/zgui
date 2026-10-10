@@ -677,11 +677,12 @@ impl VectorLayerCache {
     /// Answers every tile sprite the walk left named, and returns the device rectangles of the
     /// tiles the frame needed and deferred.
     ///
-    /// A tile drawn from a raster in the atlas is placed. A tile whose sprite meets `damage` is
-    /// rasterised when the frame's budget admits it, or when it was deferred on
-    /// [`DEFER_FRAMES`] frames; otherwise it draws nothing this frame and is owed one. A tile
-    /// within one tile of the damage is rasterised ahead only with budget that is left. Every
-    /// other tile draws nothing: the frame does not redraw where it lies.
+    /// A tile is read where its clip admits it on the surface. A tile drawn from a raster in the
+    /// atlas is placed. A tile whose admitted part meets `damage` is rasterised when the frame's
+    /// budget admits it, or when it was deferred on [`DEFER_FRAMES`] frames; otherwise it draws
+    /// nothing this frame and is owed one. A tile whose admitted part is within one tile of the
+    /// damage is rasterised ahead only with budget that is left. Every other tile draws nothing:
+    /// the frame does not show it or does not redraw where it lies.
     pub(crate) fn settle(
         &mut self,
         atlas: &mut Atlas,
@@ -702,7 +703,7 @@ impl VectorLayerCache {
         let mut ahead: Vec<u64> = Vec::new();
         let mut seen: Vec<u64> = Vec::new();
         let mut owed_at: FxHashMap<u64, Vec<Rect<i32, Device>>> = FxHashMap::default();
-        for (name, on_device) in named {
+        for (name, admitted) in named {
             if !is_tile(name) {
                 continue;
             }
@@ -713,12 +714,19 @@ impl VectorLayerCache {
                 answers.insert(handle, None);
                 continue;
             }
-            let pixels = pixels(on_device).intersection(surface);
-            let grown = pixels_grown(on_device, grow).intersection(surface);
             if let Some(raster) = self.tiles.rasters.get_mut(&handle) {
                 raster.used = frame;
             }
-            if let Some(pixels) = pixels.filter(|pixels| damage.intersects(*pixels)) {
+            let pixels = admitted.and_then(|admitted| pixels(admitted).intersection(surface));
+            let Some(pixels) = pixels else {
+                if !seen.contains(&handle) {
+                    seen.push(handle);
+                }
+                continue;
+            };
+            let grown =
+                admitted.and_then(|admitted| pixels_grown(admitted, grow).intersection(surface));
+            if damage.intersects(pixels) {
                 if !needed.contains(&handle) {
                     needed.push(handle);
                 }
