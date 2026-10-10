@@ -250,7 +250,11 @@ pub(super) fn drag(
     settle(harness);
 }
 
-/// Scrolls the port under `at` for `ticks` ticks, a six-line notch every fortieth, as one stretch.
+/// Scrolls the port under `at` for `ticks` ticks, a six-line notch every fortieth, as one stretch,
+/// and then back up the same way as a second stretch named `back`.
+///
+/// Every drawing the second stretch draws was drawn in the first, so each of its frames is a steady
+/// frame of the scroll.
 pub(super) fn scroll(
     harness: &mut Harness<Runtime>,
     stretch: (&'static str, &str, &'static str),
@@ -260,15 +264,17 @@ pub(super) fn scroll(
     harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
     settle(harness);
     let (scenario, variant, name) = stretch;
-    let mut measured = Stretch::begin(scenario, variant, name);
-    for tick in 0..ticks {
-        if tick % 40 == 0 {
-            harness.deliver_to_first(crate::input::wheel(at, 6.0));
+    for (name, lines) in [(name, 6.0), ("back", -6.0)] {
+        let mut measured = Stretch::begin(scenario, variant, name);
+        for tick in 0..ticks {
+            if tick % 40 == 0 {
+                harness.deliver_to_first(crate::input::wheel(at, lines));
+            }
+            measured.tick(harness);
         }
-        measured.tick(harness);
+        measured.end();
+        settle(harness);
     }
-    measured.end();
-    settle(harness);
 }
 
 /// A seeded linear congruential generator: the same document every run.
