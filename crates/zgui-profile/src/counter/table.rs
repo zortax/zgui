@@ -454,6 +454,12 @@ counters! {
     /// Shapes emitted as marks.
     VectorRouteMarks => vector_route_marks, Group::BackendNeutral;
 
+    /// Shapes and series parts emitted as path glyphs.
+    VectorRoutePathGlyphs => vector_route_path_glyphs, Group::BackendNeutral;
+
+    /// Path glyph phase cells rasterised.
+    PathGlyphTilesRasterised => path_glyph_tiles_rasterised, Group::BackendNeutral;
+
     /// Union coverage bins planned this frame.
     MarksUnionBins => marks_union_bins, Group::BackendNeutral;
 

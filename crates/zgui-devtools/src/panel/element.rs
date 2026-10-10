@@ -164,6 +164,9 @@ fn routes(
             .contains(zgui_paint::VectorRoute::Marks)
             .then(|| "marks".to_owned()),
         routes
+            .contains(zgui_paint::VectorRoute::PathGlyphs)
+            .then(|| "path glyphs".to_owned()),
+        routes
             .contains(zgui_paint::VectorRoute::CpuLayer)
             .then(|| "CPU layer".to_owned()),
         rest,
@@ -241,8 +244,17 @@ mod tests {
             "analytic quads + marks + Vello"
         );
 
+        marks.insert(zgui_paint::VectorRoute::PathGlyphs);
+        assert_eq!(
+            routes(marks, Some(zgui::render::VectorBackend::Vello)),
+            "analytic quads + marks + path glyphs + Vello"
+        );
+
         let mut layer = zgui_paint::VectorRoutes::NONE;
         layer.insert(zgui_paint::VectorRoute::CpuLayer);
         assert_eq!(routes(layer, None), "CPU layer");
+        let mut glyphs = zgui_paint::VectorRoutes::NONE;
+        glyphs.insert(zgui_paint::VectorRoute::PathGlyphs);
+        assert_eq!(routes(glyphs, None), "path glyphs");
     }
 }

@@ -85,6 +85,8 @@ pub enum VectorRoute {
     Marks,
     /// The whole drawing rasterised on the CPU into one colour tile, drawn as one sprite.
     CpuLayer,
+    /// One mark per part, drawing every subpath from atlas cells of its repeated outline.
+    PathGlyphs,
 }
 
 /// The raster paths used by all shapes belonging to one element.
@@ -96,7 +98,7 @@ impl VectorRoutes {
     const GENERAL_RASTER: u8 = 2;
     const ANALYTIC: u8 = 4;
     const MARKS: u8 = 8;
-    // Reserved: 16 for path glyphs.
+    const PATH_GLYPHS: u8 = 16;
     const CPU_LAYER: u8 = 32;
 
     /// No vector shape was emitted for the element.
@@ -124,6 +126,7 @@ impl VectorRoutes {
             VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
             VectorRoute::Analytic => Self::ANALYTIC,
             VectorRoute::Marks => Self::MARKS,
+            VectorRoute::PathGlyphs => Self::PATH_GLYPHS,
             VectorRoute::CpuLayer => Self::CPU_LAYER,
         }
     }
