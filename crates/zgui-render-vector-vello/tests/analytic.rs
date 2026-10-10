@@ -1,31 +1,20 @@
 //! Analytic quads against the general route, on a real device.
 //!
 //! One list of shapes is drawn twice: once with the analytic route allowed, as quads, and once
-//! through the general route, by the path renderer. Where the path renderer paints one flat colour
-//! the two pictures have to be equal. Along an edge they may differ by the antialiasing rule: the
-//! quad shader ramps coverage over one pixel of distance, and the path renderer measures area.
+//! through the general route, by the path renderer. See [`support::conformance`] for the rule.
 
 mod support;
 
 use std::sync::Arc;
 
-use zgui_bits::DamageSet;
 use zgui_color::Color;
-use zgui_geom::Matrix4;
-use zgui_paint::content::AnalyticOnly;
-use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw, draw_with_masks};
-use zgui_render_wgpu::Pixels;
+use zgui_geom::Affine2;
 use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
-use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId, VectorId, peniko};
+use zgui_scene::peniko;
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
 
-use support::{SIDE, Which, harness, opaque, present, quad, rect};
-
-/// The largest mean difference along the edges, in levels of 255.
-const MEAN: f64 = 2.0;
-
-/// The largest difference at one edge pixel: the seam's tolerance between two rasterisers.
-const WORST: u8 = 72;
+use support::conformance::{self, Route};
+use support::opaque;
 
 /// A solid paint.
 fn solid(color: Color) -> Paint {
@@ -71,222 +60,10 @@ fn circle(x: f64, y: f64, radius: f64) -> BezPath {
     Circle::new((x, y), radius).to_path(0.1)
 }
 
-/// `shapes` on black, drawn with the analytic route allowed or through the general route alone,
-/// under a uniform `scale`.
-fn scene_of(shapes: &[Shape], analytic: bool, scale: f32) -> Scene {
-    let mut scene = support::scene();
-    quad(
-        &mut scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
-        opaque(0, 0, 0),
-    );
-    let transform = if scale == 1.0 {
-        SpatialId::VIEWPORT
-    } else {
-        let viewport = scene.spatial.viewport();
-        let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
-        scene.spatial.space_of(
-            viewport,
-            owner,
-            OwnSpace::of(Some(Matrix4::scale(scale, scale, 1.0)), None, false),
-        )
-    };
-    let paint = ShapePaint {
-        fill: Color::WHITE,
-        stroke: None,
-        stroke_width: 1.0,
-    };
-    let placement = VectorPlacement {
-        clip: ClipId::ROOT,
-        transform,
-        scale: 1.0,
-    };
-    if analytic {
-        draw_with_masks(
-            &mut scene,
-            VectorId(1),
-            shapes,
-            paint,
-            &AnalyticOnly,
-            placement,
-        );
-    } else {
-        draw(&mut scene, VectorId(1), shapes, paint, placement);
-    }
-    scene.finish(&DamageSet::full());
-    scene
-}
-
-/// How one picture of some shapes agrees with another.
-#[derive(Debug)]
-struct Agreement {
-    /// Pixels whose neighbourhood the reference paints in one colour.
-    interior: u32,
-    /// Those of them that a shape covers.
-    covered: u32,
-    /// The largest channel difference at an interior pixel.
-    interior_worst: u8,
-    /// Every other pixel that either picture paints.
-    edge: u32,
-    /// The mean of the largest channel difference over the edge pixels.
-    mean: f64,
-    /// The largest channel difference at one edge pixel.
-    worst: u8,
-}
-
-/// How `picture` agrees with `reference`.
-fn agreement(picture: &Pixels, reference: &Pixels) -> Agreement {
-    let black = [0u8, 0, 0];
-    let rgb = |pixels: &Pixels, x: i32, y: i32| {
-        let [red, green, blue, _] = pixels.rgba(x, y);
-        [red, green, blue]
-    };
-    let mut found = Agreement {
-        interior: 0,
-        covered: 0,
-        interior_worst: 0,
-        edge: 0,
-        mean: 0.0,
-        worst: 0,
-    };
-    let mut sum = 0u64;
-    for y in 0..SIDE {
-        for x in 0..SIDE {
-            let want = rgb(reference, x, y);
-            let got = rgb(picture, x, y);
-            let difference = (0..3).map(|c| got[c].abs_diff(want[c])).max().unwrap_or(0);
-            let uniform = (-1..=1).all(|dy| {
-                (-1..=1).all(|dx| {
-                    let (nx, ny) = ((x + dx).clamp(0, SIDE - 1), (y + dy).clamp(0, SIDE - 1));
-                    rgb(reference, nx, ny) == want
-                })
-            });
-            if uniform {
-                found.interior += 1;
-                found.covered += u32::from(want != black);
-                found.interior_worst = found.interior_worst.max(difference);
-            } else if got != black || want != black {
-                found.edge += 1;
-                sum += u64::from(difference);
-                found.worst = found.worst.max(difference);
-            }
-        }
-    }
-    found.mean = sum as f64 / f64::from(found.edge.max(1));
-    found
-}
-
-/// The same shapes with every curve, cap and join replaced by lines within a two-hundredth of a
-/// device pixel, and every stroke by the outline it covers, filled.
-///
-/// The path renderer covers a straight edge to within a level and flattens a curve to a quarter
-/// of a pixel, so these shapes drawn through it are the true coverage of the originals.
-fn precise(shapes: &[Shape], scale: f32) -> Vec<Shape> {
-    let tolerance = 0.005 / f64::from(scale);
-    let lines = |path: &BezPath| {
-        let mut out = BezPath::new();
-        kurbo::flatten(path.iter(), tolerance, |element| out.push(element));
-        Arc::new(out)
-    };
-    let mut out = Vec::new();
-    for shape in shapes {
-        let clips: Vec<zgui_svg::Clip> = shape
-            .clips
-            .iter()
-            .map(|clip| zgui_svg::Clip {
-                path: lines(&clip.path),
-                rule: clip.rule,
-            })
-            .collect();
-        if let Some(fill) = &shape.fill {
-            out.push(Shape {
-                path: lines(&shape.path),
-                fill: Some(fill.clone()),
-                stroke: None,
-                clips: clips.clone(),
-            });
-        }
-        if let Some(stroke) = &shape.stroke {
-            let covered = kurbo::stroke(
-                shape.path.iter(),
-                &stroke.style,
-                &kurbo::StrokeOpts::default(),
-                tolerance,
-            );
-            out.push(Shape {
-                path: lines(&covered),
-                fill: Some(Fill {
-                    paint: stroke.paint.clone(),
-                    rule: peniko::Fill::NonZero,
-                }),
-                stroke: None,
-                clips,
-            });
-        }
-    }
-    out
-}
-
-/// Draws `shapes` both ways under `scale` and checks the two pictures agree.
-///
-/// Interior pixels agree to one level, the rounding of a translucent paint through the path
-/// renderer's scratch. Edge pixels agree within [`MEAN`] on average and [`WORST`] at most. Where a
-/// curve makes them differ by more, both pictures are measured against the true coverage, and the
-/// analytic one has to be the closer of the two.
+/// Draws `shapes` through the analytic route and the general route under a uniform `scale`, and
+/// checks the two pictures agree.
 fn compare(name: &str, shapes: &[Shape], scale: f32) {
-    let Some(mut harness) = harness(Which::Vello) else {
-        return;
-    };
-    let quick = scene_of(shapes, true, scale);
-    let general = scene_of(shapes, false, scale);
-    let exact = scene_of(&precise(shapes, scale), false, scale);
-    assert!(
-        quick.primitives.vectors.is_empty(),
-        "{name}: a shape left the analytic route"
-    );
-    assert_eq!(
-        general.primitives.quads.len(),
-        1,
-        "{name}: the general picture holds quads besides its background"
-    );
-    assert!(
-        quick.primitives.quads.len() > 1,
-        "{name}: the analytic picture drew no quad"
-    );
-    let by_quads = present(&mut harness.renderer, &quick);
-    let by_paths = present(&mut harness.renderer, &general);
-    let by_lines = present(&mut harness.renderer, &exact);
-    let found = agreement(&by_quads, &by_paths);
-    let quads_error = agreement(&by_quads, &by_lines);
-    let paths_error = agreement(&by_paths, &by_lines);
-    println!("{name}: against the general route {found:?}");
-    println!("{name}: analytic against the true coverage {quads_error:?}");
-    println!("{name}: general against the true coverage {paths_error:?}");
-    assert!(
-        found.interior >= 2_000,
-        "{name}: only {} interior pixels were compared",
-        found.interior
-    );
-    assert!(
-        found.covered >= 100 && found.edge >= 100,
-        "{name}: the shapes cover almost nothing: {found:?}"
-    );
-    assert!(
-        found.interior_worst <= 1,
-        "{name}: the two differ by {} inside a flat area",
-        found.interior_worst
-    );
-    let close = found.mean <= MEAN && found.worst <= WORST;
-    let closer = quads_error.mean <= paths_error.mean && quads_error.worst <= WORST;
-    assert!(
-        close || closer,
-        "{name}: the edges differ by {:.2} on average and {} at most, and the analytic picture is \
-         {:.2} from the true coverage where the general one is {:.2}",
-        found.mean,
-        found.worst,
-        quads_error.mean,
-        paths_error.mean
-    );
+    conformance::compare(name, shapes, Affine2::scale(scale, scale), Route::Analytic);
 }
 
 #[test]

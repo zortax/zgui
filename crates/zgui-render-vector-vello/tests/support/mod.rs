@@ -8,6 +8,8 @@
     reason = "one support module serves several test binaries, and none of them uses all of it"
 )]
 
+pub(crate) mod conformance;
+
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use zgui_bits::DamageSet;
