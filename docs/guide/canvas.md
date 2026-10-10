@@ -64,8 +64,8 @@ testing.
 
 A `Marker::Path` is an outline in CSS pixels with its origin on the point. It is drawn as path
 glyphs (see below), so a pan or a zoom of the view rasterises nothing and uploads no payload. A
-marker more than 64 device pixels across, and a marker under an element transform that turns or
-skews, draws through the general route.
+marker more than 64 device pixels across, a filled marker that crosses itself, and a marker under
+an element transform that turns or skews, draw through the general route.
 
 ## Path glyphs
 
@@ -83,7 +83,8 @@ shape when all of these hold:
 - The element's transform keeps the axes: a scale, a mirror or a quarter turn. A stroke needs the
   same scale on both axes.
 - Subpaths that overlap are painted as one union. Overlapping subpaths under the even-odd rule,
-  or turning both ways, take another route, because one of them is a hole.
+  turning both ways, or crossing themselves (a figure-eight), take another route, because an
+  overlap can be a hole.
 
 ## CPU layers
 

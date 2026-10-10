@@ -220,9 +220,9 @@ pub enum Marker {
     /// Any outline, in CSS pixels, with its origin on the point.
     ///
     /// It is drawn from tiles rasterised once per device scale, so a pan or a zoom of the view
-    /// rasterises nothing. A marker is at most 64 device pixels across. A larger marker, and a
-    /// marker under a transform that turns or shears the element, draws through the general
-    /// route.
+    /// rasterises nothing. A marker is at most 64 device pixels across. A larger marker, a
+    /// filled marker that crosses itself, and a marker under a transform that turns or shears the
+    /// element, draw through the general route.
     Path(Arc<kurbo::BezPath>),
 }
 

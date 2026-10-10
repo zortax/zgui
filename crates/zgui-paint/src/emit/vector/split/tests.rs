@@ -1,6 +1,6 @@
 use zgui_scene::kurbo::{BezPath, PathEl};
 
-use super::{MAX_GEOMETRIES, SplitDeclined, geometry_of, phase_of, split};
+use super::{MAX_GEOMETRIES, SplitDeclined, Winding, geometry_of, phase_of, split};
 
 /// The identity map.
 const IDENTITY: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
@@ -48,7 +48,14 @@ fn translated_triangles_are_one_outline_at_many_anchors() {
     assert_eq!(geometry.bounds[1], 0.0);
     assert!((geometry.bounds[2] - half).abs() < 1.0 / 256.0);
     assert_eq!(geometry.bounds[3], 6.0);
-    assert!(geometry.area > 0.0, "clockwise on the screen is positive");
+    assert_eq!(
+        geometry.winding,
+        Winding {
+            positive: true,
+            negative: false
+        },
+        "clockwise on the screen is positive"
+    );
 }
 
 #[test]
@@ -58,8 +65,13 @@ fn the_device_map_scales_and_mirrors_the_outline() {
     assert_eq!(doubled.geometries[0].bounds[3], 12.0);
     let mirrored = split(&path, [-1.0, 0.0, 0.0, 1.0]).expect("an outline");
     let plain = split(&path, IDENTITY).expect("an outline");
+    assert!(plain.geometries[0].winding.positive);
     assert_eq!(
-        mirrored.geometries[0].area, -plain.geometries[0].area,
+        mirrored.geometries[0].winding,
+        Winding {
+            positive: false,
+            negative: true
+        },
         "a mirror turns the outline the other way"
     );
     assert_eq!(
@@ -153,6 +165,74 @@ fn a_marker_is_one_outline_about_its_origin() {
     let elements = cross.elements().len();
     assert_eq!(elements, 4);
     assert!(matches!(cross.elements()[0], PathEl::MoveTo(_)));
+}
+
+/// A closed polygon through `points`.
+fn polygon(path: &mut BezPath, points: &[(f64, f64)]) {
+    path.move_to(points[0]);
+    for &point in &points[1..] {
+        path.line_to(point);
+    }
+    path.close_path();
+}
+
+/// The winding of `path` as one outline.
+fn winding(path: &BezPath) -> Winding {
+    geometry_of(path, IDENTITY).expect("an outline").winding
+}
+
+#[test]
+fn an_outline_that_crosses_itself_winds_both_ways() {
+    let positive = Winding {
+        positive: true,
+        negative: false,
+    };
+    let mut bowtie = BezPath::new();
+    polygon(
+        &mut bowtie,
+        &[(0.0, 0.0), (8.0, 8.0), (8.0, 0.0), (0.0, 8.0)],
+    );
+    assert!(winding(&bowtie).mixed(), "a figure-eight of lines");
+    // Two S curves between the same ends, which cross between them.
+    let mut curved = BezPath::new();
+    curved.move_to((0.0, 4.0));
+    curved.curve_to((4.0, -4.0), (12.0, 12.0), (16.0, 4.0));
+    curved.curve_to((12.0, -4.0), (4.0, 12.0), (0.0, 4.0));
+    curved.close_path();
+    assert!(winding(&curved).mixed(), "a figure-eight of curves");
+    // A pentagram winds one and two, and counts as both signs: it crosses itself.
+    let mut star = BezPath::new();
+    let point = |index: usize| {
+        let angle = core::f64::consts::TAU * (index * 2 % 5) as f64 / 5.0;
+        (8.0 * angle.sin(), -8.0 * angle.cos())
+    };
+    polygon(&mut star, &(0..5).map(point).collect::<Vec<_>>());
+    assert!(winding(&star).mixed());
+
+    let mut square = BezPath::new();
+    polygon(
+        &mut square,
+        &[(0.0, 0.0), (8.0, 0.0), (8.0, 8.0), (0.0, 8.0)],
+    );
+    assert_eq!(winding(&square), positive);
+    // A ring whose hole turns the other way winds one and zero.
+    let mut ring = square.clone();
+    polygon(&mut ring, &[(2.0, 2.0), (2.0, 6.0), (6.0, 6.0), (6.0, 2.0)]);
+    assert_eq!(winding(&ring), positive);
+    // Apart, the same two loops wind one and minus one.
+    let mut apart = square.clone();
+    polygon(
+        &mut apart,
+        &[(12.0, 2.0), (12.0, 6.0), (16.0, 6.0), (16.0, 2.0)],
+    );
+    assert!(winding(&apart).mixed());
+    // Loops that cross count as both signs.
+    let mut overlapping = square.clone();
+    polygon(
+        &mut overlapping,
+        &[(4.0, 4.0), (12.0, 4.0), (12.0, 12.0), (4.0, 12.0)],
+    );
+    assert!(winding(&overlapping).mixed());
 }
 
 #[test]

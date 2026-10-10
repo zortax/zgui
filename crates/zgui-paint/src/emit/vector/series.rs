@@ -235,8 +235,8 @@ struct Markers<'a> {
 }
 
 /// Emits a path marker series as one union glyph mark per part, or `None` when the glyph route
-/// cannot take it: a transform that turns or shears, a marker over 64 device pixels across, or no
-/// sheet.
+/// cannot take it: a transform that turns or shears, a marker over 64 device pixels across, a
+/// filled marker that winds both ways, or no sheet.
 fn emit_path_markers(
     scene: &mut Scene,
     id: VectorId,
@@ -260,6 +260,11 @@ fn emit_path_markers(
     let density = density_of(&zgui_geom::Affine2::new(l0, l1, l2, l3, 0.0, 0.0), stroked)?;
     let spatial = density_of(&affine, false)?;
     let geometry = geometry_of(markers.outline, linear).ok()?;
+    // Overlapping copies are summed into one coverage, which is their union under the nonzero rule
+    // only while the marker winds one way everywhere.
+    if geometry.winding.mixed() && markers.parts.iter().any(|part| part.width.is_none()) {
+        return None;
+    }
     let mut drawn: smallvec::SmallVec<[(GlyphSheets, &MarkerPart<'_>); 2]> =
         smallvec::SmallVec::new();
     for part in markers.parts {

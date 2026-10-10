@@ -18,7 +18,7 @@ use zgui_scene::{MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId, ku
 
 use super::document::{density_of, reference, stroke_paint};
 use super::recognise::separated_with;
-use super::split::{self, Split, SplitDeclined};
+use super::split::{self, Split, SplitDeclined, Winding};
 use super::{ShapePaint, ShapeSource, VectorPlacement};
 use crate::content::vectors::path_glyphs::{PHASES, PartPayload};
 use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
@@ -309,16 +309,19 @@ fn lower(
             (payload, union)
         }
     };
-    // The interior of overlapping copies is their union under the nonzero rule when they all turn
-    // one way. Turning both ways, or under the even-odd rule, an inner copy is a hole, which no sum
-    // of coverage draws.
+    // The interior of overlapping copies is their union under the nonzero rule when every
+    // outline winds one way everywhere. Winding both ways, or under the even-odd rule, an
+    // overlap can be a hole, which no sum of coverage draws.
     if union {
         let holes = match part.rule {
             Some(peniko::Fill::EvenOdd) => true,
-            Some(peniko::Fill::NonZero) => {
-                found.geometries.iter().any(|geometry| geometry.area > 0.0)
-                    && found.geometries.iter().any(|geometry| geometry.area < 0.0)
-            }
+            Some(peniko::Fill::NonZero) => found
+                .geometries
+                .iter()
+                .fold(Winding::default(), |held, geometry| {
+                    held.union(geometry.winding)
+                })
+                .mixed(),
             None => false,
         };
         if holes {

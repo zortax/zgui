@@ -12,7 +12,7 @@ use core::hash::Hasher;
 use core::ops::Range;
 
 use rustc_hash::FxHasher;
-use zgui_scene::kurbo::{BezPath, PathEl, Point};
+use zgui_scene::kurbo::{self, BezPath, PathEl, Point};
 
 /// The fewest subpaths a path needs before its outlines are looked for.
 pub(crate) const MIN_SUBPATHS: usize = 8;
@@ -43,6 +43,9 @@ pub(crate) const CUBIC: i32 = 3;
 /// The word of a close.
 pub(crate) const CLOSE: i32 = 4;
 
+/// How far a flattened outline may lie from its curves in the winding test, in device pixels.
+const FLATTEN: f64 = 1.0 / 16.0;
+
 /// One distinct outline, in device pixels from its anchor.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Geometry {
@@ -52,8 +55,41 @@ pub(crate) struct Geometry {
     /// The control box in device pixels from the anchor, as `[x0, y0, x1, y1]`, before any
     /// stroke reach.
     pub(crate) bounds: [f32; 4],
-    /// The signed area of the control polygon, in device pixels squared.
-    pub(crate) area: f64,
+    /// The signs its winding number takes under the nonzero rule.
+    pub(crate) winding: Winding,
+}
+
+/// The signs the winding number of an outline takes where it is not zero.
+///
+/// Copies of outlines that all wind one way paint the union of their coverage under the nonzero
+/// rule. A copy that winds the other way over another cancels it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Winding {
+    /// Positive somewhere: clockwise on the screen.
+    pub(crate) positive: bool,
+    /// Negative somewhere.
+    pub(crate) negative: bool,
+}
+
+impl Winding {
+    /// Both signs.
+    const MIXED: Self = Self {
+        positive: true,
+        negative: true,
+    };
+
+    /// The signs of either.
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            positive: self.positive || other.positive,
+            negative: self.negative || other.negative,
+        }
+    }
+
+    /// Whether both signs occur.
+    pub(crate) fn mixed(self) -> bool {
+        self.positive && self.negative
+    }
 }
 
 /// A path as anchored copies of a few distinct outlines.
@@ -239,7 +275,7 @@ fn hash(words: &[i32]) -> u64 {
     hasher.finish()
 }
 
-/// The outline of `words`, with its control box and the signed area of its control polygon.
+/// The outline of `words`, with its control box and its winding.
 fn geometry(words: &[i32]) -> Geometry {
     let mut bounds = [
         f32::INFINITY,
@@ -247,34 +283,196 @@ fn geometry(words: &[i32]) -> Geometry {
         f32::NEG_INFINITY,
         f32::NEG_INFINITY,
     ];
-    let mut twice_area = 0.0f64;
-    let mut first: Option<(f64, f64)> = None;
-    let mut last = (0.0f64, 0.0f64);
     each_point(words, |x, y| {
-        let (x, y) = (f64::from(x) / UNITS, f64::from(y) / UNITS);
+        let (x, y) = ((f64::from(x) / UNITS) as f32, (f64::from(y) / UNITS) as f32);
         bounds = [
-            bounds[0].min(x as f32),
-            bounds[1].min(y as f32),
-            bounds[2].max(x as f32),
-            bounds[3].max(y as f32),
+            bounds[0].min(x),
+            bounds[1].min(y),
+            bounds[2].max(x),
+            bounds[3].max(y),
         ];
-        if first.is_some() {
-            twice_area += last.0 * y - x * last.1;
-        }
-        first.get_or_insert((x, y));
-        last = (x, y);
     });
-    if let Some(first) = first {
-        twice_area += last.0 * first.1 - first.0 * last.1;
-    }
     if !bounds[0].is_finite() {
         bounds = [0.0; 4];
     }
     Geometry {
         commands: words.into(),
         bounds,
-        area: twice_area / 2.0,
+        winding: winding(words),
     }
+}
+
+/// The signs the winding number of `words` takes, from its outline flattened to within
+/// [`FLATTEN`].
+///
+/// An outline that crosses or touches itself, or whose subpaths cross or touch, counts as both
+/// signs. This is exact for a figure-eight and too strict for a pentagram, whose winding is one
+/// and two. Otherwise each subpath is a simple loop with no other on its boundary, so the winding
+/// just inside a loop is its own sign plus the winding of the others at any of its points, and
+/// every region lies just inside one loop.
+fn winding(words: &[i32]) -> Winding {
+    let mut loops: Vec<Vec<Point>> = Vec::new();
+    kurbo::flatten(elements(words), FLATTEN, |element| match element {
+        PathEl::MoveTo(p) => loops.push(vec![p]),
+        PathEl::LineTo(p) => {
+            if let Some(points) = loops.last_mut()
+                && points.last() != Some(&p)
+            {
+                points.push(p);
+            }
+        }
+        _ => {}
+    });
+    for points in &mut loops {
+        if points.len() > 1 && points.first() == points.last() {
+            points.pop();
+        }
+    }
+    // Two points or fewer enclose nothing.
+    loops.retain(|points| points.len() >= 3);
+    if crosses(&loops) {
+        return Winding::MIXED;
+    }
+    let mut found = Winding::default();
+    for (index, points) in loops.iter().enumerate() {
+        let twice_area: f64 = edges(points).map(|(a, b)| a.x * b.y - b.x * a.y).sum();
+        let own = if twice_area > 0.0 {
+            1
+        } else if twice_area < 0.0 {
+            -1
+        } else {
+            continue;
+        };
+        let inside = own
+            + loops
+                .iter()
+                .enumerate()
+                .filter(|&(other, _)| other != index)
+                .map(|(_, others)| winding_at(others, points[0]))
+                .sum::<i32>();
+        found.positive |= inside > 0;
+        found.negative |= inside < 0;
+    }
+    found
+}
+
+/// The edges of a closed loop of `points`, the closing edge last.
+fn edges(points: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    points
+        .iter()
+        .zip(points.iter().cycle().skip(1))
+        .map(|(&a, &b)| (a, b))
+}
+
+/// Whether two edges of `loops` that do not follow each other in one loop meet.
+///
+/// The edges are swept by their left end, so only edges whose spans overlap on both axes are
+/// tested.
+fn crosses(loops: &[Vec<Point>]) -> bool {
+    struct Edge {
+        a: Point,
+        b: Point,
+        x: [f64; 2],
+        y: [f64; 2],
+        of: usize,
+        at: usize,
+        len: usize,
+    }
+    let mut all: Vec<Edge> = Vec::new();
+    for (of, points) in loops.iter().enumerate() {
+        for (at, (a, b)) in edges(points).enumerate() {
+            all.push(Edge {
+                a,
+                b,
+                x: [a.x.min(b.x), a.x.max(b.x)],
+                y: [a.y.min(b.y), a.y.max(b.y)],
+                of,
+                at,
+                len: points.len(),
+            });
+        }
+    }
+    all.sort_unstable_by(|first, second| first.x[0].total_cmp(&second.x[0]));
+    for (index, first) in all.iter().enumerate() {
+        for second in &all[index + 1..] {
+            if second.x[0] > first.x[1] {
+                break;
+            }
+            if second.y[0] > first.y[1] || second.y[1] < first.y[0] {
+                continue;
+            }
+            let next = |edge: &Edge, other: &Edge| (edge.at + 1) % edge.len == other.at;
+            if first.of == second.of && (next(first, second) || next(second, first)) {
+                continue;
+            }
+            if meet(first.a, first.b, second.a, second.b) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Twice the signed area of the triangle `o`, `a`, `b`.
+fn turn(o: Point, a: Point, b: Point) -> f64 {
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+}
+
+/// Whether the segments `a`–`b` and `c`–`d` share a point.
+fn meet(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let within = |a: Point, b: Point, p: Point| {
+        p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x) && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)
+    };
+    let [d1, d2, d3, d4] = [turn(c, d, a), turn(c, d, b), turn(a, b, c), turn(a, b, d)];
+    let apart = |p: f64, q: f64| (p > 0.0 && q < 0.0) || (p < 0.0 && q > 0.0);
+    (apart(d1, d2) && apart(d3, d4))
+        || (d1 == 0.0 && within(c, d, a))
+        || (d2 == 0.0 && within(c, d, b))
+        || (d3 == 0.0 && within(a, b, c))
+        || (d4 == 0.0 && within(a, b, d))
+}
+
+/// The winding number of the loop `points` about `p`, which is on no edge.
+fn winding_at(points: &[Point], p: Point) -> i32 {
+    let mut winding = 0;
+    for (a, b) in edges(points) {
+        if a.y <= p.y {
+            if b.y > p.y && turn(a, b, p) > 0.0 {
+                winding += 1;
+            }
+        } else if b.y <= p.y && turn(a, b, p) < 0.0 {
+            winding -= 1;
+        }
+    }
+    winding
+}
+
+/// The path elements of `words`, in device pixels.
+fn elements(words: &[i32]) -> impl Iterator<Item = PathEl> + '_ {
+    let point = move |at: usize| {
+        Point::new(
+            f64::from(words[at]) / UNITS,
+            f64::from(words[at + 1]) / UNITS,
+        )
+    };
+    let mut at = 0;
+    core::iter::from_fn(move || {
+        let tag = *words.get(at)?;
+        let element = match tag {
+            MOVE => PathEl::MoveTo(point(at + 1)),
+            LINE => PathEl::LineTo(point(at + 1)),
+            QUAD => PathEl::QuadTo(point(at + 1), point(at + 3)),
+            CUBIC => PathEl::CurveTo(point(at + 1), point(at + 3), point(at + 5)),
+            _ => PathEl::ClosePath,
+        };
+        at += 1 + match tag {
+            MOVE | LINE => 2,
+            QUAD => 4,
+            CUBIC => 6,
+            _ => 0,
+        };
+        Some(element)
+    })
 }
 
 /// Calls `visit` with every point of `words`, control points included, in words.

@@ -224,6 +224,52 @@ fn an_even_odd_or_mixed_overlap_takes_another_route() {
     assert!(routes(&report).contains(VectorRoute::PathGlyphs));
 }
 
+/// Adds a figure-eight of half-width `r` about `(x, y)`: two triangles that meet at the centre
+/// and wind opposite ways.
+fn figure_eight(path: &mut BezPath, (x, y): (f64, f64), r: f64) {
+    path.move_to((x - r, y - r));
+    path.line_to((x + r, y + r));
+    path.line_to((x + r, y - r));
+    path.line_to((x - r, y + r));
+    path.close_path();
+}
+
+#[test]
+fn overlapping_figure_eights_take_another_route() {
+    let _recording = Recording::begin();
+    let red = || Brush::Solid(Color::srgb_u8(255, 0, 0, 255));
+    // Where a left lobe meets a right one the winding is zero, which a union would paint.
+    let mut crowded_eights = BezPath::new();
+    for &point in &crowded() {
+        figure_eight(&mut crowded_eights, point, 3.0);
+    }
+    let mut window = Window::new(
+        vec![ShapeBuilder::new(crowded_eights).fill(red()).build()],
+        "",
+    );
+    let report = window.paint();
+    assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
+    assert!(window.marks().is_empty());
+    // Apart, each copy is drawn alone.
+    let mut apart_eights = BezPath::new();
+    for &point in &apart() {
+        figure_eight(&mut apart_eights, point, 3.0);
+    }
+    let mut window = Window::new(
+        vec![ShapeBuilder::new(apart_eights).fill(red()).build()],
+        "",
+    );
+    let report = window.paint();
+    assert!(routes(&report).contains(VectorRoute::PathGlyphs));
+    // A filled figure-eight marker is summed as a union, so it takes the general route.
+    let mut outline = BezPath::new();
+    figure_eight(&mut outline, (0.0, 0.0), 3.0);
+    let mut window = Window::canvas(|scene| scene.push_series(markers_of(outline)), "");
+    let report = window.paint();
+    assert!(routes(&report).contains(VectorRoute::GeneralRaster));
+    assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
+}
+
 #[test]
 fn a_turned_canvas_takes_another_route() {
     let _recording = Recording::begin();
@@ -287,6 +333,11 @@ fn a_stroke_under_a_non_uniform_scale_declines() {
 fn markers() -> Series {
     let mut outline = BezPath::new();
     triangle(&mut outline, (0.0, 0.0), 4.0, false);
+    markers_of(outline)
+}
+
+/// The points of [`markers`], with `outline` about each.
+fn markers_of(outline: BezPath) -> Series {
     Series::Points {
         data: (0..40)
             .map(|index| {
