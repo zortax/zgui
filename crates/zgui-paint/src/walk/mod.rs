@@ -51,7 +51,7 @@ use crate::walk::decorate::Decorations;
 use crate::walk::fill::TextFills;
 use crate::walk::order::{Emission, NoReplaced, ReplacedSource};
 use crate::walk::replay::hold::{NoResources, ResourceOwner};
-use crate::walk::replay::{Encoding, PaintCache, Painted, Reuse};
+use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Painted, Reuse};
 
 pub use crate::walk::order::{NoReplaced as NoReplacedContent, ReplacedSource as ReplacedContent};
 
@@ -182,6 +182,12 @@ pub struct PaintReport {
     /// A route-less entry is meaningful: a vector or custom element was encoded and emitted no
     /// vector shape, so a retained diagnostic for its previous content must be cleared.
     pub vector_routes: Vec<VectorRouteReport>,
+    /// The device rectangles of drawings owed a frame: a CPU layer stretched from another scale,
+    /// or one deferred by the layer budget.
+    ///
+    /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
+    /// stands. An empty list asks for nothing.
+    pub layers_owed: Vec<Rect<i32, Device>>,
 }
 
 /// The vector raster paths selected for one freshly encoded element.
@@ -304,6 +310,7 @@ impl Painter {
             text_fills: TextFills::new(),
             named: Vec::new(),
             shapes: rustc_hash::FxHashMap::default(),
+            spaces: rustc_hash::FxHashMap::default(),
         };
         stacking::walk(input.store, root, &mut pass);
         let report = pass.report;
@@ -378,6 +385,8 @@ struct Pass<'a, 'b> {
     named: Vec<AtlasKey>,
     /// The fingerprint of what each coordinate system does to shapes, by name, for this frame.
     shapes: rustc_hash::FxHashMap<zgui_scene::SpatialId, u64>,
+    /// What each coordinate system resolves to in the plane, by name, for this frame.
+    spaces: rustc_hash::FxHashMap<zgui_scene::SpatialId, Option<zgui_geom::Affine2>>,
 }
 
 impl Pass<'_, '_> {
@@ -405,6 +414,37 @@ impl Pass<'_, '_> {
         self.shapes.insert(space, hash);
         hash
     }
+    /// The quarter-pixel phase of a drawing fragment's origin on the device, and `None` for every
+    /// other fragment.
+    ///
+    /// A CPU layer is rasterised for one phase. A replay moves its sprite by the fragment's
+    /// movement, so a record holding one replays only while this stays what it was.
+    fn layer_phase(&mut self, fragment: &Fragment, space: zgui_scene::SpatialId) -> Option<[u8; 2]> {
+        if fragment.kind != FragmentKind::Vector {
+            return None;
+        }
+        let affine = match self.spaces.get(&space) {
+            Some(held) => *held,
+            None => {
+                let resolved = self
+                    .scene
+                    .spatial
+                    .resolve(space)
+                    .as_ref()
+                    .and_then(zgui_geom::Matrix4::to_affine2);
+                self.spaces.insert(space, resolved);
+                resolved
+            }
+        }?;
+        let origin = fragment.border_box.origin;
+        let (x, y) = (f64::from(origin.x.0), f64::from(origin.y.0));
+        let device = [
+            f64::from(affine.a) * x + f64::from(affine.c) * y + f64::from(affine.tx),
+            f64::from(affine.b) * x + f64::from(affine.d) * y + f64::from(affine.ty),
+        ];
+        Some(device.map(|t| ((4.0 * (t - t.floor())).round() as i32 & 3) as u8))
+    }
+
     /// The alpha every colour is multiplied by right now.
     fn alpha(&self) -> f32 {
         self.alpha.iter().product::<f32>().clamp(0.0, 1.0)
@@ -710,7 +750,8 @@ impl Pass<'_, '_> {
             )),
             highlights: self.highlight_signature(fragment),
         };
-        match self.painter.cache.reuse(self.scene, fragment, painted) {
+        let phase = self.layer_phase(fragment, transform);
+        match self.painter.cache.reuse(self.scene, fragment, painted, phase) {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
                 let (source, chunk) = self
@@ -759,6 +800,9 @@ impl Pass<'_, '_> {
                 }
                 self.named.clear();
                 self.input.resources.take_named(&mut self.named);
+                if let Some(owed) = emitted.layer.owed {
+                    self.report.layers_owed.push(owed);
+                }
                 self.painter.cache.encoded(
                     self.scene,
                     fragment,
@@ -766,7 +810,14 @@ impl Pass<'_, '_> {
                     Encoding {
                         chunk,
                         resources: &self.named,
-                        complete: self.input.resources.refusals() == refusals,
+                        // A deferred drawing drew nothing this frame, which a record would replay.
+                        complete: self.input.resources.refusals() == refusals
+                            && !emitted.layer.deferred,
+                        layer: LayerRecord {
+                            phase: phase.filter(|_| emitted.layer.sprite),
+                            provisional: emitted.layer.provisional,
+                            promote: emitted.layer.promote,
+                        },
                     },
                     self.input.resources,
                 );

@@ -201,7 +201,36 @@ pub struct Record {
     /// counted repetitions would have to be given back exactly as many times and one miscount is
     /// either a tile that can never be freed or one freed while it is being drawn.
     pub resources: Vec<AtlasKey>,
+    /// The quarter-pixel phase a CPU layer sprite was rasterised for, when the chunk holds one.
+    ///
+    /// A replay moves the sprite by the fragment's movement. A movement by whole pixels keeps the
+    /// raster on the pixel grid it was made for, and a fractional one does not, so a different
+    /// phase encodes again.
+    pub layer_phase: Option<[u8; 2]>,
+    /// Whether the chunk draws a layer of another scale, stretched until the drawing settles.
+    ///
+    /// Never replayed: each frame that reaches it encodes it again, until the exact raster stands.
+    pub provisional: bool,
+    /// Whether the drawing fell back to its shapes for the layer budget or a demotion, and may
+    /// take a layer later.
+    pub promote: bool,
+    /// How many drawn replays a promotable record has had, saturating.
+    pub rasterised_frames: u8,
 }
+
+/// What the layer route did for one encoding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayerRecord {
+    /// The phase the walk read for the fragment, when the encoding pushed a layer sprite.
+    pub phase: Option<[u8; 2]>,
+    /// Whether the sprite stretches a raster of another scale or phase.
+    pub provisional: bool,
+    /// Whether the drawing fell back to its shapes for the budget or a demotion.
+    pub promote: bool,
+}
+
+/// How many drawn replays a promotable record waits before it encodes again.
+pub const PROMOTE_REPLAYS: u8 = 3;
 
 /// What one fragment's encoding produced, as the record is told it.
 ///
@@ -222,6 +251,8 @@ pub struct Encoding<'a> {
     /// a record is replayed until the fragment itself changes and the missing letter would never
     /// come back.
     pub complete: bool,
+    /// What the layer route did.
+    pub layer: LayerRecord,
 }
 
 /// What a fragment costs this frame.
@@ -425,11 +456,28 @@ impl PaintCache {
     /// A record is replayable when the fragment is still drawing what it was drawing, the style,
     /// the chain and the transform are the ones it was recorded with, and the fragment is the
     /// same size. Anything else is encoded again.
-    pub fn reuse(&self, scene: &Scene, fragment: &Fragment, painted: Painted) -> Reuse {
+    ///
+    /// `phase` is the quarter-pixel phase of a drawing fragment's origin on the device. A record
+    /// holding a layer sprite replays only at the phase it was rasterised for. A provisional layer
+    /// never replays, and a promotable record encodes again after [`PROMOTE_REPLAYS`] drawn
+    /// replays.
+    pub fn reuse(
+        &self,
+        scene: &Scene,
+        fragment: &Fragment,
+        painted: Painted,
+        phase: Option<[u8; 2]>,
+    ) -> Reuse {
         let Some(record) = self.records.get(&fragment.key) else {
             return Reuse::Encode;
         };
         if record.painted != painted {
+            return Reuse::Encode;
+        }
+        if record.provisional
+            || record.layer_phase.is_some_and(|held| Some(held) != phase)
+            || (record.promote && record.rasterised_frames >= PROMOTE_REPLAYS)
+        {
             return Reuse::Encode;
         }
         if record.kind != fragment.kind {
@@ -484,6 +532,7 @@ impl PaintCache {
             chunk,
             resources,
             complete,
+            layer,
         } = encoding;
         if !complete {
             // Something the fragment draws had nowhere to go, so this painting is a letter short.
@@ -555,6 +604,10 @@ impl PaintCache {
                 clip_hash: scene.clips.content_hash(painted.clip),
                 last_selected: self.epoch,
                 resources: held,
+                layer_phase: layer.phase,
+                provisional: layer.provisional,
+                promote: layer.promote,
+                rasterised_frames: 0,
             },
         );
         release_tables(scene, &replaced_holds);
@@ -581,6 +634,9 @@ impl PaintCache {
             if record.last_selected != self.epoch {
                 record.last_selected = self.epoch;
                 self.selected_bytes += record.prims.bytes();
+            }
+            if record.promote {
+                record.rasterised_frames = record.rasterised_frames.saturating_add(1);
             }
         }
     }

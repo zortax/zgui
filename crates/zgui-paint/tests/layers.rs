@@ -25,7 +25,6 @@ const RAMP_RECT: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0
 const CSS: &str = "root { display: block; width: 400px; height: 200px }
                    spacer { display: block; height: 10px }
                    spacer.tall { height: 30px }
-                   spacer.half { height: 30.5px }
                    mark { display: block; width: 64px; height: 64px; color: rgb(0, 128, 255) }";
 
 /// A window's caches for one fixture.
@@ -61,6 +60,28 @@ impl Window {
     fn paint(&mut self, ready: bool) -> PaintReport {
         self.harness
             .paint_cached_vectors_ready(&self.vectors, &mut self.content, &self.raster, ready)
+    }
+
+    /// Gives the element `name` the class `class`, which moves the drawing without refragmenting
+    /// it.
+    fn restyle(&mut self, name: &str, class: &'static str) {
+        let spacer = self.harness.element(name);
+        self.harness
+            .edit_and_restyle(|edit| edit.add_class(spacer, zgui_interned::ClassName::new(class)));
+        zgui_layout::boxtree::patch::restyle(
+            &mut self.harness.store,
+            &self.harness.document,
+            [spacer],
+        );
+        self.harness.compose_from_marks(400.0, 200.0);
+    }
+
+    /// The one colour sprite's rectangle.
+    fn sprite(&self) -> [f32; 4] {
+        let [sprite] = self.harness.scene().primitives.color_sprites.as_slice() else {
+            panic!("one colour sprite");
+        };
+        sprite.bounds
     }
 }
 
@@ -220,4 +241,110 @@ fn a_drawing_that_needs_no_general_route_leaves_the_candidates() {
         0,
         "the drawing is no candidate any more"
     );
+}
+
+#[test]
+fn a_scrolled_layer_replays_and_rasterises_nothing() {
+    let mut window = Window::document(RAMP);
+    let mut recording = Recording::begin();
+    window.paint(false);
+    let before = window.sprite();
+    window.restyle("spacer", "tall");
+    let mut report = None;
+    let measured = recording.measure(|| report = Some(window.paint(false)));
+    let report = report.expect("a frame");
+    assert!(report.vector_routes.is_empty(), "the drawing was encoded again");
+    assert!(report.layers_owed.is_empty());
+    assert_eq!(measured.get(Counter::VectorLayersRasterised), 0);
+    assert!(measured.get(Counter::ChunksTranslated) > 0);
+    assert_eq!(window.sprite()[1] - before[1], 20.0, "the sprite moved with its box");
+}
+
+#[test]
+fn a_fractional_move_encodes_a_layer_again() {
+    // Layout puts boxes on whole pixels, so the half pixel comes from a scale above the drawing:
+    // one pixel of movement inside it is one and a half on the device.
+    let css = "root { display: block; width: 400px; height: 300px }
+               port { display: block; width: 200px; height: 200px; transform: scale(1.5);
+                      transform-origin: 0 0 }
+               spacer { display: block; height: 10px }
+               spacer.tall { height: 11px }
+               mark { display: block; width: 64px; height: 64px }";
+    let mut window = Window::new(
+        Element::new("root").children(vec![Element::new("port").children(vec![
+            Element::new("spacer"),
+            Element::new("mark").document(RAMP),
+        ])]),
+        css,
+    );
+    let mut recording = Recording::begin();
+    window.paint(false);
+    window.restyle("spacer", "tall");
+    let mut report = None;
+    let measured = recording.measure(|| report = Some(window.paint(false)));
+    let report = report.expect("a frame");
+    assert!(!report.vector_routes.is_empty(), "half a pixel off the grid encodes again");
+    assert_eq!(measured.get(Counter::VectorLayersProvisional), 1);
+    assert_eq!(report.layers_owed.len(), 1, "a stretched layer is owed a frame");
+
+    // Owed frames encode it again until the drawing has held still for three of them.
+    let mut rasterised = 0;
+    let mut owed = Vec::new();
+    for _ in 0..3 {
+        let mut report = None;
+        rasterised += recording
+            .measure(|| report = Some(window.paint(false)))
+            .get(Counter::VectorLayersRasterised);
+        owed.push(report.expect("a frame").layers_owed.len());
+    }
+    assert_eq!(owed, [1, 1, 0]);
+    assert_eq!(rasterised, 1, "one exact raster at the new phase");
+    // The sprite lands on whole device pixels, and the raster carries the half pixel inside it.
+    let top = window.sprite()[1] * 1.5;
+    assert!((top - top.round()).abs() < 1.0e-4 && (top - 16.5).abs() <= 1.0, "{top}");
+}
+
+/// A document of one triangle-wave outline of `segments` lines under a ramp, `seed` apart from
+/// its siblings.
+fn zigzag(segments: usize, seed: usize) -> &'static str {
+    let mut path = String::from("M0 0");
+    for index in 0..segments {
+        let x = 32.0 * index as f64 / segments as f64;
+        let y = if index % 2 == 0 { 32 } else { seed % 4 };
+        path.push_str(&format!(" L{x:.3} {y}"));
+    }
+    Box::leak(
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs><path d="{path} Z" fill="url(#a)"/></svg>"##
+        )
+        .into_boxed_str(),
+    )
+}
+
+#[test]
+fn a_deferred_drawing_is_not_remembered_and_is_owed_a_frame() {
+    // Three drawings of about 3 ms each: two fit the first frame's cold budget.
+    let css = "root { display: block; width: 400px; height: 200px }
+               mark { display: block; width: 32px; height: 32px }";
+    let marks = (0..3)
+        .map(|seed| Element::new("mark").document(zigzag(2_000, seed)))
+        .collect();
+    let mut window = Window::new(Element::new("root").children(marks), css);
+    let mut recording = Recording::begin();
+    let mut first = None;
+    let measured = recording.measure(|| first = Some(window.paint(false)));
+    let first = first.expect("a frame");
+    assert_eq!(measured.get(Counter::VectorLayersRasterised), 2);
+    assert_eq!(measured.get(Counter::VectorLayersDeferred), 1);
+    assert_eq!(measured.get(Counter::ChunksIncomplete), 1, "not remembered");
+    assert_eq!(first.layers_owed.len(), 1);
+    assert_eq!(window.harness.scene().primitives.color_sprites.len(), 2);
+
+    let mut second = None;
+    let measured = recording.measure(|| second = Some(window.paint(false)));
+    let second = second.expect("a frame");
+    assert_eq!(measured.get(Counter::VectorLayersRasterised), 1);
+    assert_eq!(second.vector_routes.len(), 1, "only the deferred drawing is encoded");
+    assert!(second.layers_owed.is_empty());
+    assert_eq!(window.harness.scene().primitives.color_sprites.len(), 3);
 }
