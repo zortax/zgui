@@ -217,6 +217,8 @@ pub(crate) struct DrawingEmission {
 /// What a drawing asks of the layer route, beside its shapes.
 #[derive(Clone, Copy, Debug)]
 pub struct LayerInput {
+    /// The drawing's element, which its layer history is kept by.
+    pub owner: VectorId,
     /// The revision of the drawing's source.
     pub revision: u64,
     /// What an inherited paint resolves to, before any folded opacity.
@@ -523,7 +525,7 @@ pub(crate) fn draw_drawing_tracked(
             .as_ref()
             .and_then(zgui_geom::Matrix4::to_affine2);
         let answer = layers.layer(crate::content::vectors::LayerRequest {
-            owner: base,
+            owner: input.owner,
             revision: input.revision,
             drawing,
             paint: input.paint,
@@ -619,10 +621,10 @@ pub(crate) fn draw_drawing_tracked(
         ));
     }
     // A candidate whose shapes all found a route of their own needs no layer.
-    if let Some((_, layers)) = layers
+    if let Some((input, layers)) = layers
         && !emitted.routes.contains(VectorRoute::GeneralRaster)
     {
-        layers.per_shape_suffices(base);
+        layers.per_shape_suffices(input.owner);
     }
     emitted
 }

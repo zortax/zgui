@@ -290,6 +290,7 @@ fn content_tracked(
                     scale: emission.scale,
                 },
                 Some(vector::LayerInput {
+                    owner: VectorId(node.index() ^ (u32::from(node.generation().get()) << 24)),
                     revision: emission.vectors.revision(node),
                     paint: emission.style.shape,
                     alpha: emission.alpha,

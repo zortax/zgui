@@ -382,17 +382,6 @@ fn only_two_scales_are_kept_per_source() {
 }
 
 #[test]
-fn a_new_drawing_stretches_a_raster_its_source_has() {
-    let mut fixture = Fixture::new(false);
-    let shared = square();
-    let first = key(fixture.ask(1, 1, &shared, 1.0));
-    // A fragment rebuilt under a new transform asks under a new name.
-    let answer = fixture.ask(2, 1, &shared, 1.5);
-    assert!(provisional(answer));
-    assert_eq!(key(answer), first);
-}
-
-#[test]
 fn evicting_spares_held_layers() {
     let mut fixture = Fixture::new(false);
     let one = square();

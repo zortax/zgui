@@ -30,7 +30,10 @@ mod tests;
 /// What a drawing asks the layer cache for.
 #[derive(Clone, Copy, Debug)]
 pub struct LayerRequest<'a> {
-    /// The drawing's fragment, as the emit walk names it.
+    /// The drawing's element, as the emit walk names it.
+    ///
+    /// The element and not its fragment, because a transform that appears above a drawing
+    /// rebuilds the fragment, and the history has to see the same drawing change scale.
     pub owner: VectorId,
     /// The revision of the drawing's source.
     pub revision: u64,
@@ -150,7 +153,7 @@ pub(crate) struct LayerHistory {
     stable: u32,
     /// The frame it last asked in.
     seen: u32,
-    /// Whether its last change kept the source and the paint, or it had no key before.
+    /// Whether its last change kept the source and the paint.
     same: bool,
     /// The frames of its last three rasters, the oldest first. Zero is none.
     rasters: [u32; DEMOTE_RASTERS],
@@ -604,13 +607,9 @@ impl VectorLayerCache {
             if history.key.is_some() && history.key == key {
                 history.stable = history.stable.saturating_add(1);
             } else {
-                // A drawing with no history counts as showing its source already: a transform
-                // that appears above it rebuilds its fragment, and the new fragment stretches the
-                // raster the old one drew.
                 history.same = match (history.key, key) {
                     (Some(old), Some(new)) => old.same_source(&new),
-                    (None, Some(_)) => true,
-                    (_, None) => false,
+                    _ => false,
                 };
                 history.key = key;
                 history.stable = 0;
