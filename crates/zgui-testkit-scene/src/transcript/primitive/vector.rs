@@ -11,6 +11,10 @@ use crate::transcript::{paint, path};
 /// The path data is printed, not only its bounding box: two different paths with the same box draw
 /// differently, and a transcript that showed only the box would hold a golden green through a
 /// geometry regression.
+///
+/// The path, the clips and the stroke print in the fragment's space, with the placement applied.
+/// Neither the placement nor the brush prints, so an item placed by the identity prints as it
+/// always did.
 pub fn vector(scene: &Scene, item: &VectorItem) -> String {
     let mut line = format!(
         "vector order={} id=#{} ink={}",
@@ -31,6 +35,7 @@ pub fn vector(scene: &Scene, item: &VectorItem) -> String {
         ));
     }
     if let Some(stroke) = item.stroke.as_ref() {
+        let stroke = &stroke.scaled(item.placed_scale());
         line.push_str(&format!(
             " stroke={} width={}",
             paint::reference(&scene.paints, stroke.paint),
@@ -71,11 +76,11 @@ pub fn vector(scene: &Scene, item: &VectorItem) -> String {
     for clip in &item.clips {
         line.push_str(&format!(
             " inside=\"{}\" clip_rule={:?}",
-            path::of(&clip.path),
+            path::of(&item.placed_outline(&clip.path)),
             clip.rule
         ));
     }
-    line.push_str(&format!(" d=\"{}\"", path::of(&item.path)));
+    line.push_str(&format!(" d=\"{}\"", path::of(&item.placed_path())));
     line.push_str(&suffix(scene, item.clip, item.transform));
     line
 }

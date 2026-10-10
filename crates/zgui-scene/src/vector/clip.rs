@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// to do so.
 ///
 /// The outline is in the same space as the item's own path and is applied under the item's own
-/// transform, so a clipped drawing that is rotated has its clip rotated with it.
+/// placement and transform, so a clipped drawing that is rotated has its clip rotated with it.
 #[derive(Clone, Debug)]
 pub struct VectorClip {
     /// The outline content is kept inside.

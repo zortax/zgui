@@ -25,6 +25,23 @@ impl VectorStroke {
         }
     }
 
+    /// The same stroke at `scale` of its size.
+    ///
+    /// The width, the dash lengths and the dash offset scale. The miter limit is a ratio and
+    /// stays.
+    pub fn scaled(&self, scale: f64) -> Self {
+        let mut style = self.style.clone();
+        style.width *= scale;
+        style.dash_offset *= scale;
+        for dash in &mut style.dash_pattern {
+            *dash *= scale;
+        }
+        Self {
+            paint: self.paint,
+            style,
+        }
+    }
+
     /// How wide the stroke is.
     pub fn width(&self) -> f32 {
         self.style.width as f32
@@ -91,6 +108,21 @@ mod tests {
             4.0,
             "a limit that no join uses must not widen the ink"
         );
+    }
+
+    #[test]
+    fn a_scaled_stroke_scales_every_length_and_keeps_the_miter_limit() {
+        let stroke = VectorStroke {
+            paint: PaintRef::NONE,
+            style: kurbo::Stroke::new(2.0)
+                .with_miter_limit(3.0)
+                .with_dashes(1.0, [4.0, 2.0]),
+        };
+        let scaled = stroke.scaled(3.0);
+        assert_eq!(scaled.style.width, 6.0);
+        assert_eq!(scaled.style.dash_offset, 3.0);
+        assert_eq!(scaled.style.dash_pattern.as_slice(), &[12.0, 6.0]);
+        assert_eq!(scaled.style.miter_limit, 3.0);
     }
 
     #[test]

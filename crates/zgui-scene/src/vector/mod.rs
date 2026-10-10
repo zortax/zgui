@@ -5,7 +5,7 @@ pub mod stroke;
 
 use std::sync::Arc;
 
-use zgui_geom::{Device, DevicePx, Rect};
+use zgui_geom::{Device, DevicePx, Rect, Size};
 
 use crate::id::{ClipId, DrawOrder, VectorId};
 use crate::paint::PaintRef;
@@ -19,16 +19,28 @@ use crate::vector::stroke::VectorStroke;
 /// in them — so a rasteriser consumes exactly what is stored here with no conversion, while nothing
 /// about this type names any particular rasteriser.
 ///
-/// The path is shared rather than owned, because the same geometry is re-placed every frame and a
-/// rasteriser keeps its own encoded form of it under [`VectorItem::id`].
+/// The path is in path space and shared rather than owned. [`VectorItem::placement`] places it in
+/// the fragment's space, so a scroll, a move or a new fit changes only that affine. A rasteriser
+/// keys its encoded form of the path on content: the path allocation, the paints, the stroke style
+/// and the brush. Equal drawings therefore share one encoding.
 #[derive(Clone, Debug)]
 pub struct VectorItem {
     /// Where this draws in the painting order.
     pub order: DrawOrder,
     /// Stable identity across frames, so a rasteriser can cache its encoding of the geometry.
     pub id: VectorId,
-    /// The geometry, in device space.
+    /// The geometry, in path space.
     pub path: Arc<kurbo::BezPath>,
+    /// What maps path space into the fragment's space, before [`VectorItem::transform`].
+    ///
+    /// The path, the stroke style and the shape clips are all in path space, so a rasteriser
+    /// applies this to all of them.
+    pub placement: kurbo::Affine,
+    /// What maps paint space into path space.
+    ///
+    /// The identity unless the paint is measured in another space than the path, as a gradient
+    /// across a line of text is.
+    pub brush: kurbo::Affine,
     /// Everything this paints, on the device — the item's transform applied. Derived from the path
     /// and the stroke width, and stored because the rasterisation pass and the composite both read
     /// it and neither should re-measure a path.
@@ -71,6 +83,8 @@ impl VectorItem {
             order: 0,
             id,
             path,
+            placement: kurbo::Affine::IDENTITY,
+            brush: kurbo::Affine::IDENTITY,
             ink,
             local_ink: ink,
             fill: Some(fill),
@@ -97,6 +111,8 @@ impl VectorItem {
             order: 0,
             id,
             path,
+            placement: kurbo::Affine::IDENTITY,
+            brush: kurbo::Affine::IDENTITY,
             ink,
             local_ink: ink,
             fill: None,
@@ -125,6 +141,78 @@ impl VectorItem {
         self.fill_rule = peniko::Fill::EvenOdd;
         self
     }
+
+    /// The same item placed by `placement` after the placement it has.
+    ///
+    /// Both inks become the bounding box of the local ink under `placement`.
+    pub fn placed(mut self, placement: kurbo::Affine) -> Self {
+        self.placement = placement * self.placement;
+        let ink = mapped(placement, self.local_ink);
+        self.local_ink = ink;
+        self.ink = ink;
+        self
+    }
+
+    /// The same item with its paint mapped into path space by `brush`.
+    pub fn brushed(mut self, brush: kurbo::Affine) -> Self {
+        self.brush = brush;
+        self
+    }
+
+    /// Moves the item by `by`, keeping its path.
+    ///
+    /// The placement and both inks move. The path allocation stays the same, so a rasteriser
+    /// keeps its encoding of it.
+    pub fn translate(&mut self, by: Size<DevicePx, Device>) {
+        self.placement =
+            kurbo::Affine::translate((f64::from(by.width.0), f64::from(by.height.0)))
+                * self.placement;
+        self.local_ink = self.local_ink.translate(by);
+        self.ink = self.ink.translate(by);
+    }
+
+    /// The scale the placement applies, as the square root of the area it multiplies by.
+    pub fn placed_scale(&self) -> f64 {
+        self.placement.determinant().abs().sqrt()
+    }
+
+    /// The path in the fragment's space.
+    pub fn placed_path(&self) -> kurbo::BezPath {
+        self.placed_outline(&self.path)
+    }
+
+    /// `outline`, a path in this item's path space, in the fragment's space.
+    pub fn placed_outline(&self, outline: &kurbo::BezPath) -> kurbo::BezPath {
+        // Copied as it is under the identity, so a negative zero stays negative.
+        if self.placement == kurbo::Affine::IDENTITY {
+            return outline.clone();
+        }
+        self.placement * outline.clone()
+    }
+
+    /// The bounding box of [`VectorItem::placed_path`].
+    pub fn placed_bounds(&self) -> kurbo::Rect {
+        use kurbo::Shape as _;
+        self.placed_path().bounding_box()
+    }
+}
+
+/// The bounding box of `rect` under `affine`.
+fn mapped(affine: kurbo::Affine, rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
+    let source = kurbo::Rect::new(
+        f64::from(rect.origin.x.0),
+        f64::from(rect.origin.y.0),
+        f64::from(rect.origin.x.0 + rect.size.width.0),
+        f64::from(rect.origin.y.0 + rect.size.height.0),
+    );
+    let bounds = affine.transform_rect_bbox(source);
+    Rect::new(
+        zgui_geom::Point::new(DevicePx(bounds.x0 as f32), DevicePx(bounds.y0 as f32)),
+        Size::new(
+            DevicePx(bounds.width() as f32),
+            DevicePx(bounds.height() as f32),
+        ),
+    )
 }
 
 /// The rectangle a path of the given stroke width can put ink in.
@@ -136,7 +224,7 @@ fn ink_of(path: &kurbo::BezPath, stroke_width: f32) -> Rect<DevicePx, Device> {
             DevicePx((box2.x0 - half) as f32),
             DevicePx((box2.y0 - half) as f32),
         ),
-        zgui_geom::Size::new(
+        Size::new(
             DevicePx((box2.width() + 2.0 * half) as f32),
             DevicePx((box2.height() + 2.0 * half) as f32),
         ),
@@ -188,6 +276,52 @@ mod tests {
         let item = VectorItem::styled(VectorId(0), square(), stroke);
         assert_eq!(item.ink.origin.x, DevicePx(2.0));
         assert_eq!(item.ink.size.width, DevicePx(36.0));
+    }
+
+    #[test]
+    fn a_placed_items_ink_is_its_mapped_path_ink() {
+        let placement = kurbo::Affine::translate((5.0, -3.0)) * kurbo::Affine::scale(2.0);
+        let item = VectorItem::filled(VectorId(0), square(), PaintRef::NONE).placed(placement);
+        assert_eq!(item.placement, placement);
+        let bounds = item.placed_bounds();
+        assert_eq!(item.local_ink.origin.x, DevicePx(bounds.x0 as f32));
+        assert_eq!(item.local_ink.origin.y, DevicePx(bounds.y0 as f32));
+        assert_eq!(item.local_ink.size.width, DevicePx(bounds.width() as f32));
+        assert_eq!(item.local_ink.size.height, DevicePx(bounds.height() as f32));
+        assert_eq!(item.ink, item.local_ink);
+        assert_eq!(item.placed_scale(), 2.0);
+    }
+
+    #[test]
+    fn placing_twice_composes() {
+        let first = kurbo::Affine::scale_non_uniform(2.0, 3.0);
+        let second = kurbo::Affine::translate((7.0, 11.0));
+        let item = VectorItem::filled(VectorId(0), square(), PaintRef::NONE)
+            .placed(first)
+            .placed(second);
+        assert_eq!(item.placement, second * first);
+        assert_eq!(item.local_ink.origin.x, DevicePx(27.0));
+        assert_eq!(item.local_ink.origin.y, DevicePx(71.0));
+        assert_eq!(item.local_ink.size.width, DevicePx(40.0));
+        assert_eq!(item.local_ink.size.height, DevicePx(120.0));
+    }
+
+    #[test]
+    fn a_translated_item_moves_its_ink_and_keeps_its_path() {
+        let path = square();
+        let mut item = VectorItem::filled(VectorId(0), Arc::clone(&path), PaintRef::NONE)
+            .placed(kurbo::Affine::scale(2.0));
+        let ink = item.local_ink;
+        item.translate(zgui_geom::Size::new(DevicePx(13.0), DevicePx(-7.0)));
+        assert!(Arc::ptr_eq(&item.path, &path));
+        assert_eq!(
+            item.placement,
+            kurbo::Affine::translate((13.0, -7.0)) * kurbo::Affine::scale(2.0)
+        );
+        assert_eq!(item.local_ink.origin.x, ink.origin.x + DevicePx(13.0));
+        assert_eq!(item.local_ink.origin.y, ink.origin.y - DevicePx(7.0));
+        assert_eq!(item.local_ink.size, ink.size);
+        assert_eq!(item.ink, item.local_ink);
     }
 
     #[test]
