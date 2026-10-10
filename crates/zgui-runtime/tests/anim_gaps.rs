@@ -257,3 +257,79 @@ fn an_animated_length_is_laid_out_again_on_every_frame() {
         "the animation has finished and the loop is still being woken for it",
     );
 }
+
+// ---- a transition started by a delivery ------------------------------------------------------
+
+/// A panel whose size is watched, and a strip that changes width when the panel is wide.
+const DELIVERED_CSS: &str = "root { display: block; width: 400px; height: 300px }
+                             .panel { display: block; height: 40px }
+                             .strip { display: block; height: 20px; width: 40px;
+                                      background-color: rgb(30, 30, 30);
+                                      transition: width 200ms linear }
+                             .strip.wide { width: 240px }";
+
+/// A transition that a geometry reader starts keeps the loop running until it ends.
+///
+/// A reader of observed geometry runs inside the frame, after the main cascade, and the cascade
+/// its write causes is the one that creates the transition. The loop learns that something
+/// started only by looking after a cascade. If it looks only after the main one, the transition
+/// waits for a frame that something else asks for, and is drawn first from wherever the clock
+/// has got to by then.
+#[test]
+fn a_transition_a_geometry_reader_starts_keeps_the_loop_running() {
+    zgui_reactive::install().ok();
+    let width = RwSignal::new(100.0_f32);
+    let wide = RwSignal::new(false);
+    let mut harness = support::app(DELIVERED_CSS, move |cx: &mut BuildCx<'_>| {
+        let panel = zgui_view::NodeRef::new();
+        core::mem::forget(zgui_reactive::RenderEffect::new(move |_| {
+            if panel.get().is_none() {
+                return;
+            }
+            let size = panel.observe_border_size();
+            core::mem::forget(zgui_reactive::RenderEffect::new(move |_| {
+                if let Some(size) = size.get() {
+                    wide.set(size.width.0 > 150.0);
+                }
+            }));
+        }));
+        let view = zgui_elements::column()
+            .class("root")
+            .child(
+                zgui_elements::r#box()
+                    .class("panel")
+                    .node_ref(panel)
+                    .style_property("width", move || Some(format!("{}px", width.get()))),
+            )
+            .child(
+                zgui_elements::r#box()
+                    .class("strip")
+                    .class_toggle(zgui_interned::ClassName::new("wide"), move || wide.get()),
+            )
+            .into_view();
+        Box::new(view.build(cx)) as Box<dyn zgui_view::Anchor>
+    });
+    harness.settle(8);
+    assert_eq!(widths(&harness, "strip"), [40]);
+
+    width.set(200.0);
+    harness.settle(8);
+    assert!(wide.get(), "the reader saw the panel grow");
+    assert!(
+        harness.app().windows()[0].is_animating(),
+        "the transition the reader started does not keep the loop running",
+    );
+
+    let mut seen = vec![widths(&harness, "strip")[0]];
+    for _ in 0..6 {
+        harness.advance(FRAME);
+        harness.settle(4);
+        seen.push(widths(&harness, "strip")[0]);
+    }
+    assert!(
+        seen.windows(2).all(|pair| pair[1] > pair[0]),
+        "the strip grows on every frame: {seen:?}",
+    );
+    settle_animations(&mut harness);
+    assert_eq!(widths(&harness, "strip"), [240]);
+}

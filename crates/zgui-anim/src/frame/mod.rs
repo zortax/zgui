@@ -260,15 +260,20 @@ impl Animator {
     /// frame for ever, with a populated animation table and a correct tick that is never called
     /// again.
     ///
-    /// Called after the restyle, with the elements the engine now holds animations for.
+    /// Called after each restyle of a frame, with the elements the engine now holds animations
+    /// for. An element an earlier call of the same frame marked is not counted again.
     pub fn note_started(&mut self, document: &mut Document, running: &[NodeIndex]) -> usize {
         let mut added = 0;
         for index in running {
             // Anything this frame's tick reported on has already been given whatever it is owed,
             // by the path it took. Marking it again here would make this the bit's second writer.
-            if self.reported.binary_search(index).is_ok()
-                || document.store().try_core(*index).is_none()
-            {
+            if self.reported.binary_search(index).is_ok() {
+                continue;
+            }
+            let Some(core) = document.store().try_core(*index) else {
+                continue;
+            };
+            if core.dirty().own().contains(zgui_bits::Dirty::ANIMATING) {
                 continue;
             }
             zgui_dom::dirty::propagate::mark(

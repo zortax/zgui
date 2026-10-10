@@ -234,6 +234,11 @@ impl Window {
             return;
         }
         self.restyle();
+        // A reader's write can start a transition, and this cascade is the one that creates it.
+        // The main pass looked for new animations before this cascade ran, so this pass looks
+        // again. Without it the loop parks, and the transition waits for an unrelated frame.
+        self.note_started_animations();
+        self.publish_running_animations();
         // Between the cascade and the layout, exactly as the main pass orders them: a paragraph
         // flattened by the layout below claims its brush slot against the cascade result it was
         // styled by, and a text colour that moved in this cascade has to be written through its
