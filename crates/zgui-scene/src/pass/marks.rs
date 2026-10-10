@@ -39,7 +39,8 @@ pub struct MarkPlan {
     pub bins: Vec<MarkBin>,
     /// How many pages the bins use.
     pub pages: u32,
-    /// The size of one page, in texels: the surface's extent.
+    /// The size of one page, in texels: the extent every page's bins reach, which is never more
+    /// than the surface's.
     pub extent: Size<i32, Device>,
     /// The union items that found no page, in emission order. Each draws every prim on its own.
     pub overflow: Vec<u32>,
@@ -141,7 +142,6 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
         return;
     }
     let viewport = Rect::new(Point::new(0, 0), extent);
-    plan.extent = extent;
     plan.full_damage = damage.is_full();
     // A backdrop that reads past what it writes makes the renderer redraw more than the damage, so
     // the bins keep their whole ink there.
@@ -199,6 +199,10 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
                 match shelves.place(region.size) {
                     Some((page, at)) => {
                         plan.pages = plan.pages.max(page + 1);
+                        plan.extent = Size::new(
+                            plan.extent.width.max(at.x + region.size.width),
+                            plan.extent.height.max(at.y + region.size.height),
+                        );
                         plan.bins.push(MarkBin {
                             item: op.index,
                             region,
@@ -317,7 +321,11 @@ mod tests {
             ]
         );
         assert_eq!(plan.pages, 3);
-        assert_eq!(plan.extent, Size::new(100, 100));
+        assert_eq!(
+            plan.extent,
+            Size::new(90, 60),
+            "a page is as large as its bins reach"
+        );
     }
 
     #[test]
