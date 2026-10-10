@@ -759,6 +759,22 @@ impl VectorLayerCache {
         *history
     }
 
+    /// Records that `owner` made a new raster this frame, and demotes it when that is the third in
+    /// [`DEMOTE_WINDOW`] frames.
+    fn note_raster(&mut self, owner: VectorId) {
+        let frame = self.frame;
+        if let Some(history) = self.histories.get_mut(&owner) {
+            history.deferred = 0;
+            history.rasters.rotate_left(1);
+            history.rasters[DEMOTE_RASTERS - 1] = frame;
+            let oldest = history.rasters[0];
+            if oldest != 0 && frame.wrapping_sub(oldest) < DEMOTE_WINDOW {
+                history.demoted_until = frame.wrapping_add(DEMOTE_WINDOW);
+                counter::bump(Counter::VectorLayersDemoted);
+            }
+        }
+    }
+
     /// Whether the frame's budget admits one more layer of `us`.
     ///
     /// The first layer of a frame is always admitted, so a layer that alone costs more than the
@@ -848,16 +864,7 @@ impl VectorLayerCache {
         if !self.raster_ready {
             self.spent.cold_us += us;
         }
-        if let Some(history) = self.histories.get_mut(&request.owner) {
-            history.deferred = 0;
-            history.rasters.rotate_left(1);
-            history.rasters[DEMOTE_RASTERS - 1] = frame;
-            let oldest = history.rasters[0];
-            if oldest != 0 && frame.wrapping_sub(oldest) < DEMOTE_WINDOW {
-                history.demoted_until = frame.wrapping_add(DEMOTE_WINDOW);
-                counter::bump(Counter::VectorLayersDemoted);
-            }
-        }
+        self.note_raster(request.owner);
         self.entries.insert(
             geometry.key,
             Entry {

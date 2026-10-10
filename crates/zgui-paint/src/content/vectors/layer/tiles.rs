@@ -102,6 +102,8 @@ struct TileKey {
 pub(crate) struct Slot {
     /// The handle of its raster.
     handle: u64,
+    /// Its column and row in the grid.
+    cell: [i32; 2],
     /// Its texels in the raster space of the linear map, as `[x0, y0, x1, y1]`.
     texels: [i32; 4],
     /// The same rectangle in path space.
@@ -190,10 +192,23 @@ struct Raster {
     bytes: u64,
     /// The frame it was last drawn in.
     used: u32,
-    /// How many frames in a row it was needed and deferred.
+    /// How many frames in a row it was needed and deferred, up to `deferred_at`.
     deferred: u8,
+    /// The frame it was last deferred in.
+    deferred_at: u32,
     /// How many sources name it.
     owners: u32,
+}
+
+impl Raster {
+    /// How many frames in a row before `frame` it was needed and deferred.
+    fn streak(&self, frame: u32) -> u8 {
+        match frame.wrapping_sub(self.deferred_at) {
+            0 => self.deferred.saturating_sub(1),
+            1 => self.deferred,
+            _ => 0,
+        }
+    }
 }
 
 /// One source the cache keeps.
@@ -301,12 +316,16 @@ impl TileCache {
     /// Cuts the drawing of `request` under `mapping` into tiles, and keeps the source.
     ///
     /// A tile whose shapes and paint equal a tile of a source already kept takes that tile's
-    /// raster. `None` when the drawing inks nothing or has more than [`MAX_TILES`] tiles.
+    /// raster. A new raster in a cell where `previous`, the drawing's last source, had a raster
+    /// that is not rasterised takes over its deferrals, so a drawing that changes on every frame
+    /// still draws each cell by its third frame. `None` when the drawing inks nothing or has more
+    /// than [`MAX_TILES`] tiles.
     fn build(
         &mut self,
         request: &LayerRequest<'_>,
         mapping: &Mapping,
         key: SourceKey,
+        previous: Option<&TiledSource>,
         frame: u32,
         generation: ResourceGeneration,
     ) -> Option<Arc<TiledSource>> {
@@ -442,6 +461,7 @@ impl TileCache {
                 };
                 slots.push(Slot {
                     handle,
+                    cell: [cx as i32, cy as i32],
                     texels,
                     path_rect: inverse.transform_rect_bbox(area),
                     shapes: indices.clone().into_boxed_slice(),
@@ -467,7 +487,26 @@ impl TileCache {
                 raster.owners += 1;
             }
         }
+        // The deferrals of the cells of the drawing's last source at the same map.
+        let owed: FxHashMap<[i32; 2], (u8, u32)> = previous
+            .filter(|previous| previous.key.linear == key.linear)
+            .map(|previous| {
+                previous
+                    .slots
+                    .iter()
+                    .filter_map(|slot| {
+                        let raster = self.rasters.get(&slot.handle)?;
+                        (!raster.rasterised && raster.deferred > 0)
+                            .then_some((slot.cell, (raster.deferred, raster.deferred_at)))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         for (handle, tile, slot) in fresh {
+            let (deferred, deferred_at) = owed
+                .get(&source.slots[slot as usize].cell)
+                .copied()
+                .unwrap_or((0, 0));
             self.by_key.insert(tile, handle);
             self.rasters.insert(
                 handle,
@@ -478,7 +517,8 @@ impl TileCache {
                     rasterised: false,
                     bytes: 0,
                     used: frame,
-                    deferred: 0,
+                    deferred,
+                    deferred_at,
                     owners: 1,
                 },
             );
@@ -628,10 +668,18 @@ impl VectorLayerCache {
     ///
     /// No raster happens here. While the drawing changes scale, the tiles of the same drawing at
     /// the nearest scale within half to twice stand in, until the scale holds for
-    /// [`SETTLE_FRAMES`] frames.
+    /// [`SETTLE_FRAMES`] frames. A new source counts as a raster of the drawing: once the general
+    /// rasteriser is built, three in [`DEMOTE_WINDOW`](super::DEMOTE_WINDOW) frames demote it as
+    /// they demote a whole layer.
     pub(super) fn tiled(&mut self, request: &LayerRequest<'_>, mapping: &Mapping) -> LayerAnswer {
         let mut key = mapping.key;
         key.phase = [0, 0];
+        let previous = self
+            .histories
+            .get(&request.owner)
+            .and_then(|history| history.key)
+            .filter(|previous| *previous != key)
+            .map(|previous| SourceKey::of(&previous));
         let history = self.note_key(request.owner, Some(key));
         let source_key = SourceKey::of(&key);
         let frame = self.frame;
@@ -653,12 +701,23 @@ impl VectorLayerCache {
                 provisional: true,
             };
         }
+        if self.raster_ready && frame < history.demoted_until {
+            return LayerAnswer::Items(LayerFallback::Demoted);
+        }
         let generation = self.generation;
-        match self
-            .tiles
-            .build(request, mapping, source_key, frame, generation)
-        {
+        let previous = previous
+            .and_then(|previous| self.tiles.sources.get(&previous))
+            .map(|entry| Arc::clone(&entry.source));
+        match self.tiles.build(
+            request,
+            mapping,
+            source_key,
+            previous.as_deref(),
+            frame,
+            generation,
+        ) {
             Some(source) => {
+                self.note_raster(request.owner);
                 self.hits += 1;
                 LayerAnswer::Tiles {
                     tiles: Tiles(source),
@@ -679,10 +738,10 @@ impl VectorLayerCache {
     ///
     /// A tile is read where its clip admits it on the surface. A tile drawn from a raster in the
     /// atlas is placed. A tile whose admitted part meets `damage` is rasterised when the frame's
-    /// budget admits it, or when it was deferred on [`DEFER_FRAMES`] frames; otherwise it draws
-    /// nothing this frame and is owed one. A tile whose admitted part is within one tile of the
-    /// damage is rasterised ahead only with budget that is left. Every other tile draws nothing:
-    /// the frame does not show it or does not redraw where it lies.
+    /// budget admits it, or when it was deferred on the [`DEFER_FRAMES`] frames before; otherwise
+    /// it draws nothing this frame and is owed one. A tile whose admitted part is within one tile
+    /// of the damage is rasterised ahead only with budget that is left. Every other tile draws
+    /// nothing: the frame does not show it or does not redraw where it lies.
     pub(crate) fn settle(
         &mut self,
         atlas: &mut Atlas,
@@ -768,14 +827,15 @@ impl VectorLayerCache {
                 continue;
             };
             let us = raster.source.slots[raster.slot as usize].us;
-            let forced = raster.deferred >= DEFER_FRAMES;
-            if forced || self.admits_tile(us) {
+            let streak = raster.streak(frame);
+            if streak >= DEFER_FRAMES || self.admits_tile(us) {
                 let tile = self.raster_tile(atlas, handle, evict);
                 answers.insert(handle, tile);
                 continue;
             }
             if let Some(raster) = self.tiles.rasters.get_mut(&handle) {
-                raster.deferred = raster.deferred.saturating_add(1);
+                raster.deferred = streak.saturating_add(1);
+                raster.deferred_at = frame;
             }
             counter::bump(Counter::VectorLayerTilesDeferred);
             owed.extend(owed_at.remove(&handle).unwrap_or_default());

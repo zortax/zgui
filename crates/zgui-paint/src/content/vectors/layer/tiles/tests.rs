@@ -129,6 +129,35 @@ fn quarters(side: f64) -> Vec<zgui_svg::Shape> {
     shapes
 }
 
+/// Ten by ten zigzags over 0..100 in both axes, each of 400 lines in new paths.
+///
+/// Many segments per tile, so each tile costs more than the frame's budget allows twice.
+fn zigzags() -> Vec<zgui_svg::Shape> {
+    let mut shapes = Vec::new();
+    for row in 0..10 {
+        for column in 0..10 {
+            let mut path = kurbo::BezPath::new();
+            let (x, y) = (f64::from(column) * 10.0, f64::from(row) * 10.0);
+            path.move_to((x, y));
+            for step in 0..400 {
+                let t = f64::from(step) / 400.0;
+                path.line_to((x + 10.0 * t, y + if step % 2 == 0 { 0.0 } else { 9.0 }));
+            }
+            path.close_path();
+            shapes.push(zgui_svg::Shape {
+                path: Arc::new(path),
+                fill: Some(zgui_svg::Fill {
+                    paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Solid(Color::WHITE)),
+                    rule: peniko::Fill::NonZero,
+                }),
+                stroke: None,
+                clips: Vec::new(),
+            });
+        }
+    }
+    shapes
+}
+
 fn tiles(answer: LayerAnswer) -> Tiles {
     match answer {
         LayerAnswer::Tiles { tiles, .. } => tiles,
@@ -212,29 +241,7 @@ fn settle_rasterises_only_the_needed_tiles() {
 fn a_deferred_tile_is_owed_and_rasterised_by_its_third_frame() {
     let _turn = zgui_profile::counter::exclusive();
     let mut fixture = Fixture::new();
-    // Many segments per tile, so each tile costs more than the frame's budget allows twice.
-    let mut shapes = Vec::new();
-    for row in 0..10 {
-        for column in 0..10 {
-            let mut path = kurbo::BezPath::new();
-            let (x, y) = (f64::from(column) * 10.0, f64::from(row) * 10.0);
-            path.move_to((x, y));
-            for step in 0..400 {
-                let t = f64::from(step) / 400.0;
-                path.line_to((x + 10.0 * t, y + if step % 2 == 0 { 0.0 } else { 9.0 }));
-            }
-            path.close_path();
-            shapes.push(zgui_svg::Shape {
-                path: Arc::new(path),
-                fill: Some(zgui_svg::Fill {
-                    paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Solid(Color::WHITE)),
-                    rule: peniko::Fill::NonZero,
-                }),
-                stroke: None,
-                clips: Vec::new(),
-            });
-        }
-    }
+    let shapes = zigzags();
     let drawing = Drawing::fitted_shared(Arc::from(shapes), Affine::IDENTITY);
     let tiled = tiles(fixture.ask(1, &drawing, 25.0, [0.0, 0.0]));
     let viewport = Size::new(1536, 1024);
@@ -398,4 +405,86 @@ fn an_edit_that_moves_the_bounds_keeps_every_raster_the_size_of_its_slot() {
             .any(|slot| slot.texels[2] == 3030 && slot.texels[1] == 0),
         "the top row reaches the new edge"
     );
+}
+
+/// The blank frames in a row of each visible sprite of `scene`, by where it is, after this frame.
+fn count_blanks(
+    blanks: &mut rustc_hash::FxHashMap<[i32; 2], u32>,
+    scene: &Scene,
+    viewport: Size<i32, Device>,
+) {
+    for sprite in &scene.primitives.color_sprites {
+        let at = [sprite.frame[0] as i32, sprite.frame[1] as i32];
+        if at[0] >= viewport.width || at[1] >= viewport.height {
+            continue;
+        }
+        let run = blanks.entry(at).or_default();
+        *run = if sprite.bounds == [0.0; 4] {
+            *run + 1
+        } else {
+            0
+        };
+    }
+}
+
+#[test]
+fn a_drawing_that_changes_every_frame_draws_each_visible_tile_by_its_third_frame() {
+    let _turn = zgui_profile::counter::exclusive();
+    for ready in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.cache.set_raster_ready(ready);
+        let viewport = Size::new(1024, 1024);
+        let mut blanks = rustc_hash::FxHashMap::default();
+        let mut deferred = 0;
+        for frame in 0..5_u64 {
+            // New paths on every frame, so no tile finds the raster of the frame before.
+            let drawing = Drawing::fitted_shared(Arc::from(zigzags()), Affine::IDENTITY);
+            let answer = fixture.ask(frame + 1, &drawing, 25.0, [0.0, 0.0]);
+            if ready && frame >= 3 {
+                assert_eq!(
+                    answer,
+                    LayerAnswer::Items(super::super::LayerFallback::Demoted),
+                    "a drawing that churns leaves the tiles once the general route is built"
+                );
+                fixture.frame();
+                continue;
+            }
+            let tiled = tiles(answer);
+            let before = get(Counter::VectorLayerTilesDeferred);
+            let (scene, _) = fixture.settle(&tiled, 25.0, viewport, &DamageSet::full());
+            deferred += get(Counter::VectorLayerTilesDeferred) - before;
+            count_blanks(&mut blanks, &scene, viewport);
+            assert!(
+                blanks.values().all(|run| *run <= 2),
+                "ready {ready}, frame {frame}: a visible tile is blank on three frames: {blanks:?}"
+            );
+            fixture.frame();
+        }
+        assert!(deferred > 0, "the budget defers some tiles");
+    }
+}
+
+#[test]
+fn a_tile_deferred_on_earlier_frames_waits_for_the_budget_again() {
+    let _turn = zgui_profile::counter::exclusive();
+    let mut fixture = Fixture::new();
+    let drawing = Drawing::fitted_shared(Arc::from(zigzags()), Affine::IDENTITY);
+    let tiled = tiles(fixture.ask(1, &drawing, 25.0, [0.0, 0.0]));
+    let viewport = Size::new(2048, 1536);
+    for _ in 0..2 {
+        fixture.settle(&tiled, 25.0, viewport, &DamageSet::full());
+        fixture.frame();
+    }
+    // The frames between need nothing.
+    for _ in 0..3 {
+        fixture.settle(&tiled, 25.0, viewport, &DamageSet::new());
+        fixture.frame();
+    }
+    let before = get(Counter::VectorLayerTilesRasterised);
+    let (_, owed) = fixture.settle(&tiled, 25.0, viewport, &DamageSet::full());
+    assert!(
+        !owed.is_empty(),
+        "the tiles deferred twice before are not forced past the budget"
+    );
+    assert!(get(Counter::VectorLayerTilesRasterised) - before <= 2);
 }
