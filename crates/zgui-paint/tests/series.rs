@@ -35,6 +35,8 @@ struct Fixture {
     content: ContentCache,
     /// The glyph raster.
     raster: MonoRaster,
+    /// Held so no other test of this binary moves the counters while this one paints.
+    recording: Recording,
 }
 
 impl Fixture {
@@ -49,6 +51,7 @@ impl Fixture {
             vectors: VectorCache::new(),
             content: ContentCache::new(AtlasLimits::default()),
             raster: MonoRaster::new(),
+            recording: Recording::begin(),
         }
     }
 
@@ -223,10 +226,10 @@ fn a_view_pan_keeps_the_series_payload() {
     let payload = Arc::clone(&fixture.scene().primitives.mark_payloads[0]);
 
     fixture.view(Affine::translate((13.0, -4.0)));
-    let mut recording = Recording::begin();
-    let mut report = None;
-    let measured = recording.measure(|| report = Some(fixture.paint()));
-    let report = report.expect("painted");
+    fixture.recording.reset();
+    let report = fixture.paint();
+    let built = zgui_profile::counter::get(Counter::SeriesPayloadsBuilt);
+    let routed = zgui_profile::counter::get(Counter::VectorRouteMarks);
     assert!(
         report.vector_routes[0].routes.contains(VectorRoute::Marks),
         "the panned canvas encoded again"
@@ -245,8 +248,8 @@ fn a_view_pan_keeps_the_series_payload() {
         "the pan moved the origin"
     );
     assert_eq!(after.axes, before.axes);
-    assert_eq!(measured.get(Counter::SeriesPayloadsBuilt), 0);
-    assert_eq!(measured.get(Counter::VectorRouteMarks), 1);
+    assert_eq!(built, 0, "the pan built no payload");
+    assert_eq!(routed, 1);
 }
 
 /// `count` circles of radius 3.5 at random over 200 by 100.

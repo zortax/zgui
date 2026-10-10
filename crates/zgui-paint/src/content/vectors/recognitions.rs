@@ -125,9 +125,18 @@ impl Recognitions {
 
     /// Forgets every entry no lookup touched for [`KEPT_FRAMES`] frames, and every entry no lookup
     /// found within [`UNPROVEN_FRAMES`] frames, and decides whether the next frame keeps entries.
+    ///
+    /// A result something else holds stays: a mark payload lowered from it is still drawn.
     pub(crate) fn end_frame(&mut self) {
         let frame = self.frame;
         self.entries.retain(|_, entry| {
+            if entry
+                .outcome
+                .as_ref()
+                .is_some_and(|found| Arc::strong_count(found) > 1)
+            {
+                return true;
+            }
             let kept = if entry.proven {
                 KEPT_FRAMES
             } else {

@@ -495,6 +495,8 @@ fn a_recognition_is_reused_by_path_identity_and_swept_after_eight_frames() {
     assert!(!Arc::ptr_eq(&first, &other));
     let other_again = recognised_at(&source, &copy, 1.0 / 16.0).expect("a circle");
     assert!(Arc::ptr_eq(&other, &other_again));
+    // A result something else holds is kept; these are let go.
+    drop((first, again, other, other_again));
     source.0.borrow_mut().end_frame();
     for frame in 1..8 {
         source.0.borrow_mut().begin_frame();

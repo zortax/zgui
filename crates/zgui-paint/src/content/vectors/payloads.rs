@@ -14,7 +14,7 @@ use zgui_scene::kurbo::{Affine, Point};
 
 use crate::emit::vector::recognise::Decomposition;
 
-/// How many frames a shape entry survives without a lookup.
+/// How many frames a shape entry survives without a lookup once nothing else holds its payload.
 const SHAPE_FRAMES: u32 = 2;
 
 /// The most shape entries held. A full map keeps what it holds and adds nothing.
@@ -82,8 +82,9 @@ struct SeriesEntry {
 /// One shape's payload.
 #[derive(Debug)]
 struct ShapeEntry {
-    /// The recognition it was lowered from, held so no other takes its address.
-    found: Weak<Decomposition>,
+    /// The recognition it was lowered from. Held, so the recognition cache keeps it while a
+    /// drawing on the screen draws this payload.
+    found: Arc<Decomposition>,
     /// The payload.
     payload: Arc<MarkPayload>,
     /// The [`zgui_scene::MarkFlags`] the lowering found.
@@ -113,8 +114,12 @@ impl MarkPayloads {
     /// Ends a frame: drops the entries whose source died or that no frame asked for lately.
     pub(crate) fn end_frame(&mut self) {
         let frame = self.frame;
-        self.shapes
-            .retain(|_, entry| frame.wrapping_sub(entry.touched) < SHAPE_FRAMES);
+        // A payload a paint record holds belongs to a drawing that may encode again, as a canvas
+        // panned after a pause does.
+        self.shapes.retain(|_, entry| {
+            Arc::strong_count(&entry.payload) > 1
+                || frame.wrapping_sub(entry.touched) < SHAPE_FRAMES
+        });
         self.series.retain(|_, entry| {
             entry.data.strong_count() > 0 && frame.wrapping_sub(entry.touched) < SERIES_FRAMES
         });
@@ -134,7 +139,7 @@ impl MarkPayloads {
     ) -> Option<(Arc<MarkPayload>, u32)> {
         let frame = self.frame;
         let entry = self.shapes.get_mut(&(Arc::as_ptr(found) as usize, union))?;
-        if !Weak::ptr_eq(&entry.found, &Arc::downgrade(found)) || entry.found.strong_count() == 0 {
+        if !Arc::ptr_eq(&entry.found, found) {
             return None;
         }
         entry.touched = frame;
@@ -155,7 +160,7 @@ impl MarkPayloads {
         self.shapes.insert(
             (Arc::as_ptr(found) as usize, union),
             ShapeEntry {
-                found: Arc::downgrade(found),
+                found: Arc::clone(found),
                 payload,
                 flags,
                 touched: self.frame,
@@ -499,16 +504,25 @@ mod tests {
             "another recognition misses"
         );
 
-        // Touched every frame, the entry stays; untouched for two frames, it goes.
+        // Touched every frame, the entry stays.
+        drop(held);
         for _ in 0..4 {
             payloads.end_frame();
             payloads.begin_frame();
             assert!(payloads.shape(&found, true).is_some());
         }
-        for _ in 0..3 {
+        // Untouched, it stays while a record holds the payload, and goes two frames after.
+        for _ in 0..8 {
             payloads.end_frame();
             payloads.begin_frame();
         }
-        assert!(payloads.shape(&found, true).is_none());
+        assert_eq!(payloads.shapes.len(), 1, "a record holds the payload");
+        drop(payload);
+        for _ in 0..2 {
+            payloads.end_frame();
+            payloads.begin_frame();
+        }
+        assert!(payloads.shapes.is_empty());
+        assert_eq!(Arc::strong_count(&found), 1, "the recognition is let go");
     }
 }
