@@ -201,7 +201,10 @@ mod tests {
         let mut mark = MarkItem::new(bounds, PaintRef::NONE, [1, 0, 0]);
         assert_eq!(mark.axes, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(mark.origin, [0.0, 0.0]);
-        assert_eq!(mark.flags & (MarkFlags::SCREEN | MarkFlags::SQUARE_DISCS), 0);
+        assert_eq!(
+            mark.flags & (MarkFlags::SCREEN | MarkFlags::SQUARE_DISCS),
+            0
+        );
         mark.reanchor(Size::new(DevicePx(5.0), DevicePx(-1.0)));
         assert_eq!(mark.origin, [5.0, -1.0]);
         assert_eq!(mark.axes, [1.0, 0.0, 0.0, 1.0], "a move keeps the axes");

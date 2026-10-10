@@ -634,8 +634,7 @@ fn a_re_encoded_chunk_sharing_its_payload_uploads_none() {
     let payloads = shared_payloads();
     let mut scene = Scene::new();
     let (first, _) = encode_shared(&mut renderer, &mut scene, &payloads, (0.0, 0.0), 1, &[]);
-    let (second, panned) =
-        encode_shared(&mut renderer, &mut scene, &payloads, (5.0, 7.0), 2, &[1]);
+    let (second, panned) = encode_shared(&mut renderer, &mut scene, &payloads, (5.0, 7.0), 2, &[1]);
     if zgui_profile::COUNTERS_ENABLED {
         assert!(first > 0, "the first encoding uploads its payload");
         assert_eq!(second, 0, "the next revision holds the same payload");
@@ -695,7 +694,10 @@ fn a_shared_payload_outlives_its_first_holder() {
     // A third chunk over the same payload after many frames finds it still resident.
     let (third, _) = encode_shared(&mut renderer, &mut scene, &payloads, (5.0, 7.0), 3, &[2]);
     if zgui_profile::COUNTERS_ENABLED {
-        assert_eq!(third, 0, "the payload passed from the second holder to the third");
+        assert_eq!(
+            third, 0,
+            "the payload passed from the second holder to the third"
+        );
     }
 
     drop(renderer);
