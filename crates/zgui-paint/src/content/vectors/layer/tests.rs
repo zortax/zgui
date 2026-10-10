@@ -99,7 +99,7 @@ fn square() -> Drawing {
     )
 }
 
-/// A small outline of `segments` lines, estimated at about 1.5 µs each.
+/// A small outline of `segments` lines, estimated at about 2 µs each.
 fn zigzag(segments: usize) -> Drawing {
     let mut path = BezPath::new();
     path.move_to((0.0, 0.0));
@@ -187,7 +187,7 @@ fn a_scale_change_is_provisional_until_three_stable_frames() {
 fn a_first_raster_while_cold_stays_in_the_cold_budget() {
     let mut fixture = Fixture::new(false);
     // About 3 ms each, so two fit the 8 ms of one frame and the third waits.
-    let drawings: Vec<Drawing> = (0..3).map(|_| zigzag(2_000)).collect();
+    let drawings: Vec<Drawing> = (0..3).map(|_| zigzag(1_500)).collect();
     let answers: Vec<LayerAnswer> = drawings
         .iter()
         .enumerate()
@@ -206,11 +206,11 @@ fn a_first_raster_while_cold_stays_in_the_cold_budget() {
 #[test]
 fn a_deferred_drawing_rasterises_by_its_third_frame() {
     let mut fixture = Fixture::new(false);
-    let late = zigzag(2_000);
+    let late = zigzag(1_500);
     for frame in 0..3_u64 {
         // Each frame something else spends the cold budget first.
         for index in 0..3 {
-            let other = zigzag(2_000);
+            let other = zigzag(1_500);
             fixture.ask(10 + index, 100 + frame * 3 + u64::from(index), &other, 1.0);
         }
         let answer = fixture.ask(1, 1, &late, 1.0);
@@ -250,7 +250,7 @@ fn a_warm_first_raster_waits_two_stable_frames_unless_cheap() {
 fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     let mut fixture = Fixture::new(true);
     // About 0.6 ms each: three fit two milliseconds, and the fourth waits for the count.
-    let drawings: Vec<Drawing> = (0..5).map(|_| zigzag(400)).collect();
+    let drawings: Vec<Drawing> = (0..5).map(|_| zigzag(300)).collect();
     // Placed while cold, so every first raster is admitted at once.
     fixture.cache.set_raster_ready(false);
     for (index, drawing) in drawings.iter().enumerate() {
@@ -283,9 +283,9 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     // One upgrade costing more than the whole budget still settles, alone in its frame.
     fixture.frame();
     fixture.cache.set_raster_ready(false);
-    let large = zigzag(2_000);
+    let large = zigzag(1_500);
     key(fixture.ask(20, 20, &large, 1.0));
-    let small = zigzag(400);
+    let small = zigzag(300);
     key(fixture.ask(21, 21, &small, 1.0));
     fixture.cache.set_raster_ready(true);
     for _ in 0..3 {

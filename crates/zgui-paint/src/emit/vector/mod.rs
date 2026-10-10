@@ -420,6 +420,37 @@ pub fn draw_drawing_layered(
     draw_drawing_tracked(scene, base, drawing, paint, masks, placement, Some(layer)).pushed
 }
 
+/// The sprite one CPU layer is drawn as: the tile at `local`, through the placement's clip and
+/// transform, at `alpha`.
+///
+/// The frame is wider than the sprite by one unit on every side, so the frame's soft edge falls
+/// outside the quad. The quad's own edge lands on whole device pixels and the raster carries its
+/// own coverage.
+#[doc(hidden)]
+pub fn layer_sprite(
+    local: Rect<DevicePx, Device>,
+    tile: zgui_atlas::AtlasTile,
+    placement: VectorPlacement,
+    alpha: f32,
+) -> zgui_scene::ColorSprite {
+    let frame = Rect::new(
+        zgui_geom::Point::new(
+            DevicePx(local.origin.x.0 - 1.0),
+            DevicePx(local.origin.y.0 - 1.0),
+        ),
+        zgui_geom::Size::new(
+            DevicePx(local.size.width.0 + 2.0),
+            DevicePx(local.size.height.0 + 2.0),
+        ),
+    );
+    let mut sprite = zgui_scene::ColorSprite::new(local, tile)
+        .framed(frame)
+        .clipped(placement.clip);
+    sprite.transform = placement.transform.index();
+    sprite.opacity = alpha;
+    sprite
+}
+
 /// Whether a drawing may take the layer route: it has no series, and some shape with a gradient
 /// or a clip would take the general route.
 ///
@@ -522,9 +553,7 @@ pub(crate) fn draw_drawing_tracked(
                 provisional,
                 ..
             } => {
-                let mut sprite = zgui_scene::ColorSprite::new(local, tile).clipped(placement.clip);
-                sprite.transform = placement.transform.index();
-                sprite.opacity = input.alpha;
+                let sprite = layer_sprite(local, tile, placement, input.alpha);
                 emitted.pushed += usize::from(scene.push_color_sprite(sprite).is_some());
                 emitted.routes.insert(VectorRoute::CpuLayer);
                 emitted.layer.sprite = true;

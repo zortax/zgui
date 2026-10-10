@@ -327,7 +327,7 @@ fn a_deferred_drawing_is_not_remembered_and_is_owed_a_frame() {
     let css = "root { display: block; width: 400px; height: 200px }
                mark { display: block; width: 32px; height: 32px }";
     let marks = (0..3)
-        .map(|seed| Element::new("mark").document(zigzag(2_000, seed)))
+        .map(|seed| Element::new("mark").document(zigzag(1_500, seed)))
         .collect();
     let mut window = Window::new(Element::new("root").children(marks), css);
     let mut recording = Recording::begin();

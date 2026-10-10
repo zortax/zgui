@@ -5,7 +5,7 @@
 //! and clip like an image, so a moved replay and a scroll move it at no cost, and a static page of
 //! such drawings never builds the general rasteriser.
 //!
-//! A tile is exact for one linear map and one quarter-pixel phase. While a drawing changes scale, a
+//! A tile is exact for one linear map and one sixteenth-pixel phase. While a drawing changes scale, a
 //! tile of the same source within half to twice the scale is stretched instead, until the drawing
 //! holds still for [`SETTLE_FRAMES`] frames. New rasters are budgeted per frame, and a drawing that
 //! rasterises too often is drawn shape by shape for a while.
@@ -101,7 +101,7 @@ pub(crate) struct LayerKey {
     paint: u64,
     /// The linear map from path space to texels, in 1/4096.
     linear: [i32; 4],
-    /// The quarter-pixel phase of the translation on each axis.
+    /// The sixteenth-pixel phase of the translation on each axis.
     phase: [u8; 2],
 }
 
@@ -236,6 +236,19 @@ pub(crate) struct VectorLayerCache {
 pub(crate) const LAYER_NAMESPACE: u64 = 0x7D00_0000_0000_0000;
 const HANDLE_BITS: u64 = 0x00FF_FFFF_FFFF_FFFF;
 
+/// The steps of a pixel the translation is rasterised at.
+///
+/// A sixteenth puts an edge within a thirty-second of a pixel of where the general rasteriser puts
+/// it. A quarter, as glyphs use, leaves an eighth, which a thin stroke shows as a tenth of its
+/// coverage along every edge.
+pub(crate) const PHASES: u32 = 16;
+
+/// The phase of the device coordinate `t`: its fraction in steps of [`PHASES`].
+pub(crate) fn phase_of(t: f64) -> u8 {
+    let steps = f64::from(PHASES);
+    ((steps * (t - t.floor())).round() as u32 % PHASES) as u8
+}
+
 /// The steps of the quantised linear map, per unit.
 const QUANTUM: f64 = 4096.0;
 
@@ -290,10 +303,10 @@ const HISTORY_FRAMES: u32 = 64;
 const KEPT_SCALES: usize = 2;
 
 /// Estimated microseconds per texel, measured by `calibrate_the_cost_model`.
-const US_PER_PIXEL: f64 = 0.003;
+const US_PER_PIXEL: f64 = 0.004;
 
 /// Estimated microseconds per path element, measured by `calibrate_the_cost_model`.
-const US_PER_SEGMENT: f64 = 1.5;
+const US_PER_SEGMENT: f64 = 2.0;
 
 /// One request worked out: its key, its raster and where the sprite goes.
 #[derive(Clone, Copy, Debug)]
@@ -860,7 +873,7 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
         *out = steps as i32;
     }
     let translation = [a * fe + f64::from(spatial.tx), d * ff + f64::from(spatial.ty)];
-    let phase = translation.map(|t| ((4.0 * (t - t.floor())).round() as i32 & 3) as u8);
+    let phase = translation.map(phase_of);
     let reads_paint = inherited_strokes || shapes.iter().any(zgui_svg::Shape::is_inherited);
     let key = LayerKey {
         revision: request.revision,
@@ -878,7 +891,10 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
     let stroke_scale = if strokes { scale } else { 1.0 };
     let inherited_stroke =
         f64::from(paint.stroke_width) / zgui_svg::document::place::uniform_scale(fit) * stroke_scale;
-    let shift = kurbo::Vec2::new(f64::from(phase[0]) / 4.0, f64::from(phase[1]) / 4.0);
+    let shift = kurbo::Vec2::new(
+        f64::from(phase[0]) / f64::from(PHASES),
+        f64::from(phase[1]) / f64::from(PHASES),
+    );
     let placed = Affine::translate(shift) * dequantised;
 
     // The union of every shape's ink, each cut to its clips.

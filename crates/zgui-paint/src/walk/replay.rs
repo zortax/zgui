@@ -201,7 +201,7 @@ pub struct Record {
     /// counted repetitions would have to be given back exactly as many times and one miscount is
     /// either a tile that can never be freed or one freed while it is being drawn.
     pub resources: Vec<AtlasKey>,
-    /// The quarter-pixel phase a CPU layer sprite was rasterised for, when the chunk holds one.
+    /// The sixteenth-pixel phase a CPU layer sprite was rasterised for, when the chunk holds one.
     ///
     /// A replay moves the sprite by the fragment's movement. A movement by whole pixels keeps the
     /// raster on the pixel grid it was made for, and a fractional one does not, so a different
@@ -495,7 +495,7 @@ impl PaintCache {
     /// the chain and the transform are the ones it was recorded with, and the fragment is the
     /// same size. Anything else is encoded again.
     ///
-    /// `phase` is the quarter-pixel phase of a drawing fragment's origin on the device. A record
+    /// `phase` is the sixteenth-pixel phase of a drawing fragment's origin on the device. A record
     /// holding a layer sprite replays only at the phase it was rasterised for. A provisional layer
     /// never replays, and a promotable record encodes again after [`PROMOTE_REPLAYS`] drawn
     /// replays.

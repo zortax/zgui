@@ -138,7 +138,8 @@ fn a_linear_ramp_reads_the_vello_ramp() {
     )];
     let out = painted(&shapes, Affine::IDENTITY, 64, 1);
     for x in 0..64 {
-        let t = (f64::from(x) + 0.5) / 64.0;
+        // Read at the texel's corner, as the general rasteriser reads it.
+        let t = f64::from(x) / 64.0;
         let index = (t * 511.0).round() as usize;
         let expected = samples[index][0];
         assert_eq!(texel(&out, 64, x, 0), [expected, expected, expected, 255]);
@@ -161,11 +162,11 @@ fn an_elliptic_radial_ramp_pads_and_repeats() {
     };
     let level = |t: f64| (255.0 * (t * 511.0).round() / 511.0).round() as u8;
     // The ramp is measured in units of each axis's own radius.
-    assert_eq!(at(false, 19, 15), level((3.5_f64 / 8.0).hypot(0.5 / 4.0)));
-    assert_eq!(at(false, 15, 17), level((0.5_f64 / 8.0).hypot(1.5 / 4.0)));
+    assert_eq!(at(false, 19, 15), level((3.0_f64 / 8.0).hypot(1.0 / 4.0)));
+    assert_eq!(at(false, 15, 17), level((1.0_f64 / 8.0).hypot(1.0 / 4.0)));
     // Past the ellipse a padded ramp holds its last stop and a repeating one starts again.
     assert_eq!(at(false, 31, 16), 255);
-    let t = (15.5_f64 / 8.0).hypot(0.5 / 4.0);
+    let t = 15.0_f64 / 8.0;
     assert_eq!(at(true, 31, 16), level(t - t.floor()));
 }
 

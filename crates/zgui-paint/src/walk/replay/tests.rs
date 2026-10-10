@@ -870,7 +870,7 @@ fn a_provisional_record_is_never_replayed() {
     );
     assert_ne!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
     assert_eq!(
-        cache.reuse(&scene, &same, painted(0), Some([2, 0])),
+        cache.reuse(&scene, &same, painted(0), Some([8, 0])),
         Reuse::Encode,
         "half a pixel off the raster's grid"
     );

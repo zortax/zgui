@@ -443,7 +443,7 @@ impl Pass<'_, '_> {
         self.shapes.insert(space, hash);
         hash
     }
-    /// The quarter-pixel phase of a drawing fragment's origin on the device, and `None` for every
+    /// The sixteenth-pixel phase of a drawing fragment's origin on the device, and `None` for every
     /// other fragment.
     ///
     /// A CPU layer is rasterised for one phase. A replay moves its sprite by the fragment's
@@ -471,7 +471,7 @@ impl Pass<'_, '_> {
             f64::from(affine.a) * x + f64::from(affine.c) * y + f64::from(affine.tx),
             f64::from(affine.b) * x + f64::from(affine.d) * y + f64::from(affine.ty),
         ];
-        Some(device.map(|t| ((4.0 * (t - t.floor())).round() as i32 & 3) as u8))
+        Some(device.map(crate::content::vectors::phase_of))
     }
 
     /// The alpha every colour is multiplied by right now.

@@ -1,10 +1,11 @@
 //! A whole drawing painted on the CPU into one premultiplied sRGB tile.
 //!
 //! The painter follows the general rasteriser where the two can differ. A gradient reads a ramp of
-//! 512 samples interpolated premultiplied in sRGB, built the way vello builds its ramps. Colours are
+//! 512 samples interpolated premultiplied in sRGB, built the way vello builds its ramps, at the
+//! top-left corner of each texel, where vello reads it. Colours are
 //! quantised to eight bits before they are blended, as the general route hands them over. Shapes
-//! composite source-over in gamma space, the fill before the stroke. Coverage comes from zeno, built
-//! the way the mask route builds it.
+//! composite source-over in gamma space, the fill before the stroke. Coverage comes from zeno, over
+//! outlines flattened finely with kurbo, and a stroke is filled as the outline kurbo strokes.
 
 use zgui_color::{Color, ColorSpace};
 use zgui_scene::kurbo::{self, Affine, PathEl, Point, Rect};
@@ -180,21 +181,24 @@ impl Zeno {
         let texels = width as usize * height as usize;
 
         let map = Affine::translate(-origin.to_vec2()) * job.map;
-        commands(part.path, map, &mut self.commands);
+        let rule = match &part.style {
+            PartStyle::Fill(rule) => {
+                commands(part.path, map, None, &mut self.commands);
+                *rule
+            }
+            PartStyle::Stroke(stroke) => {
+                commands(part.path, map, Some(stroke), &mut self.commands);
+                peniko::Fill::NonZero
+            }
+        };
         self.coverage.clear();
         self.coverage.resize(texels, 0);
-        render(&self.commands, &part.style, width, height, &mut self.coverage);
+        render(&self.commands, rule, width, height, &mut self.coverage);
         for clip in &shape.clips {
-            commands(&clip.path, map, &mut self.commands);
+            commands(&clip.path, map, None, &mut self.commands);
             self.clip.clear();
             self.clip.resize(texels, 0);
-            render(
-                &self.commands,
-                &PartStyle::Fill(clip.rule),
-                width,
-                height,
-                &mut self.clip,
-            );
+            render(&self.commands, clip.rule, width, height, &mut self.clip);
             for (coverage, clip) in self.coverage.iter_mut().zip(&self.clip) {
                 *coverage = multiply(*coverage, *clip);
             }
@@ -222,13 +226,13 @@ impl Zeno {
                 for y in 0..height as usize {
                     let line = &self.coverage[y * width as usize..][..width as usize];
                     let target = &mut out[(top + y) * row + left * 4..][..width as usize * 4];
-                    let centre_y = (top + y) as f32 + 0.5;
+                    let corner_y = (top + y) as f32;
                     for (x, &coverage) in line.iter().enumerate() {
                         if coverage == 0 {
                             continue;
                         }
-                        let centre = [(left + x) as f32 + 0.5, centre_y];
-                        let t = extend(measure.at(centre), gradient.repeating);
+                        let corner = [(left + x) as f32, corner_y];
+                        let t = extend(measure.at(corner), gradient.repeating);
                         let index = ((t * last + 0.5) as usize).min(RAMP_SAMPLES - 1);
                         over(&mut target[x * 4..x * 4 + 4], self.ramp[index], coverage);
                     }
@@ -255,61 +259,54 @@ fn reach(stroke: &kurbo::Stroke) -> f64 {
     half * miter.max(cap) + 1.0
 }
 
-/// The outline's commands through `map`, as zeno reads them.
-fn commands(path: &kurbo::BezPath, map: Affine, out: &mut Vec<zeno::Command>) {
-    out.clear();
-    let point = |point: Point| {
-        let point = map * point;
-        zeno::Point::new(point.x as f32, point.y as f32)
-    };
-    out.extend(path.elements().iter().map(|element| match *element {
-        PathEl::MoveTo(p) => zeno::Command::MoveTo(point(p)),
-        PathEl::LineTo(p) => zeno::Command::LineTo(point(p)),
-        PathEl::QuadTo(a, b) => zeno::Command::QuadTo(point(a), point(b)),
-        PathEl::CurveTo(a, b, c) => zeno::Command::CurveTo(point(a), point(b), point(c)),
-        PathEl::ClosePath => zeno::Command::Close,
-    }));
-}
+/// How far a flattened outline may stray from the curve, in texels.
+///
+/// Fine enough that coverage along a curved edge is the curve's and not a polygon's.
+const TOLERANCE: f64 = 0.05;
 
-/// Rasterises `commands` into `out`, which holds `width * height` zeroed texels.
-fn render(commands: &[zeno::Command], style: &PartStyle, width: u32, height: u32, out: &mut [u8]) {
-    let mut mask = zeno::Mask::new(commands);
-    let dashes: Vec<f32>;
-    match style {
-        PartStyle::Fill(rule) => {
-            mask.style(match rule {
-                peniko::Fill::NonZero => zeno::Fill::NonZero,
-                peniko::Fill::EvenOdd => zeno::Fill::EvenOdd,
-            });
-        }
-        PartStyle::Stroke(stroke) => {
-            dashes = stroke.dash_pattern.iter().map(|dash| *dash as f32).collect();
-            mask.style(zeno::Stroke {
-                width: stroke.width as f32,
-                join: match stroke.join {
-                    kurbo::Join::Bevel => zeno::Join::Bevel,
-                    kurbo::Join::Miter => zeno::Join::Miter,
-                    kurbo::Join::Round => zeno::Join::Round,
-                },
-                miter_limit: stroke.miter_limit as f32,
-                start_cap: cap(stroke.start_cap),
-                end_cap: cap(stroke.end_cap),
-                dashes: &dashes,
-                offset: stroke.dash_offset as f32,
-                scale: true,
-            });
+/// The outline through `map` as lines, as zeno reads them: the path's own outline, or the outline
+/// of `stroke` around it.
+fn commands(
+    path: &kurbo::BezPath,
+    map: Affine,
+    stroke: Option<&kurbo::Stroke>,
+    out: &mut Vec<zeno::Command>,
+) {
+    out.clear();
+    let placed = map * path.clone();
+    let point = |point: Point| zeno::Point::new(point.x as f32, point.y as f32);
+    let mut push = |element: PathEl| {
+        out.push(match element {
+            PathEl::MoveTo(p) => zeno::Command::MoveTo(point(p)),
+            PathEl::LineTo(p) => zeno::Command::LineTo(point(p)),
+            PathEl::ClosePath => zeno::Command::Close,
+            // Flattening produces lines only.
+            PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => zeno::Command::LineTo(point(p)),
+        });
+    };
+    match stroke {
+        None => kurbo::flatten(placed.iter(), TOLERANCE, &mut push),
+        Some(stroke) => {
+            let outline = kurbo::stroke(
+                placed.iter(),
+                stroke,
+                &kurbo::StrokeOpts::default(),
+                TOLERANCE,
+            );
+            kurbo::flatten(outline.iter(), TOLERANCE, &mut push);
         }
     }
+}
+
+/// Fills `commands` under `rule` into `out`, which holds `width * height` zeroed texels.
+fn render(commands: &[zeno::Command], rule: peniko::Fill, width: u32, height: u32, out: &mut [u8]) {
+    let mut mask = zeno::Mask::new(commands);
+    mask.style(match rule {
+        peniko::Fill::NonZero => zeno::Fill::NonZero,
+        peniko::Fill::EvenOdd => zeno::Fill::EvenOdd,
+    });
     mask.size(width, height);
     mask.render_into(out, None);
-}
-
-fn cap(cap: kurbo::Cap) -> zeno::Cap {
-    match cap {
-        kurbo::Cap::Butt => zeno::Cap::Butt,
-        kurbo::Cap::Square => zeno::Cap::Square,
-        kurbo::Cap::Round => zeno::Cap::Round,
-    }
 }
 
 /// `a · b / 255`, rounded.
@@ -399,8 +396,11 @@ pub(crate) fn ramp(gradient: &zgui_svg::Gradient, inherited: Color, out: &mut Ve
     }
 }
 
-/// Where a ramp is read at a texel centre: an affine function of the centre, and for a radial
-/// ramp the length of two of them.
+/// Where a ramp is read at a texel: an affine function of the texel's corner, and for a radial ramp
+/// the length of two of them.
+///
+/// The corner and not the centre, because the general rasteriser reads a ramp at the top-left
+/// corner of each pixel.
 struct Measure {
     /// `t`, or the first radial axis, as `a·x + b·y + c`.
     first: [f32; 3],
@@ -412,7 +412,7 @@ impl Measure {
     /// The measure of `gradient`, read through `inverse` from texels to path space.
     fn of(gradient: &zgui_svg::Gradient, inverse: Affine) -> Self {
         let [a, b, c, d, e, f] = inverse.as_coeffs();
-        // A path-space function `p·x' + q·y' + r` read at the texel centre.
+        // A path-space function `p·x' + q·y' + r` read at the texel corner.
         let through = |p: f64, q: f64, r: f64| {
             [p * a + q * b, p * c + q * d, p * e + q * f + r].map(|value| value as f32)
         };
@@ -447,7 +447,7 @@ impl Measure {
         }
     }
 
-    /// `t` at `centre`.
+    /// `t` at `corner`.
     fn at(&self, [x, y]: [f32; 2]) -> f32 {
         let value = |[a, b, c]: [f32; 3]| a * x + b * y + c;
         match self.second {
