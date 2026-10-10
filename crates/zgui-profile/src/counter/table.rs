@@ -451,8 +451,14 @@ counters! {
     /// Shapes emitted as analytic quads.
     VectorRouteAnalytic => vector_route_analytic, Group::BackendNeutral;
 
+    /// Shapes emitted as marks.
+    VectorRouteMarks => vector_route_marks, Group::BackendNeutral;
+
     /// Union coverage bins planned this frame.
     MarksUnionBins => marks_union_bins, Group::BackendNeutral;
+
+    /// Mark payload bytes uploaded.
+    MarksPayloadBytes => marks_payload_bytes, Group::RendererSpecific;
 
     /// Coverage masks rasterised because no tile held their geometry.
     VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;

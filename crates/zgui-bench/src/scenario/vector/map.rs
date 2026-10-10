@@ -135,21 +135,30 @@ fn view(zoom: RwSignal<f64, LocalStorage>) -> impl IntoView {
             let zoom = zoom.get();
             (zoom != 1.0).then(|| format!("scale({zoom})"))
         })
-        .on(events::PointerDown, move |cx: &mut EventCx<'_, events::PointerDown>| {
-            grab.set(Some(cx.position.x.0));
-            cx.capture_pointer();
-        })
-        .on(events::PointerMove, move |cx: &mut EventCx<'_, events::PointerMove>| {
-            if let Some(last) = grab.get_untracked() {
-                let moved = f64::from(cx.position.x.0 - last);
-                offset.update(|offset| *offset += moved);
+        .on(
+            events::PointerDown,
+            move |cx: &mut EventCx<'_, events::PointerDown>| {
                 grab.set(Some(cx.position.x.0));
-            }
-        })
-        .on(events::PointerUp, move |cx: &mut EventCx<'_, events::PointerUp>| {
-            grab.set(None);
-            cx.release_pointer();
-        })
+                cx.capture_pointer();
+            },
+        )
+        .on(
+            events::PointerMove,
+            move |cx: &mut EventCx<'_, events::PointerMove>| {
+                if let Some(last) = grab.get_untracked() {
+                    let moved = f64::from(cx.position.x.0 - last);
+                    offset.update(|offset| *offset += moved);
+                    grab.set(Some(cx.position.x.0));
+                }
+            },
+        )
+        .on(
+            events::PointerUp,
+            move |cx: &mut EventCx<'_, events::PointerUp>| {
+                grab.set(None);
+                cx.release_pointer();
+            },
+        )
         .draw(move |cx| {
             let moved = Affine::translate((offset.get(), 0.0));
             for feature in features.iter() {
@@ -187,7 +196,13 @@ pub(super) fn run(variant: &str) {
         reason = "the canvas size is a small integer number of CSS pixels"
     )]
     let centre = Point::new(CssPx((WIDTH / 2.0) as f32), CssPx((HEIGHT / 2.0) as f32));
-    drag(&mut harness, ("map-pan", variant, "pan"), centre, 2.0, PAN_TICKS);
+    drag(
+        &mut harness,
+        ("map-pan", variant, "pan"),
+        centre,
+        2.0,
+        PAN_TICKS,
+    );
 
     let mut pinch = Stretch::begin("map-pan", variant, "pinch");
     for tick in 1..=PINCH_TICKS {

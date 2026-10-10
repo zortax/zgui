@@ -7,8 +7,8 @@
 
 use zgui::geom::{CssPx, Point};
 use zgui::prelude::*;
-use zgui::view::{Anchor, BuildCx, IntoView};
 use zgui::view;
+use zgui::view::{Anchor, BuildCx, IntoView};
 use zgui_ui_icons::IconData;
 use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::{arrow, chevron, mark, status, ui};

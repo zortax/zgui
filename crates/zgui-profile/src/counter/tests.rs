@@ -14,7 +14,7 @@ fn exclusive() -> MutexGuard<'static, ()> {
 
 #[test]
 fn the_set_is_complete_and_has_no_duplicates() {
-    assert_eq!(Counter::COUNT, 109);
+    assert_eq!(Counter::COUNT, 111);
     assert_eq!(Counter::ALL.len(), Counter::COUNT);
 
     let names: BTreeSet<&str> = Counter::ALL.iter().map(|counter| counter.name()).collect();
@@ -40,6 +40,7 @@ fn only_the_counters_a_capture_renderer_cannot_produce_are_renderer_specific() {
             "chunk_bytes_uploaded",
             "damage_px",
             "draw_calls",
+            "marks_payload_bytes",
             "side_table_slots_prepared",
             "staging_one_shot_bytes",
             "staging_warm_bytes",

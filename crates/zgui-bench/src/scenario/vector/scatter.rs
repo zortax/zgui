@@ -136,21 +136,30 @@ fn view(plot: Plot) -> impl IntoView {
     let grab: RwSignal<Option<f32>, zgui::reactive::LocalStorage> = RwSignal::new_local(None);
     let canvas = zgui::elements::canvas()
         .class(plot.class)
-        .on(events::PointerDown, move |cx: &mut EventCx<'_, events::PointerDown>| {
-            grab.set(Some(cx.position.x.0));
-            cx.capture_pointer();
-        })
-        .on(events::PointerMove, move |cx: &mut EventCx<'_, events::PointerMove>| {
-            if let Some(last) = grab.get_untracked() {
-                let moved = f64::from(cx.position.x.0 - last);
-                low.update(|low| *low -= moved / f64::from(plot.width));
+        .on(
+            events::PointerDown,
+            move |cx: &mut EventCx<'_, events::PointerDown>| {
                 grab.set(Some(cx.position.x.0));
-            }
-        })
-        .on(events::PointerUp, move |cx: &mut EventCx<'_, events::PointerUp>| {
-            grab.set(None);
-            cx.release_pointer();
-        })
+                cx.capture_pointer();
+            },
+        )
+        .on(
+            events::PointerMove,
+            move |cx: &mut EventCx<'_, events::PointerMove>| {
+                if let Some(last) = grab.get_untracked() {
+                    let moved = f64::from(cx.position.x.0 - last);
+                    low.update(|low| *low -= moved / f64::from(plot.width));
+                    grab.set(Some(cx.position.x.0));
+                }
+            },
+        )
+        .on(
+            events::PointerUp,
+            move |cx: &mut EventCx<'_, events::PointerUp>| {
+                grab.set(None);
+                cx.release_pointer();
+            },
+        )
         .draw(move |cx| {
             let width = f64::from(cx.size.width.0);
             let height = f64::from(cx.size.height.0);

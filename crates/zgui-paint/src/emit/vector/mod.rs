@@ -77,6 +77,8 @@ pub enum VectorRoute {
     GeneralRaster,
     /// Rounded, bordered quads, one per recognised circle, ellipse, rectangle or stroke segment.
     Analytic,
+    /// One mark per part, drawing every recognised prim of the part from a shared payload.
+    Marks,
 }
 
 /// The raster paths used by all shapes belonging to one element.
@@ -87,7 +89,8 @@ impl VectorRoutes {
     const ATLAS_MASK: u8 = 1;
     const GENERAL_RASTER: u8 = 2;
     const ANALYTIC: u8 = 4;
-    // Reserved: 8 for marks, 16 for path glyphs.
+    const MARKS: u8 = 8;
+    // Reserved: 16 for path glyphs.
 
     /// No vector shape was emitted for the element.
     pub const NONE: Self = Self(0);
@@ -113,6 +116,7 @@ impl VectorRoutes {
             VectorRoute::AtlasMask => Self::ATLAS_MASK,
             VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
             VectorRoute::Analytic => Self::ANALYTIC,
+            VectorRoute::Marks => Self::MARKS,
         }
     }
 

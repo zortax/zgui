@@ -156,11 +156,22 @@ fn routes(
         (false, true) => Some(general.to_owned()),
         (false, false) => None,
     };
-    match (routes.contains(zgui_paint::VectorRoute::Analytic), rest) {
-        (true, Some(rest)) => format!("analytic quads + {rest}"),
-        (true, None) => "analytic quads".to_owned(),
-        (false, Some(rest)) => rest,
-        (false, None) => "none".to_owned(),
+    let labels: Vec<String> = [
+        routes
+            .contains(zgui_paint::VectorRoute::Analytic)
+            .then(|| "analytic quads".to_owned()),
+        routes
+            .contains(zgui_paint::VectorRoute::Marks)
+            .then(|| "marks".to_owned()),
+        rest,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if labels.is_empty() {
+        "none".to_owned()
+    } else {
+        labels.join(" + ")
     }
 }
 
@@ -215,5 +226,16 @@ mod tests {
             "analytic quads + atlas / CPU mask + Vello"
         );
         assert_eq!(routes(zgui_paint::VectorRoutes::NONE, None), "none");
+
+        let mut marks = zgui_paint::VectorRoutes::NONE;
+        marks.insert(zgui_paint::VectorRoute::Marks);
+        assert_eq!(routes(marks, None), "marks");
+        marks.insert(zgui_paint::VectorRoute::Analytic);
+        assert_eq!(routes(marks, None), "analytic quads + marks");
+        marks.insert(zgui_paint::VectorRoute::GeneralRaster);
+        assert_eq!(
+            routes(marks, Some(zgui::render::VectorBackend::Vello)),
+            "analytic quads + marks + Vello"
+        );
     }
 }
