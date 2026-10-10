@@ -10,11 +10,11 @@ use std::sync::Arc;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-use zgui_scene::{MarkBox, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId};
+use zgui_scene::{MarkBox, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId, peniko};
 
 use super::analytic::{clip_links, look, of_color};
 use super::document::{reference, stroke_paint};
-use super::recognise::{self, Decomposition};
+use super::recognise::{self, Decomposition, Orientation};
 use super::recognised::{Outline, PartOf, placed_paint, recognised, straight_on_axes};
 use super::{ShapePaint, ShapeSource, VectorPlacement};
 use crate::content::vectors::VectorMaskSource;
@@ -127,12 +127,12 @@ pub(super) fn emit_marks(
     if filled.is_none() && stroked.is_none() {
         return None;
     }
-    let fills = match filled {
-        Some(found) => Some(lower(found, &affine)?),
-        None => None,
+    let fills = match (filled, fill) {
+        (Some(found), Some(fill)) => Some(lower(found, &affine, Some(fill.rule))?),
+        _ => None,
     };
     let strokes = match stroked {
-        Some(found) => Some(lower(found, &affine)?),
+        Some(found) => Some(lower(found, &affine, None)?),
         None => None,
     };
 
@@ -207,9 +207,27 @@ fn smallest_scale(affine: &zgui_geom::Affine2) -> f32 {
     ((p + q) / 2.0 - spread).max(0.0).sqrt().max(1.0e-6) as f32
 }
 
-/// The payload of one part, its flags and its ink, or `None` for polyline caps no item can draw.
-fn lower(found: Arc<Decomposition>, affine: &zgui_geom::Affine2) -> Option<Lowered> {
+/// The payload of one part, its flags and its ink, or `None` for polyline caps no item can draw,
+/// or for a fill whose prims overlap and are not one union.
+///
+/// The interior of overlapping subpaths is their union under the nonzero rule when they all turn
+/// one way. Turning both ways, or under the even-odd rule, an inner subpath is a hole, which no
+/// sum of coverage draws. `rule` is the fill rule of a fill, and `None` for a stroke, whose outline
+/// is always the union of its segments'.
+fn lower(
+    found: Arc<Decomposition>,
+    affine: &zgui_geom::Affine2,
+    rule: Option<peniko::Fill>,
+) -> Option<Lowered> {
     let union = found.count > 1 && !apart(&found, affine);
+    let holes = match rule {
+        Some(peniko::Fill::EvenOdd) => true,
+        Some(peniko::Fill::NonZero) => found.orientation == Orientation::Mixed,
+        None => false,
+    };
+    if union && holes {
+        return None;
+    }
     let mut vertices = Vec::new();
     let mut flags = runs(&found, &mut vertices)?;
     // A result no cache holds is moved into the payload rather than copied.

@@ -96,3 +96,41 @@ fn duplicate_discs_go_only_past_eightfold_overdraw() {
     dedupe(&mut dense, [1.0, 1.0, 9.0, 10.0]);
     assert_eq!(dense, vec![disc, [5.0, 6.0, 4.0, 0.0]]);
 }
+
+#[test]
+fn an_overlapping_fill_with_a_hole_is_no_union() {
+    use std::sync::Arc;
+
+    use zgui_scene::peniko;
+
+    // A ring written as two circles turning opposite ways: under the nonzero rule the inner one
+    // is a hole, which no sum of coverage draws.
+    let ring = Decomposition {
+        discs: vec![[10.0, 10.0, 8.0, 0.0], [10.0, 10.0, 4.0, 0.0]],
+        boxes: Vec::new(),
+        capsules: Vec::new(),
+        caps: Vec::new(),
+        half_width: 0.0,
+        ink: [2.0, 2.0, 18.0, 18.0],
+        orientation: Orientation::Mixed,
+        count: 2,
+        max_extent: 16.0,
+    };
+    let affine = zgui_geom::Affine2::IDENTITY;
+    let lowered = |found: &Decomposition, rule| {
+        super::lower(Arc::new(found.clone()), &affine, Some(rule)).is_some()
+    };
+    assert!(!lowered(&ring, peniko::Fill::NonZero));
+    let one_way = Decomposition {
+        orientation: Orientation::Positive,
+        ..ring.clone()
+    };
+    assert!(
+        lowered(&one_way, peniko::Fill::NonZero),
+        "turning one way, it is a union"
+    );
+    assert!(
+        !lowered(&one_way, peniko::Fill::EvenOdd),
+        "under the even-odd rule the overlap is a hole"
+    );
+}
