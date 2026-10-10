@@ -19,7 +19,7 @@ pub(crate) fn axis_scales(matrix: kurbo::Affine) -> (f64, f64) {
 ///
 /// What a stroke width is scaled by. A matrix that scales the two axes differently has no single
 /// stroke width, and this takes the one that preserves the area the stroke covers.
-pub(crate) fn uniform_scale(matrix: kurbo::Affine) -> f64 {
+pub fn uniform_scale(matrix: kurbo::Affine) -> f64 {
     matrix.determinant().abs().sqrt()
 }
 

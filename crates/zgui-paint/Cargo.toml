@@ -33,6 +33,8 @@ zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
 # The glyph formats and the paragraph identifiers a text fragment names.
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
+# The shared text a drawing's source arrives in, which the vector cache holds to know it again.
+zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
 rustc-hash.workspace = true
 smallvec.workspace = true
@@ -47,8 +49,6 @@ zgui-style = { path = "../zgui-style", version = "0.1.0" }
 # The counters have to be compiled in, or every budget stays green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
-# The properties a drawing's outlines arrive on, which a fixture has to write the way a view does.
-zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
 [lints]
 workspace = true

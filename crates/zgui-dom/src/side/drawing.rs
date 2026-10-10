@@ -6,7 +6,7 @@
 //! know (the box tree, the paint stage and anything measuring a drawing) all ask the same question
 //! of the same bytes.
 
-use zgui_vocab::{PropKey, PropValue, prop::drawing};
+use zgui_vocab::{PropKey, PropValue, SharedString, prop::drawing};
 
 use crate::arena::store::DocumentStore;
 use crate::id::node_key::NodeKey;
@@ -17,15 +17,15 @@ use crate::id::node_key::NodeKey;
 /// empty drawing and no drawing are the same drawing, and treating them differently would make a
 /// view that cleared its paths produce a fragment that draws nothing rather than no fragment.
 pub fn path_data(store: &DocumentStore, node: NodeKey) -> Option<&str> {
-    match store
-        .columns()
-        .props
-        .get(node)?
-        .get(PropKey::new(drawing::PATHS))
-    {
-        Some(PropValue::Text(data)) if !data.trim().is_empty() => Some(data.as_str()),
-        _ => None,
-    }
+    path_text(store, node).map(SharedString::as_str)
+}
+
+/// The same outlines as [`path_data`], as the shared text the property holds.
+///
+/// A reader that keeps a clone can tell an unchanged property from a new one by
+/// [`SharedString::ptr_eq`], and needs to compare no text to do so.
+pub fn path_text(store: &DocumentStore, node: NodeKey) -> Option<&SharedString> {
+    text(store, node, drawing::PATHS)
 }
 
 /// The vector document `node` draws, as its source text.
@@ -33,13 +33,18 @@ pub fn path_data(store: &DocumentStore, node: NodeKey) -> Option<&str> {
 /// Nothing for an element carrying none, and nothing for one carrying only whitespace — an empty
 /// document and no document are the same document.
 pub fn document(store: &DocumentStore, node: NodeKey) -> Option<&str> {
-    match store
-        .columns()
-        .props
-        .get(node)?
-        .get(PropKey::new(drawing::DOCUMENT))
-    {
-        Some(PropValue::Text(source)) if !source.trim().is_empty() => Some(source.as_str()),
+    document_text(store, node).map(SharedString::as_str)
+}
+
+/// The same document as [`document`], as the shared text the property holds.
+pub fn document_text(store: &DocumentStore, node: NodeKey) -> Option<&SharedString> {
+    text(store, node, drawing::DOCUMENT)
+}
+
+/// The text property `name` of `node`, unless it is missing or only whitespace.
+fn text<'a>(store: &'a DocumentStore, node: NodeKey, name: &str) -> Option<&'a SharedString> {
+    match store.columns().props.get(node)?.get(PropKey::new(name)) {
+        Some(PropValue::Text(text)) if !text.trim().is_empty() => Some(text),
         _ => None,
     }
 }
@@ -107,7 +112,7 @@ pub fn draws(store: &DocumentStore, node: NodeKey) -> bool {
 #[cfg(test)]
 mod tests {
     use zgui_interned::ElementName;
-    use zgui_vocab::{PropKey, PropValue, prop::drawing};
+    use zgui_vocab::{PropKey, PropValue, SharedString, prop::drawing};
 
     use crate::arena::document::Document;
     use crate::mutate::filter::EverythingMatters;

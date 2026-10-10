@@ -48,9 +48,10 @@ pub struct Drawing {
     /// would be a one-colour logo. An element that draws plain path notation produces shapes whose
     /// paint is the inherited one, which is the same list with the same type in it.
     ///
-    /// The outlines are shared rather than owned: the same curves are drawn every frame, and a
-    /// rasteriser keeps its encoding of them under the identity of the allocation.
-    pub shapes: Vec<zgui_svg::Shape>,
+    /// The outlines are shared rather than owned: every element drawing the same source draws the
+    /// same allocation, and a rasteriser keeps its encoding of a path under the identity of the
+    /// path's allocation.
+    pub shapes: Arc<[zgui_svg::Shape]>,
     /// What places [`shapes`](Self::shapes) in the fragment's space: the identity for shapes
     /// already placed.
     ///
@@ -66,7 +67,7 @@ impl Drawing {
     /// A drawing of shapes already in the fragment's space.
     pub fn placed_shapes(shapes: Vec<zgui_svg::Shape>) -> Self {
         Self {
-            shapes,
+            shapes: Arc::from(shapes),
             fit: Affine::IDENTITY,
             series: Arc::from([]),
             placed: Arc::from([]),
@@ -79,6 +80,11 @@ impl Drawing {
     /// A route that draws from the source shape, as recognition does, never places it, so a
     /// hundred thousand markers never become a second path.
     pub fn fitted(shapes: Vec<zgui_svg::Shape>, fit: Affine) -> Self {
+        Self::fitted_shared(Arc::from(shapes), fit)
+    }
+
+    /// The same as [`Drawing::fitted`], for shapes another drawing may share.
+    pub fn fitted_shared(shapes: Arc<[zgui_svg::Shape]>, fit: Affine) -> Self {
         let placed = (0..shapes.len()).map(|_| OnceLock::new()).collect();
         Self {
             shapes,

@@ -584,7 +584,7 @@ fn path_notation_still_draws_in_the_elements_own_colour() {
     zgui_paint::emit::vector::draw(
         &mut scene,
         VectorId(1),
-        &drawing.shapes,
+        &drawing.placed_all(),
         ShapePaint {
             fill: Color::srgb(0.0, 0.4, 1.0, 1.0),
             stroke: None,

@@ -57,6 +57,14 @@ impl SharedString {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    /// Whether both handles share one allocation.
+    ///
+    /// Equal text in two allocations answers no. While a handle is held, no other text can take
+    /// its address, so a held handle that is pointer-equal to a new one names the same text.
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl Default for SharedString {

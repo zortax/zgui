@@ -6,6 +6,8 @@ pub mod ink;
 pub mod place;
 pub mod shape;
 
+use std::sync::Arc;
+
 use crate::document::shape::Shape;
 
 /// What a document asked for that a flat list of painted outlines cannot express.
@@ -47,8 +49,8 @@ impl Unsupported {
 pub struct Document {
     /// The extent of the space the outlines are written in.
     size: (f64, f64),
-    /// The outlines, in the order they are painted.
-    shapes: Vec<Shape>,
+    /// The outlines, in the order they are painted, shared with every drawing made of them.
+    shapes: Arc<[Shape]>,
     /// What the document asked for that this model does not carry.
     unsupported: Unsupported,
 }
@@ -58,7 +60,7 @@ impl Document {
     pub fn new(size: (f64, f64), shapes: Vec<Shape>, unsupported: Unsupported) -> Self {
         Self {
             size,
-            shapes,
+            shapes: Arc::from(shapes),
             unsupported,
         }
     }
@@ -76,6 +78,11 @@ impl Document {
     /// The outlines, in the order they are painted.
     pub fn shapes(&self) -> &[Shape] {
         &self.shapes
+    }
+
+    /// The outlines, as the allocation every drawing of this document shares.
+    pub fn shapes_shared(&self) -> Arc<[Shape]> {
+        Arc::clone(&self.shapes)
     }
 
     /// Whether the document draws nothing at all.

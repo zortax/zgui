@@ -1,36 +1,99 @@
-//! The placed outlines one window has already produced, kept between frames.
+//! The drawings one window has already produced, kept between frames.
 
 use core::cell::{Cell, RefCell};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use rustc_hash::FxHashMap;
 use zgui_dom::{Document, NodeKey};
 use zgui_scene::kurbo::Affine;
+use zgui_vocab::SharedString;
 
 use crate::content::vectors::{Drawing, Placement, VectorSource, parse};
 use crate::emit::vector::fit;
 
+/// What kind of text a drawing was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// Path notation, one outline per line.
+    Notation,
+    /// A vector document.
+    Document,
+}
+
+impl Kind {
+    /// The tag a revision hash starts the text with.
+    fn tag(self) -> u32 {
+        match self {
+            Self::Notation => 3,
+            Self::Document => 2,
+        }
+    }
+}
+
+/// One source text, read once for every element that draws it.
+#[derive(Debug)]
+struct Parsed {
+    /// The text the shapes were read from.
+    source: SharedString,
+    /// What kind of text it is.
+    kind: Kind,
+    /// The shapes, in their own space.
+    shapes: Arc<[zgui_svg::Shape]>,
+    /// The read document, for a document; it says which view box the shapes are fitted through.
+    read: Option<Arc<zgui_svg::Document>>,
+}
+
+impl Parsed {
+    /// Whether this was read from `source` as `kind`.
+    fn reads(&self, kind: Kind, source: &SharedString) -> bool {
+        self.kind == kind && (self.source.ptr_eq(source) || self.source == *source)
+    }
+}
+
+/// Where one node's drawing came from.
+#[derive(Clone, Debug)]
+enum Source {
+    /// A source text, shared with every node that draws the same text.
+    Parsed(Arc<Parsed>),
+    /// A canvas scene, by token, by revision and by view.
+    Canvas {
+        /// The scene's token.
+        token: u32,
+        /// The scene's revision.
+        revision: u32,
+        /// The scene's view.
+        view: u64,
+    },
+}
+
 /// What was produced for one node, and what it was produced from.
 #[derive(Clone, Debug)]
 struct Entry {
-    /// The notation or the document source the outlines were read from.
-    data: String,
-    /// The read document, kept so that re-fitting into a different box re-places the outlines
-    /// rather than re-reading the source.
-    ///
-    /// This is what makes a document cost one read however many sizes it is drawn at, and it is
-    /// why the read is colour-independent: nothing about the element's colour is in this key, so a
-    /// hover that re-colours an icon re-places nothing and re-reads nothing.
-    read: Option<Arc<zgui_svg::Document>>,
-    /// The matrix they were placed with, as its six coefficients — compared rather than the box and
-    /// the view box separately, because two different boxes that fit to the same matrix produce the
-    /// same curves and re-placing them would throw away an encoding for nothing.
+    /// What the drawing was read from.
+    source: Source,
+    /// The matrix the shapes are fitted with, as its six coefficients — compared rather than the
+    /// box and the view box separately, because two different boxes that fit to the same matrix
+    /// produce the same picture and making a new drawing would throw away its placed cells for
+    /// nothing.
     placed: [f64; 6],
     /// The result.
     drawing: Drawing,
 }
 
-/// Every drawing a window has placed, held between frames.
+/// One node's revision, and the text it was hashed from.
+#[derive(Clone, Debug)]
+struct Memo {
+    /// The text, held so that its address names it for as long as the memo stands.
+    source: SharedString,
+    /// What kind of text it is.
+    kind: Kind,
+    /// The view box the text is fitted through.
+    view_box: Option<[f32; 4]>,
+    /// The revision.
+    hash: u64,
+}
+
+/// Every drawing a window has produced, held between frames.
 ///
 /// Held by the window rather than by the paint walk because the walk is a pure reader: it is handed
 /// a source and does not own one. The interior mutability is what lets it stay a reader while this
@@ -39,13 +102,23 @@ struct Entry {
 pub struct VectorCache {
     /// The entries, by node.
     entries: RefCell<FxHashMap<NodeKey, Entry>>,
+    /// Every source text an entry holds, by a hash of its kind and its bytes.
+    ///
+    /// Weak, so a text lives exactly as long as some node draws it. Equal text read for a thousand
+    /// elements is one parse, and its shapes are one allocation every encoding cache recognises.
+    parsed: RefCell<FxHashMap<u64, Weak<Parsed>>>,
+    /// Each node's revision, until the node's text is replaced.
+    revisions: RefCell<FxHashMap<NodeKey, Memo>>,
     /// How many drawings have been served from an entry that was already current.
     ///
     /// Monotonic and never reset: two readings subtracted answer "did anything draw from this
     /// between these two moments", which is the question a budget deciding whether the cache is
-    /// cold asks. A placement that had to be produced is not a hit — the cache did not save that
+    /// cold asks. A drawing that had to be produced is not a hit — the cache did not save that
     /// frame anything.
     hits: Cell<u64>,
+    /// How many revisions were hashed from the whole text.
+    #[cfg(test)]
+    hashes: Cell<u32>,
 }
 
 impl VectorCache {
@@ -54,7 +127,7 @@ impl VectorCache {
         Self::default()
     }
 
-    /// How many nodes have a placed drawing held for them.
+    /// How many nodes have a drawing held for them.
     pub fn len(&self) -> usize {
         self.entries.borrow().len()
     }
@@ -69,25 +142,31 @@ impl VectorCache {
         self.hits.get()
     }
 
-    /// Forgets every placed drawing, and reports how many that threw away.
+    /// Forgets every drawing, and reports how many that threw away.
     ///
     /// Nothing downstream is invalidated by this, which is what separates it from dropping a shaped
-    /// paragraph: a drawing is placed *from* the fragment it is drawn into, so the next frame that
-    /// reaches one places it again from the same box and gets the same curves. What it costs is a
-    /// parse and a fit, and — because a rasteriser keys its encoding on the identity of the path
-    /// allocation — a re-encode of every icon that comes back.
+    /// paragraph: a drawing is fitted *from* the fragment it is drawn into, so the next frame that
+    /// reaches one fits it again from the same box and gets the same picture. What it costs is a
+    /// parse, and — because a rasteriser keys its encoding on the identity of the path allocation —
+    /// a re-encode of every icon that comes back.
     pub fn clear(&mut self) -> usize {
         let held = self.entries.get_mut().len();
         self.entries.get_mut().clear();
+        self.parsed.get_mut().clear();
+        self.revisions.get_mut().clear();
         held
     }
 
-    /// Forgets every node not in `live`.
+    /// Forgets every node not in `live`, and every source text no node draws.
     ///
     /// Called when a frame ends. Without it a document that scrolled through a thousand icons keeps
-    /// every one of them placed for the life of the window.
+    /// every one of them read for the life of the window.
     pub fn retain(&mut self, live: impl Fn(NodeKey) -> bool) {
         self.entries.get_mut().retain(|node, _| live(*node));
+        self.revisions.get_mut().retain(|node, _| live(*node));
+        self.parsed
+            .get_mut()
+            .retain(|_, parsed| parsed.strong_count() > 0);
     }
 
     /// The source one frame reads through, answered from `document`.
@@ -98,61 +177,119 @@ impl VectorCache {
         }
     }
 
-    /// The document held for `node`, if it was read from this very source.
-    fn held(&self, node: NodeKey, data: &str) -> Option<Arc<zgui_svg::Document>> {
-        let entries = self.entries.borrow();
-        let entry = entries.get(&node)?;
-        (entry.data == data).then(|| entry.read.clone())?
+    /// The source text `source` read as `kind`: the one held for an equal text, or a new read.
+    ///
+    /// `None` for a document that cannot be read.
+    fn parsed(&self, kind: Kind, source: &SharedString) -> Option<Arc<Parsed>> {
+        let key = zgui_scene::ContentHash::new()
+            .u32(kind.tag())
+            .bytes(source.as_bytes())
+            .finish();
+        if let Some(held) = self.parsed.borrow().get(&key).and_then(Weak::upgrade)
+            && held.reads(kind, source)
+        {
+            return Some(held);
+        }
+        let (shapes, read) = match kind {
+            Kind::Notation => (
+                Arc::from(crate::content::vectors::outlines(
+                    &parse(source),
+                    Affine::IDENTITY,
+                )),
+                None,
+            ),
+            Kind::Document => {
+                let read = Arc::new(zgui_svg::parse(source).ok()?);
+                (read.shapes_shared(), Some(read))
+            }
+        };
+        let parsed = Arc::new(Parsed {
+            source: source.clone(),
+            kind,
+            shapes,
+            read,
+        });
+        self.parsed
+            .borrow_mut()
+            .insert(key, Arc::downgrade(&parsed));
+        Some(parsed)
     }
 
-    /// The placed shapes for `data`, produced only if what is held is stale.
-    ///
-    /// `place` is called only when there is nothing current to hand back, which is what makes a
-    /// drawing on the screen for a thousand frames cost one placement.
-    fn store(
+    /// The drawing held for `node`, when it was read from what `current` says and fitted by
+    /// `placed`.
+    fn current(
         &self,
         node: NodeKey,
-        data: &str,
-        placed: Affine,
-        read: Option<Arc<zgui_svg::Document>>,
-        place: impl FnOnce() -> Drawing,
-    ) -> Drawing {
-        let coefficients = placed.as_coeffs();
-        {
-            let entries = self.entries.borrow();
-            if let Some(entry) = entries.get(&node)
-                && entry.data == data
-                && entry.placed == coefficients
-            {
-                self.hits.set(self.hits.get() + 1);
-                return entry.drawing.clone();
-            }
-        }
-        let drawing = place();
+        placed: [f64; 6],
+        current: impl FnOnce(&Source) -> bool,
+    ) -> Option<Drawing> {
+        let entries = self.entries.borrow();
+        let entry = entries.get(&node)?;
+        (entry.placed == placed && current(&entry.source)).then(|| {
+            self.hits.set(self.hits.get() + 1);
+            entry.drawing.clone()
+        })
+    }
+
+    /// Holds `drawing` for `node`, and hands it back.
+    fn store(&self, node: NodeKey, source: Source, placed: [f64; 6], drawing: Drawing) -> Drawing {
         self.entries.borrow_mut().insert(
             node,
             Entry {
-                data: data.to_owned(),
-                read,
-                placed: coefficients,
+                source,
+                placed,
                 drawing: drawing.clone(),
             },
         );
         drawing
     }
 
-    /// The placed outlines a list of path notation draws.
-    fn notated(&self, node: NodeKey, data: &str, placed: Affine) -> Drawing {
-        self.store(node, data, placed, None, || {
-            Drawing::placed_shapes(crate::content::vectors::outlines(&parse(data), placed))
-        })
+    /// The drawing of a source text, fitted to `box_`.
+    ///
+    /// A text that cannot be read draws nothing rather than falling back to something else: the
+    /// alternative is an element that silently draws a different picture from the one it was
+    /// given, which is worse than an element that visibly draws none.
+    fn read(
+        &self,
+        node: NodeKey,
+        kind: Kind,
+        source: &SharedString,
+        view_box: Option<[f32; 4]>,
+        box_: Placement,
+    ) -> Option<Drawing> {
+        // The held text first: a node whose property is the allocation it was read from needs
+        // no hash of its text, and a node whose text changed reads its new one below.
+        let held = match self.entries.borrow().get(&node).map(|entry| &entry.source) {
+            Some(Source::Parsed(parsed)) if parsed.kind == kind && parsed.source.ptr_eq(source) => {
+                Some(Arc::clone(parsed))
+            }
+            _ => None,
+        };
+        let parsed = match held {
+            Some(parsed) => parsed,
+            None => self.parsed(kind, source)?,
+        };
+        let view_box = match &parsed.read {
+            Some(read) => Some(read.view_box()),
+            None => view_box,
+        };
+        let placed = fit::onto(box_.content_box, view_box, box_.scale);
+        let coefficients = placed.as_coeffs();
+        if let Some(drawing) = self.current(node, coefficients, |held| match held {
+            Source::Parsed(held) => Arc::ptr_eq(held, &parsed),
+            Source::Canvas { .. } => false,
+        }) {
+            return Some(drawing);
+        }
+        let drawing = Drawing::fitted_shared(Arc::clone(&parsed.shapes), placed);
+        Some(self.store(node, Source::Parsed(parsed), coefficients, drawing))
     }
 
     /// The shapes a retained canvas scene draws, with the fit that places them.
     ///
     /// The scene is resolved by token out of the paint-side registry. Its shapes are held as they
     /// are, and placed by the same fit a document's are only where a route asks for the placed
-    /// path. The revision and the view ride in the data key, so a mutated or panned scene misses
+    /// path. The revision and the view ride in the source, so a mutated or panned scene misses
     /// the cache once and an untouched one hands back the same allocations for the encoding caches
     /// to recognise.
     ///
@@ -169,42 +306,80 @@ impl VectorCache {
     ) -> Option<Drawing> {
         let scene = zgui_canvas::resolve(zgui_canvas::CanvasToken(token))?;
         let placed = fit::onto(box_.content_box, view_box, box_.scale);
-        let data = format!("canvas:{token}:{revision}:{view}");
-        Some(self.store(node, &data, placed, None, || {
+        let coefficients = placed.as_coeffs();
+        let source = Source::Canvas {
+            token,
+            revision,
+            view,
+        };
+        if let Some(drawing) = self.current(node, coefficients, |held| match held {
+            Source::Canvas {
+                token: held_token,
+                revision: held_revision,
+                view: held_view,
+            } => (*held_token, *held_revision, *held_view) == (token, revision, view),
+            Source::Parsed(_) => false,
+        }) {
+            return Some(drawing);
+        }
+        let drawing = {
             let scene = scene
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             Drawing::canvas(&scene, placed)
-        }))
+        };
+        Some(self.store(node, source, coefficients, drawing))
     }
 
-    /// The outlines a vector document draws, with the fit that places them.
-    ///
-    /// A document that cannot be read draws nothing rather than falling back to something else:
-    /// the alternative is an element that silently draws a different picture from the one it was
-    /// given, which is worse than an element that visibly draws none.
-    fn documented(&self, node: NodeKey, source: &str, box_: Placement) -> Option<Drawing> {
-        let read = match self.held(node, source) {
-            Some(held) => held,
-            None => Arc::new(zgui_svg::parse(source).ok()?),
-        };
-        let placed = fit::onto(box_.content_box, Some(read.view_box()), box_.scale);
-        let shapes = read.clone();
-        // The document's own shapes, placed by the fit where a route needs them: the source
-        // paths are the same allocations at every placement, so what recognition found in them
-        // is found again after a scroll.
-        Some(self.store(node, source, placed, Some(read), move || {
-            Drawing::fitted(shapes.shapes().to_vec(), placed)
-        }))
+    /// The revision of `node`'s text, hashed once for as long as the node holds that text.
+    fn revision_of(
+        &self,
+        node: NodeKey,
+        kind: Kind,
+        source: &SharedString,
+        view_box: Option<[f32; 4]>,
+    ) -> u64 {
+        if let Some(memo) = self.revisions.borrow().get(&node)
+            && memo.kind == kind
+            && memo.view_box == view_box
+            && memo.source.ptr_eq(source)
+        {
+            return memo.hash;
+        }
+        #[cfg(test)]
+        self.hashes.set(self.hashes.get() + 1);
+        let mut hash = zgui_scene::ContentHash::new();
+        if let Some(view_box) = view_box {
+            hash = hash.f32s(&view_box);
+        }
+        let hash = hash.u32(kind.tag()).bytes(source.as_bytes()).finish();
+        // The clone keeps the text's address unique while the memo stands, so a pointer-equal
+        // text is this text.
+        self.revisions.borrow_mut().insert(
+            node,
+            Memo {
+                source: source.clone(),
+                kind,
+                view_box,
+                hash,
+            },
+        );
+        hash
+    }
+
+    /// How many source texts are held.
+    #[cfg(test)]
+    fn parsed_len(&self) -> usize {
+        self.parsed.borrow().len()
     }
 }
 
 /// One frame's view of the cache, answered from the document the frame is painting.
 #[derive(Clone, Copy)]
 pub struct Vectors<'a> {
-    /// Where placed outlines are kept.
+    /// Where drawings are kept.
     cache: &'a VectorCache,
-    /// Where the notation is read from.
+    /// Where the sources are read from.
     document: &'a Document,
 }
 
@@ -212,23 +387,26 @@ impl VectorSource for Vectors<'_> {
     /// A fingerprint of the drawing's source data: the canvas revision, the document text, or the
     /// path notation, together with the view box every one of them is fitted through.
     ///
-    /// Hashed from the document on every call rather than memoised, because it is asked before
-    /// the cache entry for the drawing exists and an icon's notation is small.
+    /// A text is hashed once, and its hash is held for as long as the node holds that very text:
+    /// the revision is asked for every drawing fragment on every frame that reaches it.
     fn revision(&self, node: NodeKey) -> u64 {
         let store = self.document.store();
-        let mut hash = zgui_scene::ContentHash::new();
-        if let Some(view_box) = zgui_dom::side::drawing::view_box(store, node) {
-            hash = hash.f32s(&view_box);
-        }
+        let view_box = zgui_dom::side::drawing::view_box(store, node);
         if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
+            let mut hash = zgui_scene::ContentHash::new();
+            if let Some(view_box) = view_box {
+                hash = hash.f32s(&view_box);
+            }
             let view = zgui_dom::side::drawing::canvas_view(store, node).unwrap_or(0);
             return hash.u32(1).u32(token).u32(revision).u64(view).finish();
         }
-        if let Some(source) = zgui_dom::side::drawing::document(store, node) {
-            return hash.u32(2).bytes(source.as_bytes()).finish();
+        if let Some(source) = zgui_dom::side::drawing::document_text(store, node) {
+            return self
+                .cache
+                .revision_of(node, Kind::Document, source, view_box);
         }
-        if let Some(data) = zgui_dom::side::drawing::path_data(store, node) {
-            return hash.u32(3).bytes(data.as_bytes()).finish();
+        if let Some(data) = zgui_dom::side::drawing::path_text(store, node) {
+            return self.cache.revision_of(node, Kind::Notation, data, view_box);
         }
         0
     }
@@ -241,20 +419,21 @@ impl VectorSource for Vectors<'_> {
     /// each source belongs to its own element name and the order is never exercised.
     fn drawing(&self, node: NodeKey, placement: Placement) -> Option<Drawing> {
         let store = self.document.store();
+        let view_box = zgui_dom::side::drawing::view_box(store, node);
         if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
-            let view_box = zgui_dom::side::drawing::view_box(store, node);
             let view = zgui_dom::side::drawing::canvas_view(store, node).unwrap_or(0);
             return self
                 .cache
                 .canvas(node, token, revision, view, view_box, placement);
         }
-        if let Some(source) = zgui_dom::side::drawing::document(store, node) {
-            return self.cache.documented(node, source, placement);
+        if let Some(source) = zgui_dom::side::drawing::document_text(store, node) {
+            return self
+                .cache
+                .read(node, Kind::Document, source, None, placement);
         }
-        let data = zgui_dom::side::drawing::path_data(store, node)?;
-        let view_box = zgui_dom::side::drawing::view_box(store, node);
-        let placed = fit::onto(placement.content_box, view_box, placement.scale);
-        Some(self.cache.notated(node, data, placed))
+        let data = zgui_dom::side::drawing::path_text(store, node)?;
+        self.cache
+            .read(node, Kind::Notation, data, view_box, placement)
     }
 }
 
@@ -317,8 +496,9 @@ mod tests {
             .drawing(node, placement(48.0))
             .expect("the element draws");
         assert_eq!(drawing.shapes.len(), 1);
+        assert_eq!(drawing.fit, zgui_scene::kurbo::Affine::scale(2.0));
         assert_eq!(
-            drawing.shapes[0].path.bounding_box().width(),
+            drawing.placed(0).path.bounding_box().width(),
             48.0,
             "a twenty-four unit outline in a forty-eight pixel box is drawn at twice the size"
         );
@@ -356,12 +536,13 @@ mod tests {
             .frame(&document)
             .drawing(node, placement(48.0))
             .unwrap();
-        assert!(!std::sync::Arc::ptr_eq(
-            &small.shapes[0].path,
-            &large.shapes[0].path
-        ));
-        assert_eq!(small.shapes[0].path.bounding_box().width(), 16.0);
-        assert_eq!(large.shapes[0].path.bounding_box().width(), 48.0);
+        assert_ne!(small.fit, large.fit);
+        assert!(
+            std::sync::Arc::ptr_eq(&small.shapes[0].path, &large.shapes[0].path),
+            "both boxes draw the one source path"
+        );
+        assert_eq!(small.placed(0).path.bounding_box().width(), 16.0);
+        assert_eq!(large.placed(0).path.bounding_box().width(), 48.0);
     }
 
     /// An icon swapped for another of the same size occupies exactly the same box, so nothing but
@@ -394,6 +575,106 @@ mod tests {
             &before.shapes[0].path,
             &after.shapes[0].path
         ));
+    }
+
+    /// A document with two elements of `name` carrying `value` in `property`, each from its own
+    /// allocation.
+    fn two_elements(name: &str, property: &str, value: &str) -> (Document, [zgui_dom::NodeKey; 2]) {
+        let mut document = Document::new();
+        let mut keys = Vec::new();
+        for _ in 0..2 {
+            let index = document.append(
+                document.document_index(),
+                NodeKind::Element,
+                ElementName::new(name),
+            );
+            document
+                .edit(&zgui_dom::EverythingMatters, |edit| {
+                    edit.set_property(
+                        index,
+                        PropKey::new(property),
+                        Some(PropValue::from(value.to_owned())),
+                    );
+                })
+                .expect("not poisoned");
+            keys.push(document.store().key_of(index));
+        }
+        (document, [keys[0], keys[1]])
+    }
+
+    #[test]
+    fn one_notation_is_parsed_once_for_every_element() {
+        let (document, [one, two]) = two_elements("vector", drawing::PATHS, "M0 0 L24 0 L24 24 Z");
+        let cache = VectorCache::new();
+        let first = cache
+            .frame(&document)
+            .drawing(one, placement(24.0))
+            .unwrap();
+        let second = cache
+            .frame(&document)
+            .drawing(two, placement(48.0))
+            .unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first.shapes, &second.shapes),
+            "equal notation in two elements is one read and one allocation"
+        );
+        assert_eq!(cache.parsed_len(), 1);
+    }
+
+    #[test]
+    fn one_document_is_read_once_for_every_element() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0 L24 0 L24 24 Z" fill="red"/></svg>"#;
+        let (document, [one, two]) = two_elements("vector", drawing::DOCUMENT, source);
+        let cache = VectorCache::new();
+        let first = cache
+            .frame(&document)
+            .drawing(one, placement(24.0))
+            .unwrap();
+        let second = cache
+            .frame(&document)
+            .drawing(two, placement(24.0))
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first.shapes, &second.shapes));
+        assert_eq!(cache.parsed_len(), 1);
+    }
+
+    #[test]
+    fn a_dead_source_leaves_the_parsed_map() {
+        let (document, [one, two]) = two_elements("vector", drawing::PATHS, "M0 0 L24 0 L24 24 Z");
+        let mut cache = VectorCache::new();
+        let drawn = |cache: &VectorCache, node| {
+            cache.frame(&document).drawing(node, placement(24.0));
+        };
+        drawn(&cache, one);
+        drawn(&cache, two);
+        cache.retain(|node| node == two);
+        assert_eq!(cache.parsed_len(), 1, "a node still draws the text");
+        cache.retain(|_| false);
+        assert_eq!(cache.parsed_len(), 0, "no node draws it any more");
+    }
+
+    #[test]
+    fn a_revision_is_hashed_once_per_source_text() {
+        let (document, node) = drawing_document("M0 0 L24 0 L24 24 Z", Some("0 0 24 24"));
+        let cache = VectorCache::new();
+        let first = cache.frame(&document).revision(node);
+        let second = cache.frame(&document).revision(node);
+        assert_eq!(first, second);
+        assert_eq!(cache.hashes.get(), 1, "the held text is hashed once");
+
+        let index = document.store().index_of(node).expect("a live node");
+        document
+            .edit(&zgui_dom::EverythingMatters, |edit| {
+                edit.set_property(
+                    index,
+                    PropKey::new(drawing::PATHS),
+                    Some(PropValue::from("M24 0 L24 24 L0 24 Z")),
+                );
+            })
+            .expect("not poisoned");
+        let third = cache.frame(&document).revision(node);
+        assert_ne!(third, first, "new text is a new revision");
+        assert_eq!(cache.hashes.get(), 2);
     }
 
     /// A document with one `<canvas>` naming the given scene.
