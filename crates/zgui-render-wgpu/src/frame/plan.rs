@@ -40,10 +40,13 @@ struct OpenGroup {
 /// One rectangle is one full replay of the batch stream under a different scissor, rather than a
 /// re-culled stream. Which primitives survive a damage set is decided where the display list is
 /// built, from the fragments' own ink; here the rectangles are only where the writes land.
+///
+/// `marks` holds the union bins, planned against `damage` or more.
 pub fn plan_segments(
     mut builder: PlanBuilder<'_>,
     scene: &Scene,
     damage: &DamageSet,
+    marks: &MarkPlan,
     used: Rect<i32, Device>,
     externals: &dyn Fn(zgui_scene::ExternalTextureId) -> Option<ExternalTexture>,
     vectors: Option<&zgui_render::VectorPlan>,
@@ -57,42 +60,19 @@ pub fn plan_segments(
         .map(|backdrop| rounded_out(backdrop.source))
         .collect();
 
-    let binned = bins_apply(scene, damage);
-    plan_mark_pages(&mut builder, scene, binned);
-    let marks = MarkFrame {
-        plan: scene.mark_plan(),
-        binned,
-    };
+    plan_mark_pages(&mut builder, scene, marks);
     for rect in damage::rects_covering_backdrops(damage, used, &backdrops) {
-        plan_rect(&mut builder, scene, &marks, rect, used, externals, vectors);
+        plan_rect(&mut builder, scene, marks, rect, used, externals, vectors);
     }
     builder.finish()
-}
-
-/// Whether union marks read the bins the scene planned.
-///
-/// A bin outside every group holds only the damaged part of its item. A frame that redraws every
-/// pixel for a reason of the renderer's own, where the plan was made for less, paints each prim
-/// of a union item on its own instead: overlaps blend twice for that frame, and no pixel is lost.
-pub fn bins_apply(scene: &Scene, damage: &DamageSet) -> bool {
-    scene.mark_plan().full_damage || !damage.is_full()
-}
-
-/// How one frame draws its marks.
-struct MarkFrame<'a> {
-    /// The scene's bins.
-    plan: &'a MarkPlan,
-    /// Whether union items read their bins.
-    binned: bool,
 }
 
 /// Plans one pass per bin page, adding the coverage of every bin on it.
 ///
 /// The pages come before every damage rectangle and every target, because a composite in any of
 /// them reads its bin.
-fn plan_mark_pages(builder: &mut PlanBuilder<'_>, scene: &Scene, binned: bool) {
-    let plan = scene.mark_plan();
-    if !binned || plan.bins.is_empty() {
+fn plan_mark_pages(builder: &mut PlanBuilder<'_>, scene: &Scene, plan: &MarkPlan) {
+    if plan.bins.is_empty() {
         return;
     }
     builder.set_mark_extent(plan.extent);
@@ -146,15 +126,15 @@ fn draw_mark_kinds(
 fn plan_marks(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
-    marks: &MarkFrame<'_>,
+    marks: &MarkPlan,
     range: core::ops::Range<usize>,
 ) {
     let remap = scene.remap(PrimitiveKind::Marks);
     for position in range {
         let slot = remap[position];
         let item = &scene.primitives.marks[slot as usize];
-        if item.is_union() && marks.binned {
-            if let Some(bin) = marks.plan.bin(slot) {
+        if item.is_union() {
+            if let Some(bin) = marks.bin(slot) {
                 let block = builder.stage_mark_draw(position, || {
                     MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)
                 });
@@ -163,7 +143,7 @@ fn plan_marks(
             }
             // No bin and no overflow: the item's ink misses the damage, so the scissor holds
             // none of it.
-            if !marks.plan.overflows(slot) {
+            if !marks.overflows(slot) {
                 continue;
             }
         }
@@ -180,7 +160,7 @@ fn plan_marks(
 fn plan_rect(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
-    marks: &MarkFrame<'_>,
+    marks: &MarkPlan,
     rect: Rect<i32, Device>,
     used: Rect<i32, Device>,
     externals: &dyn Fn(zgui_scene::ExternalTextureId) -> Option<ExternalTexture>,

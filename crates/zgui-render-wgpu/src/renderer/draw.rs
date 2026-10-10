@@ -169,13 +169,19 @@ impl Renderer for WgpuRenderer {
         // it. The plan is also where the frame's blocks are staged and its isolated targets are
         // lent, so that recording is nothing but issuing what was decided.
         zgui_profile::latency::mark("r.plan");
-        let marks = scene.mark_plan();
-        let pages = if crate::frame::plan::bins_apply(scene, damage) {
-            marks.pages
+        // A union item paints through its bin whatever the damage, and a bin outside every group
+        // holds only what the scene's damage reaches. A frame widened above plans its own bins.
+        let widened;
+        let marks = if damage.is_full() && !scene.mark_plan().full_damage {
+            let mut plan = zgui_scene::MarkPlan::default();
+            scene.plan_marks(damage, &mut plan);
+            widened = plan;
+            &widened
         } else {
-            0
+            scene.mark_plan()
         };
-        self.marks_scratch.ensure(&self.gpu, marks.extent, pages);
+        self.marks_scratch
+            .ensure(&self.gpu, marks.extent, marks.pages);
         let externals = |id| self.externals.get(&id).map(|attached| attached.texture);
         let plan = {
             let builder = PlanBuilder::new(
@@ -196,6 +202,7 @@ impl Renderer for WgpuRenderer {
                 builder,
                 scene,
                 damage,
+                marks,
                 self.composed.used(),
                 &externals,
                 vectors.as_ref(),
@@ -247,7 +254,7 @@ impl Renderer for WgpuRenderer {
                 externals: &self.externals,
                 vectors: self.vectors.as_deref(),
                 marks: &self.marks_scratch,
-                mark_extent: scene.mark_plan().extent,
+                mark_extent: marks.extent,
             }
             .record(&mut encoder, &plan)
         };

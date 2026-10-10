@@ -47,7 +47,8 @@ pub struct MarkPlan {
     /// Whether the plan was made for a frame that redraws every pixel.
     ///
     /// A bin outside every group holds only the damaged part of its item. A renderer that redraws
-    /// more than the damage this plan was made for draws a union item without its bin.
+    /// every pixel for a plan made for less plans the bins again with
+    /// [`Scene::plan_marks`](crate::scene::Scene::plan_marks).
     pub full_damage: bool,
 }
 
@@ -138,11 +139,11 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
         viewport: extent,
         damage,
     } = input;
+    plan.full_damage = damage.is_full();
     if !primitives.marks.iter().any(MarkItem::is_union) {
         return;
     }
     let viewport = Rect::new(Point::new(0, 0), extent);
-    plan.full_damage = damage.is_full();
     // A backdrop that reads past what it writes makes the renderer redraw more than the damage, so
     // the bins keep their whole ink there.
     let cut = !damage.is_full()

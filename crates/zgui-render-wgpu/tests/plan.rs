@@ -55,7 +55,15 @@ fn plan_with_vectors(
         wgpu::TextureFormat::Bgra8Unorm,
         Size::new(256, 256),
     );
-    plan_segments(builder, scene, damage, used(), &|_| None, vectors)
+    plan_segments(
+        builder,
+        scene,
+        damage,
+        scene.mark_plan(),
+        used(),
+        &|_| None,
+        vectors,
+    )
 }
 
 /// A scene of one quad, optionally wrapped in a group and optionally under a frosted panel.

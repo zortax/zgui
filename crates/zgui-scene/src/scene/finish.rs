@@ -28,6 +28,19 @@ impl Scene {
         // Before the sort as well: the sweep is over the emission stream, and the log's indices
         // are the arrays' own for the whole of the frame — nothing rewrites them.
         self.plan_vector_passes(damage, overlap);
+        let mut marks = core::mem::take(&mut self.mark_plan);
+        self.plan_marks(damage, &mut marks);
+        self.mark_plan = marks;
+        self.sort_remap();
+        self.finished = true;
+        self.check_order_overlap();
+    }
+
+    /// Plans the union bins for marks against `damage` into `plan`.
+    ///
+    /// [`Scene::finish`] plans them against the frame's damage. A renderer that redraws more than
+    /// that plans them again here, against what it redraws.
+    pub fn plan_marks(&self, damage: &DamageSet, plan: &mut crate::pass::MarkPlan) {
         crate::pass::marks::plan(
             crate::pass::marks::Input {
                 ops: &self.ops,
@@ -36,11 +49,8 @@ impl Scene {
                 viewport: self.viewport,
                 damage,
             },
-            &mut self.mark_plan,
+            plan,
         );
-        self.sort_remap();
-        self.finished = true;
-        self.check_order_overlap();
     }
 
     /// Sorts every remap list into draw order, leaving the arrays as they were pushed.

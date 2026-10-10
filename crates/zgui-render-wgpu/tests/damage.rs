@@ -7,11 +7,16 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use zgui_bits::DamageSet;
+use zgui_color::Color;
 use zgui_geom::{Device, DevicePx, Point, Rect, Scale, Size};
 use zgui_render::{RenderTarget, Renderer};
 use zgui_render_wgpu::{Pixels, WgpuRenderer};
-use zgui_scene::{BackdropFilter, Filter, GroupBoundary, Quad, Scene};
+use zgui_scene::{
+    BackdropFilter, Filter, GroupBoundary, MarkFlags, MarkItem, MarkPayload, PaintRef, Quad, Scene,
+};
 
 use support::{SIDE, opaque, plain_renderer, present, rect};
 
@@ -591,5 +596,43 @@ fn a_transform_that_moves_nothing_else_still_damages_what_it_moved() {
     assert!(
         !damage.is_empty(),
         "the step moved a coordinate system and damaged nothing"
+    );
+}
+
+#[test]
+fn a_frame_the_renderer_widens_paints_a_union_overlap_once() {
+    // A fresh renderer redraws its first frame whole, whatever damage it is handed. The scene plans
+    // its bins for a corner the discs do not reach, so the frame that draws them plans its own.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let translucent = PaintRef::solid(scene.paints.solid(Color::srgb_u8(200, 60, 20, 128)));
+    let discs = MarkPayload {
+        discs: vec![[48.0, 64.0, 24.0, 0.0], [80.0, 64.0, 24.0, 0.0]],
+        ..MarkPayload::default()
+    };
+    let mut union = MarkItem::new(rect(24.0, 40.0, 80.0, 48.0), translucent, discs.counts());
+    union.flags |= MarkFlags::UNION;
+    scene.push_marks(union, Arc::new(discs));
+    let mut corner = DamageSet::new();
+    corner.absorb(Rect::new(Point::new(0, 0), Size::new(16, 16)));
+    scene.finish(&corner);
+    assert!(scene.mark_plan().is_empty(), "the corner reaches no disc");
+
+    let outcome = renderer.draw(&scene, &corner);
+    assert_eq!(
+        outcome.stats().map(|stats| stats.damage_px),
+        Some((SIDE * SIDE) as u64),
+        "the first frame redraws all of the surface"
+    );
+    let pixels = renderer.read_composed();
+    let single = pixels.rgba(36, 64)[3];
+    let overlap = pixels.rgba(64, 64)[3];
+    assert!((127..=129).contains(&single), "one disc: {single}");
+    assert!(
+        overlap.abs_diff(single) <= 1,
+        "the overlap paints alpha once ({overlap}), as one disc does ({single}), never twice"
     );
 }
