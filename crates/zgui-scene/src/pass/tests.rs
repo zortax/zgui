@@ -446,3 +446,44 @@ fn a_long_pass_past_many_backgrounds_plans_quickly() {
         "planning took {elapsed:?}"
     );
 }
+
+/// A mark is an occluder like a quad: drawn after a vector item and over its ink, it ends the
+/// item's pass.
+#[test]
+fn marks_split_a_vector_pass_like_any_primitive() {
+    use std::sync::Arc;
+
+    let mut scene = Scene::new();
+    scene.begin_frame(viewport());
+    let path = |x: f64| {
+        Arc::new(kurbo::Shape::to_path(
+            &kurbo::Rect::new(x, 0.0, x + 40.0, 40.0),
+            0.1,
+        ))
+    };
+    let fill = crate::PaintRef::solid(
+        scene
+            .paints
+            .solid(zgui_color::Color::srgb(0.5, 0.5, 0.5, 1.0)),
+    );
+    scene.push_vector(crate::VectorItem::filled(
+        crate::VectorId(1),
+        path(0.0),
+        fill,
+    ));
+    let payload = crate::MarkPayload {
+        discs: vec![[20.0, 20.0, 10.0, 0.0]],
+        ..crate::MarkPayload::default()
+    };
+    let mark = crate::MarkItem::new(rect(10.0, 10.0, 20.0, 20.0), fill, payload.counts());
+    scene.push_marks(mark, Arc::new(payload));
+    scene.push_vector(crate::VectorItem::filled(
+        crate::VectorId(2),
+        path(10.0),
+        fill,
+    ));
+    assert_eq!(
+        passes(&mut scene, &DamageSet::full(), Overlap::default()),
+        2
+    );
+}

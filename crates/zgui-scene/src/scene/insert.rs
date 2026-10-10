@@ -1,5 +1,7 @@
 //! Pushing primitives: the clip cull, the order assignment, and the log entry.
 
+use std::sync::Arc;
+
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_profile::{Counter, counter};
 
@@ -7,8 +9,8 @@ use crate::group::{BackdropFilter, GroupBoundary};
 use crate::id::{ClipId, DrawOrder};
 use crate::ops::PaintOp;
 use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, ShadedQuad, Shadow,
-    SubpixelSprite,
+    ColorSprite, Decoration, ExternalQuad, MarkItem, MarkPayload, MonoSprite, PrimitiveKind, Quad,
+    ShadedQuad, Shadow, SubpixelSprite,
 };
 use crate::scene::Scene;
 use crate::spatial::SpatialId;
@@ -323,6 +325,46 @@ impl Scene {
         self.note_pushed(
             PrimitiveKind::ColorSprite,
             self.primitives.color_sprites.len() - 1,
+            capture_intra,
+        );
+        Some(order)
+    }
+
+    /// Pushes recognised shapes over a shared payload, returning the order the item took or
+    /// `None` if it was culled.
+    ///
+    /// The payload is shared, never copied: the capture and the frame each hold one more
+    /// reference to it, so the cost does not depend on how many prims it holds.
+    pub fn push_marks(
+        &mut self,
+        mut item: MarkItem,
+        payload: Arc<MarkPayload>,
+    ) -> Option<DrawOrder> {
+        tee!(
+            self,
+            Marks,
+            marks,
+            self.space_at(item.transform),
+            item.transform,
+            item.ink(),
+            item
+        );
+        if let Some(capture) = &mut self.capture {
+            capture.mark_payloads.push(Arc::clone(&payload));
+        }
+        let order = self.assign_order(item.ink(), item.clip_id(), item.transform)?;
+        item.order = order;
+        let space = self.space_at(item.transform);
+        self.record(PrimitiveKind::Marks, self.primitives.marks.len(), space);
+        let capture_intra = self
+            .capture
+            .as_ref()
+            .map(|open| open.marks.len() as u32 - 1);
+        self.primitives.marks.push(item);
+        self.primitives.mark_payloads.push(payload);
+        self.note_pushed(
+            PrimitiveKind::Marks,
+            self.primitives.marks.len() - 1,
             capture_intra,
         );
         Some(order)

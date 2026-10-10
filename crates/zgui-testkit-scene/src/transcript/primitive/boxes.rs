@@ -1,6 +1,7 @@
-//! The rectangle primitives: quads, shaded quads, shadows and decoration lines.
+//! The rectangle primitives: quads, shaded quads, shadows and decoration lines, and the marks
+//! that draw recognised shapes.
 
-use zgui_scene::{ClipId, Decoration, Quad, Scene, ShadedQuad, Shadow};
+use zgui_scene::{ClipId, Decoration, MarkFlags, MarkItem, Quad, Scene, ShadedQuad, Shadow};
 
 use crate::text::number::{all_zero, float, list, rect};
 use crate::transcript::paint;
@@ -120,6 +121,48 @@ pub fn decoration(scene: &Scene, decoration: &Decoration) -> String {
         scene,
         ClipId(decoration.clip),
         scene.spatial.at(decoration.transform),
+    ));
+    line
+}
+
+/// Recognised shapes over a shared payload: the counts and the flags, never the payload.
+pub fn marks(scene: &Scene, mark: &MarkItem) -> String {
+    let cap = |shift: u32| match (mark.flags >> shift) & 3 {
+        MarkFlags::BUTT => "butt",
+        MarkFlags::SQUARE => "square",
+        MarkFlags::ROUND => "round",
+        _ => "<unknown>",
+    };
+    let mut line = format!(
+        "marks order={} bounds={} paint={} discs={} boxes={} vertices={}",
+        mark.order,
+        rect(mark.bounds),
+        paint::reference(&scene.paints, mark.paint),
+        mark.discs,
+        mark.boxes,
+        mark.vertices
+    );
+    if mark.is_union() {
+        line.push_str(" union");
+    }
+    if mark.vertices > 0 {
+        line.push_str(&format!(
+            " half_width={} caps={}/{}",
+            float(mark.half_width),
+            cap(MarkFlags::START_CAP_SHIFT),
+            cap(MarkFlags::END_CAP_SHIFT)
+        ));
+    }
+    if !all_zero(&mark.origin) {
+        line.push_str(&format!(" origin={}", list(&mark.origin)));
+    }
+    if !all_zero(&mark.paint_origin) {
+        line.push_str(&format!(" paint_origin={}", list(&mark.paint_origin)));
+    }
+    line.push_str(&suffix(
+        scene,
+        mark.clip_id(),
+        scene.spatial.at(mark.transform),
     ));
     line
 }

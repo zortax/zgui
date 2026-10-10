@@ -130,7 +130,7 @@ pub struct Scene {
     remap: Remap,
     /// Where each instanced primitive came from, parallel to its array — see
     /// [`Scene::provenance`].
-    provenance: [Vec<crate::scene::chunk::ChunkSlot>; 7],
+    provenance: [Vec<crate::scene::chunk::ChunkSlot>; 8],
     /// Positions pushed under the open capture, awaiting the revision the encoding is stamped
     /// with: (kind, index in the frame array, index in the capture's lane).
     capture_stamped: Vec<(PrimitiveKind, u32, u32)>,
@@ -211,6 +211,8 @@ pub(crate) struct Remap {
     pub(crate) subpixel_sprites: Vec<u32>,
     /// Full-colour sprites.
     pub(crate) color_sprites: Vec<u32>,
+    /// Recognised shapes drawn from a shared payload.
+    pub(crate) marks: Vec<u32>,
     /// Textures the renderer did not draw.
     pub(crate) externals: Vec<u32>,
     /// Filters over the composite beneath them.
@@ -229,6 +231,7 @@ impl Remap {
         self.mono_sprites.clear();
         self.subpixel_sprites.clear();
         self.color_sprites.clear();
+        self.marks.clear();
         self.externals.clear();
         self.backdrops.clear();
         self.groups.clear();

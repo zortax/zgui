@@ -116,8 +116,9 @@ pub use crate::pass::{Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassP
 pub use crate::place::Placement;
 pub use crate::place::band::{Travel, Travels};
 pub use crate::prim::{
-    ColorSprite, CornerShape, Decoration, ExternalQuad, ExternalTextureId, MonoSprite,
-    PrimitiveKind, Quad, Resource, ShadedQuad, Shadow, SpriteTile, SubpixelSprite,
+    ColorSprite, CornerShape, Decoration, ExternalQuad, ExternalTextureId, MarkBox, MarkFlags,
+    MarkItem, MarkPayload, MonoSprite, PrimitiveKind, Quad, Resource, ShadedQuad, Shadow,
+    SpriteTile, SubpixelSprite,
 };
 pub use crate::resource::{ResourceGeneration, ResourceKey, ResourceKind, ResourceRegistry};
 pub use crate::scene::{ChunkPrims, ChunkSlot, ChunkUpload, Scene, SpatialFault, TableHolds};

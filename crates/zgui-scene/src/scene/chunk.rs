@@ -17,8 +17,8 @@ use crate::id::{ClipId, PaintId};
 use crate::ops::PaintOp;
 use crate::paint::PaintRef;
 use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, MonoSprite, PrimitiveKind, Quad, ShadedQuad, Shadow,
-    SubpixelSprite,
+    ColorSprite, Decoration, ExternalQuad, MarkItem, MarkPayload, MonoSprite, PrimitiveKind, Quad,
+    ShadedQuad, Shadow, SubpixelSprite,
 };
 use crate::scene::Scene;
 use crate::spatial::SpatialId;
@@ -132,6 +132,11 @@ pub struct ChunkPrims {
     pub subpixel_sprites: Vec<SubpixelSprite>,
     /// Full-colour sprites.
     pub color_sprites: Vec<ColorSprite>,
+    /// Recognised shapes drawn from a shared payload.
+    pub marks: Vec<MarkItem>,
+    /// The payload of each mark, parallel to [`ChunkPrims::marks`], shared with every frame that
+    /// draws it.
+    pub mark_payloads: Vec<std::sync::Arc<MarkPayload>>,
     /// Textures the renderer did not draw.
     pub externals: Vec<ExternalQuad>,
     /// Filters over the composite beneath them.
@@ -196,6 +201,12 @@ impl ChunkPrims {
             + self.mono_sprites.capacity() * size_of::<MonoSprite>()
             + self.subpixel_sprites.capacity() * size_of::<SubpixelSprite>()
             + self.color_sprites.capacity() * size_of::<ColorSprite>()
+            + self.marks.capacity() * size_of::<MarkItem>()
+            + self
+                .mark_payloads
+                .iter()
+                .map(|payload| payload.bytes())
+                .sum::<usize>()
             + self.externals.capacity() * size_of::<ExternalQuad>()
             + self.backdrops.capacity() * size_of::<BackdropFilter>()
             + self.vectors.capacity() * size_of::<VectorItem>()
@@ -285,6 +296,10 @@ impl ChunkPrims {
         for sprite in &self.color_sprites {
             holds.clip(sprite.clip);
         }
+        for mark in &self.marks {
+            holds.clip(mark.clip);
+            holds.paint(mark.paint);
+        }
         for external in &self.externals {
             holds.clips.push(external.clip);
         }
@@ -318,6 +333,8 @@ impl ChunkPrims {
         self.mono_sprites.clear();
         self.subpixel_sprites.clear();
         self.color_sprites.clear();
+        self.marks.clear();
+        self.mark_payloads.clear();
         self.externals.clear();
         self.backdrops.clear();
         self.vectors.clear();
@@ -346,6 +363,7 @@ fn order_of(prims: &crate::scene::primitives::Primitives, op: PaintOp) -> DrawOr
             .get(index)
             .map_or(0, |prim| prim.order),
         PrimitiveKind::ColorSprite => prims.color_sprites.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::Marks => prims.marks.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::External => prims.externals.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Backdrop => prims.backdrops.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => 0,
@@ -385,6 +403,10 @@ fn slot_of(chunk: &ChunkPrims, op: PaintOp) -> u32 {
             .color_sprites
             .get(index)
             .map_or(viewport, |prim| prim.transform),
+        PrimitiveKind::Marks => chunk
+            .marks
+            .get(index)
+            .map_or(viewport, |prim| prim.transform),
         PrimitiveKind::External => chunk
             .externals
             .get(index)
@@ -409,6 +431,7 @@ fn ink_of(chunk: &ChunkPrims, op: PaintOp) -> Option<Rect<DevicePx, Device>> {
         PrimitiveKind::MonoSprite => chunk.mono_sprites.get(index).map(MonoSprite::ink),
         PrimitiveKind::SubpixelSprite => chunk.subpixel_sprites.get(index).map(SubpixelSprite::ink),
         PrimitiveKind::ColorSprite => chunk.color_sprites.get(index).map(ColorSprite::ink),
+        PrimitiveKind::Marks => chunk.marks.get(index).map(MarkItem::ink),
         PrimitiveKind::External => chunk.externals.get(index).map(ExternalQuad::ink),
         PrimitiveKind::Backdrop => chunk.backdrops.get(index).map(|prim| prim.bounds),
         // A vector item is rasterised elsewhere and composited back in, and a replay does not
@@ -445,6 +468,7 @@ pub(crate) fn provenance_lane_of(kind: PrimitiveKind) -> Option<usize> {
         PrimitiveKind::SubpixelSprite => 4,
         PrimitiveKind::ColorSprite => 5,
         PrimitiveKind::Shaded => 6,
+        PrimitiveKind::Marks => 7,
         _ => return None,
     })
 }
@@ -616,6 +640,15 @@ impl Scene {
                     index,
                     &mut chunk.color_sprites,
                 ),
+                PrimitiveKind::Marks => {
+                    let at = copied(&self.primitives.marks, index, &mut chunk.marks);
+                    if at.is_some() {
+                        chunk
+                            .mark_payloads
+                            .push(std::sync::Arc::clone(&self.primitives.mark_payloads[index]));
+                    }
+                    at
+                }
                 PrimitiveKind::External => {
                     copied(&self.primitives.externals, index, &mut chunk.externals)
                 }
@@ -800,6 +833,26 @@ impl Scene {
                     translate(&mut sprite.frame, by);
                     if self.push_color_sprite(sprite).is_some() && source != 0 {
                         self.stamp_replayed(PrimitiveKind::ColorSprite, source, op.index);
+                    }
+                }
+                PrimitiveKind::Marks => {
+                    let (Some(mut mark), Some(payload)) = (
+                        chunk.marks.get(index).copied(),
+                        chunk.mark_payloads.get(index),
+                    ) else {
+                        continue;
+                    };
+                    // The payload stays where it was encoded: the item's origin carries the move.
+                    mark.reanchor(by);
+                    if mark.samples_its_paint() && (by.width.0 != 0.0 || by.height.0 != 0.0) {
+                        counter::bump(Counter::PaintsReanchored);
+                    }
+                    if self
+                        .push_marks(mark, std::sync::Arc::clone(payload))
+                        .is_some()
+                        && source != 0
+                    {
+                        self.stamp_replayed(PrimitiveKind::Marks, source, op.index);
                     }
                 }
                 PrimitiveKind::External => {

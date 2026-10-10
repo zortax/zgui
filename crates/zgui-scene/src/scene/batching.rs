@@ -25,6 +25,7 @@ impl Scene {
             PrimitiveKind::MonoSprite => &self.remap.mono_sprites,
             PrimitiveKind::SubpixelSprite => &self.remap.subpixel_sprites,
             PrimitiveKind::ColorSprite => &self.remap.color_sprites,
+            PrimitiveKind::Marks => &self.remap.marks,
             PrimitiveKind::External => &self.remap.externals,
             PrimitiveKind::Backdrop => &self.remap.backdrops,
             PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => &[],
@@ -51,6 +52,7 @@ impl Scene {
             PrimitiveKind::MonoSprite => self.primitives.mono_sprites[index].ink(),
             PrimitiveKind::SubpixelSprite => self.primitives.subpixel_sprites[index].ink(),
             PrimitiveKind::ColorSprite => self.primitives.color_sprites[index].ink(),
+            PrimitiveKind::Marks => self.primitives.marks[index].ink(),
             PrimitiveKind::External => self.primitives.externals[index].ink(),
             PrimitiveKind::Backdrop => self.primitives.backdrops[index].bounds,
             PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => {
@@ -75,6 +77,7 @@ impl Scene {
             PrimitiveKind::MonoSprite => self.primitives.mono_sprites.get(index)?.transform,
             PrimitiveKind::SubpixelSprite => self.primitives.subpixel_sprites.get(index)?.transform,
             PrimitiveKind::ColorSprite => self.primitives.color_sprites.get(index)?.transform,
+            PrimitiveKind::Marks => self.primitives.marks.get(index)?.transform,
             PrimitiveKind::External => self.primitives.externals.get(index)?.transform.index(),
             PrimitiveKind::Vector => return self.primitives.vectors.get(index)?.transform,
             PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => {
@@ -115,6 +118,7 @@ impl Scene {
                 .color_sprites
                 .get(index)
                 .map(|held| held.order),
+            PrimitiveKind::Marks => self.primitives.marks.get(index).map(|held| held.order),
             PrimitiveKind::External => self.primitives.externals.get(index).map(|held| held.order),
             PrimitiveKind::Backdrop => self.primitives.backdrops.get(index).map(|held| held.order),
             PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => {
@@ -164,6 +168,10 @@ impl Scene {
                     .color_sprites
                     .get(slot)
                     .map(|held| held.order)
+            }
+            PrimitiveKind::Marks => {
+                let slot = self.slot(kind, position)?;
+                self.primitives.marks.get(slot).map(|held| held.order)
             }
             PrimitiveKind::External => {
                 let slot = self.slot(kind, position)?;
@@ -218,6 +226,12 @@ impl Scene {
             PrimitiveKind::Shadow => {
                 let end = self.run_end(kind, start, limit, None);
                 (Batch::Shadows(start..end), end)
+            }
+            // Each mark binds its own payload range, which the renderer looks up by position, so
+            // a run of them is one batch however many payloads it names.
+            PrimitiveKind::Marks => {
+                let end = self.run_end(kind, start, limit, None);
+                (Batch::Marks(start..end), end)
             }
             PrimitiveKind::Decoration => {
                 let end = self.run_end(kind, start, limit, None);

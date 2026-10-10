@@ -57,6 +57,8 @@ pub enum Batch {
         /// The range of the scene's array.
         range: Range<usize>,
     },
+    /// Recognised shapes, each drawn from its own payload.
+    Marks(Range<usize>),
     /// One composite of a rasterisation pass, by its index in the pass plan.
     Vector(usize),
     /// One external texture, by its index in the scene's array.

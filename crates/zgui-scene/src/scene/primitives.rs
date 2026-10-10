@@ -1,8 +1,11 @@
 //! The struct-of-arrays store, one vector per primitive kind.
 
+use std::sync::Arc;
+
 use crate::group::{BackdropFilter, GroupBoundary};
 use crate::prim::{
-    ColorSprite, Decoration, ExternalQuad, MonoSprite, Quad, ShadedQuad, Shadow, SubpixelSprite,
+    ColorSprite, Decoration, ExternalQuad, MarkItem, MarkPayload, MonoSprite, Quad, ShadedQuad,
+    Shadow, SubpixelSprite,
 };
 use crate::vector::VectorItem;
 
@@ -27,6 +30,10 @@ pub struct Primitives {
     pub subpixel_sprites: Vec<SubpixelSprite>,
     /// Full-colour sprites.
     pub color_sprites: Vec<ColorSprite>,
+    /// Recognised shapes drawn from a shared payload.
+    pub marks: Vec<MarkItem>,
+    /// The payload of each mark, parallel to [`Primitives::marks`].
+    pub mark_payloads: Vec<Arc<MarkPayload>>,
     /// Vector content, rasterised elsewhere and composited back in.
     pub vectors: Vec<VectorItem>,
     /// Textures the renderer did not draw.
@@ -47,6 +54,8 @@ impl Primitives {
         self.mono_sprites.clear();
         self.subpixel_sprites.clear();
         self.color_sprites.clear();
+        self.marks.clear();
+        self.mark_payloads.clear();
         self.vectors.clear();
         self.externals.clear();
         self.backdrops.clear();
@@ -62,6 +71,7 @@ impl Primitives {
             + self.mono_sprites.len()
             + self.subpixel_sprites.len()
             + self.color_sprites.len()
+            + self.marks.len()
             + self.vectors.len()
             + self.externals.len()
             + self.backdrops.len()

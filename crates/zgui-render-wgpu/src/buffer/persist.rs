@@ -63,7 +63,8 @@ macro_rules! lane_slice {
             PrimitiveKind::SubpixelSprite => bytemuck::cast_slice(&prims.subpixel_sprites),
             PrimitiveKind::ColorSprite => bytemuck::cast_slice(&prims.color_sprites),
             PrimitiveKind::Shaded => bytemuck::cast_slice(&prims.shaded),
-            PrimitiveKind::GroupStart
+            PrimitiveKind::Marks
+            | PrimitiveKind::GroupStart
             | PrimitiveKind::GroupEnd
             | PrimitiveKind::Vector
             | PrimitiveKind::External

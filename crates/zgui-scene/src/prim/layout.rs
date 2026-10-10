@@ -58,6 +58,7 @@ macro_rules! assert_instance_layout {
 
 use crate::paint::PaintRef;
 use crate::prim::decoration::Decoration;
+use crate::prim::marks::{MarkBox, MarkItem};
 use crate::prim::quad::Quad;
 use crate::prim::shaded::ShadedQuad;
 use crate::prim::shadow::Shadow;
@@ -199,6 +200,33 @@ assert_instance_layout!(
     ],
 );
 
+assert_instance_layout!(
+    MarkItem,
+    size = 72,
+    align = 4,
+    fields = [
+        order @ 0, 4;
+        flags @ 4, 4;
+        bounds @ 8, 16;
+        paint @ 24, 8;
+        clip @ 32, 4;
+        transform @ 36, 4;
+        paint_origin @ 40, 8;
+        origin @ 48, 8;
+        discs @ 56, 4;
+        boxes @ 60, 4;
+        vertices @ 64, 4;
+        half_width @ 68, 4;
+    ],
+);
+
+assert_instance_layout!(
+    MarkBox,
+    size = 64,
+    align = 4,
+    fields = [rect @ 0, 16; radii @ 16, 32; shape @ 48, 16],
+);
+
 /// The rectangle a `[x, y, width, height]` instance field describes.
 pub(crate) fn rect_of(bounds: [f32; 4]) -> Rect<DevicePx, Device> {
     Rect::new(
@@ -212,7 +240,8 @@ mod tests {
     use core::mem::offset_of;
 
     use crate::prim::{
-        ColorSprite, Decoration, MonoSprite, Quad, ShadedQuad, Shadow, SubpixelSprite,
+        ColorSprite, Decoration, MarkBox, MarkItem, MonoSprite, Quad, ShadedQuad, Shadow,
+        SubpixelSprite,
     };
 
     /// The table above is compile-time; this is the runtime half, so a failure names the type.
@@ -225,6 +254,8 @@ mod tests {
         assert_eq!(size_of::<MonoSprite>(), 72);
         assert_eq!(size_of::<SubpixelSprite>(), 72);
         assert_eq!(size_of::<ColorSprite>(), 108);
+        assert_eq!(size_of::<MarkItem>(), 72);
+        assert_eq!(size_of::<MarkBox>(), 64);
     }
 
     /// A subpixel sprite differs from a monochrome one only in which pipeline draws it, so the two

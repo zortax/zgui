@@ -243,3 +243,36 @@ fn a_clip_from_another_space_does_not_cull() {
     assert!(left_behind.is_none(), "the one nothing moves");
     assert_eq!(scene.primitives.quads.len(), 1);
 }
+
+#[test]
+fn marks_batch_by_order() {
+    use std::sync::Arc;
+
+    let (mut scene, fill) = scene();
+    let mark = |x: f32| {
+        let payload = crate::MarkPayload {
+            discs: vec![[x + 10.0, 10.0, 8.0, 0.0]],
+            ..crate::MarkPayload::default()
+        };
+        (
+            crate::MarkItem::new(rect(x + 2.0, 2.0, 16.0, 16.0), fill, payload.counts()),
+            Arc::new(payload),
+        )
+    };
+    // Two disjoint marks at order 1, a quad over the first at order 2, and a mark over the quad at
+    // order 3.
+    let (first, payload) = mark(0.0);
+    scene.push_marks(first, payload);
+    let (second, payload) = mark(100.0);
+    scene.push_marks(second, payload);
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
+    let (third, payload) = mark(0.0);
+    scene.push_marks(third, payload);
+
+    scene.finish(&DamageSet::full());
+    let batches: Vec<_> = scene.batches().collect();
+    assert_eq!(
+        batches,
+        vec![Batch::Marks(0..2), Batch::Quads(0..1), Batch::Marks(2..3)]
+    );
+}

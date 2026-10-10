@@ -207,6 +207,11 @@ fn write_batch(writer: &mut Writer, scene: &Scene, batch: &Batch) {
                 ));
             }
         }
+        Batch::Marks(range) => {
+            for slot in &scene.remap(PrimitiveKind::Marks)[range.clone()] {
+                writer.line(&primitive::marks(scene, &primitives.marks[*slot as usize]));
+            }
+        }
         Batch::External(index) => {
             writer.line(&primitive::external(scene, &primitives.externals[*index]));
         }

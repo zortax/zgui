@@ -85,6 +85,9 @@ impl Scene {
                 (sprite.order, texture, tile)
             },
         );
+        sort_lane(&mut self.remap.marks, &self.primitives.marks, |mark| {
+            (mark.order, 0, 0)
+        });
         sort_lane(
             &mut self.remap.externals,
             &self.primitives.externals,

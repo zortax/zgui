@@ -318,7 +318,11 @@ impl Recorder<'_> {
             } => return self.shaded(pass, planned, tables, shader, params, range, format),
             // Group markers, backdrops, vector composites and external quads are planned, not
             // batched: each one changes what is being drawn into or where the pixels come from.
-            Batch::Group(_) | Batch::Backdrop(_) | Batch::Vector(_) | Batch::External(_) => {
+            Batch::Group(_)
+            | Batch::Backdrop(_)
+            | Batch::Vector(_)
+            | Batch::External(_)
+            | Batch::Marks(_) => {
                 return false;
             }
         };
