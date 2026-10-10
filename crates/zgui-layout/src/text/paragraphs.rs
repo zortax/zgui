@@ -10,6 +10,14 @@ use zgui_text_style::{TextPaint, TextStyle};
 
 use crate::measure::{MeasureContent, MeasureRequest, Measured, NaturalSize, ShapedSummary};
 
+/// The fewest distinct misses the pre-shape prepass hands to the pool.
+///
+/// Measured with `zgui-bench`'s `label-churn` probe, short labels relabelled every frame. At 4 to
+/// 12 misses a pooled prepass made the frame 1.9 times slower at the median of nine runs and up to
+/// 4.3 times slower, because waking the workers costs more than the shaping. At 16 to 120 misses
+/// it made the frame 0.9 times as long.
+const PRE_SHAPE_MIN_MISSES: usize = 16;
+
 /// A shaper, its shaped paragraphs and its brush table, as one measurer.
 ///
 /// The cache is here rather than inside a shaper because it is what outlives the pass: a paragraph
@@ -116,8 +124,8 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
     ///
     /// Keys the cache already holds are skipped. The rest are shaped on forked shapers and
     /// inserted in job order, so layout finds every one warm and the cache is filled exactly as
-    /// serial shaping would have filled it. An engine that cannot fork shapes serially here,
-    /// which still warms the cache.
+    /// serial shaping would have filled it. Fewer than `PRE_SHAPE_MIN_MISSES` misses, or an
+    /// engine that cannot fork, shape serially here, which still warms the cache.
     pub fn pre_shape(
         &mut self,
         jobs: &[(ParagraphKey, ParagraphContent<'_>)],
@@ -145,15 +153,19 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         if misses.is_empty() {
             return;
         }
-        let wanted = pool.width().min(misses.len());
-        while self.forks.len() < wanted {
-            match self.shaper.fork() {
-                Some(fork) => self.forks.push(fork),
-                None => break,
+        let distributed = misses.len() >= PRE_SHAPE_MIN_MISSES;
+        if distributed {
+            let wanted = pool.width().min(misses.len());
+            while self.forks.len() < wanted {
+                match self.shaper.fork() {
+                    Some(fork) => self.forks.push(fork),
+                    None => break,
+                }
             }
         }
-        // One miss gains nothing from a worker, and an unforkable engine has none to give.
-        if self.forks.is_empty() || misses.len() < 2 {
+        // A handful of misses costs less to shape here than to hand to woken workers and back,
+        // and an unforkable engine has no worker to give.
+        if !distributed || self.forks.is_empty() {
             for &index in &misses {
                 let (key, content) = &jobs[index];
                 let shaped = self.shaper.shape_keyed(*key, content);
