@@ -253,8 +253,9 @@ fn the_lod_property_reduces_a_line_series_per_column() {
     let [mark] = marks(reduced.scene()) else {
         panic!("one mark");
     };
-    // 200 device columns a unit is a bucket of 256 columns: at most four points in each.
-    assert!(mark.vertices <= 4 * 257 + 2, "{} vertices", mark.vertices);
+    // 200 device columns a unit is a bucket of 512 columns, two a device column at least: at
+    // most four points in each.
+    assert!(mark.vertices <= 4 * 513 + 2, "{} vertices", mark.vertices);
 }
 
 #[test]

@@ -689,8 +689,9 @@ fn lines(data: &Arc<[[f32; 2]]>) -> Option<(Pixels, Pixels, Pixels)> {
         PLACEMENT,
     );
     let vertices = scene.primitives.marks[0].vertices;
+    // 120 device columns a unit is a bucket of 256 columns.
     assert!(
-        vertices <= 4 * 129 + 2,
+        vertices <= 4 * 257 + 2,
         "four points a column at most: {vertices} vertices"
     );
     let exact = exact_line(data)?;
@@ -727,8 +728,8 @@ fn a_reduced_dense_line_stays_close_to_the_exact_line() {
 #[test]
 fn a_reduced_random_walk_keeps_its_envelope() {
     // 333 points a device column, a fifth of a pixel apart in y: under antialiasing the whole
-    // line covers each column between its lowest and highest point, and the reduced line covers it
-    // with three strokes. This is why the reduction is never automatic.
+    // line covers each column between its lowest and highest point, and the reduced line covers
+    // each half of it with three strokes. This is why the reduction is never automatic.
     let Some((reduced, whole, exact)) = lines(&walk(40_000)) else {
         return;
     };
@@ -739,5 +740,5 @@ fn a_reduced_random_walk_keeps_its_envelope() {
     println!("reduced against whole: {:?}", difference(&whole, &reduced));
     // The whole line strays as far: a few pixels of round joins past the exact outline.
     assert!(ours.spurious <= 4, "{ours:?}");
-    assert!(ours.mean <= 64.0, "{ours:?}");
+    assert!(ours.mean <= 48.0, "{ours:?}");
 }

@@ -393,21 +393,21 @@ pub(crate) fn series_payload(
     Some(payload)
 }
 
-/// The most points per device column a line is drawn with whole.
+/// The most points per column of the reduction a line is drawn with whole.
 const POINTS_PER_COLUMN: f64 = 4.0;
 
-/// The column bucket a line over `data` is reduced at, when the device draws `per_unit` columns per
-/// data unit, or `None` when it is drawn whole.
+/// How many columns of the reduction a device column holds at least, as a power of two.
 ///
-/// The data must run left to right and hold more than [`POINTS_PER_COLUMN`] finite points per
-/// column over its x range. The bucket is `ceil(log2(per_unit))`, so a column is never wider than a
-/// device pixel. A payload already built one bucket finer is kept, so a zoom builds again only when
-/// it passes twice or half the scale it was built for.
-pub(crate) fn lod_bucket(
-    cache: Option<&mut MarkPayloads>,
-    data: &Arc<[[f32; 2]]>,
-    per_unit: f64,
-) -> Option<i32> {
+/// The columns start at data x = 0 and the device columns start where the view puts them, so a
+/// device column shares the columns at its two edges with its neighbours. The reduction keeps the
+/// extremes of a shared column, which can lie in the neighbour. With two columns a device column,
+/// what the device column can lose is within half a pixel of its edges. Narrower columns keep more
+/// points, and on smooth dense data each point adds to the overlap the marks route sums.
+const SUB_COLUMNS_LOG2: i32 = 1;
+
+/// The column bucket for a device that draws `per_unit` columns per data unit: columns at most
+/// half a device pixel wide.
+fn bucket_of(per_unit: f64) -> Option<i32> {
     if !(per_unit.is_finite() && per_unit > 0.0) {
         return None;
     }
@@ -415,19 +415,35 @@ pub(crate) fn lod_bucket(
     if !(-1000.0..=1000.0).contains(&need) {
         return None;
     }
-    let need = need as i32;
+    Some(need as i32 + SUB_COLUMNS_LOG2)
+}
+
+/// The column bucket a line over `data` is reduced at, when the device draws `per_unit` columns per
+/// data unit, or `None` when it is drawn whole.
+///
+/// The data must run left to right and hold more than [`POINTS_PER_COLUMN`] finite points per
+/// column of the reduction over its x range. The bucket is `ceil(log2(per_unit)) + 1`, so a column
+/// is never wider than half a device pixel. A payload already built one bucket finer is
+/// kept, so a zoom builds again only when it passes twice or half the scale it was built for.
+pub(crate) fn lod_bucket(
+    cache: Option<&mut MarkPayloads>,
+    data: &Arc<[[f32; 2]]>,
+    per_unit: f64,
+) -> Option<i32> {
+    let bucket = bucket_of(per_unit)?;
     let (facts, finer) = match cache {
-        Some(cache) => (cache.facts(data), cache.holds_columns(data, need + 1)),
+        Some(cache) => (cache.facts(data), cache.holds_columns(data, bucket + 1)),
         None => (DataFacts::of(data), false),
     };
     if !facts.monotone || facts.finite == 0 {
         return None;
     }
-    let columns = ((facts.x[1] - facts.x[0]) * per_unit).max(1.0);
+    let columns =
+        ((facts.x[1] - facts.x[0]) * per_unit).max(1.0) * f64::from(1 << SUB_COLUMNS_LOG2);
     if facts.finite as f64 / columns <= POINTS_PER_COLUMN {
         return None;
     }
-    Some(if finer { need + 1 } else { need })
+    Some(if finer { bucket + 1 } else { bucket })
 }
 
 /// `data` reduced to the first, lowest, highest and last point of each column `2^-bucket` data
@@ -795,11 +811,32 @@ mod tests {
     #[test]
     fn a_sparse_line_is_not_reduced() {
         let data = dense(390);
-        assert_eq!(lod_bucket(None, &data, 100.0), None, "four points a column");
         assert_eq!(
             lod_bucket(None, &data, 50.0),
+            None,
+            "fewer than eight points a device column, four a column of the reduction"
+        );
+        assert_eq!(
+            lod_bucket(None, &data, 25.0),
             Some(6),
-            "eight points a column"
+            "sixteen points a device column, columns of a sixty-fourth of a unit"
+        );
+    }
+
+    #[test]
+    fn a_device_column_keeps_its_extremes_off_the_grid() {
+        // One device column a unit, its edge at x = 0.5. The highest point right of the edge is
+        // not the highest of its unit.
+        let data = [[0.1, 0.0], [0.3, 10.0], [0.6, 8.0], [0.9, 0.0]];
+        let bucket = super::bucket_of(1.0).expect("a bucket");
+        assert_eq!(bucket, 1, "half a device column");
+        assert!(
+            m4(&data, bucket).contains(&[0.6, 8.0]),
+            "the extreme of the device column right of the edge"
+        );
+        assert!(
+            !m4(&data, 0).contains(&[0.6, 8.0]),
+            "a whole column loses it"
         );
     }
 
@@ -833,11 +870,11 @@ mod tests {
             draw(&drawing, &source).vertices.len()
         };
         assert!(
-            reduced <= 4 * 129 + 2,
+            reduced <= 4 * 257 + 2,
             "four points a column at most: {reduced}"
         );
-        // 100 columns a unit needs 128; 120 too; 140 needs 256; back to 100 keeps the finer one;
-        // 40 needs 64 and keeps 128, which is twice as fine.
+        // 100 device columns a unit needs 256 columns; 120 too; 140 needs 512; back to 100 keeps
+        // the finer one; 40 needs 128 and keeps 256, which is twice as fine.
         let views = [
             (Affine::translate((13.0, 0.0)), 0),
             (Affine::scale(1.2), 0),

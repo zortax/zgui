@@ -64,8 +64,8 @@ testing.
 
 A long line can be drawn at a lower level of detail. `push_series_lod(series, Lod::Columns)`, or
 `--zgui-vector-lod: columns` on the element for all its line series, reduces a `Series::Line`
-whose points run left to right, with more than four points per device column, to the first, lowest,
-highest and last point of each column. A pan builds nothing new, and a zoom builds the reduction
+whose points run left to right, with more than eight points per device column, to the first,
+lowest, highest and last point of each half column. A pan builds nothing new, and a zoom builds the reduction
 again only past twice or half the scale. Under antialiasing the reduced line is lighter where the
 data is noise denser than a pixel, so the reduction is never automatic.
 
