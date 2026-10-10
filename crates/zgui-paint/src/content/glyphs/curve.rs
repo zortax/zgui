@@ -10,28 +10,27 @@
 //! quantised, and the same string drawn a third of a pixel to the right is a third of a pixel to
 //! the right.
 //!
-//! # Why the curve is copied
+//! # Why the curve is shared
 //!
-//! The face's curves are held once per glyph, at the origin, and shared. What a display list needs
-//! is a path *where the glyph is*, and the two cannot be the same allocation while one glyph
-//! appears twice in a line. So each placed glyph is a translated copy — a few hundred points for a
-//! run the atlas already refused to serve, and the alternative is a transform per glyph interned in
-//! a table the scene keeps across frames, which grows without bound for text that scrolls.
-
-use std::sync::Arc;
+//! The face's curves are held once per glyph, at the origin, and shared. A placed glyph keeps that
+//! allocation and carries the pen position beside it, and the display list places the curve there
+//! by a translation. One letter twice on a line is one allocation drawn twice, and a rasteriser's
+//! encoding of it outlives a scroll.
 
 use zgui_geom::{Device, DevicePx, Point};
-use zgui_scene::kurbo::{Affine, BezPath};
-use zgui_text::{GlyphRaster, ShapedRun};
+use zgui_scene::kurbo::Vec2;
+use zgui_text::{GlyphOutline, GlyphRaster, ShapedRun};
 
-/// One glyph of a run, as curves already placed on the surface.
+/// One glyph of a run: the face's curve, and where its pen is.
 #[derive(Clone, Debug)]
 pub struct OutlineGlyph {
-    /// The curves, in absolute device pixels before the run's own transform.
+    /// The curves, in the glyph's own space with the pen at the origin.
     ///
-    /// Shared because a display list hands the same allocation to a rasteriser, which keeps its
-    /// encoding of the geometry under that allocation's identity.
-    pub path: Arc<BezPath>,
+    /// Shared with the face's outline cache, because a display list hands the same allocation to
+    /// a rasteriser, which keeps its encoding of the geometry under that allocation's identity.
+    pub path: GlyphOutline,
+    /// Where the pen is, in absolute device pixels before the run's own transform.
+    pub pen: Vec2,
 }
 
 /// Places one run's glyphs as curves, extracting whatever the rasteriser has not extracted yet.
@@ -53,13 +52,12 @@ pub(crate) fn place(
         if curves.is_empty() {
             continue;
         }
-        let mut path = BezPath::clone(&curves);
-        path.apply_affine(Affine::translate((
-            f64::from(origin.x.0 + glyph.x),
-            f64::from(origin.y.0 + glyph.y),
-        )));
         out.push(OutlineGlyph {
-            path: Arc::new(path),
+            path: curves,
+            pen: Vec2::new(
+                f64::from(origin.x.0 + glyph.x),
+                f64::from(origin.y.0 + glyph.y),
+            ),
         });
     }
 }

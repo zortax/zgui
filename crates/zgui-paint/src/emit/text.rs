@@ -27,7 +27,7 @@ use zgui_css::values::color::{current, resolve};
 use zgui_css::{ComputedStyle, register_properties};
 use zgui_geom::{Affine2, Device, DevicePx, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
-use zgui_scene::kurbo::{Affine, BezPath, Shape};
+use zgui_scene::kurbo::{Affine, Shape};
 use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
 use zgui_scene::{
     ClipId, ClipLink, ColorSprite, Decoration, MonoSprite, Paint, PaintRef, PaintSlot, Resource,
@@ -700,9 +700,9 @@ fn runs(
             Owned::Outlines(outlines) => {
                 // A colour run never reaches here — it has no single outline to fill — so a
                 // shadow pass over one has nothing to suppress, unlike the tile path.
-                let fill = match painting.brush {
-                    RunBrush::Painted(reference) if !painting.force_mono => reference,
-                    _ => scene.paints.add(Paint::Solid(color)),
+                let (fill, painted) = match painting.brush {
+                    RunBrush::Painted(reference) if !painting.force_mono => (reference, true),
+                    _ => (scene.paints.add(Paint::Solid(color)), false),
                 };
                 let affine = placement.affine(scene);
                 for glyph in outlines {
@@ -713,6 +713,7 @@ fn runs(
                         Outlined {
                             id: outline_id(at, index),
                             fill,
+                            painted,
                             stroke: run.synthetic_bold,
                             offset: painting.offset,
                         },
@@ -807,6 +808,8 @@ struct Outlined {
     id: VectorId,
     /// What fills the curve.
     fill: PaintRef,
+    /// Whether the fill is a paint measured on the line box rather than a colour.
+    painted: bool,
     /// How wide a stroke stands in for a weight the face does not have; zero for no stroke.
     stroke: f32,
     /// How far this pass is displaced from the text itself.
@@ -815,10 +818,11 @@ struct Outlined {
 
 /// Fills one glyph's curves, and says whether the item landed.
 ///
-/// The ink is the curve's bounds **after** the run's transform, because that is the rectangle the
-/// rasteriser will write: the item is drawn into a scratch covering exactly this rectangle and
-/// composited back through it, so an ink measured before the transform would cut a turned letter
-/// off at the edge of the box it would have occupied upright.
+/// The face's curve is drawn as it is, placed at the pen by a translation. The ink is the curve's
+/// bounds **after** the run's transform, because that is the rectangle the rasteriser will write:
+/// the item is drawn into a scratch covering exactly this rectangle and composited back through
+/// it, so an ink measured before the transform would cut a turned letter off at the edge of the
+/// box it would have occupied upright.
 fn outline(
     scene: &mut Scene,
     placement: TextPlacement,
@@ -826,17 +830,14 @@ fn outline(
     drawn: Outlined,
     glyph: &OutlineGlyph,
 ) -> bool {
-    let path = if drawn.offset.width.0 == 0.0 && drawn.offset.height.0 == 0.0 {
-        Arc::clone(&glyph.path)
-    } else {
-        let mut moved = BezPath::clone(&glyph.path);
-        moved.apply_affine(Affine::translate((
-            f64::from(drawn.offset.width.0),
-            f64::from(drawn.offset.height.0),
-        )));
-        Arc::new(moved)
-    };
-    let bounds = path.bounding_box();
+    let at = Affine::translate(
+        glyph.pen
+            + zgui_scene::kurbo::Vec2::new(
+                f64::from(drawn.offset.width.0),
+                f64::from(drawn.offset.height.0),
+            ),
+    );
+    let bounds = at.transform_rect_bbox(glyph.path.bounding_box());
     let reach = f64::from(drawn.stroke) * 0.5;
     let local = Rect::from_corners(
         Point::new(
@@ -848,10 +849,17 @@ fn outline(
             DevicePx((bounds.y1 + reach) as f32),
         ),
     );
-    let mut item = VectorItem::filled(drawn.id, path, drawn.fill).clipped(placement.clip);
+    let mut item = VectorItem::filled(drawn.id, Arc::clone(&glyph.path), drawn.fill)
+        .placed(at)
+        .clipped(placement.clip);
     item.ink = affine.transform_rect(local);
     item.local_ink = local;
     item.transform = Some(placement.transform);
+    if drawn.painted {
+        // A ramp across the text is measured on the line box, so it is mapped back into the
+        // glyph's own space.
+        item.brush = at.inverse();
+    }
     if drawn.stroke > 0.0 {
         // A synthesised bold is a stroke around the face's own curve, in the same brush: the
         // curve is what the face draws and the weight is what it does not have.
@@ -860,12 +868,11 @@ fn outline(
     scene.push_vector(item).is_some()
 }
 
-/// The identity one outlined glyph's curves are cached under.
+/// The identity of one outlined glyph in the display list.
 ///
-/// Derived from where the glyph is in the document rather than from what it is, so that the same
-/// letter twice on a line is two entries and one letter that moved is still one — a rasteriser
-/// re-encodes when the geometry under an identity changes, which is exactly what a moved glyph
-/// wants and what a shared identity for two glyphs would make happen twice a frame.
+/// Derived from where the glyph is in the document rather than from what it is, so the same letter
+/// twice on a line is two items. A rasteriser keys its encoding on content, so the two still share
+/// one encoding of the face's curve.
 fn outline_id(at: Where, index: u32) -> VectorId {
     let mut hash = zgui_scene::ContentHash::new();
     hash = hash
@@ -1182,5 +1189,151 @@ mod tests {
                 "a band thinner than its own stroke has nothing to draw: {ink:?}"
             );
         }
+    }
+
+    /// A face that holds one curve and hands out the same allocation every time.
+    struct OneCurve(zgui_text::GlyphOutline);
+
+    impl zgui_text::GlyphRaster for OneCurve {
+        fn raster(&self, _key: &zgui_text::GlyphKey) -> Option<zgui_text::GlyphImage> {
+            None
+        }
+
+        fn outline(&self, _key: &zgui_text::OutlineKey) -> Option<zgui_text::GlyphOutline> {
+            Some(std::sync::Arc::clone(&self.0))
+        }
+    }
+
+    /// A source of one outlined glyph, placed the way the content cache places one.
+    struct OneOutline(OneCurve);
+
+    impl super::GlyphSource for OneOutline {
+        fn visit_line(
+            &self,
+            _paragraph: zgui_layout::fragment::ParagraphId,
+            _line: u16,
+            request: super::GlyphRequest,
+            visit: &mut dyn FnMut(super::GlyphRun<'_>),
+        ) {
+            let glyphs = [zgui_text::ShapedGlyph {
+                glyph: 5,
+                x: 6.5,
+                y: 12.0,
+            }];
+            let run = zgui_text::ShapedRun {
+                face: zgui_text::FaceId(1),
+                size: 96.0,
+                synthetic_bold: 0.0,
+                synthetic_slant: 0.0,
+                has_color: false,
+                brush: zgui_scene::PaintSlot(0),
+                glyphs: &glyphs,
+            };
+            let mut placed = Vec::new();
+            crate::content::glyphs::curve::place(&self.0, &run, request.origin, &mut placed);
+            visit(super::GlyphRun {
+                content: super::RunContent::Outlines(&placed),
+                format: zgui_text::GlyphFormat::Mono,
+                paint: zgui_scene::PaintSlot(0),
+                synthetic_bold: 0.0,
+            });
+        }
+    }
+
+    /// A triangle, as a face's curve.
+    fn curve() -> zgui_text::GlyphOutline {
+        let mut path = zgui_scene::kurbo::BezPath::new();
+        path.move_to((0.0, -10.0));
+        path.line_to((8.0, 0.0));
+        path.line_to((0.0, 0.0));
+        path.close_path();
+        std::sync::Arc::new(path)
+    }
+
+    /// One line of the outlined glyph at a line box whose corner is at (20, 30).
+    fn emit_outline(
+        face: zgui_text::GlyphOutline,
+        inherited: super::Inherited<'_>,
+    ) -> zgui_scene::Scene {
+        let style = crate::lower::lower(&StyleDraft::initial().build(), 1.0);
+        let mut scene = zgui_scene::Scene::new();
+        scene.begin_frame(zgui_geom::Size::new(128, 128));
+        let mut placement = placement();
+        placement.line.origin = Point::new(DevicePx(20.0), DevicePx(30.0));
+        super::emit(
+            &mut scene,
+            &OneOutline(OneCurve(face)),
+            zgui_layout::fragment::ParagraphId(0),
+            0,
+            &style,
+            inherited,
+            placement,
+        );
+        scene
+    }
+
+    #[test]
+    fn an_outlined_glyph_draws_the_face_curve_at_its_pen() {
+        let face = curve();
+        let scene = emit_outline(std::sync::Arc::clone(&face), super::Inherited::default());
+        let item = &scene.primitives.vectors[0];
+        assert!(
+            std::sync::Arc::ptr_eq(&item.path, &face),
+            "the face's own curve is drawn, not a placed copy"
+        );
+        assert_eq!(
+            item.placement,
+            zgui_scene::kurbo::Affine::translate((26.5, 42.0))
+        );
+        assert_eq!(item.brush, zgui_scene::kurbo::Affine::IDENTITY);
+        assert_eq!(
+            item.local_ink.origin,
+            Point::new(DevicePx(26.5), DevicePx(32.0))
+        );
+        assert_eq!(
+            item.local_ink.size,
+            Size::new(DevicePx(8.0), DevicePx(10.0))
+        );
+    }
+
+    #[test]
+    fn a_gradient_outline_maps_its_brush_back_to_the_line() {
+        let ramp = crate::lower::background::GradientSpec {
+            shape: crate::lower::background::GradientShape::Linear { angle: 90.0 },
+            stops: smallvec::smallvec![
+                crate::lower::background::SpecStop {
+                    color: zgui_color::Color::BLACK,
+                    position: None,
+                },
+                crate::lower::background::SpecStop {
+                    color: zgui_color::Color::WHITE,
+                    position: None,
+                },
+            ],
+            interpolation: zgui_color::Interpolation::new(zgui_color::ColorSpace::Srgb),
+            repeating: false,
+        };
+        let scene = emit_outline(
+            curve(),
+            super::Inherited {
+                text_fill: Some(&ramp),
+                decorations: &[],
+            },
+        );
+        let item = &scene.primitives.vectors[0];
+        assert!(
+            matches!(
+                item.fill
+                    .and_then(|fill| fill.id())
+                    .and_then(|id| scene.paints.get(id)),
+                Some(zgui_scene::Paint::Gradient { .. })
+            ),
+            "the glyph is filled with the ramp"
+        );
+        assert_eq!(
+            item.brush * item.placement,
+            zgui_scene::kurbo::Affine::IDENTITY,
+            "the ramp is measured on the line box, so the brush undoes the glyph's placement"
+        );
     }
 }
