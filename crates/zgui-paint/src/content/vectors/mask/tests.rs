@@ -142,7 +142,10 @@ fn an_unchanged_owner_across_frames_is_never_volatile() {
 fn a_volatile_owner_declines_while_vector_raster_is_ready() {
     let mut rig = Rig::new(true);
     let masks: Vec<bool> = (0..6)
-        .map(|frame| rig.frame(OWNER, &triangle(f64::from(frame) * 0.1)).is_some())
+        .map(|frame| {
+            rig.frame(OWNER, &triangle(f64::from(frame) * 0.1))
+                .is_some()
+        })
         .collect();
     assert_eq!(masks, [true, true, true, false, false, false]);
 }
@@ -151,7 +154,10 @@ fn a_volatile_owner_declines_while_vector_raster_is_ready() {
 fn a_small_volatile_owner_keeps_the_mask_while_vector_raster_is_cold() {
     let mut rig = Rig::new(false);
     for frame in 0..8 {
-        assert!(rig.frame(OWNER, &triangle(f64::from(frame) * 0.1)).is_some());
+        assert!(
+            rig.frame(OWNER, &triangle(f64::from(frame) * 0.1))
+                .is_some()
+        );
     }
     assert!(rig.volatile(OWNER));
 }
@@ -186,8 +192,15 @@ fn an_owner_untouched_for_eight_frames_is_swept() {
 fn a_churning_owner_keeps_at_most_two_live_tiles() {
     let mut rig = Rig::new(false);
     for frame in 0..20 {
-        assert!(rig.frame(OWNER, &triangle(f64::from(frame) * 0.01)).is_some());
-        assert!(rig.atlas.len() <= 2, "frame {frame}: {} tiles", rig.atlas.len());
+        assert!(
+            rig.frame(OWNER, &triangle(f64::from(frame) * 0.01))
+                .is_some()
+        );
+        assert!(
+            rig.atlas.len() <= 2,
+            "frame {frame}: {} tiles",
+            rig.atlas.len()
+        );
         assert!(rig.cache.entries.len() <= 2, "frame {frame}");
     }
 }
@@ -244,9 +257,16 @@ fn a_declining_volatile_owner_gives_back_its_tiles() {
     let mut rig = Rig::new(true);
     let mut drawn = Vec::new();
     for frame in 0..3 {
-        drawn.push(rig.frame(OWNER, &triangle(f64::from(frame) * 0.1)).expect("a mask").key);
+        drawn.push(
+            rig.frame(OWNER, &triangle(f64::from(frame) * 0.1))
+                .expect("a mask")
+                .key,
+        );
     }
-    assert!(rig.frame(OWNER, &triangle(0.3)).is_none(), "volatile and declined");
+    assert!(
+        rig.frame(OWNER, &triangle(0.3)).is_none(),
+        "volatile and declined"
+    );
     for key in drawn {
         assert!(!rig.atlas.contains(key), "{key:?} was given back");
     }

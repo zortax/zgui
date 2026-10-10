@@ -338,10 +338,12 @@ impl VectorMaskCache {
             budget,
         } = self;
         let part = part_of(request.style);
-        let history = histories.entry(request.owner).or_insert_with(|| MaskHistory {
-            frame: *frame,
-            ..MaskHistory::default()
-        });
+        let history = histories
+            .entry(request.owner)
+            .or_insert_with(|| MaskHistory {
+                frame: *frame,
+                ..MaskHistory::default()
+            });
         history.advance(*frame);
         let moved = history.observe(part, stamp(&request, part));
         let decline = |history: &mut MaskHistory, superseded: &mut Vec<AtlasKey>| {
