@@ -262,13 +262,7 @@ fn record(
             item: *index,
             residual,
             clip: item.clip,
-            ink: Rect::new(
-                zgui_geom::Point::new(
-                    ink.origin.x - region.origin.x,
-                    ink.origin.y - region.origin.y,
-                ),
-                ink.size,
-            ),
+            ink: relative(ink, region),
         });
     }
 
@@ -287,10 +281,55 @@ fn record(
     });
 }
 
+/// Writes `plan` into `out` with every cut pass given its whole region back.
+///
+/// The passes, their items, their clips and their order stay as planned. Only the cut decides a
+/// region, so the whole region is the one [`record`] cuts from.
+pub(crate) fn uncut(
+    plan: &ScenePassPlan,
+    vectors: &[VectorItem],
+    viewport: Size<i32, Device>,
+    out: &mut ScenePassPlan,
+) {
+    out.clone_from(plan);
+    let ScenePassPlan { items, passes, .. } = out;
+    for pass in passes.iter_mut().filter(|pass| pass.clamped) {
+        let planned = &mut items[pass.items.clone()];
+        let Some(bounds) = planned
+            .iter()
+            .map(|item| vectors[item.item].ink)
+            .reduce(Rect::union)
+        else {
+            continue;
+        };
+        let region = region::aligned(bounds, viewport);
+        let mut covered = Vec::with_capacity(planned.len());
+        for item in planned {
+            let ink = cut(region::covering(vectors[item.item].ink), region);
+            covered.push(ink);
+            item.ink = relative(ink, region);
+        }
+        pass.region = region;
+        pass.instanced = pairwise_disjoint(&covered);
+        pass.clamped = false;
+    }
+}
+
 /// The part of `ink` inside `region`, or an empty rectangle at the region's corner.
 fn cut(ink: Rect<i32, Device>, region: Rect<i32, Device>) -> Rect<i32, Device> {
     ink.intersection(region)
         .unwrap_or_else(|| Rect::new(region.origin, Size::new(0, 0)))
+}
+
+/// `ink` measured from the origin of `region`.
+fn relative(ink: Rect<i32, Device>, region: Rect<i32, Device>) -> Rect<i32, Device> {
+    Rect::new(
+        zgui_geom::Point::new(
+            ink.origin.x - region.origin.x,
+            ink.origin.y - region.origin.y,
+        ),
+        ink.size,
+    )
 }
 
 /// Whether `ink` meets anything being redrawn.

@@ -162,7 +162,18 @@ impl Renderer for WgpuRenderer {
         // implementation submits command buffers of its own. Ordering stays exact anyway: nothing
         // it submits writes the target this frame composes into.
         zgui_profile::latency::mark("r.vectors");
-        let vectors = self.rasterise_vectors(scene, damage.is_full());
+        // A pass outside every group rasterises only what the scene's damage reaches. A frame
+        // widened above draws its passes whole.
+        let uncut;
+        let passes = if damage.is_full() && scene.pass_plan().is_cut() {
+            let mut plan = zgui_scene::ScenePassPlan::default();
+            scene.plan_uncut_passes(&mut plan);
+            uncut = plan;
+            &uncut
+        } else {
+            scene.pass_plan()
+        };
+        let vectors = self.rasterise_vectors(scene, passes, damage.is_full());
 
         // Everything is planned before a pass is opened, because a live pass holds the encoder
         // borrowed and the points a frame has to be cut at are exactly the operations that need
@@ -458,14 +469,14 @@ impl WgpuRenderer {
     /// Runs this frame's vector work, before the frame's own encoder exists.
     ///
     /// A frame with no surviving vector item runs no rasterisation at all — not an empty pass, which
-    /// is very far from free — so the whole of this is behind one question asked of the display
-    /// list's own plan.
+    /// is very far from free — so the whole of this is behind one question asked of `planned`: the
+    /// display list's own plan, or its uncut version on a frame widened past the damage.
     fn rasterise_vectors(
         &mut self,
         scene: &Scene,
+        planned: &zgui_scene::ScenePassPlan,
         full_repaint: bool,
     ) -> Option<zgui_render::VectorPlan> {
-        let planned = scene.pass_plan();
         if planned.is_empty() {
             return None;
         }

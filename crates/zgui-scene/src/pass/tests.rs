@@ -5,6 +5,7 @@ use zgui_geom::{Point, Rect, Size};
 
 use crate::clip::ClipLink;
 use crate::id::ClipId;
+use crate::pass::ScenePassPlan;
 use crate::pass::fixture::{
     across_a_group, avatars, badged_cards, dashboard, falling_order, label_field, rect,
     stacked_area, viewport,
@@ -585,4 +586,18 @@ fn full_damage_cuts_nothing() {
         plan.items_of(pass)[1].ink,
         Rect::new(Point::new(150, 60), Size::new(300, 10))
     );
+}
+
+#[test]
+fn an_uncut_plan_is_the_plan_full_damage_makes() {
+    let mut cut = wide(true);
+    cut.finish(&damaged(100, 50, 100, 30));
+    assert!(cut.pass_plan().is_cut());
+    let mut uncut = ScenePassPlan::default();
+    cut.plan_uncut_passes(&mut uncut);
+
+    let mut whole = wide(true);
+    whole.finish(&DamageSet::full());
+    assert!(!uncut.is_cut());
+    assert_eq!(&uncut, whole.pass_plan());
 }

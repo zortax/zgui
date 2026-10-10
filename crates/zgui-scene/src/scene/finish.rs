@@ -4,6 +4,7 @@ use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_profile::{Counter, counter};
 
+use crate::pass::ScenePassPlan;
 use crate::pass::coalesce::{self, Event, Input};
 use crate::pass::overlap::Overlap;
 use crate::prim::PrimitiveKind;
@@ -49,6 +50,20 @@ impl Scene {
                 viewport: self.viewport,
                 damage,
             },
+            plan,
+        );
+    }
+
+    /// Writes this frame's vector passes into `plan` with none of them cut to the damage.
+    ///
+    /// [`Scene::finish`] cuts a pass outside every group to the frame's damage. A renderer that
+    /// redraws more than that draws the passes from here. The passes and their order stay the same,
+    /// so each composite still sorts where the display list puts it.
+    pub fn plan_uncut_passes(&self, plan: &mut ScenePassPlan) {
+        coalesce::uncut(
+            &self.pass_plan,
+            &self.primitives.vectors,
+            self.viewport,
             plan,
         );
     }

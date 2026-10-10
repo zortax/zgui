@@ -54,7 +54,9 @@ pub struct PlannedPass {
     /// Whether the region was cut to the frame's damage, so its items reach past it.
     ///
     /// A rasteriser keeps the items of a cut pass inside the region: passes share a scratch layer,
-    /// and an item drawn past its cut region would draw into the region of the pass beside it.
+    /// and an item drawn past its cut region would draw into the region of the pass beside it. A
+    /// renderer that redraws more than the damage draws the passes of
+    /// [`Scene::plan_uncut_passes`](crate::scene::Scene::plan_uncut_passes).
     pub clamped: bool,
 }
 
@@ -86,6 +88,11 @@ impl ScenePassPlan {
     /// latency, so this is worth asking before anything else.
     pub fn is_empty(&self) -> bool {
         self.passes.is_empty()
+    }
+
+    /// Whether a pass was cut to the frame's damage.
+    pub fn is_cut(&self) -> bool {
+        self.passes.iter().any(|pass| pass.clamped)
     }
 
     /// How many passes the frame costs.

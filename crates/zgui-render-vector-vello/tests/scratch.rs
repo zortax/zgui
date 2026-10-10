@@ -242,3 +242,51 @@ fn a_cut_pass_leaves_its_neighbours_alone() {
         );
     }
 }
+
+/// A frame the renderer widens draws a cut pass whole.
+///
+/// A fresh renderer redraws its first frame whole, whatever damage it is handed. The scene cuts the
+/// tall drawing's pass to a strip at the top, so the frame that redraws everything has to draw that
+/// pass without the cut.
+#[test]
+fn a_frame_the_renderer_widens_draws_a_cut_pass_whole() {
+    use zgui_render::Renderer as _;
+
+    for which in [Which::Vello, Which::Coverage] {
+        let Some((mut fresh, mut whole)) = support::twins(support::SIDE, which) else {
+            return;
+        };
+        let mut strip = DamageSet::new();
+        strip.absorb(zgui_geom::Rect::new(
+            zgui_geom::Point::new(0, 0),
+            zgui_geom::Size::new(96, 48),
+        ));
+        let partial = cut_scene(&strip);
+        assert!(
+            partial.pass_plan().passes[0].clamped,
+            "the tall drawing's pass is cut to the strip"
+        );
+
+        let outcome = fresh.renderer.draw(&partial, &strip);
+        assert_eq!(
+            outcome.stats().map(|stats| stats.damage_px),
+            Some((support::SIDE * support::SIDE) as u64),
+            "the first frame redraws all of the surface"
+        );
+        let after = fresh
+            .renderer
+            .read_presented()
+            .expect("a stand-in surface can be read back");
+        let expected = support::present(&mut whole, &cut_scene(&DamageSet::full()));
+        assert_eq!(
+            expected.rgba(20, 100),
+            [255, 255, 255, 255],
+            "the tall drawing reaches below the strip"
+        );
+        assert_eq!(
+            support::difference(support::SIDE, &after, &expected),
+            None,
+            "{which:?}: the widened frame drew the tall drawing only inside the strip"
+        );
+    }
+}
