@@ -457,6 +457,15 @@ impl Window {
             // stands until then.
             self.scene.clear_chunk_notes();
         }
+        // A drawing drawn from a stretched layer, or deferred by the layer budget, is encoded
+        // again on the next frame that reaches it. Its rectangles are what reaches it, and the
+        // frame is asked for only when one is owed, so a window with none parks.
+        if !self.layers_owed.is_empty() {
+            for owed in self.layers_owed.drain(..) {
+                self.damage.absorb(owed);
+            }
+            self.request_frame();
+        }
         if matches!(outcome, zgui_render::FrameOutcome::Recovered) {
             // The renderer rebuilt its device and holds nothing resident. Re-noting every
             // record's chunk lets the next frame restore residence in one pass of uploads,
@@ -1494,6 +1503,7 @@ impl Window {
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.scene);
             vector_report = report.vector_routes;
+            self.layers_owed = report.layers_owed;
             let after = glyph_counts();
             zgui_profile::latency::note_with("p.finish", || {
                 format!(

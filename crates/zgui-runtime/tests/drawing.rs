@@ -514,8 +514,9 @@ fn a_scrolled_document_replays_and_encodes_nothing() {
                  overflow: auto }
          .gap { flex: none; height: 100px }
          .row { display: flex; flex-direction: row; flex: none; gap: 8px }
-         .art { display: block; width: 32px; height: 32px }
+         .art { display: block; width: 32px; height: 32px; transform: rotate(1deg) }
          .tail { flex: none; height: 2000px }";
+    // Turned, so each drawing stays a general vector item rather than a CPU layer.
     let log: Log = Rc::default();
     let mut harness = mount(PORT, &log, |cx| {
         let mut row = zgui_elements::r#box().class("row");

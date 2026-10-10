@@ -231,6 +231,9 @@ pub struct Window {
     vector_routes: rustc_hash::FxHashMap<zgui_dom::NodeKey, zgui_paint::VectorRoutes>,
     /// The document revision at which stale retained vector routes were last retired.
     vector_routes_revision: u64,
+    /// The device rectangles of drawings the last painted frame owes a frame: a CPU layer
+    /// stretched from another scale, or one the layer budget deferred.
+    layers_owed: Vec<zgui_geom::Rect<i32, zgui_geom::Device>>,
     /// The complex-vector elements present in the frame that first constructed Vello.
     vello_initializers: Vec<zgui_dom::NodeKey>,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
@@ -685,6 +688,7 @@ impl Window {
             vectors: zgui_paint::VectorCache::new(),
             vector_routes: rustc_hash::FxHashMap::default(),
             vector_routes_revision: 0,
+            layers_owed: Vec::new(),
             vello_initializers: Vec::new(),
             budgets: crate::budget::Budgets::new(),
             raster,

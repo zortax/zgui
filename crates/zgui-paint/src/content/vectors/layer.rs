@@ -150,7 +150,7 @@ pub(crate) struct LayerHistory {
     stable: u32,
     /// The frame it last asked in.
     seen: u32,
-    /// Whether its last change kept the source and the paint.
+    /// Whether its last change kept the source and the paint, or it had no key before.
     same: bool,
     /// The frames of its last three rasters, the oldest first. Zero is none.
     rasters: [u32; DEMOTE_RASTERS],
@@ -561,9 +561,13 @@ impl VectorLayerCache {
             if history.key.is_some() && history.key == key {
                 history.stable = history.stable.saturating_add(1);
             } else {
+                // A drawing with no history counts as showing its source already: a transform
+                // that appears above it rebuilds its fragment, and the new fragment stretches the
+                // raster the old one drew.
                 history.same = match (history.key, key) {
                     (Some(old), Some(new)) => old.same_source(&new),
-                    _ => false,
+                    (None, Some(_)) => true,
+                    (_, None) => false,
                 };
                 history.key = key;
                 history.stable = 0;

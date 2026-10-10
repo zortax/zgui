@@ -363,8 +363,15 @@ fn only_two_scales_are_kept_per_source() {
     let mut fixture = Fixture::new(false);
     let shared = square();
     let mut keys = Vec::new();
-    for (owner, scale) in [(1, 1.0), (2, 1.25), (3, 1.5)] {
-        keys.push(key(fixture.ask(owner, 1, &shared, scale)));
+    for scale in [1.0, 1.25, 1.5] {
+        // Three frames stretch the scale before, and the fourth rasterises it.
+        let mut answer = fixture.ask(1, 1, &shared, scale);
+        for _ in 0..3 {
+            fixture.frame();
+            answer = fixture.ask(1, 1, &shared, scale);
+        }
+        assert!(!provisional(answer));
+        keys.push(key(answer));
         fixture.frame();
     }
     fixture.frame();
@@ -372,6 +379,17 @@ fn only_two_scales_are_kept_per_source() {
     assert!(fixture.atlas.contains(keys[1]));
     assert!(fixture.atlas.contains(keys[2]));
     assert_eq!(fixture.cache.len(), 2);
+}
+
+#[test]
+fn a_new_drawing_stretches_a_raster_its_source_has() {
+    let mut fixture = Fixture::new(false);
+    let shared = square();
+    let first = key(fixture.ask(1, 1, &shared, 1.0));
+    // A fragment rebuilt under a new transform asks under a new name.
+    let answer = fixture.ask(2, 1, &shared, 1.5);
+    assert!(provisional(answer));
+    assert_eq!(key(answer), first);
 }
 
 #[test]
