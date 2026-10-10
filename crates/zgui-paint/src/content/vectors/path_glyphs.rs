@@ -128,12 +128,6 @@ impl PathGlyphs {
         self.splits.clear();
     }
 
-    /// How many sheets are held.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.sheets.len()
-    }
-
     /// The sheets of every outline of `request`, rasterising the missing ones, or `None` to
     /// decline.
     ///
@@ -502,12 +496,6 @@ impl Splits {
         self.entries.get_mut(&key)
     }
 
-    /// How many paths are held.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Forgets everything.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
@@ -517,6 +505,22 @@ impl Splits {
 /// The key of `path` under `linear`.
 fn key(path: &Arc<BezPath>, linear: [f64; 4]) -> (usize, [u64; 4]) {
     (Arc::as_ptr(path).addr(), linear.map(f64::to_bits))
+}
+
+#[cfg(test)]
+impl PathGlyphs {
+    /// How many sheets are held.
+    pub(crate) fn len(&self) -> usize {
+        self.sheets.len()
+    }
+}
+
+#[cfg(test)]
+impl Splits {
+    /// How many paths are held.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 #[cfg(test)]
