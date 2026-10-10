@@ -122,10 +122,16 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
     let corner_center_to_point = corner_to_point + corner_radii;
     let is_near_rounded_corner = corner_center_to_point.x >= 0.0 && corner_center_to_point.y >= 0.0;
     let straight_inner_corner_to_point = corner_to_point + reduced_border;
-    let is_beyond_inner_straight_border = straight_inner_corner_to_point.x > 0.0
-        || straight_inner_corner_to_point.y > 0.0;
-    let is_within_inner_straight_border = straight_inner_corner_to_point.x < -antialias_threshold
-        && straight_inner_corner_to_point.y < -antialias_threshold;
+    // Past the antialiasing band of a straight inner edge. The inner corner lies inside those
+    // edges, so a point this far beyond one is in the border whatever the corner's shape; nearer
+    // the edge, the curve of the inner corner decides.
+    let is_beyond_inner_straight_border = straight_inner_corner_to_point.x > antialias_threshold
+        || straight_inner_corner_to_point.y > antialias_threshold;
+    // Inside both the inner edges and the outer edge's antialiasing band. A zero-width side puts
+    // its inner edge outside the outer one, so the outer band is tested as well.
+    let is_within_inner_straight_border =
+        max(straight_inner_corner_to_point.x, corner_to_point.x) < -antialias_threshold
+        && max(straight_inner_corner_to_point.y, corner_to_point.y) < -antialias_threshold;
 
     if is_within_inner_straight_border && !is_near_rounded_corner {
         return background * clip;

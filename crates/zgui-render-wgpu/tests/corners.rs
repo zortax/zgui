@@ -206,3 +206,50 @@ fn a_square_box_is_the_same_box_whatever_shape_it_names() {
         );
     }
 }
+
+/// A rounded box at a fraction of a pixel covers the edge pixel by that fraction along its
+/// straight sides, as a square box does.
+#[test]
+fn a_rounded_edge_at_a_fraction_of_a_pixel_covers_that_fraction() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    for radius in [0.0, 8.0] {
+        let mut scene = scene();
+        let fill = scene.paints.add(zgui_scene::Paint::Solid(opaque(0, 0, 0)));
+        scene
+            .push_quad(Quad::filled(rect(10.25, 10.0, 40.0, 40.0), fill).with_radii(radii(radius)));
+        scene.finish(&DamageSet::full());
+        let pixels = present(&mut renderer, &scene);
+        // The left edge is a quarter of a pixel into column 10, so three quarters of it are inside.
+        let alpha = pixels.rgba(10, 30)[3];
+        assert!(
+            alpha.abs_diff(191) <= 2,
+            "radius {radius}: the edge pixel holds {alpha} of 255"
+        );
+    }
+}
+
+/// A ring's inner edge is antialiased where it runs beside the straight band of its border.
+#[test]
+fn a_ring_antialiases_its_inner_edge_beside_the_straight_band() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = scene();
+    let stroke = zgui_scene::PaintRef::solid(scene.paints.solid(opaque(0, 0, 0)));
+    // Centred on (30.5, 30.6), outer radius 19, border 2: the inner edge crosses column 30 at
+    // 13.6, so the border covers six tenths of pixel (30, 13).
+    let mut ring = Quad::filled(rect(11.5, 11.6, 38.0, 38.0), zgui_scene::PaintRef::NONE)
+        .with_radii(radii(19.0));
+    ring.border = [2.0; 4];
+    ring.stroke = stroke;
+    scene.push_quad(ring);
+    scene.finish(&DamageSet::full());
+    let pixels = present(&mut renderer, &scene);
+    let alpha = pixels.rgba(30, 13)[3];
+    assert!(
+        alpha.abs_diff(153) <= 3,
+        "the pixel across the inner edge holds {alpha} of 255"
+    );
+}
