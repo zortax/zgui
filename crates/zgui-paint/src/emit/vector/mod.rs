@@ -37,6 +37,7 @@ mod marks;
 pub(crate) mod recognise;
 pub(crate) mod recognised;
 mod series;
+pub(crate) mod split;
 
 use std::sync::{Arc, OnceLock};
 
