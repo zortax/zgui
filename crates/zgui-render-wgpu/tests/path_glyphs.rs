@@ -265,3 +265,54 @@ fn a_half_resolution_glyph_ending_on_an_odd_pixel_keeps_its_last_row_and_column(
         "at half resolution the cell paints {half} of {full}"
     );
 }
+
+#[test]
+fn union_items_past_the_last_bin_page_paint_alpha_once() {
+    // Each item covers the surface, so each takes a whole bin page, and the last ones find none.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let (table, texture) = solid(&mut renderer, 3);
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let translucent = PaintRef::solid(scene.paints.solid(Color::srgb_u8(255, 255, 255, 128)));
+    let items: i32 = 10;
+    for index in 0..items {
+        // Two copies a pixel apart, which overlap in two columns.
+        let x = 10.01 + 12.0 * index as f32;
+        let mut glyphs = table.clone();
+        for dx in [0.0, 1.0] {
+            let offset = glyphs.len() as u32;
+            glyphs.push([(x + dx).to_bits(), 10.01f32.to_bits(), 0, offset]);
+        }
+        let payload = MarkPayload {
+            glyphs,
+            ..MarkPayload::default()
+        };
+        let mut item = MarkItem::new(
+            rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+            translucent,
+            payload.counts(),
+        );
+        item.flags |= MarkFlags::UNION;
+        item.tiles = table.len() as u32;
+        item.texture = texture;
+        scene.push_marks(item, Arc::new(payload));
+    }
+    scene.finish(&DamageSet::full());
+    assert!(
+        !scene.mark_plan().overflow.is_empty(),
+        "some items find no page"
+    );
+    let pixels = present(&mut renderer, &scene);
+    for index in 0..items {
+        let x = 10 + 12 * index;
+        let single = pixels.rgba(x, 11)[3];
+        let overlap = pixels.rgba(x + 1, 11)[3];
+        assert!((127..=129).contains(&single), "item {index}: {single}");
+        assert!(
+            overlap.abs_diff(single) <= 1,
+            "item {index} paints its overlap at {overlap}, one copy at {single}"
+        );
+    }
+}

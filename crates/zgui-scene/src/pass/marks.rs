@@ -5,6 +5,9 @@
 //! scratch is cut into bins, one per item, packed into pages the size of the surface. Which items
 //! get a bin and where it lies is decided here, from the display list and the damage set, so the
 //! renderer executes the plan and decides nothing.
+//!
+//! The items past [`MAX_PAGES`] pages take turns on one spare page: each sums its coverage there
+//! right before its composite. A bin never exceeds the surface, so one item always fits it.
 
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, Point, Rect, Size};
@@ -16,7 +19,7 @@ use crate::prim::{MarkItem, PrimitiveKind};
 use crate::scene::Primitives;
 use crate::spatial::{Placements, SpatialTree};
 
-/// The most scratch pages one frame may use.
+/// The most scratch pages the bins of one frame may use, before the spare page.
 pub const MAX_PAGES: u32 = 8;
 
 /// The scratch region one union item adds its coverage into.
@@ -37,13 +40,14 @@ pub struct MarkBin {
 pub struct MarkPlan {
     /// One bin per union item that reaches the damage, in emission order.
     pub bins: Vec<MarkBin>,
-    /// How many pages the bins use.
+    /// How many pages the bins use, the spare page included.
     pub pages: u32,
     /// The size of one page, in texels: the extent every page's bins reach, which is never more
     /// than the surface's.
     pub extent: Size<i32, Device>,
-    /// The union items that found no page, in emission order. Each draws every prim on its own.
-    pub overflow: Vec<u32>,
+    /// The bins of the union items that found no page, in emission order. Each is at the origin
+    /// of the spare page, the last page, which holds one of them at a time.
+    pub overflow: Vec<MarkBin>,
     /// Whether the plan was made for a frame that redraws every pixel.
     ///
     /// A bin outside every group holds only the damaged part of its item. A renderer that redraws
@@ -61,9 +65,12 @@ impl MarkPlan {
             .map(|at| &self.bins[at])
     }
 
-    /// Whether the item at `item` found no page.
-    pub fn overflows(&self, item: u32) -> bool {
-        self.overflow.binary_search(&item).is_ok()
+    /// The bin on the spare page of the item at `item`, if it found no other.
+    pub fn overflow_bin(&self, item: u32) -> Option<&MarkBin> {
+        self.overflow
+            .binary_search_by_key(&item, |bin| bin.item)
+            .ok()
+            .map(|at| &self.overflow[at])
     }
 
     /// Whether no item has a bin.
@@ -197,21 +204,24 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
                         }
                     }
                 }
-                match shelves.place(region.size) {
-                    Some((page, at)) => {
-                        plan.pages = plan.pages.max(page + 1);
-                        plan.extent = Size::new(
-                            plan.extent.width.max(at.x + region.size.width),
-                            plan.extent.height.max(at.y + region.size.height),
-                        );
-                        plan.bins.push(MarkBin {
-                            item: op.index,
-                            region,
-                            at,
-                            page,
-                        });
-                    }
-                    None => plan.overflow.push(op.index),
+                let (page, at) = shelves
+                    .place(region.size)
+                    .unwrap_or((MAX_PAGES, Point::new(0, 0)));
+                plan.pages = plan.pages.max(page + 1);
+                plan.extent = Size::new(
+                    plan.extent.width.max(at.x + region.size.width),
+                    plan.extent.height.max(at.y + region.size.height),
+                );
+                let bin = MarkBin {
+                    item: op.index,
+                    region,
+                    at,
+                    page,
+                };
+                if page < MAX_PAGES {
+                    plan.bins.push(bin);
+                } else {
+                    plan.overflow.push(bin);
                 }
             }
             _ => {}
@@ -330,15 +340,30 @@ mod tests {
     }
 
     #[test]
-    fn items_past_the_last_page_overflow() {
+    fn items_past_the_last_page_take_turns_on_the_spare_page() {
         let (mut scene, fill) = scene(100, 100);
         for at in 0..MAX_PAGES + 2 {
             push(&mut scene, fill, rect(at as f32, 0.0, 90.0, 90.0), true);
         }
         scene.finish(&DamageSet::full());
-        assert_eq!(scene.mark_plan().bins.len(), MAX_PAGES as usize);
-        assert_eq!(scene.mark_plan().overflow, vec![8, 9]);
-        assert!(scene.mark_plan().overflows(9));
+        let plan = scene.mark_plan();
+        assert_eq!(plan.bins.len(), MAX_PAGES as usize);
+        let spare: Vec<(u32, u32, Point<i32, Device>)> = plan
+            .overflow
+            .iter()
+            .map(|bin| (bin.item, bin.page, bin.at))
+            .collect();
+        assert_eq!(
+            spare,
+            vec![
+                (8, MAX_PAGES, Point::new(0, 0)),
+                (9, MAX_PAGES, Point::new(0, 0))
+            ],
+            "the items past the last page take turns on the spare page"
+        );
+        assert_eq!(plan.pages, MAX_PAGES + 1);
+        assert_eq!(plan.overflow_bin(9).map(|bin| bin.item), Some(9));
+        assert!(plan.bin(9).is_none());
     }
 
     #[test]

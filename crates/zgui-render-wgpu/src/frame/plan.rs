@@ -72,7 +72,7 @@ pub fn plan_segments(
 /// The pages come before every damage rectangle and every target, because a composite in any of
 /// them reads its bin.
 fn plan_mark_pages(builder: &mut PlanBuilder<'_>, scene: &Scene, plan: &MarkPlan) {
-    if plan.bins.is_empty() {
+    if plan.pages == 0 {
         return;
     }
     builder.set_mark_extent(plan.extent);
@@ -127,12 +127,15 @@ fn draw_mark_kinds(
     }
 }
 
-/// Plans one batch of marks: each union item through its bin, and every other one directly.
+/// Plans one batch of marks into the pass open on `target` with `scissor`: each union item
+/// through its bin, and every other one directly.
 fn plan_marks(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
     marks: &MarkPlan,
     range: core::ops::Range<usize>,
+    target: TargetRef,
+    scissor: Rect<i32, Device>,
 ) {
     let remap = scene.remap(PrimitiveKind::Marks);
     for position in range {
@@ -144,13 +147,20 @@ fn plan_marks(
                     MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)
                 });
                 builder.draw(PlannedDraw::MarksComposite { block });
-                continue;
+            } else if let Some(bin) = marks.overflow_bin(slot) {
+                // The spare page holds one item at a time, so the item sums its coverage there
+                // right before its composite.
+                let block = builder.stage_mark_draw(position, || {
+                    MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)
+                });
+                let page = Rect::new(zgui_geom::Point::new(0, 0), marks.extent);
+                builder.begin_pass(TargetRef::MarksPage(bin.page), page);
+                draw_mark_kinds(builder, scene, slot as usize, position, block, true);
+                builder.begin_pass(target, scissor);
+                builder.draw(PlannedDraw::MarksComposite { block });
             }
-            // No bin and no overflow: the item's ink misses the damage, so the scissor holds
-            // none of it.
-            if !marks.overflows(slot) {
-                continue;
-            }
+            // With no bin, the item's ink misses the damage, so the scissor holds none of it.
+            continue;
         }
         let block = builder.stage_mark_draw(position, || MarkDraw::direct(position as u32));
         draw_mark_kinds(builder, scene, slot as usize, position, block, false);
@@ -262,7 +272,7 @@ fn plan_rect(
                     None => builder.defer(),
                 }
             }
-            Batch::Marks(range) => plan_marks(builder, scene, marks, range),
+            Batch::Marks(range) => plan_marks(builder, scene, marks, range, current, scissor),
             other => builder.draw(PlannedDraw::Batch(other)),
         }
     }
