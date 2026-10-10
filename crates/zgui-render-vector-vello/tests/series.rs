@@ -208,16 +208,13 @@ fn a_series_marker_keeps_its_size_under_a_zoom() {
     }
 }
 
-#[test]
-fn a_series_far_from_the_origin_lands_on_its_pixel() {
-    let data: Arc<[[f32; 2]]> = (0..16)
-        .map(|i| [1.0e7 + 6.0 * (i % 4) as f32, 1.0e7 + 6.0 * (i / 4) as f32])
-        .collect();
+/// Draws `data` as discs of radius 3 through `to_canvas`, and asserts that the coverage centroid
+/// of each of the first 16 discs lies within 1/8 px of its place on a 4 by 4 grid at 20 px with a
+/// 22.2 px step.
+fn assert_discs_land(data: Arc<[[f32; 2]]>, to_canvas: Affine) {
     let series = Series::Points {
-        data: Arc::clone(&data),
-        to_canvas: Affine::translate((20.0, 20.0))
-            * Affine::scale(4.0)
-            * Affine::translate((-1.0e7, -1.0e7)),
+        data,
+        to_canvas,
         marker: Marker::Circle { radius: 3.0 },
         fill: Some(white()),
         stroke: None,
@@ -230,7 +227,7 @@ fn a_series_far_from_the_origin_lands_on_its_pixel() {
         return;
     };
     for i in 0..16 {
-        let (cx, cy) = (20.0 + 24.0 * (i % 4) as f64, 20.0 + 24.0 * (i / 4) as f64);
+        let (cx, cy) = (20.0 + 22.2 * (i % 4) as f64, 20.0 + 22.2 * (i / 4) as f64);
         let (mut sum, mut sx, mut sy) = (0.0, 0.0, 0.0);
         for y in (cy as i32 - 8)..(cy as i32 + 8) {
             for x in (cx as i32 - 8)..(cx as i32 + 8) {
@@ -243,9 +240,32 @@ fn a_series_far_from_the_origin_lands_on_its_pixel() {
         let (mx, my) = (sx / sum, sy / sum);
         assert!(
             (mx - cx).abs() <= 0.125 && (my - cy).abs() <= 0.125,
-            "disc {i} lands at ({mx:.3}, {my:.3}), not ({cx}, {cy})"
+            "disc {i} lands at ({mx:.3}, {my:.3}), not ({cx:.3}, {cy:.3})"
         );
     }
+}
+
+#[test]
+fn a_series_far_from_the_origin_lands_on_its_pixel() {
+    // A scale with no exact f32 product, so raw f32 positions at 1e7 miss their pixels.
+    let data: Arc<[[f32; 2]]> = (0..16)
+        .map(|i| [1.0e7 + 6.0 * (i % 4) as f32, 1.0e7 + 6.0 * (i / 4) as f32])
+        .collect();
+    let to_canvas =
+        Affine::translate((20.0, 20.0)) * Affine::scale(3.7) * Affine::translate((-1.0e7, -1.0e7));
+    assert_discs_land(data, to_canvas);
+}
+
+#[test]
+fn a_series_with_a_far_centre_lands_on_its_pixel() {
+    // The data centre lands near 1.85e7, past the 65 536 limit, while the first 16 points are in
+    // view.
+    let mut data: Vec<[f32; 2]> = (0..16)
+        .map(|i| [6.0 * (i % 4) as f32, 6.0 * (i / 4) as f32])
+        .collect();
+    data.push([1.0e7, 1.0e7]);
+    let to_canvas = Affine::translate((20.0, 20.0)) * Affine::scale(3.7);
+    assert_discs_land(data.into(), to_canvas);
 }
 
 /// The points of a zigzag over 100 by 100.
