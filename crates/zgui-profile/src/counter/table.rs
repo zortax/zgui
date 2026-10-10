@@ -448,6 +448,9 @@ counters! {
     /// Shapes emitted as items for the general vector rasteriser.
     VectorRouteGeneral => vector_route_general, Group::BackendNeutral;
 
+    /// Shapes emitted as analytic quads.
+    VectorRouteAnalytic => vector_route_analytic, Group::BackendNeutral;
+
     /// Coverage masks rasterised because no tile held their geometry.
     VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;
 

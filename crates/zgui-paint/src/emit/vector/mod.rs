@@ -74,6 +74,8 @@ pub enum VectorRoute {
     AtlasMask,
     /// A general vector item, executed by the renderer's configured vector rasteriser.
     GeneralRaster,
+    /// Rounded, bordered quads, one per recognised circle, ellipse, rectangle or stroke segment.
+    Analytic,
 }
 
 /// The raster paths used by all shapes belonging to one element.
@@ -83,16 +85,15 @@ pub struct VectorRoutes(u8);
 impl VectorRoutes {
     const ATLAS_MASK: u8 = 1;
     const GENERAL_RASTER: u8 = 2;
+    const ANALYTIC: u8 = 4;
+    // Reserved: 8 for marks, 16 for path glyphs.
 
     /// No vector shape was emitted for the element.
     pub const NONE: Self = Self(0);
 
     /// Adds `route` to this set.
     pub fn insert(&mut self, route: VectorRoute) {
-        self.0 |= match route {
-            VectorRoute::AtlasMask => Self::ATLAS_MASK,
-            VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
-        };
+        self.0 |= Self::bit(route);
     }
 
     /// Adds every route in `other` to this set.
@@ -102,11 +103,16 @@ impl VectorRoutes {
 
     /// Whether at least one shape used `route`.
     pub const fn contains(self, route: VectorRoute) -> bool {
-        let bit = match route {
+        self.0 & Self::bit(route) != 0
+    }
+
+    /// The bit that stands for `route`.
+    const fn bit(route: VectorRoute) -> u8 {
+        match route {
             VectorRoute::AtlasMask => Self::ATLAS_MASK,
             VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
-        };
-        self.0 & bit != 0
+            VectorRoute::Analytic => Self::ANALYTIC,
+        }
     }
 
     /// Whether no vector route is represented.
