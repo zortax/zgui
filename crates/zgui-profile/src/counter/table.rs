@@ -482,6 +482,36 @@ counters! {
     /// Geometry identities the mask cache maps to atlas tiles right now.
     VectorMaskTilesLive => vector_mask_tiles_live, Group::Live;
 
+    /// Drawings emitted as one CPU layer sprite.
+    VectorRouteLayer => vector_route_layer, Group::BackendNeutral;
+
+    /// CPU layers rasterised.
+    VectorLayersRasterised => vector_layers_rasterised, Group::BackendNeutral;
+
+    /// Microseconds spent rasterising CPU layers, measured.
+    VectorLayerRasterUs => vector_layer_raster_us, Group::BackendNeutral;
+
+    /// Bytes of CPU layer texels queued for upload, mip levels included.
+    VectorLayerBytesUploaded => vector_layer_bytes_uploaded, Group::BackendNeutral;
+
+    /// Layer sprites drawn from a raster of another scale, until the drawing settles.
+    VectorLayersProvisional => vector_layers_provisional, Group::BackendNeutral;
+
+    /// Drawings that drew nothing this frame because the layer budget was spent.
+    VectorLayersDeferred => vector_layers_deferred, Group::BackendNeutral;
+
+    /// Times a drawing rasterised so often that the layer route was closed to it for a while.
+    VectorLayersDemoted => vector_layers_demoted, Group::BackendNeutral;
+
+    /// CPU layers the budget removed.
+    VectorLayersEvicted => vector_layers_evicted, Group::BackendNeutral;
+
+    /// Layer candidates drawn shape by shape instead.
+    VectorLayerFallbacks => vector_layer_fallbacks, Group::BackendNeutral;
+
+    /// Bytes of CPU layer tiles the layer cache keeps right now.
+    VectorLayerBytesLive => vector_layer_bytes_live, Group::Live;
+
     /// Primitives whose paint was re-anchored because the primitive moved.
     ///
     /// A ramp and a sampled image are read at the point being drawn, in the coordinates they were

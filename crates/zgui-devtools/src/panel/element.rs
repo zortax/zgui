@@ -163,6 +163,9 @@ fn routes(
         routes
             .contains(zgui_paint::VectorRoute::Marks)
             .then(|| "marks".to_owned()),
+        routes
+            .contains(zgui_paint::VectorRoute::CpuLayer)
+            .then(|| "CPU layer".to_owned()),
         rest,
     ]
     .into_iter()
@@ -237,5 +240,9 @@ mod tests {
             routes(marks, Some(zgui::render::VectorBackend::Vello)),
             "analytic quads + marks + Vello"
         );
+
+        let mut layer = zgui_paint::VectorRoutes::NONE;
+        layer.insert(zgui_paint::VectorRoute::CpuLayer);
+        assert_eq!(routes(layer, None), "CPU layer");
     }
 }
