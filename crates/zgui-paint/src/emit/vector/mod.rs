@@ -32,6 +32,7 @@
 
 pub mod document;
 pub mod fit;
+pub(crate) mod recognise;
 
 use std::sync::Arc;
 
