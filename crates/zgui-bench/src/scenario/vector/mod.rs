@@ -60,7 +60,7 @@ pub(crate) const ALL: [(&str, &str); 15] = [
 pub(super) const TICK: Duration = Duration::from_micros(8_333);
 
 /// The counters a `VCOUNT` line prints, in order.
-const PRINTED: [Counter; 31] = [
+const PRINTED: [Counter; 34] = [
     Counter::VectorBackendBuilt,
     Counter::VelloRenders,
     Counter::VectorEncodeHits,
@@ -92,6 +92,9 @@ const PRINTED: [Counter; 31] = [
     Counter::VectorLayersDemoted,
     Counter::VectorLayersEvicted,
     Counter::VectorLayerFallbacks,
+    Counter::VectorLayerTilesRasterised,
+    Counter::VectorLayerTilesDeferred,
+    Counter::VectorLayerTilesReused,
 ];
 
 /// Runs `scenario` at `variant`, or every pair when `scenario` is `all`.

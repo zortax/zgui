@@ -515,6 +515,16 @@ counters! {
     /// Layer candidates drawn shape by shape instead.
     VectorLayerFallbacks => vector_layer_fallbacks, Group::BackendNeutral;
 
+    /// Tiles of large CPU layers rasterised.
+    VectorLayerTilesRasterised => vector_layer_tiles_rasterised, Group::BackendNeutral;
+
+    /// Tiles of large CPU layers a frame needed and drew nothing for, because the layer budget was
+    /// spent.
+    VectorLayerTilesDeferred => vector_layer_tiles_deferred, Group::BackendNeutral;
+
+    /// Tiles of a new tiled source that an equal tile of an earlier source already rasterised.
+    VectorLayerTilesReused => vector_layer_tiles_reused, Group::BackendNeutral;
+
     /// Bytes of CPU layer tiles the layer cache keeps right now.
     VectorLayerBytesLive => vector_layer_bytes_live, Group::Live;
 
