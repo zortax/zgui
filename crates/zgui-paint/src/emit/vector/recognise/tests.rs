@@ -465,3 +465,158 @@ fn a_crowded_cell_is_not_proven_separated() {
     rects.pop();
     assert!(separated(&rects, 1.0), "sixteen fit one cell");
 }
+
+/// The scatter bench's 100 000 circles in one path: random centres over 960 by 540, radius 3.5.
+fn scatter(count: usize) -> BezPath {
+    let mut state = 0x5CA7_7E12_u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let mut path = BezPath::new();
+    for _ in 0..count {
+        let (x, y) = (next() * 960.0, next() * 540.0);
+        plot_circle(&mut path, (x, y), 3.5);
+    }
+    path
+}
+
+/// Times one recognition of the scatter bench's largest path. Run it in release with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore = "a timing, run on demand in release"]
+fn timing_a_hundred_thousand_circles() {
+    let path = scatter(100_000);
+    let limits = Limits {
+        tau: TAU,
+        max_prims: 1 << 22,
+    };
+    let mut best = std::time::Duration::MAX;
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let found = recognise(&path, Part::Fill(peniko::Fill::NonZero), limits)
+            .expect("every subpath is a circle");
+        best = best.min(start.elapsed());
+        assert_eq!(found.discs.len(), 100_000);
+    }
+    eprintln!("recognise 100k circles: {best:?}");
+}
+
+#[test]
+#[ignore = "a timing, run on demand in release"]
+fn timing_one_run_of_a_hundred_thousand_circles() {
+    let path = scatter(100_000);
+    let mut best = std::time::Duration::MAX;
+    for _ in 0..10 {
+        let start = std::time::Instant::now();
+        let found = super::recognise_run(path.elements(), Part::Fill(peniko::Fill::NonZero), TAU)
+            .expect("every subpath is a circle");
+        best = best.min(start.elapsed());
+        assert_eq!(found.discs.len(), 100_000);
+    }
+    eprintln!("one run of 100k circles: {best:?}");
+}
+
+/// The test `follows` made before it compared squared lengths.
+fn follows_by_hypot(cubic: &kurbo::CubicBez, centre: Point, rx: f64, ry: f64, tau: f64) -> bool {
+    use kurbo::ParamCurve;
+
+    let largest = rx.max(ry);
+    let normal =
+        |point: Point| kurbo::Vec2::new((point.x - centre.x) / rx, (point.y - centre.y) / ry);
+    let error = |point: Point| (normal(point).hypot() - 1.0).abs() * largest;
+    if error(cubic.p0) > tau || error(cubic.p3) > tau {
+        return false;
+    }
+    if [0.25, 0.5, 0.75]
+        .into_iter()
+        .any(|t| error(cubic.eval(t)) > tau / 2.0)
+    {
+        return false;
+    }
+    let perpendicular = |point: Point, tangent: kurbo::Vec2| {
+        let radius = normal(point);
+        let tangent = kurbo::Vec2::new(tangent.x / rx, tangent.y / ry);
+        let lengths = radius.hypot() * tangent.hypot();
+        lengths > 0.0 && (radius.dot(tangent) / lengths).abs() <= 0.02
+    };
+    perpendicular(cubic.p0, cubic.p1 - cubic.p0) && perpendicular(cubic.p3, cubic.p3 - cubic.p2)
+}
+
+#[test]
+fn squared_bounds_accept_and_reject_what_hypot_did() {
+    let centre = Point::new(20.0, 20.0);
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for radius in [3.5, 10.0, 40.0] {
+        for first in [-2.0, -1.0, -0.75, -0.25, 0.0, 0.25, 0.75, 1.0, 1.5, 2.0] {
+            for second in [-2.0, -0.5, 0.0, 0.25, 0.75, 2.0] {
+                let path = perturbed(radius, [first * TAU, second * TAU]);
+                let PathEl::CurveTo(p1, p2, p3) = path.elements()[1] else {
+                    panic!("a plot circle starts with a cubic");
+                };
+                let PathEl::MoveTo(p0) = path.elements()[0] else {
+                    panic!("and a move");
+                };
+                let cubic = kurbo::CubicBez::new(p0, p1, p2, p3);
+                let old = follows_by_hypot(&cubic, centre, radius, radius, TAU);
+                assert_eq!(
+                    super::follows(&cubic, centre, radius, radius, TAU),
+                    old,
+                    "radius {radius}, perturbed by {first} and {second} tau"
+                );
+                if old {
+                    accepted += 1;
+                } else {
+                    rejected += 1;
+                }
+            }
+        }
+    }
+    assert!(accepted > 10 && rejected > 10, "{accepted} / {rejected}");
+}
+
+#[test]
+fn a_translated_repeat_takes_the_first_circles_prim_and_a_perturbed_one_is_measured() {
+    let mut path = BezPath::new();
+    plot_circle(&mut path, (10.0, 10.0), 3.5);
+    plot_circle(&mut path, (30.25, 12.5), 3.5);
+    let found = filled(&path).expect("two circles");
+    assert!(close(found.discs[1], [30.25, 12.5, 3.5, 0.0]));
+
+    // The same circle with one cubic bent out by two tau is no repeat, and no circle.
+    let mut bent = BezPath::new();
+    plot_circle(&mut bent, (10.0, 10.0), 10.0);
+    let mut elements: Vec<PathEl> = bent.elements().to_vec();
+    elements.extend(
+        perturbed(10.0, [2.0 * TAU, 2.0 * TAU])
+            .elements()
+            .iter()
+            .copied(),
+    );
+    assert_eq!(filled(&BezPath::from_vec(elements)), None);
+}
+
+#[test]
+fn a_path_split_across_threads_is_recognised_as_one_run_is() {
+    let path = scatter(20_000);
+    let limits = Limits {
+        tau: TAU,
+        max_prims: 1 << 22,
+    };
+    let split = recognise(&path, Part::Fill(peniko::Fill::NonZero), limits).expect("circles");
+    let one = super::recognise_run(path.elements(), Part::Fill(peniko::Fill::NonZero), TAU)
+        .and_then(|found| found.finish(1 << 22))
+        .expect("circles");
+    assert_eq!(split, one);
+    let short = Limits {
+        tau: TAU,
+        max_prims: 19_999,
+    };
+    assert_eq!(
+        recognise(&path, Part::Fill(peniko::Fill::NonZero), short),
+        None
+    );
+}

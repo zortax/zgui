@@ -273,10 +273,10 @@ fn content_tracked(
             ) else {
                 return FragmentEmission::default();
             };
-            let emitted = vector::draw_with_masks_tracked(
+            let emitted = vector::draw_drawing_tracked(
                 scene,
                 VectorId(fragment.key.index()),
-                &drawing.shapes,
+                &drawing,
                 style.shape,
                 emission.vector_masks,
                 VectorPlacement {

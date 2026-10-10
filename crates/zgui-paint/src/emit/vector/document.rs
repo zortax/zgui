@@ -26,7 +26,7 @@ use zgui_scene::{
 };
 
 use crate::content::vectors::{VectorMaskRequest, VectorMaskSource, VectorMaskStyle};
-use crate::emit::vector::{ShapePaint, VectorPlacement, under};
+use crate::emit::vector::{ShapePaint, ShapeSource, VectorPlacement, under};
 
 use super::analytic::emit_analytic;
 use super::{ShapeEmission, VectorRoute};
@@ -40,25 +40,37 @@ pub fn emit(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
-    emit_tracked(scene, id, shape, paint, masks, placement).pushed
+    emit_tracked(
+        scene,
+        id,
+        &ShapeSource::placed_shape(shape),
+        paint,
+        masks,
+        placement,
+    )
+    .pushed
 }
 
 /// Emits one shape and reports which raster path it selected.
+///
+/// The recognising routes read the source shape. The mask and the general route read the placed
+/// one, which is made here only when one of them is reached.
 pub(crate) fn emit_tracked(
     scene: &mut Scene,
     id: VectorId,
-    shape: &zgui_svg::Shape,
+    source: &ShapeSource<'_>,
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> ShapeEmission {
-    if let Some(pushed) = emit_analytic(scene, id, shape, paint, masks, placement) {
+    if let Some(pushed) = emit_analytic(scene, id, source, paint, masks, placement) {
         counter::bump(Counter::VectorRouteAnalytic);
         return ShapeEmission {
             pushed,
             route: Some(VectorRoute::Analytic),
         };
     }
+    let shape = source.placed();
     if let Some(pushed) = emit_mask(scene, id, shape, paint, masks, placement) {
         counter::bump(Counter::VectorRouteMask);
         return ShapeEmission {
@@ -360,6 +372,25 @@ pub(super) fn stroke_of(
                 paint.stroke_width,
             ))
         }
+    }
+}
+
+/// The paint the stroke of `source` is drawn with, placed in the fragment's space: the shape's
+/// own, or the element's.
+pub(super) fn stroke_paint(
+    scene: &mut Scene,
+    source: &ShapeSource<'_>,
+    paint: &ShapePaint,
+) -> PaintRef {
+    match &source.shape.stroke {
+        Some(stroke) => reference(
+            scene,
+            &super::recognised::placed_paint(source, &stroke.paint),
+            paint.stroke.unwrap_or(paint.fill),
+        ),
+        None => paint.stroke.map_or(PaintRef::NONE, |color| {
+            PaintRef::solid(scene.paints.solid(color))
+        }),
     }
 }
 

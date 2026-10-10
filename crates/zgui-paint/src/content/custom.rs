@@ -196,7 +196,7 @@ impl ScenePainter<'_> {
         let emitted = crate::emit::vector::document::emit_tracked(
             self.scene,
             id,
-            &placed,
+            &crate::emit::vector::ShapeSource::placed_shape(&placed),
             &self.shape_paint,
             self.vector_masks,
             crate::emit::vector::VectorPlacement {

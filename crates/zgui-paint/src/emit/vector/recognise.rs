@@ -142,37 +142,254 @@ pub(crate) fn recognise(path: &BezPath, part: Part<'_>, limits: Limits) -> Optio
     if !tau.is_finite() || tau <= 0.0 {
         return None;
     }
-    let moves = path
-        .elements()
-        .iter()
-        .filter(|element| matches!(element, PathEl::MoveTo(_)))
-        .count();
-    if moves > limits.max_prims {
-        return None;
+    let elements = path.elements();
+    if let Part::Stroke(style) = part {
+        let width = style.width;
+        if !style.dash_pattern.is_empty() || !width.is_finite() || width <= 0.0 {
+            return None;
+        }
+        if !style.miter_limit.is_finite() {
+            return None;
+        }
     }
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(MAX_THREADS);
+    let found = if elements.len() >= PARALLEL_ELEMENTS && threads > 1 {
+        recognise_in_parallel(elements, part, tau, limits.max_prims, threads)?
+    } else {
+        let moves = elements
+            .iter()
+            .filter(|element| matches!(element, PathEl::MoveTo(_)))
+            .count();
+        if moves > limits.max_prims {
+            return None;
+        }
+        recognise_run(elements, part, tau)?
+    };
+    found.finish(limits.max_prims)
+}
+
+/// How many path elements make a path worth recognising on several threads: about 16 384
+/// circles of a move, four cubics and a close.
+const PARALLEL_ELEMENTS: usize = 16_384 * 6;
+
+/// The most threads one recognition uses.
+const MAX_THREADS: usize = 8;
+
+/// What the subpaths of `elements` are, or `None` when one of them is no accepted shape.
+fn recognise_run(elements: &[PathEl], part: Part<'_>, tau: f64) -> Option<Found> {
     let mut found = Found::default();
     let mut scratch = Segments::new();
+    let mut template = Template::default();
+    let tolerance = tau * REPEAT;
     match part {
         Part::Fill(_) => {
-            each_subpath(path, tau, |subpath| {
-                fill(subpath, tau, &mut found, &mut scratch)
+            each_subpath(elements, tau, |subpath| {
+                found.subpaths += 1;
+                if template.repeat(subpath, tolerance, &mut found) {
+                    return Some(());
+                }
+                let before = found.counts();
+                fill(subpath, tau, &mut found, &mut scratch)?;
+                template.learn(subpath, before, &found);
+                Some(())
             })?;
         }
         Part::Stroke(style) => {
-            let width = style.width;
-            if !style.dash_pattern.is_empty() || !width.is_finite() || width <= 0.0 {
-                return None;
-            }
-            if !style.miter_limit.is_finite() {
-                return None;
-            }
-            found.half_width = width / 2.0;
-            each_subpath(path, tau, |subpath| {
-                stroke(subpath, style, tau, &mut found, &mut scratch)
+            found.half_width = style.width / 2.0;
+            each_subpath(elements, tau, |subpath| {
+                found.subpaths += 1;
+                if subpath.closed && template.repeat(subpath, tolerance, &mut found) {
+                    return Some(());
+                }
+                let before = found.counts();
+                stroke(subpath, style, tau, &mut found, &mut scratch)?;
+                if subpath.closed {
+                    template.learn(subpath, before, &found);
+                }
+                Some(())
             })?;
         }
     }
-    found.finish(limits.max_prims)
+    Some(found)
+}
+
+/// How far, as a fraction of tau, a subpath may lie from the last recognised one and repeat it.
+///
+/// A plot draws every marker with the same commands at a different place, and the place moves the
+/// rounding of every coordinate. A repeat is a translated copy within this much, and takes the
+/// prim the first copy became, moved: its error is the first copy's plus at most this fraction of
+/// tau.
+const REPEAT: f64 = 1.0 / 1024.0;
+
+/// The last closed subpath that became exactly one disc or box, moved to start at the origin.
+#[derive(Debug, Default)]
+struct Template {
+    /// Its segments, moved. Empty while there is no template.
+    segments: Segments,
+    /// Where it ended, moved.
+    end: Point,
+    /// Whether it ended with a close.
+    closed: bool,
+    /// What it became, moved the same way.
+    prim: Option<Repeated>,
+    /// The turning sign of the subpath.
+    sign: f64,
+}
+
+/// The one prim a template became, relative to the template's start.
+#[derive(Clone, Copy, Debug)]
+enum Repeated {
+    /// A disc or a ring: centre, outer radius and inner radius.
+    Disc([f64; 4]),
+    /// A box: its outer edge, radii, exponent and border.
+    Box([f64; 4], [f32; 8], f32, f32),
+}
+
+impl Template {
+    /// Adds the template's prim at `subpath`'s start when `subpath` repeats it within
+    /// `tolerance`, and reports whether it did.
+    fn repeat(&self, subpath: &Subpath, tolerance: f64, found: &mut Found) -> bool {
+        let Some(prim) = self.prim else {
+            return false;
+        };
+        let start = subpath.start;
+        let near = |point: Point, held: Point| {
+            let moved = point - start;
+            (moved.x - held.x).abs() <= tolerance && (moved.y - held.y).abs() <= tolerance
+        };
+        let same = subpath.closed == self.closed
+            && subpath.segments.len() == self.segments.len()
+            && near(subpath.end, self.end)
+            && subpath
+                .segments
+                .iter()
+                .zip(&self.segments)
+                .all(|pair| match pair {
+                    (Segment::Line(_, to), Segment::Line(_, held)) => near(*to, *held),
+                    (Segment::Cubic(cubic), Segment::Cubic(held)) => {
+                        near(cubic.p1, held.p1)
+                            && near(cubic.p2, held.p2)
+                            && near(cubic.p3, held.p3)
+                    }
+                    _ => false,
+                });
+        if !same {
+            return false;
+        }
+        found.turned(self.sign);
+        match prim {
+            Repeated::Disc([x, y, outer, inner]) => {
+                found.disc([x + start.x, y + start.y, outer, inner]);
+            }
+            Repeated::Box([x0, y0, x1, y1], radii, exponent, border) => {
+                let rect = [x0 + start.x, y0 + start.y, x1 + start.x, y1 + start.y];
+                found.boxed(rect, radii, exponent, border);
+            }
+        }
+        true
+    }
+
+    /// Keeps `subpath` as the template when it became exactly one disc or box.
+    fn learn(&mut self, subpath: &Subpath, before: [usize; 3], found: &Found) {
+        let after = found.counts();
+        let start = subpath.start.to_vec2();
+        let prim = match [
+            after[0] - before[0],
+            after[1] - before[1],
+            after[2] - before[2],
+        ] {
+            [1, 0, 0] => {
+                let [x, y, outer, inner] = found.last;
+                Repeated::Disc([x - start.x, y - start.y, outer, inner])
+            }
+            [0, 1, 0] => {
+                let held = &found.boxes[after[1] - 1];
+                let [x0, y0, x1, y1] = found.last;
+                Repeated::Box(
+                    [x0 - start.x, y0 - start.y, x1 - start.x, y1 - start.y],
+                    held.radii,
+                    held.exponent,
+                    held.border,
+                )
+            }
+            _ => {
+                self.prim = None;
+                return;
+            }
+        };
+        self.segments.clear();
+        self.segments
+            .extend(subpath.segments.iter().map(|segment| match *segment {
+                Segment::Line(from, to) => Segment::Line(from - start, to - start),
+                Segment::Cubic(cubic) => Segment::Cubic(CubicBez::new(
+                    cubic.p0 - start,
+                    cubic.p1 - start,
+                    cubic.p2 - start,
+                    cubic.p3 - start,
+                )),
+            }));
+        self.end = subpath.end - start;
+        self.closed = subpath.closed;
+        self.sign = found.last_sign;
+        self.prim = Some(prim);
+    }
+}
+
+/// The same, with the elements split into contiguous runs at moves, one run per thread, and the
+/// runs joined in order.
+///
+/// Each run starts at the first move at or after an even share of the elements, so finding the
+/// runs reads a few elements rather than the whole path. More than `max_prims` subpaths answer
+/// `None`, as one run would.
+fn recognise_in_parallel(
+    elements: &[PathEl],
+    part: Part<'_>,
+    tau: f64,
+    max_prims: usize,
+    threads: usize,
+) -> Option<Found> {
+    let mut starts = Vec::with_capacity(threads + 1);
+    starts.push(0);
+    for share in 1..threads {
+        let from = (elements.len() * share / threads).max(*starts.last().unwrap_or(&0));
+        let at = elements[from..]
+            .iter()
+            .position(|element| matches!(element, PathEl::MoveTo(_)))
+            .map_or(elements.len(), |offset| from + offset);
+        starts.push(at);
+    }
+    starts.push(elements.len());
+    let runs: Vec<Option<Found>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = starts
+            .windows(2)
+            .filter(|bounds| bounds[0] < bounds[1])
+            .map(|bounds| {
+                let run = &elements[bounds[0]..bounds[1]];
+                scope.spawn(move || {
+                    let found = recognise_run(run, part, tau)?;
+                    (found.subpaths <= max_prims).then_some(found)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().ok().flatten())
+            .collect()
+    });
+    let mut joined: Option<Found> = None;
+    for run in runs {
+        let run = run?;
+        joined = Some(match joined {
+            None => run,
+            Some(mut held) => {
+                held.join(run);
+                held
+            }
+        });
+    }
+    joined.filter(|found| found.subpaths <= max_prims)
 }
 
 /// Whether the device rectangles `rects`, each as `[x0, y0, x1, y1]` and inflated by `margin` on
@@ -280,7 +497,7 @@ struct Subpath {
 /// Also `None` for a quadratic, a non-finite point, a segment before any move, or too many
 /// segments in one subpath. One subpath is held at a time, in storage reused for the next.
 fn each_subpath(
-    path: &BezPath,
+    elements: &[PathEl],
     tau: f64,
     mut visit: impl FnMut(&Subpath) -> Option<()>,
 ) -> Option<()> {
@@ -288,7 +505,7 @@ fn each_subpath(
     let finite = |point: Point| point.is_finite().then_some(point);
     let mut subpath = Subpath::default();
     let mut open = false;
-    for element in path.elements() {
+    for element in elements {
         match *element {
             PathEl::MoveTo(point) => {
                 let point = finite(point)?;
@@ -308,7 +525,7 @@ fn each_subpath(
                     return None;
                 }
                 subpath.drawn = true;
-                if (point - subpath.end).hypot() >= short {
+                if (point - subpath.end).hypot2() >= short * short {
                     subpath.segments.push(Segment::Line(subpath.end, point));
                     subpath.end = point;
                 }
@@ -320,7 +537,7 @@ fn each_subpath(
                 }
                 subpath.drawn = true;
                 let points = [subpath.end, first, second, point];
-                if spread(&points) >= short {
+                if spread_squared(&points) >= short * short {
                     subpath.segments.push(Segment::Cubic(CubicBez::new(
                         subpath.end,
                         first,
@@ -351,12 +568,12 @@ fn each_subpath(
     Some(())
 }
 
-/// The largest distance between two of `points`.
-fn spread(points: &[Point]) -> f64 {
+/// The square of the largest distance between two of `points`.
+fn spread_squared(points: &[Point]) -> f64 {
     let mut largest = 0.0f64;
     for (at, first) in points.iter().enumerate() {
         for second in &points[at + 1..] {
-            largest = largest.max((*first - *second).hypot());
+            largest = largest.max((*first - *second).hypot2());
         }
     }
     largest
@@ -441,6 +658,13 @@ struct Found {
     ink: [f64; 4],
     /// The longest side of any bounds so far.
     max_extent: f64,
+    /// The last disc as recognised, or the last box's outer edge, before either is stored in
+    /// `f32`.
+    last: [f64; 4],
+    /// The turning sign of the last closed subpath.
+    last_sign: f64,
+    /// How many subpaths were visited.
+    subpaths: usize,
 }
 
 impl Default for Found {
@@ -454,14 +678,43 @@ impl Default for Found {
             turned: [false; 2],
             ink: [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
             max_extent: 0.0,
+            last: [0.0; 4],
+            last_sign: 0.0,
+            subpaths: 0,
         }
     }
 }
 
 impl Found {
+    /// Appends what a later run of subpaths became.
+    fn join(&mut self, later: Self) {
+        self.discs.extend(later.discs);
+        self.boxes.extend(later.boxes);
+        self.capsules.extend(later.capsules);
+        self.caps.extend(later.caps);
+        self.turned = [
+            self.turned[0] || later.turned[0],
+            self.turned[1] || later.turned[1],
+        ];
+        self.ink = [
+            self.ink[0].min(later.ink[0]),
+            self.ink[1].min(later.ink[1]),
+            self.ink[2].max(later.ink[2]),
+            self.ink[3].max(later.ink[3]),
+        ];
+        self.max_extent = self.max_extent.max(later.max_extent);
+        self.subpaths += later.subpaths;
+    }
+
     /// Notes the turning sign of one closed subpath.
     fn turned(&mut self, sign: f64) {
         self.turned[usize::from(sign < 0.0)] = true;
+        self.last_sign = sign;
+    }
+
+    /// How many discs, boxes and capsules there are so far.
+    fn counts(&self) -> [usize; 3] {
+        [self.discs.len(), self.boxes.len(), self.capsules.len()]
     }
 
     /// Takes the bounds of one more primitive into the ink.
@@ -480,6 +733,7 @@ impl Found {
 
     /// Adds a disc or a ring.
     fn disc(&mut self, [cx, cy, outer, inner]: [f64; 4]) {
+        self.last = [cx, cy, outer, inner];
         self.bounded([cx - outer, cy - outer, cx + outer, cy + outer]);
         self.discs
             .push([cx, cy, outer, inner].map(|value| value as f32));
@@ -487,6 +741,7 @@ impl Found {
 
     /// Adds a box whose outer edge is `rect`.
     fn boxed(&mut self, rect: [f64; 4], radii: [f32; 8], exponent: f32, border: f32) {
+        self.last = rect;
         self.bounded(rect);
         self.boxes.push(BoxPrim {
             rect: rect.map(|value| value as f32),
@@ -894,23 +1149,23 @@ fn ellipse(segments: &[Segment], tau: f64) -> Option<Ellipse> {
         return None;
     }
     // Each step between endpoints turns one way by less than a half turn, and the steps add up to
-    // one full turn.
+    // one full turn. A step turns by less than a half turn exactly when its cross product is not
+    // zero, and its sign says which way. The steps of a closed run add up to a whole number of
+    // turns, which pseudo-angles count with no trigonometry.
     let normal = |point: Point| Vec2::new((point.x - centre.x) / rx, (point.y - centre.y) / ry);
     let mut total = 0.0;
     let mut sign = 0.0;
     for cubic in &cubics {
         let (from, to) = (normal(cubic.p0), normal(cubic.p3));
-        let angle = from.cross(to).atan2(from.dot(to));
-        if angle == 0.0 || angle.abs() >= core::f64::consts::PI {
+        let cross = from.cross(to);
+        if cross == 0.0 || (sign != 0.0 && cross.signum() != sign) {
             return None;
         }
-        if sign != 0.0 && angle.signum() != sign {
-            return None;
-        }
-        sign = angle.signum();
-        total += angle;
+        sign = cross.signum();
+        let step = (pseudo_angle(to) - pseudo_angle(from)) * sign;
+        total += if step < 0.0 { step + PSEUDO_TURN } else { step };
     }
-    if (total.abs() - core::f64::consts::TAU).abs() > FULL_TURN {
+    if (total - PSEUDO_TURN).abs() > FULL_TURN {
         return None;
     }
     Some(Ellipse {
@@ -919,6 +1174,30 @@ fn ellipse(segments: &[Segment], tau: f64) -> Option<Ellipse> {
         ry,
         sign,
     })
+}
+
+/// A full turn in pseudo-angle units.
+const PSEUDO_TURN: f64 = 4.0;
+
+/// A number in `0..4` that grows with the angle of `v` from the positive x axis, as the angle
+/// does: one per quarter turn, and exact at each axis.
+fn pseudo_angle(v: Vec2) -> f64 {
+    let sum = v.x.abs() + v.y.abs();
+    if sum == 0.0 {
+        return 0.0;
+    }
+    let along = v.x / sum;
+    if v.y >= 0.0 { 1.0 - along } else { 3.0 + along }
+}
+
+/// The squared radii, in the ellipse's normalised space, between which a point lies within `error`
+/// of the ellipse whose larger radius is `largest`.
+///
+/// `|‖u‖ − 1| · largest ≤ error` holds exactly when `‖u‖²` lies between the two squares, so a
+/// test needs no square root.
+fn ring(error: f64, largest: f64) -> (f64, f64) {
+    let reach = error / largest;
+    ((1.0 - reach).max(0.0).powi(2), (1.0 + reach).powi(2))
 }
 
 /// Whether `cubic` follows the axis-aligned ellipse at `centre` with radii `rx` and `ry`.
@@ -931,21 +1210,27 @@ fn follows(cubic: &CubicBez, centre: Point, rx: f64, ry: f64, tau: f64) -> bool 
     }
     let largest = rx.max(ry);
     let normal = |point: Point| Vec2::new((point.x - centre.x) / rx, (point.y - centre.y) / ry);
-    let error = |point: Point| (normal(point).hypot() - 1.0).abs() * largest;
-    if error(cubic.p0) > tau || error(cubic.p3) > tau {
+    let within = |point: Point, (low, high): (f64, f64)| {
+        let squared = normal(point).hypot2();
+        low <= squared && squared <= high
+    };
+    let ends = ring(tau, largest);
+    if !within(cubic.p0, ends) || !within(cubic.p3, ends) {
         return false;
     }
-    if [0.25, 0.5, 0.75]
+    let samples = ring(tau / 2.0, largest);
+    if ![0.25, 0.5, 0.75]
         .into_iter()
-        .any(|t| error(cubic.eval(t)) > tau / 2.0)
+        .all(|t| within(cubic.eval(t), samples))
     {
         return false;
     }
     let perpendicular = |point: Point, tangent: Vec2| {
         let radius = normal(point);
         let tangent = Vec2::new(tangent.x / rx, tangent.y / ry);
-        let lengths = radius.hypot() * tangent.hypot();
-        lengths > 0.0 && (radius.dot(tangent) / lengths).abs() <= PERPENDICULAR
+        let lengths = radius.hypot2() * tangent.hypot2();
+        let dot = radius.dot(tangent);
+        lengths > 0.0 && dot * dot <= PERPENDICULAR * PERPENDICULAR * lengths
     };
     perpendicular(cubic.p0, start_tangent(cubic)) && perpendicular(cubic.p3, end_tangent(cubic))
 }

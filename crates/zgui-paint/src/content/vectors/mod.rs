@@ -16,19 +16,24 @@
 
 mod cache;
 mod mask;
+mod recognitions;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
 pub(crate) use crate::content::vectors::mask::VectorMaskCache;
 pub use crate::content::vectors::mask::{
-    AnalyticOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource, VectorMaskStyle,
+    AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,
+    VectorMaskStyle,
 };
+pub(crate) use crate::content::vectors::recognitions::PartKey;
+#[doc(hidden)]
+pub use crate::content::vectors::recognitions::Recognitions;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use zgui_dom::NodeKey;
 use zgui_scene::kurbo::{Affine, BezPath};
 
-/// The outlines one element draws, placed in its fragment's own space.
+/// The outlines one element draws, and the matrix that places them in its fragment's own space.
 #[derive(Clone, Debug, Default)]
 pub struct Drawing {
     /// One outline per entry, in the order they are painted.
@@ -41,6 +46,57 @@ pub struct Drawing {
     /// The outlines are shared rather than owned: the same curves are drawn every frame, and a
     /// rasteriser keeps its encoding of them under the identity of the allocation.
     pub shapes: Vec<zgui_svg::Shape>,
+    /// What places [`shapes`](Self::shapes) in the fragment's space: the identity for shapes
+    /// already placed.
+    pub fit: Affine,
+    /// Each shape placed by `fit`, made on first use and shared by every clone.
+    placed: Arc<[OnceLock<zgui_svg::Shape>]>,
+}
+
+impl Drawing {
+    /// A drawing of shapes already in the fragment's space.
+    pub fn placed_shapes(shapes: Vec<zgui_svg::Shape>) -> Self {
+        Self {
+            shapes,
+            fit: Affine::IDENTITY,
+            placed: Arc::from([]),
+        }
+    }
+
+    /// A drawing of `shapes` in their own space, placed by `fit` only where a route needs the
+    /// placed path.
+    ///
+    /// A route that draws from the source shape, as recognition does, never places it, so a
+    /// hundred thousand markers never become a second path.
+    pub fn fitted(shapes: Vec<zgui_svg::Shape>, fit: Affine) -> Self {
+        let placed = (0..shapes.len()).map(|_| OnceLock::new()).collect();
+        Self {
+            shapes,
+            fit,
+            placed,
+        }
+    }
+
+    /// Shape `index` placed in the fragment's space.
+    ///
+    /// Placed on first use and kept, so the placed path is one allocation for as long as the
+    /// drawing is held: a rasteriser's encoding cache recognises it by that identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `index` is not a shape of the drawing.
+    pub fn placed(&self, index: usize) -> &zgui_svg::Shape {
+        let shape = &self.shapes[index];
+        if self.fit == Affine::IDENTITY {
+            return shape;
+        }
+        self.placed[index].get_or_init(|| zgui_svg::document::place::shape(shape, self.fit))
+    }
+
+    /// The cell shape `index` is placed into, for a drawing that places its shapes.
+    pub(crate) fn cell(&self, index: usize) -> Option<&OnceLock<zgui_svg::Shape>> {
+        self.placed.get(index)
+    }
 }
 
 /// Where the outlines an element draws come from.

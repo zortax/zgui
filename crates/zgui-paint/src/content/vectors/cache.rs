@@ -115,7 +115,7 @@ impl VectorCache {
         data: &str,
         placed: Affine,
         read: Option<Arc<zgui_svg::Document>>,
-        place: impl FnOnce() -> Vec<zgui_svg::Shape>,
+        place: impl FnOnce() -> Drawing,
     ) -> Drawing {
         let coefficients = placed.as_coeffs();
         {
@@ -128,7 +128,7 @@ impl VectorCache {
                 return entry.drawing.clone();
             }
         }
-        let drawing = Drawing { shapes: place() };
+        let drawing = place();
         self.entries.borrow_mut().insert(
             node,
             Entry {
@@ -144,16 +144,16 @@ impl VectorCache {
     /// The placed outlines a list of path notation draws.
     fn notated(&self, node: NodeKey, data: &str, placed: Affine) -> Drawing {
         self.store(node, data, placed, None, || {
-            crate::content::vectors::outlines(&parse(data), placed)
+            Drawing::placed_shapes(crate::content::vectors::outlines(&parse(data), placed))
         })
     }
 
-    /// The placed shapes a retained canvas scene draws.
+    /// The shapes a retained canvas scene draws, with the fit that places them.
     ///
-    /// The scene is resolved by token out of the paint-side registry and placed exactly as a
-    /// document's shapes are — same fit, same per-shape paint, same cache. The revision rides in
-    /// the data key, so a mutated scene misses the cache once and an untouched one hands back the
-    /// same allocations for the rasteriser's encoding cache to recognise.
+    /// The scene is resolved by token out of the paint-side registry. Its shapes are held as they
+    /// are, and placed by the same fit a document's are only where a route asks for the placed
+    /// path. The revision rides in the data key, so a mutated scene misses the cache once and an
+    /// untouched one hands back the same allocations for the encoding caches to recognise.
     ///
     /// A token whose scene has died draws nothing: the application dropped every handle while an
     /// element still named it, and inventing a picture for it would be worse than a blank.
@@ -172,11 +172,7 @@ impl VectorCache {
             let scene = scene
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            scene
-                .shapes()
-                .iter()
-                .map(|shape| zgui_svg::document::place::shape(shape, placed))
-                .collect()
+            Drawing::fitted(scene.shapes().to_vec(), placed)
         }))
     }
 
@@ -193,7 +189,7 @@ impl VectorCache {
         let placed = fit::onto(box_.content_box, Some(read.view_box()), box_.scale);
         let shapes = read.clone();
         Some(self.store(node, source, placed, Some(read), move || {
-            shapes.placed(placed)
+            Drawing::placed_shapes(shapes.placed(placed))
         }))
     }
 }
@@ -534,5 +530,39 @@ mod tests {
         assert_eq!(cache.len(), 1);
         cache.retain(|_| false);
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn a_canvas_drawing_keeps_its_source_and_places_on_demand() {
+        let handle = zgui_canvas::SceneHandle::new();
+        handle.edit(|scene| scene.push(triangle()));
+        let source = handle.edit(|scene| std::sync::Arc::clone(&scene.shapes()[0].path));
+        let (document, node) = canvas_document(&handle);
+        let cache = VectorCache::new();
+        let mut box_ = placement(24.0);
+        box_.content_box.origin.x = DevicePx(10.0);
+        let drawing = cache
+            .frame(&document)
+            .drawing(node, box_)
+            .expect("the canvas draws");
+        assert!(
+            std::sync::Arc::ptr_eq(&drawing.shapes[0].path, &source),
+            "the drawing holds the scene's own path"
+        );
+        assert!(
+            drawing.cell(0).and_then(|cell| cell.get()).is_none(),
+            "nothing is placed before a route asks"
+        );
+        let placed = std::sync::Arc::clone(&drawing.placed(0).path);
+        assert_eq!(placed.bounding_box().x0, 10.0, "placed by the fit");
+        assert!(std::sync::Arc::ptr_eq(&placed, &drawing.placed(0).path));
+        let next = cache
+            .frame(&document)
+            .drawing(node, box_)
+            .expect("still draws");
+        assert!(
+            std::sync::Arc::ptr_eq(&placed, &next.placed(0).path),
+            "the next frame shares the placed path"
+        );
     }
 }

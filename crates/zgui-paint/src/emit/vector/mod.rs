@@ -34,8 +34,9 @@ mod analytic;
 pub mod document;
 pub mod fit;
 pub(crate) mod recognise;
+pub(crate) mod recognised;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use zgui_color::Color;
 use zgui_css::ComputedStyle;
@@ -123,6 +124,53 @@ impl VectorRoutes {
     /// Whether no vector route is represented.
     pub const fn is_empty(self) -> bool {
         self.0 == 0
+    }
+}
+
+/// One shape as a drawing holds it: in its own space, with the fit that places it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShapeSource<'a> {
+    /// The shape in its own space.
+    pub(crate) shape: &'a zgui_svg::Shape,
+    /// What places it in the fragment's space.
+    pub(crate) fit: zgui_scene::kurbo::Affine,
+    /// Where the placed shape is kept once made, for a fit that is not the identity.
+    pub(crate) cell: Option<&'a OnceLock<zgui_svg::Shape>>,
+}
+
+impl<'a> ShapeSource<'a> {
+    /// A shape already in the fragment's space.
+    pub(crate) fn placed_shape(shape: &'a zgui_svg::Shape) -> Self {
+        Self {
+            shape,
+            fit: zgui_scene::kurbo::Affine::IDENTITY,
+            cell: None,
+        }
+    }
+
+    /// Shape `index` of `drawing`.
+    pub(crate) fn of(drawing: &'a crate::content::Drawing, index: usize) -> Self {
+        Self {
+            shape: &drawing.shapes[index],
+            fit: drawing.fit,
+            cell: drawing.cell(index),
+        }
+    }
+
+    /// The shape in the fragment's space, placed on first use.
+    pub(crate) fn placed(&self) -> &'a zgui_svg::Shape {
+        if self.fit == zgui_scene::kurbo::Affine::IDENTITY {
+            return self.shape;
+        }
+        let fit = self.fit;
+        let shape = self.shape;
+        match self.cell {
+            Some(cell) => cell.get_or_init(|| zgui_svg::document::place::shape(shape, fit)),
+            None => {
+                debug_assert!(false, "a fitted shape has a cell to be placed into");
+                shape
+            }
+        }
     }
 }
 
@@ -283,7 +331,37 @@ pub(crate) fn draw_with_masks_tracked(
         let shape = document::emit_tracked(
             scene,
             outline_id(base, index),
-            shape,
+            &ShapeSource::placed_shape(shape),
+            &paint,
+            masks,
+            placement,
+        );
+        emitted.pushed += shape.pushed;
+        if let Some(route) = shape.route {
+            emitted.routes.insert(route);
+        }
+    }
+    emitted
+}
+
+/// Emits every shape of a drawing from its source, and records all raster paths selected.
+///
+/// A route that reads the source never places it, and the placed shape is made only for a route
+/// that needs it.
+pub(crate) fn draw_drawing_tracked(
+    scene: &mut Scene,
+    base: VectorId,
+    drawing: &crate::content::Drawing,
+    paint: ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> DrawingEmission {
+    let mut emitted = DrawingEmission::default();
+    for index in 0..drawing.shapes.len() {
+        let shape = document::emit_tracked(
+            scene,
+            outline_id(base, index),
+            &ShapeSource::of(drawing, index),
             &paint,
             masks,
             placement,

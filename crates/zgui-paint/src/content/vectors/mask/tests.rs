@@ -397,3 +397,125 @@ fn an_analytic_decline_survives_the_sweep_while_it_counts() {
     );
     assert!(rig.cache.analytic_allowed(OWNER));
 }
+
+/// A source that keeps recognitions and declines every mask.
+#[derive(Default)]
+struct Remembering(core::cell::RefCell<crate::content::vectors::Recognitions>);
+
+impl crate::content::vectors::VectorMaskSource for Remembering {
+    fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
+        None
+    }
+
+    fn recognitions(
+        &self,
+    ) -> Option<core::cell::RefMut<'_, crate::content::vectors::Recognitions>> {
+        Some(self.0.borrow_mut())
+    }
+}
+
+/// A filled circle as a shape in its own space.
+fn circle_shape() -> zgui_svg::Shape {
+    use zgui_scene::kurbo::Shape as _;
+
+    zgui_svg::Shape {
+        path: Arc::new(zgui_scene::kurbo::Circle::new((20.0, 20.0), 8.0).to_path(0.01)),
+        fill: Some(zgui_svg::Fill {
+            paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
+            rule: peniko::Fill::NonZero,
+        }),
+        stroke: None,
+        clips: Vec::new(),
+    }
+}
+
+/// What the circle's fill is found to be, at `tau`.
+fn recognised_at(
+    source: &Remembering,
+    shape: &zgui_svg::Shape,
+    tau: f64,
+) -> Option<Arc<crate::emit::vector::recognise::Decomposition>> {
+    use crate::emit::vector::ShapeSource;
+    use crate::emit::vector::recognised::{Outline, PartOf, recognised};
+
+    recognised(
+        &ShapeSource::placed_shape(shape),
+        Outline::Path,
+        PartOf::Fill(peniko::Fill::NonZero),
+        tau,
+        1 << 22,
+        source,
+    )
+}
+
+#[test]
+fn a_recognition_is_reused_by_path_identity_and_swept_after_eight_frames() {
+    let source = Remembering::default();
+    let shape = circle_shape();
+    source.0.borrow_mut().begin_frame();
+    let first = recognised_at(&source, &shape, 1.0 / 16.0).expect("a circle");
+    let again = recognised_at(&source, &shape, 1.0 / 16.0).expect("a circle");
+    assert!(
+        Arc::ptr_eq(&first, &again),
+        "the second lookup is the first result"
+    );
+    // Another allocation of the same geometry is another path.
+    let copy = zgui_svg::Shape {
+        path: Arc::new(shape.path.as_ref().clone()),
+        ..shape.clone()
+    };
+    let other = recognised_at(&source, &copy, 1.0 / 16.0).expect("a circle");
+    assert!(!Arc::ptr_eq(&first, &other));
+    source.0.borrow_mut().end_frame();
+    for frame in 1..8 {
+        source.0.borrow_mut().begin_frame();
+        source.0.borrow_mut().end_frame();
+        assert_eq!(source.0.borrow().len(), 2, "frame {frame} keeps both");
+    }
+    source.0.borrow_mut().begin_frame();
+    source.0.borrow_mut().end_frame();
+    assert_eq!(
+        source.0.borrow().len(),
+        0,
+        "eight untouched frames sweep them"
+    );
+}
+
+#[test]
+fn a_finer_tau_class_misses_the_cache() {
+    let source = Remembering::default();
+    let shape = circle_shape();
+    let coarse = recognised_at(&source, &shape, 1.0 / 16.0).expect("a circle");
+    let same_class = recognised_at(&source, &shape, 1.0 / 12.0).expect("a circle");
+    assert!(
+        Arc::ptr_eq(&coarse, &same_class),
+        "one class serves every tolerance within a factor of two"
+    );
+    let finer = recognised_at(&source, &shape, 1.0 / 64.0).expect("a circle");
+    assert!(
+        !Arc::ptr_eq(&coarse, &finer),
+        "a finer class is measured again"
+    );
+}
+
+#[test]
+fn a_marks_decline_is_remembered_for_eight_frames() {
+    let mut rig = Rig::new(false);
+    rig.begin();
+    assert!(rig.cache.marks_allowed(OWNER), "nothing declined yet");
+    rig.cache.note_marks_declined(OWNER);
+    assert!(!rig.cache.marks_allowed(OWNER));
+    assert!(
+        rig.cache.analytic_allowed(OWNER),
+        "a marks decline leaves the analytic route alone"
+    );
+    rig.end();
+    for frame in 1..8 {
+        rig.begin();
+        assert!(!rig.cache.marks_allowed(OWNER), "frame {frame}");
+        rig.end();
+    }
+    rig.begin();
+    assert!(rig.cache.marks_allowed(OWNER), "frame 8 tries again");
+    rig.end();
+}

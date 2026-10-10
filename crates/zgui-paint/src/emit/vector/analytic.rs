@@ -11,11 +11,12 @@
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipId, ClipLink, CornerShape, PaintRef, Quad, Scene, VectorId, kurbo};
+use zgui_scene::{ClipId, ClipLink, CornerShape, PaintRef, Quad, Scene, VectorId};
 
-use super::document::{density_of, reference, stroke_of};
-use super::recognise::{self, Decomposition, Limits, Part};
-use super::{ShapePaint, VectorPlacement};
+use super::document::{density_of, reference, stroke_paint};
+use super::recognise::{self, Decomposition};
+use super::recognised::{Outline, PartOf, placed_paint, recognised};
+use super::{ShapePaint, ShapeSource, VectorPlacement};
 use crate::content::vectors::VectorMaskSource;
 
 /// The most primitives one part of a shape may become.
@@ -185,7 +186,7 @@ fn of_color(color: Color) -> Look {
 pub(super) fn emit_analytic(
     scene: &mut Scene,
     id: VectorId,
-    shape: &zgui_svg::Shape,
+    source: &ShapeSource<'_>,
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
@@ -193,6 +194,7 @@ pub(super) fn emit_analytic(
     if !masks.analytic(id) {
         return None;
     }
+    let shape = source.shape;
     // Too long to be written as the most primitives a shape may become.
     if shape.path.elements().len() > MAX_PRIMS * ELEMENTS_PER_PRIM {
         masks.analytic_declined(id);
@@ -213,47 +215,46 @@ pub(super) fn emit_analytic(
         .fill
         .as_ref()
         .filter(|fill| look(&fill.paint, paint.fill).visible);
-    let inherited_stroke = (shape.stroke.is_none() && paint.stroke.is_some())
-        .then(|| kurbo::Stroke::new(f64::from(paint.stroke_width)));
     let outline = match &shape.stroke {
         Some(stroke) => {
             let look = look(&stroke.paint, paint.stroke.unwrap_or(paint.fill));
-            look.visible.then_some((&stroke.style, look.opaque))
+            look.visible.then_some((PartOf::OwnStroke, look.opaque))
         }
         None => paint
             .stroke
             .map(of_color)
             .filter(|look| look.visible)
-            .zip(inherited_stroke.as_ref())
-            .map(|(look, style)| (style, look.opaque)),
+            .map(|look| {
+                (
+                    PartOf::Inherited(f64::from(paint.stroke_width)),
+                    look.opaque,
+                )
+            }),
     };
     if fill.is_none() && outline.is_none() {
         return None;
     }
 
     let tau = recognise::tau(&affine)?;
-    if !straight_on_axes(&shape.path, tau) {
+    if !super::recognised::straight(source, tau) {
         return None;
     }
-    let limits = Limits {
-        tau,
-        max_prims: MAX_PRIMS,
-    };
     let declined = || {
         if shape.path.elements().len() >= REMEMBERED {
             masks.analytic_declined(id);
         }
         None
     };
+    let recognise_part = |part| recognised(source, Outline::Path, part, tau, MAX_PRIMS, masks);
     let filled = match fill {
-        Some(fill) => match recognise::recognise(&shape.path, Part::Fill(fill.rule), limits) {
+        Some(fill) => match recognise_part(PartOf::Fill(fill.rule)) {
             Some(found) => Some(found),
             None => return declined(),
         },
         None => None,
     };
     let stroked = match outline {
-        Some((style, _)) => match recognise::recognise(&shape.path, Part::Stroke(style), limits) {
+        Some((part, _)) => match recognise_part(part) {
             Some(found) => Some(found),
             None => return declined(),
         },
@@ -265,6 +266,7 @@ pub(super) fn emit_analytic(
     if filled.is_none() && stroked.is_none() {
         return None;
     }
+    let tau_local = tau;
     let tau = tau as f32;
     let fills = match &filled {
         Some(found) => prims(found, tau)?,
@@ -302,8 +304,15 @@ pub(super) fn emit_analytic(
     // is on a whole device pixel. A clip that reaches past every primitive's antialiased edge
     // changes no pixel and is left out.
     let mut links: SmallVec<[ClipLink; 2]> = SmallVec::new();
-    for clip in &shape.clips {
-        let found = recognise::recognise(&clip.path, Part::Fill(clip.rule), limits)?;
+    for (index, clip) in shape.clips.iter().enumerate() {
+        let found = recognised(
+            source,
+            Outline::Clip(index),
+            PartOf::Fill(clip.rule),
+            tau_local,
+            MAX_PRIMS,
+            masks,
+        )?;
         let [prim] = found.boxes.as_slice() else {
             return None;
         };
@@ -363,11 +372,11 @@ pub(super) fn emit_analytic(
     }
     let space = (clip, placement.transform.index());
     let fill_paint = match fill {
-        Some(fill) => reference(scene, &fill.paint, paint.fill),
+        Some(fill) => reference(scene, &placed_paint(source, &fill.paint), paint.fill),
         None => PaintRef::NONE,
     };
     let stroke_paint = match stroked {
-        Some(_) => stroke_of(scene, shape, paint).map_or(PaintRef::NONE, |stroke| stroke.paint),
+        Some(_) => stroke_paint(scene, source, paint),
         None => PaintRef::NONE,
     };
 
@@ -399,44 +408,6 @@ pub(super) fn emit_analytic(
     let mut pushed = run(scene, fill_quads.collect(), space);
     pushed += run(scene, stroke_quads.collect(), space);
     Some(pushed)
-}
-
-/// Whether every line of `path`, closing lines included, runs along an axis within a quarter of
-/// `tau`, and no segment is a quadratic.
-///
-/// No quad draws a slanted edge, so a polygon or a slanted polyline fails here in one pass over
-/// its elements, before recognition allocates anything.
-fn straight_on_axes(path: &kurbo::BezPath, tau: f64) -> bool {
-    let off = tau / 4.0;
-    let axial = |from: kurbo::Point, to: kurbo::Point| {
-        let step = to - from;
-        step.x.abs() <= off || step.y.abs() <= off
-    };
-    let mut start = kurbo::Point::ZERO;
-    let mut at = kurbo::Point::ZERO;
-    for element in path.elements() {
-        match *element {
-            kurbo::PathEl::MoveTo(point) => {
-                start = point;
-                at = point;
-            }
-            kurbo::PathEl::LineTo(point) => {
-                if !axial(at, point) {
-                    return false;
-                }
-                at = point;
-            }
-            kurbo::PathEl::CurveTo(_, _, point) => at = point,
-            kurbo::PathEl::QuadTo(..) => return false,
-            kurbo::PathEl::ClosePath => {
-                if !axial(at, start) {
-                    return false;
-                }
-                at = start;
-            }
-        }
-    }
-    true
 }
 
 /// Pushes `quads` left to right as one run, and returns how many survived.

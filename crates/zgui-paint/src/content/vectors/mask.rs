@@ -74,9 +74,25 @@ pub trait VectorMaskSource {
 
     /// Records that a large shape of `owner` failed recognition.
     fn analytic_declined(&self, _owner: VectorId) {}
+
+    /// Whether `owner` may try the marks route this frame.
+    ///
+    /// False for a few frames after a large shape failed recognition there.
+    fn marks(&self, _owner: VectorId) -> bool {
+        true
+    }
+
+    /// Records that a large shape of `owner` failed recognition on the marks route.
+    fn marks_declined(&self, _owner: VectorId) {}
+
+    /// Where recognitions are kept between frames, if anywhere.
+    #[doc(hidden)]
+    fn recognitions(&self) -> Option<core::cell::RefMut<'_, super::recognitions::Recognitions>> {
+        None
+    }
 }
 
-/// A source that declines every mask request and the analytic route.
+/// A source that declines every mask request, the analytic route and the marks route.
 ///
 /// Every shape drawn through it takes the general route.
 #[derive(Clone, Copy, Debug, Default)]
@@ -90,9 +106,13 @@ impl VectorMaskSource for NoVectorMasks {
     fn analytic(&self, _owner: VectorId) -> bool {
         false
     }
+
+    fn marks(&self, _owner: VectorId) -> bool {
+        false
+    }
 }
 
-/// A source that declines every mask request and allows the analytic route.
+/// A source that declines every mask request and the marks route, and allows the analytic route.
 ///
 /// It remembers nothing, so a shape that fails recognition is measured again on every frame.
 #[derive(Clone, Copy, Debug, Default)]
@@ -101,6 +121,26 @@ pub struct AnalyticOnly;
 impl VectorMaskSource for AnalyticOnly {
     fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
         None
+    }
+
+    fn marks(&self, _owner: VectorId) -> bool {
+        false
+    }
+}
+
+/// A source that declines every mask request and the analytic route, and allows the marks route.
+///
+/// It remembers nothing, so a shape that fails recognition is measured again on every frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MarksOnly;
+
+impl VectorMaskSource for MarksOnly {
+    fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
+        None
+    }
+
+    fn analytic(&self, _owner: VectorId) -> bool {
+        false
     }
 }
 
@@ -167,6 +207,8 @@ struct RouteHistory {
     tiles: [[Option<AtlasKey>; 2]; 2],
     /// The frame a large shape of the owner last failed recognition in.
     analytic_declined: Option<u32>,
+    /// The frame a large shape of the owner last failed recognition on the marks route in.
+    marks_declined: Option<u32>,
 }
 
 impl RouteHistory {
@@ -287,6 +329,8 @@ pub(crate) struct VectorMaskCache {
     superseded: Vec<AtlasKey>,
     /// What this frame has spent on new masks.
     budget: Budget,
+    /// What recognition found in the paths drawn lately.
+    pub(crate) recognitions: super::recognitions::Recognitions,
 }
 
 /// A disjoint namespace from glyph handles in the monochrome atlas.
@@ -303,6 +347,7 @@ impl Default for VectorMaskCache {
             raster_ready: false,
             superseded: Vec::new(),
             budget: Budget::default(),
+            recognitions: super::recognitions::Recognitions::default(),
         }
     }
 }
@@ -312,6 +357,7 @@ impl VectorMaskCache {
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
         self.budget = Budget::default();
+        self.recognitions.begin_frame();
     }
 
     /// Sets whether the general vector rasteriser is built.
@@ -337,6 +383,7 @@ impl VectorMaskCache {
         let frame = self.frame;
         self.histories
             .retain(|_, history| frame.wrapping_sub(history.frame) < HISTORY_FRAMES);
+        self.recognitions.end_frame();
         removed.len()
     }
 
@@ -367,6 +414,7 @@ impl VectorMaskCache {
             raster_ready,
             superseded,
             budget,
+            recognitions: _,
         } = self;
         let part = part_of(request.style);
         let history = histories
@@ -470,6 +518,27 @@ impl VectorMaskCache {
         history.analytic_declined = Some(frame);
     }
 
+    /// Whether `owner` may try the marks route: false for [`HISTORY_FRAMES`] frames after it
+    /// failed recognition there.
+    pub(crate) fn marks_allowed(&self, owner: VectorId) -> bool {
+        self.histories
+            .get(&owner)
+            .and_then(|history| history.marks_declined)
+            .is_none_or(|declined| self.frame.wrapping_sub(declined) >= HISTORY_FRAMES)
+    }
+
+    /// Records that a large shape of `owner` failed recognition on the marks route in this
+    /// frame.
+    pub(crate) fn note_marks_declined(&mut self, owner: VectorId) {
+        let frame = self.frame;
+        let history = self.histories.entry(owner).or_insert_with(|| RouteHistory {
+            frame,
+            ..RouteHistory::default()
+        });
+        history.advance(frame);
+        history.marks_declined = Some(frame);
+    }
+
     /// How many geometry identities map to a tile.
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
@@ -488,6 +557,7 @@ impl VectorMaskCache {
         self.entries.clear();
         self.histories.clear();
         self.superseded.clear();
+        self.recognitions.clear();
         self.next_handle = MASK_NAMESPACE;
     }
 }

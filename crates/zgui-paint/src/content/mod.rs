@@ -34,6 +34,7 @@ pub mod vectors;
 pub use crate::content::cache::{ContentCache, FrameContent, TileOwner};
 pub use crate::content::images::{ImageError, MipLevel};
 pub use crate::content::vectors::{
-    AnalyticOnly, Drawing, NoVectorMasks, NoVectors, Placement as VectorPlacement, VectorCache,
-    VectorMask, VectorMaskRequest, VectorMaskSource, VectorMaskStyle, VectorSource, Vectors,
+    AnalyticOnly, Drawing, MarksOnly, NoVectorMasks, NoVectors, Placement as VectorPlacement,
+    VectorCache, VectorMask, VectorMaskRequest, VectorMaskSource, VectorMaskStyle, VectorSource,
+    Vectors,
 };

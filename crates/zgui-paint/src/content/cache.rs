@@ -1,6 +1,6 @@
 //! The atlas a window's glyphs and images share, and the borrowed view one frame draws through.
 
-use core::cell::{Cell, RefCell};
+use core::cell::{Cell, RefCell, RefMut};
 
 use rustc_hash::FxHashMap;
 use zgui_atlas::{Atlas, AtlasKey, AtlasLimits, AtlasReport, TextureSink};
@@ -725,6 +725,23 @@ impl VectorMaskSource for FrameContent<'_> {
             .borrow_mut()
             .vector_masks
             .note_analytic_declined(owner);
+    }
+
+    fn marks(&self, owner: zgui_scene::VectorId) -> bool {
+        self.writing.borrow().vector_masks.marks_allowed(owner)
+    }
+
+    fn marks_declined(&self, owner: zgui_scene::VectorId) {
+        self.writing
+            .borrow_mut()
+            .vector_masks
+            .note_marks_declined(owner);
+    }
+
+    fn recognitions(&self) -> Option<RefMut<'_, crate::content::vectors::Recognitions>> {
+        Some(RefMut::map(self.writing.borrow_mut(), |writing| {
+            &mut writing.vector_masks.recognitions
+        }))
     }
 }
 
