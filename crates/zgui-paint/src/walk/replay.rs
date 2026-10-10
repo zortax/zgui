@@ -446,15 +446,6 @@ impl PaintCache {
         if record.clip_hash != scene.clips.content_hash(painted.clip) {
             return Reuse::Encode;
         }
-        // A drawing's curves are placed in device coordinates and shared with the rasteriser's
-        // encoding cache, so a chunk holding a vector item replays only in place — a moved
-        // drawing is encoded at its new position. Everything else in the chunk translates.
-        if !record.prims.vectors.is_empty()
-            && record.border_box.origin != fragment.border_box.origin
-        {
-            counter::bump(Counter::VectorReplaysRefused);
-            return Reuse::Encode;
-        }
         debug_assert!(
             self.indices_still_resolve(scene, record),
             "a replayed range's clip or transform no longer resolves to what it was recorded with"

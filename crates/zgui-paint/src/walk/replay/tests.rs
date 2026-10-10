@@ -334,12 +334,10 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
     assert_eq!(cache.reuse(&scene, &wider, painted(0),), Reuse::Encode);
 }
 
-/// A drawing that stayed where it was replays, and the replay re-emits its vector item into the
-/// frame's pass planning. A drawing that moved is encoded: its curves are placed in device
-/// coordinates and shared by pointer with the rasteriser's encoding cache, so translating them
-/// would mean copying the path.
+/// A drawing replays wherever its box went. The replay re-emits its vector item into the frame's
+/// pass planning, with the path it was encoded with and its placement moved by the offset.
 #[test]
-fn a_still_drawing_replays_its_vector_item_and_a_moved_one_is_encoded() {
+fn a_moved_drawing_replays_its_vector_item() {
     use std::sync::Arc;
 
     let mut cache = PaintCache::new();
@@ -351,9 +349,10 @@ fn a_still_drawing_replays_its_vector_item_and_a_moved_one_is_encoded() {
     path.line_to((10.0, 10.0));
     path.line_to((0.0, 10.0));
     path.close_path();
+    let path = Arc::new(path);
     let item = zgui_scene::VectorItem::filled(
         zgui_scene::VectorId(1),
-        Arc::new(path),
+        Arc::clone(&path),
         zgui_scene::PaintRef::NONE,
     );
     scene.begin_chunk_capture(cache.take_capture_scratch());
@@ -384,12 +383,25 @@ fn a_still_drawing_replays_its_vector_item_and_a_moved_one_is_encoded() {
     assert_eq!(range.len(), 1, "and the replay re-emits the vector item");
     assert_eq!(scene.primitives.vectors.len(), 1);
 
+    scene.begin_frame(Size::new(256, 256));
     let mut moved = fragment(0.0, 40.0);
     moved.kind = FragmentKind::Vector;
+    let by = Size::new(DevicePx(0.0), DevicePx(40.0));
     assert_eq!(
         cache.reuse(&scene, &moved, painted(0)),
-        Reuse::Encode,
-        "a moved drawing is encoded at its new position"
+        Reuse::Replay(by),
+        "a moved drawing replays at the offset"
+    );
+    let (source, chunk) = cache.chunk(moved.key).expect("recorded");
+    scene.replay_chunk(chunk, by, source);
+    let replayed = &scene.primitives.vectors[0];
+    assert!(
+        Arc::ptr_eq(&replayed.path, &path),
+        "the path is the encoded one"
+    );
+    assert_eq!(
+        replayed.placement,
+        zgui_scene::kurbo::Affine::translate((0.0, 40.0))
     );
 }
 

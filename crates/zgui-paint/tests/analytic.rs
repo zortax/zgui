@@ -507,10 +507,10 @@ fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
         report.vector_routes
     );
     assert!(measured.get(Counter::ChunksTranslated) > 0);
-    assert_eq!(measured.get(Counter::VectorReplaysRefused), 0);
+    assert_eq!(measured.get(Counter::VectorReplaysMoved), 0);
     assert_eq!(shift, Some(20.0), "the replayed quad moved with its box");
 
-    // A vector item holds curves placed where they were encoded, so its record refuses to move.
+    // A vector item holds its path in path space, so its record moves its placement.
     let gradient = Brush::Linear {
         start: kurbo::Point::new(0.0, 0.0),
         end: kurbo::Point::new(40.0, 0.0),
@@ -522,15 +522,10 @@ fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
             .fill(gradient)
             .build(),
     ]);
-    assert_eq!(
-        report.vector_routes.len(),
-        1,
-        "the drawing was encoded again"
-    );
     assert!(
-        report.vector_routes[0]
-            .routes
-            .contains(VectorRoute::GeneralRaster)
+        report.vector_routes.is_empty(),
+        "the drawing was encoded again: {:?}",
+        report.vector_routes
     );
-    assert!(measured.get(Counter::VectorReplaysRefused) > 0);
+    assert!(measured.get(Counter::VectorReplaysMoved) > 0);
 }

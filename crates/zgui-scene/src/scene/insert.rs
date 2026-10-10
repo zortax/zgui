@@ -371,11 +371,6 @@ impl Scene {
     }
 
     /// Pushes vector content, returning the order it took or `None` if it was culled.
-    ///
-    /// A vector item is logged like everything else and, unlike everything else, is not re-emitted
-    /// by [`Scene::replay`] — it is planned into a rasterisation pass instead. So pushing one puts
-    /// the log out of step with what was drawn, which is what
-    /// [`Scene::unreplayable`](Scene::unreplayable) counts.
     pub fn push_vector(&mut self, mut item: VectorItem) -> Option<DrawOrder> {
         tee!(
             self,
@@ -386,7 +381,6 @@ impl Scene {
             item.local_ink,
             item.clone()
         );
-        self.note_unreplayable();
         // The cull reads the ink measured in the subtree's own space, exactly as it does for every
         // other primitive, and the order places that same rectangle on the device.
         let order = self.assign_order(

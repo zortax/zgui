@@ -72,7 +72,7 @@ const PRINTED: [Counter; 20] = [
     Counter::SeriesPayloadsBuilt,
     Counter::VectorMaskMisses,
     Counter::VectorMaskBudgetOverflow,
-    Counter::VectorReplaysRefused,
+    Counter::VectorReplaysMoved,
     Counter::VectorTierChanges,
     Counter::VelloPasses,
     Counter::AtlasTilesEvicted,

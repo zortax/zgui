@@ -55,6 +55,8 @@ struct Frame {
     full: bool,
     /// The rectangle the damage rectangles are bounded by, when the set is not full and not empty.
     damaged: Option<zgui_geom::Rect<i32, zgui_geom::Device>>,
+    /// How many recorded paintings holding a vector item were encoded since the last frame.
+    encoded_drawings: usize,
 }
 
 /// The frames a run produced.
@@ -119,6 +121,11 @@ impl Renderer for Recorder {
                 .collect(),
             full: damage.is_full(),
             damaged: damage.bounds(),
+            encoded_drawings: scene
+                .chunk_inserted()
+                .iter()
+                .filter(|upload| !upload.prims.vectors.is_empty())
+                .count(),
         });
         FrameOutcome::Presented(zgui_render::FrameStats {
             vector_passes: 0,
@@ -485,4 +492,83 @@ fn two_elements_sharing_one_outline_are_each_fitted_to_their_own_box() {
     let mut widths: Vec<f32> = masks.iter().map(|mask| mask.bounds[2]).collect();
     widths.sort_by(f32::total_cmp);
     assert_eq!(widths, vec![16.0, 64.0], "{masks:?}");
+}
+
+/// A document whose one shape takes the general route: a ramp has no single tint.
+const RAMP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>
+  </defs>
+  <path d="M0 0 L24 4 L6 24 Z" fill="url(#a)"/>
+</svg>"##;
+
+/// A scroll moves every drawing's recorded painting rigidly, so each one replays at an offset
+/// and none is encoded again.
+#[test]
+fn a_scrolled_document_replays_and_encodes_nothing() {
+    use zgui_geom::{Css, CssPx, Point};
+    use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
+
+    const PORT: &str = "root { display: block; width: 400px; height: 300px }
+         .port { display: flex; flex-direction: column; width: 400px; height: 300px;
+                 overflow: auto }
+         .gap { flex: none; height: 100px }
+         .row { display: flex; flex-direction: row; flex: none; gap: 8px }
+         .art { display: block; width: 32px; height: 32px }
+         .tail { flex: none; height: 2000px }";
+    let log: Log = Rc::default();
+    let mut harness = mount(PORT, &log, |cx| {
+        let mut row = zgui_elements::r#box().class("row");
+        for _ in 0..6 {
+            row = row.child(zgui_elements::vector().class("art").document(RAMP));
+        }
+        Box::new(
+            zgui_elements::r#box()
+                .class("port")
+                .child(zgui_elements::r#box().class("gap"))
+                .child(row)
+                .child(zgui_elements::r#box().class("tail"))
+                .into_view()
+                .build(cx),
+        )
+    });
+    harness.settle(8);
+    assert!(
+        log.borrow().iter().any(|frame| frame.encoded_drawings > 0),
+        "the drawings were never encoded, so nothing below is measured"
+    );
+    log.borrow_mut().clear();
+
+    let moved = zgui_profile::counter::get(zgui_profile::Counter::VectorReplaysMoved);
+    harness.deliver_to_first(zgui_platform::SurfaceEvent::Wheel {
+        event: WheelEvent {
+            id: zgui_vocab::PointerId::MOUSE,
+            kind: zgui_vocab::PointerKind::Mouse,
+            position: Point::<CssPx, Css>::new(CssPx(200.0), CssPx(150.0)),
+            // Pixels, because a window with no text system has no line height to count lines in.
+            delta: ScrollDelta::Pixels(zgui_geom::Size::new(CssPx(0.0), CssPx(40.0))),
+            phase: ScrollPhase::Discrete,
+        },
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    });
+    for _ in 0..40 {
+        harness.advance(std::time::Duration::from_micros(8_333));
+        harness.pump();
+    }
+    harness.settle(8);
+
+    let frames = log.borrow();
+    assert!(
+        frames.iter().any(|frame| !frame.shapes.is_empty()),
+        "the scroll drew no drawing"
+    );
+    let encoded: usize = frames.iter().map(|frame| frame.encoded_drawings).sum();
+    assert_eq!(encoded, 0, "a scrolled drawing was encoded again");
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(
+            zgui_profile::counter::get(zgui_profile::Counter::VectorReplaysMoved) > moved,
+            "no drawing replayed at an offset"
+        );
+    }
 }

@@ -435,3 +435,132 @@ fn an_extracted_chunk_keeps_each_marks_payload() {
     assert_eq!(chunk.marks.len(), 1);
     assert!(std::sync::Arc::ptr_eq(&chunk.mark_payloads[0], &payload));
 }
+
+/// A closed triangle inside `(x, y)` to `(x + side, y + side)`.
+fn triangle(x: f64, y: f64, side: f64) -> std::sync::Arc<kurbo::BezPath> {
+    let mut path = kurbo::BezPath::new();
+    path.move_to((x, y));
+    path.line_to((x + side, y));
+    path.line_to((x, y + side));
+    path.close_path();
+    std::sync::Arc::new(path)
+}
+
+#[test]
+fn a_moved_replay_translates_a_drawings_placement() {
+    let (mut scene, fill) = scene();
+    let path = triangle(20.0, 20.0, 10.0);
+    scene.begin_chunk_capture(ChunkPrims::default());
+    scene.push_vector(
+        crate::VectorItem::filled(crate::VectorId(1), std::sync::Arc::clone(&path), fill)
+            .placed(kurbo::Affine::scale(2.0)),
+    );
+    let chunk = scene.take_chunk_capture();
+    let encoded = chunk.vectors[0].local_ink;
+    scene.finish(&DamageSet::full());
+
+    scene.begin_frame(Size::new(400, 400));
+    let before = zgui_profile::counter::get(zgui_profile::Counter::VectorReplaysMoved);
+    scene.replay_chunk(&chunk, Size::new(DevicePx(13.0), DevicePx(-7.0)), 0);
+    let moved = zgui_profile::counter::get(zgui_profile::Counter::VectorReplaysMoved) - before;
+
+    let item = &scene.primitives.vectors[0];
+    assert!(
+        std::sync::Arc::ptr_eq(&item.path, &path),
+        "the path is the one the encoding drew"
+    );
+    assert_eq!(
+        item.placement,
+        kurbo::Affine::translate((13.0, -7.0)) * kurbo::Affine::scale(2.0)
+    );
+    assert_eq!(
+        item.local_ink.origin,
+        Point::new(
+            encoded.origin.x + DevicePx(13.0),
+            encoded.origin.y - DevicePx(7.0)
+        )
+    );
+    assert_eq!(item.local_ink.size, encoded.size);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(moved, 1, "one vector item moved");
+    }
+}
+
+#[test]
+fn a_chunks_ink_covers_its_drawings() {
+    let (mut scene, fill) = scene();
+    scene.begin_chunk_capture(ChunkPrims::default());
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
+    scene.push_vector(crate::VectorItem::filled(
+        crate::VectorId(1),
+        triangle(0.0, 0.0, 50.0),
+        fill,
+    ));
+    let chunk = scene.take_chunk_capture();
+
+    let ink = chunk.ink.expect("the chunk puts ink somewhere");
+    assert!(
+        ink.contains_rect(chunk.vectors[0].local_ink),
+        "the chunk's ink {ink:?} leaves out its drawing"
+    );
+    assert_eq!(ink.right(), DevicePx(50.0));
+}
+
+#[test]
+fn an_extracted_chunk_keeps_its_drawings() {
+    let (mut scene, fill) = scene();
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
+    scene.push_vector(crate::VectorItem::filled(
+        crate::VectorId(1),
+        triangle(0.0, 0.0, 30.0),
+        fill,
+    ));
+    let mut chunk = ChunkPrims::default();
+    scene.extract_chunk(0..scene.ops().len() as u32, &mut chunk);
+    assert_eq!(chunk.ops.len(), 2);
+    assert_eq!(chunk.vectors.len(), 1);
+    assert!(
+        chunk.orders[1] > chunk.orders[0],
+        "the drawing keeps its order above the quad it overlaps"
+    );
+    scene.finish(&DamageSet::full());
+
+    scene.begin_frame(Size::new(400, 400));
+    let replayed = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)), 0);
+    assert_eq!(replayed.len(), 2);
+    assert_eq!(scene.primitives.vectors.len(), 1);
+}
+
+/// A primitive pushed after a replayed drawing over only the part of the drawing that reaches past
+/// the rest of its chunk orders above the drawing.
+#[test]
+fn a_later_primitive_over_a_drawings_overflow_orders_above_it() {
+    let (mut scene, fill) = scene();
+    scene.begin_chunk_capture(ChunkPrims::default());
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, 20.0, 20.0), fill));
+    // Reaches thirty pixels to the right of the box.
+    let mut path = kurbo::BezPath::new();
+    path.move_to((0.0, 0.0));
+    path.line_to((50.0, 0.0));
+    path.line_to((50.0, 20.0));
+    path.line_to((0.0, 20.0));
+    path.close_path();
+    scene.push_vector(crate::VectorItem::filled(
+        crate::VectorId(1),
+        std::sync::Arc::new(path),
+        fill,
+    ));
+    let chunk = scene.take_chunk_capture();
+    scene.finish(&DamageSet::full());
+
+    scene.begin_frame(Size::new(400, 400));
+    scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(0.0)), 0);
+    let later = scene
+        .push_quad(Quad::filled(rect(35.0, 5.0, 10.0, 10.0), fill))
+        .expect("on the surface");
+    let drawing = scene.primitives.vectors[0].order;
+    assert!(
+        later > drawing,
+        "the later quad took {later}, under the drawing at {drawing} it covers"
+    );
+}

@@ -473,8 +473,8 @@ counters! {
     /// Mask requests declined because the frame had spent its budget for new masks.
     VectorMaskBudgetOverflow => vector_mask_budget_overflow, Group::BackendNeutral;
 
-    /// Moved fragments that encoded again because their recorded painting holds a vector item.
-    VectorReplaysRefused => vector_replays_refused, Group::BackendNeutral;
+    /// Vector items a chunk replay moved.
+    VectorReplaysMoved => vector_replays_moved, Group::BackendNeutral;
 
     /// Times one shape part went from the mask route to a decline, or back.
     VectorTierChanges => vector_tier_changes, Group::BackendNeutral;

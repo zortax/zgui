@@ -349,7 +349,7 @@ impl ChunkPrims {
 
 /// The order one of the frame's own primitives was given, for an extraction to rebase.
 ///
-/// Zero for the kinds an extraction skips, which never reach [`ChunkPrims::ops`] at all.
+/// Zero for the group markers an extraction skips, which never reach [`ChunkPrims::ops`] at all.
 fn order_of(prims: &crate::scene::primitives::Primitives, op: PaintOp) -> DrawOrder {
     let index = op.index as usize;
     match op.kind {
@@ -366,7 +366,8 @@ fn order_of(prims: &crate::scene::primitives::Primitives, op: PaintOp) -> DrawOr
         PrimitiveKind::Marks => prims.marks.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::External => prims.externals.get(index).map_or(0, |prim| prim.order),
         PrimitiveKind::Backdrop => prims.backdrops.get(index).map_or(0, |prim| prim.order),
-        PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => 0,
+        PrimitiveKind::Vector => prims.vectors.get(index).map_or(0, |prim| prim.order),
+        PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => 0,
     }
 }
 
@@ -434,9 +435,10 @@ fn ink_of(chunk: &ChunkPrims, op: PaintOp) -> Option<Rect<DevicePx, Device>> {
         PrimitiveKind::Marks => chunk.marks.get(index).map(MarkItem::ink),
         PrimitiveKind::External => chunk.externals.get(index).map(ExternalQuad::ink),
         PrimitiveKind::Backdrop => chunk.backdrops.get(index).map(|prim| prim.bounds),
-        // A vector item is rasterised elsewhere and composited back in, and a replay does not
-        // re-plan a pass for one; its extent is no part of what the block is asked about.
-        PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => None,
+        // A drawing's ink can reach past everything else in its chunk, and a later primitive
+        // over that overflow has to order above it.
+        PrimitiveKind::Vector => chunk.vectors.get(index).map(|prim| prim.local_ink),
+        PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => None,
     }
 }
 
@@ -600,9 +602,8 @@ impl Scene {
     /// entry indexes the chunk's own arrays.
     ///
     /// This runs before [`Scene::finish`]: the log indices are as pushed, and the sort rewrites
-    /// them. Vector items and group markers are left out, because a replay skips them — a chunk
-    /// holds exactly what a replay re-emits, so what a replay cannot reproduce is counted by
-    /// [`Scene::unreplayable`] at the pushes instead.
+    /// them. Group markers are left out, because a replay skips them: a chunk holds exactly what a
+    /// replay re-emits.
     pub fn extract_chunk(&self, range: Range<u32>, chunk: &mut ChunkPrims) {
         debug_assert!(
             !self.finished,
@@ -655,7 +656,10 @@ impl Scene {
                 PrimitiveKind::Backdrop => {
                     copied(&self.primitives.backdrops, index, &mut chunk.backdrops)
                 }
-                PrimitiveKind::Vector | PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => None,
+                PrimitiveKind::Vector => {
+                    copied(&self.primitives.vectors, index, &mut chunk.vectors)
+                }
+                PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => None,
             };
             let Some(at) = at else {
                 continue;
@@ -679,10 +683,8 @@ impl Scene {
     ///
     /// Draw order is re-derived through the ordinary push path, the paints travel in the
     /// instances and are re-anchored rather than re-interned, and a vector item is re-pushed into
-    /// this frame's pass planning exactly as a fresh emission pushes it. One restriction: a
-    /// vector item replays only where `by` is zero, because its curves are placed in device
-    /// coordinates and shared with the rasteriser's encoding cache — translating them would mean
-    /// copying the path. The caller encodes a moved drawing instead.
+    /// this frame's pass planning exactly as a fresh emission pushes it. A moved vector item keeps
+    /// its path and moves its placement, so the rasteriser's encoding of the path stays valid.
     /// `source` is the chunk's revision, stamped as the provenance of every primitive a replay
     /// pushes — a renderer holding the chunk resident points those draws at its copy. A replay
     /// away from the encode position records its offset beside the stamp, and the renderer adds
@@ -871,18 +873,14 @@ impl Scene {
                     self.push_backdrop(backdrop);
                 }
                 PrimitiveKind::Vector => {
-                    let Some(item) = chunk.vectors.get(index) else {
+                    let Some(mut item) = chunk.vectors.get(index).cloned() else {
                         continue;
                     };
-                    debug_assert!(
-                        by.width.0 == 0.0 && by.height.0 == 0.0,
-                        "a moved drawing is encoded, never translated: the caller's reuse \
-                         decision guarantees a vector item only replays in place"
-                    );
-                    if by.width.0 != 0.0 || by.height.0 != 0.0 {
-                        continue;
+                    if !in_place {
+                        item.translate(by);
+                        counter::bump(Counter::VectorReplaysMoved);
                     }
-                    self.push_vector(item.clone());
+                    self.push_vector(item);
                 }
                 PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => {}
             }
