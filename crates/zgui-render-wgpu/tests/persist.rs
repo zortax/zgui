@@ -733,3 +733,136 @@ fn shared_payloads_hold_still_over_a_hundred_pans() {
     }
     assert_eq!(Some(renderer.memory().buffers), held);
 }
+
+/// Uploads a sheet of sixteen one-texel cells, cell `p` holding a level of its own, and returns
+/// a glyph payload with one copy per phase, and the packed texture.
+fn glyph_sheet(
+    renderer: &mut zgui_render_wgpu::WgpuRenderer,
+) -> (Arc<zgui_scene::MarkPayload>, u32) {
+    use zgui_atlas::{Atlas, AtlasKey, AtlasLimits, TextureKind};
+
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    let tile = atlas
+        .get_or_insert(
+            AtlasKey::new(0x7E00_0000_0000_0002, TextureKind::Mono),
+            Size::new(4, 4),
+            || {
+                (0..16)
+                    .map(|phase| 15 * (phase + 1) as u8)
+                    .collect::<Vec<u8>>()
+            },
+        )
+        .expect("a fresh atlas has room");
+    atlas
+        .flush_uploads(renderer.atlas())
+        .expect("the device accepts the upload");
+    let (x, y) = (tile.bounds.origin.x as u32, tile.bounds.origin.y as u32);
+    let mut glyphs: Vec<[u32; 4]> = (0..16)
+        .map(|phase| {
+            [
+                (x + phase % 4) | ((y + phase / 4) << 16),
+                1 | (1 << 16),
+                0,
+                0,
+            ]
+        })
+        .collect();
+    for phase in 0..16u32 {
+        let (px, py) = ((phase % 4) as f32, (phase / 4) as f32);
+        let anchor = [
+            10.0 + 20.0 * px + px / 4.0 + 0.01,
+            10.0 + 20.0 * py + py / 4.0 + 0.01,
+        ];
+        let offset = glyphs.len() as u32;
+        glyphs.push([anchor[0].to_bits(), anchor[1].to_bits(), 0, offset]);
+    }
+    let payload = zgui_scene::MarkPayload {
+        glyphs,
+        ..zgui_scene::MarkPayload::default()
+    };
+    (Arc::new(payload), zgui_scene::SpriteTile::of(tile).texture)
+}
+
+/// Pushes one union glyph mark over `payload`, moved by `by`.
+fn push_glyphs(
+    scene: &mut Scene,
+    payload: &Arc<zgui_scene::MarkPayload>,
+    texture: u32,
+    by: [f32; 2],
+) {
+    use zgui_scene::{MarkFlags, MarkItem};
+
+    let white = PaintRef::solid(scene.paints.solid(Color::srgb_u8(255, 255, 255, 255)));
+    let mut item = MarkItem::new(rect(8.0, 8.0, 80.0, 80.0), white, payload.counts());
+    item.tiles = 16;
+    item.texture = texture;
+    item.flags |= MarkFlags::UNION;
+    item.reanchor(Size::new(DevicePx(by[0]), DevicePx(by[1])));
+    scene.push_marks(item, Arc::clone(payload));
+}
+
+#[test]
+fn a_moved_glyph_chunk_uploads_no_payload() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let (payload, texture) = glyph_sheet(&mut renderer);
+
+    // Frame one: the chunk is captured and made resident.
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_glyphs(&mut scene, &payload, texture, [0.0, 0.0]);
+    let chunk = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(1, Arc::clone(&chunk));
+    scene.bind_capture(1);
+    scene.finish(&DamageSet::full());
+    zgui_profile::counter::reset();
+    let (_, first) = draw_bytes(&mut renderer, &scene);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(
+            zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes) > 0,
+            "the encoded chunk uploads its payload once"
+        );
+    }
+    assert_eq!(first.rgba(10, 10)[3], 15, "phase zero reads its own cell");
+    scene.clear_chunk_notes();
+
+    // Frame two: the same chunk replayed a quarter pixel past five across and half past seven
+    // down, which moves every copy to another phase.
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.replay_chunk(&chunk, Size::new(DevicePx(5.25), DevicePx(7.5)), 1);
+    scene.finish(&DamageSet::full());
+    zgui_profile::counter::reset();
+    let (_, moved) = draw_bytes(&mut renderer, &scene);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(
+            zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes),
+            0,
+            "a moved replay of a resident glyph chunk uploads no payload"
+        );
+    }
+    // Phase (0, 0) moved by (1, 2) quarters lands on pixel (15, 17) and reads cell 9.
+    assert_eq!(
+        moved.rgba(15, 17)[3],
+        150,
+        "the moved copy reads its new phase"
+    );
+
+    // The control: the same glyphs encoded fresh at the moved position, on a renderer of its own.
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let (payload, texture) = glyph_sheet(&mut control_renderer);
+    let mut control = Scene::new();
+    control.begin_frame(Size::new(SIDE, SIDE));
+    push_glyphs(&mut control, &payload, texture, [5.25, 7.5]);
+    control.finish(&DamageSet::full());
+    let (_, expected) = draw_bytes(&mut control_renderer, &control);
+    assert_eq!(
+        moved.max_difference(&expected),
+        0,
+        "the offset draw finds every phase a fresh encoding finds"
+    );
+}

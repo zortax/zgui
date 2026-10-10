@@ -142,6 +142,9 @@ pub fn marks(scene: &Scene, mark: &MarkItem) -> String {
         mark.boxes,
         mark.vertices
     );
+    if mark.glyphs > 0 {
+        line.push_str(&format!(" glyphs={} tiles={}", mark.glyphs, mark.tiles));
+    }
     if mark.is_union() {
         line.push_str(" union");
     }

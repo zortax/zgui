@@ -41,6 +41,7 @@ impl Module {
             Self::MarksDisc => text!("marks_disc"),
             Self::MarksBox => text!("marks_box"),
             Self::MarksPolyline => text!("marks_polyline"),
+            Self::MarksGlyph => text!("marks_glyph"),
             Self::MarksComposite => text!("marks_composite"),
         }
     }
@@ -63,6 +64,7 @@ impl Module {
             Self::MarksDisc => ir!("marks_disc"),
             Self::MarksBox => ir!("marks_box"),
             Self::MarksPolyline => ir!("marks_polyline"),
+            Self::MarksGlyph => ir!("marks_glyph"),
             Self::MarksComposite => ir!("marks_composite"),
         }
     }

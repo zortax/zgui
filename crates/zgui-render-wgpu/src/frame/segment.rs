@@ -62,6 +62,10 @@ pub enum PlannedDraw {
         position: usize,
         /// The dynamic offset of the item's block.
         block: u32,
+        /// How many leading payload elements no instance walks: a glyph item's tile table.
+        lead: u32,
+        /// The atlas texture a glyph item reads, packed as a sprite tile packs it.
+        texture: Option<u32>,
     },
     /// A union mark item painted through the coverage its prims summed into its bin.
     MarksComposite {

@@ -41,7 +41,7 @@ impl MarkFlags {
     }
 }
 
-/// One shape whose prims are discs, boxes and stroked polylines, drawn with one paint.
+/// One shape whose prims are discs, boxes, stroked polylines and glyphs, drawn with one paint.
 ///
 /// The geometry is in a [`MarkPayload`] beside the item, and the item holds only how many of
 /// each kind the payload has. So a hundred thousand circles are one item: one draw order, one
@@ -80,12 +80,18 @@ pub struct MarkItem {
     /// The linear part of the map from payload to local space, as `[a, b, c, d]`:
     /// `x' = a·x + c·y` and `y' = b·x + d·y`.
     pub axes: [f32; 4],
+    /// How many glyph words the payload holds, the tile table included.
+    pub glyphs: u32,
+    /// How many of those words are the tile table, which comes first.
+    pub tiles: u32,
+    /// The atlas texture the glyph cells lie in, packed as [`crate::SpriteTile::texture`].
+    pub texture: u32,
 }
 
 impl MarkItem {
-    /// An item over a payload of `counts` discs, boxes and vertices, filling `bounds` with
-    /// `paint`.
-    pub fn new(bounds: Rect<DevicePx, Device>, paint: PaintRef, counts: [u32; 3]) -> Self {
+    /// An item over a payload of `counts` discs, boxes, vertices and glyph words, filling `bounds`
+    /// with `paint`.
+    pub fn new(bounds: Rect<DevicePx, Device>, paint: PaintRef, counts: [u32; 4]) -> Self {
         Self {
             order: 0,
             flags: 0,
@@ -105,6 +111,9 @@ impl MarkItem {
             vertices: counts[2],
             half_width: 0.0,
             axes: [1.0, 0.0, 0.0, 1.0],
+            glyphs: counts[3],
+            tiles: 0,
+            texture: 0,
         }
     }
 
@@ -165,6 +174,14 @@ pub struct MarkPayload {
     /// Polyline vertices. One NaN vertex separates two runs, and one NaN vertex comes first and
     /// last.
     pub vertices: Vec<[f32; 2]>,
+    /// Glyph words: first the item's tile table, sixteen cells per outline as
+    /// `[x | y << 16, w | h << 16, ox, oy]`, then one instance per glyph as
+    /// `[x bits, y bits, outline, offset]`.
+    ///
+    /// A cell is in atlas texels, and `(ox, oy)` is where it starts from the pixel of the anchor.
+    /// An instance's `(x, y)` is its anchor as two `f32`, mapped like any payload position, and
+    /// `offset` is the instance's own index from the first word.
+    pub glyphs: Vec<[u32; 4]>,
 }
 
 impl MarkPayload {
@@ -173,14 +190,16 @@ impl MarkPayload {
         self.discs.len() * size_of::<[f32; 4]>()
             + self.boxes.len() * size_of::<MarkBox>()
             + self.vertices.len() * size_of::<[f32; 2]>()
+            + self.glyphs.len() * size_of::<[u32; 4]>()
     }
 
-    /// How many discs, boxes and vertices it holds.
-    pub fn counts(&self) -> [u32; 3] {
+    /// How many discs, boxes, vertices and glyph words it holds.
+    pub fn counts(&self) -> [u32; 4] {
         [
             self.discs.len() as u32,
             self.boxes.len() as u32,
             self.vertices.len() as u32,
+            self.glyphs.len() as u32,
         ]
     }
 }
@@ -198,7 +217,7 @@ mod tests {
             Point::new(DevicePx(1.0), DevicePx(2.0)),
             Size::new(DevicePx(3.0), DevicePx(4.0)),
         );
-        let mut mark = MarkItem::new(bounds, PaintRef::NONE, [1, 0, 0]);
+        let mut mark = MarkItem::new(bounds, PaintRef::NONE, [1, 0, 0, 0]);
         assert_eq!(mark.axes, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(mark.origin, [0.0, 0.0]);
         assert_eq!(

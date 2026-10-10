@@ -31,6 +31,11 @@ struct MarkItem {
     half_width: f32,
     // The linear part of the payload-to-local map: x' = a x + c y, y' = b x + d y.
     axes: Vector4,
+    // How many glyph words the payload holds, and how many of them lead as the tile table.
+    glyphs: u32,
+    tiles: u32,
+    // The atlas texture the glyph cells lie in.
+    texture: u32,
 }
 
 // What one draw of one item reads beside the payload.

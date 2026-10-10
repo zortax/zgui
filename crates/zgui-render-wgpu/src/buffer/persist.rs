@@ -45,8 +45,8 @@ pub(crate) const LANES: [PrimitiveKind; 8] = [
 /// The lane mark items live in.
 pub(crate) const MARKS_LANE: usize = 7;
 
-/// How many payload kinds a mark has: discs, boxes and polyline vertices.
-pub(crate) const PAYLOAD_LANES: usize = 3;
+/// How many payload kinds a mark has: discs, boxes, polyline vertices and glyph words.
+pub(crate) const PAYLOAD_LANES: usize = 4;
 
 /// Every arena: one per lane, then one per payload kind.
 const ARENAS: usize = LANES.len() + PAYLOAD_LANES;
@@ -126,7 +126,8 @@ fn payload_slice(payload: &zgui_scene::MarkPayload, kind: usize) -> &[u8] {
     match kind {
         0 => bytemuck::cast_slice(&payload.discs),
         1 => bytemuck::cast_slice(&payload.boxes),
-        _ => bytemuck::cast_slice(&payload.vertices),
+        2 => bytemuck::cast_slice(&payload.vertices),
+        _ => bytemuck::cast_slice(&payload.glyphs),
     }
 }
 
@@ -442,6 +443,7 @@ impl ChunkStore {
                     "zgui.arena.mark_vertices",
                     size_of::<[f32; 2]>() as u32,
                 ),
+                Arena::new(gpu, "zgui.arena.mark_glyphs", size_of::<[u32; 4]>() as u32),
             ],
             residence: HashMap::new(),
             shared: FxHashMap::default(),
@@ -482,7 +484,7 @@ impl ChunkStore {
         self.mark_payload
             .get(position)
             .cloned()
-            .unwrap_or([0..0, 0..0, 0..0])
+            .unwrap_or([0..0, 0..0, 0..0, 0..0])
     }
 
     /// How many bytes the arenas hold.
@@ -879,7 +881,7 @@ impl ChunkStore {
             }
         }
         let mut uploaded = 0;
-        let mut ranges: [Range<u32>; PAYLOAD_LANES] = [0..0, 0..0, 0..0];
+        let mut ranges: [Range<u32>; PAYLOAD_LANES] = [0..0, 0..0, 0..0, 0..0];
         for (kind, range) in ranges.iter_mut().enumerate() {
             if transient[kind] == 0 {
                 continue;

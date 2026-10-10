@@ -324,6 +324,7 @@ fn payload_of(found: Arc<Decomposition>, union: bool) -> Option<(MarkPayload, u3
             })
             .collect(),
         vertices,
+        glyphs: Vec::new(),
     };
     if union {
         flags |= MarkFlags::UNION;

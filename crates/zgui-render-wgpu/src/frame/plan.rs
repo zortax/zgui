@@ -110,13 +110,18 @@ fn draw_mark_kinds(
             MarkKind::Box => item.boxes,
             // A run is a separator, two vertices and a separator, and fewer strokes nothing.
             MarkKind::Polyline => item.vertices.saturating_sub(2),
+            // The tile table comes first and draws nothing.
+            MarkKind::Glyph => item.glyphs.saturating_sub(item.tiles),
         };
         if count > 0 {
+            let glyph = kind == MarkKind::Glyph;
             builder.draw(PlannedDraw::Marks {
                 kind,
                 coverage,
                 position,
                 block,
+                lead: if glyph { item.tiles } else { 0 },
+                texture: glyph.then_some(item.texture),
             });
         }
     }

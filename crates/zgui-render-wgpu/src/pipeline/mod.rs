@@ -226,6 +226,10 @@ fn build(
         } else {
             &layouts.marks
         }));
+        // A glyph reads its cells out of an atlas texture, bound after its payload.
+        if kind.samples_atlas() {
+            bind_group_layouts.push(Some(&layouts.sampled));
+        }
     } else if kind.composites_vector() {
         bind_group_layouts.push(Some(&layouts.vector));
     } else if kind.samples_through_block() {

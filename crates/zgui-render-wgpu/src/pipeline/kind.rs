@@ -50,13 +50,17 @@ pub enum PipelineKind {
     MarksPolyline,
     /// Adding the coverage of a mark's polylines into its bin.
     MarksPolylineCoverage,
+    /// Painting the glyphs of a mark.
+    MarksGlyph,
+    /// Adding the coverage of a mark's glyphs into its bin.
+    MarksGlyphCoverage,
     /// Painting a union mark through the coverage in its bin.
     MarksComposite,
 }
 
 impl PipelineKind {
     /// Every kind.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 23] = [
         Self::Quad,
         Self::Shadow,
         Self::Decoration,
@@ -77,6 +81,8 @@ impl PipelineKind {
         Self::MarksBoxCoverage,
         Self::MarksPolyline,
         Self::MarksPolylineCoverage,
+        Self::MarksGlyph,
+        Self::MarksGlyphCoverage,
         Self::MarksComposite,
     ];
 
@@ -93,6 +99,8 @@ impl PipelineKind {
             (MarkKind::Box, true) => Self::MarksBoxCoverage,
             (MarkKind::Polyline, false) => Self::MarksPolyline,
             (MarkKind::Polyline, true) => Self::MarksPolylineCoverage,
+            (MarkKind::Glyph, false) => Self::MarksGlyph,
+            (MarkKind::Glyph, true) => Self::MarksGlyphCoverage,
         }
     }
 
@@ -114,6 +122,7 @@ impl PipelineKind {
             Self::MarksDisc | Self::MarksDiscCoverage => Module::MarksDisc,
             Self::MarksBox | Self::MarksBoxCoverage => Module::MarksBox,
             Self::MarksPolyline | Self::MarksPolylineCoverage => Module::MarksPolyline,
+            Self::MarksGlyph | Self::MarksGlyphCoverage => Module::MarksGlyph,
             Self::MarksComposite => Module::MarksComposite,
         }
     }
@@ -139,6 +148,8 @@ impl PipelineKind {
             Self::MarksBoxCoverage => "vs_box_coverage",
             Self::MarksPolyline => "vs_segment_paint",
             Self::MarksPolylineCoverage => "vs_segment_coverage",
+            Self::MarksGlyph => "vs_glyph_paint",
+            Self::MarksGlyphCoverage => "vs_glyph_coverage",
             Self::MarksComposite => "vs_mark_composite",
         }
     }
@@ -166,6 +177,8 @@ impl PipelineKind {
             Self::MarksBoxCoverage => "fs_box_coverage",
             Self::MarksPolyline => "fs_segment_paint",
             Self::MarksPolylineCoverage => "fs_segment_coverage",
+            Self::MarksGlyph => "fs_glyph_paint",
+            Self::MarksGlyphCoverage => "fs_glyph_coverage",
             Self::MarksComposite => "fs_mark_composite",
         }
     }
@@ -174,7 +187,11 @@ impl PipelineKind {
     pub fn samples_atlas(self) -> bool {
         matches!(
             self,
-            Self::MonoSprite | Self::ColorSprite | Self::SubpixelSprite
+            Self::MonoSprite
+                | Self::ColorSprite
+                | Self::SubpixelSprite
+                | Self::MarksGlyph
+                | Self::MarksGlyphCoverage
         )
     }
 
@@ -224,6 +241,8 @@ impl PipelineKind {
                 | Self::MarksBoxCoverage
                 | Self::MarksPolyline
                 | Self::MarksPolylineCoverage
+                | Self::MarksGlyph
+                | Self::MarksGlyphCoverage
                 | Self::MarksComposite
         )
     }
@@ -232,7 +251,10 @@ impl PipelineKind {
     pub fn adds_coverage(self) -> bool {
         matches!(
             self,
-            Self::MarksDiscCoverage | Self::MarksBoxCoverage | Self::MarksPolylineCoverage
+            Self::MarksDiscCoverage
+                | Self::MarksBoxCoverage
+                | Self::MarksPolylineCoverage
+                | Self::MarksGlyphCoverage
         )
     }
 
@@ -277,7 +299,10 @@ impl PipelineKind {
             | Self::BlurDownsample
             | Self::BlurAxis => None,
             // Coverage adds up, and the format saturates the sum at one: the union of the prims.
-            Self::MarksDiscCoverage | Self::MarksBoxCoverage | Self::MarksPolylineCoverage => {
+            Self::MarksDiscCoverage
+            | Self::MarksBoxCoverage
+            | Self::MarksPolylineCoverage
+            | Self::MarksGlyphCoverage => {
                 let add = wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::One,
                     dst_factor: wgpu::BlendFactor::One,
@@ -338,6 +363,8 @@ impl PipelineKind {
             Self::MarksBoxCoverage => "zgui.pipeline.marks_box_coverage",
             Self::MarksPolyline => "zgui.pipeline.marks_polyline",
             Self::MarksPolylineCoverage => "zgui.pipeline.marks_polyline_coverage",
+            Self::MarksGlyph => "zgui.pipeline.marks_glyph",
+            Self::MarksGlyphCoverage => "zgui.pipeline.marks_glyph_coverage",
             Self::MarksComposite => "zgui.pipeline.marks_composite",
         }
     }
@@ -453,6 +480,19 @@ mod tests {
             PipelineKind::Blit.fragment_entry(),
             PipelineKind::BlitUndoSrgb.fragment_entry()
         );
+    }
+
+    #[test]
+    fn a_glyph_draw_reads_the_atlas_beside_its_payload() {
+        use crate::pipeline::marks::MarkKind;
+
+        for coverage in [false, true] {
+            let kind = PipelineKind::marks(MarkKind::Glyph, coverage);
+            assert!(kind.draws_marks() && kind.samples_atlas(), "{kind:?}");
+            assert_eq!(kind.adds_coverage(), coverage, "{kind:?}");
+            assert!(!kind.is_instanced(), "{kind:?} reads the marks lane");
+        }
+        assert_eq!(MarkKind::Glyph.lane(), 3);
     }
 
     #[test]

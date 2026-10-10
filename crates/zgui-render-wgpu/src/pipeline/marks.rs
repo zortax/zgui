@@ -12,11 +12,13 @@ pub enum MarkKind {
     Box,
     /// Stroked polylines.
     Polyline,
+    /// Copies of repeated outlines, read from atlas cells.
+    Glyph,
 }
 
 impl MarkKind {
     /// Every kind, in payload-lane order.
-    pub const ALL: [Self; 3] = [Self::Disc, Self::Box, Self::Polyline];
+    pub const ALL: [Self; 4] = [Self::Disc, Self::Box, Self::Polyline, Self::Glyph];
 
     /// The kind's payload lane.
     pub fn lane(self) -> usize {

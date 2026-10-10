@@ -267,8 +267,10 @@ impl Recorder<'_> {
                 coverage,
                 position,
                 block,
+                lead,
+                texture,
             } => self.marks_draw(
-                pass, planned, tables, *kind, *coverage, *position, *block, format,
+                pass, planned, tables, *kind, *coverage, *position, *block, *lead, *texture, format,
             ),
             PlannedDraw::MarksComposite { block } => {
                 let Some(view) = self.marks.array() else {
@@ -423,16 +425,21 @@ impl Recorder<'_> {
         coverage: bool,
         position: usize,
         block: u32,
+        lead: u32,
+        texture: Option<u32>,
         format: wgpu::TextureFormat,
     ) -> bool {
         let range = self.buffers.chunks.mark_payload(position)[kind.lane()].clone();
         // Instance `i` of a polyline strokes vertex `i` to vertex `i + 1`, and the first and last
-        // vertices are separators.
+        // vertices are separators. A glyph item's tile table comes before its instances.
         let range = match kind {
             crate::pipeline::marks::MarkKind::Polyline if range.len() >= 3 => {
                 range.start + 1..range.end - 2
             }
             crate::pipeline::marks::MarkKind::Polyline => return false,
+            crate::pipeline::marks::MarkKind::Glyph => {
+                (range.start + lead).min(range.end)..range.end
+            }
             _ => range,
         };
         if range.is_empty() {
@@ -452,6 +459,15 @@ impl Recorder<'_> {
         let Some(payload) = self.buffers.mark_bind_group(self.gpu, layouts, kind) else {
             return false;
         };
+        // A glyph item whose atlas texture is gone draws nothing, as a sprite does: another
+        // texture would show a stranger's pixels.
+        let atlas = match texture {
+            None => None,
+            Some(texture) => match self.atlas.bind_group(decode_texture(texture)) {
+                Some(bind_group) => Some(bind_group),
+                None => return false,
+            },
+        };
         let Some(pipeline) =
             self.pipelines
                 .get(self.gpu, PipelineKind::marks(kind, coverage), format)
@@ -462,6 +478,9 @@ impl Recorder<'_> {
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         pass.set_bind_group(2, &payload, &[block]);
+        if let Some(bind_group) = atlas {
+            pass.set_bind_group(3, bind_group, &[]);
+        }
         pass.draw(0..4, range);
         true
     }

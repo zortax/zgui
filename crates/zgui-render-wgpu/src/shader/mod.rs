@@ -42,13 +42,15 @@ pub enum Module {
     MarksBox,
     /// The polylines of a mark.
     MarksPolyline,
+    /// The glyphs of a mark.
+    MarksGlyph,
     /// Painting a union mark through its bin.
     MarksComposite,
 }
 
 impl Module {
     /// Every module, which is what makes "each one compiles" a statement about all of them.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Quad,
         Self::Shadow,
         Self::Decoration,
@@ -64,6 +66,7 @@ impl Module {
         Self::MarksDisc,
         Self::MarksBox,
         Self::MarksPolyline,
+        Self::MarksGlyph,
         Self::MarksComposite,
     ];
 
@@ -94,6 +97,7 @@ impl Module {
             Self::MarksDisc => "zgui.shader.marks_disc",
             Self::MarksBox => "zgui.shader.marks_box",
             Self::MarksPolyline => "zgui.shader.marks_polyline",
+            Self::MarksGlyph => "zgui.shader.marks_glyph",
             Self::MarksComposite => "zgui.shader.marks_composite",
         }
     }
@@ -141,7 +145,11 @@ pub fn structures(module: Module) -> Vec<Reflected> {
     ];
     if matches!(
         module,
-        Module::MarksDisc | Module::MarksBox | Module::MarksPolyline | Module::MarksComposite
+        Module::MarksDisc
+            | Module::MarksBox
+            | Module::MarksPolyline
+            | Module::MarksGlyph
+            | Module::MarksComposite
     ) {
         structures.push(reflected!(
             MarkItem,
@@ -159,7 +167,10 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 boxes,
                 vertices,
                 half_width,
-                axes
+                axes,
+                glyphs,
+                tiles,
+                texture
             ]
         ));
         structures.push(reflected!(
@@ -260,7 +271,11 @@ pub fn structures(module: Module) -> Vec<Reflected> {
         Module::Blit | Module::Clear | Module::Blur => {
             unreachable!("a module reading no side tables was answered above")
         }
-        Module::MarksDisc | Module::MarksBox | Module::MarksPolyline | Module::MarksComposite => {
+        Module::MarksDisc
+        | Module::MarksBox
+        | Module::MarksPolyline
+        | Module::MarksGlyph
+        | Module::MarksComposite => {
             unreachable!("a mark module was answered above")
         }
     });

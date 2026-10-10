@@ -57,7 +57,7 @@ pub const MODULES: &[(&str, &[&str])] = &[
     ("composite", &["common", "sdf", "composite"]),
     ("external", &["common", "sdf", "external"]),
     ("vector", &["common", "sdf", "vector"]),
-    // The three payload kinds bind three different arrays at one binding, so each is a module of
+    // The four payload kinds bind four different arrays at one binding, so each is a module of
     // its own over the part they share.
     (
         "marks_disc",
@@ -70,6 +70,10 @@ pub const MODULES: &[(&str, &[&str])] = &[
     (
         "marks_polyline",
         &["common", "sdf", "paint", "marks", "marks_polyline"],
+    ),
+    (
+        "marks_glyph",
+        &["common", "sdf", "paint", "marks", "marks_glyph"],
     ),
     (
         "marks_composite",
