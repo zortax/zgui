@@ -466,7 +466,7 @@ fn a_crowded_cell_is_not_proven_separated() {
     assert!(separated(&rects, 1.0), "sixteen fit one cell");
 }
 
-/// The scatter bench's 100 000 circles in one path: random centres over 960 by 540, radius 3.5.
+/// `count` circles of radius 3.5 in one path, at random over 960 by 540 as in the scatter bench.
 fn scatter(count: usize) -> BezPath {
     let mut state = 0x5CA7_7E12_u64;
     let mut next = || {
@@ -481,42 +481,6 @@ fn scatter(count: usize) -> BezPath {
         plot_circle(&mut path, (x, y), 3.5);
     }
     path
-}
-
-/// Times one recognition of the scatter bench's largest path. Run it in release with
-/// `--ignored --nocapture`.
-#[test]
-#[ignore = "a timing, run on demand in release"]
-fn timing_a_hundred_thousand_circles() {
-    let path = scatter(100_000);
-    let limits = Limits {
-        tau: TAU,
-        max_prims: 1 << 22,
-    };
-    let mut best = std::time::Duration::MAX;
-    for _ in 0..10 {
-        let start = std::time::Instant::now();
-        let found = recognise(&path, Part::Fill(peniko::Fill::NonZero), limits)
-            .expect("every subpath is a circle");
-        best = best.min(start.elapsed());
-        assert_eq!(found.discs.len(), 100_000);
-    }
-    eprintln!("recognise 100k circles: {best:?}");
-}
-
-#[test]
-#[ignore = "a timing, run on demand in release"]
-fn timing_one_run_of_a_hundred_thousand_circles() {
-    let path = scatter(100_000);
-    let mut best = std::time::Duration::MAX;
-    for _ in 0..10 {
-        let start = std::time::Instant::now();
-        let found = super::recognise_run(path.elements(), Part::Fill(peniko::Fill::NonZero), TAU)
-            .expect("every subpath is a circle");
-        best = best.min(start.elapsed());
-        assert_eq!(found.discs.len(), 100_000);
-    }
-    eprintln!("one run of 100k circles: {best:?}");
 }
 
 /// The test `follows` made before it compared squared lengths.
