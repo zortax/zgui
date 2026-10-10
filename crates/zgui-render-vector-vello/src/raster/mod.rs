@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use vello::{AaConfig, RenderParams, peniko::Color as PenikoColor};
 use zgui_geom::{Device, Rect};
+use zgui_profile::{Counter, counter};
 use zgui_render::{
     Layering, MemoryReport, VectorError, VectorFrame, VectorPass, VectorPlan, VectorRaster,
     VectorTarget,
@@ -226,6 +227,7 @@ impl VectorRaster for VelloRaster {
             .position(|pass| pass.target == VectorTarget::NONE)
             .unwrap_or(frame.plan.passes.len());
         self.group(&frame.plan.passes[..prepared]);
+        let (hits, misses) = self.encodings.counts();
         let mut renderer = self.shared.lock();
         for layer in 0..self.layered.len() {
             // One rasterisation for the whole layer, because everything in it is one picture: the
@@ -282,8 +284,12 @@ impl VectorRaster for VelloRaster {
                 .map_err(|error| VectorError::Device {
                     detail: error.to_string(),
                 })?;
+            counter::bump(Counter::VelloRenders);
         }
         drop(renderer);
+        let (hits_now, misses_now) = self.encodings.counts();
+        counter::add(Counter::VectorEncodeHits, hits_now - hits);
+        counter::add(Counter::VectorEncodeMisses, misses_now - misses);
         if prepared < frame.plan.passes.len() {
             // More passes stacked over one point than there are layers to keep them apart. Reporting
             // it is what makes this frame's vector content missing rather than jumbled: the

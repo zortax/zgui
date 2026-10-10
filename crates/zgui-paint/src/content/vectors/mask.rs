@@ -8,6 +8,7 @@ use core::hash::{Hash, Hasher};
 use rustc_hash::{FxHashMap, FxHasher};
 use zgui_atlas::{Atlas, AtlasKey, AtlasTile, TextureKind};
 use zgui_geom::{Device, Rect, Size};
+use zgui_profile::{Counter, counter};
 use zgui_scene::kurbo::{self, BezPath, PathEl};
 use zgui_scene::peniko;
 
@@ -156,9 +157,17 @@ impl VectorMaskCache {
             key
         };
         let tile = atlas
-            .get_or_insert(key, Size::new(width, height), || raster(&fingerprint))
+            .get_or_insert(key, Size::new(width, height), || {
+                counter::bump(Counter::VectorMaskMisses);
+                raster(&fingerprint)
+            })
             .ok()?;
         Some(VectorMask { tile, key })
+    }
+
+    /// How many geometry identities map to a tile.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
     }
 
     /// Drops metadata whose atlas content was evicted.

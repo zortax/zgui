@@ -468,6 +468,7 @@ impl WgpuRenderer {
             && let Some(factory) = self.vector_factory
         {
             let raster = factory(&self.gpu, self.target.size);
+            counter::bump(Counter::VectorBackendBuilt);
             self.vector_backend = Some(raster.backend());
             self.vectors = Some(raster);
         }

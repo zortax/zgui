@@ -452,6 +452,7 @@ impl PaintCache {
         if !record.prims.vectors.is_empty()
             && record.border_box.origin != fragment.border_box.origin
         {
+            counter::bump(Counter::VectorReplaysRefused);
             return Reuse::Encode;
         }
         debug_assert!(

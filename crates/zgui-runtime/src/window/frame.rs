@@ -1632,11 +1632,19 @@ impl Window {
         }
         let outcome = self.renderer.draw(&self.scene, &self.damage);
         let vector_after = self.renderer.vector_status();
-        if !vector_before.initialized
-            && vector_after.initialized
-            && vector_after.backend == Some(zgui_render::VectorBackend::Vello)
-        {
-            self.vello_initializers = complex_this_frame;
+        if !vector_before.initialized && vector_after.initialized {
+            // Once per renderer: the build is the costliest single step a frame can take, so the
+            // log names what asked for it.
+            tracing::info!(
+                target: "zgui::paint",
+                backend = ?vector_after.backend,
+                nodes = complex_this_frame.len(),
+                first = ?complex_this_frame.first(),
+                "the general vector rasteriser was built"
+            );
+            if vector_after.backend == Some(zgui_render::VectorBackend::Vello) {
+                self.vello_initializers = complex_this_frame;
+            }
         }
         outcome
     }

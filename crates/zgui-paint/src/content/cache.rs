@@ -119,6 +119,7 @@ impl ContentCache {
         // here too, and says it as a count rather than as a byte figure an allocator has smeared.
         counter::set(Counter::AtlasEntriesLive, self.atlas.len() as u64);
         counter::set(Counter::GlyphEntriesLive, self.glyphs.held() as u64);
+        counter::set(Counter::VectorMaskTilesLive, self.vector_masks.len() as u64);
     }
 
     /// What the cache is holding.

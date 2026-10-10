@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use zgui_color::{Color, ColorSpace, HueInterpolation};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+use zgui_profile::{Counter, counter};
 use zgui_scene::kurbo;
 use zgui_scene::{
     GradientKind, MonoSprite, Paint, PaintRef, Scene, VectorClip, VectorId, VectorItem,
@@ -51,6 +52,7 @@ pub(crate) fn emit_tracked(
     placement: VectorPlacement,
 ) -> ShapeEmission {
     if let Some(pushed) = emit_mask(scene, shape, paint, masks, placement) {
+        counter::bump(Counter::VectorRouteMask);
         return ShapeEmission {
             pushed,
             route: Some(VectorRoute::AtlasMask),
@@ -96,6 +98,9 @@ pub(crate) fn emit_tracked(
         item.local_ink = local;
         item.transform = Some(placement.transform);
         pushed += usize::from(scene.push_vector(item).is_some());
+    }
+    if shape.fill.is_some() || has_stroke {
+        counter::bump(Counter::VectorRouteGeneral);
     }
     ShapeEmission {
         pushed,
