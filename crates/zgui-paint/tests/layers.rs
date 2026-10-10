@@ -147,28 +147,36 @@ fn ramp() -> Brush {
 fn a_series_canvas_is_no_candidate() {
     // Held so this test's rasters do not reach another test's counters.
     let _recording = Recording::begin();
-    let handle = SceneHandle::new();
-    handle.edit(|scene| {
-        scene.replace(vec![
-            ShapeBuilder::new(kurbo::Circle::new((20.0, 20.0), 12.0).to_path(0.1))
-                .fill(ramp())
-                .build(),
-        ]);
-        scene.push_series(Series::Points {
-            data: std::sync::Arc::from(vec![[0.2_f32, 0.2], [0.5, 0.5], [0.8, 0.3]]),
-            to_canvas: Affine::new([60.0, 0.0, 0.0, -60.0, 0.0, 60.0]),
-            marker: Marker::Circle { radius: 3.0 },
-            fill: Some(Brush::Solid(Color::srgb_u8(255, 0, 0, 255))),
-            stroke: None,
+    // A triangle under a ramp, which no analytic route takes.
+    let canvas = |series: bool| {
+        let handle = SceneHandle::new();
+        handle.edit(|scene| {
+            let mut triangle = kurbo::BezPath::new();
+            triangle.move_to((0.0, 0.0));
+            triangle.line_to((40.0, 0.0));
+            triangle.line_to((0.0, 40.0));
+            triangle.close_path();
+            scene.replace(vec![ShapeBuilder::new(triangle).fill(ramp()).build()]);
+            if series {
+                scene.push_series(Series::Points {
+                    data: std::sync::Arc::from(vec![[0.2_f32, 0.2], [0.5, 0.5], [0.8, 0.3]]),
+                    to_canvas: Affine::new([60.0, 0.0, 0.0, -60.0, 0.0, 60.0]),
+                    marker: Marker::Circle { radius: 3.0 },
+                    fill: Some(Brush::Solid(Color::srgb_u8(255, 0, 0, 255))),
+                    stroke: None,
+                });
+            }
         });
-    });
-    let mut window = Window::new(
-        Element::new("root").children(vec![Element::new("mark").canvas(&handle)]),
-        CSS,
-    );
-    let report = window.paint(false);
-    assert!(!routes(&report).contains(VectorRoute::CpuLayer));
-    assert!(window.harness.scene().primitives.color_sprites.is_empty());
+        let mut window = Window::new(
+            Element::new("root").children(vec![Element::new("mark").canvas(&handle)]),
+            CSS,
+        );
+        let report = window.paint(false);
+        let sprites = window.harness.scene().primitives.color_sprites.len();
+        (routes(&report).contains(VectorRoute::CpuLayer), sprites)
+    };
+    assert_eq!(canvas(false), (true, 1), "the shapes alone take a layer");
+    assert_eq!(canvas(true), (false, 0), "a series keeps the drawing off the layer");
 }
 
 #[test]
