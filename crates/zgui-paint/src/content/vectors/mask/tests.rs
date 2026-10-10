@@ -466,6 +466,8 @@ fn a_recognition_is_reused_by_path_identity_and_swept_after_eight_frames() {
     };
     let other = recognised_at(&source, &copy, 1.0 / 16.0).expect("a circle");
     assert!(!Arc::ptr_eq(&first, &other));
+    let other_again = recognised_at(&source, &copy, 1.0 / 16.0).expect("a circle");
+    assert!(Arc::ptr_eq(&other, &other_again));
     source.0.borrow_mut().end_frame();
     for frame in 1..8 {
         source.0.borrow_mut().begin_frame();
@@ -518,4 +520,54 @@ fn a_marks_decline_is_remembered_for_eight_frames() {
     rig.begin();
     assert!(rig.cache.marks_allowed(OWNER), "frame 8 tries again");
     rig.end();
+}
+
+#[test]
+fn a_recognition_nothing_finds_again_lives_one_frame() {
+    let source = Remembering::default();
+    let shape = circle_shape();
+    source.0.borrow_mut().begin_frame();
+    recognised_at(&source, &shape, 1.0 / 16.0).expect("a circle");
+    source.0.borrow_mut().end_frame();
+    assert_eq!(
+        source.0.borrow().len(),
+        1,
+        "kept for the next frame to find"
+    );
+    source.0.borrow_mut().begin_frame();
+    source.0.borrow_mut().end_frame();
+    assert_eq!(
+        source.0.borrow().len(),
+        0,
+        "nothing found it, so it is gone"
+    );
+}
+
+#[test]
+fn a_frame_that_finds_nothing_it_held_stops_keeping_until_a_probe() {
+    let source = Remembering::default();
+    let fresh = || zgui_svg::Shape {
+        path: Arc::new(circle_shape().path.as_ref().clone()),
+        ..circle_shape()
+    };
+    // Every frame draws new allocations, so no lookup finds anything.
+    let mut kept = Vec::new();
+    for _ in 0..16 {
+        source.0.borrow_mut().begin_frame();
+        let shapes: Vec<_> = (0..20).map(|_| fresh()).collect();
+        let before = source.0.borrow().len();
+        for shape in &shapes {
+            recognised_at(&source, shape, 1.0 / 16.0);
+        }
+        kept.push(source.0.borrow().len() - before);
+        source.0.borrow_mut().end_frame();
+    }
+    assert!(
+        kept.iter().filter(|&&held| held == 0).count() >= 12,
+        "an idle cache keeps entries only on probe frames: {kept:?}"
+    );
+    assert!(
+        kept.iter().any(|&held| held > 0),
+        "a probe keeps them: {kept:?}"
+    );
 }

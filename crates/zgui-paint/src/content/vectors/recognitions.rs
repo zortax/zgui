@@ -1,19 +1,34 @@
 //! What recognition found in a path, kept between frames by the identity of the path.
 //!
 //! A drawing that does not change hands its shapes back as the same allocations every frame, so
-//! the address of a path names its geometry for as long as an entry holds the path alive. The
+//! the address of a path names its geometry for as long as an entry holds its allocation. The
 //! analytic route and the marks route both ask, the second with a larger limit, and a decline is
 //! kept as well as a result: a path that is no recognised shape costs one attempt.
+//!
+//! A drawing placed again every frame hands back new allocations every frame, and an entry for
+//! one of them is never asked for again. Holding those paths costs more than recognising them,
+//! so an entry nothing has asked for again lives one frame only, and a frame that found nothing
+//! it held stops adding entries until a later frame tries again.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use rustc_hash::FxHashMap;
 use zgui_scene::kurbo::{self, BezPath};
 
 use crate::emit::vector::recognise::Decomposition;
 
-/// How many frames an entry survives without a lookup.
+/// How many frames an entry survives without a lookup, once a lookup has found it.
 const KEPT_FRAMES: u32 = 8;
+
+/// How many frames an entry nothing found yet survives: the next frame may find it.
+const UNPROVEN_FRAMES: u32 = 1;
+
+/// How many misses with no hit stop a frame's entries from being kept.
+const IDLE_MISSES: u32 = 16;
+
+/// How often, in frames, the cache keeps entries while it is idle, to find out whether the
+/// drawings have stopped changing.
+const PROBE_FRAMES: u32 = 8;
 
 /// The most entries held. A full map keeps what it holds and adds nothing.
 const MAX_ENTRIES: usize = 4096;
@@ -55,8 +70,11 @@ impl PartKey {
 /// One path's recognition.
 #[derive(Debug)]
 struct Entry {
-    /// The path, held so its address names it while the entry stands.
-    _path: Arc<BezPath>,
+    /// The path's allocation, held so no other path takes its address while the entry stands.
+    ///
+    /// Weak: the elements are freed with the last drawing that holds them, and only the small
+    /// allocation that names them stays.
+    _path: Weak<BezPath>,
     /// The power of two the tolerance was rounded down to.
     class: i32,
     /// The most primitives the recognition was allowed.
@@ -65,29 +83,60 @@ struct Entry {
     outcome: Option<Arc<Decomposition>>,
     /// The frame it was last looked up in.
     touched: u32,
+    /// Whether a lookup has found it.
+    proven: bool,
 }
 
 /// Recognitions of paths, by the address of the path and the part recognised.
 #[doc(hidden)]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Recognitions {
     /// The entries.
     entries: FxHashMap<(usize, PartKey), Entry>,
     /// The current frame.
     frame: u32,
+    /// Lookups this frame that found an entry.
+    hits: u32,
+    /// Lookups this frame that found none.
+    misses: u32,
+    /// Whether this frame keeps what it recognises.
+    keeping: bool,
+}
+
+impl Default for Recognitions {
+    fn default() -> Self {
+        Self {
+            entries: FxHashMap::default(),
+            frame: 0,
+            hits: 0,
+            misses: 0,
+            keeping: true,
+        }
+    }
 }
 
 impl Recognitions {
     /// Starts a frame.
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        self.hits = 0;
+        self.misses = 0;
     }
 
-    /// Forgets every entry no lookup touched for [`KEPT_FRAMES`] frames.
+    /// Forgets every entry no lookup touched for [`KEPT_FRAMES`] frames, and every entry no lookup
+    /// found within [`UNPROVEN_FRAMES`] frames, and decides whether the next frame keeps entries.
     pub(crate) fn end_frame(&mut self) {
         let frame = self.frame;
-        self.entries
-            .retain(|_, entry| frame.wrapping_sub(entry.touched) < KEPT_FRAMES);
+        self.entries.retain(|_, entry| {
+            let kept = if entry.proven {
+                KEPT_FRAMES
+            } else {
+                UNPROVEN_FRAMES
+            };
+            frame.wrapping_sub(entry.touched) < kept
+        });
+        let idle = self.hits == 0 && self.misses >= IDLE_MISSES;
+        self.keeping = !idle || frame.wrapping_add(1).is_multiple_of(PROBE_FRAMES);
     }
 
     /// What `path` was found to be at tolerance `class` and limit `max_prims`, or `None` when no
@@ -102,16 +151,25 @@ impl Recognitions {
         class: i32,
         max_prims: usize,
     ) -> Option<Option<Arc<Decomposition>>> {
-        let entry = self.entries.get_mut(&(key(path), part))?;
-        if entry.class != class {
-            return None;
-        }
-        let answer = match &entry.outcome {
-            Some(found) => Some((found.count <= max_prims).then(|| Arc::clone(found))),
-            None => (entry.max_prims >= max_prims).then_some(None),
-        };
+        let answer = self
+            .entries
+            .get_mut(&(key(path), part))
+            .filter(|entry| entry.class == class)
+            .and_then(|entry| {
+                let answer = match &entry.outcome {
+                    Some(found) => Some((found.count <= max_prims).then(|| Arc::clone(found))),
+                    None => (entry.max_prims >= max_prims).then_some(None),
+                };
+                if answer.is_some() {
+                    entry.touched = self.frame;
+                    entry.proven = true;
+                }
+                answer
+            });
         if answer.is_some() {
-            entry.touched = self.frame;
+            self.hits += 1;
+        } else {
+            self.misses += 1;
         }
         answer
     }
@@ -125,6 +183,9 @@ impl Recognitions {
         max_prims: usize,
         outcome: Option<Arc<Decomposition>>,
     ) {
+        if !self.keeping {
+            return;
+        }
         let key = (key(path), part);
         if self.entries.len() >= MAX_ENTRIES && !self.entries.contains_key(&key) {
             return;
@@ -132,11 +193,12 @@ impl Recognitions {
         self.entries.insert(
             key,
             Entry {
-                _path: Arc::clone(path),
+                _path: Arc::downgrade(path),
                 class,
                 max_prims,
                 outcome,
                 touched: self.frame,
+                proven: false,
             },
         );
     }
