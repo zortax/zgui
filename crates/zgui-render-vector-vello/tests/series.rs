@@ -636,25 +636,20 @@ fn exact_line(data: &[[f32; 2]]) -> Option<Pixels> {
 /// How two readbacks of one line differ, in the red channel.
 #[derive(Debug)]
 struct Difference {
-    /// Pixels more than one level apart.
-    off: usize,
     /// Pixels more than sixteen levels apart.
     far: usize,
-    /// Pixels either side inks.
-    inked: usize,
-    /// The mean difference over those.
+    /// The mean difference over the pixels either side inks.
     mean: f64,
     /// Pixels `ours` inks by more than sixteen levels where `reference` inks nothing.
     spurious: usize,
 }
 
 fn difference(reference: &Pixels, ours: &Pixels) -> Difference {
-    let (mut off, mut far, mut inked, mut summed, mut spurious) = (0, 0, 0, 0_u64, 0);
+    let (mut far, mut inked, mut summed, mut spurious) = (0, 0_usize, 0_u64, 0);
     for y in 0..SIDE {
         for x in 0..SIDE {
             let (a, b) = (reference.rgba(x, y)[0], ours.rgba(x, y)[0]);
             let d = a.abs_diff(b);
-            off += usize::from(d > 1);
             far += usize::from(d > 16);
             spurious += usize::from(a == 0 && b > 16);
             if a > 0 || b > 0 {
@@ -664,9 +659,7 @@ fn difference(reference: &Pixels, ours: &Pixels) -> Difference {
         }
     }
     Difference {
-        off,
         far,
-        inked,
         mean: summed as f64 / inked.max(1) as f64,
         spurious,
     }
