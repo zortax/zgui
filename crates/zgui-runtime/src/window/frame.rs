@@ -452,6 +452,7 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
+            self.layers_inherited.clear();
             // The chunk notes were consumed by the same submission. A skipped frame keeps them
             // for the next drawn one, and anything noted after this point — a budget eviction —
             // stands until then.
@@ -463,6 +464,7 @@ impl Window {
         if !self.layers_owed.is_empty() {
             for owed in self.layers_owed.drain(..) {
                 self.damage.absorb(owed);
+                self.layers_inherited.push(owed);
             }
             self.request_frame();
         }
@@ -1394,6 +1396,12 @@ impl Window {
                 self.damage = self.damage_before_layout;
                 self.damage.absorb_set(&self.rigid_moves.beyond);
                 shift.expose_into(&mut self.damage);
+                // An owed rectangle is where the drawing was, and the copy moves its pixels.
+                for owed in &self.layers_inherited {
+                    if let Some(carried) = shift.carry(*owed) {
+                        self.damage.absorb(carried);
+                    }
+                }
             }
             self.damage
                 .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));

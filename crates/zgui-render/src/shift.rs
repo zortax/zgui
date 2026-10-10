@@ -141,6 +141,30 @@ impl ScrollShift {
         }
     }
 
+    /// Where the composed pixels of `rect` are after the shift.
+    ///
+    /// Only the part of `rect` inside the port moves, and only the part that lands inside the port
+    /// stays. A caller that owed `rect` before the shift owes this rectangle after it.
+    ///
+    /// ```
+    /// use zgui_geom::{Device, Point, Rect, Size};
+    /// use zgui_render::ScrollShift;
+    ///
+    /// let port: Rect<i32, Device> = Rect::new(Point::new(0, 0), Size::new(100, 100));
+    /// let shift = ScrollShift { port, by: (0, -30) };
+    /// let owed = Rect::new(Point::new(10, 50), Size::new(20, 20));
+    /// assert_eq!(shift.carry(owed), Some(Rect::new(Point::new(10, 20), Size::new(20, 20))));
+    /// ```
+    #[must_use]
+    pub fn carry(&self, rect: Rect<i32, Device>) -> Option<Rect<i32, Device>> {
+        let inside = rect.intersection(self.port)?;
+        Rect::new(
+            Point::new(inside.origin.x + self.by.0, inside.origin.y + self.by.1),
+            inside.size,
+        )
+        .intersection(self.port)
+    }
+
     /// Puts every exposed band into `damage`.
     ///
     /// What a caller that accepted a shift owes: the shift moves the pixels it can and this is the
@@ -232,6 +256,24 @@ mod tests {
         };
         assert_eq!(shift.destination(), None);
         assert_eq!(bands(&shift), vec![port()]);
+    }
+
+    #[test]
+    fn a_carried_rectangle_moves_with_the_port_and_stays_inside_it() {
+        let shift = ScrollShift {
+            port: port(),
+            by: (0, -30),
+        };
+        // Half of it starts above the port, and that half is no pixel of the port to move.
+        let straddling = Rect::new(Point::new(20, 0), Size::new(10, 60));
+        assert_eq!(
+            shift.carry(straddling),
+            Some(Rect::new(Point::new(20, 20), Size::new(10, 10))),
+        );
+        let outside = Rect::new(Point::new(200, 40), Size::new(10, 10));
+        assert_eq!(shift.carry(outside), None);
+        let off_the_top = Rect::new(Point::new(20, 30), Size::new(10, 10));
+        assert_eq!(shift.carry(off_the_top), None, "moved out of the port");
     }
 
     #[test]
