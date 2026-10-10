@@ -460,6 +460,18 @@ impl Splits {
         }
     }
 
+    /// The entry of `path` under `linear`, if one is held, for its payloads.
+    ///
+    /// No lookup: the entry is not touched or proven, and nothing counts as a hit or a miss. A
+    /// path split this frame keeps its payloads here, and lives on only if a later frame finds it.
+    pub(crate) fn held(
+        &mut self,
+        path: &Arc<BezPath>,
+        linear: [f64; 4],
+    ) -> Option<&mut SplitEntry> {
+        self.entries.get_mut(&key(path, linear))
+    }
+
     /// Keeps what `path` split into under `linear`, and returns the entry, or `None` when this
     /// frame keeps nothing.
     pub(crate) fn insert(

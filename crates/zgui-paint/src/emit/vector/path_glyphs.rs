@@ -268,7 +268,7 @@ fn lower(
     }
     let tiles = (found.geometries.len() * PHASES) as u32;
     let held = masks.glyph_splits().and_then(|mut splits| {
-        let entry = splits.lookup(path, linear)?;
+        let entry = splits.held(path, linear)?;
         let held = entry.payloads[part.index].as_ref()?;
         (*held.keys == sheets.keys[..]).then(|| (Arc::clone(&held.payload), held.union))
     });
@@ -298,7 +298,7 @@ fn lower(
                 ..MarkPayload::default()
             });
             if let Some(mut splits) = masks.glyph_splits()
-                && let Some(entry) = splits.lookup(path, linear)
+                && let Some(entry) = splits.held(path, linear)
             {
                 entry.payloads[part.index] = Some(PartPayload {
                     keys: sheets.keys.clone().into_boxed_slice(),
@@ -357,3 +357,6 @@ fn push(
     item.texture = lowered.texture;
     usize::from(scene.push_marks(item, lowered.payload).is_some())
 }
+
+#[cfg(test)]
+mod tests;
