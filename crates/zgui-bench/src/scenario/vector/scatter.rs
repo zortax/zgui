@@ -16,6 +16,9 @@
 //! `triangles-10k` is `10k` with an upright triangle of circumradius 4 in place of each circle,
 //! which no analytic route takes, so it takes the path glyph route. `series-path-100k` is
 //! `series-100k` with that triangle as a path marker.
+//!
+//! `line-5m` is a random walk of 5 000 000 points as one line series reduced per device column,
+//! drawn once and panned through the canvas view.
 
 use std::rc::Rc;
 
@@ -76,6 +79,8 @@ struct Plot {
     view: bool,
     /// Whether each point is a triangle rather than a circle.
     triangles: bool,
+    /// Whether the data is a random walk drawn as one line reduced per device column.
+    line: bool,
 }
 
 /// The variant's plot.
@@ -91,6 +96,7 @@ fn plot(variant: &str) -> Plot {
         "series-1m" => ("plot-large", 960.0, 540.0, 1_000_000, false),
         "triangles-10k" => ("plot-large", 960.0, 540.0, 10_000, false),
         "series-path-100k" => ("plot-large", 960.0, 540.0, 100_000, false),
+        "line-5m" => ("plot-large", 960.0, 540.0, 2_500_000, false),
         other => panic!("unknown scatter-pan variant `{other}`"),
     };
     Plot {
@@ -100,8 +106,9 @@ fn plot(variant: &str) -> Plot {
         visible,
         grid,
         waves: variant.starts_with("waves"),
-        view: variant.starts_with("series") || variant == "waves-view",
+        view: variant.starts_with("series") || variant == "waves-view" || variant == "line-5m",
         triangles: variant.starts_with("triangles") || variant == "series-path-100k",
+        line: variant == "line-5m",
     }
 }
 
@@ -327,6 +334,30 @@ fn viewed(plot: Plot) -> impl IntoView {
     let (width, height) = (f64::from(plot.width), f64::from(plot.height));
     if plot.waves {
         handle.draw(|scene| scene.replace(waves(1.0, width, height, true)));
+    } else if plot.line {
+        // Twice the visible points over x in 0..2, left to right, y a walk within 0..1.
+        let mut random = Lcg::new(0x00F1_A7ED);
+        let count = plot.visible * 2;
+        let mut y = 0.5_f64;
+        let data: std::sync::Arc<[[f32; 2]]> = (0..count)
+            .map(|i| {
+                y = (y + (random.next() - 0.5) * 0.002).clamp(0.02, 0.98);
+                [(2.0 * i as f64 / count as f64) as f32, y as f32]
+            })
+            .collect();
+        handle.draw(|scene| {
+            scene.push_series_lod(
+                zgui::canvas::Series::Line {
+                    data,
+                    to_canvas: zgui::elements::kurbo::Affine::new([
+                        width, 0.0, 0.0, -height, -width, height,
+                    ]),
+                    stroke: zgui::elements::kurbo::Stroke::new(1.0),
+                    brush: Brush::Solid(Color::srgb(0.36, 0.62, 1.0, 1.0)),
+                },
+                zgui::canvas::Lod::Columns,
+            );
+        });
     } else {
         let data: std::sync::Arc<[[f32; 2]]> = data(plot)
             .iter()
