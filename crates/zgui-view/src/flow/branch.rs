@@ -93,6 +93,7 @@ impl<K: PartialEq + 'static> Branch<K> {
     /// branch does. The effect's own scope is cleaned every time the selector runs again, so a
     /// branch built in it would lose what it made — the default of a prop, a stored value — on
     /// every write the selector reads, while its nodes stayed on the screen.
+    #[allow(clippy::too_many_arguments)]
     fn watch(
         hole: Rc<RefCell<Hole<AnyViewState>>>,
         owner: &Owner,

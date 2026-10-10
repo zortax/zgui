@@ -17,6 +17,9 @@ use crate::host::{
 use crate::id::NodeId;
 use crate::scroll::{ScrollBehavior, ScrollPosition, ScrollTarget};
 
+/// One registered frame callback and the identity it was registered under.
+type FrameEntry = (FrameRequestId, Rc<dyn Fn(Timestamp)>);
+
 /// One scheduled callback.
 struct Scheduled {
     /// Which registration this is.
@@ -89,7 +92,7 @@ pub struct StubHost {
     /// The next timer number to mint.
     next_timer: Cell<u64>,
     /// The frame callbacks that have not run or been cancelled.
-    frames: RefCell<Vec<(FrameRequestId, Rc<dyn Fn(Timestamp)>)>>,
+    frames: RefCell<Vec<FrameEntry>>,
     /// The next frame-request number to mint.
     next_frame: Cell<u64>,
     /// How far the virtual clock has advanced from its origin.

@@ -137,10 +137,8 @@ impl Window {
     ) {
         let latched = self.scroll.borrow().latched();
         match wheel.phase {
-            ScrollPhase::Ended => {
-                if !self.scroll.borrow_mut().lift().is_empty() {
-                    self.request_scroll_frame();
-                }
+            ScrollPhase::Ended if !self.scroll.borrow_mut().lift().is_empty() => {
+                self.request_scroll_frame();
             }
             ScrollPhase::Started if allowed => self.scroll.borrow_mut().touch(&[]),
             ScrollPhase::Moved | ScrollPhase::Momentum if allowed => {

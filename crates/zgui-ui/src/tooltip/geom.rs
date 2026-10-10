@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn the_arrow_reaches_out_of_the_panel() {
         // Half the diagonal of a ten pixel square, less the one pixel it is sunk by.
-        assert!((ARROW_REACH - 6.0710678).abs() < 1.0e-4);
+        assert!((ARROW_REACH - 6.071_068).abs() < 1.0e-4);
     }
 
     #[test]

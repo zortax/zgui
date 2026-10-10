@@ -142,12 +142,11 @@ impl Effects {
         format: wgpu::TextureFormat,
     ) -> Option<&wgpu::RenderPipeline> {
         let effect = self.registered.get(&id)?;
-        let key = (id, format);
-        if !self.built.contains_key(&key) {
-            let pipeline = build(gpu, layouts, cache, effect, format);
-            self.built.insert(key, pipeline);
-        }
-        self.built.get(&key)
+        Some(
+            self.built
+                .entry((id, format))
+                .or_insert_with(|| build(gpu, layouts, cache, effect, format)),
+        )
     }
 }
 

@@ -172,6 +172,7 @@ impl UploadBelt {
     }
 
     /// Copies tightly packed texels into level `mip` of a texture through padded mapped rows.
+    #[allow(clippy::too_many_arguments)]
     pub fn write_texture(
         &mut self,
         gpu: &Gpu,

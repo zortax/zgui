@@ -21,11 +21,14 @@ use std::time::Instant;
 use zgui_view::FrameRequestId;
 use zgui_vocab::Timestamp;
 
+/// One registered frame callback and the identity it was registered under.
+type Entry = (FrameRequestId, Rc<dyn Fn(Timestamp)>);
+
 /// One window's pending frame callbacks.
 #[derive(Default)]
 pub struct FrameCallbacks {
     /// The pending batch, in registration order.
-    entries: Vec<(FrameRequestId, Rc<dyn Fn(Timestamp)>)>,
+    entries: Vec<Entry>,
     /// The next identity, never reused.
     next: u64,
     /// When the first entry of the pending batch was registered.

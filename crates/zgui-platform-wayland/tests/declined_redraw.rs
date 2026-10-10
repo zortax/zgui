@@ -56,7 +56,7 @@ impl<A: AppHandler> AppHandler for DeclineEveryOther<A> {
             return;
         }
         self.delivered += 1;
-        let declines = self.delivered > 1 && self.delivered % 2 == 0;
+        let declines = self.delivered > 1 && self.delivered.is_multiple_of(2);
         if declines {
             if let Some(surface) = cx.surface(surface) {
                 surface.redraw_declined();

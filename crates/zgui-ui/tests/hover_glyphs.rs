@@ -9,7 +9,6 @@ mod painted;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
 
 use zgui::view;
 use zgui::view::{AnyView, NodeId, NodeRef};
@@ -98,12 +97,11 @@ fn every_button_keeps_its_label_through_hover_and_leave() {
         "labels at rest: {at_rest:?}"
     );
     let check = |stage: &Stage, when: &str| {
-        for which in 0..built.len() {
+        for (which, rest) in at_rest.iter().enumerate() {
             let ink = ink_pixels(stage, built.node(which));
             assert!(
-                ink * 10 >= at_rest[which] * 7,
-                "button {which} lost its label {when}: {ink} ink pixels, {} at rest",
-                at_rest[which]
+                ink * 10 >= rest * 7,
+                "button {which} lost its label {when}: {ink} ink pixels, {rest} at rest"
             );
         }
     };
