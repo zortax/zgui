@@ -12,6 +12,10 @@
 //! `series-100k` and `series-1m` draw the scatter once as a canvas series and pan it through the
 //! canvas view. `waves-view` draws the waves over the whole data range once and pans it the same
 //! way. All three sit in a clipping box of the plot's size.
+//!
+//! `triangles-10k` is `10k` with an upright triangle of circumradius 4 in place of each circle,
+//! which no analytic route takes, so it takes the path glyph route. `series-path-100k` is
+//! `series-100k` with that triangle as a path marker.
 
 use std::rc::Rc;
 
@@ -30,6 +34,9 @@ const MARGIN: f64 = 4.0;
 
 /// A circle's radius, in CSS pixels.
 const RADIUS: f64 = 3.5;
+
+/// A triangle's circumradius, in CSS pixels.
+const CIRCUMRADIUS: f64 = 4.0;
 
 /// The control-point distance of a quarter circle drawn as one cubic.
 const KAPPA: f64 = 0.552_284_749_8;
@@ -67,6 +74,8 @@ struct Plot {
     waves: bool,
     /// Whether it draws once and pans through the canvas view.
     view: bool,
+    /// Whether each point is a triangle rather than a circle.
+    triangles: bool,
 }
 
 /// The variant's plot.
@@ -80,6 +89,8 @@ fn plot(variant: &str) -> Plot {
         "waves" | "waves-view" => ("plot-large", 960.0, 540.0, 0, false),
         "series-100k" => ("plot-large", 960.0, 540.0, 100_000, false),
         "series-1m" => ("plot-large", 960.0, 540.0, 1_000_000, false),
+        "triangles-10k" => ("plot-large", 960.0, 540.0, 10_000, false),
+        "series-path-100k" => ("plot-large", 960.0, 540.0, 100_000, false),
         other => panic!("unknown scatter-pan variant `{other}`"),
     };
     Plot {
@@ -90,6 +101,7 @@ fn plot(variant: &str) -> Plot {
         grid,
         waves: variant.starts_with("waves"),
         view: variant.starts_with("series") || variant == "waves-view",
+        triangles: variant.starts_with("triangles") || variant == "series-path-100k",
     }
 }
 
@@ -131,15 +143,36 @@ fn append_circle(path: &mut BezPath, x: f64, y: f64, r: f64) {
     path.close_path();
 }
 
-/// The points inside the range starting at `low`, as one path in a box `width` by `height`.
-fn scatter_path(points: &[(f64, f64)], low: f64, width: f64, height: f64) -> BezPath {
+/// Adds one upright triangle of circumradius `r` about `(x, y)`: a move, two lines and a close.
+fn append_triangle(path: &mut BezPath, x: f64, y: f64, r: f64) {
+    let half = r * 3f64.sqrt() / 2.0;
+    path.move_to((x, y - r));
+    path.line_to((x + half, y + r / 2.0));
+    path.line_to((x - half, y + r / 2.0));
+    path.close_path();
+}
+
+/// The points inside the range starting at `low`, as one path in a box `width` by `height`, each
+/// a triangle when `triangles` and a circle otherwise.
+fn scatter_path(
+    points: &[(f64, f64)],
+    low: f64,
+    width: f64,
+    height: f64,
+    triangles: bool,
+) -> BezPath {
     let mut path = BezPath::new();
     for &(x, y) in points {
         let px = (x - low) * width;
         if px < -MARGIN || px > width + MARGIN {
             continue;
         }
-        append_circle(&mut path, px, (1.0 - y) * height, RADIUS);
+        let py = (1.0 - y) * height;
+        if triangles {
+            append_triangle(&mut path, px, py, CIRCUMRADIUS);
+        } else {
+            append_circle(&mut path, px, py, RADIUS);
+        }
     }
     path
 }
@@ -266,7 +299,7 @@ fn view(plot: Plot) -> impl IntoView {
                 }
                 return;
             }
-            let path = scatter_path(&points, low.get(), width, height);
+            let path = scatter_path(&points, low.get(), width, height, plot.triangles);
             cx.scene.push(
                 ShapeBuilder::new(path)
                     .fill(Brush::Solid(Color::srgb(0.36, 0.62, 1.0, 1.0)))
@@ -299,13 +332,20 @@ fn viewed(plot: Plot) -> impl IntoView {
             .iter()
             .map(|&(x, y)| [x as f32, y as f32])
             .collect();
+        let marker = if plot.triangles {
+            let mut triangle = BezPath::new();
+            append_triangle(&mut triangle, 0.0, 0.0, CIRCUMRADIUS);
+            zgui::canvas::Marker::Path(std::sync::Arc::new(triangle))
+        } else {
+            zgui::canvas::Marker::Circle { radius: RADIUS }
+        };
         handle.draw(|scene| {
             scene.push_series(zgui::canvas::Series::Points {
                 data,
                 to_canvas: zgui::elements::kurbo::Affine::new([
                     width, 0.0, 0.0, -height, -width, height,
                 ]),
-                marker: zgui::canvas::Marker::Circle { radius: RADIUS },
+                marker,
                 fill: Some(Brush::Solid(Color::srgb(0.36, 0.62, 1.0, 1.0))),
                 stroke: None,
             });
