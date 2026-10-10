@@ -58,6 +58,7 @@ fn painted(shapes: &[zgui_svg::Shape], map: Affine, width: u32, height: u32) -> 
     Zeno::default().paint(
         &LayerJob {
             shapes,
+            only: None,
             paint: paint(),
             map,
             stroke_scale: 1.0,
@@ -220,6 +221,7 @@ fn a_stroke_scales_with_the_map() {
     Zeno::default().paint(
         &LayerJob {
             shapes: &[shape],
+            only: None,
             paint: paint(),
             map: Affine::scale(2.0),
             stroke_scale: 2.0,
@@ -278,6 +280,7 @@ fn calibrate_the_cost_model() {
             let mut out = vec![0; side as usize * side as usize * 4];
             let job = LayerJob {
                 shapes: document.shapes(),
+                only: None,
                 paint: paint(),
                 map: Affine::scale(scale),
                 stroke_scale: scale,

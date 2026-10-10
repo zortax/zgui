@@ -313,7 +313,14 @@ impl Painter {
             spaces: rustc_hash::FxHashMap::default(),
         };
         stacking::walk(input.store, root, &mut pass);
-        let report = pass.report;
+        let mut report = pass.report;
+        // After the walk and its replays, which are what push the tiles of large drawings: the
+        // frame's whole need is known only here.
+        if let Some(layers) = input.vector_masks.layers() {
+            report
+                .layers_owed
+                .extend(layers.settle(scene, input.damage));
+        }
         self.cache.end_frame();
         self.styles.sweep();
         report
@@ -784,11 +791,23 @@ impl Pass<'_, '_> {
             highlights: self.highlight_signature(fragment),
         };
         let phase = self.layer_phase(fragment, transform);
-        match self
-            .painter
-            .cache
-            .reuse(self.scene, fragment, painted, phase)
-        {
+        // A record drawing tiles replays only while their source stands: a source the layer cache
+        // dropped names rasters nothing will place.
+        let tiles_gone = self.painter.cache.tiled(fragment.key).is_some_and(|id| {
+            !self
+                .input
+                .vector_masks
+                .layers()
+                .is_some_and(|layers| layers.tiles_alive(id))
+        });
+        let reuse = if tiles_gone {
+            Reuse::Encode
+        } else {
+            self.painter
+                .cache
+                .reuse(self.scene, fragment, painted, phase)
+        };
+        match reuse {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
                 let (source, chunk) = self
@@ -854,6 +873,7 @@ impl Pass<'_, '_> {
                             phase: phase.filter(|_| emitted.layer.sprite),
                             provisional: emitted.layer.provisional,
                             promote: emitted.layer.promote,
+                            tiled: emitted.layer.tiled,
                         },
                     },
                     self.input.resources,

@@ -246,6 +246,8 @@ pub(crate) struct LayerOutcome {
     pub(crate) promote: bool,
     /// The device pixels a provisional or deferred drawing is owed a frame for.
     pub(crate) owed: Option<Rect<i32, Device>>,
+    /// The number of the tiled source whose tiles the drawing pushed.
+    pub(crate) tiled: Option<u64>,
 }
 
 /// Resolves how a shape carrying `style` is painted.
@@ -436,7 +438,7 @@ pub fn draw_drawing_layered(
 #[doc(hidden)]
 pub fn layer_sprite(
     local: Rect<DevicePx, Device>,
-    tile: zgui_atlas::AtlasTile,
+    tile: impl Into<zgui_scene::Resource>,
     placement: VectorPlacement,
     alpha: f32,
 ) -> zgui_scene::ColorSprite {
@@ -575,6 +577,27 @@ pub(crate) fn draw_drawing_tracked(
                 }
                 return emitted;
             }
+            crate::content::vectors::LayerAnswer::Tiles { tiles, provisional } => {
+                // Each tile names its raster: the end of the walk places the ones the frame needs.
+                for (name, path_rect) in tiles.sprites() {
+                    let local = rect_of(drawing.fit.transform_rect_bbox(path_rect));
+                    let sprite = layer_sprite(local, name, placement, input.alpha);
+                    emitted.pushed += usize::from(scene.push_color_sprite(sprite).is_some());
+                }
+                emitted.routes.insert(VectorRoute::CpuLayer);
+                emitted.layer.tiled = Some(tiles.id());
+                counter::bump(Counter::VectorRouteLayer);
+                if provisional {
+                    counter::bump(Counter::VectorLayersProvisional);
+                    emitted.layer.provisional = true;
+                    let ink = tiles
+                        .sprites()
+                        .map(|(_, path_rect)| drawing.fit.transform_rect_bbox(path_rect))
+                        .reduce(|a, b| a.union(b));
+                    emitted.layer.owed = ink.and_then(|ink| owed(scene, rect_of(ink)));
+                }
+                return emitted;
+            }
             crate::content::vectors::LayerAnswer::Defer { local } => {
                 counter::bump(Counter::VectorLayersDeferred);
                 emitted.routes.insert(VectorRoute::CpuLayer);
@@ -644,6 +667,17 @@ pub(crate) fn draw_drawing_tracked(
         layers.per_shape_suffices(input.owner);
     }
     emitted
+}
+
+/// A rectangle of path-space arithmetic in the fragment's space.
+fn rect_of(rect: zgui_scene::kurbo::Rect) -> Rect<DevicePx, Device> {
+    Rect::new(
+        zgui_geom::Point::new(DevicePx(rect.x0 as f32), DevicePx(rect.y0 as f32)),
+        zgui_geom::Size::new(
+            DevicePx(rect.width() as f32),
+            DevicePx(rect.height() as f32),
+        ),
+    )
 }
 
 /// The identity of one outline of a drawing whose first outline is `base`.

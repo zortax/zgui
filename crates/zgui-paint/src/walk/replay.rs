@@ -216,6 +216,11 @@ pub struct Record {
     pub promote: bool,
     /// How many drawn replays a promotable record has had, saturating.
     pub rasterised_frames: u8,
+    /// The number of the tiled source whose tiles the chunk draws.
+    ///
+    /// The tiles name their rasters and are placed every frame, so the record holds none of them.
+    /// It replays only while the source stands.
+    pub tiled: Option<u64>,
 }
 
 /// What the layer route did for one encoding.
@@ -227,6 +232,8 @@ pub struct LayerRecord {
     pub provisional: bool,
     /// Whether the drawing fell back to its shapes for the budget or a demotion.
     pub promote: bool,
+    /// The number of the tiled source whose tiles the encoding pushed.
+    pub tiled: Option<u64>,
 }
 
 /// How many drawn replays a promotable record waits before it encodes again.
@@ -546,6 +553,11 @@ impl PaintCache {
         ))
     }
 
+    /// The number of the tiled source `fragment`'s record draws, if it draws one.
+    pub fn tiled(&self, fragment: FragKey) -> Option<u64> {
+        self.records.get(&fragment).and_then(|record| record.tiled)
+    }
+
     /// The chunk recorded for `fragment` and its revision, for a caller that has already decided
     /// to replay it.
     pub fn chunk(&self, fragment: FragKey) -> Option<(u64, &Arc<ChunkPrims>)> {
@@ -651,6 +663,7 @@ impl PaintCache {
                 provisional: layer.provisional,
                 promote: layer.promote,
                 rasterised_frames: 0,
+                tiled: layer.tiled,
             },
         );
         release_tables(scene, &replaced_holds);

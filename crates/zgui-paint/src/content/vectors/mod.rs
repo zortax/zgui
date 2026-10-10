@@ -26,7 +26,7 @@ mod recognitions;
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
 #[doc(hidden)]
 pub use crate::content::vectors::layer::{
-    LayerAnswer, LayerFallback, LayerRequest, VectorLayerSource,
+    LayerAnswer, LayerFallback, LayerRequest, Tiles, VectorLayerSource,
 };
 pub(crate) use crate::content::vectors::layer::{VectorLayerCache, phase_of};
 #[doc(hidden)]

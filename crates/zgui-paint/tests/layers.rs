@@ -397,3 +397,112 @@ fn a_deferred_drawing_is_not_remembered_and_is_owed_a_frame() {
     assert!(second.layers_owed.is_empty());
     assert_eq!(window.harness.scene().primitives.color_sprites.len(), 3);
 }
+
+/// A 3000 by 3000 document: a ground, a ramp over a quadrilateral no analytic route takes, and a
+/// few solid shapes. Too large for one layer.
+const HUGE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 3000"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#203040"/><stop offset="1" stop-color="#a0c0e0"/></linearGradient></defs><path d="M0 0 L3000 0 L3000 3000 L0 3000 Z" fill="#102030"/><path d="M0 0 L3000 200 L2800 3000 L0 2900 Z" fill="url(#a)"/><circle cx="300" cy="300" r="200" fill="#ff8000"/><circle cx="1500" cy="1500" r="400" fill="#00a060"/><path d="M100 900 L700 1100 L200 1400 Z" fill="#e0e020"/></svg>"##;
+
+/// A huge drawing below a spacer, in a 400 by 200 root.
+fn huge() -> Window {
+    let css = "root { display: block; width: 400px; height: 200px }
+               spacer { display: block; height: 10px }
+               spacer.up { height: 10px; margin-top: -400px }
+               mark { display: block; width: 3000px; height: 3000px }";
+    Window::new(
+        Element::new("root").children(vec![
+            Element::new("spacer"),
+            Element::new("mark").document(HUGE),
+        ]),
+        css,
+    )
+}
+
+/// How many colour sprites draw something.
+fn drawn_sprites(window: &Window) -> usize {
+    window
+        .harness
+        .scene()
+        .primitives
+        .color_sprites
+        .iter()
+        .filter(|sprite| sprite.bounds != [0.0; 4])
+        .count()
+}
+
+#[test]
+fn a_huge_drawing_draws_named_tiles_and_no_vector_item() {
+    let mut window = huge();
+    let mut recording = Recording::begin();
+    let mut report = None;
+    let measured = recording.measure(|| report = Some(window.paint(false)));
+    let report = report.expect("a frame");
+    assert!(routes(&report).contains(VectorRoute::CpuLayer));
+    assert!(!routes(&report).contains(VectorRoute::GeneralRaster));
+    assert!(report.layers_owed.is_empty());
+    let scene = window.harness.scene();
+    assert!(scene.primitives.vectors.is_empty(), "no vector item");
+    assert!(!scene.has_unresolved_resources());
+    let rasterised = measured.get(Counter::VectorLayerTilesRasterised);
+    assert!(rasterised >= 1);
+    assert_eq!(drawn_sprites(&window) as u64, rasterised);
+    assert_eq!(measured.get(Counter::VectorLayersRasterised), 0);
+    assert_eq!(measured.get(Counter::VectorRouteLayer), 1);
+
+    // The next frames replay the drawing, and rasterise the tiles one tile beyond the root with
+    // budget the first frame did not have. Then a still frame rasterises nothing.
+    let mut ahead = 0;
+    for _ in 0..2 {
+        let mut report = None;
+        ahead += recording
+            .measure(|| report = Some(window.paint(false)))
+            .get(Counter::VectorLayerTilesRasterised);
+        assert!(report.expect("a frame").vector_routes.is_empty());
+    }
+    let measured = recording.measure(|| {
+        window.paint(false);
+    });
+    assert_eq!(measured.get(Counter::VectorLayerTilesRasterised), 0);
+    assert_eq!(drawn_sprites(&window) as u64, rasterised + ahead);
+}
+
+#[test]
+fn a_scrolled_huge_drawing_rasterises_only_the_exposed_tiles() {
+    let mut window = huge();
+    let mut recording = Recording::begin();
+    window.paint(false);
+    let before = drawn_sprites(&window);
+    // 400 px up: the second row of tiles enters the root.
+    window.restyle("spacer", "up");
+    let mut report = None;
+    let measured = recording.measure(|| report = Some(window.paint(false)));
+    let report = report.expect("a frame");
+    assert!(
+        report.vector_routes.is_empty(),
+        "the drawing replays at its new place"
+    );
+    assert!(measured.get(Counter::ChunksTranslated) > 0);
+    let exposed = measured.get(Counter::VectorLayerTilesRasterised);
+    assert_eq!(
+        exposed as usize,
+        drawn_sprites(&window) - before,
+        "only the tiles that entered"
+    );
+    assert!(exposed >= 1);
+}
+
+#[test]
+fn a_record_whose_tiled_source_is_gone_encodes_again() {
+    let mut window = huge();
+    let _recording = Recording::begin();
+    window.paint(false);
+    // A lost device clears every cache, and the tiled source with it.
+    window.content.clear();
+    let report = window.paint(false);
+    assert_eq!(
+        report.vector_routes.len(),
+        1,
+        "the record names a source that is gone, so the drawing is encoded again"
+    );
+    assert!(!window.harness.scene().has_unresolved_resources());
+    assert!(drawn_sprites(&window) >= 1);
+}

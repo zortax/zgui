@@ -27,6 +27,8 @@ pub(crate) trait VectorPainter {
 pub(crate) struct LayerJob<'a> {
     /// The shapes, in their own space and in painting order.
     pub(crate) shapes: &'a [zgui_svg::Shape],
+    /// The indices of the shapes to paint, in painting order, or `None` for every shape.
+    pub(crate) only: Option<&'a [u32]>,
     /// What an inherited paint resolves to, before any folded opacity.
     pub(crate) paint: ShapePaint,
     /// Path space to raster texels.
@@ -96,38 +98,18 @@ impl VectorPainter for Zeno {
         out.fill(0);
         let layer = Rect::new(0.0, 0.0, f64::from(job.width), f64::from(job.height));
         let inverse = job.map.inverse();
-        for shape in job.shapes {
-            // Every clip bounds the shape, so the parts are cut to the clips before anything is
-            // rasterised.
-            let mut bounds = layer;
-            for clip in &shape.clips {
-                bounds = bounds.intersect(job.map.transform_rect_bbox(clip.path.control_box()));
+        match job.only {
+            Some(only) => {
+                for &index in only {
+                    if let Some(shape) = job.shapes.get(index as usize) {
+                        self.shape(job, shape, layer, inverse, out);
+                    }
+                }
             }
-            if let Some(fill) = &shape.fill {
-                let part = Part {
-                    path: &shape.path,
-                    style: PartStyle::Fill(fill.rule),
-                    paint: shading(&fill.paint, job.paint.fill),
-                };
-                self.part(job, shape, &part, bounds, inverse, out);
-            }
-            let stroke = match &shape.stroke {
-                Some(stroke) => Some(Part {
-                    path: &shape.path,
-                    style: PartStyle::Stroke(zgui_svg::document::place::scaled(
-                        &stroke.style,
-                        job.stroke_scale,
-                    )),
-                    paint: shading(&stroke.paint, job.paint.stroke.unwrap_or(job.paint.fill)),
-                }),
-                None => job.paint.stroke.map(|color| Part {
-                    path: &shape.path,
-                    style: PartStyle::Stroke(kurbo::Stroke::new(job.inherited_stroke)),
-                    paint: Shading::Solid(color),
-                }),
-            };
-            if let Some(part) = stroke {
-                self.part(job, shape, &part, bounds, inverse, out);
+            None => {
+                for shape in job.shapes {
+                    self.shape(job, shape, layer, inverse, out);
+                }
             }
         }
     }
@@ -142,6 +124,49 @@ fn shading(paint: &zgui_svg::Paint, inherited: Color) -> Shading<'_> {
 }
 
 impl Zeno {
+    /// Paints `shape` over `out`, cut to `layer`.
+    fn shape(
+        &mut self,
+        job: &LayerJob<'_>,
+        shape: &zgui_svg::Shape,
+        layer: Rect,
+        inverse: Affine,
+        out: &mut [u8],
+    ) {
+        // Every clip bounds the shape, so the parts are cut to the clips before anything is
+        // rasterised.
+        let mut bounds = layer;
+        for clip in &shape.clips {
+            bounds = bounds.intersect(job.map.transform_rect_bbox(clip.path.control_box()));
+        }
+        if let Some(fill) = &shape.fill {
+            let part = Part {
+                path: &shape.path,
+                style: PartStyle::Fill(fill.rule),
+                paint: shading(&fill.paint, job.paint.fill),
+            };
+            self.part(job, shape, &part, bounds, inverse, out);
+        }
+        let stroke = match &shape.stroke {
+            Some(stroke) => Some(Part {
+                path: &shape.path,
+                style: PartStyle::Stroke(zgui_svg::document::place::scaled(
+                    &stroke.style,
+                    job.stroke_scale,
+                )),
+                paint: shading(&stroke.paint, job.paint.stroke.unwrap_or(job.paint.fill)),
+            }),
+            None => job.paint.stroke.map(|color| Part {
+                path: &shape.path,
+                style: PartStyle::Stroke(kurbo::Stroke::new(job.inherited_stroke)),
+                paint: Shading::Solid(color),
+            }),
+        };
+        if let Some(part) = stroke {
+            self.part(job, shape, &part, bounds, inverse, out);
+        }
+    }
+
     /// Paints one part of `shape` over `out`, inside `bounds`.
     fn part(
         &mut self,

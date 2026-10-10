@@ -117,16 +117,16 @@ fn zigzag(segments: usize) -> Drawing {
     drawing(path, zgui_svg::Ink::Solid(Color::WHITE))
 }
 
-fn key(answer: LayerAnswer) -> AtlasKey {
+fn key(answer: &LayerAnswer) -> AtlasKey {
     match answer {
-        LayerAnswer::Sprite { key, .. } => key,
+        LayerAnswer::Sprite { key, .. } => *key,
         other => panic!("expected a sprite, got {other:?}"),
     }
 }
 
-fn provisional(answer: LayerAnswer) -> bool {
+fn provisional(answer: &LayerAnswer) -> bool {
     match answer {
-        LayerAnswer::Sprite { provisional, .. } => provisional,
+        LayerAnswer::Sprite { provisional, .. } => *provisional,
         other => panic!("expected a sprite, got {other:?}"),
     }
 }
@@ -140,8 +140,8 @@ fn equal_drawings_share_one_layer() {
     let mut fixture = Fixture::new(false);
     let shared = square();
     let other = shared.clone();
-    let one = key(fixture.ask(1, 7, &shared, 1.0));
-    let two = key(fixture.ask(2, 7, &other, 1.0));
+    let one = key(&fixture.ask(1, 7, &shared, 1.0));
+    let two = key(&fixture.ask(2, 7, &other, 1.0));
     assert_eq!(one, two);
     assert_eq!(fixture.cache.len(), 1);
 }
@@ -155,16 +155,16 @@ fn an_inherited_drawing_keys_its_paint_and_an_own_coloured_one_does_not() {
     );
     let red = paint(Color::srgb(1.0, 0.0, 0.0, 1.0));
     let blue = paint(Color::srgb(0.0, 0.0, 1.0, 1.0));
-    let a = key(fixture.ask_with(1, 1, &inherited, red, spatial(1.0)));
-    let b = key(fixture.ask_with(2, 1, &inherited, blue, spatial(1.0)));
+    let a = key(&fixture.ask_with(1, 1, &inherited, red, spatial(1.0)));
+    let b = key(&fixture.ask_with(2, 1, &inherited, blue, spatial(1.0)));
     assert_ne!(
         a, b,
         "the paint is part of what an inherited drawing looks like"
     );
 
     let own = square();
-    let c = key(fixture.ask_with(3, 2, &own, red, spatial(1.0)));
-    let d = key(fixture.ask_with(4, 2, &own, blue, spatial(1.0)));
+    let c = key(&fixture.ask_with(3, 2, &own, red, spatial(1.0)));
+    let d = key(&fixture.ask_with(4, 2, &own, blue, spatial(1.0)));
     assert_eq!(c, d, "a drawing in its own colours ignores the element's");
 }
 
@@ -191,21 +191,21 @@ fn a_new_source_asks_again_after_its_shapes_sufficed() {
 fn a_scale_change_is_provisional_until_three_stable_frames() {
     let mut fixture = Fixture::new(false);
     let shared = square();
-    let first = key(fixture.ask(1, 1, &shared, 1.0));
+    let first = key(&fixture.ask(1, 1, &shared, 1.0));
     for frame in 0..3 {
         fixture.frame();
         let answer = fixture.ask(1, 1, &shared, 1.5);
         assert!(
-            provisional(answer),
+            provisional(&answer),
             "frame {frame} stretches the raster it has"
         );
-        assert_eq!(key(answer), first);
+        assert_eq!(key(&answer), first);
     }
     fixture.frame();
     let settled = fixture.ask(1, 1, &shared, 1.5);
-    assert!(!provisional(settled));
+    assert!(!provisional(&settled));
     assert_ne!(
-        key(settled),
+        key(&settled),
         first,
         "the settled scale has a raster of its own"
     );
@@ -214,7 +214,7 @@ fn a_scale_change_is_provisional_until_three_stable_frames() {
     for step in 0..10 {
         fixture.frame();
         let scale = 1.5 + 0.05 * (step + 1) as f32;
-        assert!(provisional(fixture.ask(1, 1, &shared, scale)));
+        assert!(provisional(&fixture.ask(1, 1, &shared, scale)));
     }
 }
 
@@ -292,13 +292,13 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     // Placed while cold, so every first raster is admitted at once.
     fixture.cache.set_raster_ready(false);
     for (index, drawing) in drawings.iter().enumerate() {
-        key(fixture.ask(index as u32, index as u64, drawing, 1.0));
+        key(&fixture.ask(index as u32, index as u64, drawing, 1.0));
     }
     fixture.cache.set_raster_ready(true);
     for _ in 0..3 {
         fixture.frame();
         for (index, drawing) in drawings.iter().enumerate() {
-            assert!(provisional(fixture.ask(
+            assert!(provisional(&fixture.ask(
                 index as u32,
                 index as u64,
                 drawing,
@@ -312,7 +312,7 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
         .iter()
         .enumerate()
         .filter(|(index, drawing)| {
-            !provisional(fixture.ask(*index as u32, *index as u64, drawing, 1.5))
+            !provisional(&fixture.ask(*index as u32, *index as u64, drawing, 1.5))
         })
         .count();
     assert_eq!(exact, 3);
@@ -322,7 +322,7 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
         .iter()
         .enumerate()
         .filter(|(index, drawing)| {
-            !provisional(fixture.ask(*index as u32, *index as u64, drawing, 1.5))
+            !provisional(&fixture.ask(*index as u32, *index as u64, drawing, 1.5))
         })
         .count();
     assert_eq!(exact, 5, "the other two settle on the next frame");
@@ -331,19 +331,19 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     fixture.frame();
     fixture.cache.set_raster_ready(false);
     let large = zigzag(1_500);
-    key(fixture.ask(20, 20, &large, 1.0));
+    key(&fixture.ask(20, 20, &large, 1.0));
     let small = zigzag(300);
-    key(fixture.ask(21, 21, &small, 1.0));
+    key(&fixture.ask(21, 21, &small, 1.0));
     fixture.cache.set_raster_ready(true);
     for _ in 0..3 {
         fixture.frame();
-        assert!(provisional(fixture.ask(20, 20, &large, 1.5)));
-        assert!(provisional(fixture.ask(21, 21, &small, 1.5)));
+        assert!(provisional(&fixture.ask(20, 20, &large, 1.5)));
+        assert!(provisional(&fixture.ask(21, 21, &small, 1.5)));
     }
     fixture.frame();
-    assert!(!provisional(fixture.ask(20, 20, &large, 1.5)));
+    assert!(!provisional(&fixture.ask(20, 20, &large, 1.5)));
     assert!(
-        provisional(fixture.ask(21, 21, &small, 1.5)),
+        provisional(&fixture.ask(21, 21, &small, 1.5)),
         "the budget is spent"
     );
 }
@@ -389,19 +389,19 @@ fn a_turned_or_mirrored_space_is_ineligible() {
 }
 
 #[test]
-fn a_drawing_past_the_size_or_cost_cap_is_ineligible() {
+fn a_drawing_past_the_size_cap_is_tiled_and_past_the_cost_cap_ineligible() {
     let mut fixture = Fixture::new(false);
     let shared = square();
     // 16 units at 129 is 2064 texels a side.
-    assert_eq!(
+    assert!(matches!(
         fixture.ask(1, 1, &shared, 129.0),
-        LayerAnswer::Items(LayerFallback::Ineligible)
-    );
+        LayerAnswer::Tiles { .. }
+    ));
     // 1100 by 1100 texels is past four megabytes.
-    assert_eq!(
+    assert!(matches!(
         fixture.ask(1, 1, &shared, 68.75),
-        LayerAnswer::Items(LayerFallback::Ineligible)
-    );
+        LayerAnswer::Tiles { .. }
+    ));
     assert_eq!(
         fixture.ask(2, 2, &zigzag(6_000), 1.0),
         LayerAnswer::Items(LayerFallback::Ineligible)
@@ -420,8 +420,8 @@ fn only_two_scales_are_kept_per_source() {
             fixture.frame();
             answer = fixture.ask(1, 1, &shared, scale);
         }
-        assert!(!provisional(answer));
-        keys.push(key(answer));
+        assert!(!provisional(&answer));
+        keys.push(key(&answer));
         fixture.frame();
     }
     fixture.frame();
@@ -436,8 +436,8 @@ fn evicting_spares_held_layers() {
     let mut fixture = Fixture::new(false);
     let one = square();
     let two = square();
-    let held = key(fixture.ask(1, 1, &one, 1.0));
-    let free = key(fixture.ask(2, 2, &two, 1.0));
+    let held = key(&fixture.ask(1, 1, &one, 1.0));
+    let free = key(&fixture.ask(2, 2, &two, 1.0));
     fixture.atlas.retain(held);
     fixture.frame();
     let bytes = fixture.cache.bytes();
@@ -458,12 +458,12 @@ fn evicting_spares_held_layers() {
 fn forgotten_tiles_leave_the_metadata() {
     let mut fixture = Fixture::new(false);
     let shared = square();
-    let first = key(fixture.ask(1, 1, &shared, 1.0));
+    let first = key(&fixture.ask(1, 1, &shared, 1.0));
     assert!(fixture.atlas.remove(first));
     fixture.cache.forget_tiles(&[first]);
     assert_eq!(fixture.cache.len(), 0);
     assert_eq!(fixture.cache.bytes(), 0);
     fixture.frame();
-    let again = key(fixture.ask(1, 1, &shared, 1.0));
+    let again = key(&fixture.ask(1, 1, &shared, 1.0));
     assert!(fixture.atlas.contains(again));
 }

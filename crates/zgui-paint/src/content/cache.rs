@@ -539,6 +539,8 @@ impl ContentCache {
         // so they stop being names. A sprite still carrying one resolves to nothing rather than to
         // whatever has since taken that content's place.
         self.registry.discard();
+        self.vector_layers
+            .set_generation(self.registry.generation());
     }
 }
 
@@ -914,6 +916,36 @@ impl VectorLayerSource for FrameContent<'_> {
             .borrow_mut()
             .vector_layers
             .per_shape_suffices(owner);
+    }
+
+    fn tiles_alive(&self, id: u64) -> bool {
+        self.writing.borrow().vector_layers.tiles_alive(id)
+    }
+
+    fn settle(
+        &self,
+        scene: &mut zgui_scene::Scene,
+        damage: &zgui_bits::DamageSet,
+    ) -> Vec<zgui_geom::Rect<i32, Device>> {
+        let mut writing = self.writing.borrow_mut();
+        let Rasterising {
+            glyphs,
+            atlas,
+            vector_masks,
+            vector_layers,
+            ..
+        } = &mut *writing;
+        // One eviction step spares everything this frame has drawn and everything anything holds,
+        // so a single retry is safe.
+        let mut evict = |atlas: &mut zgui_atlas::Atlas| {
+            let mut removed = Vec::new();
+            let freed = atlas.evict_least_recently_used_into(&mut removed);
+            glyphs.forget_tiles(&removed);
+            vector_masks.forget_tiles(&removed);
+            counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+            removed
+        };
+        vector_layers.settle(atlas, scene, damage, &mut evict)
     }
 }
 

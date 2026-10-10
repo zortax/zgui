@@ -853,6 +853,7 @@ fn a_provisional_record_is_never_replayed() {
             phase,
             provisional: true,
             promote: false,
+            tiled: None,
         },
     );
     assert_eq!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
@@ -866,6 +867,7 @@ fn a_provisional_record_is_never_replayed() {
             phase,
             provisional: false,
             promote: false,
+            tiled: None,
         },
     );
     assert_ne!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
@@ -889,6 +891,7 @@ fn a_promotable_record_encodes_again_after_three_drawn_replays() {
             phase: None,
             provisional: false,
             promote: true,
+            tiled: None,
         },
     );
     for replay in 0..3 {
