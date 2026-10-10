@@ -186,6 +186,61 @@ fn a_face_registered_later_reaches_the_shaper() {
     );
 }
 
+/// A face unregistered after a shaper drew with it is not drawn with again.
+///
+/// The collection's query keeps the faces it loaded from one paragraph to the next, so this is
+/// what pins that a change to the collection drops them: the family stays bound to `sans-serif`,
+/// and only the face is gone.
+#[test]
+fn a_face_unregistered_after_shaping_is_not_drawn_with_again() {
+    use zgui_scene::PaintSlot;
+    use zgui_text::{ParagraphContent, ParagraphShaper, StyledRun, TextMap};
+    use zgui_text_parley::Shaper;
+    use zgui_text_style::ParagraphStyle;
+
+    let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    fonts
+        .register(support::face("NotoSans-Regular.ttf"), None)
+        .expect("registers");
+    let mut shaper = Shaper::new(fonts.clone());
+    let style = Arc::new(TextStyle {
+        family: FontFamilyList::from_iter([FamilyName::Generic(GenericFamily::SansSerif)]),
+        ..TextStyle::initial()
+    });
+    let paragraph = ParagraphStyle::initial();
+    let glyphs = |shaper: &mut Shaper| {
+        let text = "-0.25";
+        let mut map = TextMap::new();
+        map.push(0..text.len(), 0, 0);
+        let runs = [StyledRun {
+            text: 0..text.len(),
+            style: Arc::clone(&style),
+            brush: PaintSlot(0),
+        }];
+        let content = ParagraphContent {
+            text,
+            map: &map,
+            runs: &runs,
+            boxes: &[],
+            paragraph: &paragraph,
+            scale: 1.0,
+        };
+        let mut shaped = shaper.shape(&content);
+        let _ = shaper.break_lines(&mut shaped, &zgui_text::BreakRequest::new(&content, None));
+        let mut count = 0;
+        shaper.visit_line(&shaped, 0, &mut |run| count += run.glyphs.len());
+        count
+    };
+
+    assert!(glyphs(&mut shaper) > 0, "the text is drawn from the face");
+    fonts.unregister(Ident::new(support::LATIN));
+    assert_eq!(
+        glyphs(&mut shaper),
+        0,
+        "the query must not keep drawing with a face the collection no longer holds"
+    );
+}
+
 /// The two constructors select the two modes, and they disagree about reading the machine.
 ///
 /// This is the plumbing half of the choice and it is the only half that can be asserted from a
