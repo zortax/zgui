@@ -226,6 +226,8 @@ pub(crate) struct VectorLayerCache {
     superseded: Vec<AtlasKey>,
     /// What paints the rasters.
     painter: Zeno,
+    /// How many sprites the cache has answered, monotonic.
+    hits: u64,
 }
 
 /// The handle namespace of layer tiles in the image pool.
@@ -326,6 +328,7 @@ impl Default for VectorLayerCache {
             spent: Spent::default(),
             superseded: Vec::new(),
             painter: Zeno::default(),
+            hits: 0,
         }
     }
 }
@@ -394,11 +397,13 @@ impl VectorLayerCache {
         self.bytes
     }
 
-    /// The bytes of the layer tiles a record holds or this frame drew.
+    /// The bytes of the layer tiles this frame drew.
+    ///
+    /// A tile a record holds and this frame did not draw can still go, with the record.
     pub(crate) fn pinned_bytes(&self, atlas: &Atlas) -> u64 {
         self.entries
             .values()
-            .filter(|entry| pinned(atlas, entry.key))
+            .filter(|entry| entry.used == self.frame || atlas.used_this_frame(entry.key))
             .map(|entry| entry.bytes)
             .sum()
     }
@@ -406,6 +411,28 @@ impl VectorLayerCache {
     /// How many rasters the cache keeps.
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// How many sprites the cache has answered, monotonic.
+    pub(crate) fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    /// The bytes of the layer tiles a record holds.
+    pub(crate) fn held_bytes(&self, atlas: &Atlas) -> u64 {
+        self.entries
+            .values()
+            .filter(|entry| atlas.refs(entry.key).is_some_and(|refs| refs > 0))
+            .map(|entry| entry.bytes)
+            .sum()
+    }
+
+    /// Every layer tile and its bytes.
+    pub(crate) fn tiles(&self) -> FxHashMap<AtlasKey, u64> {
+        self.entries
+            .values()
+            .map(|entry| (entry.key, entry.bytes))
+            .collect()
     }
 
     /// Removes the least recently drawn layers nothing holds until `bytes` have gone, and reports
@@ -502,6 +529,9 @@ impl VectorLayerCache {
             return LayerAnswer::Items(LayerFallback::Ineligible);
         };
         let local = |path_bounds: kurbo::Rect| rect(drawing.fit.transform_rect_bbox(path_bounds));
+        if matches!(route, Route::Hit(..) | Route::Provisional(_) | Route::Raster) {
+            self.hits += 1;
+        }
         match route {
             Route::Hit(tile, key) => {
                 named.push(key);

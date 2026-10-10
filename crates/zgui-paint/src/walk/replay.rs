@@ -427,6 +427,44 @@ impl PaintCache {
         freed
     }
 
+    /// The records not selected this frame that hold a resource `holds` names, coldest first, each
+    /// with the resources of those it holds.
+    pub fn cold_holding(&self, holds: &dyn Fn(AtlasKey) -> bool) -> Vec<(FragKey, Vec<AtlasKey>)> {
+        let mut cold: Vec<(u64, FragKey, Vec<AtlasKey>)> = self
+            .records
+            .iter()
+            .filter(|(_, record)| record.last_selected < self.epoch)
+            .filter_map(|(key, record)| {
+                let held: Vec<AtlasKey> = record
+                    .resources
+                    .iter()
+                    .copied()
+                    .filter(|resource| holds(*resource))
+                    .collect();
+                (!held.is_empty()).then_some((record.last_selected, *key, held))
+            })
+            .collect();
+        cold.sort_unstable_by_key(|(selected, _, _)| *selected);
+        cold.into_iter().map(|(_, key, held)| (key, held)).collect()
+    }
+
+    /// Drops the records of `keys`, releasing what they held, and reports how many went.
+    ///
+    /// A clean miss, as [`PaintCache::evict_cold`] is: the next frame that reaches one of the
+    /// fragments encodes it again.
+    pub fn evict(&mut self, keys: &[FragKey], scene: &mut Scene, owner: &dyn ResourceOwner) -> usize {
+        let mut holds = TableHolds::default();
+        let mut evicted = 0;
+        for key in keys {
+            if let Some(record) = self.records.remove(key) {
+                counter::bump(Counter::ChunksEvicted);
+                self.drop_record(record, scene, owner, &mut holds);
+                evicted += 1;
+            }
+        }
+        evicted
+    }
+
     /// Notes every record's chunk into the scene again, for a renderer that lost its residence.
     ///
     /// A recovered device holds nothing: every replay would fall back to transient upload until

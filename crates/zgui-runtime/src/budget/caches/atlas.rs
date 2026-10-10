@@ -47,11 +47,18 @@ impl Budgeted for GlyphAtlasBudget<'_> {
 
     fn report(&self) -> CacheReport {
         let atlas = self.content.report();
+        // The CPU vector layers in the image pool report themselves, so they are left out here and
+        // the registry counts them once.
         CacheReport {
-            resident: self.content.resident_bytes(),
+            resident: self
+                .content
+                .resident_bytes()
+                .saturating_sub(self.content.layer_bytes()),
             // The tiles a live record holds. A replayed range draws from these and looks none of
             // them up, so this — not the frame's lookups — is what says they are still on screen.
-            pinned: atlas.referenced_bytes,
+            pinned: atlas
+                .referenced_bytes
+                .saturating_sub(self.content.layer_held_bytes()),
             last_used: self.tracked.last_used(),
             // A rasteriser over a face already loaded, plus an upload.
             rebuild_cost: rebuild::RECOMPUTED,

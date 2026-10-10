@@ -155,14 +155,53 @@ impl ContentCache {
         self.vector_layers.bytes()
     }
 
-    /// How many of those bytes a paint record holds or this frame drew.
+    /// How many of those bytes this frame drew.
     pub fn layer_pinned_bytes(&self) -> u64 {
         self.vector_layers.pinned_bytes(&self.atlas)
+    }
+
+    /// How many of those bytes a paint record holds.
+    pub fn layer_held_bytes(&self) -> u64 {
+        self.vector_layers.held_bytes(&self.atlas)
     }
 
     /// How many CPU vector layers are held.
     pub fn layers_held(&self) -> usize {
         self.vector_layers.len()
+    }
+
+    /// How many layer sprites the cache has answered, monotonic.
+    pub fn layer_hits(&self) -> u64 {
+        self.vector_layers.hits()
+    }
+
+    /// Every CPU vector layer's atlas key and bytes.
+    pub fn layer_tiles(&self) -> rustc_hash::FxHashMap<AtlasKey, u64> {
+        self.vector_layers.tiles()
+    }
+
+    /// The CPU layer for `request`, against this cache's atlas, outside a frame's walk.
+    #[doc(hidden)]
+    pub fn layer(
+        &mut self,
+        request: LayerRequest<'_>,
+    ) -> LayerAnswer {
+        let Self {
+            atlas,
+            glyphs,
+            vector_masks,
+            vector_layers,
+            ..
+        } = self;
+        let mut named = Vec::new();
+        let mut evict = |atlas: &mut Atlas| {
+            let mut removed = Vec::new();
+            atlas.evict_least_recently_used_into(&mut removed);
+            glyphs.forget_tiles(&removed);
+            vector_masks.forget_tiles(&removed);
+            removed
+        };
+        vector_layers.layer(atlas, request, &mut named, &mut evict)
     }
 
     /// Removes the least recently drawn CPU vector layers nothing holds until `bytes` have gone,

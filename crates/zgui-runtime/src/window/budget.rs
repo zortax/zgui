@@ -12,7 +12,7 @@
 
 use crate::budget::caches::{
     DecodedImagesBudget, DeviceMemoryBudget, GlyphAtlasBudget, PaintChunksBudget,
-    ParagraphShapingBudget, RenderTargetsBudget, VectorResourcesBudget,
+    ParagraphShapingBudget, RenderTargetsBudget, VectorLayersBudget, VectorResourcesBudget,
 };
 use crate::budget::manager::{self, Budgeted, CacheRegistry};
 use crate::budget::report::{BudgetReport, CacheId};
@@ -31,6 +31,19 @@ impl CacheRegistry for Window {
             &mut self.content,
             chunk_bytes,
             self.budgets.tracked(CacheId::PaintChunks),
+        ));
+        // Before the atlas, whose forget clears the layers with everything else in it.
+        let size = self.surface.size();
+        let layer_bytes = crate::budget::caches::layers::layer_limit(
+            size.width.0.max(0.0) as u32,
+            size.height.0.max(0.0) as u32,
+        );
+        visit(&mut VectorLayersBudget::new(
+            &mut self.painter,
+            &mut self.scene,
+            &mut self.content,
+            layer_bytes,
+            self.budgets.tracked(CacheId::VectorLayers),
         ));
         visit(&mut GlyphAtlasBudget::new(
             &mut self.content,

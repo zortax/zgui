@@ -402,7 +402,8 @@ fn evicting_spares_held_layers() {
     fixture.atlas.retain(held);
     fixture.frame();
     let bytes = fixture.cache.bytes();
-    assert_eq!(fixture.cache.pinned_bytes(&fixture.atlas), bytes / 2);
+    assert_eq!(fixture.cache.pinned_bytes(&fixture.atlas), 0, "this frame drew neither");
+    assert_eq!(fixture.cache.held_bytes(&fixture.atlas), bytes / 2);
     let freed = fixture.cache.evict(&mut fixture.atlas, u64::MAX);
     assert_eq!(freed, bytes / 2);
     assert!(fixture.atlas.contains(held));

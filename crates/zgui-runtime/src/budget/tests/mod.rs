@@ -7,6 +7,7 @@
 //! `tests/budget_registry.rs`, over the registry rather than over any one cache.
 
 mod images;
+mod layers;
 mod order;
 mod tracking;
 

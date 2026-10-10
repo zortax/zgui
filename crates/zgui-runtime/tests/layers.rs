@@ -219,3 +219,53 @@ fn a_provisional_layer_settles_and_the_window_parks() {
     assert_eq!(log.borrow().len(), parked, "the window keeps drawing");
     assert!(log.borrow().iter().all(|frame| frame.vectors == 0));
 }
+
+#[test]
+fn layer_bytes_stay_within_the_budget() {
+    use zgui_geom::{Css, CssPx, Point};
+    use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
+
+    const PORT: &str = "root { display: block; width: 800px; height: 600px }
+         .port { display: flex; flex-direction: column; gap: 4px; width: 800px; height: 600px;
+                 overflow: auto }
+         .art { display: block; width: 256px; height: 256px; flex: none }";
+    let _recording = Recording::begin();
+    let log: Log = Rc::default();
+    let mut harness = mount(PORT, &log, |cx| {
+        let mut port = zgui_elements::r#box().class("port");
+        for index in 0..200_u32 {
+            let source = format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#{index:06x}"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs><path d="M0 0 L32 0 L0 32 Z" fill="url(#a)"/></svg>"##
+            );
+            port = port.child(zgui_elements::vector().class("art").document(&source));
+        }
+        Box::new(port.into_view().build(cx))
+    });
+    harness.settle(8);
+    // Four surfaces of 800 by 600 is less than the floor.
+    let limit = 16 * 1024 * 1024;
+    let mut highest = 0;
+    for _ in 0..110 {
+        harness.deliver_to_first(zgui_platform::SurfaceEvent::Wheel {
+            event: WheelEvent {
+                id: zgui_vocab::PointerId::MOUSE,
+                kind: zgui_vocab::PointerKind::Mouse,
+                position: Point::<CssPx, Css>::new(CssPx(200.0), CssPx(300.0)),
+                delta: ScrollDelta::Pixels(zgui_geom::Size::new(CssPx(0.0), CssPx(520.0))),
+                phase: ScrollPhase::Discrete,
+            },
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        for _ in 0..4 {
+            harness.advance(TICK);
+            harness.pump();
+            let live = zgui_profile::counter::get(Counter::VectorLayerBytesLive);
+            highest = highest.max(live);
+            assert!(live <= limit, "{live} layer bytes held against a level of {limit}");
+        }
+    }
+    assert!(rasterised() >= 150, "the scroll reached {} drawings", rasterised());
+    assert!(zgui_profile::counter::get(Counter::VectorLayersEvicted) > 0);
+    assert!(highest > limit / 2, "the budget was never approached: {highest}");
+}

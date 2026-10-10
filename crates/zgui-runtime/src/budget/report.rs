@@ -22,6 +22,8 @@ pub enum CacheId {
     RenderTargets,
     /// The per-fragment paint records: each fragment's compiled painting, owned across frames.
     PaintChunks,
+    /// The whole drawings rasterised on the CPU into the atlas's image pool.
+    VectorLayers,
     /// Everything else the renderer holds on the device: its pipelines, its swapchain, the target
     /// a frame is composed into, the vector scratch and the buffers a frame uploads through.
     DeviceMemory,
@@ -31,9 +33,11 @@ impl CacheId {
     /// Every cache a window registers, in registration order.
     ///
     /// The paint chunks come first on purpose: their forget releases atlas and table holds, so it
-    /// has to run while the caches those holds are in are still alive to be released into.
-    pub const ALL: [Self; 7] = [
+    /// has to run while the caches those holds are in are still alive to be released into. The
+    /// vector layers come before the atlas, whose forget clears them with everything else.
+    pub const ALL: [Self; 8] = [
         Self::PaintChunks,
+        Self::VectorLayers,
         Self::GlyphAtlas,
         Self::DecodedImages,
         Self::ParagraphShaping,
@@ -49,12 +53,13 @@ impl CacheId {
     pub const fn index(self) -> usize {
         match self {
             Self::PaintChunks => 0,
-            Self::GlyphAtlas => 1,
-            Self::DecodedImages => 2,
-            Self::ParagraphShaping => 3,
-            Self::VectorResources => 4,
-            Self::RenderTargets => 5,
-            Self::DeviceMemory => 6,
+            Self::VectorLayers => 1,
+            Self::GlyphAtlas => 2,
+            Self::DecodedImages => 3,
+            Self::ParagraphShaping => 4,
+            Self::VectorResources => 5,
+            Self::RenderTargets => 6,
+            Self::DeviceMemory => 7,
         }
     }
 
@@ -62,6 +67,7 @@ impl CacheId {
     pub const fn name(self) -> &'static str {
         match self {
             Self::PaintChunks => "paint chunks",
+            Self::VectorLayers => "vector layers",
             Self::GlyphAtlas => "glyph atlas",
             Self::DecodedImages => "decoded images",
             Self::ParagraphShaping => "paragraph shaping",

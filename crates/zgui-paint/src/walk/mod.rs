@@ -348,6 +348,35 @@ impl Painter {
         self.cache.evict_cold(bytes, scene, owner)
     }
 
+    /// Drops the coldest records holding a raster `holds` names until their rasters sum to
+    /// `bytes`, as `bytes_of` weighs each, and reports how many records went.
+    ///
+    /// Records selected this frame are never taken. A raster several records hold is weighed once.
+    pub fn evict_cold_holding(
+        &mut self,
+        bytes: u64,
+        bytes_of: &dyn Fn(AtlasKey) -> Option<u64>,
+        scene: &mut Scene,
+        owner: &dyn ResourceOwner,
+    ) -> usize {
+        let cold = self.cache.cold_holding(&|key| bytes_of(key).is_some());
+        let mut picked = Vec::new();
+        let mut weighed = rustc_hash::FxHashSet::default();
+        let mut sum = 0;
+        for (fragment, held) in cold {
+            if sum >= bytes {
+                break;
+            }
+            picked.push(fragment);
+            for key in held {
+                if weighed.insert(key) {
+                    sum += bytes_of(key).unwrap_or(0);
+                }
+            }
+        }
+        self.cache.evict(&picked, scene, owner)
+    }
+
     /// Drops every record, releasing everything each one held into caches that survive.
     pub fn clear_records(&mut self, scene: &mut Scene, owner: &dyn ResourceOwner) {
         self.cache.clear_releasing(scene, owner);
