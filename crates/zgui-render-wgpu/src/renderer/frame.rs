@@ -70,6 +70,9 @@ pub struct FrameBuffers {
     instance_binds: RefCell<HashMap<usize, ([u64; 3], wgpu::BindGroup)>>,
     /// One bind group per mark payload kind, keyed by its block and payload allocation epochs.
     mark_binds: RefCell<HashMap<usize, ([u64; 2], wgpu::BindGroup)>>,
+    /// The bind group mark composites read their bins through, keyed by the block and the pages'
+    /// allocation epochs.
+    mark_composite_bind: RefCell<Option<([u64; 2], wgpu::BindGroup)>>,
     /// Whether idle trimming replaced the retained side-table buffers with empty allocations.
     tables_released: bool,
 }
@@ -114,6 +117,7 @@ impl FrameBuffers {
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::new(HashMap::new()),
             mark_binds: RefCell::new(HashMap::new()),
+            mark_composite_bind: RefCell::new(None),
             tables_released: false,
         }
     }
@@ -403,25 +407,32 @@ impl FrameBuffers {
         gpu: &Gpu,
         layouts: &Layouts,
         bins: &wgpu::TextureView,
+        bins_generation: u64,
     ) -> Option<wgpu::BindGroup> {
-        Some(
-            gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("zgui.bind.mark_composite"),
-                layout: &layouts.mark_composite,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self
-                            .mark_draws
-                            .binding::<crate::pipeline::marks::MarkDraw>()?,
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(bins),
-                    },
-                ],
-            }),
-        )
+        let signature = [self.mark_draws.generation(), bins_generation];
+        if let Some((held, bind)) = self.mark_composite_bind.borrow().as_ref()
+            && *held == signature
+        {
+            return Some(bind.clone());
+        }
+        let bind = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("zgui.bind.mark_composite"),
+            layout: &layouts.mark_composite,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self
+                        .mark_draws
+                        .binding::<crate::pipeline::marks::MarkDraw>()?,
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(bins),
+                },
+            ],
+        });
+        *self.mark_composite_bind.borrow_mut() = Some((signature, bind.clone()));
+        Some(bind)
     }
 
     /// How many bytes every buffer holds.
@@ -458,6 +469,7 @@ impl FrameBuffers {
         *self.frame_bind.borrow_mut() = None;
         self.instance_binds.borrow_mut().clear();
         self.mark_binds.borrow_mut().clear();
+        *self.mark_composite_bind.borrow_mut() = None;
         freed
     }
 

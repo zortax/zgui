@@ -22,6 +22,8 @@ pub struct MarksScratch {
     extent: Size<i32, Device>,
     /// What is held, and how long it has been more than any frame needed.
     decay: Decay,
+    /// Changes whenever the texture does, for bind-group cache keys.
+    generation: u64,
 }
 
 impl MarksScratch {
@@ -46,6 +48,7 @@ impl MarksScratch {
             self.layers.clear();
             self.array = None;
             self.extent = Size::new(0, 0);
+            self.generation = self.generation.wrapping_add(1);
             return;
         }
         let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
@@ -80,6 +83,12 @@ impl MarksScratch {
         }));
         self.texture = Some(texture);
         self.extent = Size::new(held.width as i32, held.height as i32);
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// The allocation epoch of the pages, for bind-group cache keys.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The view a coverage pass draws page `page` through.
@@ -109,7 +118,9 @@ impl MarksScratch {
     /// Lets go of the pages, and reports how many bytes that freed.
     pub fn release(&mut self) -> u64 {
         let freed = self.bytes();
+        let generation = self.generation.wrapping_add(1);
         *self = Self::default();
+        self.generation = generation;
         freed
     }
 }

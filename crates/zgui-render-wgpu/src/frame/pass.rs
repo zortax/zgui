@@ -285,10 +285,12 @@ impl Recorder<'_> {
                 ) else {
                     return false;
                 };
-                let Some(bins) = self
-                    .buffers
-                    .mark_composite_bind_group(self.gpu, layouts, view)
-                else {
+                let Some(bins) = self.buffers.mark_composite_bind_group(
+                    self.gpu,
+                    layouts,
+                    view,
+                    self.marks.generation(),
+                ) else {
                     return false;
                 };
                 let Some(pipeline) =
