@@ -564,4 +564,105 @@ mod tests {
             "densifying must not reorder the ramp"
         );
     }
+
+    /// A mask source over a real mask cache that records each stroke width it is asked for.
+    struct Recording {
+        cache: core::cell::RefCell<crate::content::vectors::VectorMaskCache>,
+        atlas: core::cell::RefCell<zgui_atlas::Atlas>,
+        asked: core::cell::RefCell<Vec<(f64, zgui_atlas::AtlasKey)>>,
+    }
+
+    impl crate::content::vectors::VectorMaskSource for Recording {
+        fn vector_mask(
+            &self,
+            request: crate::content::vectors::VectorMaskRequest<'_>,
+        ) -> Option<crate::content::vectors::VectorMask> {
+            let mask = self
+                .cache
+                .borrow_mut()
+                .tile_for(&mut self.atlas.borrow_mut(), request)?;
+            if let crate::content::vectors::VectorMaskStyle::Stroke(style) = request.style {
+                self.asked.borrow_mut().push((style.width, mask.key));
+            }
+            Some(mask)
+        }
+
+        fn analytic(&self, _owner: zgui_scene::VectorId) -> bool {
+            false
+        }
+
+        fn marks(&self, _owner: zgui_scene::VectorId) -> bool {
+            false
+        }
+    }
+
+    /// The mask route scales a shape's own stroke by the fit, so the shape through the fit is the
+    /// same mask as the shape placed by that fit.
+    #[test]
+    fn a_shapes_own_stroke_is_scaled_by_the_fit_on_the_mask_route() {
+        use std::sync::Arc;
+
+        use zgui_scene::kurbo::{self, Affine, BezPath};
+        use zgui_scene::{ClipId, SpatialId, VectorId};
+
+        use super::document::emit_tracked;
+        use super::{ShapeSource, VectorPlacement, VectorRoute};
+
+        let mut path = BezPath::new();
+        path.move_to((2.0, 2.0));
+        path.line_to((20.0, 4.0));
+        path.line_to((6.0, 18.0));
+        let shape = zgui_svg::Shape {
+            path: Arc::new(path),
+            fill: None,
+            stroke: Some(zgui_svg::Stroke {
+                paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
+                style: kurbo::Stroke::new(2.0),
+            }),
+            clips: Vec::new(),
+        };
+        let fit = Affine::translate((3.0, 2.0)) * Affine::scale(2.0);
+        let placed = zgui_svg::document::place::shape(&shape, fit);
+
+        let masks = Recording {
+            cache: Default::default(),
+            atlas: core::cell::RefCell::new(zgui_atlas::Atlas::new(
+                zgui_atlas::AtlasLimits::default(),
+            )),
+            asked: Default::default(),
+        };
+        masks.atlas.borrow_mut().begin_frame();
+        masks.cache.borrow_mut().begin_frame();
+        let mut scene = Scene::new();
+        scene.begin_frame(Size::new(100, 100));
+        let paint = shape_paint(&StyleDraft::initial().build(), 1.0);
+        let placement = VectorPlacement {
+            clip: ClipId::ROOT,
+            transform: SpatialId::VIEWPORT,
+            scale: 1.0,
+        };
+        let through = ShapeSource {
+            shape: &shape,
+            fit,
+            cell: None,
+        };
+        for (owner, source) in [
+            (VectorId(1), through),
+            (VectorId(2), ShapeSource::placed_shape(&placed)),
+        ] {
+            let emitted = emit_tracked(&mut scene, owner, &source, &paint, &masks, placement);
+            assert_eq!(emitted.route, Some(VectorRoute::AtlasMask));
+        }
+
+        let asked = masks.asked.borrow();
+        assert_eq!(
+            asked.iter().map(|(width, _)| *width).collect::<Vec<_>>(),
+            [4.0, 4.0],
+            "a 2 unit stroke under a fit of 2 is 4 pixels wide"
+        );
+        assert_eq!(asked[0].1, asked[1].1, "one raster, one atlas entry");
+        let sprites = &scene.primitives.mono_sprites;
+        assert_eq!(sprites.len(), 2);
+        assert_eq!(sprites[0].ink(), sprites[1].ink());
+    }
 }
