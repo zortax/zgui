@@ -28,11 +28,15 @@ pub fn covering(rect: Rect<DevicePx, Device>) -> Rect<i32, Device> {
 /// Empty when the rectangle lies wholly outside the surface, which is the answer a caller wants:
 /// there is nothing there to rasterise.
 pub fn aligned(rect: Rect<DevicePx, Device>, viewport: Size<i32, Device>) -> Rect<i32, Device> {
-    let covered = covering(rect);
-    let left = align_down(covered.origin.x).clamp(0, viewport.width);
-    let top = align_down(covered.origin.y).clamp(0, viewport.height);
-    let right = align_up(covered.origin.x + covered.size.width).clamp(0, viewport.width);
-    let bottom = align_up(covered.origin.y + covered.size.height).clamp(0, viewport.height);
+    aligned_whole(covering(rect), viewport)
+}
+
+/// The tile-aligned region covering a whole-pixel `rect`, clamped to a surface of `viewport`.
+pub fn aligned_whole(rect: Rect<i32, Device>, viewport: Size<i32, Device>) -> Rect<i32, Device> {
+    let left = align_down(rect.origin.x).clamp(0, viewport.width);
+    let top = align_down(rect.origin.y).clamp(0, viewport.height);
+    let right = align_up(rect.origin.x + rect.size.width).clamp(0, viewport.width);
+    let bottom = align_up(rect.origin.y + rect.size.height).clamp(0, viewport.height);
     Rect::new(
         Point::new(left, top),
         Size::new((right - left).max(0), (bottom - top).max(0)),

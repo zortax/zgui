@@ -96,6 +96,7 @@ mod tests {
             items: 0..2,
             clip: ClipId(1),
             instanced,
+            clamped: false,
         };
         (plan, pass)
     }

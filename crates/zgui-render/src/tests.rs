@@ -79,6 +79,7 @@ impl VectorRaster for RecordingRaster {
                 items: pass.items.clone(),
                 clip: pass.clip,
                 instanced: pass.instanced,
+                clamped: pass.clamped,
             });
         }
         plan

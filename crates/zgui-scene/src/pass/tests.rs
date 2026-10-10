@@ -487,3 +487,102 @@ fn marks_split_a_vector_pass_like_any_primitive() {
         2
     );
 }
+
+/// A damage set of one rectangle.
+fn damaged(x: i32, y: i32, width: i32, height: i32) -> DamageSet {
+    let mut damage = DamageSet::new();
+    damage.absorb(Rect::new(Point::new(x, y), Size::new(width, height)));
+    damage
+}
+
+/// A scene of one wide drawing, and of a second one in the same pass when `two`.
+fn wide(two: bool) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(viewport());
+    crate::pass::fixture::vector(&mut scene, 0, rect(0.0, 0.0, 800.0, 400.0), ClipId::ROOT);
+    if two {
+        crate::pass::fixture::vector(&mut scene, 1, rect(150.0, 60.0, 300.0, 10.0), ClipId::ROOT);
+    }
+    scene
+}
+
+#[test]
+fn a_pass_region_is_cut_to_the_damage() {
+    let mut scene = wide(false);
+    scene.finish(&damaged(100, 50, 100, 30));
+    let plan = scene.pass_plan();
+    assert_eq!(plan.len(), 1);
+    let pass = &plan.passes[0];
+    assert_eq!(
+        pass.region,
+        Rect::new(Point::new(96, 48), Size::new(112, 32)),
+        "the region is the damage on the tile grid, not the drawing's 800 by 400"
+    );
+    assert!(pass.clamped);
+}
+
+#[test]
+fn a_cut_pass_cuts_its_item_inks() {
+    let mut scene = wide(true);
+    scene.finish(&damaged(100, 50, 100, 30));
+    let plan = scene.pass_plan();
+    assert_eq!(plan.len(), 1);
+    let pass = &plan.passes[0];
+    let inks: Vec<_> = plan.items_of(pass).iter().map(|item| item.ink).collect();
+    assert_eq!(
+        inks,
+        vec![
+            Rect::new(Point::new(0, 0), Size::new(112, 32)),
+            Rect::new(Point::new(54, 12), Size::new(58, 10)),
+        ],
+        "each ink is the part of the item inside the region, relative to it"
+    );
+}
+
+#[test]
+fn a_pass_inside_a_group_keeps_its_whole_region() {
+    let mut scene = across_a_group();
+    scene.finish(&damaged(220, 40, 8, 8));
+    let plan = scene.pass_plan();
+    assert_eq!(plan.len(), 1, "only the drawing in the group is damaged");
+    let pass = &plan.passes[0];
+    assert_eq!(
+        pass.region,
+        Rect::new(Point::new(208, 32), Size::new(48, 32)),
+        "a group target is drawn whole, so its pass is not cut"
+    );
+    assert!(!pass.clamped);
+}
+
+#[test]
+fn a_scene_with_a_backdrop_keeps_whole_regions() {
+    let mut scene = wide(false);
+    scene.push_backdrop(crate::group::BackdropFilter::new(
+        rect(1200.0, 600.0, 100.0, 100.0),
+        smallvec::smallvec![crate::group::Filter::Blur(4.0)],
+    ));
+    scene.finish(&damaged(100, 50, 100, 30));
+    let pass = &scene.pass_plan().passes[0];
+    assert_eq!(
+        pass.region,
+        Rect::new(Point::new(0, 0), Size::new(800, 400))
+    );
+    assert!(!pass.clamped);
+}
+
+#[test]
+fn full_damage_cuts_nothing() {
+    let mut scene = wide(true);
+    scene.finish(&DamageSet::full());
+    let plan = scene.pass_plan();
+    let pass = &plan.passes[0];
+    assert_eq!(
+        pass.region,
+        Rect::new(Point::new(0, 0), Size::new(800, 400))
+    );
+    assert!(!pass.clamped);
+    assert_eq!(
+        plan.items_of(pass)[1].ink,
+        Rect::new(Point::new(150, 60), Size::new(300, 10))
+    );
+}

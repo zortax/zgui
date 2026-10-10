@@ -178,7 +178,8 @@ impl Scene {
                 // A group marker is where the renderer changes target, which a pass may not span.
                 // It is emphatically not an occluder: what a group covers is irrelevant to the
                 // question, and treating it as one let a pass run straight through the boundary.
-                PrimitiveKind::GroupStart | PrimitiveKind::GroupEnd => Event::Boundary,
+                PrimitiveKind::GroupStart => Event::Boundary { opens: true },
+                PrimitiveKind::GroupEnd => Event::Boundary { opens: false },
                 _ => {
                     let ink = self.ink_of(*op);
                     Event::Occluder(placed(&placements, self.space_of_op(*op), ink).unwrap_or(ink))
@@ -192,6 +193,13 @@ impl Scene {
                 vectors: &self.primitives.vectors,
                 damage,
                 viewport: self.viewport,
+                // A backdrop widens what the renderer redraws past the damage, and a cut pass
+                // would leave the widened part of its drawings unpainted.
+                cut: if self.primitives.backdrops.is_empty() {
+                    damage.bounds()
+                } else {
+                    None
+                },
                 overlap,
             },
             &mut self.clips,

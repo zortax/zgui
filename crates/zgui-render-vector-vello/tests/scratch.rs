@@ -163,3 +163,82 @@ fn the_coverage_scratch_is_two_textures_of_the_shared_shape() {
          does for the other rasteriser"
     );
 }
+
+/// The scene for the cut-pass case: a tall drawing, something over it, and a disc beside it.
+///
+/// The thing over the tall drawing splits the two drawings into two passes, and the two share one
+/// layer because they do not meet on the surface.
+fn cut_scene(damage: &DamageSet) -> Scene {
+    let mut scene = support::scene();
+    quad(&mut scene, rect(0.0, 0.0, 128.0, 128.0), opaque(0, 0, 0));
+    vector(
+        &mut scene,
+        0,
+        path(rect(0.0, 0.0, 40.0, 128.0)),
+        opaque(255, 255, 255),
+        ClipId::ROOT,
+    );
+    quad(
+        &mut scene,
+        rect(0.0, 0.0, 40.0, 10.0),
+        Color::srgb_u8(0, 0, 0, 0),
+    );
+    vector(
+        &mut scene,
+        1,
+        // Its ink starts on the tile grid, so it starts where its pass's region does.
+        support::circle(80.0, 32.0, 16.0),
+        opaque(255, 255, 255),
+        ClipId::ROOT,
+    );
+    scene.finish(damage);
+    scene
+}
+
+/// A pass cut to the damage keeps its drawing inside its own region of the layer.
+///
+/// The cut pass's drawing reaches far past the region it was cut to, and the pass packed next to it
+/// in the same layer starts where that region ends. A frame that redraws the damage has to look
+/// exactly like one that redraws everything.
+#[test]
+fn a_cut_pass_leaves_its_neighbours_alone() {
+    use zgui_render::Renderer as _;
+
+    for which in [Which::Vello, Which::Coverage] {
+        let Some((mut cut, mut whole)) = support::twins(support::SIDE, which) else {
+            return;
+        };
+        let mut strip = DamageSet::new();
+        strip.absorb(zgui_geom::Rect::new(
+            zgui_geom::Point::new(0, 0),
+            zgui_geom::Size::new(96, 48),
+        ));
+        let partial = cut_scene(&strip);
+        let passes = &partial.pass_plan().passes;
+        assert_eq!(passes.len(), 2, "two passes: {passes:?}");
+        assert!(
+            passes[0].clamped,
+            "the tall drawing's pass is cut to the strip"
+        );
+        assert!(!passes[1].clamped);
+
+        let full = cut_scene(&DamageSet::full());
+        support::present(&mut cut.renderer, &full);
+        cut.renderer.draw(&partial, &strip);
+        let after = cut
+            .renderer
+            .read_presented()
+            .expect("a stand-in surface can be read back");
+        let expected = support::present(&mut whole, &full);
+        assert_eq!(
+            expected.rgba(65, 17),
+            [0, 0, 0, 255],
+            "the disc's corner is the background"
+        );
+        assert_eq!(
+            support::difference(support::SIDE, &after, &expected),
+            None,
+            "{which:?}: the cut pass drew into the pass beside it"
+        );
+    }
+}

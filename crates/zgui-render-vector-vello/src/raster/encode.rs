@@ -50,6 +50,21 @@ pub fn pass(
         f64::from(pass.raster_region.origin.x - pass.region.origin.x),
         f64::from(pass.raster_region.origin.y - pass.region.origin.y),
     ));
+    // A cut pass holds items that reach past its region, and the layer goes on past the region
+    // into the pass packed beside it. One clip keeps every item of the pass inside its own region.
+    if pass.clamped {
+        let region = pass.raster_region;
+        scene.push_clip_layer(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            &kurbo::Rect::new(
+                f64::from(region.left()),
+                f64::from(region.top()),
+                f64::from(region.right()),
+                f64::from(region.bottom()),
+            ),
+        );
+    }
 
     for planned in frame.plan.items_of(pass) {
         let Some(item) = frame.items.get(planned.item) else {
@@ -100,6 +115,9 @@ pub fn pass(
         for _ in &shapes {
             scene.pop_layer();
         }
+    }
+    if pass.clamped {
+        scene.pop_layer();
     }
     encoded
 }

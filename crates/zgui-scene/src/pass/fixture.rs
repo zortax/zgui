@@ -68,7 +68,7 @@ fn grey(scene: &mut Scene, level: f32) -> PaintRef {
 }
 
 /// Pushes one vector item under `clip`.
-fn vector(scene: &mut Scene, id: u32, bounds: Rect<DevicePx, Device>, clip: ClipId) {
+pub(crate) fn vector(scene: &mut Scene, id: u32, bounds: Rect<DevicePx, Device>, clip: ClipId) {
     let fill = grey(scene, 0.6);
     scene.push_vector(VectorItem::filled(VectorId(id), path(bounds), fill).clipped(clip));
 }

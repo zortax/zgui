@@ -51,6 +51,11 @@ pub struct PlannedPass {
     pub instanced: bool,
     /// Where in the painting order the composite belongs: the draw order of the pass's last item.
     pub composite_order: DrawOrder,
+    /// Whether the region was cut to the frame's damage, so its items reach past it.
+    ///
+    /// A rasteriser keeps the items of a cut pass inside the region: passes share a scratch layer,
+    /// and an item drawn past its cut region would draw into the region of the pass beside it.
+    pub clamped: bool,
 }
 
 /// Everything a frame's vector work amounts to.

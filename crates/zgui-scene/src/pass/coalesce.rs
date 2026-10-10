@@ -30,7 +30,13 @@ pub(crate) enum Event {
     /// point and scissored to that target's region. So a pass whose items straddle a group boundary
     /// has every item on the far side of it discarded by a scissor belonging to something else —
     /// which is a drawing that reached the display list, was rasterised, and is not on the screen.
-    Boundary,
+    ///
+    /// `opens` says whether the target that begins here is a group's, so the policy knows which
+    /// passes are drawn into a group target.
+    Boundary {
+        /// Whether a group starts here rather than ends.
+        opens: bool,
+    },
 }
 
 /// Everything the policy reads.
@@ -43,6 +49,12 @@ pub(crate) struct Input<'a> {
     pub(crate) damage: &'a DamageSet,
     /// The surface's extent, which regions are clamped to.
     pub(crate) viewport: Size<i32, Device>,
+    /// The rectangle a pass outside every group is cut to, when the frame redraws only part of
+    /// the surface.
+    ///
+    /// Nothing for full damage, and nothing when the scene holds a backdrop: a backdrop widens
+    /// what the renderer redraws past the damage, so a cut pass would leave part of it unpainted.
+    pub(crate) cut: Option<Rect<i32, Device>>,
     /// Which reading of rule 3 to apply.
     pub(crate) overlap: Overlap,
 }
@@ -78,21 +90,31 @@ struct Open {
     /// to *that item's* clip, so admitting a second item would either clip the newcomer by a
     /// stranger's chain or drop the clip the pass exists for.
     sealed: bool,
+    /// Whether the pass is drawn into a group's target.
+    ///
+    /// Taken at the first item and never changed: a boundary closes the pass.
+    nested: bool,
 }
 
 /// Plans a frame's vector passes into `out`.
 pub(crate) fn plan(input: Input<'_>, clips: &mut ClipTable, out: &mut ScenePassPlan) {
     out.clear();
     let mut open: Option<Open> = None;
+    let mut depth = 0_usize;
 
     for event in input.events {
         match *event {
             // Rule 4: a pass ends where the target does. Nothing is carried across, not even the
             // intervening occluders, because the pass that follows begins in a different target.
-            Event::Boundary => {
+            Event::Boundary { opens } => {
                 if let Some(finished) = open.take() {
                     close(finished, clips, &input, out);
                 }
+                depth = if opens {
+                    depth + 1
+                } else {
+                    depth.saturating_sub(1)
+                };
             }
             Event::Occluder(bounds) => {
                 if let Some(current) = open.as_mut() {
@@ -142,6 +164,7 @@ pub(crate) fn plan(input: Input<'_>, clips: &mut ClipTable, out: &mut ScenePassP
                     caught: false,
                     composite_order: item.order,
                     sealed: false,
+                    nested: depth > 0,
                 });
                 current.items.push(index);
                 current.cells.insert(current.inks.len(), item.ink);
@@ -177,18 +200,28 @@ fn close(open: Open, clips: &mut ClipTable, input: &Input<'_>, out: &mut ScenePa
         open.composite_order,
     ) {
         for index in &open.items {
-            record(core::slice::from_ref(index), clips, input, out);
+            record(core::slice::from_ref(index), open.nested, clips, input, out);
         }
         return;
     }
-    record(&open.items, clips, input, out);
+    record(&open.items, open.nested, clips, input, out);
 }
 
 /// Records one pass covering exactly `items`: resolves its shared clip, splits out the residuals,
 /// decides whether it can be composited per item, and records the region.
 ///
 /// The composite goes at the highest order among `items`, the only order that is above all of them.
-fn record(items: &[usize], clips: &mut ClipTable, input: &Input<'_>, out: &mut ScenePassPlan) {
+///
+/// A pass outside every group is cut to the frame's cut, so a pass that only part of the damage
+/// reaches rasterises only that part. A pass `nested` in a group keeps its whole region, because a
+/// group target is drawn whole.
+fn record(
+    items: &[usize],
+    nested: bool,
+    clips: &mut ClipTable,
+    input: &Input<'_>,
+    out: &mut ScenePassPlan,
+) {
     let inks: Vec<_> = items
         .iter()
         .map(|index| input.vectors[*index].ink)
@@ -196,10 +229,17 @@ fn record(items: &[usize], clips: &mut ClipTable, input: &Input<'_>, out: &mut S
     let Some(bounds) = inks.iter().copied().reduce(Rect::union) else {
         return;
     };
-    let region = region::aligned(bounds, input.viewport);
+    let whole = region::aligned(bounds, input.viewport);
+    let region = match input.cut {
+        Some(cut) if !nested => whole
+            .intersection(region::aligned_whole(cut, input.viewport))
+            .unwrap_or(Rect::ZERO),
+        _ => whole,
+    };
     if region.is_empty() {
         return;
     }
+    let clamped = region != whole;
 
     // Rule 2's other half: the pass's clip is the deepest chain every item of it applies.
     let pass_clip = items
@@ -216,7 +256,7 @@ fn record(items: &[usize], clips: &mut ClipTable, input: &Input<'_>, out: &mut S
         let item = &input.vectors[*index];
         let residual = clips.residual(item.clip, pass_clip);
         out.clip_layers += clips.depth(residual) as usize;
-        let ink = region::covering(item.ink);
+        let ink = cut(region::covering(item.ink), region);
         covered.push(ink);
         out.items.push(PlannedItem {
             item: *index,
@@ -243,7 +283,14 @@ fn record(items: &[usize], clips: &mut ClipTable, input: &Input<'_>, out: &mut S
         clip: pass_clip,
         instanced: pairwise_disjoint(&covered),
         composite_order,
+        clamped,
     });
+}
+
+/// The part of `ink` inside `region`, or an empty rectangle at the region's corner.
+fn cut(ink: Rect<i32, Device>, region: Rect<i32, Device>) -> Rect<i32, Device> {
+    ink.intersection(region)
+        .unwrap_or_else(|| Rect::new(region.origin, Size::new(0, 0)))
 }
 
 /// Whether `ink` meets anything being redrawn.

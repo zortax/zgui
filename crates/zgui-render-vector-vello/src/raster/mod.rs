@@ -303,6 +303,7 @@ impl VectorRaster for VelloRaster {
                 items: planned.items.clone(),
                 clip: planned.clip,
                 instanced: planned.instanced,
+                clamped: planned.clamped,
             });
         }
         // The far corner of the surface anything is drawn at, not the largest region: a layer holds

@@ -191,13 +191,17 @@ impl CoverageRaster {
             let clip_count = self.runs.len() - clip_first;
 
             // The ink is recorded relative to its pass's region and the layer is in device
-            // coordinates, so the two are added back together here.
-            let bounds = [
+            // coordinates, so the two are added back together here. A pixel of slack on each side,
+            // except past the edge of a cut pass: the pass beside it in the layer starts there.
+            let mut bounds = [
                 (origin.x + planned.ink.origin.x) as f32 - 1.0,
                 (origin.y + planned.ink.origin.y) as f32 - 1.0,
                 planned.ink.size.width as f32 + 2.0,
                 planned.ink.size.height as f32 + 2.0,
             ];
+            if pass.clamped {
+                bounds = clamped(bounds, pass.raster_region);
+            }
             let mut painted = false;
             if let Some(color) = flat(item.fill, frame.paints) {
                 let start = self.segments.len();
@@ -388,6 +392,7 @@ impl VectorRaster for CoverageRaster {
                 items: planned.items.clone(),
                 clip: planned.clip,
                 instanced: planned.instanced,
+                clamped: planned.clamped,
             });
         }
         // The far corner of the surface anything is drawn at, not the largest region: a layer holds
@@ -495,6 +500,15 @@ impl VectorSource for CoverageRaster {
     fn view(&self, target: VectorTarget) -> Option<&wgpu::TextureView> {
         self.scratch.straight(target.0 as u32)
     }
+}
+
+/// `bounds`, as x, y, width and height, kept inside `region`.
+fn clamped(bounds: [f32; 4], region: Rect<i32, Device>) -> [f32; 4] {
+    let left = bounds[0].max(region.left() as f32);
+    let top = bounds[1].max(region.top() as f32);
+    let right = (bounds[0] + bounds[2]).min(region.right() as f32);
+    let bottom = (bounds[1] + bounds[3]).min(region.bottom() as f32);
+    [left, top, (right - left).max(0.0), (bottom - top).max(0.0)]
 }
 
 /// Opens a render pass that keeps what the attachment already holds.
