@@ -1001,3 +1001,59 @@ fn a_dense_line_draws_as_the_true_line() {
         assert_eq!(ours.spurious, 0, "{name} {width} px: {ours:?}");
     }
 }
+
+/// The pixels of `drawing` encoded once through `masks`, on a renderer of its own, and how many
+/// series chunks the encoding left out.
+fn drawn_through(drawing: &Drawing, masks: &CachedMarks) -> Option<(Pixels, u64)> {
+    let mut harness = harness(Which::Vello)?;
+    let mut scene = Scene::new();
+    zgui_profile::counter::reset();
+    encode(&mut scene, drawing, masks, 1, None);
+    let culled = zgui_profile::counter::get(Counter::SeriesChunksCulled);
+    Some((draw(&mut harness.renderer, &mut scene).1, culled))
+}
+
+#[test]
+fn a_deep_zoom_draws_the_chunks_it_shows_as_the_whole_series_draws() {
+    // Seventy chunks of points over x in 0..1, and a view 64 times wider along x with a chunk
+    // border at its centre. Thousands of translucent discs overlap in every column, so the union
+    // sums across the border.
+    let count = 70 * 4096;
+    let data = walk(count);
+    let translucent = || Brush::Solid(Color::srgb(1.0, 1.0, 1.0, 0.5));
+    let line = Series::Line {
+        data: Arc::clone(&data),
+        to_canvas: PLOT,
+        stroke: kurbo::Stroke::new(1.5),
+        brush: translucent(),
+    };
+    let dots = Series::Points {
+        data,
+        to_canvas: PLOT,
+        marker: Marker::Circle { radius: 2.0 },
+        fill: Some(translucent()),
+        stroke: None,
+    };
+    let border = (35 * 4096) as f64 / count as f64;
+    let at = 120.0 * border + 4.0;
+    let zoom = 64.0;
+    let view = Affine::new([zoom, 0.0, 0.0, 1.0, 64.0 - zoom * at, 0.0]);
+    let canvas = canvas(vec![line, dots], Vec::new(), view);
+    let drawing = Drawing::canvas(&canvas, Affine::IDENTITY);
+
+    let Some((pixels, culled)) = drawn_through(&drawing, &CachedMarks::new()) else {
+        return;
+    };
+    let Some((expected, kept)) = drawn_through(&drawing, &CachedMarks::whole()) else {
+        return;
+    };
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(
+            culled > 2 * 60,
+            "most chunks of both series are left out: {culled}"
+        );
+        assert_eq!(kept, 0, "the reference draws every chunk");
+    }
+    assert!(coverage(&pixels) > 300.0, "the series draw");
+    assert_eq!(pixels.max_difference(&expected), 0);
+}

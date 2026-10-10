@@ -12,6 +12,9 @@
 //! or another level of detail. Such a draw is provisional, and the frame that draws it is owed a
 //! frame of its own.
 //!
+//! Every series payload has a chunk index: the bounds of each run of [`CHUNK`] prims. An item can
+//! then draw only the runs near what the viewport shows.
+//!
 //! No picture depends on an entry: a source with none is lowered again, to a new allocation that
 //! uploads once more. So a full map drops the entries touched least recently, and when paint
 //! records pin every shape entry, it lowers new shapes with no entry until a pin drops.
@@ -51,6 +54,9 @@ const FAR: f64 = 65_536.0;
 /// The fewest points of a series whose new payloads are built on a worker thread. A smaller
 /// series builds in well under a millisecond, in the frame that asks.
 pub(crate) const WORKER_POINTS: usize = 1 << 16;
+
+/// How many prims of a series payload one entry of its chunk index holds.
+pub(crate) const CHUNK: usize = 4096;
 
 /// One part of a series, as its payload is keyed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -112,12 +118,12 @@ impl SeriesKey {
 }
 
 /// How far a payload of `held` is from one of `wanted`, as a stand-in: lower is nearer. The
-/// nearest reduction comes first, a finer one before a coarser one as far away, and the whole line
-/// last. The finest reduction stands in for the whole line.
+/// nearest reduction comes first, a coarser one before a finer one as far away, because it has
+/// fewer vertices. The finest reduction stands in for the whole line.
 fn distance(wanted: SeriesPart, held: SeriesPart) -> i64 {
     match (wanted, held) {
         (SeriesPart::Columns { bucket }, SeriesPart::Columns { bucket: other }) => {
-            2 * (i64::from(other) - i64::from(bucket)).abs() + i64::from(other < bucket)
+            2 * (i64::from(other) - i64::from(bucket)).abs() + i64::from(other > bucket)
         }
         (SeriesPart::Line, SeriesPart::Columns { bucket }) => (1 << 40) - i64::from(bucket),
         _ => 1 << 41,
@@ -154,6 +160,8 @@ pub(crate) struct SeriesPayload {
     pub(crate) bounds: [f64; 4],
     /// The payloads, one per item, each of at most the most prims an item may hold.
     pub(crate) payloads: Vec<Arc<MarkPayload>>,
+    /// The chunk index of each payload, as [`chunk_index`] makes it.
+    pub(crate) chunks: Vec<Arc<[[f32; 4]]>>,
 }
 
 /// One series' payload.
@@ -857,11 +865,112 @@ fn build(data: &[[f32; 2]], request: Request<'_>) -> Option<SeriesPayload> {
             }
         }
     }
+    let chunks = payloads
+        .iter()
+        .map(|payload| match part {
+            SeriesPart::Disc { .. } => chunk_index(&payload.discs, 0, |disc| [disc[0], disc[1]]),
+            SeriesPart::Glyph { .. } => chunk_index(&payload.glyphs[table.len()..], 0, |word| {
+                [f32::from_bits(word[0]), f32::from_bits(word[1])]
+            }),
+            SeriesPart::Line | SeriesPart::Columns { .. } => {
+                chunk_index(&payload.vertices, 1, |vertex| *vertex)
+            }
+        })
+        .collect();
     Some(SeriesPayload {
         centre,
         bounds,
         payloads,
+        chunks,
     })
+}
+
+/// The chunk index of `prims`: for each run of [`CHUNK`] prims, the bounds of the finite positions
+/// `at` finds in the run and in the `after` prims that follow it, as `[x0, y0, x1, y1]`.
+///
+/// A polyline segment starts at its vertex and ends at the next one, so the run of its segments
+/// reads one vertex after it. A run with no finite position has bounds that meet nothing.
+fn chunk_index<T>(prims: &[T], after: usize, at: impl Fn(&T) -> [f32; 2]) -> Arc<[[f32; 4]]> {
+    let empty = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    (0..prims.len().div_ceil(CHUNK))
+        .map(|chunk| {
+            let start = chunk * CHUNK;
+            let end = (start + CHUNK + after).min(prims.len());
+            prims[start..end]
+                .iter()
+                .map(&at)
+                .filter(|[x, y]| x.is_finite() && y.is_finite())
+                .fold(empty, |[x0, y0, x1, y1], [x, y]| {
+                    [x0.min(x), y0.min(y), x1.max(x), y1.max(y)]
+                })
+        })
+        .collect()
+}
+
+/// The chunks of `index` whose bounds meet `query`, as the range from the first one to the last
+/// one. Empty when no chunk meets it.
+///
+/// `query` is `[x0, y0, x1, y1]` in payload units. On data that runs left to right, the chunks
+/// that meet a query are contiguous, so the range holds no other chunk. On other data it can hold
+/// every chunk.
+pub(crate) fn chunks_meeting(index: &[[f32; 4]], query: [f64; 4]) -> core::ops::Range<usize> {
+    let meets = |bounds: &[f32; 4]| {
+        let [x0, y0, x1, y1] = bounds.map(f64::from);
+        x0 <= query[2] && x1 >= query[0] && y0 <= query[3] && y1 >= query[1]
+    };
+    let Some(start) = index.iter().position(meets) else {
+        return 0..0;
+    };
+    let end = index.iter().rposition(meets).map_or(start, |last| last + 1);
+    start..end
+}
+
+/// One payload kind a series item draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// Discs.
+    Disc,
+    /// Polyline vertices.
+    Polyline,
+    /// Glyph words, after a tile table of this many words.
+    Glyph(usize),
+}
+
+/// The part of a payload lane of `len` prims that the chunks `range` hold, as a
+/// [`zgui_scene::MarkItem`] counts it: the first prim, and how many prims from there.
+///
+/// A polyline part holds the segments that start in the chunks, the vertex before the first one,
+/// and the vertex after the end of the last one, so the separators keep their meaning at both
+/// ends. `(0, 0)` when the part draws nothing.
+pub(crate) fn part_of(lane: Lane, range: core::ops::Range<usize>, len: usize) -> (u32, u32) {
+    let start = range.start * CHUNK;
+    let end = range.end * CHUNK;
+    let (first, count) = match lane {
+        Lane::Disc => (start, end.min(len).saturating_sub(start)),
+        Lane::Glyph(tiles) => {
+            let anchors = len.saturating_sub(tiles);
+            (tiles + start, end.min(anchors).saturating_sub(start))
+        }
+        Lane::Polyline => {
+            // Segment `i` strokes vertex `i` to `i + 1`. The first and the last vertex are
+            // separators, so the segments are 1 to len - 3.
+            let from = start.max(1);
+            let to = end.min(len.saturating_sub(2));
+            if to <= from {
+                return (0, 0);
+            }
+            (from - 1, to - from + 3)
+        }
+    };
+    if count == 0 {
+        return (0, 0);
+    }
+    (first as u32, count as u32)
 }
 
 #[cfg(test)]
@@ -876,8 +985,8 @@ mod tests {
     use zgui_scene::{ClipId, MarkPayload, Scene, SpatialId, VectorId};
 
     use super::{
-        EVICTED_SHAPES, MAX_SHAPES, MarkPayloads, SeriesLookup, SeriesPart, WORKER_POINTS,
-        lod_bucket, m4, series_payload,
+        CHUNK, EVICTED_SHAPES, Lane, MAX_SHAPES, MarkPayloads, SeriesLookup, SeriesPart,
+        WORKER_POINTS, chunks_meeting, distance, lod_bucket, m4, part_of, series_payload,
     };
     use crate::content::Drawing;
     use crate::content::vectors::recognitions::MAX_ENTRIES;
@@ -1442,5 +1551,164 @@ mod tests {
                 "a pinned entry stays"
             );
         }
+    }
+
+    /// `count` points along x from 0, one unit apart, with y = x mod 7.
+    fn row(count: usize) -> Arc<[[f32; 2]]> {
+        (0..count).map(|i| [i as f32, (i % 7) as f32]).collect()
+    }
+
+    #[test]
+    fn sorted_data_selects_only_the_chunks_near_the_query() {
+        let data = row(10 * CHUNK + 5);
+        let built = series_payload(None, &data, DISC, Affine::IDENTITY, 1.0, 1 << 22, &[])
+            .expect("points")
+            .payload;
+        let index = &built.chunks[0];
+        assert_eq!(index.len(), 11, "ten full chunks and five discs");
+        // Payload x is data x less the centre of the bounds.
+        let centre = built.centre[0];
+        let at = |x: f64| x - centre;
+        let query = [
+            at(3.0 * CHUNK as f64 + 10.0),
+            -1.0,
+            at(4.0 * CHUNK as f64 + 2.0),
+            8.0,
+        ];
+        let range = chunks_meeting(index, query);
+        assert_eq!(range, 3..5);
+        assert_eq!(
+            part_of(Lane::Disc, range, data.len()),
+            (3 * CHUNK as u32, 2 * CHUNK as u32)
+        );
+        // The last chunk holds the five discs past the full ones.
+        let range = chunks_meeting(index, [at(1e9), -1.0, at(2e9), 8.0]);
+        assert!(range.is_empty(), "nothing lies past the end");
+        assert_eq!(part_of(Lane::Disc, range, data.len()), (0, 0));
+        let tail = chunks_meeting(index, [at(10.0 * CHUNK as f64), -1.0, at(1e9), 8.0]);
+        assert_eq!(tail, 10..11);
+        assert_eq!(
+            part_of(Lane::Disc, tail, data.len()),
+            (10 * CHUNK as u32, 5)
+        );
+        // A query above every point meets nothing.
+        assert!(chunks_meeting(index, [at(0.0), 20.0, at(1e9), 30.0]).is_empty());
+    }
+
+    #[test]
+    fn unsorted_data_selects_from_the_first_meeting_chunk_to_the_last() {
+        // Each chunk sweeps x the whole way, so every chunk meets every query.
+        let data: Arc<[[f32; 2]]> = (0..4 * CHUNK)
+            .map(|i| [((i * 37) % 1000) as f32, 0.0])
+            .collect();
+        let built = series_payload(None, &data, DISC, Affine::IDENTITY, 1.0, 1 << 22, &[])
+            .expect("points")
+            .payload;
+        let centre = built.centre[0];
+        let range = chunks_meeting(&built.chunks[0], [10.0 - centre, -1.0, 12.0 - centre, 1.0]);
+        assert_eq!(range, 0..4, "an unsorted series draws whole");
+
+        // Chunks that meet the query at both ends take the ones between with them.
+        let far = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        let index = [
+            [0.0, 0.0, 1.0, 1.0],
+            far,
+            [5.0, 5.0, 6.0, 6.0],
+            [0.5, 0.5, 2.0, 2.0],
+            far,
+        ];
+        assert_eq!(chunks_meeting(&index, [0.0, 0.0, 1.0, 1.0]), 0..4);
+        assert_eq!(chunks_meeting(&index, [5.5, 5.5, 9.0, 9.0]), 2..3);
+        assert_eq!(chunks_meeting(&index, [7.0, 7.0, 9.0, 9.0]), 0..0);
+    }
+
+    #[test]
+    fn a_line_part_holds_the_vertex_after_its_last_segment() {
+        let data = row(3 * CHUNK);
+        let built = series_payload(
+            None,
+            &data,
+            SeriesPart::Line,
+            Affine::IDENTITY,
+            1.0,
+            1 << 22,
+            &[],
+        )
+        .expect("points")
+        .payload;
+        let vertices = &built.payloads[0].vertices;
+        let len = vertices.len();
+        assert_eq!(len, 3 * CHUNK + 2, "one run between two separators");
+        let index = &built.chunks[0];
+        assert_eq!(index.len(), 4);
+        // The chunk of segments CHUNK..2 CHUNK ends at vertex 2 CHUNK, which data point
+        // 2 CHUNK - 1 is.
+        let centre = built.centre[0];
+        assert_eq!(f64::from(index[1][2]) + centre, (2 * CHUNK - 1) as f64);
+
+        let (first, count) = part_of(Lane::Polyline, 1..2, len);
+        // The item reads from the vertex before its first segment to the one after its last
+        // segment ends, and strokes segments first + 1 .. first + count - 2.
+        assert_eq!(first as usize, CHUNK - 1);
+        assert_eq!(
+            (first + 1) as usize,
+            CHUNK,
+            "the first segment starts the chunk"
+        );
+        assert_eq!(
+            (first + count - 2) as usize,
+            2 * CHUNK,
+            "the chunk's segments all draw"
+        );
+        assert!(
+            ((first + count) as usize) < len,
+            "the vertex after the end is read"
+        );
+        assert!(!vertices[(first + count - 2) as usize][0].is_nan());
+
+        // The first chunk starts at the separator. The third holds the last segment and reads
+        // the closing separator, and the fourth holds only the last vertex, which no segment
+        // starts at.
+        assert_eq!(part_of(Lane::Polyline, 0..1, len), (0, CHUNK as u32 + 2));
+        let (first, count) = part_of(Lane::Polyline, 2..3, len);
+        assert_eq!(
+            (first + count) as usize,
+            len,
+            "the closing separator is the last read"
+        );
+        assert!(vertices[len - 1][0].is_nan());
+        assert_eq!(part_of(Lane::Polyline, 3..4, len), (0, 0));
+        assert_eq!(
+            part_of(Lane::Polyline, 0..4, len),
+            (0, len as u32),
+            "the whole line"
+        );
+        assert_eq!(part_of(Lane::Polyline, 2..2, len), (0, 0));
+    }
+
+    #[test]
+    fn a_glyph_part_starts_past_the_tile_table() {
+        assert_eq!(
+            part_of(Lane::Glyph(16), 1..2, 16 + 2 * CHUNK + 3),
+            (16 + CHUNK as u32, CHUNK as u32)
+        );
+        assert_eq!(
+            part_of(Lane::Glyph(16), 2..3, 16 + 2 * CHUNK + 3),
+            (16 + 2 * CHUNK as u32, 3)
+        );
+    }
+
+    #[test]
+    fn a_coarser_reduction_stands_in_before_a_finer_one() {
+        let wanted = SeriesPart::Columns { bucket: 10 };
+        let coarser = distance(wanted, SeriesPart::Columns { bucket: 9 });
+        let finer = distance(wanted, SeriesPart::Columns { bucket: 11 });
+        assert!(coarser < finer);
+        assert!(finer < distance(wanted, SeriesPart::Columns { bucket: 8 }));
     }
 }

@@ -10,19 +10,29 @@
 //!
 //! A part drawn from a provisional payload owes the frame its ink on the device, so a later frame
 //! draws it again from the payload its build makes.
+//!
+//! An item over a payload of more than [`MIN_CUT_CHUNKS`] chunks draws only the chunks near what the
+//! viewport shows through the item's clip: that region, grown by half its size on each side. The
+//! region is the window the fragment's record keeps, and the record replays only while the window
+//! holds what is shown.
 
 use std::sync::Arc;
 
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
 use zgui_scene::kurbo::{self, Affine, BezPath};
-use zgui_scene::{MarkFlags, MarkItem, PaintRef, Scene, VectorId, VectorItem, VectorStroke};
+use zgui_scene::{
+    ClipId, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, SpatialId, VectorId, VectorItem,
+    VectorStroke,
+};
 
 use super::document::{density_of, reference};
 use super::marks::MAX_MARK_PRIMS;
 use super::split::geometry_of;
 use super::{ShapeEmission, ShapePaint, VectorPlacement, VectorRoute, under};
-use crate::content::vectors::payloads::{SeriesLookup, SeriesPart, lod_bucket, series_payload};
+use crate::content::vectors::payloads::{
+    Lane, SeriesLookup, SeriesPart, chunks_meeting, lod_bucket, part_of, series_payload,
+};
 use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
 
 /// One part of a series before its payload is found.
@@ -45,9 +55,211 @@ struct Part<'a> {
 /// shows any.
 pub(super) type Owed = Option<Rect<i32, Device>>;
 
+/// The most chunks a payload has that an item draws whole.
+const MIN_CUT_CHUNKS: usize = 64;
+
+/// What a series tells the record of its fragment, beside its items.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct SeriesOutcome {
+    /// With a provisional payload, the device pixels the series is owed a frame for.
+    pub(super) owed: Option<Owed>,
+    /// With an item that draws a part of its payload, the region of local space whose prims every
+    /// such item draws.
+    pub(super) window: Option<kurbo::Rect>,
+}
+
+/// The part of local space under `transform` that `clip` and the viewport show, or `None` when
+/// they show nothing or the transform has no inverse on the plane.
+pub(crate) fn shown(scene: &Scene, clip: ClipId, transform: SpatialId) -> Option<kurbo::Rect> {
+    shown_through(scene, clip, transform).map(|(shown, _)| shown)
+}
+
+/// What [`shown`] finds, and the to-device map it inverted.
+fn shown_through(
+    scene: &Scene,
+    clip: ClipId,
+    transform: SpatialId,
+) -> Option<(kurbo::Rect, Affine)> {
+    let affine = scene
+        .spatial
+        .resolve(transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2)?;
+    let to_device =
+        Affine::new([affine.a, affine.b, affine.c, affine.d, affine.tx, affine.ty].map(f64::from));
+    let determinant = to_device.determinant();
+    if !determinant.is_finite() || determinant.abs() <= 1e-12 {
+        return None;
+    }
+    let admitted = scene
+        .clips
+        .bounds_placed(clip, &|space| scene.spatial.resolve(space));
+    let viewport = scene.viewport();
+    let device = kurbo::Rect::new(
+        f64::from(admitted.left().0),
+        f64::from(admitted.top().0),
+        f64::from(admitted.right().0),
+        f64::from(admitted.bottom().0),
+    )
+    .intersect(kurbo::Rect::new(
+        0.0,
+        0.0,
+        f64::from(viewport.width),
+        f64::from(viewport.height),
+    ));
+    if !(device.width() > 0.0 && device.height() > 0.0) {
+        return None;
+    }
+    Some((to_device.inverse().transform_rect_bbox(device), to_device))
+}
+
+/// Where the items of a series cut to what is shown draw.
+#[derive(Clone, Copy, Debug)]
+struct Cut {
+    /// The region of local space whose prims a cut item draws: what [`shown`] finds, grown by half
+    /// its size on each side, so a pan of up to half the view replays.
+    window: kurbo::Rect,
+    /// The longest a device pixel is in local units, which the edge of a prim reaches past it.
+    pixel: f64,
+}
+
+/// Where the items of a series under `placement` draw, or `None` when they draw whole: nothing is
+/// shown, the transform has no inverse on the plane, or `masks` asks for whole payloads.
+fn cut_of(scene: &Scene, placement: VectorPlacement, masks: &dyn VectorMaskSource) -> Option<Cut> {
+    if masks.series_whole() {
+        return None;
+    }
+    let (shown, to_device) = shown_through(scene, placement.clip, placement.transform)?;
+    // One over the smallest singular value of the linear part.
+    let [a, b, c, d, _, _] = to_device.as_coeffs();
+    let (p, q, r) = (a * a + b * b, c * c + d * d, a * c + b * d);
+    let spread = (0.25 * (p - q) * (p - q) + r * r).sqrt();
+    let smallest = (0.5 * (p + q) - spread).max(1e-12).sqrt();
+    Some(Cut {
+        window: shown.inflate(shown.width() / 2.0, shown.height() / 2.0),
+        pixel: (1.0 / smallest).min(1e4),
+    })
+}
+
+/// The intersection of two windows.
+pub(super) fn meet(held: Option<kurbo::Rect>, more: Option<kurbo::Rect>) -> Option<kurbo::Rect> {
+    match (held, more) {
+        (Some(held), Some(more)) => {
+            let both = held.intersect(more);
+            // Two windows that do not meet hold nothing: a replay shows nothing they hold.
+            Some(if both.width() >= 0.0 && both.height() >= 0.0 {
+                both
+            } else {
+                kurbo::Rect::new(held.x0, held.y0, held.x0, held.y0)
+            })
+        }
+        (held, more) => held.or(more),
+    }
+}
+
+/// What one item draws of one payload.
+enum Drawn {
+    /// The whole payload.
+    Whole,
+    /// The prims from `first`, `count` of them, whose positions lie in `ink`, in local space.
+    Part {
+        /// The first prim.
+        first: u32,
+        /// How many prims.
+        count: u32,
+        /// The bounds of the drawn positions, in local space.
+        ink: kurbo::Rect,
+    },
+    /// Nothing: no prim reaches the window.
+    Nothing,
+}
+
+/// What an item over `payload` draws: the chunks of `index` whose positions come within `reach`
+/// of the window of `cut`, when the payload has more than [`MIN_CUT_CHUNKS`] chunks.
+///
+/// `map` takes payload positions to local space.
+fn drawn(
+    payload: &MarkPayload,
+    index: &[[f32; 4]],
+    lane: Lane,
+    map: Affine,
+    cut: Option<Cut>,
+    reach: f64,
+) -> Drawn {
+    let chunks = index.len();
+    let Some(cut) = cut.filter(|_| chunks > MIN_CUT_CHUNKS) else {
+        counter::add(Counter::SeriesChunksDrawn, chunks as u64);
+        return Drawn::Whole;
+    };
+    let near = reach + cut.pixel;
+    let query = map
+        .inverse()
+        .transform_rect_bbox(cut.window.inflate(near, near));
+    let range = chunks_meeting(index, [query.x0, query.y0, query.x1, query.y1]);
+    counter::add(Counter::SeriesChunksDrawn, range.len() as u64);
+    counter::add(Counter::SeriesChunksCulled, (chunks - range.len()) as u64);
+    if range.len() == chunks {
+        return Drawn::Whole;
+    }
+    let len = match lane {
+        Lane::Disc => payload.discs.len(),
+        Lane::Polyline => payload.vertices.len(),
+        Lane::Glyph(_) => payload.glyphs.len(),
+    };
+    let (first, count) = part_of(lane, range.clone(), len);
+    if count == 0 {
+        return Drawn::Nothing;
+    }
+    let [x0, y0, x1, y1] = index[range]
+        .iter()
+        .copied()
+        .reduce(|[a0, b0, a1, b1], [c0, d0, c1, d1]| {
+            [a0.min(c0), b0.min(d0), a1.max(c1), b1.max(d1)]
+        })
+        .map_or([0.0; 4], |bounds| bounds.map(f64::from));
+    Drawn::Part {
+        first,
+        count,
+        // The edge of a prim reaches a pixel past the prim.
+        ink: map
+            .transform_rect_bbox(kurbo::Rect::new(x0, y0, x1, y1))
+            .inflate(near, near),
+    }
+}
+
+/// The item over `payload` that draws what `drawn` says, within `ink`, the ink of the whole
+/// payload. `None` when it draws nothing.
+fn item_over(
+    payload: &MarkPayload,
+    drawn: Drawn,
+    ink: kurbo::Rect,
+    paint: PaintRef,
+) -> Option<MarkItem> {
+    let (first, counts, ink) = match drawn {
+        Drawn::Whole => (0, payload.counts(), ink),
+        Drawn::Nothing => return None,
+        Drawn::Part {
+            first,
+            count,
+            ink: part,
+        } => {
+            // A series payload holds one kind, so the count is that kind's. The part's ink stays
+            // within the whole ink, so a bin of the part holds no pixel a bin of the whole would
+            // not.
+            let counts = payload
+                .counts()
+                .map(|held| if held > 0 { count } else { 0 });
+            (first, counts, part.intersect(ink))
+        }
+    };
+    let mut item = MarkItem::new(rect_of(ink), paint, counts);
+    item.first = first;
+    Some(item)
+}
+
 /// Emits one series as one union mark per part, and reports the marks route, or the path glyph
 /// route for a path marker. With a provisional payload, it also reports the device pixels the
-/// series is owed a frame for.
+/// series is owed a frame for. With an item cut to the window, it reports the window.
 ///
 /// `fit` places canvas units in the fragment's space. A series whose matrix is not finite or has
 /// no area draws nothing. Only a path marker takes another route, the general one, and `id` names
@@ -68,7 +280,7 @@ pub(super) fn emit_series(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
     lod: bool,
-) -> (ShapeEmission, Option<Owed>) {
+) -> (ShapeEmission, SeriesOutcome) {
     let (data, to_canvas) = match series {
         zgui_canvas::Series::Points {
             data, to_canvas, ..
@@ -80,7 +292,7 @@ pub(super) fn emit_series(
     let to_local = fit * to_canvas;
     let coefficients = to_local.as_coeffs();
     if !coefficients.iter().all(|value| value.is_finite()) || to_local.determinant().abs() < 1e-12 {
-        return (ShapeEmission::default(), None);
+        return (ShapeEmission::default(), SeriesOutcome::default());
     }
     let scale = f64::from(placement.scale);
     let stroke_colour = paint.stroke.unwrap_or(paint.fill);
@@ -121,11 +333,14 @@ pub(super) fn emit_series(
                     };
                     return match emit_path_markers(scene, id, &markers, masks, placement) {
                         Some(emitted) => emitted,
-                        None => (emit_placed_markers(scene, id, &markers, placement), None),
+                        None => (
+                            emit_placed_markers(scene, id, &markers, placement),
+                            SeriesOutcome::default(),
+                        ),
                     };
                 }
                 // A marker this lowering does not know draws nothing.
-                _ => return (ShapeEmission::default(), None),
+                _ => return (ShapeEmission::default(), SeriesOutcome::default()),
             };
             let flags = if square { MarkFlags::SQUARE_DISCS } else { 0 };
             let disc = |outer: f64, inner: f64| SeriesPart::Disc {
@@ -178,9 +393,10 @@ pub(super) fn emit_series(
 
     let [a, b, c, d, _, _] = coefficients;
     let device = device_scale(scene, placement);
+    let cut = cut_of(scene, placement, masks);
     let mut pushed = 0;
     let mut drew = false;
-    let mut owed = None;
+    let mut outcome = SeriesOutcome::default();
     for part in parts {
         let payloads = {
             let mut cache = masks.payloads();
@@ -207,40 +423,44 @@ pub(super) fn emit_series(
             .transform_rect_bbox(kurbo::Rect::new(x0, y0, x1, y1))
             .inflate(part.reach, part.reach);
         if provisional {
-            owed = Some(union(owed.flatten(), owed_of(scene, placement, ink)));
+            outcome.owed = Some(union(
+                outcome.owed.flatten(),
+                owed_of(scene, placement, ink),
+            ));
         }
-        let bounds = zgui_geom::Rect::new(
-            zgui_geom::Point::new(
-                zgui_geom::DevicePx(ink.x0 as f32),
-                zgui_geom::DevicePx(ink.y0 as f32),
-            ),
-            zgui_geom::Size::new(
-                zgui_geom::DevicePx(ink.width() as f32),
-                zgui_geom::DevicePx(ink.height() as f32),
-            ),
-        );
+        let lane = match part.part {
+            SeriesPart::Disc { .. } => Lane::Disc,
+            _ => Lane::Polyline,
+        };
+        let map = Affine::new([a, b, c, d, origin.x, origin.y]);
         let paint_ref = brush_paint(scene, part.brush, fit, part.inherited);
-        for payload in built.payloads {
-            let mut item = MarkItem::new(bounds, paint_ref, payload.counts());
+        for (payload, index) in built.payloads.iter().zip(&built.chunks) {
+            drew = true;
+            let part_drawn = drawn(payload, index, lane, map, cut, part.reach);
+            if !matches!(part_drawn, Drawn::Whole) {
+                outcome.window = meet(outcome.window, cut.map(|cut| cut.window));
+            }
+            let Some(mut item) = item_over(payload, part_drawn, ink, paint_ref) else {
+                continue;
+            };
             item.flags = MarkFlags::UNION | MarkFlags::SCREEN | part.flags;
             item.clip = placement.clip.0;
             item.transform = placement.transform.index();
             item.half_width = part.half_width;
             item.axes = [a as f32, b as f32, c as f32, d as f32];
             item.origin = [origin.x as f32, origin.y as f32];
-            pushed += usize::from(scene.push_marks(item, payload).is_some());
-            drew = true;
+            pushed += usize::from(scene.push_marks(item, Arc::clone(payload)).is_some());
         }
     }
     if !drew {
-        return (ShapeEmission::default(), None);
+        return (ShapeEmission::default(), outcome);
     }
     counter::bump(Counter::VectorRouteMarks);
     let emitted = ShapeEmission {
         pushed,
         route: Some(VectorRoute::Marks),
     };
-    (emitted, owed)
+    (emitted, outcome)
 }
 
 /// How many device pixels one local unit spans at most under the placement's transform, or one
@@ -356,7 +576,7 @@ fn emit_path_markers(
     markers: &Markers<'_>,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
-) -> Option<(ShapeEmission, Option<Owed>)> {
+) -> Option<(ShapeEmission, SeriesOutcome)> {
     if !masks.path_glyphs(id) {
         return None;
     }
@@ -378,7 +598,7 @@ fn emit_path_markers(
     if geometry.winding.mixed() && markers.parts.iter().any(|part| part.width.is_none()) {
         return None;
     }
-    let mut drawn: smallvec::SmallVec<[(GlyphSheets, &MarkerPart<'_>); 2]> =
+    let mut drawn_parts: smallvec::SmallVec<[(GlyphSheets, &MarkerPart<'_>); 2]> =
         smallvec::SmallVec::new();
     for part in markers.parts {
         let stroke = part.width.map(kurbo::Stroke::new);
@@ -391,15 +611,16 @@ fn emit_path_markers(
             style,
             scale: f64::from(density[0]),
         })?;
-        drawn.push((sheets, part));
+        drawn_parts.push((sheets, part));
     }
 
     let [a, b, c, d, _, _] = markers.to_local.as_coeffs();
     let device = device_scale(scene, placement);
+    let cut = cut_of(scene, placement, masks);
     let mut pushed = 0;
     let mut drew = false;
-    let mut owed = None;
-    for (sheets, part) in drawn {
+    let mut outcome = SeriesOutcome::default();
+    for (sheets, part) in drawn_parts {
         let reach = sheets.reach[0];
         let sheet = sheets.keys[0].handle();
         let built = {
@@ -436,15 +657,23 @@ fn emit_path_markers(
             .transform_rect_bbox(kurbo::Rect::new(x0, y0, x1, y1))
             .inflate(margin, margin);
         if provisional {
-            owed = Some(union(owed.flatten(), owed_of(scene, placement, ink)));
+            outcome.owed = Some(union(
+                outcome.owed.flatten(),
+                owed_of(scene, placement, ink),
+            ));
         }
-        let bounds = Rect::new(
-            Point::new(DevicePx(ink.x0 as f32), DevicePx(ink.y0 as f32)),
-            Size::new(DevicePx(ink.width() as f32), DevicePx(ink.height() as f32)),
-        );
+        let map = Affine::new([a, b, c, d, origin.x, origin.y]);
+        let lane = Lane::Glyph(sheets.table.len());
         let paint_ref = brush_paint(scene, part.brush, markers.fit, part.inherited);
-        for payload in built.payloads {
-            let mut item = MarkItem::new(bounds, paint_ref, payload.counts());
+        for (payload, index) in built.payloads.iter().zip(&built.chunks) {
+            drew = true;
+            let part_drawn = drawn(payload, index, lane, map, cut, margin);
+            if !matches!(part_drawn, Drawn::Whole) {
+                outcome.window = meet(outcome.window, cut.map(|cut| cut.window));
+            }
+            let Some(mut item) = item_over(payload, part_drawn, ink, paint_ref) else {
+                continue;
+            };
             item.flags = MarkFlags::UNION | MarkFlags::SCREEN;
             item.clip = placement.clip.0;
             item.transform = placement.transform.index();
@@ -452,19 +681,18 @@ fn emit_path_markers(
             item.origin = [origin.x as f32, origin.y as f32];
             item.tiles = sheets.table.len() as u32;
             item.texture = sheets.texture;
-            pushed += usize::from(scene.push_marks(item, payload).is_some());
-            drew = true;
+            pushed += usize::from(scene.push_marks(item, Arc::clone(payload)).is_some());
         }
     }
     if !drew {
-        return Some((ShapeEmission::default(), None));
+        return Some((ShapeEmission::default(), outcome));
     }
     counter::bump(Counter::VectorRoutePathGlyphs);
     let emitted = ShapeEmission {
         pushed,
         route: Some(VectorRoute::PathGlyphs),
     };
-    Some((emitted, owed))
+    Some((emitted, outcome))
 }
 
 /// Emits a path marker series through the general route: one item per part, the marker placed

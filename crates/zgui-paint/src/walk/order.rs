@@ -104,7 +104,7 @@ pub struct Emission<'a> {
 }
 
 /// What one fragment emitted, including the path selected for vector content.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct FragmentEmission {
     /// How many primitives reached the scene.
     pub(crate) pushed: usize,

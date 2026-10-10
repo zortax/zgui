@@ -40,6 +40,8 @@ pub(crate) mod recognised;
 mod series;
 pub(crate) mod split;
 
+pub(crate) use series::shown;
+
 use std::sync::{Arc, OnceLock};
 
 use zgui_color::Color;
@@ -221,7 +223,7 @@ pub(crate) struct ShapeEmission {
 }
 
 /// What emitting all shapes belonging to one element did.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct DrawingEmission {
     /// How many primitives survived insertion into the scene.
     pub(crate) pushed: usize,
@@ -245,7 +247,7 @@ pub struct LayerInput {
 }
 
 /// What the layer route did for one drawing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct LayerOutcome {
     /// Whether a layer sprite was pushed.
     pub(crate) sprite: bool,
@@ -260,6 +262,8 @@ pub(crate) struct LayerOutcome {
     pub(crate) owed: Option<Rect<i32, Device>>,
     /// The number of the tiled source whose tiles the drawing pushed.
     pub(crate) tiled: Option<u64>,
+    /// The region of local space whose prims a series cut to it draws.
+    pub(crate) window: Option<zgui_scene::kurbo::Rect>,
 }
 
 /// Resolves how a shape carrying `style` is painted.
@@ -650,15 +654,20 @@ pub(crate) fn draw_drawing_tracked(
             emitted.routes.insert(route);
         }
     };
-    // A series drawn from a provisional payload is owed a frame, as a provisional layer is.
-    let series_note = |emitted: &mut DrawingEmission,
-                       (shape, owed): (ShapeEmission, Option<series::Owed>)| {
-        note(emitted, shape);
-        if let Some(owed) = owed {
-            emitted.layer.provisional = true;
-            emitted.layer.owed = series::union(emitted.layer.owed, owed);
-        }
-    };
+    // A series drawn from a provisional payload is owed a frame, as a provisional layer is. A
+    // series cut to a window replays only while the window holds what is shown.
+    let series_note =
+        |emitted: &mut DrawingEmission,
+         (shape, outcome): (ShapeEmission, series::SeriesOutcome)| {
+            note(emitted, shape);
+            if let Some(owed) = outcome.owed {
+                emitted.layer.provisional = true;
+                emitted.layer.owed = series::union(emitted.layer.owed, owed);
+            }
+            if outcome.window.is_some() {
+                emitted.layer.window = series::meet(emitted.layer.window, outcome.window);
+            }
+        };
     // A series that draws through the general route takes an identity past every shape's.
     let mut series = drawing
         .series

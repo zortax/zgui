@@ -221,10 +221,17 @@ pub struct Record {
     /// The tiles name their rasters and are placed every frame, so the record holds none of them.
     /// It replays only while the source stands.
     pub tiled: Option<u64>,
+    /// The region of the fragment's space whose prims a series cut to it draws, as the encoding
+    /// measured it.
+    ///
+    /// The record replays only while the region, moved as the fragment moved, holds what the
+    /// viewport shows of the fragment through its chain. A move or a wider clip can show prims the
+    /// cut left out.
+    pub window: Option<zgui_scene::kurbo::Rect>,
 }
 
 /// What the layer route did for one encoding.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LayerRecord {
     /// The phase the walk read for the fragment, when the encoding pushed a layer sprite.
     pub phase: Option<[u8; 2]>,
@@ -234,6 +241,8 @@ pub struct LayerRecord {
     pub promote: bool,
     /// The number of the tiled source whose tiles the encoding pushed.
     pub tiled: Option<u64>,
+    /// The region of the fragment's space whose prims a series cut to it draws.
+    pub window: Option<zgui_scene::kurbo::Rect>,
 }
 
 /// How many drawn replays a promotable record waits before it encodes again.
@@ -510,7 +519,8 @@ impl PaintCache {
     /// `phase` is the sixteenth-pixel phase of a drawing fragment's origin on the device. A record
     /// holding a layer sprite replays only at the phase it was rasterised for. A provisional layer
     /// never replays, and a promotable record encodes again after [`PROMOTE_REPLAYS`] drawn
-    /// replays.
+    /// replays. A record with a [window](Record::window) replays only while the window holds what
+    /// is shown.
     pub fn reuse(
         &self,
         scene: &Scene,
@@ -543,14 +553,20 @@ impl PaintCache {
         if record.clip_hash != scene.clips.content_hash(painted.clip) {
             return Reuse::Encode;
         }
+        let offset = Size::new(
+            DevicePx(fragment.border_box.origin.x.0 - record.border_box.origin.x.0),
+            DevicePx(fragment.border_box.origin.y.0 - record.border_box.origin.y.0),
+        );
+        if let Some(window) = record.window
+            && !holds_shown(scene, &painted, window, offset)
+        {
+            return Reuse::Encode;
+        }
         debug_assert!(
             self.indices_still_resolve(scene, record),
             "a replayed range's clip or transform no longer resolves to what it was recorded with"
         );
-        Reuse::Replay(Size::new(
-            DevicePx(fragment.border_box.origin.x.0 - record.border_box.origin.x.0),
-            DevicePx(fragment.border_box.origin.y.0 - record.border_box.origin.y.0),
-        ))
+        Reuse::Replay(offset)
     }
 
     /// The number of the tiled source `fragment`'s record draws, if it draws one.
@@ -664,6 +680,7 @@ impl PaintCache {
                 promote: layer.promote,
                 rasterised_frames: 0,
                 tiled: layer.tiled,
+                window: layer.window,
             },
         );
         release_tables(scene, &replaced_holds);
@@ -743,6 +760,24 @@ impl PaintCache {
             .filter(|key| !owner.contains(*key))
             .collect()
     }
+}
+
+/// Whether `window`, moved by `offset`, holds what the viewport shows of the space `painted` is
+/// drawn in, through its chain. True when nothing is shown.
+fn holds_shown(
+    scene: &Scene,
+    painted: &Painted,
+    window: zgui_scene::kurbo::Rect,
+    offset: Size<DevicePx, Device>,
+) -> bool {
+    let Some(shown) = crate::emit::vector::shown(scene, painted.clip, painted.transform) else {
+        return true;
+    };
+    let (dx, dy) = (f64::from(offset.width.0), f64::from(offset.height.0));
+    window.x0 + dx <= shown.x0
+        && window.y0 + dy <= shown.y0
+        && window.x1 + dx >= shown.x1
+        && window.y1 + dy >= shown.y1
 }
 
 /// Gives up one hold on each table entry in `holds`.

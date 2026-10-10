@@ -96,6 +96,13 @@ pub trait VectorMaskSource {
         None
     }
 
+    /// Whether a series item draws its whole payload however little of it is shown. For a
+    /// reference picture.
+    #[doc(hidden)]
+    fn series_whole(&self) -> bool {
+        false
+    }
+
     /// Where whole drawings are rasterised on the CPU, if anywhere.
     #[doc(hidden)]
     fn layers(&self) -> Option<&dyn super::layer::VectorLayerSource> {
@@ -205,6 +212,8 @@ pub struct CachedMarks {
     pub(crate) recognitions: core::cell::RefCell<super::recognitions::Recognitions>,
     /// The mark payloads.
     pub(crate) payloads: core::cell::RefCell<super::payloads::MarkPayloads>,
+    /// Whether series items draw their whole payloads.
+    pub(crate) whole: bool,
 }
 
 impl CachedMarks {
@@ -214,6 +223,14 @@ impl CachedMarks {
         source.recognitions.borrow_mut().begin_frame();
         source.payloads.borrow_mut().begin_frame();
         source
+    }
+
+    /// A source like [`CachedMarks::new`] whose series items draw their whole payloads.
+    pub fn whole() -> Self {
+        Self {
+            whole: true,
+            ..Self::new()
+        }
     }
 
     /// Ends a frame and starts the next.
@@ -251,6 +268,10 @@ impl VectorMaskSource for CachedMarks {
 
     fn payloads(&self) -> Option<core::cell::RefMut<'_, super::payloads::MarkPayloads>> {
         Some(self.payloads.borrow_mut())
+    }
+
+    fn series_whole(&self) -> bool {
+        self.whole
     }
 }
 

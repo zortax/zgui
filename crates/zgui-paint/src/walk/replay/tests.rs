@@ -854,6 +854,7 @@ fn a_provisional_record_is_never_replayed() {
             provisional: true,
             promote: false,
             tiled: None,
+            window: None,
         },
     );
     assert_eq!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
@@ -868,6 +869,7 @@ fn a_provisional_record_is_never_replayed() {
             provisional: false,
             promote: false,
             tiled: None,
+            window: None,
         },
     );
     assert_ne!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
@@ -892,6 +894,7 @@ fn a_promotable_record_encodes_again_after_three_drawn_replays() {
             provisional: false,
             promote: true,
             tiled: None,
+            window: None,
         },
     );
     for replay in 0..3 {
@@ -904,4 +907,50 @@ fn a_promotable_record_encodes_again_after_three_drawn_replays() {
         cache.replayed(&same);
     }
     assert_eq!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+}
+
+#[test]
+fn a_cut_record_replays_only_while_its_window_holds_what_is_shown() {
+    use zgui_scene::kurbo;
+
+    // The viewport shows 0..256 on each axis; the window holds a quarter of that more each way.
+    let window = kurbo::Rect::new(-64.0, -64.0, 320.0, 320.0);
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let first = fragment(0.0, 0.0);
+    layered(
+        &mut cache,
+        &mut scene,
+        &first,
+        LayerRecord {
+            window: Some(window),
+            ..LayerRecord::default()
+        },
+    );
+    assert_eq!(
+        cache.reuse(&scene, &first, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
+        "in place, the window holds the viewport"
+    );
+    let near = fragment(48.0, -32.0);
+    assert_eq!(
+        cache.reuse(&scene, &near, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(48.0), DevicePx(-32.0))),
+        "a move within the margin keeps every shown prim"
+    );
+    let far = fragment(80.0, 0.0);
+    assert_eq!(
+        cache.reuse(&scene, &far, painted(0), None),
+        Reuse::Encode,
+        "a move past the margin shows prims the cut left out"
+    );
+
+    // A wider viewport shows more of the fragment where it stands.
+    scene.begin_frame(Size::new(512, 256));
+    assert_eq!(cache.reuse(&scene, &first, painted(0), None), Reuse::Encode);
+
+    // A record with no window replays anywhere.
+    let mut scene = self::scene();
+    layered(&mut cache, &mut scene, &first, LayerRecord::default());
+    assert_ne!(cache.reuse(&scene, &far, painted(0), None), Reuse::Encode);
 }

@@ -874,6 +874,7 @@ impl Pass<'_, '_> {
                             provisional: emitted.layer.provisional,
                             promote: emitted.layer.promote,
                             tiled: emitted.layer.tiled,
+                            window: emitted.layer.window,
                         },
                     },
                     self.input.resources,

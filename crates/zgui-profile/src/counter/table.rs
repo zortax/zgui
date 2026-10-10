@@ -475,6 +475,12 @@ counters! {
     /// Series parts drawn from a payload that stands in for one a build makes.
     SeriesDrawsProvisional => series_draws_provisional, Group::BackendNeutral;
 
+    /// Chunks of series payloads that items draw.
+    SeriesChunksDrawn => series_chunks_drawn, Group::BackendNeutral;
+
+    /// Chunks of series payloads that items leave out, because they are far from what is shown.
+    SeriesChunksCulled => series_chunks_culled, Group::BackendNeutral;
+
     /// Recognitions and shape mark payloads kept nowhere, because every entry of their full cache
     /// was pinned.
     MarksUncached => marks_uncached, Group::BackendNeutral;
