@@ -96,5 +96,5 @@ fn fs_disc_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
     let across = dpdx(in.point);
     let down = dpdy(in.point);
     let coverage = disc_coverage(in, across, down);
-    return mark_bin(in, coverage);
+    return mark_bin(in, vec4<f32>(coverage));
 }

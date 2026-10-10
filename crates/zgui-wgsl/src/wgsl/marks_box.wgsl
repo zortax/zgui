@@ -122,5 +122,5 @@ fn fs_box_paint(in: MarkVarying) -> @location(0) vec4<f32> {
 fn fs_box_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
     let across = dpdx(in.point);
     let down = dpdy(in.point);
-    return mark_bin(in, box_coverage(in, across, down));
+    return mark_bin(in, vec4<f32>(box_coverage(in, across, down)));
 }

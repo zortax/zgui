@@ -118,7 +118,7 @@ pub struct WgpuRenderer {
     /// `None` for a window that has never shifted anything, which is every window that has never
     /// scrolled a self-contained region.
     shift_scratch: Option<crate::frame::shift::ShiftScratch>,
-    /// The bin pages union marks sum their coverage into.
+    /// The bin pages union marks write their coverage into.
     marks_scratch: crate::target::marks::MarksScratch,
     /// A region of the composed target whose pixels are to be moved before this frame draws.
     ///

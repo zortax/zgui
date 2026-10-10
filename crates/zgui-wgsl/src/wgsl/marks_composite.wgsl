@@ -1,7 +1,7 @@
-// Painting one union item through the coverage its prims summed into its bin.
+// Painting one union item through the coverage its prims wrote into its bin.
 //
 // The bin holds coverage in device pixels, at one texel each, so the read is a `textureLoad` with
-// no sampler. A half-resolution target covers two by two device pixels with each texel, and reads
+// no sampler. A pixel's coverage is the mean of its four quarters. A half-resolution target covers two by two device pixels with each texel, and reads
 // the mean of the four: an exact box filter of the full-resolution coverage.
 
 @group(2) @binding(1) var mark_bins: texture_2d_array<f32>;
@@ -24,7 +24,7 @@ fn vs_mark_composite(@builtin(vertex_index) vertex: u32) -> MarkVarying {
     return out;
 }
 
-// The summed coverage of one device pixel, or nothing outside the bin.
+// The coverage of one device pixel, or nothing outside the bin.
 fn bin_coverage(device: vec2<f32>) -> f32 {
     let region = mark_draw.region;
     if device.x < region.x || device.y < region.y
@@ -32,7 +32,7 @@ fn bin_coverage(device: vec2<f32>) -> f32 {
         return 0.0;
     }
     let texel = vec2<i32>(floor(device + mark_draw.shift));
-    return textureLoad(mark_bins, texel, i32(mark_draw.page), 0).r;
+    return dot(textureLoad(mark_bins, texel, i32(mark_draw.page), 0), vec4<f32>(0.25));
 }
 
 @fragment

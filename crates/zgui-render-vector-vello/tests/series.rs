@@ -594,11 +594,12 @@ fn sine(count: usize) -> Arc<[[f32; 2]]> {
 /// Data to the 128 pixel surface: 120 device columns a unit.
 const PLOT: Affine = Affine::new([120.0, 0.0, 0.0, -100.0, 4.0, 114.0]);
 
-/// The pixels of `data` as one stroked shape on the general route: the exact union of the line.
-fn exact_line(data: &[[f32; 2]]) -> Option<Pixels> {
+/// A black surface `side` square holding `data` stroked `width` wide through `plot` as one shape
+/// on the general route.
+fn general_line(data: &[[f32; 2]], plot: Affine, width: f64, side: i32) -> Scene {
     let mut path = BezPath::new();
     for (index, &[x, y]) in data.iter().enumerate() {
-        let point = PLOT * kurbo::Point::new(f64::from(x), f64::from(y));
+        let point = plot * kurbo::Point::new(f64::from(x), f64::from(y));
         if index == 0 {
             path.move_to(point);
         } else {
@@ -610,15 +611,14 @@ fn exact_line(data: &[[f32; 2]]) -> Option<Pixels> {
         fill: None,
         stroke: Some(Stroke {
             paint: Paint::Solid(Ink::Solid(Color::WHITE)),
-            style: kurbo::Stroke::new(1.0),
+            style: kurbo::Stroke::new(width),
         }),
         clips: Vec::new(),
     };
-    let mut harness = harness(Which::Vello)?;
-    let mut scene = support::scene();
+    let mut scene = support::scene_at(side);
     quad(
         &mut scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        rect(0.0, 0.0, side as f32, side as f32),
         opaque(0, 0, 0),
     );
     draw_with_masks(
@@ -630,10 +630,129 @@ fn exact_line(data: &[[f32; 2]]) -> Option<Pixels> {
         PLACEMENT,
     );
     scene.finish(&DamageSet::full());
-    Some(present(&mut harness.renderer, &scene))
+    scene
 }
 
-/// How two readbacks of one line differ, in the red channel.
+/// How many samples the true coverage takes along each side of a pixel.
+const SAMPLES: usize = 32;
+
+/// The true coverage of `data` stroked `width` wide through `plot` on a surface `side` square, in
+/// levels of 255 a pixel: the share of its 32 by 32 samples that lie in the stroke.
+///
+/// The stroke is the union of its segments, each with round ends where it meets another and butt
+/// ends at the ends of the line. The path renderer fills a stroke by the sum of its outline's area,
+/// which is too much where a line folds over itself, so it is no reference there.
+fn true_line(data: &[[f32; 2]], plot: Affine, width: f64, side: i32) -> Vec<u8> {
+    let points: Vec<kurbo::Point> = data
+        .iter()
+        .map(|&[x, y]| plot * kurbo::Point::new(f64::from(x), f64::from(y)))
+        .collect();
+    let side = side as usize;
+    let rows = side * SAMPLES;
+    let words = rows.div_ceil(64);
+    let mut inside = vec![0_u64; rows * words];
+    let half = width / 2.0;
+    let scale = SAMPLES as f64;
+    // The sample at `at` along an axis, rounded up or down.
+    let first = |at: f64| (at * scale - 0.5).ceil().max(0.0) as usize;
+    let last = |at: f64| (at * scale - 0.5).floor().min(rows as f64 - 1.0);
+    for (index, pair) in points.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+        let ends = (index > 0, index + 2 < points.len());
+        let bottom = last(a.y.max(b.y) + half);
+        if bottom < 0.0 {
+            continue;
+        }
+        for row in first(a.y.min(b.y) - half)..=bottom as usize {
+            let y = (row as f64 + 0.5) / scale;
+            let Some((left, right)) = span(a, b, half, ends, y) else {
+                continue;
+            };
+            let right = last(right);
+            if right < 0.0 {
+                continue;
+            }
+            for column in first(left)..=right as usize {
+                inside[row * words + column / 64] |= 1 << (column % 64);
+            }
+        }
+    }
+    let mut levels = vec![0_u8; side * side];
+    for (at, level) in levels.iter_mut().enumerate() {
+        let (x, y) = (at % side, at / side);
+        let column = x * SAMPLES;
+        let mask = u64::MAX >> (64 - SAMPLES) << (column % 64);
+        let count: u32 = (y * SAMPLES..(y + 1) * SAMPLES)
+            .map(|row| (inside[row * words + column / 64] & mask).count_ones())
+            .sum();
+        *level = (f64::from(count) / (scale * scale) * 255.0).round() as u8;
+    }
+    levels
+}
+
+/// Where the row at `y` crosses the segment from `a` to `b` stroked `half` wide on each side, with
+/// a round end at `a` and at `b` as `ends` says.
+///
+/// The segment's outline is convex, so the row crosses it in one span: the hull of where it crosses
+/// the rectangle and the round ends.
+fn span(
+    a: kurbo::Point,
+    b: kurbo::Point,
+    half: f64,
+    ends: (bool, bool),
+    y: f64,
+) -> Option<(f64, f64)> {
+    let hull = |found: Option<(f64, f64)>, left: f64, right: f64| {
+        if left > right {
+            return found;
+        }
+        Some(found.map_or((left, right), |(low, high)| {
+            (low.min(left), high.max(right))
+        }))
+    };
+    let mut found = None;
+    let along = b - a;
+    let length = along.hypot();
+    if length > 0.0 {
+        let (dx, dy) = (along.x / length, along.y / length);
+        // Along the segment u = (x − a.x) dx + (y − a.y) dy lies in 0..length, and across it
+        // v = −(x − a.x) dy + (y − a.y) dx lies in −half..half.
+        let (mut left, mut right) = (f64::NEG_INFINITY, f64::INFINITY);
+        for (slope, offset, low, high) in [
+            (dx, (y - a.y) * dy, 0.0, length),
+            (-dy, (y - a.y) * dx, -half, half),
+        ] {
+            if slope.abs() < 1e-12 {
+                if offset < low || offset > high {
+                    right = f64::NEG_INFINITY;
+                }
+                continue;
+            }
+            let (p, q) = ((low - offset) / slope, (high - offset) / slope);
+            left = left.max(a.x + p.min(q));
+            right = right.min(a.x + p.max(q));
+        }
+        found = hull(found, left, right);
+    }
+    for (centre, round) in [(a, ends.0), (b, ends.1)] {
+        let rise = y - centre.y;
+        if round && rise.abs() <= half {
+            let reach = (half * half - rise * rise).sqrt();
+            found = hull(found, centre.x - reach, centre.x + reach);
+        }
+    }
+    found
+}
+
+/// The red channel of a readback, one level a pixel.
+fn levels(pixels: &Pixels) -> Vec<u8> {
+    let size = pixels.size();
+    (0..size.height)
+        .flat_map(|y| (0..size.width).map(move |x| pixels.rgba(x, y)[0]))
+        .collect()
+}
+
+/// How two pictures of one line differ.
 #[derive(Debug)]
 struct Difference {
     /// Pixels more than sixteen levels apart.
@@ -644,18 +763,15 @@ struct Difference {
     spurious: usize,
 }
 
-fn difference(reference: &Pixels, ours: &Pixels) -> Difference {
+fn difference(reference: &[u8], ours: &[u8]) -> Difference {
     let (mut far, mut inked, mut summed, mut spurious) = (0, 0_usize, 0_u64, 0);
-    for y in 0..SIDE {
-        for x in 0..SIDE {
-            let (a, b) = (reference.rgba(x, y)[0], ours.rgba(x, y)[0]);
-            let d = a.abs_diff(b);
-            far += usize::from(d > 16);
-            spurious += usize::from(a == 0 && b > 16);
-            if a > 0 || b > 0 {
-                inked += 1;
-                summed += u64::from(d);
-            }
+    for (&a, &b) in reference.iter().zip(ours) {
+        let d = a.abs_diff(b);
+        far += usize::from(d > 16);
+        spurious += usize::from(a == 0 && b > 16);
+        if a > 0 || b > 0 {
+            inked += 1;
+            summed += u64::from(d);
         }
     }
     Difference {
@@ -665,8 +781,8 @@ fn difference(reference: &Pixels, ours: &Pixels) -> Difference {
     }
 }
 
-/// The reduced and the whole line series over `data` on the marks route, and the exact line.
-fn lines(data: &Arc<[[f32; 2]]>) -> Option<(Pixels, Pixels, Pixels)> {
+/// The reduced and the whole line series over `data` on the marks route, and the true line.
+fn lines(data: &Arc<[[f32; 2]]>) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let line = || Series::Line {
         data: Arc::clone(data),
         to_canvas: PLOT,
@@ -694,51 +810,121 @@ fn lines(data: &Arc<[[f32; 2]]>) -> Option<(Pixels, Pixels, Pixels)> {
         vertices <= 4 * 257 + 2,
         "four points a column at most: {vertices} vertices"
     );
-    let exact = exact_line(data)?;
     let whole = fresh(&Drawing::canvas(&whole, Affine::IDENTITY))?;
     let reduced = fresh(&reduced)?;
-    Some((reduced, whole, exact))
+    let truth = true_line(data, PLOT, 1.0, SIDE);
+    Some((levels(&reduced), levels(&whole), truth))
 }
 
 #[test]
-fn a_reduced_dense_line_stays_close_to_the_exact_line() {
+fn a_reduced_dense_line_stays_close_to_the_true_line() {
     // 333 points a device column, smooth within each.
-    let Some((reduced, whole, exact)) = lines(&sine(40_000)) else {
+    let Some((reduced, whole, truth)) = lines(&sine(40_000)) else {
         return;
     };
-    let ours = difference(&exact, &reduced);
-    let theirs = difference(&exact, &whole);
+    let ours = difference(&truth, &reduced);
+    let theirs = difference(&truth, &whole);
     let against_whole = difference(&whole, &reduced);
-    println!("reduced against exact: {ours:?}");
-    println!("whole against exact: {theirs:?}");
+    println!("reduced against the true line: {ours:?}");
+    println!("whole against the true line: {theirs:?}");
     println!("reduced against whole: {against_whole:?}");
-    assert!(coverage(&exact) > 200.0, "the line draws");
+    let inked: u32 = truth.iter().map(|&level| u32::from(level)).sum();
+    assert!(inked > 200 * 255, "the line draws");
     assert!(ours.mean <= 4.0, "{ours:?}");
     assert!(
         ours.far as f64 <= 0.005 * f64::from(SIDE * SIDE),
         "{ours:?}"
     );
     assert_eq!(ours.spurious, 0);
-    // Every overlapping segment of the whole line adds to the union bin, so on dense data the whole
-    // line saturates a halo the exact line leaves light. The reduced line has four points a column
-    // and stays close.
-    assert!(ours.mean < theirs.mean);
+    // The whole line keeps the largest coverage of its overlapping segments, so it stays as close.
+    assert!(theirs.mean <= 4.0, "{theirs:?}");
+    assert_eq!(theirs.spurious, 0);
 }
 
 #[test]
 fn a_reduced_random_walk_keeps_its_envelope() {
-    // 333 points a device column, a fifth of a pixel apart in y: under antialiasing the whole
-    // line covers each column between its lowest and highest point, and the reduced line covers
-    // each half of it with three strokes. This is why the reduction is never automatic.
-    let Some((reduced, whole, exact)) = lines(&walk(40_000)) else {
+    // 333 points a device column, a fifth of a pixel apart in y: the whole line fills each column
+    // between its lowest and highest point, and the reduced line covers each half of it with
+    // three strokes. This is why the reduction is never automatic.
+    let Some((reduced, whole, truth)) = lines(&walk(40_000)) else {
         return;
     };
-    let ours = difference(&exact, &reduced);
-    let theirs = difference(&exact, &whole);
-    println!("reduced against exact: {ours:?}");
-    println!("whole against exact: {theirs:?}");
+    let ours = difference(&truth, &reduced);
+    let theirs = difference(&truth, &whole);
+    println!("reduced against the true line: {ours:?}");
+    println!("whole against the true line: {theirs:?}");
     println!("reduced against whole: {:?}", difference(&whole, &reduced));
-    // The whole line strays as far: a few pixels of round joins past the exact outline.
-    assert!(ours.spurious <= 4, "{ours:?}");
-    assert!(ours.mean <= 48.0, "{ours:?}");
+    assert_eq!(ours.spurious, 0, "{ours:?}");
+    assert!(ours.mean <= 12.0, "{ours:?}");
+    assert!(theirs.mean <= 4.0, "{theirs:?}");
+}
+
+/// The side of the surface the dense lines are drawn on.
+const WIDE: i32 = 320;
+
+/// Data to the wide surface: 300 device columns and 280 device rows a unit.
+const WIDE_PLOT: Affine = Affine::new([300.0, 0.0, 0.0, -280.0, 10.0, 300.0]);
+
+/// The whole line series over `data` stroked `width` wide on the marks route and the same line on
+/// the general route, on the wide surface.
+fn wide_lines(data: &Arc<[[f32; 2]]>, width: f64) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut canvas = CanvasScene::default();
+    canvas.push_series(Series::Line {
+        data: Arc::clone(data),
+        to_canvas: WIDE_PLOT,
+        stroke: kurbo::Stroke::new(width),
+        brush: white(),
+    });
+    let drawing = Drawing::canvas(&canvas, Affine::IDENTITY);
+    let mut scene = support::scene_at(WIDE);
+    quad(
+        &mut scene,
+        rect(0.0, 0.0, WIDE as f32, WIDE as f32),
+        opaque(0, 0, 0),
+    );
+    draw_drawing(
+        &mut scene,
+        VectorId(1),
+        &drawing,
+        PAINT,
+        &CachedMarks::new(),
+        PLACEMENT,
+    );
+    assert!(scene.primitives.vectors.is_empty(), "the line is a mark");
+    assert!(
+        scene.primitives.marks[0].is_union(),
+        "the line overlaps itself"
+    );
+    scene.finish(&DamageSet::full());
+    let general = general_line(data, WIDE_PLOT, width, WIDE);
+    let mut harness = support::harness_at(WIDE, Which::Vello)?;
+    let marks = present(&mut harness.renderer, &scene);
+    let general = present(&mut harness.renderer, &general);
+    Some((levels(&marks), levels(&general)))
+}
+
+#[test]
+fn a_dense_line_draws_as_the_true_line() {
+    // 67 points a device column. Many segments of one line cross each pixel: the line covers each
+    // quarter of the pixel as far as its nearest segment does.
+    let mut found = Vec::new();
+    for (name, data) in [("sine", sine(20_000)), ("walk", walk(20_000))] {
+        for width in [1.0, 2.0] {
+            let Some((marks, general)) = wide_lines(&data, width) else {
+                return;
+            };
+            let truth = true_line(&data, WIDE_PLOT, width, WIDE);
+            let ours = difference(&truth, &marks);
+            println!("{name} {width} px, marks against the true line: {ours:?}");
+            println!(
+                "{name} {width} px, general against the true line: {:?}",
+                difference(&truth, &general)
+            );
+            found.push((name, width, ours));
+        }
+    }
+    for (name, width, ours) in found {
+        assert!(ours.mean <= 4.0, "{name} {width} px: {ours:?}");
+        assert_eq!(ours.spurious, 0, "{name} {width} px: {ours:?}");
+    }
 }

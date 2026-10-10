@@ -86,8 +86,8 @@ impl PipelineKind {
         Self::MarksComposite,
     ];
 
-    /// The format a coverage draw writes: the bin pages.
-    pub const COVERAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+    /// The format a coverage draw writes: the bin pages, one quarter of a pixel in each channel.
+    pub const COVERAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
     /// The pipeline drawing one payload kind of a mark, painting it or adding its coverage.
     pub fn marks(kind: crate::pipeline::marks::MarkKind, coverage: bool) -> Self {
@@ -247,7 +247,7 @@ impl PipelineKind {
         )
     }
 
-    /// Whether it adds coverage into a bin page rather than painting into a target.
+    /// Whether it writes coverage into a bin page rather than painting into a target.
     pub fn adds_coverage(self) -> bool {
         matches!(
             self,
@@ -266,9 +266,10 @@ impl PipelineKind {
     /// that is not opaque. An isolated target never is. Text landing in one is emitted as
     /// single-channel coverage instead, so the variant would be unreachable as well as wrong.
     ///
-    /// A coverage draw writes only the bin pages, and nothing else writes them.
+    /// A coverage draw writes only the bin pages. A surface can have their format, so every other
+    /// draw may be built for it.
     pub fn suits(self, format: wgpu::TextureFormat) -> bool {
-        if self.adds_coverage() != (format == Self::COVERAGE_FORMAT) {
+        if self.adds_coverage() && format != Self::COVERAGE_FORMAT {
             return false;
         }
         self != Self::SubpixelSprite || format != crate::target::group_pool::GroupPool::FORMAT
@@ -298,21 +299,15 @@ impl PipelineKind {
             | Self::DamageClear
             | Self::BlurDownsample
             | Self::BlurAxis => None,
-            // Coverage adds up, and the format saturates the sum at one: the union of the prims.
-            Self::MarksDiscCoverage
-            | Self::MarksBoxCoverage
-            | Self::MarksPolylineCoverage
-            | Self::MarksGlyphCoverage => {
-                let add = wgpu::BlendComponent {
-                    src_factor: wgpu::BlendFactor::One,
-                    dst_factor: wgpu::BlendFactor::One,
-                    operation: wgpu::BlendOperation::Add,
-                };
-                Some(wgpu::BlendState {
-                    color: add,
-                    alpha: add,
-                })
+            // Fill coverage adds up, and the format saturates the sum at one: the union of the
+            // prims, exact where two fills abut.
+            Self::MarksDiscCoverage | Self::MarksBoxCoverage | Self::MarksGlyphCoverage => {
+                Some(Self::coverage_blend(wgpu::BlendOperation::Add))
             }
+            // The segments of a stroke overlap along its whole length, and many of them can cross
+            // one antialiased edge. Their sum makes the stroke too dark there. The largest
+            // coverage of each quarter of a pixel is close to the stroke's own.
+            Self::MarksPolylineCoverage => Some(Self::coverage_blend(wgpu::BlendOperation::Max)),
             Self::SubpixelSprite => Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::Src1,
@@ -329,12 +324,23 @@ impl PipelineKind {
         }
     }
 
+    /// The blend of a coverage draw: the source and the bin, combined by `operation`.
+    fn coverage_blend(operation: wgpu::BlendOperation) -> wgpu::BlendState {
+        let component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation,
+        };
+        wgpu::BlendState {
+            color: component,
+            alpha: component,
+        }
+    }
+
     /// Which channels it writes.
     pub fn write_mask(self) -> wgpu::ColorWrites {
         if self == Self::SubpixelSprite {
             wgpu::ColorWrites::COLOR
-        } else if self.adds_coverage() {
-            wgpu::ColorWrites::RED
         } else {
             wgpu::ColorWrites::ALL
         }
@@ -389,12 +395,7 @@ mod tests {
             if kind == PipelineKind::SubpixelSprite {
                 continue;
             }
-            let expected = if kind.adds_coverage() {
-                wgpu::ColorWrites::RED
-            } else {
-                wgpu::ColorWrites::ALL
-            };
-            assert_eq!(kind.write_mask(), expected, "{kind:?}");
+            assert_eq!(kind.write_mask(), wgpu::ColorWrites::ALL, "{kind:?}");
         }
     }
 
@@ -435,18 +436,29 @@ mod tests {
     }
 
     #[test]
-    fn a_coverage_draw_writes_only_the_bin_pages_and_adds() {
+    fn a_coverage_draw_writes_only_the_bin_pages() {
         for kind in PipelineKind::ALL {
-            assert_eq!(
-                kind.suits(PipelineKind::COVERAGE_FORMAT),
-                kind.adds_coverage(),
-                "{kind:?}"
-            );
-            if kind.adds_coverage() {
-                let blend = kind.blend().expect("coverage blends");
-                assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One, "{kind:?}");
-                assert!(kind.draws_marks(), "{kind:?}");
+            if !kind.adds_coverage() {
+                continue;
             }
+            assert!(kind.suits(PipelineKind::COVERAGE_FORMAT), "{kind:?}");
+            assert!(kind.draws_marks(), "{kind:?}");
+            let blend = kind.blend().expect("coverage blends");
+            assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One, "{kind:?}");
+            // The segments of a stroke keep their largest coverage, and fills add theirs.
+            let operation = if kind == PipelineKind::MarksPolylineCoverage {
+                wgpu::BlendOperation::Max
+            } else {
+                wgpu::BlendOperation::Add
+            };
+            assert_eq!(blend.color.operation, operation, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_surface_in_the_bin_format_takes_every_paint_draw() {
+        for kind in PipelineKind::ALL {
+            assert!(kind.suits(PipelineKind::COVERAGE_FORMAT), "{kind:?}");
         }
     }
 

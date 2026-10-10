@@ -6,7 +6,7 @@
 //! get a bin and where it lies is decided here, from the display list and the damage set, so the
 //! renderer executes the plan and decides nothing.
 //!
-//! The items past [`MAX_PAGES`] pages take turns on one spare page: each sums its coverage there
+//! The items past [`MAX_PAGES`] pages take turns on one spare page: each writes its coverage there
 //! right before its composite. A bin never exceeds the surface, so one item always fits it.
 
 use zgui_bits::DamageSet;

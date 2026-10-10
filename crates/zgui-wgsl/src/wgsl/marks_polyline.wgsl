@@ -92,9 +92,10 @@ fn segment_value(point: vec2<f32>, a: vec2<f32>, b: vec2<f32>, half: f32, caps: 
 
 // Signed distance to the segment of `in`, and whether that segment is the nearest of its run.
 //
-// The segments of a run overlap at every join, and two coverages added at one antialiased edge
-// paint it too dark. So a pixel near a join is drawn only by the nearer of the two segments,
-// with that segment's distance, which is the distance to the run there.
+// The segments of a run overlap at every join, and a paint draw that painted both would paint
+// the overlap twice. So a pixel near a join is drawn only by the nearer of the two segments,
+// with that segment's distance, which is the distance to the run there. A coverage draw needs no
+// such rule: its bin keeps the largest coverage.
 fn segment_distance(in: MarkVarying, owned: ptr<function, bool>) -> Distance {
     let item = marks[in.slot];
     let point = payload_point(in);
@@ -159,7 +160,19 @@ fn fs_segment_paint(in: MarkVarying) -> @location(0) vec4<f32> {
 fn fs_segment_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
     let across = dpdx(in.point);
     let down = dpdy(in.point);
-    var owned = true;
-    let coverage = sdf_coverage(segment_distance(in, &owned), across, down);
-    return mark_bin(in, select(0.0, coverage, owned));
+    let item = marks[in.slot];
+    let a = to_space(item, mark_vertices[in.prim]);
+    let b = to_space(item, mark_vertices[in.prim + 1u]);
+    // Each quarter is half a pixel wide, and measured from its own centre.
+    let point = payload_point(in);
+    let half_across = 0.5 * across;
+    let half_down = 0.5 * down;
+    var quarters = vec4<f32>(0.0);
+    for (var quarter = 0u; quarter < 4u; quarter += 1u) {
+        let corner = vec2<f32>(f32(quarter & 1u), f32(quarter >> 1u)) - vec2<f32>(0.5);
+        let centre = point + corner.x * half_across + corner.y * half_down;
+        let distance = segment_value(centre, a, b, item.half_width, in.caps);
+        quarters[quarter] = sdf_coverage(distance, half_across, half_down);
+    }
+    return mark_bin(in, quarters);
 }

@@ -143,10 +143,6 @@ fn fs_glyph_paint(in: GlyphVarying) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_glyph_coverage(in: GlyphVarying) -> @location(0) vec4<f32> {
-    let device = in.position.xy - mark_draw.shift;
-    let region = mark_draw.region;
-    let inside = device.x >= region.x && device.y >= region.y
-        && device.x < region.x + region.z && device.y < region.y + region.w;
-    let coverage = cell_coverage(in, device);
-    return vec4<f32>(select(0.0, coverage, inside), 0.0, 0.0, 0.0);
+    let coverage = cell_coverage(in, in.position.xy - mark_draw.shift);
+    return select(vec4<f32>(0.0), vec4<f32>(coverage), in_bin(in.position.xy));
 }

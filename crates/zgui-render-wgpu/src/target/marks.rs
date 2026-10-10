@@ -1,4 +1,4 @@
-//! The single-channel pages union marks sum their coverage into.
+//! The pages union marks write their coverage into.
 
 use zgui_geom::{Device, Size};
 use zgui_render::{Decay, Extent};
@@ -112,6 +112,7 @@ impl MarksScratch {
             u64::from(texture.width())
                 * u64::from(texture.height())
                 * u64::from(texture.depth_or_array_layers())
+                * u64::from(texture.format().block_copy_size(None).unwrap_or(1))
         })
     }
 

@@ -10,9 +10,15 @@
 // axes, and local units with it, so a marker keeps its size under any axes.
 //
 // A draw paints in one of two ways. A *paint* draw writes paint times coverage times clip into the
-// target, which is exact when the prims are apart. A *coverage* draw adds the coverage alone into a
-// single-channel bin, and one composite later paints the item through the sum: the union of
-// overlapping prims, painted once.
+// target, which is exact when the prims are apart. A *coverage* draw writes the coverage alone into
+// a bin, and one composite later paints the item through the bin: the union of overlapping prims,
+// painted once.
+//
+// A bin texel holds the coverage of each quarter of its pixel, one in each channel. The polylines
+// write the bin first and keep the largest coverage of each quarter. Every fill then adds its
+// coverage of the whole pixel to each quarter, and each quarter saturates at one. A sum is exact
+// where two fills abut. The largest coverage is close where the many segments of one stroke
+// overlap, and the quarters let strokes that cover different parts of a pixel cover it together.
 
 struct MarkItem {
     order: u32,
@@ -301,13 +307,18 @@ fn mark_paint(in: MarkVarying, item: MarkItem, coverage: f32) -> vec4<f32> {
     return paint_color(item.paint, point, origin) * coverage * clip;
 }
 
-// What a coverage draw adds into its bin: nothing outside the bin's region.
-fn mark_bin(in: MarkVarying, coverage: f32) -> vec4<f32> {
-    let device = in.position.xy - mark_draw.shift;
+// What a coverage draw writes into its bin, one quarter of the pixel in each channel: nothing
+// outside the bin's region.
+fn mark_bin(in: MarkVarying, quarters: vec4<f32>) -> vec4<f32> {
+    return select(vec4<f32>(0.0), quarters, in_bin(in.position.xy));
+}
+
+// Whether the bin texel at `texel` lies in the bin's region.
+fn in_bin(texel: vec2<f32>) -> bool {
+    let device = texel - mark_draw.shift;
     let region = mark_draw.region;
-    let inside = device.x >= region.x && device.y >= region.y
+    return device.x >= region.x && device.y >= region.y
         && device.x < region.x + region.z && device.y < region.y + region.w;
-    return vec4<f32>(select(0.0, coverage, inside), 0.0, 0.0, 0.0);
 }
 
 // Whether a payload vertex is a run separator.

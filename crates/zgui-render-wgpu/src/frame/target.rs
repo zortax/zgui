@@ -15,7 +15,7 @@ pub enum TargetRef {
     Composed,
     /// A target lent by the pool for one group, one backdrop capture, or one blur pass.
     Pool(GroupSlot),
-    /// One page of the single-channel bins union marks sum their coverage into.
+    /// One page of the bins union marks write their coverage into.
     MarksPage(u32),
 }
 

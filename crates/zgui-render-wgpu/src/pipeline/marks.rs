@@ -20,6 +20,13 @@ impl MarkKind {
     /// Every kind, in payload-lane order.
     pub const ALL: [Self; 4] = [Self::Disc, Self::Box, Self::Polyline, Self::Glyph];
 
+    /// Every kind, in the order a union item writes its bin.
+    ///
+    /// The polylines go first and keep the largest coverage of their segments. Each fill after
+    /// them adds its coverage to that. So the bin holds the strokes as one prim and the fills as
+    /// a sum, in any order of the prims.
+    pub const BINNED: [Self; 4] = [Self::Polyline, Self::Disc, Self::Box, Self::Glyph];
+
     /// The kind's payload lane.
     pub fn lane(self) -> usize {
         self as usize

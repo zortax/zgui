@@ -104,7 +104,12 @@ fn draw_mark_kinds(
     coverage: bool,
 ) {
     let item = &scene.primitives.marks[slot];
-    for kind in MarkKind::ALL {
+    let kinds = if coverage {
+        MarkKind::BINNED
+    } else {
+        MarkKind::ALL
+    };
+    for kind in kinds {
         let count = match kind {
             MarkKind::Disc => item.discs,
             MarkKind::Box => item.boxes,
@@ -148,7 +153,7 @@ fn plan_marks(
                 });
                 builder.draw(PlannedDraw::MarksComposite { block });
             } else if let Some(bin) = marks.overflow_bin(slot) {
-                // The spare page holds one item at a time, so the item sums its coverage there
+                // The spare page holds one item at a time, so the item writes its coverage there
                 // right before its composite.
                 let block = builder.stage_mark_draw(position, || {
                     MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)

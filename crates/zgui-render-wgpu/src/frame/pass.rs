@@ -54,7 +54,7 @@ pub struct Recorder<'frame> {
     pub externals: &'frame BTreeMap<ExternalTextureId, AttachedTexture>,
     /// Whatever rasterised this frame's vector content, when there is one.
     pub vectors: Option<&'frame dyn crate::frame::vector::VectorSource>,
-    /// The bin pages union marks sum their coverage into.
+    /// The bin pages union marks write their coverage into.
     pub marks: &'frame crate::target::marks::MarksScratch,
     /// The device extent of one bin page, which a page pass's block describes.
     pub mark_extent: zgui_geom::Size<i32, Device>,
