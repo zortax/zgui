@@ -27,8 +27,10 @@ Recognition and the mark payloads are keyed by that allocation.
 
 `set_transform(affine)` on `CanvasHandle`, `SceneHandle` or the scene in a draw closure sets one
 matrix, applied before the view-box fit. It moves every shape and series and moves no revision.
-A pan or a zoom through it builds no new geometry: recognised shapes and series keep their
-payloads, and the renderer uploads none.
+A pan or a zoom through it recognises no shape again. The series and the shapes that become
+analytic quads or marks keep their payloads, and the renderer uploads none for them. A turn or a
+stretch keeps only the series payloads. Every other shape, for example one on the mask or the
+general route, is placed again under each new view.
 
 ```rust,ignore
 let handle = CanvasHandle::new();

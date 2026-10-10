@@ -90,8 +90,10 @@ impl Drawing {
 
     /// The drawing of a canvas scene, placed by `fit` times the scene's view transform.
     ///
-    /// The shapes and the series keep their source allocations, so a change of the view alone
-    /// recognises nothing again and builds no new series payload.
+    /// The shapes and the series keep their source allocations, so a pan or a zoom alone
+    /// recognises nothing again and builds no new series payload. A route that draws the placed
+    /// path places a shape again under each new view, and so does recognition under a turn or a
+    /// stretch.
     pub fn canvas(scene: &zgui_canvas::CanvasScene, fit: Affine) -> Self {
         Self {
             series: Arc::from(scene.series()),

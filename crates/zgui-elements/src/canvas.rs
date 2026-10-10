@@ -64,7 +64,9 @@ impl CanvasHandle {
     /// view moved.
     ///
     /// The transform maps canvas units to canvas units before the view-box fit. It moves every
-    /// shape and series and moves no revision, so a pan or a zoom builds no new geometry.
+    /// shape and series and moves no revision. A pan or a zoom builds no new geometry for the
+    /// series and for the shapes that become analytic quads or marks; a turn or a stretch, for the
+    /// series only. Other shapes are placed again under each view.
     pub fn set_transform(&self, transform: kurbo::Affine) {
         if self.scene.set_transform(transform) {
             self.changed.notify();

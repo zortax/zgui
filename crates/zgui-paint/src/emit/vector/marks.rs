@@ -7,7 +7,9 @@
 //!
 //! The payload stays in the units the shape was recognised in, and the item maps it to the
 //! fragment's space. So a payload lowered from a recognition the cache holds is the same
-//! allocation under every fit, and a pan of a canvas view uploads none.
+//! allocation under every fit that scales both axes alike, and a pan or a zoom of a canvas view
+//! uploads none. Under any other fit, recognition reads the placed path, so a turn or a stretch
+//! of the view lowers a new payload.
 
 use std::sync::Arc;
 

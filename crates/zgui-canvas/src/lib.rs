@@ -19,7 +19,9 @@
 //!
 //! A scene also holds [`Series`]: plot data in data space, drawn with markers or a line of a fixed
 //! size. A view transform ([`CanvasScene::set_transform`]) moves every shape and series with one
-//! matrix and moves no revision, so a pan or a zoom builds no new geometry.
+//! matrix and moves no revision. A pan or a zoom builds no new geometry for the series and for the
+//! shapes that become analytic quads or marks; a turn or a stretch, for the series only. Other
+//! shapes are placed again under each view.
 //!
 //! # Threads
 //!

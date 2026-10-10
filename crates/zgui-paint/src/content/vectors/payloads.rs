@@ -3,7 +3,9 @@
 //! A mark payload uploads once per allocation: the renderer keeps it resident by its address. A
 //! shape recognised from a path the recognition cache holds, or a series whose data a scene holds,
 //! is lowered to the same payload allocation on every encode while its source lives, so a pan or a
-//! zoom of a canvas view uploads no payload.
+//! zoom of a canvas view uploads no payload. A turn or a stretch of the view places each shape
+//! again, which is a new path and a new payload. A series keeps its payload under any view until
+//! a far pan measures it from a new centre.
 
 use std::sync::{Arc, Weak};
 
