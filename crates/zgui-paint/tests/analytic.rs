@@ -299,6 +299,61 @@ fn a_rect_clipped_to_a_rounded_rect_is_one_quad_under_a_minted_clip() {
     assert_eq!(radii, Corners::uniform(Vec2::splat(DevicePx(6.0))));
 }
 
+/// A canvas showing `shapes` inside `depth` nested boxes that clip to rounded corners.
+fn rounded_ports(shapes: Vec<zgui_canvas::Shape>, depth: usize) -> (Harness, SceneHandle) {
+    let handle = SceneHandle::new();
+    handle.edit(|scene| scene.replace(shapes));
+    let mut tree = Element::new("mark").canvas(&handle);
+    for _ in 0..depth {
+        tree = Element::new("port").children(vec![tree]);
+    }
+    let css = format!(
+        "{CSS}
+         port {{ display: block; width: 300px; height: 100px; overflow: hidden;
+                 border-radius: 8px }}"
+    );
+    (
+        Harness::new(Element::new("root").children(vec![tree]), &css),
+        handle,
+    )
+}
+
+/// A rect clipped to `clip`.
+fn clipped_rect(clip: BezPath) -> Vec<zgui_canvas::Shape> {
+    vec![
+        ShapeBuilder::new(kurbo::Rect::new(4.0, 4.0, 44.0, 44.0).to_path(0.1))
+            .fill(Brush::Solid(opaque(255, 0, 0)))
+            .clipped(clip)
+            .build(),
+    ]
+}
+
+#[test]
+fn a_rounded_clip_past_the_inline_tests_takes_another_route() {
+    let rounded = RoundedRect::new(10.0, 10.0, 40.0, 40.0, 6.0).to_path(0.1);
+    let (mut harness, _handle) = rounded_ports(clipped_rect(rounded.clone()), 2);
+    let report = paint(&mut harness);
+    assert!(
+        !report.vector_routes[0]
+            .routes
+            .contains(VectorRoute::Analytic)
+    );
+    let scene = harness.scene();
+    assert!(scene.primitives.quads.iter().all(|quad| {
+        scene.clips.rounded_links(ClipId(quad.clip)) <= zgui_scene::ClipTable::MAX_INLINE_ROUNDED
+    }));
+
+    let (mut harness, _handle) = rounded_ports(clipped_rect(rounded), 1);
+    assert!(analytic_only(&paint(&mut harness)), "two rounded tests fit");
+
+    let square = kurbo::Rect::new(10.0, 10.0, 40.0, 40.0).to_path(0.1);
+    let (mut harness, _handle) = rounded_ports(clipped_rect(square), 2);
+    assert!(
+        analytic_only(&paint(&mut harness)),
+        "a square clip needs no test"
+    );
+}
+
 #[test]
 fn a_rect_clipped_to_a_triangle_takes_another_route() {
     let triangle = BezPath::from_svg("M10 10 L40 10 L10 40 Z").expect("a path");

@@ -221,6 +221,17 @@ impl ClipTable {
         resolved
     }
 
+    /// How many links of `id` need a rounded-corner test.
+    pub fn rounded_links(&self, id: ClipId) -> usize {
+        let mut rounded = 0;
+        let mut cursor = id;
+        while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
+            rounded += usize::from(link.is_rounded());
+            cursor = *parent;
+        }
+        rounded
+    }
+
     /// Whether `id` is deeper than one draw call can apply, and so needs its content drawn into a
     /// target of its own.
     pub fn needs_group_target(&self, id: ClipId) -> bool {

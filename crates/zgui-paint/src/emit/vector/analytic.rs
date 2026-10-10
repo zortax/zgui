@@ -11,7 +11,9 @@
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipId, ClipLink, CornerShape, PaintRef, Quad, Scene, VectorId, kurbo};
+use zgui_scene::{
+    ClipId, ClipLink, ClipTable, CornerShape, PaintRef, Quad, Scene, VectorId, kurbo,
+};
 
 use super::document::{density_of, reference, stroke_of};
 use super::recognise::{self, Decomposition, Limits, Part};
@@ -298,7 +300,7 @@ pub(super) fn emit_analytic(
         }
     }
 
-    let mut clips: SmallVec<[recognise::BoxPrim; 2]> = SmallVec::new();
+    let mut links: SmallVec<[ClipLink; 2]> = SmallVec::new();
     for clip in &shape.clips {
         let found = recognise::recognise(&clip.path, Part::Fill(clip.rule), limits)?;
         let [prim] = found.boxes.as_slice() else {
@@ -307,15 +309,9 @@ pub(super) fn emit_analytic(
         if found.count != 1 || prim.exponent != CornerShape::ROUND.get() {
             return None;
         }
-        clips.push(*prim);
-    }
-
-    // Everything is decided. From here on, the shape is drawn.
-    let mut clip = placement.clip;
-    for prim in clips {
         let [x0, y0, x1, y1] = prim.rect;
         let radius = |at: usize| Vec2::new(DevicePx(prim.radii[at]), DevicePx(prim.radii[at + 1]));
-        let link = ClipLink::shaped(
+        links.push(ClipLink::shaped(
             Rect::new(
                 Point::new(DevicePx(x0), DevicePx(y0)),
                 Size::new(DevicePx(x1 - x0), DevicePx(y1 - y0)),
@@ -328,7 +324,20 @@ pub(super) fn emit_analytic(
             },
             CornerShape::ROUND,
             placement.transform,
-        );
+        ));
+    }
+    // A draw call applies only the outermost rounded tests of its chain, and the shape's clips are
+    // the innermost. The general route applies them inside the drawing.
+    let rounded = links.iter().filter(|link| link.is_rounded()).count();
+    if rounded > 0
+        && scene.clips.rounded_links(placement.clip) + rounded > ClipTable::MAX_INLINE_ROUNDED
+    {
+        return None;
+    }
+
+    // Everything is decided. From here on, the shape is drawn.
+    let mut clip = placement.clip;
+    for link in links {
         clip = scene.clips.push(clip, link);
         scene.note_minted_clip(clip);
     }
