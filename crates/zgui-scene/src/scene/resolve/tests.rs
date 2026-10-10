@@ -148,3 +148,56 @@ fn an_unresolved_sprite_never_reaches_a_draw() {
         "the range it was in cannot stand in for the drawing next frame"
     );
 }
+
+/// A color tile of the image pool at the given origin.
+fn image_tile(x: i32) -> AtlasTile {
+    AtlasTile {
+        texture: TextureId::new(TextureKind::Image, 0),
+        tile: TileId(3),
+        bounds: Rect::new(Point::new(x, 0), Size::new(16, 16)),
+    }
+}
+
+/// The name of one color raster in the first generation.
+fn image_name(hash: u64) -> ResourceKey {
+    ResourceKey::new(TextureKind::Image, hash, ResourceGeneration::FIRST)
+}
+
+#[test]
+fn settle_named_places_blanks_and_keeps() {
+    use crate::scene::resolve::Settle;
+
+    let mut scene = scene();
+    for (index, hash) in [1_u64, 2, 3].into_iter().enumerate() {
+        scene.push_color_sprite(ColorSprite::new(
+            rect(index as f32 * 20.0, 4.0, 16.0, 16.0),
+            image_name(hash),
+        ));
+    }
+    let named = scene.named_color_sprites();
+    assert_eq!(named.len(), 3);
+    assert_eq!(named[1].0, image_name(2));
+    assert_eq!(
+        named[1].1,
+        rect(20.0, 4.0, 16.0, 16.0),
+        "the rectangle on the surface"
+    );
+
+    let placed = scene.settle_named(|key, _| match key.hash() {
+        1 => Settle::Place(image_tile(48)),
+        2 => Settle::Blank,
+        _ => Settle::Keep,
+    });
+    assert_eq!(placed, 1);
+    let sprites = &scene.primitives.color_sprites;
+    assert_eq!(sprites[0].tile.bounds, [48, 0, 16, 16]);
+    assert!(!sprites[1].tile.is_unresolved());
+    assert_eq!(sprites[1].bounds, [0.0; 4], "a blank covers nothing");
+    assert!(sprites[2].tile.is_unresolved());
+    assert!(scene.has_unresolved_resources(), "the kept one still waits");
+
+    let mut registry = ResourceRegistry::new();
+    registry.place(image_name(3), image_tile(64));
+    assert_eq!(scene.resolve_resources(&registry), 1);
+    scene.finish(&DamageSet::full());
+}

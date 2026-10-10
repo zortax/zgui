@@ -1,10 +1,23 @@
 //! The fix-up: turning the names sprites were pushed with into the placements they draw from.
 
+use zgui_atlas::AtlasTile;
+use zgui_geom::{Device, DevicePx, Rect};
 use zgui_profile::{Counter, counter};
 
 use crate::prim::{PrimitiveKind, SpriteTile};
-use crate::resource::ResourceRegistry;
+use crate::resource::{ResourceKey, ResourceRegistry};
 use crate::scene::Scene;
+
+/// What [`Scene::settle_named`] does with one named sprite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Settle {
+    /// Draw it from this tile.
+    Place(AtlasTile),
+    /// Draw nothing for it this frame.
+    Blank,
+    /// Leave it waiting for the registry.
+    Keep,
+}
 
 /// Where a sprite that named a resource is waiting for one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +74,63 @@ impl Scene {
         self.unresolved = still;
         counter::add(Counter::SpritesFixedUp, fixed as u64);
         fixed
+    }
+
+    /// Every color sprite still waiting for a placement: its name and its rectangle on the surface.
+    ///
+    /// The rectangle is the sprite's own, under its transform. A producer that rasterises on demand
+    /// reads it to decide what the frame needs.
+    pub fn named_color_sprites(&self) -> Vec<(ResourceKey, Rect<DevicePx, Device>)> {
+        self.unresolved
+            .iter()
+            .filter(|entry| entry.kind == PrimitiveKind::ColorSprite)
+            .filter_map(|entry| {
+                let sprite = self.primitives.color_sprites.get(entry.index as usize)?;
+                let key = sprite.tile.key()?;
+                Some((key, self.on_device(sprite.transform, sprite.ink())))
+            })
+            .collect()
+    }
+
+    /// Answers every color sprite still waiting for a placement, and reports how many were
+    /// placed.
+    ///
+    /// `answer` gets the name and the rectangle on the surface. [`Settle::Place`] fills in the
+    /// placement. [`Settle::Blank`] turns the sprite into one that samples and covers nothing, for
+    /// content the frame does not need or cannot afford: unlike a refusal at the finish, it is no
+    /// fault. [`Settle::Keep`] leaves it waiting for [`Scene::resolve_resources`].
+    pub fn settle_named(
+        &mut self,
+        mut answer: impl FnMut(ResourceKey, Rect<DevicePx, Device>) -> Settle,
+    ) -> usize {
+        let mut placed = 0;
+        let waiting = core::mem::take(&mut self.unresolved);
+        let mut still = Vec::with_capacity(waiting.len());
+        for entry in waiting {
+            if entry.kind != PrimitiveKind::ColorSprite {
+                still.push(entry);
+                continue;
+            }
+            let Some(sprite) = self.primitives.color_sprites.get(entry.index as usize) else {
+                continue;
+            };
+            let Some(key) = sprite.tile.key() else {
+                continue;
+            };
+            let on_device = self.on_device(sprite.transform, sprite.ink());
+            let sprite = &mut self.primitives.color_sprites[entry.index as usize];
+            match answer(key, on_device) {
+                Settle::Place(tile) => {
+                    sprite.tile = SpriteTile::of(tile);
+                    placed += 1;
+                }
+                Settle::Blank => blank(&mut sprite.tile, &mut sprite.bounds),
+                Settle::Keep => still.push(entry),
+            }
+        }
+        self.unresolved = still;
+        counter::add(Counter::SpritesFixedUp, placed as u64);
+        placed
     }
 
     /// The tile word of the sprite one waiting entry names.
