@@ -697,8 +697,12 @@ impl ChunkStore {
                 .map(|shared| length(&shared.ranges[kind]))
                 .sum(),
         };
-        // Double past the need, so a growth is rare rather than per-insert.
-        let needed = (live + incoming).saturating_mul(2);
+        // Double past the need, so a growth is rare rather than per-insert. Ranges still in flight
+        // count toward no need, so a growth also at least doubles what the arena held: a lane of a
+        // few transient elements would otherwise grow to the same size every few frames.
+        let needed = (live + incoming)
+            .saturating_mul(2)
+            .max(self.arenas[lane].capacity.saturating_mul(2));
         self.arenas[lane].reset_with_capacity(gpu, needed);
         // Every ledger bucket may name ranges in the replaced buffer of this lane; forgetting
         // them all over-forgets other lanes' pending ranges, which costs those elements until
