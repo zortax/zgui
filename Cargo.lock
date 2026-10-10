@@ -6216,6 +6216,7 @@ dependencies = [
  "zgui-render-vector-coverage",
  "zgui-render-wgpu",
  "zgui-scene",
+ "zgui-svg",
  "zgui-text",
  "zgui-text-parley",
  "zgui-text-style",

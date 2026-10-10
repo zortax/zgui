@@ -42,5 +42,9 @@ zgui-color = { path = "../zgui-color", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# Shapes built directly, so one list is drawn by the analytic route and by this crate's rasteriser
+# and the two pictures are compared.
+zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
+
 [lints]
 workspace = true
