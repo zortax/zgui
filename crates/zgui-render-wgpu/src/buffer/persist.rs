@@ -26,7 +26,7 @@ use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// The instanced kinds with persistent storage, in lane order.
-pub(crate) const LANES: [PrimitiveKind; 7] = [
+pub(crate) const LANES: [PrimitiveKind; 8] = [
     PrimitiveKind::Quad,
     PrimitiveKind::Shadow,
     PrimitiveKind::Decoration,
@@ -34,7 +34,22 @@ pub(crate) const LANES: [PrimitiveKind; 7] = [
     PrimitiveKind::SubpixelSprite,
     PrimitiveKind::ColorSprite,
     PrimitiveKind::Shaded,
+    PrimitiveKind::Marks,
 ];
+
+/// The lane mark items live in.
+pub(crate) const MARKS_LANE: usize = 7;
+
+/// How many payload kinds a mark has: discs, boxes and polyline vertices.
+pub(crate) const PAYLOAD_LANES: usize = 3;
+
+/// Every arena: one per lane, then one per payload kind.
+const ARENAS: usize = LANES.len() + PAYLOAD_LANES;
+
+/// The arena a payload kind lives in.
+const fn payload_arena(kind: usize) -> usize {
+    LANES.len() + kind
+}
 
 /// How many low bits of a resolved remap entry name the arena slot.
 ///
@@ -63,8 +78,8 @@ macro_rules! lane_slice {
             PrimitiveKind::SubpixelSprite => bytemuck::cast_slice(&prims.subpixel_sprites),
             PrimitiveKind::ColorSprite => bytemuck::cast_slice(&prims.color_sprites),
             PrimitiveKind::Shaded => bytemuck::cast_slice(&prims.shaded),
-            PrimitiveKind::Marks
-            | PrimitiveKind::GroupStart
+            PrimitiveKind::Marks => bytemuck::cast_slice(&prims.marks),
+            PrimitiveKind::GroupStart
             | PrimitiveKind::GroupEnd
             | PrimitiveKind::Vector
             | PrimitiveKind::External
@@ -79,8 +94,37 @@ macro_rules! lane_slice {
 struct Resident {
     /// The bytes, shared with the paint cache's record — also the rebuild source.
     prims: Arc<ChunkPrims>,
-    /// The element range each lane occupies, where the chunk has elements of that kind.
-    ranges: [Option<Range<u32>>; LANES.len()],
+    /// The element range each arena holds of the chunk, where it has elements of that kind: the
+    /// lanes first, then the mark payloads.
+    ranges: [Option<Range<u32>>; ARENAS],
+    /// Where each mark's payload starts inside the chunk's payload ranges, per payload kind.
+    mark_starts: Box<[[u32; PAYLOAD_LANES]]>,
+}
+
+/// The payloads of every mark of a chunk, one payload kind after another, as bytes.
+fn payload_bytes(prims: &ChunkPrims, kind: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for payload in &prims.mark_payloads {
+        bytes.extend_from_slice(payload_slice(payload, kind));
+    }
+    bytes
+}
+
+/// One payload kind of one mark, as bytes.
+fn payload_slice(payload: &zgui_scene::MarkPayload, kind: usize) -> &[u8] {
+    match kind {
+        0 => bytemuck::cast_slice(&payload.discs),
+        1 => bytemuck::cast_slice(&payload.boxes),
+        _ => bytemuck::cast_slice(&payload.vertices),
+    }
+}
+
+/// What one arena holds of a resident chunk, as bytes.
+fn resident_bytes(prims: &ChunkPrims, arena: usize) -> Vec<u8> {
+    match LANES.get(arena) {
+        Some(&kind) => lane_slice!(prims, kind).to_vec(),
+        None => payload_bytes(prims, arena - LANES.len()),
+    }
 }
 
 /// One persistent element arena: a buffer, a bump tail, and ranges given back by the ledger.
@@ -279,7 +323,7 @@ impl RetireLedger {
     }
 
     /// Offers every bucket the device has finished with back to `arenas`.
-    fn reclaim(&mut self, arenas: &mut [Arena; LANES.len()]) {
+    fn reclaim(&mut self, arenas: &mut [Arena; ARENAS]) {
         let mut completed = 0;
         while let Ok(seq) = self.receiver.try_recv() {
             completed = completed.max(seq);
@@ -310,8 +354,8 @@ impl RetireLedger {
 /// The persistent halves of the six instanced kinds, and the residence over them.
 #[derive(Debug)]
 pub struct ChunkStore {
-    /// One arena per lane.
-    arenas: [Arena; LANES.len()],
+    /// One arena per lane, then one per mark payload kind.
+    arenas: [Arena; ARENAS],
     /// Every chunk the arenas hold, by revision.
     residence: HashMap<u64, Resident>,
     /// Ranges awaiting their submission's completion.
@@ -331,6 +375,8 @@ pub struct ChunkStore {
     /// past that spills to [`u32::MAX`] and is served transiently — the frame arrays hold its
     /// translated bytes — which is correct and merely copies.
     offset_of: HashMap<u64, u32>,
+    /// Per-frame scratch: each mark's payload ranges by remap position, one per payload kind.
+    mark_payload: Vec<[Range<u32>; PAYLOAD_LANES]>,
 }
 
 impl ChunkStore {
@@ -373,6 +419,22 @@ impl ChunkStore {
                     "zgui.arena.shaded",
                     size_of::<zgui_scene::ShadedQuad>() as u32,
                 ),
+                Arena::new(
+                    gpu,
+                    "zgui.arena.marks",
+                    size_of::<zgui_scene::MarkItem>() as u32,
+                ),
+                Arena::new(gpu, "zgui.arena.mark_discs", size_of::<[f32; 4]>() as u32),
+                Arena::new(
+                    gpu,
+                    "zgui.arena.mark_boxes",
+                    size_of::<zgui_scene::MarkBox>() as u32,
+                ),
+                Arena::new(
+                    gpu,
+                    "zgui.arena.mark_vertices",
+                    size_of::<[f32; 2]>() as u32,
+                ),
             ],
             residence: HashMap::new(),
             ledger: RetireLedger::new(),
@@ -380,6 +442,7 @@ impl ChunkStore {
             gathered: Default::default(),
             frame_offsets: vec![[0.0, 0.0]],
             offset_of: HashMap::new(),
+            mark_payload: Vec::new(),
         }
     }
 
@@ -391,6 +454,26 @@ impl ChunkStore {
     /// The allocation epoch of `lane`'s buffer, for bind-group cache keys.
     pub fn generation(&self, lane: usize) -> u64 {
         self.arenas[lane].generation
+    }
+
+    /// The buffer a mark draw binds as the payload of `kind`.
+    pub fn payload_binding(&self, kind: usize) -> wgpu::BindingResource<'_> {
+        self.arenas[payload_arena(kind)].buffer.as_entire_binding()
+    }
+
+    /// The allocation epoch of the payload buffer of `kind`.
+    pub fn payload_generation(&self, kind: usize) -> u64 {
+        self.arenas[payload_arena(kind)].generation
+    }
+
+    /// The payload ranges of the mark at draw-order `position`, one per payload kind.
+    ///
+    /// Empty ranges past the frame's marks.
+    pub fn mark_payload(&self, position: usize) -> [Range<u32>; PAYLOAD_LANES] {
+        self.mark_payload
+            .get(position)
+            .cloned()
+            .unwrap_or([0..0, 0..0, 0..0])
     }
 
     /// How many bytes the arenas hold.
@@ -458,10 +541,25 @@ impl ChunkStore {
         {
             return 0;
         }
-        let mut ranges: [Option<Range<u32>>; LANES.len()] = Default::default();
+        let mut ranges: [Option<Range<u32>>; ARENAS] = Default::default();
         let mut uploaded = 0;
-        for (lane, &kind) in LANES.iter().enumerate() {
-            let bytes = lane_slice!(prims, kind);
+        let mut mark_starts = Vec::with_capacity(prims.marks.len());
+        let mut running = [0u32; PAYLOAD_LANES];
+        for payload in &prims.mark_payloads {
+            mark_starts.push(running);
+            for (kind, count) in payload.counts().into_iter().enumerate() {
+                running[kind] += count;
+            }
+        }
+        for (lane, held) in ranges.iter_mut().enumerate() {
+            let owned;
+            let bytes: &[u8] = match LANES.get(lane) {
+                Some(&kind) => lane_slice!(prims, kind),
+                None => {
+                    owned = payload_bytes(prims, lane - LANES.len());
+                    &owned
+                }
+            };
             let count = (bytes.len() / self.arenas[lane].element as usize) as u32;
             if count == 0 {
                 continue;
@@ -477,14 +575,19 @@ impl ChunkStore {
                         .expect("the arena was grown for exactly this request")
                 }
             };
-            uploaded += self.arenas[lane].upload(gpu, belt, encoder, range.start, bytes);
-            ranges[lane] = Some(range);
+            let written = self.arenas[lane].upload(gpu, belt, encoder, range.start, bytes);
+            if lane >= LANES.len() {
+                counter::add(Counter::MarksPayloadBytes, written);
+            }
+            uploaded += written;
+            *held = Some(range);
         }
         self.residence.insert(
             revision,
             Resident {
                 prims: Arc::clone(prims),
                 ranges,
+                mark_starts: mark_starts.into_boxed_slice(),
             },
         );
         uploaded
@@ -525,7 +628,7 @@ impl ChunkStore {
         for revision in revisions {
             let (bytes, count) = {
                 let resident = &self.residence[&revision];
-                let bytes: Vec<u8> = lane_slice!(resident.prims, LANES[lane]).to_vec();
+                let bytes = resident_bytes(&resident.prims, lane);
                 let count = (bytes.len() as u32) / self.arenas[lane].element;
                 (bytes, count)
             };
@@ -535,7 +638,11 @@ impl ChunkStore {
             let range = self.arenas[lane]
                 .alloc(count)
                 .expect("the arena was sized for everything resident");
-            uploaded += self.arenas[lane].upload(gpu, belt, encoder, range.start, &bytes);
+            let written = self.arenas[lane].upload(gpu, belt, encoder, range.start, &bytes);
+            if lane >= LANES.len() {
+                counter::add(Counter::MarksPayloadBytes, written);
+            }
+            uploaded += written;
             self.residence
                 .get_mut(&revision)
                 .expect("iterating known keys")
@@ -629,6 +736,98 @@ impl ChunkStore {
             }
             // This frame's transient elements are reclaimable once its submission completes.
             self.ledger.retire(lane, transient_range);
+        }
+        uploaded += self.resolve_payloads(gpu, belt, encoder, scene);
+        uploaded
+    }
+
+    /// Finds each mark's payload ranges, by remap position: in its resident chunk's ranges, or
+    /// gathered into per-frame ranges for a mark served transiently.
+    ///
+    /// The test is the one the lane's own resolution made, so an item and its payload always come
+    /// from the same place.
+    fn resolve_payloads(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &Scene,
+    ) -> u64 {
+        self.mark_payload.clear();
+        let remap = scene.remap(PrimitiveKind::Marks);
+        if remap.is_empty() {
+            return 0;
+        }
+        let provenance = scene.provenance(PrimitiveKind::Marks);
+        let payloads = &scene.primitives.mark_payloads;
+        let resident = |store: &Self, index: u32| {
+            resident_slot(
+                &store.residence,
+                &store.offset_of,
+                MARKS_LANE,
+                &provenance[index as usize],
+            )
+            .is_some()
+        };
+        let mut transient = [0u32; PAYLOAD_LANES];
+        for &index in remap {
+            if !resident(self, index) {
+                for (kind, count) in payloads[index as usize].counts().into_iter().enumerate() {
+                    transient[kind] += count;
+                }
+            }
+        }
+        let mut uploaded = 0;
+        let mut ranges: [Range<u32>; PAYLOAD_LANES] = [0..0, 0..0, 0..0];
+        for (kind, range) in ranges.iter_mut().enumerate() {
+            if transient[kind] == 0 {
+                continue;
+            }
+            let arena = payload_arena(kind);
+            *range = match self.arenas[arena].alloc(transient[kind]) {
+                Some(range) => range,
+                None => {
+                    uploaded += self.grow(gpu, belt, encoder, arena, transient[kind]);
+                    self.arenas[arena]
+                        .alloc(transient[kind])
+                        .expect("the arena was grown for exactly this request")
+                }
+            };
+        }
+        let mut gathered: [Vec<u8>; PAYLOAD_LANES] = Default::default();
+        let mut placed = [0u32; PAYLOAD_LANES];
+        for &index in remap {
+            let payload = &payloads[index as usize];
+            let counts = payload.counts();
+            let slot = provenance[index as usize];
+            let at = if resident(self, index) {
+                let held = &self.residence[&slot.revision];
+                let starts = held.mark_starts[slot.index as usize];
+                core::array::from_fn(|kind| {
+                    let base = held.ranges[payload_arena(kind)]
+                        .as_ref()
+                        .map_or(0, |range| range.start);
+                    base + starts[kind]
+                })
+            } else {
+                let at: [u32; PAYLOAD_LANES] =
+                    core::array::from_fn(|kind| ranges[kind].start + placed[kind]);
+                for kind in 0..PAYLOAD_LANES {
+                    gathered[kind].extend_from_slice(payload_slice(payload, kind));
+                    placed[kind] += counts[kind];
+                }
+                at
+            };
+            self.mark_payload.push(core::array::from_fn(|kind| {
+                at[kind]..at[kind] + counts[kind]
+            }));
+        }
+        for (kind, bytes) in gathered.iter().enumerate() {
+            let arena = payload_arena(kind);
+            let written = self.arenas[arena].upload(gpu, belt, encoder, ranges[kind].start, bytes);
+            counter::add(Counter::MarksPayloadBytes, written);
+            uploaded += written;
+            self.ledger.retire(arena, ranges[kind].clone());
         }
         uploaded
     }

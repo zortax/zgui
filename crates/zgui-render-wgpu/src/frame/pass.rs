@@ -54,6 +54,10 @@ pub struct Recorder<'frame> {
     pub externals: &'frame BTreeMap<ExternalTextureId, AttachedTexture>,
     /// Whatever rasterised this frame's vector content, when there is one.
     pub vectors: Option<&'frame dyn crate::frame::vector::VectorSource>,
+    /// The bin pages union marks sum their coverage into.
+    pub marks: &'frame crate::target::marks::MarksScratch,
+    /// The device extent of one bin page, which a page pass's block describes.
+    pub mark_extent: zgui_geom::Size<i32, Device>,
 }
 
 impl Recorder<'_> {
@@ -258,6 +262,48 @@ impl Recorder<'_> {
                 pass.draw(0..4, *first..*first + *count);
                 true
             }
+            PlannedDraw::Marks {
+                kind,
+                coverage,
+                position,
+                block,
+            } => self.marks_draw(
+                pass, planned, tables, *kind, *coverage, *position, *block, format,
+            ),
+            PlannedDraw::MarksComposite { block } => {
+                let Some(view) = self.marks.array() else {
+                    return false;
+                };
+                let Some(tables) = tables else {
+                    return false;
+                };
+                let layouts = self.pipelines.layouts();
+                let Some(instances) = self.buffers.instance_bind_group(
+                    self.gpu,
+                    layouts,
+                    crate::renderer::frame::FrameBuffers::MARKS_LANE,
+                ) else {
+                    return false;
+                };
+                let Some(bins) = self
+                    .buffers
+                    .mark_composite_bind_group(self.gpu, layouts, view)
+                else {
+                    return false;
+                };
+                let Some(pipeline) =
+                    self.pipelines
+                        .get(self.gpu, PipelineKind::MarksComposite, format)
+                else {
+                    return false;
+                };
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, tables, &[planned.globals]);
+                pass.set_bind_group(1, &instances, &[]);
+                pass.set_bind_group(2, &bins, &[*block]);
+                pass.draw(0..4, 0..1);
+                true
+            }
             PlannedDraw::External { texture, params } => {
                 let Some(attached) = self.externals.get(texture) else {
                     return false;
@@ -361,6 +407,60 @@ impl Recorder<'_> {
             pass.set_bind_group(2, bind_group, &[]);
         }
         pass.draw(0..4, range.start as u32..range.end as u32);
+        true
+    }
+
+    /// Issues one payload kind of one mark item: one instance per prim, out of the payload arena.
+    #[allow(clippy::too_many_arguments)]
+    fn marks_draw(
+        &mut self,
+        pass: &mut wgpu::RenderPass<'_>,
+        planned: &PlannedPass,
+        tables: Option<&wgpu::BindGroup>,
+        kind: crate::pipeline::marks::MarkKind,
+        coverage: bool,
+        position: usize,
+        block: u32,
+        format: wgpu::TextureFormat,
+    ) -> bool {
+        let range = self.buffers.chunks.mark_payload(position)[kind.lane()].clone();
+        // Instance `i` of a polyline strokes vertex `i` to vertex `i + 1`, and the first and last
+        // vertices are separators.
+        let range = match kind {
+            crate::pipeline::marks::MarkKind::Polyline if range.len() >= 3 => {
+                range.start + 1..range.end - 2
+            }
+            crate::pipeline::marks::MarkKind::Polyline => return false,
+            _ => range,
+        };
+        if range.is_empty() {
+            return false;
+        }
+        let Some(tables) = tables else {
+            return false;
+        };
+        let layouts = self.pipelines.layouts();
+        let Some(instances) = self.buffers.instance_bind_group(
+            self.gpu,
+            layouts,
+            crate::renderer::frame::FrameBuffers::MARKS_LANE,
+        ) else {
+            return false;
+        };
+        let Some(payload) = self.buffers.mark_bind_group(self.gpu, layouts, kind) else {
+            return false;
+        };
+        let Some(pipeline) =
+            self.pipelines
+                .get(self.gpu, PipelineKind::marks(kind, coverage), format)
+        else {
+            return false;
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, tables, &[planned.globals]);
+        pass.set_bind_group(1, &instances, &[]);
+        pass.set_bind_group(2, &payload, &[block]);
+        pass.draw(0..4, range);
         true
     }
 
@@ -512,6 +612,7 @@ impl Recorder<'_> {
         match target {
             TargetRef::Composed => Some(self.composed.view()),
             TargetRef::Pool(slot) => Some(self.pool.view(slot)),
+            TargetRef::MarksPage(page) => self.marks.page(page),
         }
     }
 
@@ -520,6 +621,7 @@ impl Recorder<'_> {
         match target {
             TargetRef::Composed => Some(self.composed.texture()),
             TargetRef::Pool(slot) => Some(self.pool.texture(slot)),
+            TargetRef::MarksPage(_) => None,
         }
     }
 
@@ -528,6 +630,7 @@ impl Recorder<'_> {
         match target {
             TargetRef::Composed => Some(self.composed.format()),
             TargetRef::Pool(slot) => Some(slot.format()),
+            TargetRef::MarksPage(_) => Some(PipelineKind::COVERAGE_FORMAT),
         }
     }
 
@@ -536,6 +639,7 @@ impl Recorder<'_> {
         match target {
             TargetRef::Composed => self.composed.used().size,
             TargetRef::Pool(slot) => slot.scale().extent(self.pool.region()),
+            TargetRef::MarksPage(_) => self.mark_extent,
         }
     }
 }

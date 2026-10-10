@@ -38,11 +38,25 @@ pub enum PipelineKind {
     External,
     /// Compositing a rasterised vector batch back into the target.
     VectorComposite,
+    /// Painting the discs of a mark.
+    MarksDisc,
+    /// Adding the coverage of a mark's discs into its bin.
+    MarksDiscCoverage,
+    /// Painting the boxes of a mark.
+    MarksBox,
+    /// Adding the coverage of a mark's boxes into its bin.
+    MarksBoxCoverage,
+    /// Painting the polylines of a mark.
+    MarksPolyline,
+    /// Adding the coverage of a mark's polylines into its bin.
+    MarksPolylineCoverage,
+    /// Painting a union mark through the coverage in its bin.
+    MarksComposite,
 }
 
 impl PipelineKind {
     /// Every kind.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 21] = [
         Self::Quad,
         Self::Shadow,
         Self::Decoration,
@@ -57,7 +71,30 @@ impl PipelineKind {
         Self::Composite,
         Self::External,
         Self::VectorComposite,
+        Self::MarksDisc,
+        Self::MarksDiscCoverage,
+        Self::MarksBox,
+        Self::MarksBoxCoverage,
+        Self::MarksPolyline,
+        Self::MarksPolylineCoverage,
+        Self::MarksComposite,
     ];
+
+    /// The format a coverage draw writes: the bin pages.
+    pub const COVERAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+
+    /// The pipeline drawing one payload kind of a mark, painting it or adding its coverage.
+    pub fn marks(kind: crate::pipeline::marks::MarkKind, coverage: bool) -> Self {
+        use crate::pipeline::marks::MarkKind;
+        match (kind, coverage) {
+            (MarkKind::Disc, false) => Self::MarksDisc,
+            (MarkKind::Disc, true) => Self::MarksDiscCoverage,
+            (MarkKind::Box, false) => Self::MarksBox,
+            (MarkKind::Box, true) => Self::MarksBoxCoverage,
+            (MarkKind::Polyline, false) => Self::MarksPolyline,
+            (MarkKind::Polyline, true) => Self::MarksPolylineCoverage,
+        }
+    }
 
     /// Which shader module it is built from.
     pub fn module(self) -> Module {
@@ -74,6 +111,10 @@ impl PipelineKind {
             Self::Composite => Module::Composite,
             Self::External => Module::External,
             Self::VectorComposite => Module::Vector,
+            Self::MarksDisc | Self::MarksDiscCoverage => Module::MarksDisc,
+            Self::MarksBox | Self::MarksBoxCoverage => Module::MarksBox,
+            Self::MarksPolyline | Self::MarksPolylineCoverage => Module::MarksPolyline,
+            Self::MarksComposite => Module::MarksComposite,
         }
     }
 
@@ -92,6 +133,13 @@ impl PipelineKind {
             Self::Composite => "vs_composite",
             Self::External => "vs_external",
             Self::VectorComposite => "vs_vector",
+            Self::MarksDisc => "vs_disc_paint",
+            Self::MarksDiscCoverage => "vs_disc_coverage",
+            Self::MarksBox => "vs_box_paint",
+            Self::MarksBoxCoverage => "vs_box_coverage",
+            Self::MarksPolyline => "vs_segment_paint",
+            Self::MarksPolylineCoverage => "vs_segment_coverage",
+            Self::MarksComposite => "vs_mark_composite",
         }
     }
 
@@ -112,6 +160,13 @@ impl PipelineKind {
             Self::Composite => "fs_composite",
             Self::External => "fs_external",
             Self::VectorComposite => "fs_vector",
+            Self::MarksDisc => "fs_disc_paint",
+            Self::MarksDiscCoverage => "fs_disc_coverage",
+            Self::MarksBox => "fs_box_paint",
+            Self::MarksBoxCoverage => "fs_box_coverage",
+            Self::MarksPolyline => "fs_segment_paint",
+            Self::MarksPolylineCoverage => "fs_segment_coverage",
+            Self::MarksComposite => "fs_mark_composite",
         }
     }
 
@@ -158,6 +213,29 @@ impl PipelineKind {
         self == Self::VectorComposite
     }
 
+    /// Whether it draws a mark: an item out of the marks lane, and a block and a payload or the
+    /// bin pages of its own.
+    pub fn draws_marks(self) -> bool {
+        matches!(
+            self,
+            Self::MarksDisc
+                | Self::MarksDiscCoverage
+                | Self::MarksBox
+                | Self::MarksBoxCoverage
+                | Self::MarksPolyline
+                | Self::MarksPolylineCoverage
+                | Self::MarksComposite
+        )
+    }
+
+    /// Whether it adds coverage into a bin page rather than painting into a target.
+    pub fn adds_coverage(self) -> bool {
+        matches!(
+            self,
+            Self::MarksDiscCoverage | Self::MarksBoxCoverage | Self::MarksPolylineCoverage
+        )
+    }
+
     /// Whether this pipeline may be built for an attachment of `format`.
     ///
     /// The per-channel coverage pipeline may not be built for an isolated target, and the reason
@@ -165,7 +243,12 @@ impl PipelineKind {
     /// per-channel coverage as its blend factor, and that is meaningless against a destination
     /// that is not opaque. An isolated target never is. Text landing in one is emitted as
     /// single-channel coverage instead, so the variant would be unreachable as well as wrong.
+    ///
+    /// A coverage draw writes only the bin pages, and nothing else writes them.
     pub fn suits(self, format: wgpu::TextureFormat) -> bool {
+        if self.adds_coverage() != (format == Self::COVERAGE_FORMAT) {
+            return false;
+        }
         self != Self::SubpixelSprite || format != crate::target::group_pool::GroupPool::FORMAT
     }
 
@@ -193,6 +276,18 @@ impl PipelineKind {
             | Self::DamageClear
             | Self::BlurDownsample
             | Self::BlurAxis => None,
+            // Coverage adds up, and the format saturates the sum at one: the union of the prims.
+            Self::MarksDiscCoverage | Self::MarksBoxCoverage | Self::MarksPolylineCoverage => {
+                let add = wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                };
+                Some(wgpu::BlendState {
+                    color: add,
+                    alpha: add,
+                })
+            }
             Self::SubpixelSprite => Some(wgpu::BlendState {
                 color: wgpu::BlendComponent {
                     src_factor: wgpu::BlendFactor::Src1,
@@ -213,6 +308,8 @@ impl PipelineKind {
     pub fn write_mask(self) -> wgpu::ColorWrites {
         if self == Self::SubpixelSprite {
             wgpu::ColorWrites::COLOR
+        } else if self.adds_coverage() {
+            wgpu::ColorWrites::RED
         } else {
             wgpu::ColorWrites::ALL
         }
@@ -235,6 +332,13 @@ impl PipelineKind {
             Self::Composite => "zgui.pipeline.composite",
             Self::External => "zgui.pipeline.external",
             Self::VectorComposite => "zgui.pipeline.vector_composite",
+            Self::MarksDisc => "zgui.pipeline.marks_disc",
+            Self::MarksDiscCoverage => "zgui.pipeline.marks_disc_coverage",
+            Self::MarksBox => "zgui.pipeline.marks_box",
+            Self::MarksBoxCoverage => "zgui.pipeline.marks_box_coverage",
+            Self::MarksPolyline => "zgui.pipeline.marks_polyline",
+            Self::MarksPolylineCoverage => "zgui.pipeline.marks_polyline_coverage",
+            Self::MarksComposite => "zgui.pipeline.marks_composite",
         }
     }
 }
@@ -255,9 +359,15 @@ mod tests {
             wgpu::ColorWrites::COLOR
         );
         for kind in PipelineKind::ALL {
-            if kind != PipelineKind::SubpixelSprite {
-                assert_eq!(kind.write_mask(), wgpu::ColorWrites::ALL, "{kind:?}");
+            if kind == PipelineKind::SubpixelSprite {
+                continue;
             }
+            let expected = if kind.adds_coverage() {
+                wgpu::ColorWrites::RED
+            } else {
+                wgpu::ColorWrites::ALL
+            };
+            assert_eq!(kind.write_mask(), expected, "{kind:?}");
         }
     }
 
@@ -285,14 +395,31 @@ mod tests {
 
         let refused: Vec<PipelineKind> = PipelineKind::ALL
             .into_iter()
-            .filter(|kind| !kind.suits(GroupPool::FORMAT))
+            .filter(|kind| !kind.suits(GroupPool::FORMAT) && !kind.adds_coverage())
             .collect();
         assert_eq!(refused, vec![PipelineKind::SubpixelSprite]);
         for kind in PipelineKind::ALL {
-            assert!(
+            assert_eq!(
                 kind.suits(wgpu::TextureFormat::Bgra8Unorm),
+                !kind.adds_coverage(),
                 "{kind:?} is refused for the composed target"
             );
+        }
+    }
+
+    #[test]
+    fn a_coverage_draw_writes_only_the_bin_pages_and_adds() {
+        for kind in PipelineKind::ALL {
+            assert_eq!(
+                kind.suits(PipelineKind::COVERAGE_FORMAT),
+                kind.adds_coverage(),
+                "{kind:?}"
+            );
+            if kind.adds_coverage() {
+                let blend = kind.blend().expect("coverage blends");
+                assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::One, "{kind:?}");
+                assert!(kind.draws_marks(), "{kind:?}");
+            }
         }
     }
 
@@ -302,6 +429,7 @@ mod tests {
             assert_eq!(
                 kind.uses_tables(),
                 kind.is_instanced()
+                    || kind.draws_marks()
                     || kind.composites_vector()
                     || kind.samples_through_block()
                         && kind != PipelineKind::BlurDownsample

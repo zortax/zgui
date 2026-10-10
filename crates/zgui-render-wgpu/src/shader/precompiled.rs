@@ -38,6 +38,10 @@ impl Module {
             Self::Composite => text!("composite"),
             Self::External => text!("external"),
             Self::Vector => text!("vector"),
+            Self::MarksDisc => text!("marks_disc"),
+            Self::MarksBox => text!("marks_box"),
+            Self::MarksPolyline => text!("marks_polyline"),
+            Self::MarksComposite => text!("marks_composite"),
         }
     }
 
@@ -56,6 +60,10 @@ impl Module {
             Self::Composite => ir!("composite"),
             Self::External => ir!("external"),
             Self::Vector => ir!("vector"),
+            Self::MarksDisc => ir!("marks_disc"),
+            Self::MarksBox => ir!("marks_box"),
+            Self::MarksPolyline => ir!("marks_polyline"),
+            Self::MarksComposite => ir!("marks_composite"),
         }
     }
 
@@ -93,6 +101,20 @@ mod tests {
                 !representation.types.is_empty(),
                 "{module:?} decoded to a module declaring no types"
             );
+        }
+    }
+
+    /// Every module passes the same validation a device runs when a pipeline is made, so a shader
+    /// that parses and would not validate fails here rather than on the first frame that uses it.
+    #[test]
+    fn every_shader_validates() {
+        use wgpu::naga::valid::{Capabilities, ValidationFlags, Validator};
+
+        for module in Module::ALL {
+            let representation = module.representation();
+            Validator::new(ValidationFlags::all(), Capabilities::all())
+                .validate(&representation)
+                .unwrap_or_else(|error| panic!("{module:?}: {error:?}"));
         }
     }
 

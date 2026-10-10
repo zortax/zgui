@@ -15,13 +15,15 @@ pub enum TargetRef {
     Composed,
     /// A target lent by the pool for one group, one backdrop capture, or one blur pass.
     Pool(GroupSlot),
+    /// One page of the single-channel bins union marks sum their coverage into.
+    MarksPage(u32),
 }
 
 impl TargetRef {
     /// How many texels of this target one device pixel covers.
     pub fn scale(self) -> TargetScale {
         match self {
-            Self::Composed => TargetScale::Full,
+            Self::Composed | Self::MarksPage(_) => TargetScale::Full,
             Self::Pool(slot) => slot.scale(),
         }
     }
@@ -29,7 +31,7 @@ impl TargetRef {
     /// The pool target this names, if it is one.
     pub fn slot(self) -> Option<GroupSlot> {
         match self {
-            Self::Composed => None,
+            Self::Composed | Self::MarksPage(_) => None,
             Self::Pool(slot) => Some(slot),
         }
     }

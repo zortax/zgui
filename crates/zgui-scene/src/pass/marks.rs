@@ -41,8 +41,8 @@ pub struct MarkPlan {
     pub pages: u32,
     /// The size of one page, in texels: the surface's extent.
     pub extent: Size<i32, Device>,
-    /// How many union items found no page, and draw each prim on its own instead.
-    pub overflow: usize,
+    /// The union items that found no page, in emission order. Each draws every prim on its own.
+    pub overflow: Vec<u32>,
     /// Whether the plan was made for a frame that redraws every pixel.
     ///
     /// A bin outside every group holds only the damaged part of its item. A renderer that redraws
@@ -59,6 +59,11 @@ impl MarkPlan {
             .map(|at| &self.bins[at])
     }
 
+    /// Whether the item at `item` found no page.
+    pub fn overflows(&self, item: u32) -> bool {
+        self.overflow.binary_search(&item).is_ok()
+    }
+
     /// Whether no item has a bin.
     pub fn is_empty(&self) -> bool {
         self.bins.is_empty()
@@ -69,7 +74,7 @@ impl MarkPlan {
         self.bins.clear();
         self.pages = 0;
         self.extent = Size::new(0, 0);
-        self.overflow = 0;
+        self.overflow.clear();
         self.full_damage = false;
     }
 }
@@ -201,7 +206,7 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
                             page,
                         });
                     }
-                    None => plan.overflow += 1,
+                    None => plan.overflow.push(op.index),
                 }
             }
             _ => {}
@@ -323,7 +328,8 @@ mod tests {
         }
         scene.finish(&DamageSet::full());
         assert_eq!(scene.mark_plan().bins.len(), MAX_PAGES as usize);
-        assert_eq!(scene.mark_plan().overflow, 2);
+        assert_eq!(scene.mark_plan().overflow, vec![8, 9]);
+        assert!(scene.mark_plan().overflows(9));
     }
 
     #[test]

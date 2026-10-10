@@ -52,6 +52,22 @@ pub enum PlannedDraw {
         /// The dynamic offset of its block.
         params: u32,
     },
+    /// One payload kind of one mark item: painted into the target, or added into its bin.
+    Marks {
+        /// Which payload kind the instances walk.
+        kind: crate::pipeline::marks::MarkKind,
+        /// Whether the draw adds coverage into a bin page rather than painting.
+        coverage: bool,
+        /// The item's position in the draw-order remap, which names its payload ranges.
+        position: usize,
+        /// The dynamic offset of the item's block.
+        block: u32,
+    },
+    /// A union mark item painted through the coverage its prims summed into its bin.
+    MarksComposite {
+        /// The dynamic offset of the item's block.
+        block: u32,
+    },
     /// One rasterised vector pass, composited back into the target.
     ///
     /// It is one draw call whether the pass is composited whole or one item at a time: the two

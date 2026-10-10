@@ -236,3 +236,164 @@ fn a_growing_shaded_lane_keeps_its_own_bytes() {
     );
     assert!(grown.rgba(4, 44)[1] > 200, "the new chunk draws as well");
 }
+
+/// A chunk holding one union mark of overlapping discs and one direct mark of a ring, `down` from
+/// the top, with its payload coordinates measured from `origin`.
+fn push_marks(scene: &mut Scene, down: f32, origin: [f32; 2]) {
+    use zgui_scene::{MarkFlags, MarkItem, MarkPayload};
+
+    let translucent = PaintRef::solid(scene.paints.solid(Color::srgb_u8(200, 60, 20, 128)));
+    let opaque = PaintRef::solid(scene.paints.solid(Color::srgb_u8(20, 160, 90, 255)));
+    let at = |x: f32, y: f32| [x - origin[0], y + down - origin[1]];
+    let overlapping = MarkPayload {
+        discs: vec![
+            [at(20.5, 20.5)[0], at(20.5, 20.5)[1], 9.25, 0.0],
+            [at(28.5, 24.5)[0], at(28.5, 24.5)[1], 9.25, 0.0],
+            [at(24.5, 30.5)[0], at(24.5, 30.5)[1], 6.5, 0.0],
+        ],
+        ..MarkPayload::default()
+    };
+    let mut union = MarkItem::new(
+        rect(11.25, 11.25 + down, 26.5, 28.5),
+        translucent,
+        overlapping.counts(),
+    );
+    union.flags |= MarkFlags::UNION;
+    union.origin = origin;
+    scene.push_marks(union, Arc::new(overlapping));
+    let ring = MarkPayload {
+        discs: vec![[at(80.5, 40.5)[0], at(80.5, 40.5)[1], 12.0, 7.5]],
+        ..MarkPayload::default()
+    };
+    let mut direct = MarkItem::new(rect(68.5, 28.5 + down, 24.0, 24.0), opaque, ring.counts());
+    direct.origin = origin;
+    scene.push_marks(direct, Arc::new(ring));
+}
+
+#[test]
+fn a_moved_marks_chunk_uploads_no_payload() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+
+    // Frame one: the chunk is captured and made resident.
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_marks(&mut scene, 0.0, [0.0, 0.0]);
+    let chunk = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(1, Arc::clone(&chunk));
+    scene.bind_capture(1);
+    scene.finish(&DamageSet::full());
+    zgui_profile::counter::reset();
+    let (_, first) = draw_bytes(&mut renderer, &scene);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(
+            zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes) > 0,
+            "the encoded chunk uploads its payload once"
+        );
+    }
+    let overlap = first.rgba(24, 24)[3];
+    assert!(
+        (127..=129).contains(&overlap),
+        "three overlapping translucent discs paint their alpha once: {overlap}"
+    );
+    assert_eq!(first.rgba(80, 30)[3], 255, "the ring draws");
+    assert_eq!(first.rgba(80, 40)[3], 0, "and leaves its hole");
+    scene.clear_chunk_notes();
+
+    // Frame two: the same chunk replayed five pixels across and seven down.
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.replay_chunk(&chunk, Size::new(DevicePx(5.0), DevicePx(7.0)), 1);
+    scene.finish(&DamageSet::full());
+    zgui_profile::counter::reset();
+    let (_, moved) = draw_bytes(&mut renderer, &scene);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(
+            zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes),
+            0,
+            "a moved replay of a resident chunk uploads no payload"
+        );
+    }
+
+    // The control: the same marks encoded fresh at the moved position, on a renderer of its own.
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let mut control = Scene::new();
+    control.begin_frame(Size::new(SIDE, SIDE));
+    push_marks_at(&mut control, 5.0, 7.0);
+    control.finish(&DamageSet::full());
+    let (_, expected) = draw_bytes(&mut control_renderer, &control);
+    assert_eq!(
+        moved.max_difference(&expected),
+        0,
+        "the offset draw puts every prim exactly where a fresh encoding would"
+    );
+}
+
+/// The marks of [`push_marks`], encoded at `(across, down)` with their payload there too.
+fn push_marks_at(scene: &mut Scene, across: f32, down: f32) {
+    use zgui_scene::{MarkFlags, MarkItem, MarkPayload};
+
+    let translucent = PaintRef::solid(scene.paints.solid(Color::srgb_u8(200, 60, 20, 128)));
+    let opaque = PaintRef::solid(scene.paints.solid(Color::srgb_u8(20, 160, 90, 255)));
+    let overlapping = MarkPayload {
+        discs: vec![
+            [20.5 + across, 20.5 + down, 9.25, 0.0],
+            [28.5 + across, 24.5 + down, 9.25, 0.0],
+            [24.5 + across, 30.5 + down, 6.5, 0.0],
+        ],
+        ..MarkPayload::default()
+    };
+    let mut union = MarkItem::new(
+        rect(11.25 + across, 11.25 + down, 26.5, 28.5),
+        translucent,
+        overlapping.counts(),
+    );
+    union.flags |= MarkFlags::UNION;
+    scene.push_marks(union, Arc::new(overlapping));
+    let ring = MarkPayload {
+        discs: vec![[80.5 + across, 40.5 + down, 12.0, 7.5]],
+        ..MarkPayload::default()
+    };
+    let direct = MarkItem::new(
+        rect(68.5 + across, 28.5 + down, 24.0, 24.0),
+        opaque,
+        ring.counts(),
+    );
+    scene.push_marks(direct, Arc::new(ring));
+}
+
+#[test]
+fn marks_arenas_hold_still_over_a_hundred_redraws() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    let mut held = None;
+    for frame in 1..=100_u64 {
+        // One fresh encoding per frame, and the one before it retired.
+        scene.begin_frame(Size::new(SIDE, SIDE));
+        scene.begin_chunk_capture(ChunkPrims::default());
+        push_marks(&mut scene, (frame % 7) as f32, [0.0, 0.0]);
+        let chunk = Arc::new(scene.take_chunk_capture());
+        scene.note_chunk_inserted(frame, chunk);
+        if frame > 1 {
+            scene.note_chunk_retired(frame - 1);
+        }
+        scene.bind_capture(frame);
+        scene.finish(&DamageSet::full());
+        draw_bytes(&mut renderer, &scene);
+        scene.clear_chunk_notes();
+        if frame == 10 {
+            held = Some(renderer.memory().buffers);
+        }
+    }
+    assert_eq!(
+        Some(renderer.memory().buffers),
+        held,
+        "retired payloads are reused, so the arenas do not grow"
+    );
+}

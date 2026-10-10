@@ -36,6 +36,8 @@ pub struct FrameBuffers {
     pub blocks: SlotBuffer,
     /// One block per distinct set of parameters an application effect draws with this frame.
     pub effect_params: SlotBuffer,
+    /// One block per mark item a draw of this frame names.
+    pub mark_draws: SlotBuffer,
     /// Which slot of `effect_params` each interned parameter block was staged into.
     ///
     /// Public so that a plan can borrow it beside the block allocators it also borrows: the two
@@ -66,6 +68,8 @@ pub struct FrameBuffers {
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
     /// One bind group per lane, keyed by its instance, remap and offset allocation epochs.
     instance_binds: RefCell<HashMap<usize, ([u64; 3], wgpu::BindGroup)>>,
+    /// One bind group per mark payload kind, keyed by its block and payload allocation epochs.
+    mark_binds: RefCell<HashMap<usize, ([u64; 2], wgpu::BindGroup)>>,
     /// Whether idle trimming replaced the retained side-table buffers with empty allocations.
     tables_released: bool,
 }
@@ -87,6 +91,7 @@ impl FrameBuffers {
                 zgui_scene::ShaderParams::BYTES as u64,
             ),
             effect_offsets: Vec::new(),
+            mark_draws: SlotBuffer::new::<crate::pipeline::marks::MarkDraw>(gpu, "zgui.mark_draws"),
             vectors: VectorInstances::new(gpu),
             clips: StorageBuffer::new(gpu, "zgui.clips"),
             paints: StorageBuffer::new(gpu, "zgui.paints"),
@@ -101,12 +106,14 @@ impl FrameBuffers {
                 StorageBuffer::new(gpu, "zgui.remap.subpixel_sprites"),
                 StorageBuffer::new(gpu, "zgui.remap.color_sprites"),
                 StorageBuffer::new(gpu, "zgui.remap.shaded"),
+                StorageBuffer::new(gpu, "zgui.remap.marks"),
             ],
             last_remaps: Default::default(),
             offsets: StorageBuffer::new(gpu, "zgui.remap.offsets"),
             last_offsets: Vec::new(),
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::new(HashMap::new()),
+            mark_binds: RefCell::new(HashMap::new()),
             tables_released: false,
         }
     }
@@ -118,6 +125,7 @@ impl FrameBuffers {
         self.blocks.reset();
         self.effect_params.reset();
         self.effect_offsets.clear();
+        self.mark_draws.reset();
         self.vectors.begin_frame();
     }
 
@@ -215,6 +223,9 @@ impl FrameBuffers {
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self
             .effect_params
+            .upload_with(gpu, &mut self.uploader, encoder);
+        uploaded += self
+            .mark_draws
             .upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.vectors.upload_with(gpu, &mut self.uploader, encoder);
         uploaded
@@ -344,10 +355,80 @@ impl FrameBuffers {
     /// The lane application effects draw out of.
     pub const SHADED_LANE: usize = 6;
 
+    /// The lane mark items are drawn out of.
+    pub const MARKS_LANE: usize = crate::buffer::persist::MARKS_LANE;
+
+    /// The bind group a mark draw reads its block and the payload of `kind` through.
+    pub fn mark_bind_group(
+        &self,
+        gpu: &Gpu,
+        layouts: &Layouts,
+        kind: crate::pipeline::marks::MarkKind,
+    ) -> Option<wgpu::BindGroup> {
+        let lane = kind.lane();
+        let signature = [
+            self.mark_draws.generation(),
+            self.chunks.payload_generation(lane),
+        ];
+        if let Some((held, bind)) = self.mark_binds.borrow().get(&lane)
+            && *held == signature
+        {
+            return Some(bind.clone());
+        }
+        let bind = gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("zgui.bind.marks"),
+            layout: &layouts.marks,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self
+                        .mark_draws
+                        .binding::<crate::pipeline::marks::MarkDraw>()?,
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.chunks.payload_binding(lane),
+                },
+            ],
+        });
+        self.mark_binds
+            .borrow_mut()
+            .insert(lane, (signature, bind.clone()));
+        Some(bind)
+    }
+
+    /// The bind group a mark composite reads its block and the bin pages through.
+    pub fn mark_composite_bind_group(
+        &self,
+        gpu: &Gpu,
+        layouts: &Layouts,
+        bins: &wgpu::TextureView,
+    ) -> Option<wgpu::BindGroup> {
+        Some(
+            gpu.device().create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("zgui.bind.mark_composite"),
+                layout: &layouts.mark_composite,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self
+                            .mark_draws
+                            .binding::<crate::pipeline::marks::MarkDraw>()?,
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(bins),
+                    },
+                ],
+            }),
+        )
+    }
+
     /// How many bytes every buffer holds.
     pub fn bytes(&self) -> u64 {
         self.globals.bytes()
             + self.blocks.bytes()
+            + self.mark_draws.bytes()
             + self.effect_params.bytes()
             + self.vectors.bytes()
             + self.clips.capacity()
@@ -361,7 +442,7 @@ impl FrameBuffers {
 
     /// Shrinks device and host high-water buffers after wall-clock idleness.
     pub fn release_idle(&mut self, gpu: &Gpu) -> u64 {
-        let mut freed = self.globals.release() + self.blocks.release();
+        let mut freed = self.globals.release() + self.blocks.release() + self.mark_draws.release();
         freed += self.vectors.shrink(gpu);
         freed += self.clips.shrink(gpu);
         freed += self.paints.shrink(gpu);
@@ -376,6 +457,7 @@ impl FrameBuffers {
         freed += self.uploader.release_idle();
         *self.frame_bind.borrow_mut() = None;
         self.instance_binds.borrow_mut().clear();
+        self.mark_binds.borrow_mut().clear();
         freed
     }
 
@@ -483,6 +565,7 @@ fn lane_label(lane: usize) -> &'static str {
         Some(zgui_scene::PrimitiveKind::SubpixelSprite) => "zgui.bind.instances.subpixel_sprites",
         Some(zgui_scene::PrimitiveKind::ColorSprite) => "zgui.bind.instances.color_sprites",
         Some(zgui_scene::PrimitiveKind::Shaded) => "zgui.bind.instances.shaded",
+        Some(zgui_scene::PrimitiveKind::Marks) => "zgui.bind.instances.marks",
         _ => "zgui.bind.instances",
     }
 }

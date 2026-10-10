@@ -169,6 +169,13 @@ impl Renderer for WgpuRenderer {
         // it. The plan is also where the frame's blocks are staged and its isolated targets are
         // lent, so that recording is nothing but issuing what was decided.
         zgui_profile::latency::mark("r.plan");
+        let marks = scene.mark_plan();
+        let pages = if crate::frame::plan::bins_apply(scene, damage) {
+            marks.pages
+        } else {
+            0
+        };
+        self.marks_scratch.ensure(&self.gpu, marks.extent, pages);
         let externals = |id| self.externals.get(&id).map(|attached| attached.texture);
         let plan = {
             let builder = PlanBuilder::new(
@@ -177,6 +184,7 @@ impl Renderer for WgpuRenderer {
                 &mut self.buffers.globals,
                 &mut self.buffers.blocks,
                 &mut self.buffers.vectors,
+                &mut self.buffers.mark_draws,
                 self.subpixel_order,
                 scene.frame_clock(),
                 &self.buffers.effect_offsets,
@@ -238,6 +246,8 @@ impl Renderer for WgpuRenderer {
                 sampler: &self.sampler,
                 externals: &self.externals,
                 vectors: self.vectors.as_deref(),
+                marks: &self.marks_scratch,
+                mark_extent: scene.mark_plan().extent,
             }
             .record(&mut encoder, &plan)
         };
@@ -402,7 +412,7 @@ impl Renderer for WgpuRenderer {
             .shift_scratch
             .take()
             .map_or(0, |held| crate::frame::shift::ShiftScratch::bytes(&held));
-        self.groups.release_unused() + scratch
+        self.groups.release_unused() + scratch + self.marks_scratch.release()
     }
 
     fn release_idle_resources(&mut self) -> u64 {
@@ -426,7 +436,7 @@ impl Renderer for WgpuRenderer {
         let own = MemoryReport {
             fixed: 0,
             targets: self.composed.bytes() + self.groups.bytes(),
-            scratch: 0,
+            scratch: self.marks_scratch.bytes(),
             atlases: self.atlas.bytes(),
             buffers: self.buffers.bytes() + self.atlas.staging_bytes(),
         };

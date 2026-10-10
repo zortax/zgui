@@ -3,7 +3,7 @@
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_render::ExternalTexture;
-use zgui_scene::{BackdropFilter, Batch, GroupBoundary, Scene};
+use zgui_scene::{BackdropFilter, Batch, GroupBoundary, MarkPlan, PrimitiveKind, Scene};
 
 use crate::filter::chain::Chain;
 use crate::filter::{self, Filtered};
@@ -14,6 +14,7 @@ use crate::frame::target::TargetRef;
 use crate::frame::vector;
 use crate::pipeline::composite::CompositeParams;
 use crate::pipeline::external::ExternalParams;
+use crate::pipeline::marks::{MarkDraw, MarkKind};
 use crate::target::scale::TargetScale;
 
 /// A group whose content is being drawn into a target of its own.
@@ -56,16 +57,130 @@ pub fn plan_segments(
         .map(|backdrop| rounded_out(backdrop.source))
         .collect();
 
+    let binned = bins_apply(scene, damage);
+    plan_mark_pages(&mut builder, scene, binned);
+    let marks = MarkFrame {
+        plan: scene.mark_plan(),
+        binned,
+    };
     for rect in damage::rects_covering_backdrops(damage, used, &backdrops) {
-        plan_rect(&mut builder, scene, rect, used, externals, vectors);
+        plan_rect(&mut builder, scene, &marks, rect, used, externals, vectors);
     }
     builder.finish()
 }
 
+/// Whether union marks read the bins the scene planned.
+///
+/// A bin outside every group holds only the damaged part of its item. A frame that redraws every
+/// pixel for a reason of the renderer's own, where the plan was made for less, paints each prim
+/// of a union item on its own instead: overlaps blend twice for that frame, and no pixel is lost.
+pub fn bins_apply(scene: &Scene, damage: &DamageSet) -> bool {
+    scene.mark_plan().full_damage || !damage.is_full()
+}
+
+/// How one frame draws its marks.
+struct MarkFrame<'a> {
+    /// The scene's bins.
+    plan: &'a MarkPlan,
+    /// Whether union items read their bins.
+    binned: bool,
+}
+
+/// Plans one pass per bin page, adding the coverage of every bin on it.
+///
+/// The pages come before every damage rectangle and every target, because a composite in any of
+/// them reads its bin.
+fn plan_mark_pages(builder: &mut PlanBuilder<'_>, scene: &Scene, binned: bool) {
+    let plan = scene.mark_plan();
+    if !binned || plan.bins.is_empty() {
+        return;
+    }
+    builder.set_mark_extent(plan.extent);
+    let mut position_of = vec![0usize; scene.primitives.marks.len()];
+    for (position, &slot) in scene.remap(PrimitiveKind::Marks).iter().enumerate() {
+        position_of[slot as usize] = position;
+    }
+    let page = Rect::new(zgui_geom::Point::new(0, 0), plan.extent);
+    for index in 0..plan.pages {
+        builder.begin_pass(TargetRef::MarksPage(index), page);
+        for bin in plan.bins.iter().filter(|bin| bin.page == index) {
+            let position = position_of[bin.item as usize];
+            let block = builder.stage_mark_draw(position, || {
+                MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)
+            });
+            draw_mark_kinds(builder, scene, bin.item as usize, position, block, true);
+        }
+    }
+    builder.end_pass();
+}
+
+/// Plans one draw per payload kind the mark at `slot` holds.
+fn draw_mark_kinds(
+    builder: &mut PlanBuilder<'_>,
+    scene: &Scene,
+    slot: usize,
+    position: usize,
+    block: u32,
+    coverage: bool,
+) {
+    let item = &scene.primitives.marks[slot];
+    for kind in MarkKind::ALL {
+        let count = match kind {
+            MarkKind::Disc => item.discs,
+            MarkKind::Box => item.boxes,
+            // A run is a separator, two vertices and a separator, and fewer strokes nothing.
+            MarkKind::Polyline => item.vertices.saturating_sub(2),
+        };
+        if count > 0 {
+            builder.draw(PlannedDraw::Marks {
+                kind,
+                coverage,
+                position,
+                block,
+            });
+        }
+    }
+}
+
+/// Plans one batch of marks: each union item through its bin, and every other one directly.
+fn plan_marks(
+    builder: &mut PlanBuilder<'_>,
+    scene: &Scene,
+    marks: &MarkFrame<'_>,
+    range: core::ops::Range<usize>,
+) {
+    let remap = scene.remap(PrimitiveKind::Marks);
+    for position in range {
+        let slot = remap[position];
+        let item = &scene.primitives.marks[slot as usize];
+        if item.is_union() && marks.binned {
+            if let Some(bin) = marks.plan.bin(slot) {
+                let block = builder.stage_mark_draw(position, || {
+                    MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)
+                });
+                builder.draw(PlannedDraw::MarksComposite { block });
+                continue;
+            }
+            // No bin and no overflow: the item's ink misses the damage, so the scissor holds
+            // none of it.
+            if !marks.plan.overflows(slot) {
+                continue;
+            }
+        }
+        let block = builder.stage_mark_draw(position, || MarkDraw::direct(position as u32));
+        draw_mark_kinds(builder, scene, slot as usize, position, block, false);
+    }
+}
+
 /// Plans one damage rectangle's worth of the batch stream.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a damage rectangle replays the whole stream, and each argument is a source it reads"
+)]
 fn plan_rect(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
+    marks: &MarkFrame<'_>,
     rect: Rect<i32, Device>,
     used: Rect<i32, Device>,
     externals: &dyn Fn(zgui_scene::ExternalTextureId) -> Option<ExternalTexture>,
@@ -162,6 +277,7 @@ fn plan_rect(
                     None => builder.defer(),
                 }
             }
+            Batch::Marks(range) => plan_marks(builder, scene, marks, range),
             other => builder.draw(PlannedDraw::Batch(other)),
         }
     }

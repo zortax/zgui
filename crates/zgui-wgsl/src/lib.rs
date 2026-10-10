@@ -57,6 +57,24 @@ pub const MODULES: &[(&str, &[&str])] = &[
     ("composite", &["common", "sdf", "composite"]),
     ("external", &["common", "sdf", "external"]),
     ("vector", &["common", "sdf", "vector"]),
+    // The three payload kinds bind three different arrays at one binding, so each is a module of
+    // its own over the part they share.
+    (
+        "marks_disc",
+        &["common", "sdf", "paint", "marks", "marks_disc"],
+    ),
+    (
+        "marks_box",
+        &["common", "sdf", "paint", "marks", "marks_box"],
+    ),
+    (
+        "marks_polyline",
+        &["common", "sdf", "paint", "marks", "marks_polyline"],
+    ),
+    (
+        "marks_composite",
+        &["common", "sdf", "paint", "marks", "marks_composite"],
+    ),
 ];
 
 /// What has to precede every other item of a module that blends against a second colour output.

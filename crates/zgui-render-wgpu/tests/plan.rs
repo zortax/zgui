@@ -39,12 +39,15 @@ fn plan_with_vectors(
     let mut blocks =
         SlotBuffer::new::<zgui_render_wgpu::pipeline::composite::CompositeParams>(gpu, "test.b");
     let mut instances = zgui_render_wgpu::buffer::vectors::VectorInstances::new(gpu);
+    let mut marks =
+        SlotBuffer::new::<zgui_render_wgpu::pipeline::marks::MarkDraw>(gpu, "test.marks");
     let builder = PlanBuilder::new(
         gpu,
         &mut pool,
         &mut globals,
         &mut blocks,
         &mut instances,
+        &mut marks,
         SubpixelOrder::default(),
         zgui_scene::FrameClock::default(),
         &[],

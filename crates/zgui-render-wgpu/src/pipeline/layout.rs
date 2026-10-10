@@ -39,6 +39,13 @@ pub struct Layouts {
     /// because the parameters are the same for every rectangle of a draw: two rectangles that
     /// disagree about them are two draws, and the batcher breaks the run where they do.
     pub effect: wgpu::BindGroupLayout,
+    /// One mark draw's block, and the payload of the kind it draws.
+    ///
+    /// The block names the item and its bin. The payload is a storage array walked by the draw's
+    /// instances, one prim each.
+    pub marks: wgpu::BindGroupLayout,
+    /// One mark draw's block, and the bin pages a union item's composite reads.
+    pub mark_composite: wgpu::BindGroupLayout,
 }
 
 impl Layouts {
@@ -59,6 +66,26 @@ impl Layouts {
             effect: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.effect"),
                 entries: &[dynamic_uniform(0)],
+            }),
+            marks: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("zgui.bind.marks"),
+                entries: &[dynamic_uniform(0), storage(1)],
+            }),
+            mark_composite: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("zgui.bind.mark_composite"),
+                entries: &[
+                    dynamic_uniform(0),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
             }),
             instances: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.instances"),

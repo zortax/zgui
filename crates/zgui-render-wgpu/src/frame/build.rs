@@ -59,6 +59,12 @@ pub struct PlanBuilder<'gpu> {
     blocks: &'gpu mut SlotBuffer,
     /// Where the quads of every vector composite are staged.
     vectors: &'gpu mut VectorInstances,
+    /// Where each mark item's block is staged.
+    mark_draws: &'gpu mut SlotBuffer,
+    /// The offset of each mark item's block this frame, by remap position.
+    mark_blocks: std::collections::HashMap<usize, u32>,
+    /// The texel extent of one bin page.
+    mark_extent: Size<i32, Device>,
     /// Which way round the display's subpixels run.
     subpixel_order: SubpixelOrder,
     /// What this frame's application effects are told about it.
@@ -71,8 +77,9 @@ pub struct PlanBuilder<'gpu> {
     composed_format: wgpu::TextureFormat,
     /// The texel extent the composed target is allocated at.
     composed_extent: Size<i32, Device>,
-    /// The offsets of the per-target blocks already staged, by resolution.
-    staged_globals: [Option<u32>; 2],
+    /// The offsets of the per-target blocks already staged: full resolution, half resolution, and
+    /// a bin page.
+    staged_globals: [Option<u32>; 3],
     /// The plan so far.
     plan: FramePlan,
     /// The pass currently being filled.
@@ -95,6 +102,7 @@ impl<'gpu> PlanBuilder<'gpu> {
         globals: &'gpu mut SlotBuffer,
         blocks: &'gpu mut SlotBuffer,
         vectors: &'gpu mut VectorInstances,
+        mark_draws: &'gpu mut SlotBuffer,
         subpixel_order: SubpixelOrder,
         frame_clock: zgui_scene::FrameClock,
         effect_offsets: &'gpu [u32],
@@ -108,13 +116,16 @@ impl<'gpu> PlanBuilder<'gpu> {
             globals,
             blocks,
             vectors,
+            mark_draws,
+            mark_blocks: std::collections::HashMap::new(),
+            mark_extent: Size::new(0, 0),
             subpixel_order,
             frame_clock,
             effect_offsets,
             region,
             composed_format,
             composed_extent,
-            staged_globals: [None; 2],
+            staged_globals: [None; 3],
             plan: FramePlan::default(),
             open: None,
             lent: Vec::new(),
@@ -140,6 +151,7 @@ impl<'gpu> PlanBuilder<'gpu> {
         match target {
             TargetRef::Composed => self.composed_extent,
             TargetRef::Pool(slot) => self.pool.allocated_extent(slot.scale()),
+            TargetRef::MarksPage(_) => self.mark_extent,
         }
     }
 
@@ -226,6 +238,28 @@ impl<'gpu> PlanBuilder<'gpu> {
         self.blocks.stage(params)
     }
 
+    /// Sets the texel extent of one bin page, which the bin passes' block describes.
+    pub fn set_mark_extent(&mut self, extent: Size<i32, Device>) {
+        self.mark_extent = extent;
+    }
+
+    /// The offset of the block naming the mark item at `position`, staging `draw` the first time.
+    ///
+    /// One block per item and frame: a union item's coverage draws and its composite read the
+    /// same block in every damage rectangle.
+    pub fn stage_mark_draw(
+        &mut self,
+        position: usize,
+        draw: impl FnOnce() -> crate::pipeline::marks::MarkDraw,
+    ) -> u32 {
+        if let Some(&offset) = self.mark_blocks.get(&position) {
+            return offset;
+        }
+        let offset = self.mark_draws.stage(&draw());
+        self.mark_blocks.insert(position, offset);
+        offset
+    }
+
     /// Stages the quads of one vector composite and returns the instance range naming them.
     pub fn stage_vector(
         &mut self,
@@ -234,13 +268,20 @@ impl<'gpu> PlanBuilder<'gpu> {
         self.vectors.stage(instances)
     }
 
-    /// The offset of the block describing a target at `scale`, staging it the first time.
-    fn globals_for(&mut self, scale: TargetScale) -> u32 {
-        let index = usize::from(scale == TargetScale::Half);
+    /// The offset of the block describing `target`, staging it the first time.
+    fn globals_for(&mut self, target: TargetRef) -> u32 {
+        let (index, region) = match target {
+            TargetRef::MarksPage(_) => (2, self.mark_extent),
+            _ => (
+                usize::from(target.scale() == TargetScale::Half),
+                self.region,
+            ),
+        };
+        let scale = target.scale();
         match self.staged_globals[index] {
             Some(offset) => offset,
             None => {
-                let block = Globals::for_target(self.region, scale, self.subpixel_order)
+                let block = Globals::for_target(region, scale, self.subpixel_order)
                     .with_frame(self.frame_clock);
                 let offset = self.globals.stage(&block);
                 self.staged_globals[index] = Some(offset);
@@ -252,12 +293,14 @@ impl<'gpu> PlanBuilder<'gpu> {
     /// Opens a pass into `target`, scissored to `scissor`, ending whatever preceded it.
     pub fn begin_pass(&mut self, target: TargetRef, scissor: Rect<i32, Device>) {
         self.end_pass();
-        let globals = self.globals_for(target.scale());
+        let globals = self.globals_for(target);
         let load = match target.slot() {
             Some(slot) if self.unwritten.contains(&slot) => {
                 self.unwritten.retain(|held| *held != slot);
                 PassLoad::Discard
             }
+            // A bin page holds only this frame's coverage.
+            _ if matches!(target, TargetRef::MarksPage(_)) => PassLoad::Discard,
             _ => PassLoad::Keep,
         };
         let start = self.plan.draws.len();

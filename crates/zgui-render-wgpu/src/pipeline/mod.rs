@@ -6,6 +6,7 @@ pub mod effect_filter;
 pub mod external;
 pub mod kind;
 pub mod layout;
+pub mod marks;
 pub mod vector;
 
 use std::collections::{BTreeMap, HashMap};
@@ -218,6 +219,13 @@ fn build(
         if kind.samples_atlas() {
             bind_group_layouts.push(Some(&layouts.sampled));
         }
+    } else if kind.draws_marks() {
+        bind_group_layouts.push(Some(&layouts.instances));
+        bind_group_layouts.push(Some(if kind == PipelineKind::MarksComposite {
+            &layouts.mark_composite
+        } else {
+            &layouts.marks
+        }));
     } else if kind.composites_vector() {
         bind_group_layouts.push(Some(&layouts.vector));
     } else if kind.samples_through_block() {
