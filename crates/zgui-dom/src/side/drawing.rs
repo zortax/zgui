@@ -77,6 +77,21 @@ pub fn canvas(store: &DocumentStore, node: NodeKey) -> Option<(u32, u32)> {
     }
 }
 
+/// The view counter of the canvas scene `node` shows; see [`drawing::CANVAS_VIEW`].
+///
+/// Nothing for an element carrying none. [`draws`] does not read it: a view alone draws nothing.
+pub fn canvas_view(store: &DocumentStore, node: NodeKey) -> Option<u64> {
+    match store
+        .columns()
+        .props
+        .get(node)?
+        .get(PropKey::new(drawing::CANVAS_VIEW))
+    {
+        Some(PropValue::Integer(value)) => Some(*value as u64),
+        _ => None,
+    }
+}
+
 /// Whether `node` draws any outlines at all.
 ///
 /// This is what decides that an element's box produces a drawing rather than a plain box, so it is
@@ -157,6 +172,28 @@ mod tests {
         let node = document.store().key_of(index);
         assert_eq!(super::canvas(document.store(), node), Some((9, 4)));
         assert!(draws(document.store(), node));
+    }
+
+    #[test]
+    fn a_canvas_view_alone_draws_nothing() {
+        let mut document = Document::new();
+        let index = document.append(
+            document.document_index(),
+            NodeKind::Element,
+            ElementName::new("canvas"),
+        );
+        document
+            .edit(&EverythingMatters, |edit| {
+                edit.set_property(
+                    index,
+                    PropKey::new(drawing::CANVAS_VIEW),
+                    Some(PropValue::Integer(3)),
+                );
+            })
+            .expect("not poisoned");
+        let node = document.store().key_of(index);
+        assert_eq!(super::canvas_view(document.store(), node), Some(3));
+        assert!(!draws(document.store(), node));
     }
 
     #[test]

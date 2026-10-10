@@ -1,4 +1,4 @@
-//! The three properties an element's outlines are carried in.
+//! The properties an element's outlines are carried in.
 //!
 //! They are named here rather than beside the element that sets them because three layers read
 //! them and only one writes them: a view writes the outlines, the box tree asks whether an element
@@ -46,6 +46,12 @@ pub const DOCUMENT: &str = "svg";
 /// change and therefore a repaint.
 pub const CANVAS: &str = "canvas";
 
+/// The property a canvas's view transform is named by.
+///
+/// The value is an integer: the scene's view counter, moved by every change of its view
+/// transform. It is apart from [`CANVAS`], so a pan or a zoom moves no content revision.
+pub const CANVAS_VIEW: &str = "canvasView";
+
 /// Packs a canvas token and revision into the integer [`CANVAS`] carries.
 ///
 /// The revision is kept to its low thirty-two bits. A canvas mutated four billion times wraps,
@@ -62,12 +68,12 @@ pub fn canvas_ref(value: i64) -> (u32, u32) {
 
 /// Whether a change to `name` can change what an element draws.
 ///
-/// The paint stage reads exactly these four properties, so a write to any of them has to be
+/// The paint stage reads exactly these five properties, so a write to any of them has to be
 /// reported as a repaint and a write to anything else must not be — a field whose value changes on
 /// every keystroke is a property too, and repainting for it would repaint on every keystroke for
 /// nothing.
 pub fn paints(name: &str) -> bool {
-    name == PATHS || name == VIEW_BOX || name == DOCUMENT || name == CANVAS
+    name == PATHS || name == VIEW_BOX || name == DOCUMENT || name == CANVAS || name == CANVAS_VIEW
 }
 
 /// Reads the four numbers of a view box, or nothing if they are not four numbers.
@@ -114,6 +120,11 @@ mod tests {
             !paints("value"),
             "a field's text changes on every keystroke and paints nothing by itself"
         );
+    }
+
+    #[test]
+    fn the_canvas_view_paints() {
+        assert!(paints(super::CANVAS_VIEW));
     }
 
     #[test]

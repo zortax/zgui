@@ -60,6 +60,17 @@ impl CanvasHandle {
         result
     }
 
+    /// Sets the scene's view transform, and marks every element showing it for repaint when the
+    /// view moved.
+    ///
+    /// The transform maps canvas units to canvas units before the view-box fit. It moves every
+    /// shape and series and moves no revision, so a pan or a zoom builds no new geometry.
+    pub fn set_transform(&self, transform: kurbo::Affine) {
+        if self.scene.set_transform(transform) {
+            self.changed.notify();
+        }
+    }
+
     /// The thread-safe half, for a producer that draws from off the UI thread.
     ///
     /// Edits through it move the scene's revision but wake nobody: pair it with a signal or a
@@ -79,16 +90,23 @@ impl Default for CanvasHandle {
 impl Element<Canvas> {
     /// Shows `handle`'s scene in this element.
     ///
-    /// The binding writes the scene's token and revision as a property and tracks the handle's
-    /// change edge, so a [`CanvasHandle::draw`] elsewhere becomes a value change here, and a
-    /// value change is a repaint of exactly this element.
+    /// The binding writes the scene's token and revision, and its view counter, as two
+    /// properties, and tracks the handle's change edge. So a [`CanvasHandle::draw`] or a
+    /// [`CanvasHandle::set_transform`] elsewhere becomes a value change here, and a value change
+    /// is a repaint of exactly this element.
     #[must_use]
     pub fn scene(self, handle: &CanvasHandle) -> Self {
         let scene = handle.scene.clone();
         let changed = handle.changed.clone();
+        let viewed = handle.scene.clone();
+        let moved = handle.changed.clone();
         self.property(PropKey::new(drawing::CANVAS), move || {
             changed.track();
             PropValue::Integer(drawing::canvas_value(scene.token().0, scene.revision()))
+        })
+        .property(PropKey::new(drawing::CANVAS_VIEW), move || {
+            moved.track();
+            PropValue::Integer(viewed.view() as i64)
         })
     }
 
@@ -146,7 +164,8 @@ impl Element<Canvas> {
 
 /// One run of a canvas closure: the scene to draw into, and the box it is drawn in.
 pub struct DrawCx<'a> {
-    /// The scene, already cleared for this run.
+    /// The scene, already cleared for this run. The view transform
+    /// ([`CanvasScene::set_transform`]) stays between runs.
     pub scene: &'a mut CanvasScene,
     /// The element's content box size, in CSS pixels. Zero until the first layout has run.
     pub size: Size<CssPx, Css>,
@@ -352,6 +371,32 @@ mod tests {
             before, after,
             "a draw moves the revision, and the binding rewrites the property"
         );
+        window.unmount();
+    }
+
+    #[test]
+    fn set_transform_rewrites_the_view_and_leaves_the_reference() {
+        let (backend, dom, window, cx) = harness();
+        let handle = CanvasHandle::new();
+        let root = dom.create_element(ElementName::new("box"));
+        let mut built = window.with(|| canvas().scene(&handle).build(&mut cx.cx()));
+        built.mount(&dom, root, None);
+
+        let node = built.first_node().expect("the element is a node");
+        let reference = PropKey::new(drawing::CANVAS);
+        let view = PropKey::new(drawing::CANVAS_VIEW);
+        let before = backend.property(node, reference).expect("written");
+        let view_before = backend.property(node, view).expect("written");
+
+        handle.set_transform(kurbo::Affine::translate((12.0, 0.0)));
+        zgui_reactive::flush();
+        assert_eq!(
+            backend.property(node, reference).expect("still written"),
+            before,
+            "a view transform moves no revision"
+        );
+        let view_after = backend.property(node, view).expect("still written");
+        assert_ne!(view_before, view_after, "the view moved");
         window.unmount();
     }
 
