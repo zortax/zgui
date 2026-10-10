@@ -58,8 +58,12 @@ impl Window {
 
     /// Paints one frame with the general rasteriser cold, or built when `ready`.
     fn paint(&mut self, ready: bool) -> PaintReport {
-        self.harness
-            .paint_cached_vectors_ready(&self.vectors, &mut self.content, &self.raster, ready)
+        self.harness.paint_cached_vectors_ready(
+            &self.vectors,
+            &mut self.content,
+            &self.raster,
+            ready,
+        )
     }
 
     /// Gives the element `name` the class `class`, which moves the drawing without refragmenting
@@ -107,7 +111,11 @@ fn a_gradient_document_draws_one_color_sprite_and_no_vector_item() {
     let [sprite] = primitives.color_sprites.as_slice() else {
         panic!("{} colour sprites", primitives.color_sprites.len());
     };
-    assert_eq!(sprite.bounds, [0.0, 10.0, 64.0, 64.0], "the sprite covers the box");
+    assert_eq!(
+        sprite.bounds,
+        [0.0, 10.0, 64.0, 64.0],
+        "the sprite covers the box"
+    );
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 1);
     assert_eq!(measured.get(Counter::VectorRouteLayer), 1);
     assert_eq!(measured.get(Counter::VectorRouteGeneral), 0);
@@ -176,7 +184,11 @@ fn a_series_canvas_is_no_candidate() {
         (routes(&report).contains(VectorRoute::CpuLayer), sprites)
     };
     assert_eq!(canvas(false), (true, 1), "the shapes alone take a layer");
-    assert_eq!(canvas(true), (false, 0), "a series keeps the drawing off the layer");
+    assert_eq!(
+        canvas(true),
+        (false, 0),
+        "a series keeps the drawing off the layer"
+    );
 }
 
 #[test]
@@ -203,10 +215,18 @@ fn a_layer_sprite_carries_the_chain_clip_and_the_element_opacity() {
     let [sprite] = window.harness.scene().primitives.color_sprites.as_slice() else {
         panic!("one colour sprite");
     };
-    assert_eq!(sprite.clip_id(), clip, "the chain clip applies at composite");
+    assert_eq!(
+        sprite.clip_id(),
+        clip,
+        "the chain clip applies at composite"
+    );
     assert_ne!(clip, zgui_scene::ClipId::ROOT);
     assert_eq!(sprite.opacity, 0.5, "the folded opacity rides the sprite");
-    assert_eq!(sprite.bounds, [0.0, 0.0, 64.0, 64.0], "nothing is cut from the raster");
+    assert_eq!(
+        sprite.bounds,
+        [0.0, 0.0, 64.0, 64.0],
+        "nothing is cut from the raster"
+    );
 }
 
 #[test]
@@ -261,11 +281,18 @@ fn a_scrolled_layer_replays_and_rasterises_nothing() {
     let mut report = None;
     let measured = recording.measure(|| report = Some(window.paint(false)));
     let report = report.expect("a frame");
-    assert!(report.vector_routes.is_empty(), "the drawing was encoded again");
+    assert!(
+        report.vector_routes.is_empty(),
+        "the drawing was encoded again"
+    );
     assert!(report.layers_owed.is_empty());
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 0);
     assert!(measured.get(Counter::ChunksTranslated) > 0);
-    assert_eq!(window.sprite()[1] - before[1], 20.0, "the sprite moved with its box");
+    assert_eq!(
+        window.sprite()[1] - before[1],
+        20.0,
+        "the sprite moved with its box"
+    );
 }
 
 #[test]
@@ -291,9 +318,16 @@ fn a_fractional_move_encodes_a_layer_again() {
     let mut report = None;
     let measured = recording.measure(|| report = Some(window.paint(false)));
     let report = report.expect("a frame");
-    assert!(!report.vector_routes.is_empty(), "half a pixel off the grid encodes again");
+    assert!(
+        !report.vector_routes.is_empty(),
+        "half a pixel off the grid encodes again"
+    );
     assert_eq!(measured.get(Counter::VectorLayersProvisional), 1);
-    assert_eq!(report.layers_owed.len(), 1, "a stretched layer is owed a frame");
+    assert_eq!(
+        report.layers_owed.len(),
+        1,
+        "a stretched layer is owed a frame"
+    );
 
     // Owed frames encode it again until the drawing has held still for three of them.
     let mut rasterised = 0;
@@ -309,7 +343,10 @@ fn a_fractional_move_encodes_a_layer_again() {
     assert_eq!(rasterised, 1, "one exact raster at the new phase");
     // The sprite lands on whole device pixels, and the raster carries the half pixel inside it.
     let top = window.sprite()[1] * 1.5;
-    assert!((top - top.round()).abs() < 1.0e-4 && (top - 16.5).abs() <= 1.0, "{top}");
+    assert!(
+        (top - top.round()).abs() < 1.0e-4 && (top - 16.5).abs() <= 1.0,
+        "{top}"
+    );
 }
 
 /// A document of one triangle-wave outline of `segments` lines under a ramp, `seed` apart from
@@ -352,7 +389,11 @@ fn a_deferred_drawing_is_not_remembered_and_is_owed_a_frame() {
     let measured = recording.measure(|| second = Some(window.paint(false)));
     let second = second.expect("a frame");
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 1);
-    assert_eq!(second.vector_routes.len(), 1, "only the deferred drawing is encoded");
+    assert_eq!(
+        second.vector_routes.len(),
+        1,
+        "only the deferred drawing is encoded"
+    );
     assert!(second.layers_owed.is_empty());
     assert_eq!(window.harness.scene().primitives.color_sprites.len(), 3);
 }

@@ -448,7 +448,11 @@ impl Pass<'_, '_> {
     ///
     /// A CPU layer is rasterised for one phase. A replay moves its sprite by the fragment's
     /// movement, so a record holding one replays only while this stays what it was.
-    fn layer_phase(&mut self, fragment: &Fragment, space: zgui_scene::SpatialId) -> Option<[u8; 2]> {
+    fn layer_phase(
+        &mut self,
+        fragment: &Fragment,
+        space: zgui_scene::SpatialId,
+    ) -> Option<[u8; 2]> {
         if fragment.kind != FragmentKind::Vector {
             return None;
         }
@@ -780,7 +784,11 @@ impl Pass<'_, '_> {
             highlights: self.highlight_signature(fragment),
         };
         let phase = self.layer_phase(fragment, transform);
-        match self.painter.cache.reuse(self.scene, fragment, painted, phase) {
+        match self
+            .painter
+            .cache
+            .reuse(self.scene, fragment, painted, phase)
+        {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
                 let (source, chunk) = self

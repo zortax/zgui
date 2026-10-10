@@ -452,7 +452,12 @@ impl PaintCache {
     ///
     /// A clean miss, as [`PaintCache::evict_cold`] is: the next frame that reaches one of the
     /// fragments encodes it again.
-    pub fn evict(&mut self, keys: &[FragKey], scene: &mut Scene, owner: &dyn ResourceOwner) -> usize {
+    pub fn evict(
+        &mut self,
+        keys: &[FragKey],
+        scene: &mut Scene,
+        owner: &dyn ResourceOwner,
+    ) -> usize {
         let mut holds = TableHolds::default();
         let mut evicted = 0;
         for key in keys {

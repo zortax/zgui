@@ -478,7 +478,10 @@ fn candidate(
         .and_then(zgui_geom::Matrix4::to_affine2);
     drawing.shapes.iter().enumerate().any(|(index, shape)| {
         let general = !shape.clips.is_empty()
-            || shape.fill.as_ref().is_some_and(|fill| gradient(&fill.paint))
+            || shape
+                .fill
+                .as_ref()
+                .is_some_and(|fill| gradient(&fill.paint))
             || shape
                 .stroke
                 .as_ref()
@@ -579,7 +582,8 @@ pub(crate) fn draw_drawing_tracked(
                 if why != LayerFallback::PerShape {
                     counter::bump(Counter::VectorLayerFallbacks);
                 }
-                emitted.layer.promote = matches!(why, LayerFallback::Budget | LayerFallback::Demoted);
+                emitted.layer.promote =
+                    matches!(why, LayerFallback::Budget | LayerFallback::Demoted);
             }
         }
     }

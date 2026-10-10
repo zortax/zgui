@@ -36,7 +36,13 @@ impl Fixture {
     }
 
     fn ask(&mut self, owner: u32, revision: u64, drawing: &Drawing, scale: f32) -> LayerAnswer {
-        self.ask_with(owner, revision, drawing, paint(Color::BLACK), spatial(scale))
+        self.ask_with(
+            owner,
+            revision,
+            drawing,
+            paint(Color::BLACK),
+            spatial(scale),
+        )
     }
 
     fn ask_with(
@@ -151,7 +157,10 @@ fn an_inherited_drawing_keys_its_paint_and_an_own_coloured_one_does_not() {
     let blue = paint(Color::srgb(0.0, 0.0, 1.0, 1.0));
     let a = key(fixture.ask_with(1, 1, &inherited, red, spatial(1.0)));
     let b = key(fixture.ask_with(2, 1, &inherited, blue, spatial(1.0)));
-    assert_ne!(a, b, "the paint is part of what an inherited drawing looks like");
+    assert_ne!(
+        a, b,
+        "the paint is part of what an inherited drawing looks like"
+    );
 
     let own = square();
     let c = key(fixture.ask_with(3, 2, &own, red, spatial(1.0)));
@@ -186,13 +195,20 @@ fn a_scale_change_is_provisional_until_three_stable_frames() {
     for frame in 0..3 {
         fixture.frame();
         let answer = fixture.ask(1, 1, &shared, 1.5);
-        assert!(provisional(answer), "frame {frame} stretches the raster it has");
+        assert!(
+            provisional(answer),
+            "frame {frame} stretches the raster it has"
+        );
         assert_eq!(key(answer), first);
     }
     fixture.frame();
     let settled = fixture.ask(1, 1, &shared, 1.5);
     assert!(!provisional(settled));
-    assert_ne!(key(settled), first, "the settled scale has a raster of its own");
+    assert_ne!(
+        key(settled),
+        first,
+        "the settled scale has a raster of its own"
+    );
 
     // A change that keeps moving stays provisional for as long as it moves.
     for step in 0..10 {
@@ -236,7 +252,10 @@ fn a_deferred_drawing_rasterises_by_its_third_frame() {
         if frame < 2 {
             assert!(matches!(answer, LayerAnswer::Defer { .. }), "frame {frame}");
         } else {
-            assert!(matches!(answer, LayerAnswer::Sprite { .. }), "over the budget");
+            assert!(
+                matches!(answer, LayerAnswer::Sprite { .. }),
+                "over the budget"
+            );
         }
         fixture.frame();
     }
@@ -279,7 +298,12 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     for _ in 0..3 {
         fixture.frame();
         for (index, drawing) in drawings.iter().enumerate() {
-            assert!(provisional(fixture.ask(index as u32, index as u64, drawing, 1.5)));
+            assert!(provisional(fixture.ask(
+                index as u32,
+                index as u64,
+                drawing,
+                1.5
+            )));
         }
     }
     fixture.frame();
@@ -287,7 +311,9 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     let exact = drawings
         .iter()
         .enumerate()
-        .filter(|(index, drawing)| !provisional(fixture.ask(*index as u32, *index as u64, drawing, 1.5)))
+        .filter(|(index, drawing)| {
+            !provisional(fixture.ask(*index as u32, *index as u64, drawing, 1.5))
+        })
         .count();
     assert_eq!(exact, 3);
     assert!(rasterised() - before >= 3);
@@ -295,7 +321,9 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     let exact = drawings
         .iter()
         .enumerate()
-        .filter(|(index, drawing)| !provisional(fixture.ask(*index as u32, *index as u64, drawing, 1.5)))
+        .filter(|(index, drawing)| {
+            !provisional(fixture.ask(*index as u32, *index as u64, drawing, 1.5))
+        })
         .count();
     assert_eq!(exact, 5, "the other two settle on the next frame");
 
@@ -314,7 +342,10 @@ fn upgrades_take_at_most_three_layers_and_two_ms_a_frame() {
     }
     fixture.frame();
     assert!(!provisional(fixture.ask(20, 20, &large, 1.5)));
-    assert!(provisional(fixture.ask(21, 21, &small, 1.5)), "the budget is spent");
+    assert!(
+        provisional(fixture.ask(21, 21, &small, 1.5)),
+        "the budget is spent"
+    );
 }
 
 #[test]
@@ -410,7 +441,11 @@ fn evicting_spares_held_layers() {
     fixture.atlas.retain(held);
     fixture.frame();
     let bytes = fixture.cache.bytes();
-    assert_eq!(fixture.cache.pinned_bytes(&fixture.atlas), 0, "this frame drew neither");
+    assert_eq!(
+        fixture.cache.pinned_bytes(&fixture.atlas),
+        0,
+        "this frame drew neither"
+    );
     assert_eq!(fixture.cache.held_bytes(&fixture.atlas), bytes / 2);
     let freed = fixture.cache.evict(&mut fixture.atlas, u64::MAX);
     assert_eq!(freed, bytes / 2);

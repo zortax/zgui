@@ -57,25 +57,18 @@ fn the_layer_budget_evicts_unheld_layers_oldest_first() {
     let mut painter = Painter::new();
     let mut scene = Scene::new();
     let mut tracked = Tracked::default();
-    let mut budget = VectorLayersBudget::new(
-        &mut painter,
-        &mut scene,
-        &mut content,
-        one,
-        &mut tracked,
-    );
+    let mut budget =
+        VectorLayersBudget::new(&mut painter, &mut scene, &mut content, one, &mut tracked);
     assert_eq!(budget.report().resident, 3 * one);
     assert_eq!(budget.report().pinned, 0, "this frame drew none of them");
     assert_eq!(budget.evict(one, at(1)), one);
-    assert!(!content.atlas().contains(keys[1]), "the oldest unheld layer goes first");
-    assert!(content.atlas().contains(keys[2]));
-    let mut budget = VectorLayersBudget::new(
-        &mut painter,
-        &mut scene,
-        &mut content,
-        one,
-        &mut tracked,
+    assert!(
+        !content.atlas().contains(keys[1]),
+        "the oldest unheld layer goes first"
     );
+    assert!(content.atlas().contains(keys[2]));
+    let mut budget =
+        VectorLayersBudget::new(&mut painter, &mut scene, &mut content, one, &mut tracked);
     assert_eq!(budget.evict(u64::MAX, at(1)), one);
     assert!(content.atlas().contains(keys[0]), "a held layer stays");
     assert!(!content.atlas().contains(keys[2]));

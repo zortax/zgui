@@ -182,10 +182,7 @@ impl ContentCache {
 
     /// The CPU layer for `request`, against this cache's atlas, outside a frame's walk.
     #[doc(hidden)]
-    pub fn layer(
-        &mut self,
-        request: LayerRequest<'_>,
-    ) -> LayerAnswer {
+    pub fn layer(&mut self, request: LayerRequest<'_>) -> LayerAnswer {
         let Self {
             atlas,
             glyphs,

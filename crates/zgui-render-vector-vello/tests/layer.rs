@@ -138,7 +138,10 @@ fn general(source: &str, case: Case) -> Scene {
             scale: 1.0,
         },
     );
-    assert!(!scene.primitives.vectors.is_empty(), "the general route drew nothing");
+    assert!(
+        !scene.primitives.vectors.is_empty(),
+        "the general route drew nothing"
+    );
     scene.finish(&DamageSet::full());
     scene
 }
@@ -303,7 +306,9 @@ fn a_layer_matches_the_general_route_on_the_conformance_set() {
                 layer_error.0 <= paths_error.0 && layer_error.1 <= support::conformance::WORST
             };
             if !closer {
-                failures.push(format!("{name} {case:?}: mean {mean:.3}, worst {worst} at {at:?}"));
+                failures.push(format!(
+                    "{name} {case:?}: mean {mean:.3}, worst {worst} at {at:?}"
+                ));
             }
         }
     }

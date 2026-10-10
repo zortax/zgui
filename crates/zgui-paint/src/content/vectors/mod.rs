@@ -24,12 +24,12 @@ mod recognitions;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
 #[doc(hidden)]
-pub use crate::content::vectors::mask::CachedMarks;
-pub(crate) use crate::content::vectors::layer::{VectorLayerCache, phase_of};
-#[doc(hidden)]
 pub use crate::content::vectors::layer::{
     LayerAnswer, LayerFallback, LayerRequest, VectorLayerSource,
 };
+pub(crate) use crate::content::vectors::layer::{VectorLayerCache, phase_of};
+#[doc(hidden)]
+pub use crate::content::vectors::mask::CachedMarks;
 pub(crate) use crate::content::vectors::mask::VectorMaskCache;
 pub use crate::content::vectors::mask::{
     AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,

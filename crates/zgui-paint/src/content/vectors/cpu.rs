@@ -387,7 +387,9 @@ pub(crate) fn ramp(gradient: &zgui_svg::Gradient, inherited: Color, out: &mut Ve
             this_c
         } else {
             let t = (u - last_u) / du;
-            core::array::from_fn(|channel| last_c[channel] + t * (this_c[channel] - last_c[channel]))
+            core::array::from_fn(|channel| {
+                last_c[channel] + t * (this_c[channel] - last_c[channel])
+            })
         };
         out.push(bytes(sample));
     }

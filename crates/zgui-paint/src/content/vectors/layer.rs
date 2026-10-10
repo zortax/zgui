@@ -180,7 +180,10 @@ impl SourceCost {
     pub(crate) fn of(shapes: &[zgui_svg::Shape]) -> Self {
         let mut cost = Self::default();
         for shape in shapes {
-            let reach = shape.stroke.as_ref().map_or(0.0, |stroke| reach(&stroke.style));
+            let reach = shape
+                .stroke
+                .as_ref()
+                .map_or(0.0, |stroke| reach(&stroke.style));
             cost.area += shape.path.control_box().inflate(reach, reach).area();
             cost.segments += shape.path.elements().len();
             cost.strokes += usize::from(shape.stroke.is_some());
@@ -546,7 +549,10 @@ impl VectorLayerCache {
             return LayerAnswer::Items(LayerFallback::Ineligible);
         };
         let local = |path_bounds: kurbo::Rect| rect(drawing.fit.transform_rect_bbox(path_bounds));
-        if matches!(route, Route::Hit(..) | Route::Provisional(_) | Route::Raster) {
+        if matches!(
+            route,
+            Route::Hit(..) | Route::Provisional(_) | Route::Raster
+        ) {
             self.hits += 1;
         }
         match route {
@@ -560,7 +566,10 @@ impl VectorLayerCache {
                 }
             }
             Route::Provisional(near) => {
-                let entry = self.entries.get_mut(&near).expect("a near key has an entry");
+                let entry = self
+                    .entries
+                    .get_mut(&near)
+                    .expect("a near key has an entry");
                 entry.used = self.frame;
                 let path_bounds = entry.path_bounds;
                 let key = entry.key;
@@ -855,7 +864,8 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
     }
     let shapes = &request.drawing.shapes;
     let paint = request.paint;
-    let inherited_strokes = paint.stroke.is_some() && shapes.iter().any(|shape| shape.stroke.is_none());
+    let inherited_strokes =
+        paint.stroke.is_some() && shapes.iter().any(|shape| shape.stroke.is_none());
     let strokes = cost.strokes > 0 || inherited_strokes;
     let linear = [a * fa, d * fb, a * fc, d * fd];
     if strokes {
@@ -872,7 +882,10 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
         }
         *out = steps as i32;
     }
-    let translation = [a * fe + f64::from(spatial.tx), d * ff + f64::from(spatial.ty)];
+    let translation = [
+        a * fe + f64::from(spatial.tx),
+        d * ff + f64::from(spatial.ty),
+    ];
     let phase = translation.map(phase_of);
     let reads_paint = inherited_strokes || shapes.iter().any(zgui_svg::Shape::is_inherited);
     let key = LayerKey {
@@ -889,8 +902,9 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
     }
     let scale = det.abs().sqrt();
     let stroke_scale = if strokes { scale } else { 1.0 };
-    let inherited_stroke =
-        f64::from(paint.stroke_width) / zgui_svg::document::place::uniform_scale(fit) * stroke_scale;
+    let inherited_stroke = f64::from(paint.stroke_width)
+        / zgui_svg::document::place::uniform_scale(fit)
+        * stroke_scale;
     let shift = kurbo::Vec2::new(
         f64::from(phase[0]) / f64::from(PHASES),
         f64::from(phase[1]) / f64::from(PHASES),
@@ -902,9 +916,7 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
     for shape in shapes.iter() {
         let reach = match &shape.stroke {
             Some(stroke) => reach(&stroke.style) * stroke_scale,
-            None if paint.stroke.is_some() => {
-                reach(&kurbo::Stroke::new(inherited_stroke))
-            }
+            None if paint.stroke.is_some() => reach(&kurbo::Stroke::new(inherited_stroke)),
             None => 0.0,
         };
         if shape.fill.is_none() && reach == 0.0 {
@@ -933,9 +945,7 @@ fn geometry(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Geometry> {
         return None;
     }
     let raster = kurbo::Rect::new(origin.x, origin.y, origin.x + width, origin.y + height);
-    let path_bounds = dequantised
-        .inverse()
-        .transform_rect_bbox(raster - shift);
+    let path_bounds = dequantised.inverse().transform_rect_bbox(raster - shift);
     Some(Geometry {
         key,
         map: Affine::translate(-origin.to_vec2()) * placed,
