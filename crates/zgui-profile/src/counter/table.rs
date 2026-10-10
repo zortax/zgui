@@ -427,6 +427,42 @@ counters! {
     /// reported nowhere else.
     VectorFramesDropped => vector_frames_dropped, Group::BackendNeutral;
 
+    /// Times a renderer built its general vector rasteriser.
+    ///
+    /// At most one per renderer. The build costs hundreds of milliseconds and a large fixed
+    /// allocation, so a document that can draw every shape from the atlas must keep this at zero.
+    VectorBackendBuilt => vector_backend_built, Group::RendererSpecific;
+
+    /// Rasterisations the general vector rasteriser performed on the device.
+    VelloRenders => vello_renders, Group::RendererSpecific;
+
+    /// Vector item encodings the general rasteriser found current and used again.
+    VectorEncodeHits => vector_encode_hits, Group::RendererSpecific;
+
+    /// Vector item encodings the general rasteriser had to make.
+    VectorEncodeMisses => vector_encode_misses, Group::RendererSpecific;
+
+    /// Shapes emitted as coverage masks in the shared atlas.
+    VectorRouteMask => vector_route_mask, Group::BackendNeutral;
+
+    /// Shapes emitted as items for the general vector rasteriser.
+    VectorRouteGeneral => vector_route_general, Group::BackendNeutral;
+
+    /// Coverage masks rasterised because no tile held their geometry.
+    VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;
+
+    /// Mask requests declined because the frame had spent its budget for new masks.
+    VectorMaskBudgetOverflow => vector_mask_budget_overflow, Group::BackendNeutral;
+
+    /// Moved fragments that encoded again because their recorded painting holds a vector item.
+    VectorReplaysRefused => vector_replays_refused, Group::BackendNeutral;
+
+    /// Times one shape part went from the mask route to a decline, or back.
+    VectorTierChanges => vector_tier_changes, Group::BackendNeutral;
+
+    /// Geometry identities the mask cache maps to atlas tiles right now.
+    VectorMaskTilesLive => vector_mask_tiles_live, Group::Live;
+
     /// Primitives whose paint was re-anchored because the primitive moved.
     ///
     /// A ramp and a sampled image are read at the point being drawn, in the coordinates they were
