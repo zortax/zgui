@@ -157,61 +157,9 @@ impl VelloRaster {
             }
         }
     }
-}
 
-impl VectorRaster for VelloRaster {
-    fn backend(&self) -> zgui_render::VectorBackend {
-        zgui_render::VectorBackend::Vello
-    }
-
-    fn plan(&mut self, passes: &ScenePassPlan) -> VectorPlan {
-        // The one question worth asking before anything else: a frame with no surviving path runs no
-        // rasterisation at all, because a deliberately empty pass over a whole surface is tens of
-        // microseconds of processor time and several times that in latency.
-        if passes.is_empty() {
-            return VectorPlan::empty();
-        }
-        let mut plan = VectorPlan::resourcing(passes);
-        // Layers are shared by passes that do not meet on the surface. Every pass of a frame is
-        // still rasterised before any of them is composited, so a layer holds its passes' coverage
-        // until their composites have read it — and because a layer is in device coordinates,
-        // passes that do not overlap there do not overlap in it either.
-        self.regions.clear();
-        self.regions
-            .extend(passes.passes.iter().map(|planned| planned.region));
-        let layering = Layering::of(&self.regions, Scratch::MAX_LAYERS);
-        let (packed, width, height) = layering.compact(&self.regions);
-        self.depth = layering.layers();
-        for (index, planned) in passes.passes.iter().enumerate() {
-            plan.passes.push(VectorPass {
-                region: planned.region,
-                raster_region: packed[index],
-                target: layering.target(index),
-                items: planned.items.clone(),
-                clip: planned.clip,
-                instanced: planned.instanced,
-            });
-        }
-        // The far corner of the surface anything is drawn at, not the largest region: a layer holds
-        // device pixels where they belong, so it has to reach as far as the furthest of them.
-        self.scratch
-            .ensure(&self.gpu, width, height, layering.layers());
-        plan
-    }
-
-    fn clear_targets(&mut self, plan: &VectorPlan) {
-        let mut layers: Vec<u32> = plan
-            .passes
-            .iter()
-            .filter(|pass| pass.target != VectorTarget::NONE)
-            .map(|pass| pass.target.0 as u32)
-            .collect();
-        layers.sort_unstable();
-        layers.dedup();
-        self.scratch.clear(&self.gpu, &layers);
-    }
-
-    fn prepare(&mut self, frame: &mut VectorFrame<'_>) -> Result<(), VectorError> {
+    /// Encodes and rasterises one frame's passes.
+    fn prepare_frame(&mut self, frame: &mut VectorFrame<'_>) -> Result<(), VectorError> {
         self.last = Encoded::default();
         self.passes = 0;
         if frame.is_empty() {
@@ -308,17 +256,6 @@ impl VectorRaster for VelloRaster {
                 prepared,
             });
         }
-        // Everything drawn this frame is current; anything else is only worth keeping while there
-        // is room for it.
-        let drawn: std::collections::HashSet<zgui_scene::VectorId> = frame
-            .plan
-            .items
-            .iter()
-            .filter_map(|planned| frame.items.get(planned.item).map(|item| item.id))
-            .collect();
-        self.encodings
-            .retain_if_over_capacity(|id| drawn.contains(&id));
-
         if self.last.unclippable > 0 {
             tracing::warn!(
                 items = self.last.unclippable,
@@ -332,6 +269,66 @@ impl VectorRaster for VelloRaster {
             );
         }
         Ok(())
+    }
+}
+
+impl VectorRaster for VelloRaster {
+    fn backend(&self) -> zgui_render::VectorBackend {
+        zgui_render::VectorBackend::Vello
+    }
+
+    fn plan(&mut self, passes: &ScenePassPlan) -> VectorPlan {
+        // The one question worth asking before anything else: a frame with no surviving path runs no
+        // rasterisation at all, because a deliberately empty pass over a whole surface is tens of
+        // microseconds of processor time and several times that in latency.
+        if passes.is_empty() {
+            return VectorPlan::empty();
+        }
+        let mut plan = VectorPlan::resourcing(passes);
+        // Layers are shared by passes that do not meet on the surface. Every pass of a frame is
+        // still rasterised before any of them is composited, so a layer holds its passes' coverage
+        // until their composites have read it — and because a layer is in device coordinates,
+        // passes that do not overlap there do not overlap in it either.
+        self.regions.clear();
+        self.regions
+            .extend(passes.passes.iter().map(|planned| planned.region));
+        let layering = Layering::of(&self.regions, Scratch::MAX_LAYERS);
+        let (packed, width, height) = layering.compact(&self.regions);
+        self.depth = layering.layers();
+        for (index, planned) in passes.passes.iter().enumerate() {
+            plan.passes.push(VectorPass {
+                region: planned.region,
+                raster_region: packed[index],
+                target: layering.target(index),
+                items: planned.items.clone(),
+                clip: planned.clip,
+                instanced: planned.instanced,
+            });
+        }
+        // The far corner of the surface anything is drawn at, not the largest region: a layer holds
+        // device pixels where they belong, so it has to reach as far as the furthest of them.
+        self.scratch
+            .ensure(&self.gpu, width, height, layering.layers());
+        plan
+    }
+
+    fn clear_targets(&mut self, plan: &VectorPlan) {
+        let mut layers: Vec<u32> = plan
+            .passes
+            .iter()
+            .filter(|pass| pass.target != VectorTarget::NONE)
+            .map(|pass| pass.target.0 as u32)
+            .collect();
+        layers.sort_unstable();
+        layers.dedup();
+        self.scratch.clear(&self.gpu, &layers);
+    }
+
+    fn prepare(&mut self, frame: &mut VectorFrame<'_>) -> Result<(), VectorError> {
+        let prepared = self.prepare_frame(frame);
+        // Every return of the frame ends it, so an encoding no frame drew ages whatever happened.
+        self.encodings.end_frame();
+        prepared
     }
 
     fn memory(&self) -> MemoryReport {

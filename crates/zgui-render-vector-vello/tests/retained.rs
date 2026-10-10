@@ -75,8 +75,111 @@ fn an_unchanged_item_is_re_placed_rather_than_encoded_again() {
     let (held, (hits, misses)) = raster.cache();
     assert_eq!((hits, misses), (1, 2), "a recoloured item is encoded again");
     assert_eq!(
-        held, 1,
-        "and it replaces the old encoding rather than adding"
+        held, 2,
+        "and the old encoding stays until the byte cap asks for its room"
+    );
+}
+
+/// An item whose placement alone moved is placed from the encoding it already has.
+///
+/// The placement is what a scroll and a moved replay change, so this is what keeps a scrolled
+/// drawing from being encoded again. The moved picture has to be the one a fresh rasteriser draws.
+#[test]
+fn a_moved_placement_costs_no_re_encoding() {
+    let Some((mut moved, mut fresh)) = support::twins(support::SIDE, Which::Vello) else {
+        return;
+    };
+    let gpu = Arc::clone(moved.gpu());
+    let mut raster = VelloRaster::new(&gpu, 128, 128).expect("a rasteriser");
+    let geometry = support::circle(0.0, 0.0, 12.0);
+    let placed = |x: f64| {
+        let mut scene = scene();
+        quad(&mut scene, rect(0.0, 0.0, 128.0, 128.0), opaque(0, 0, 0));
+        let fill = solid(&mut scene, opaque(255, 255, 255));
+        let item = VectorItem::filled(VectorId(0), Arc::clone(&geometry), fill)
+            .placed(kurbo::Affine::translate((x, 40.0)) * kurbo::Affine::scale(1.5));
+        scene.push_vector(item);
+        scene.finish(&DamageSet::full());
+        scene
+    };
+
+    let (left, right) = (placed(24.0), placed(80.25));
+    rasterise(&mut raster, &left);
+    rasterise(&mut raster, &right);
+    let (_, (hits, misses)) = raster.cache();
+    assert_eq!(
+        (hits, misses),
+        (1, 1),
+        "the moved placement was encoded again"
+    );
+
+    present(&mut moved.renderer, &left);
+    let after = present(&mut moved.renderer, &right);
+    let expected = present(&mut fresh, &right);
+    assert_eq!(
+        support::difference(support::SIDE, &after, &expected),
+        None,
+        "a moved placement draws what a fresh encoding draws"
+    );
+}
+
+/// A gradient in path space under a placement draws what the placed path and the placed gradient
+/// draw.
+#[test]
+fn a_placed_gradient_matches_the_placed_path() {
+    let Some((mut through, mut placed)) = support::twins(support::SIDE, Which::Vello) else {
+        return;
+    };
+    let placement = kurbo::Affine::translate((20.0, 30.0)) * kurbo::Affine::scale(4.0);
+    let source = path(rect(0.0, 0.0, 20.0, 12.0));
+    let ramp = |scene: &mut Scene, start: (f64, f64), end: (f64, f64)| {
+        let point = |(x, y): (f64, f64)| {
+            zgui_geom::Point::new(zgui_geom::DevicePx(x as f32), zgui_geom::DevicePx(y as f32))
+        };
+        scene.paints.add(zgui_scene::Paint::Gradient {
+            kind: zgui_scene::GradientKind::Linear {
+                start: point(start),
+                end: point(end),
+            },
+            stops: [
+                zgui_color::GradientStop::new(0.0, opaque(255, 0, 0)),
+                zgui_color::GradientStop::new(1.0, opaque(0, 0, 255)),
+            ]
+            .into_iter()
+            .collect(),
+            space: zgui_color::ColorSpace::Srgb,
+            hue: zgui_color::HueInterpolation::Shorter,
+            repeating: false,
+        })
+    };
+
+    let mut in_path_space = scene();
+    let fill = ramp(&mut in_path_space, (0.0, 0.0), (20.0, 0.0));
+    in_path_space
+        .push_vector(VectorItem::filled(VectorId(0), Arc::clone(&source), fill).placed(placement));
+    in_path_space.finish(&DamageSet::full());
+
+    let mut in_device_space = scene();
+    let start = placement * kurbo::Point::new(0.0, 0.0);
+    let end = placement * kurbo::Point::new(20.0, 0.0);
+    let fill = ramp(&mut in_device_space, (start.x, start.y), (end.x, end.y));
+    in_device_space.push_vector(VectorItem::filled(
+        VectorId(0),
+        Arc::new(placement * source.as_ref().clone()),
+        fill,
+    ));
+    in_device_space.finish(&DamageSet::full());
+
+    let one = present(&mut through.renderer, &in_path_space);
+    let other = present(&mut placed, &in_device_space);
+    assert!(
+        one.rgba(60, 50) != [0, 0, 0, 0],
+        "the placed gradient drew nothing inside its shape"
+    );
+    let worst = support::difference(support::SIDE, &one, &other);
+    assert!(
+        worst.is_none_or(|(_, _, delta)| delta <= 1),
+        "the placed gradient differs from the placed path by {worst:?}"
     );
 }
 

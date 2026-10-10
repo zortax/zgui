@@ -6198,6 +6198,7 @@ version = "0.1.0"
 dependencies = [
  "kurbo",
  "peniko",
+ "rustc-hash 2.1.3",
  "tracing",
  "vello",
  "wgpu",

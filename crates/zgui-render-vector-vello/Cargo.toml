@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 kurbo.workspace = true
 peniko.workspace = true
+rustc-hash.workspace = true
 tracing.workspace = true
 vello.workspace = true
 wgpu.workspace = true
