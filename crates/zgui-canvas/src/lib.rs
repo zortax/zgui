@@ -17,6 +17,10 @@
 //! cost nothing new downstream — fitting, per-shape paint, damage and the rasteriser's encoding
 //! cache all treat it as one more producer of the thing they already consume.
 //!
+//! A scene also holds [`Series`]: plot data in data space, drawn with markers or a line of a fixed
+//! size. A view transform ([`CanvasScene::set_transform`]) moves every shape and series with one
+//! matrix and moves no revision, so a pan or a zoom builds no new geometry.
+//!
 //! # Threads
 //!
 //! A scene is `Arc<Mutex<…>>` and a handle is `Send + Sync`: a simulation thread may push shapes
@@ -43,20 +47,27 @@ pub use zgui_color;
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct CanvasToken(pub u32);
 
-/// A retained list of shapes, with the revision that says when it last changed.
+/// A retained list of shapes and series, with the revision that says when it last changed.
 #[derive(Debug, Default)]
 pub struct CanvasScene {
     /// The shapes, in painting order, in canvas-local coordinates: CSS pixels from the content
     /// box's top left corner, or view-box units when the element declares a view box.
     shapes: Vec<Shape>,
+    /// The series, each with the number of shapes painted under it. Sorted by that number.
+    series: Vec<SeriesAt>,
+    /// The view transform: canvas units to canvas units, applied before the view-box fit.
+    transform: kurbo::Affine,
+    /// Moved by every change of the view transform.
+    view: u64,
     /// Moved by every mutating access; what the element's property carries beside the token.
     revision: u64,
 }
 
 impl CanvasScene {
-    /// Removes every shape.
+    /// Removes every shape and every series. The view transform stays.
     pub fn clear(&mut self) {
         self.shapes.clear();
+        self.series.clear();
     }
 
     /// Adds one shape above everything already there.
@@ -64,14 +75,180 @@ impl CanvasScene {
         self.shapes.push(shape);
     }
 
-    /// Replaces the whole list.
+    /// Replaces the whole list, and removes every series.
     pub fn replace(&mut self, shapes: Vec<Shape>) {
         self.shapes = shapes;
+        self.series.clear();
     }
 
     /// The shapes, in painting order.
     pub fn shapes(&self) -> &[Shape] {
         &self.shapes
+    }
+
+    /// Adds one series above everything already there.
+    ///
+    /// A series keeps its data in data space. A change of the view transform moves its points and
+    /// keeps its marker size, so a pan builds no new geometry.
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    ///
+    /// use zgui_canvas::{Brush, Marker, SceneHandle, Series};
+    /// use zgui_color::Color;
+    ///
+    /// let handle = SceneHandle::new();
+    /// let data: Arc<[[f32; 2]]> = (0..1000).map(|i| [i as f32, (i as f32).sin()]).collect();
+    /// handle.edit(|scene| {
+    ///     scene.push_series(Series::Points {
+    ///         data,
+    ///         to_canvas: kurbo::Affine::new([1.0, 0.0, 0.0, -100.0, 0.0, 150.0]),
+    ///         marker: Marker::Circle { radius: 3.0 },
+    ///         fill: Some(Brush::Solid(Color::srgb(0.2, 0.5, 0.9, 1.0))),
+    ///         stroke: None,
+    ///     });
+    /// });
+    /// // A pan: one matrix changes, and the revision stays.
+    /// handle.set_transform(kurbo::Affine::translate((-40.0, 0.0)));
+    /// ```
+    pub fn push_series(&mut self, series: Series) {
+        self.series.push(SeriesAt {
+            before: self.shapes.len(),
+            series,
+        });
+    }
+
+    /// The series, in painting order.
+    pub fn series(&self) -> &[SeriesAt] {
+        &self.series
+    }
+
+    /// The shapes and the series, in painting order.
+    pub fn items(&self) -> Items<'_> {
+        Items {
+            scene: self,
+            shape: 0,
+            series: 0,
+        }
+    }
+
+    /// Sets the view transform, which maps canvas units to canvas units before the view-box fit.
+    ///
+    /// Moves the view when `transform` differs from the held one. The default is the identity.
+    pub fn set_transform(&mut self, transform: kurbo::Affine) {
+        if transform != self.transform {
+            self.transform = transform;
+            self.view += 1;
+        }
+    }
+
+    /// The view transform.
+    pub fn transform(&self) -> kurbo::Affine {
+        self.transform
+    }
+
+    /// Where the view transform stands: moved by every change of it.
+    pub fn view(&self) -> u64 {
+        self.view
+    }
+}
+
+/// One series, with the number of shapes painted under it.
+#[derive(Clone, Debug)]
+pub struct SeriesAt {
+    /// How many shapes are painted under the series.
+    pub before: usize,
+    /// The series.
+    pub series: Series,
+}
+
+/// Plot data in data space, drawn with markers or a line of a fixed size in CSS pixels.
+///
+/// `to_canvas` maps data to canvas units. The marker radius, the half side, the stroke widths and
+/// `stroke.width` of a line are CSS pixels. No transform of the canvas scales them: not
+/// `to_canvas`, not the view transform and not the view-box fit. A CSS transform on the element
+/// scales them with the rest of the element.
+///
+/// A NaN point ends a line run, and a points series skips it. Series do not take part in hit
+/// testing.
+#[derive(Clone, Debug)]
+pub enum Series {
+    /// One marker per point.
+    Points {
+        /// The points, in data space.
+        data: Arc<[[f32; 2]]>,
+        /// Data space to canvas units.
+        to_canvas: kurbo::Affine,
+        /// The marker.
+        marker: Marker,
+        /// What fills each marker.
+        fill: Option<Brush>,
+        /// What strokes each marker, and how wide, in CSS pixels.
+        stroke: Option<(Brush, f64)>,
+    },
+    /// One polyline through the points, with round joins.
+    Line {
+        /// The points, in data space.
+        data: Arc<[[f32; 2]]>,
+        /// Data space to canvas units.
+        to_canvas: kurbo::Affine,
+        /// The width and the caps. The dash pattern is ignored.
+        stroke: kurbo::Stroke,
+        /// What strokes the line.
+        brush: Brush,
+    },
+}
+
+/// The marker of a points series, in CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Marker {
+    /// A circle.
+    Circle {
+        /// The radius.
+        radius: f64,
+    },
+    /// An axis-aligned square.
+    Square {
+        /// Half the side.
+        half: f64,
+    },
+}
+
+/// One item of a scene in painting order.
+#[derive(Clone, Copy, Debug)]
+pub enum CanvasItem<'a> {
+    /// A shape.
+    Shape(&'a Shape),
+    /// A series.
+    Series(&'a Series),
+}
+
+/// The items of a scene in painting order. Made by [`CanvasScene::items`].
+#[derive(Clone, Debug)]
+pub struct Items<'a> {
+    /// The scene.
+    scene: &'a CanvasScene,
+    /// The next shape.
+    shape: usize,
+    /// The next series.
+    series: usize,
+}
+
+impl<'a> Iterator for Items<'a> {
+    type Item = CanvasItem<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let scene = self.scene;
+        if let Some(at) = scene.series.get(self.series)
+            && at.before <= self.shape
+        {
+            self.series += 1;
+            return Some(CanvasItem::Series(&at.series));
+        }
+        let shape = scene.shapes.get(self.shape)?;
+        self.shape += 1;
+        Some(CanvasItem::Shape(shape))
     }
 }
 
@@ -111,6 +288,27 @@ impl SceneHandle {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .revision
+    }
+
+    /// Sets the scene's view transform, and returns whether its view moved.
+    ///
+    /// The revision stays: a view transform changes no content.
+    pub fn set_transform(&self, transform: kurbo::Affine) -> bool {
+        let mut scene = self
+            .scene
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = scene.view;
+        scene.set_transform(transform);
+        scene.view != before
+    }
+
+    /// Where the scene's view transform stands.
+    pub fn view(&self) -> u64 {
+        self.scene
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .view
     }
 
     /// Mutates the scene, and moves the revision so whoever shows it repaints.
@@ -187,6 +385,11 @@ pub enum Brush {
 }
 
 impl Brush {
+    /// The document paint this brush lowers to, for the paint stage.
+    pub fn paint(&self) -> Paint {
+        self.clone().lower()
+    }
+
     /// The document paint this brush lowers to.
     fn lower(self) -> Paint {
         match self {
@@ -433,6 +636,84 @@ mod tests {
             ramp.fill.as_ref().unwrap().paint,
             Paint::Gradient(_)
         ));
+    }
+
+    /// A points series of two points.
+    fn series() -> Series {
+        Series::Points {
+            data: Arc::from([[0.0, 0.0], [1.0, 1.0]]),
+            to_canvas: kurbo::Affine::IDENTITY,
+            marker: Marker::Circle { radius: 2.0 },
+            fill: Some(Brush::Inherited { alpha: 1.0 }),
+            stroke: None,
+        }
+    }
+
+    #[test]
+    fn a_series_paints_between_the_shapes_around_it() {
+        let mut scene = CanvasScene::default();
+        scene.push_series(series());
+        scene.push(ShapeBuilder::new(triangle()).build());
+        scene.push(ShapeBuilder::new(triangle()).build());
+        scene.push_series(series());
+        scene.push(ShapeBuilder::new(triangle()).build());
+        scene.push_series(series());
+        let order: String = scene
+            .items()
+            .map(|item| match item {
+                CanvasItem::Shape(_) => 's',
+                CanvasItem::Series(_) => 'p',
+            })
+            .collect();
+        assert_eq!(order, "psspsp");
+        assert_eq!(scene.shapes().len(), 3);
+        let before: Vec<usize> = scene.series().iter().map(|at| at.before).collect();
+        assert_eq!(before, [0, 2, 3]);
+    }
+
+    #[test]
+    fn set_transform_moves_the_view_and_not_the_revision() {
+        let handle = SceneHandle::new();
+        assert_eq!(handle.view(), 0);
+        assert!(handle.set_transform(kurbo::Affine::translate((4.0, 0.0))));
+        assert_eq!(handle.view(), 1);
+        assert_eq!(handle.revision(), 0);
+        let scene = resolve(handle.token()).expect("registered");
+        let transform = scene
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .transform();
+        assert_eq!(transform, kurbo::Affine::translate((4.0, 0.0)));
+    }
+
+    #[test]
+    fn an_equal_transform_moves_nothing() {
+        let handle = SceneHandle::new();
+        assert!(!handle.set_transform(kurbo::Affine::IDENTITY));
+        assert!(handle.set_transform(kurbo::Affine::scale(2.0)));
+        assert!(!handle.set_transform(kurbo::Affine::scale(2.0)));
+        assert_eq!((handle.view(), handle.revision()), (1, 0));
+    }
+
+    #[test]
+    fn clear_keeps_the_transform() {
+        let mut scene = CanvasScene::default();
+        scene.set_transform(kurbo::Affine::scale(3.0));
+        scene.push(ShapeBuilder::new(triangle()).build());
+        scene.push_series(series());
+        scene.clear();
+        assert!(scene.shapes().is_empty() && scene.series().is_empty());
+        assert_eq!(scene.transform(), kurbo::Affine::scale(3.0));
+        assert_eq!(scene.view(), 1);
+    }
+
+    #[test]
+    fn replace_drops_the_series() {
+        let mut scene = CanvasScene::default();
+        scene.push_series(series());
+        scene.replace(vec![ShapeBuilder::new(triangle()).build()]);
+        assert!(scene.series().is_empty());
+        assert_eq!(scene.items().count(), 1);
     }
 
     #[test]
