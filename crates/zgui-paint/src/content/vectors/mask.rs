@@ -219,6 +219,21 @@ const HISTORY_FRAMES: u32 = 8;
 /// Past this a raster per frame costs more than the general rasteriser does once it is built.
 const COLD_SEGMENTS: usize = 4096;
 
+/// The most new masks one frame rasterises while the general rasteriser is built.
+const BUDGET_TILES: u32 = 32;
+
+/// The most texels those new masks may cover together.
+const BUDGET_TEXELS: u64 = 128 * 1024;
+
+/// What one frame has spent on new masks.
+#[derive(Clone, Copy, Debug, Default)]
+struct Budget {
+    /// Masks rasterised.
+    tiles: u32,
+    /// Texels they cover.
+    texels: u64,
+}
+
 /// The sparse metadata beside monochrome atlas entries used by vector masks.
 #[derive(Debug)]
 pub(crate) struct VectorMaskCache {
@@ -233,6 +248,8 @@ pub(crate) struct VectorMaskCache {
     raster_ready: bool,
     /// Tiles their owners stopped drawing, removed when the frame ends.
     superseded: Vec<AtlasKey>,
+    /// What this frame has spent on new masks.
+    budget: Budget,
 }
 
 /// A disjoint namespace from glyph handles in the monochrome atlas.
@@ -248,6 +265,7 @@ impl Default for VectorMaskCache {
             frame: 0,
             raster_ready: false,
             superseded: Vec::new(),
+            budget: Budget::default(),
         }
     }
 }
@@ -256,6 +274,7 @@ impl VectorMaskCache {
     /// Starts a frame.
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
+        self.budget = Budget::default();
     }
 
     /// Sets whether the general vector rasteriser is built.
@@ -289,6 +308,9 @@ impl VectorMaskCache {
     /// An owner whose request changed in three of the last four frames is volatile. A volatile
     /// owner is declined while the general rasteriser is built. While it is cold, only a shape of
     /// more than [`COLD_SEGMENTS`] segments is declined, because a decline then builds it.
+    ///
+    /// While the general rasteriser is built, a frame also rasterises at most [`BUDGET_TILES`] new
+    /// masks covering [`BUDGET_TEXELS`], and declines the rest. A hit costs nothing.
     pub(crate) fn tile_for(
         &mut self,
         atlas: &mut Atlas,
@@ -331,19 +353,38 @@ impl VectorMaskCache {
             size: [width, height],
         };
 
-        let key = if let Some(key) = self.entries.get(&fingerprint).copied() {
+        let held = self.entries.get(&fingerprint).copied();
+        let texels = u64::from(width.unsigned_abs()) * u64::from(height.unsigned_abs());
+        if self.raster_ready
+            && !held.is_some_and(|key| atlas.contains(key))
+            && (self.budget.tiles >= BUDGET_TILES
+                || self.budget.texels + texels > BUDGET_TEXELS)
+        {
+            counter::bump(Counter::VectorMaskBudgetOverflow);
+            if let Some(history) = self.histories.get_mut(&request.owner) {
+                history.route(part, Routed::Declined);
+            }
+            return None;
+        }
+        let key = if let Some(key) = held {
             key
         } else {
             let key = self.fresh_key(atlas);
             self.entries.insert(fingerprint.clone(), key);
             key
         };
+        let mut missed = false;
         let tile = atlas
             .get_or_insert(key, Size::new(width, height), || {
+                missed = true;
                 counter::bump(Counter::VectorMaskMisses);
                 raster(&fingerprint)
             })
             .ok()?;
+        if missed {
+            self.budget.tiles += 1;
+            self.budget.texels += texels;
+        }
         if let Some(history) = self.histories.get_mut(&request.owner) {
             history.track(part, key, &mut self.superseded);
             history.route(part, Routed::Mask);

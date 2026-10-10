@@ -266,3 +266,49 @@ fn reclaim_spares_a_tile_another_owner_drew_this_frame() {
     rig.end();
     assert!(rig.atlas.contains(first));
 }
+
+/// Asks for `count` new geometries in the current frame, one owner each from `first`, and reports
+/// which were masks.
+fn new_masks(rig: &mut Rig, first: u32, count: u32) -> Vec<bool> {
+    (first..first + count)
+        .map(|index| {
+            rig.ask(VectorId(100 + index), &triangle(f64::from(index) * 0.01))
+                .is_some()
+        })
+        .collect()
+}
+
+#[test]
+fn the_new_mask_budget_declines_the_33rd_miss_while_ready() {
+    let mut rig = Rig::new(true);
+    rig.begin();
+    let masks = new_masks(&mut rig, 0, 33);
+    rig.end();
+    assert!(masks[..32].iter().all(|mask| *mask));
+    assert!(!masks[32]);
+    // The budget is per frame.
+    rig.begin();
+    assert_eq!(new_masks(&mut rig, 32, 1), [true]);
+    rig.end();
+}
+
+#[test]
+fn a_cache_hit_spends_no_budget() {
+    let mut rig = Rig::new(true);
+    rig.begin();
+    assert!(new_masks(&mut rig, 0, 32).into_iter().all(|mask| mask));
+    rig.end();
+    rig.begin();
+    // The same 32 again are hits, and leave the whole budget for 32 new ones.
+    assert!(new_masks(&mut rig, 0, 64).into_iter().all(|mask| mask));
+    assert_eq!(new_masks(&mut rig, 64, 1), [false]);
+    rig.end();
+}
+
+#[test]
+fn the_budget_does_not_apply_while_vector_raster_is_cold() {
+    let mut rig = Rig::new(false);
+    rig.begin();
+    assert!(new_masks(&mut rig, 0, 64).into_iter().all(|mask| mask));
+    rig.end();
+}
