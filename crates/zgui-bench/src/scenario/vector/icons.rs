@@ -13,7 +13,7 @@ use zgui_ui_icons::IconData;
 use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::{arrow, chevron, mark, status, ui};
 
-use crate::scenario::vector::{opened, scroll};
+use crate::scenario::vector::{Stretch, opened, scroll};
 
 /// How many ticks the scroll runs.
 const TICKS: usize = 300;
@@ -77,6 +77,9 @@ pub(super) fn run(variant: &str) {
         ),
         other => panic!("unknown icons-scroll variant `{other}`"),
     };
+    // Counters only: opening runs its frames before any tick is measured.
+    let open = Stretch::begin("icons-scroll", variant, "open");
     let mut harness = opened(runtime);
+    open.end();
     scroll(&mut harness, ("icons-scroll", variant, "scroll"), at, TICKS);
 }
