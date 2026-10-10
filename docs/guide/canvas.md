@@ -62,6 +62,13 @@ precision: positions are stored relative to the centre of the data.
 `push_series` places the series above the shapes pushed so far. Series take no part in hit
 testing.
 
+A long line can be drawn at a lower level of detail. `push_series_lod(series, Lod::Columns)`, or
+`--zgui-vector-lod: columns` on the element for all its line series, reduces a `Series::Line`
+whose points run left to right, with more than four points per device column, to the first, lowest,
+highest and last point of each column. A pan builds nothing new, and a zoom builds the reduction
+again only past twice or half the scale. Under antialiasing the reduced line is lighter where the
+data is noise denser than a pixel, so the reduction is never automatic.
+
 A `Marker::Path` is an outline in CSS pixels with its origin on the point. It is drawn as path
 glyphs (see below), so a pan or a zoom of the view rasterises nothing and uploads no payload. A
 marker more than 64 device pixels across, a filled marker that crosses itself, and a marker under
@@ -104,7 +111,11 @@ drawings does not build the general rasteriser. Vector documents take the same r
 - After that, one frame makes at most three new tiles in about 2 ms. A new drawing waits for two
   stable frames unless it is cheap. A drawing that is rasterised three times in 30 frames gets no
   new tile for the next 30 frames.
-- A tile is at most 2048 pixels on a side and 4 MiB. A larger drawing uses the general route.
+- A drawing larger than 2048 pixels on a side or 4 MiB is cut into tiles of 512 pixels, one sprite
+  each. Only the tiles that a frame redraws are rasterised, together with the tiles next to them
+  while budget is left. A tile that does not fit the frame's budget is drawn at most two frames
+  later. A move or a scroll keeps every tile. An edit of one canvas shape rasterises again only the
+  tiles the shape meets.
 - The tiles are held to four surfaces of RGBA8, from 16 MiB to 128 MiB.
 
 ## Clipping
