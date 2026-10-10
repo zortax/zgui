@@ -259,7 +259,7 @@ fn a_full_split_map_drops_the_least_recently_touched() {
     for path in &paths[1..] {
         splits.insert(path, IDENTITY, Err(super::SplitDeclined::Few));
     }
-    assert_eq!(splits.len(), MAX_SPLITS);
+    assert!(splits.len() <= MAX_SPLITS);
     assert!(
         splits.lookup(first, IDENTITY).is_none(),
         "the oldest entry made room"

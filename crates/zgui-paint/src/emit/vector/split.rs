@@ -172,6 +172,7 @@ pub(crate) fn geometry_of(path: &BezPath, linear: [f64; 4]) -> Result<Geometry, 
 /// Quantised first and split after, as a pen position is, so the two halves agree about the pixel.
 /// `pixel + phase / 4` is within 1/8 of a pixel of `device`. The shader splits with the same
 /// formula, in the same precision.
+#[cfg(test)]
 pub(crate) fn phase_of(device: f32) -> (i32, u8) {
     let quantised = (4.0 * device + 0.5).floor();
     let phase = quantised.rem_euclid(4.0);

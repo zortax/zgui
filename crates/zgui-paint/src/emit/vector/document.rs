@@ -30,6 +30,7 @@ use crate::emit::vector::{ShapePaint, ShapeSource, VectorPlacement, under};
 
 use super::analytic::emit_analytic;
 use super::marks::emit_marks;
+use super::path_glyphs::emit_path_glyphs;
 use super::{ShapeEmission, VectorRoute};
 
 /// Emits one shape, and returns how many primitives were pushed.
@@ -83,6 +84,13 @@ pub(crate) fn emit_tracked(
         return ShapeEmission {
             pushed,
             route: Some(VectorRoute::Marks),
+        };
+    }
+    if let Some(pushed) = emit_path_glyphs(scene, id, source, paint, masks, placement, affine) {
+        counter::bump(Counter::VectorRoutePathGlyphs);
+        return ShapeEmission {
+            pushed,
+            route: Some(VectorRoute::PathGlyphs),
         };
     }
     // A fit with no area is a box of no size, and nothing drawn into it reaches a pixel.

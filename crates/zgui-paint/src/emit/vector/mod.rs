@@ -34,6 +34,7 @@ mod analytic;
 pub mod document;
 pub mod fit;
 mod marks;
+mod path_glyphs;
 pub(crate) mod recognise;
 pub(crate) mod recognised;
 mod series;

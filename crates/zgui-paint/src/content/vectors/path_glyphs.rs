@@ -350,8 +350,12 @@ const IDLE_MISSES: u32 = 16;
 /// How often, in frames, the cache keeps entries while it is idle.
 const PROBE_FRAMES: u32 = 8;
 
-/// The most entries held. A full map drops the entry touched least recently.
+/// The most entries held. A full map drops [`EVICTED_SPLITS`] entries, those touched least
+/// recently first.
 pub(crate) const MAX_SPLITS: usize = 256;
+
+/// How many entries a full map drops at once, so one scan for the oldest serves this many inserts.
+const EVICTED_SPLITS: usize = MAX_SPLITS / 16;
 
 /// One part's payload, with the sheets it names.
 #[derive(Debug)]
@@ -469,7 +473,7 @@ impl Splits {
         }
         let key = key(path, linear);
         if self.entries.len() >= MAX_SPLITS && !self.entries.contains_key(&key) {
-            evict(&mut self.entries, self.frame, 1, |entry| {
+            evict(&mut self.entries, self.frame, EVICTED_SPLITS, |entry| {
                 (entry.touched, false)
             });
         }
