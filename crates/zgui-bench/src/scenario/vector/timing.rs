@@ -60,8 +60,8 @@ impl Frames {
         self.paint.len()
     }
 
-    /// The median and the 95th percentile of paint and of render time.
-    pub(super) fn spreads(&mut self) -> ((f64, f64), (f64, f64)) {
+    /// The median, the 95th percentile and the largest of paint and of render time.
+    pub(super) fn spreads(&mut self) -> ((f64, f64, f64), (f64, f64, f64)) {
         (spread(&mut self.paint), spread(&mut self.render))
     }
 }
@@ -94,18 +94,18 @@ fn millis(nanos: u128) -> f64 {
     nanos as f64 / 1e6
 }
 
-/// The median and the 95th percentile of `samples`, or zeros when there are none.
+/// The median, the 95th percentile and the largest of `samples`, or zeros when there are none.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
     reason = "an index into a list of at most a few hundred samples"
 )]
-fn spread(samples: &mut [f64]) -> (f64, f64) {
+fn spread(samples: &mut [f64]) -> (f64, f64, f64) {
     if samples.is_empty() {
-        return (0.0, 0.0);
+        return (0.0, 0.0, 0.0);
     }
     samples.sort_by(f64::total_cmp);
     let at = |q: f64| samples[((samples.len() - 1) as f64 * q).round() as usize];
-    (at(0.50), at(0.95))
+    (at(0.50), at(0.95), at(1.0))
 }

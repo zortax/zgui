@@ -19,6 +19,10 @@
 //!
 //! `line-5m` is a random walk of 5 000 000 points as one line series reduced per device column,
 //! drawn once and panned through the canvas view.
+//!
+//! `series-zoom` draws `line-5m`'s line and 1 000 000 circle markers over four times the plot's
+//! width, then sweeps the canvas view through 600 frames: from one view of a quarter of the data
+//! to a view 64 times narrower and back, while it pans to and fro across the data.
 
 use std::rc::Rc;
 
@@ -30,7 +34,7 @@ use zgui::prelude::*;
 use zgui::reactive::RwSignal;
 use zgui::view::{Anchor, BuildCx, IntoView};
 
-use crate::scenario::vector::{Lcg, drag, opened};
+use crate::scenario::vector::{Lcg, Stretch, drag, opened};
 
 /// How far a circle may sit outside the range and still be drawn, in CSS pixels.
 const MARGIN: f64 = 4.0;
@@ -49,6 +53,9 @@ const TICKS: usize = 120;
 
 /// How far one tick drags, in CSS pixels.
 const STEP: f32 = 2.0;
+
+/// How many ticks the zoom sweep runs.
+const SWEEP_TICKS: usize = 600;
 
 /// The tick labels' rules and the canvas sizes.
 const SHEET: &str = zgui::css!(
@@ -81,6 +88,8 @@ struct Plot {
     triangles: bool,
     /// Whether the data is a random walk drawn as one line reduced per device column.
     line: bool,
+    /// Whether it draws the line and the markers, and sweeps the view through a zoom.
+    zoom: bool,
 }
 
 /// The variant's plot.
@@ -97,6 +106,7 @@ fn plot(variant: &str) -> Plot {
         "triangles-10k" => ("plot-large", 960.0, 540.0, 10_000, false),
         "series-path-100k" => ("plot-large", 960.0, 540.0, 100_000, false),
         "line-5m" => ("plot-large", 960.0, 540.0, 2_500_000, false),
+        "series-zoom" => ("plot-large", 960.0, 540.0, 2_500_000, false),
         other => panic!("unknown scatter-pan variant `{other}`"),
     };
     Plot {
@@ -108,7 +118,8 @@ fn plot(variant: &str) -> Plot {
         waves: variant.starts_with("waves"),
         view: variant.starts_with("series") || variant == "waves-view" || variant == "line-5m",
         triangles: variant.starts_with("triangles") || variant == "series-path-100k",
-        line: variant == "line-5m",
+        line: variant == "line-5m" || variant == "series-zoom",
+        zoom: variant == "series-zoom",
     }
 }
 
@@ -329,34 +340,19 @@ fn view(plot: Plot) -> impl IntoView {
 ///
 /// The scatter is one points series over twice the visible points, in data space; the waves are
 /// their shapes over the whole data range. The pan sets the view to `translate((1 − low) · width)`.
-fn viewed(plot: Plot) -> impl IntoView {
-    let handle = CanvasHandle::new();
+fn viewed(plot: Plot, handle: CanvasHandle) -> impl IntoView {
     let (width, height) = (f64::from(plot.width), f64::from(plot.height));
-    if plot.waves {
+    if plot.zoom {
+        handle.draw(|scene| {
+            scene.push_series_lod(walk_line(plot, width, height), zgui::canvas::Lod::Columns);
+            scene.push_series(sweep_markers(width, height));
+            scene.set_transform(sweep_view(0, width));
+        });
+    } else if plot.waves {
         handle.draw(|scene| scene.replace(waves(1.0, width, height, true)));
     } else if plot.line {
-        // Twice the visible points over x in 0..2, left to right, y a walk within 0..1.
-        let mut random = Lcg::new(0x00F1_A7ED);
-        let count = plot.visible * 2;
-        let mut y = 0.5_f64;
-        let data: std::sync::Arc<[[f32; 2]]> = (0..count)
-            .map(|i| {
-                y = (y + (random.next() - 0.5) * 0.002).clamp(0.02, 0.98);
-                [(2.0 * i as f64 / count as f64) as f32, y as f32]
-            })
-            .collect();
         handle.draw(|scene| {
-            scene.push_series_lod(
-                zgui::canvas::Series::Line {
-                    data,
-                    to_canvas: zgui::elements::kurbo::Affine::new([
-                        width, 0.0, 0.0, -height, -width, height,
-                    ]),
-                    stroke: zgui::elements::kurbo::Stroke::new(1.0),
-                    brush: Brush::Solid(Color::srgb(0.36, 0.62, 1.0, 1.0)),
-                },
-                zgui::canvas::Lod::Columns,
-            );
+            scene.push_series_lod(walk_line(plot, width, height), zgui::canvas::Lod::Columns);
         });
     } else {
         let data: std::sync::Arc<[[f32; 2]]> = data(plot)
@@ -430,16 +426,86 @@ fn viewed(plot: Plot) -> impl IntoView {
     }
 }
 
+/// The line series of `line-5m`: twice the visible points over x in `0..2`, left to right, y a
+/// walk within `0..1`.
+fn walk_line(plot: Plot, width: f64, height: f64) -> zgui::canvas::Series {
+    let mut random = Lcg::new(0x00F1_A7ED);
+    let count = plot.visible * 2;
+    let mut y = 0.5_f64;
+    let data: std::sync::Arc<[[f32; 2]]> = (0..count)
+        .map(|i| {
+            y = (y + (random.next() - 0.5) * 0.002).clamp(0.02, 0.98);
+            [(2.0 * i as f64 / count as f64) as f32, y as f32]
+        })
+        .collect();
+    zgui::canvas::Series::Line {
+        data,
+        to_canvas: zgui::elements::kurbo::Affine::new([width, 0.0, 0.0, -height, -width, height]),
+        stroke: zgui::elements::kurbo::Stroke::new(1.0),
+        brush: Brush::Solid(Color::srgb(0.36, 0.62, 1.0, 1.0)),
+    }
+}
+
+/// The markers of `series-zoom`: 1 000 000 circles over x in `0..2`, left to right, about a
+/// cosine.
+fn sweep_markers(width: f64, height: f64) -> zgui::canvas::Series {
+    let mut random = Lcg::new(0x0005_A3B1);
+    let count = 1_000_000;
+    let data: std::sync::Arc<[[f32; 2]]> = (0..count)
+        .map(|i| {
+            let x = 2.0 * (i as f64 + random.next()) / f64::from(count);
+            let y = 0.5 + 0.3 * (x * 9.0).cos() + (random.next() - 0.5) * 0.15;
+            [x as f32, y as f32]
+        })
+        .collect();
+    zgui::canvas::Series::Points {
+        data,
+        to_canvas: zgui::elements::kurbo::Affine::new([width, 0.0, 0.0, -height, -width, height]),
+        marker: zgui::canvas::Marker::Circle { radius: RADIUS },
+        fill: Some(Brush::Solid(Color::srgb(1.0, 0.71, 0.28, 1.0))),
+        stroke: None,
+    }
+}
+
+/// The view of `series-zoom` at `tick`.
+///
+/// The data runs over x in `0..2`, which the canvas places at `(x − 1) · width`. The view shows a
+/// span of x a quarter of the data wide at tick 0, 64 times narrower half way, and wide again at
+/// the end, and its centre swings across the data twice.
+fn sweep_view(tick: usize, width: f64) -> zgui::elements::kurbo::Affine {
+    let turn = std::f64::consts::TAU * tick as f64 / SWEEP_TICKS as f64;
+    let zoom = 0.5 - 0.5 * turn.cos();
+    let span = 0.5 * 64f64.powf(-zoom);
+    let centre = 1.0 + (2.0 - span) / 2.0 * (2.0 * turn).sin();
+    let low = centre - span / 2.0;
+    // Canvas x `(low − 1) · width` to 0, and a span of x to the width.
+    let scale = 1.0 / span;
+    zgui::elements::kurbo::Affine::new([scale, 0.0, 0.0, 1.0, -scale * (low - 1.0) * width, 0.0])
+}
+
 /// Runs one variant.
 pub(super) fn run(variant: &str) {
     let plot = plot(variant);
+    let handle = CanvasHandle::new();
+    let shown = handle.clone();
     let runtime = crate::scenario::fixture::custom(SHEET, move |cx: &mut BuildCx<'_>| {
         if plot.view {
-            return Box::new(viewed(plot).into_view().build(cx)) as Box<dyn Anchor>;
+            return Box::new(viewed(plot, shown.clone()).into_view().build(cx))
+                as Box<dyn Anchor>;
         }
         Box::new(view(plot).into_view().build(cx)) as Box<dyn Anchor>
     });
     let mut harness = opened(runtime);
+    if plot.zoom {
+        let width = f64::from(plot.width);
+        let mut measured = Stretch::begin("scatter-pan", variant, "zoom");
+        for tick in 0..SWEEP_TICKS {
+            handle.set_transform(sweep_view(tick, width));
+            measured.tick(&mut harness);
+        }
+        measured.end();
+        return;
+    }
     let centre = Point::new(CssPx(plot.width / 2.0), CssPx(plot.height / 2.0));
     drag(
         &mut harness,

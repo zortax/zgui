@@ -16,7 +16,7 @@
 //! One block per variant:
 //!
 //! ```text
-//! VECTOR <scenario> <variant> <stretch> frames=N paint_p50=.. paint_p95=.. render_p50=.. render_p95=..
+//! VECTOR <scenario> <variant> <stretch> frames=N paint_p50=.. paint_p95=.. paint_max=.. render_p50=.. render_p95=..
 //! VCOUNT <scenario> <variant> <stretch> <field>=<total> ...
 //! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_mask_tiles_live=<start>-><end> vector_layer_bytes_live=<start>-><end>
 //! ```
@@ -38,7 +38,7 @@ use zgui_profile::{Counter, Counters};
 use crate::scenario::vector::timing::Frames;
 
 /// Every (scenario, variant) pair, in the order `all` runs them.
-pub(crate) const ALL: [(&str, &str); 17] = [
+pub(crate) const ALL: [(&str, &str); 18] = [
     ("scatter-pan", "mask-512"),
     ("scatter-pan", "mask-2k"),
     ("scatter-pan", "markers-200"),
@@ -51,6 +51,7 @@ pub(crate) const ALL: [(&str, &str); 17] = [
     ("scatter-pan", "triangles-10k"),
     ("scatter-pan", "series-path-100k"),
     ("scatter-pan", "line-5m"),
+    ("scatter-pan", "series-zoom"),
     ("icons-scroll", "icons"),
     ("icons-scroll", "gallery"),
     ("svg-static", "grid"),
@@ -206,10 +207,11 @@ impl Stretch {
         let (paint, render) = self.frames.spreads();
         println!(
             "VECTOR {scenario} {variant} {name} frames={} paint_p50={:.3} paint_p95={:.3} \
-             render_p50={:.3} render_p95={:.3}",
+             paint_max={:.3} render_p50={:.3} render_p95={:.3}",
             self.frames.len(),
             paint.0,
             paint.1,
+            paint.2,
             render.0,
             render.1,
         );
