@@ -6,6 +6,10 @@
 //! insertions, and offset replays, outlines and unresolved sprites travel as per-frame copies —
 //! plus the resolved remap lists themselves.
 //!
+//! Mark payloads are resident once per payload allocation, whatever chunks hold them. A canvas
+//! panned by its view re-encodes its chunk with the same payload, and the new chunk takes a hold on
+//! the payload the old one held, so the pan uploads no payload.
+//!
 //! Ranges are reclaimed through a ledger keyed by submission: a replaced or retired chunk's
 //! ranges, and every frame's transient ranges, go into the current bucket, and the bucket is
 //! offered back to the arenas once the device reports the submission that could still read them
@@ -94,20 +98,26 @@ macro_rules! lane_slice {
 struct Resident {
     /// The bytes, shared with the paint cache's record — also the rebuild source.
     prims: Arc<ChunkPrims>,
-    /// The element range each arena holds of the chunk, where it has elements of that kind: the
-    /// lanes first, then the mark payloads.
-    ranges: [Option<Range<u32>>; ARENAS],
-    /// Where each mark's payload starts inside the chunk's payload ranges, per payload kind.
-    mark_starts: Box<[[u32; PAYLOAD_LANES]]>,
+    /// The element range each lane holds of the chunk, where it has elements of that kind.
+    ranges: [Option<Range<u32>>; LANES.len()],
+    /// The key of each mark's payload in [`ChunkStore::shared`], one per mark.
+    payloads: Box<[usize]>,
 }
 
-/// The payloads of every mark of a chunk, one payload kind after another, as bytes.
-fn payload_bytes(prims: &ChunkPrims, kind: usize) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for payload in &prims.mark_payloads {
-        bytes.extend_from_slice(payload_slice(payload, kind));
-    }
-    bytes
+/// One resident mark payload, held by every resident mark that draws it.
+#[derive(Debug)]
+struct Shared {
+    /// The payload. Held so no other payload takes its address while the key lives.
+    payload: Arc<zgui_scene::MarkPayload>,
+    /// Where each payload kind sits in its arena, where the payload has elements of that kind.
+    ranges: [Option<Range<u32>>; PAYLOAD_LANES],
+    /// How many resident marks draw it.
+    holders: u32,
+}
+
+/// The key a payload is resident under: the address of its allocation.
+fn payload_key(payload: &Arc<zgui_scene::MarkPayload>) -> usize {
+    Arc::as_ptr(payload) as usize
 }
 
 /// One payload kind of one mark, as bytes.
@@ -116,14 +126,6 @@ fn payload_slice(payload: &zgui_scene::MarkPayload, kind: usize) -> &[u8] {
         0 => bytemuck::cast_slice(&payload.discs),
         1 => bytemuck::cast_slice(&payload.boxes),
         _ => bytemuck::cast_slice(&payload.vertices),
-    }
-}
-
-/// What one arena holds of a resident chunk, as bytes.
-fn resident_bytes(prims: &ChunkPrims, arena: usize) -> Vec<u8> {
-    match LANES.get(arena) {
-        Some(&kind) => lane_slice!(prims, kind).to_vec(),
-        None => payload_bytes(prims, arena - LANES.len()),
     }
 }
 
@@ -358,6 +360,10 @@ pub struct ChunkStore {
     arenas: [Arena; ARENAS],
     /// Every chunk the arenas hold, by revision.
     residence: HashMap<u64, Resident>,
+    /// Every mark payload the arenas hold, by [`payload_key`].
+    shared: HashMap<usize, Shared>,
+    /// Per-frame scratch: the payload keys of the chunks retired this frame, one per mark.
+    released: Vec<usize>,
     /// Ranges awaiting their submission's completion.
     ledger: RetireLedger,
     /// Per-frame scratch: the resolved remap for each lane.
@@ -437,6 +443,8 @@ impl ChunkStore {
                 ),
             ],
             residence: HashMap::new(),
+            shared: HashMap::new(),
+            released: Vec::new(),
             ledger: RetireLedger::new(),
             resolved: Default::default(),
             gathered: Default::default(),
@@ -497,6 +505,7 @@ impl ChunkStore {
         self.ledger.reclaim(&mut self.arenas);
         let mut uploaded = 0;
 
+        self.released.clear();
         for &revision in scene.chunk_retired() {
             if let Some(resident) = self.residence.remove(&revision) {
                 for (lane, range) in resident.ranges.into_iter().enumerate() {
@@ -504,12 +513,20 @@ impl ChunkStore {
                         self.ledger.retire(lane, range);
                     }
                 }
+                self.released.extend_from_slice(&resident.payloads);
             }
         }
 
+        // The new chunks take their holds before the retired ones drop theirs, so a payload that
+        // passes from one revision to the next stays resident.
         for upload in scene.chunk_inserted() {
             uploaded += self.insert(gpu, belt, encoder, upload.revision, &upload.prims);
         }
+        let released = core::mem::take(&mut self.released);
+        for key in &released {
+            self.drop_hold(*key);
+        }
+        self.released = released;
 
         uploaded += self.resolve_and_gather(gpu, belt, encoder, scene);
         counter::set(Counter::ChunksResident, self.residence.len() as u64);
@@ -541,60 +558,105 @@ impl ChunkStore {
         {
             return 0;
         }
-        let mut ranges: [Option<Range<u32>>; ARENAS] = Default::default();
+        let mut ranges: [Option<Range<u32>>; LANES.len()] = Default::default();
         let mut uploaded = 0;
-        let mut mark_starts = Vec::with_capacity(prims.marks.len());
-        let mut running = [0u32; PAYLOAD_LANES];
-        for payload in &prims.mark_payloads {
-            mark_starts.push(running);
-            for (kind, count) in payload.counts().into_iter().enumerate() {
-                running[kind] += count;
-            }
-        }
         for (lane, held) in ranges.iter_mut().enumerate() {
-            let owned;
-            let bytes: &[u8] = match LANES.get(lane) {
-                Some(&kind) => lane_slice!(prims, kind),
-                None => {
-                    owned = payload_bytes(prims, lane - LANES.len());
-                    &owned
-                }
-            };
+            let bytes = lane_slice!(prims, LANES[lane]);
             let count = (bytes.len() / self.arenas[lane].element as usize) as u32;
             if count == 0 {
                 continue;
             }
-            let range = match self.arenas[lane].alloc(count) {
-                Some(range) => range,
-                None => {
-                    // Grow the lane and settle every resident chunk into the new buffer, then
-                    // take the range that now must fit.
-                    uploaded += self.grow(gpu, belt, encoder, lane, count);
-                    self.arenas[lane]
-                        .alloc(count)
-                        .expect("the arena was grown for exactly this request")
-                }
-            };
-            let written = self.arenas[lane].upload(gpu, belt, encoder, range.start, bytes);
-            if lane >= LANES.len() {
-                counter::add(Counter::MarksPayloadBytes, written);
-            }
-            uploaded += written;
+            let range = self.alloc(gpu, belt, encoder, lane, count, &mut uploaded);
+            uploaded += self.arenas[lane].upload(gpu, belt, encoder, range.start, bytes);
             *held = Some(range);
+        }
+        let mut payloads = Vec::with_capacity(prims.mark_payloads.len());
+        for payload in &prims.mark_payloads {
+            let key = payload_key(payload);
+            payloads.push(key);
+            if let Some(shared) = self.shared.get_mut(&key) {
+                shared.holders += 1;
+                continue;
+            }
+            let mut held: [Option<Range<u32>>; PAYLOAD_LANES] = Default::default();
+            for (kind, count) in payload.counts().into_iter().enumerate() {
+                if count == 0 {
+                    continue;
+                }
+                let arena = payload_arena(kind);
+                let range = self.alloc(gpu, belt, encoder, arena, count, &mut uploaded);
+                let written = self.arenas[arena].upload(
+                    gpu,
+                    belt,
+                    encoder,
+                    range.start,
+                    payload_slice(payload, kind),
+                );
+                counter::add(Counter::MarksPayloadBytes, written);
+                uploaded += written;
+                held[kind] = Some(range);
+            }
+            self.shared.insert(
+                key,
+                Shared {
+                    payload: Arc::clone(payload),
+                    ranges: held,
+                    holders: 1,
+                },
+            );
         }
         self.residence.insert(
             revision,
             Resident {
                 prims: Arc::clone(prims),
                 ranges,
-                mark_starts: mark_starts.into_boxed_slice(),
+                payloads: payloads.into_boxed_slice(),
             },
         );
         uploaded
     }
 
+    /// Takes `count` elements of `arena`, growing it when they do not fit, and adds what the
+    /// growth uploaded to `uploaded`.
+    fn alloc(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+        arena: usize,
+        count: u32,
+        uploaded: &mut u64,
+    ) -> Range<u32> {
+        if let Some(range) = self.arenas[arena].alloc(count) {
+            return range;
+        }
+        // Grow the arena and settle everything resident into the new buffer, then take the range
+        // that now must fit.
+        *uploaded += self.grow(gpu, belt, encoder, arena, count);
+        self.arenas[arena]
+            .alloc(count)
+            .expect("the arena was grown for exactly this request")
+    }
+
+    /// Drops one hold on the payload under `key`, and retires its ranges when none is left.
+    fn drop_hold(&mut self, key: usize) {
+        let Some(shared) = self.shared.get_mut(&key) else {
+            return;
+        };
+        shared.holders = shared.holders.saturating_sub(1);
+        if shared.holders > 0 {
+            return;
+        }
+        let shared = self.shared.remove(&key).expect("just found");
+        for (kind, range) in shared.ranges.into_iter().enumerate() {
+            if let Some(range) = range {
+                self.ledger.retire(payload_arena(kind), range);
+            }
+        }
+    }
+
     /// Replaces `lane`'s buffer with one that fits everything resident plus `incoming`, and
-    /// re-uploads every resident chunk's lane.
+    /// re-uploads every resident chunk's lane, or every resident payload of a payload arena.
     ///
     /// Nothing in flight can be corrupted: the old buffer is dropped, and the device keeps it
     /// alive until the submissions reading it complete. The ledger's claims on the old buffer
@@ -607,15 +669,19 @@ impl ChunkStore {
         lane: usize,
         incoming: u32,
     ) -> u64 {
-        let live: u32 = self
-            .residence
-            .values()
-            .map(|resident| {
-                resident.ranges[lane]
-                    .as_ref()
-                    .map_or(0, |range| range.end - range.start)
-            })
-            .sum();
+        let length = |range: &Option<Range<u32>>| range.as_ref().map_or(0, |r| r.end - r.start);
+        let live: u32 = match lane.checked_sub(LANES.len()) {
+            None => self
+                .residence
+                .values()
+                .map(|resident| length(&resident.ranges[lane]))
+                .sum(),
+            Some(kind) => self
+                .shared
+                .values()
+                .map(|shared| length(&shared.ranges[kind]))
+                .sum(),
+        };
         // Double past the need, so a growth is rare rather than per-insert.
         let needed = (live + incoming).saturating_mul(2);
         self.arenas[lane].reset_with_capacity(gpu, needed);
@@ -624,29 +690,36 @@ impl ChunkStore {
         // their own lanes grow. Rare enough to prefer over per-lane bookkeeping.
         self.ledger.forget();
         let mut uploaded = 0;
-        let revisions: Vec<u64> = self.residence.keys().copied().collect();
-        for revision in revisions {
-            let (bytes, count) = {
-                let resident = &self.residence[&revision];
-                let bytes = resident_bytes(&resident.prims, lane);
-                let count = (bytes.len() as u32) / self.arenas[lane].element;
-                (bytes, count)
-            };
+        if let Some(kind) = lane.checked_sub(LANES.len()) {
+            let arena = &mut self.arenas[lane];
+            for shared in self.shared.values_mut() {
+                let bytes = payload_slice(&shared.payload, kind);
+                let count = (bytes.len() as u32) / arena.element;
+                if count == 0 {
+                    continue;
+                }
+                let range = arena
+                    .alloc(count)
+                    .expect("the arena was sized for everything resident");
+                let written = arena.upload(gpu, belt, encoder, range.start, bytes);
+                counter::add(Counter::MarksPayloadBytes, written);
+                uploaded += written;
+                shared.ranges[kind] = Some(range);
+            }
+            return uploaded;
+        }
+        let arena = &mut self.arenas[lane];
+        for resident in self.residence.values_mut() {
+            let bytes = lane_slice!(resident.prims, LANES[lane]);
+            let count = (bytes.len() as u32) / arena.element;
             if count == 0 {
                 continue;
             }
-            let range = self.arenas[lane]
+            let range = arena
                 .alloc(count)
                 .expect("the arena was sized for everything resident");
-            let written = self.arenas[lane].upload(gpu, belt, encoder, range.start, &bytes);
-            if lane >= LANES.len() {
-                counter::add(Counter::MarksPayloadBytes, written);
-            }
-            uploaded += written;
-            self.residence
-                .get_mut(&revision)
-                .expect("iterating known keys")
-                .ranges[lane] = Some(range);
+            uploaded += arena.upload(gpu, belt, encoder, range.start, bytes);
+            resident.ranges[lane] = Some(range);
         }
         uploaded
     }
@@ -741,11 +814,12 @@ impl ChunkStore {
         uploaded
     }
 
-    /// Finds each mark's payload ranges, by remap position: in its resident chunk's ranges, or
-    /// gathered into per-frame ranges for a mark served transiently.
+    /// Finds each mark's payload ranges, by remap position: in the resident payload its resident
+    /// chunk holds, in a resident payload a transient mark draws as well, or gathered into
+    /// per-frame ranges.
     ///
-    /// The test is the one the lane's own resolution made, so an item and its payload always come
-    /// from the same place.
+    /// The test is the one the lane's own resolution made, so a resident item always reads the
+    /// payload its chunk holds.
     fn resolve_payloads(
         &mut self,
         gpu: &Gpu,
@@ -769,9 +843,16 @@ impl ChunkStore {
             )
             .is_some()
         };
+        // A mark served transiently gathers its payload only when no resident payload is it.
+        let gathers = |store: &Self, index: u32| {
+            !resident(store, index)
+                && !store
+                    .shared
+                    .contains_key(&payload_key(&payloads[index as usize]))
+        };
         let mut transient = [0u32; PAYLOAD_LANES];
         for &index in remap {
-            if !resident(self, index) {
+            if gathers(self, index) {
                 for (kind, count) in payloads[index as usize].counts().into_iter().enumerate() {
                     transient[kind] += count;
                 }
@@ -800,15 +881,15 @@ impl ChunkStore {
             let payload = &payloads[index as usize];
             let counts = payload.counts();
             let slot = provenance[index as usize];
-            let at = if resident(self, index) {
-                let held = &self.residence[&slot.revision];
-                let starts = held.mark_starts[slot.index as usize];
-                core::array::from_fn(|kind| {
-                    let base = held.ranges[payload_arena(kind)]
-                        .as_ref()
-                        .map_or(0, |range| range.start);
-                    base + starts[kind]
-                })
+            let key = if resident(self, index) {
+                Some(self.residence[&slot.revision].payloads[slot.index as usize])
+            } else {
+                let key = payload_key(payload);
+                self.shared.contains_key(&key).then_some(key)
+            };
+            let at = if let Some(key) = key {
+                let held = &self.shared[&key].ranges;
+                core::array::from_fn(|kind| held[kind].as_ref().map_or(0, |range| range.start))
             } else {
                 let at: [u32; PAYLOAD_LANES] =
                     core::array::from_fn(|kind| ranges[kind].start + placed[kind]);
@@ -854,6 +935,7 @@ impl ChunkStore {
     pub fn release(&mut self, gpu: &Gpu) -> u64 {
         let before = self.bytes();
         self.residence.clear();
+        self.shared.clear();
         self.ledger.forget();
         for arena in &mut self.arenas {
             arena.reset_with_capacity(gpu, 0);

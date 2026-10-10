@@ -548,3 +548,186 @@ fn mark_axes_draw_as_the_mapped_payload() {
         mapped.max_difference(&expected)
     );
 }
+
+/// The payloads of [`push_marks`] at origin zero, made once and shared by every encoding.
+fn shared_payloads() -> [Arc<zgui_scene::MarkPayload>; 2] {
+    use zgui_scene::MarkPayload;
+
+    [
+        Arc::new(MarkPayload {
+            discs: vec![
+                [20.5, 20.5, 9.25, 0.0],
+                [28.5, 24.5, 9.25, 0.0],
+                [24.5, 30.5, 6.5, 0.0],
+            ],
+            ..MarkPayload::default()
+        }),
+        Arc::new(MarkPayload {
+            discs: vec![[80.5, 40.5, 12.0, 7.5]],
+            ..MarkPayload::default()
+        }),
+    ]
+}
+
+/// The marks of [`push_marks`] over `payloads`, with their origin at `(across, down)`.
+fn push_shared_marks(
+    scene: &mut Scene,
+    payloads: &[Arc<zgui_scene::MarkPayload>; 2],
+    across: f32,
+    down: f32,
+) {
+    use zgui_scene::{MarkFlags, MarkItem};
+
+    let translucent = PaintRef::solid(scene.paints.solid(Color::srgb_u8(200, 60, 20, 128)));
+    let opaque = PaintRef::solid(scene.paints.solid(Color::srgb_u8(20, 160, 90, 255)));
+    let mut union = MarkItem::new(
+        rect(11.25 + across, 11.25 + down, 26.5, 28.5),
+        translucent,
+        payloads[0].counts(),
+    );
+    union.flags |= MarkFlags::UNION;
+    union.origin = [across, down];
+    scene.push_marks(union, Arc::clone(&payloads[0]));
+    let mut direct = MarkItem::new(
+        rect(68.5 + across, 28.5 + down, 24.0, 24.0),
+        opaque,
+        payloads[1].counts(),
+    );
+    direct.origin = [across, down];
+    scene.push_marks(direct, Arc::clone(&payloads[1]));
+}
+
+/// Encodes the shared marks at `(across, down)` as chunk `revision`, retiring `retired`, and
+/// draws it. Returns the payload bytes the frame uploaded and its pixels.
+fn encode_shared(
+    renderer: &mut support::TestRenderer,
+    scene: &mut Scene,
+    payloads: &[Arc<zgui_scene::MarkPayload>; 2],
+    (across, down): (f32, f32),
+    revision: u64,
+    retired: &[u64],
+) -> (u64, Pixels) {
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_shared_marks(scene, payloads, across, down);
+    let chunk = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(revision, chunk);
+    for &old in retired {
+        scene.note_chunk_retired(old);
+    }
+    scene.bind_capture(revision);
+    scene.finish(&DamageSet::full());
+    zgui_profile::counter::reset();
+    let (_, pixels) = draw_bytes(renderer, scene);
+    scene.clear_chunk_notes();
+    (
+        zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes),
+        pixels,
+    )
+}
+
+#[test]
+fn a_re_encoded_chunk_sharing_its_payload_uploads_none() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let payloads = shared_payloads();
+    let mut scene = Scene::new();
+    let (first, _) = encode_shared(&mut renderer, &mut scene, &payloads, (0.0, 0.0), 1, &[]);
+    let (second, panned) =
+        encode_shared(&mut renderer, &mut scene, &payloads, (5.0, 7.0), 2, &[1]);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(first > 0, "the first encoding uploads its payload");
+        assert_eq!(second, 0, "the next revision holds the same payload");
+    }
+
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let mut control = Scene::new();
+    control.begin_frame(Size::new(SIDE, SIDE));
+    push_marks_at(&mut control, 5.0, 7.0);
+    control.finish(&DamageSet::full());
+    let (_, expected) = draw_bytes(&mut control_renderer, &control);
+    assert_eq!(panned.max_difference(&expected), 0);
+}
+
+#[test]
+fn a_shared_payload_outlives_its_first_holder() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let payloads = shared_payloads();
+    let mut scene = Scene::new();
+    // Two chunks hold the payload: the first is encoded, then the second.
+    encode_shared(&mut renderer, &mut scene, &payloads, (0.0, 0.0), 1, &[]);
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_shared_marks(&mut scene, &payloads, 5.0, 7.0);
+    let second = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(2, Arc::clone(&second));
+    scene.bind_capture(2);
+    scene.finish(&DamageSet::full());
+    draw_bytes(&mut renderer, &scene);
+    scene.clear_chunk_notes();
+    // The first retires, and the second replays in place.
+    let mut last = None;
+    for frame in 0..4 {
+        scene.begin_frame(Size::new(SIDE, SIDE));
+        scene.replay_chunk(&second, Size::new(DevicePx(0.0), DevicePx(0.0)), 2);
+        if frame == 0 {
+            scene.note_chunk_retired(1);
+        }
+        scene.finish(&DamageSet::full());
+        zgui_profile::counter::reset();
+        let (_, pixels) = draw_bytes(&mut renderer, &scene);
+        scene.clear_chunk_notes();
+        if zgui_profile::COUNTERS_ENABLED {
+            assert_eq!(
+                zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes),
+                0,
+                "frame {frame}: the payload stays resident under its second holder"
+            );
+        }
+        last = Some(pixels);
+    }
+    // A third chunk over the same payload after many frames finds it still resident.
+    let (third, _) = encode_shared(&mut renderer, &mut scene, &payloads, (5.0, 7.0), 3, &[2]);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(third, 0, "the payload passed from the second holder to the third");
+    }
+
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let mut control = Scene::new();
+    control.begin_frame(Size::new(SIDE, SIDE));
+    push_marks_at(&mut control, 5.0, 7.0);
+    control.finish(&DamageSet::full());
+    let (_, expected) = draw_bytes(&mut control_renderer, &control);
+    assert_eq!(last.expect("drawn").max_difference(&expected), 0);
+}
+
+#[test]
+fn shared_payloads_hold_still_over_a_hundred_pans() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let payloads = shared_payloads();
+    let mut scene = Scene::new();
+    let mut held = None;
+    for frame in 1..=100_u64 {
+        let retired: &[u64] = if frame > 1 { &[frame - 1] } else { &[] };
+        let at = ((frame % 9) as f32, (frame % 5) as f32);
+        let (bytes, _) = encode_shared(&mut renderer, &mut scene, &payloads, at, frame, retired);
+        if zgui_profile::COUNTERS_ENABLED && frame > 1 {
+            assert_eq!(bytes, 0, "frame {frame} uploads no payload");
+        }
+        if frame == 10 {
+            held = Some(renderer.memory().buffers);
+        }
+    }
+    assert_eq!(Some(renderer.memory().buffers), held);
+}
