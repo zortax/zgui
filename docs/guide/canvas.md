@@ -31,7 +31,8 @@ A pan or a zoom through it recognises no shape again. The series and the shapes 
 analytic quads or marks keep their payloads, and the renderer uploads none for them. A turn or a
 stretch keeps only the series payloads. A shape on the general route keeps its encoding under
 every view, because the view only changes where the renderer places that encoding. A shape on the
-mask route rasterises again under each new view.
+path glyph route keeps its payload under a pan and rasterises its outlines again under a new zoom.
+A shape on the mask route rasterises again under each new view.
 
 ```rust,ignore
 let handle = CanvasHandle::new();
@@ -46,7 +47,8 @@ The transform stays when a draw closure clears the scene for its next run.
 
 A `Series` holds plot data in data space as an `Arc<[[f32; 2]]>`, with a `to_canvas` matrix:
 
-- `Series::Points` draws one marker per point: a circle or a square, with a fill, a stroke or both.
+- `Series::Points` draws one marker per point: a circle, a square or any outline
+  (`Marker::Path`), with a fill, a stroke or both.
 - `Series::Line` draws one polyline through the points, with round joins.
 
 Marker sizes and line widths are CSS pixels. No canvas transform scales them: not `to_canvas`,
@@ -59,6 +61,29 @@ precision: positions are stored relative to the centre of the data.
 
 `push_series` places the series above the shapes pushed so far. Series take no part in hit
 testing.
+
+A `Marker::Path` is an outline in CSS pixels with its origin on the point. It is drawn as path
+glyphs (see below), so a pan or a zoom of the view rasterises nothing and uploads no payload. A
+marker more than 64 device pixels across, and a marker under an element transform that turns or
+skews, draws through the general route.
+
+## Path glyphs
+
+A shape whose subpaths repeat a few outlines, such as a scatter of triangles, crosses or stars, is
+drawn like text. Each distinct outline is rasterised once per device scale into the monochrome
+atlas, at 16 quarter-pixel positions, and each subpath draws the one nearest its own position. A
+pan rasterises nothing, and a position is off by at most an eighth of a pixel. The route takes a
+shape when all of these hold:
+
+- No analytic or marks route takes it. Circles, rectangles and simple strokes go there first.
+- It has at least 8 subpaths. At most 16 distinct outlines are allowed among the first 64
+  subpaths, and at most one eighth of all subpaths (and never more than 64) are distinct.
+- Each subpath is at most 64 device pixels from its first point.
+- The paint is a solid or inherited colour, with no clip and no dash pattern.
+- The element's transform keeps the axes: a scale, a mirror or a quarter turn. A stroke needs the
+  same scale on both axes.
+- Subpaths that overlap are painted as one union. Overlapping subpaths under the even-odd rule,
+  or turning both ways, take another route, because one of them is a hole.
 
 ## CPU layers
 
