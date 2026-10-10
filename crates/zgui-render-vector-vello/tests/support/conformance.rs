@@ -6,15 +6,22 @@
 //! distance, and the path renderer measures area. A third picture stands for the true coverage:
 //! the shapes flattened to lines within a two-hundredth of a pixel, strokes replaced by their
 //! outlines, drawn by the path renderer, which is exact on straight edges.
+//!
+//! The path glyph route rasterises into a content cache, whose tiles are flushed to the renderer's
+//! atlas before the picture is drawn.
 
 use std::sync::Arc;
 
 use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::Affine2;
-use zgui_paint::content::{AnalyticOnly, MarksOnly};
+use zgui_paint::content::vectors::{GlyphRequest, GlyphSheets, MarkPayloads, Splits};
+use zgui_paint::content::{
+    AnalyticOnly, MarksOnly, VectorMask, VectorMaskRequest, VectorMaskSource,
+};
 use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw, draw_with_masks};
-use zgui_render_wgpu::Pixels;
+use zgui_paint::{ContentCache, FrameContent};
+use zgui_render_wgpu::{Pixels, WgpuRenderer};
 use zgui_scene::kurbo::{self, BezPath};
 use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId, VectorId, peniko};
 use zgui_svg::{Fill, Shape};
@@ -34,28 +41,134 @@ pub(crate) enum Route {
     Analytic,
     /// Marks.
     Marks,
+    /// Path glyphs.
+    Glyphs,
+}
+
+/// A source of positioned glyphs with nothing in it.
+pub(crate) struct NoShaped;
+
+impl zgui_text::ShapedGlyphs for NoShaped {
+    fn visit_line(
+        &self,
+        _paragraph: zgui_text::ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
+    ) {
+    }
+}
+
+/// A frame of a content cache that allows the path glyph route alone, and keeps mark payloads.
+pub(crate) struct GlyphsOnly<'a>(pub(crate) &'a FrameContent<'a>);
+
+impl VectorMaskSource for GlyphsOnly<'_> {
+    fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
+        None
+    }
+
+    fn analytic(&self, _owner: VectorId) -> bool {
+        false
+    }
+
+    fn marks(&self, _owner: VectorId) -> bool {
+        false
+    }
+
+    fn payloads(&self) -> Option<core::cell::RefMut<'_, MarkPayloads>> {
+        self.0.payloads()
+    }
+
+    fn path_glyphs(&self, owner: VectorId) -> bool {
+        self.0.path_glyphs(owner)
+    }
+
+    fn path_glyphs_declined(&self, owner: VectorId) {
+        self.0.path_glyphs_declined(owner);
+    }
+
+    fn glyph_splits(&self) -> Option<core::cell::RefMut<'_, Splits>> {
+        self.0.glyph_splits()
+    }
+
+    fn glyph_sheets(&self, request: GlyphRequest<'_>) -> Option<GlyphSheets> {
+        self.0.glyph_sheets(request)
+    }
+}
+
+/// Runs `draw` over a frame of `content` that allows the path glyph route alone, then flushes the
+/// frame's tiles to `renderer`'s atlas.
+pub(crate) fn with_glyphs<R>(
+    content: &mut ContentCache,
+    renderer: &mut WgpuRenderer,
+    draw: impl FnOnce(&dyn VectorMaskSource) -> R,
+) -> R {
+    let store = zgui_layout::tree::store::LayoutStore::new(zgui_arena::DocumentId::FIRST);
+    content.set_vector_raster_ready(true);
+    content.begin_frame();
+    let out = {
+        let frame = content.frame(&store, &NoShaped, &zgui_text::NoRaster);
+        draw(&GlyphsOnly(&frame))
+    };
+    content
+        .flush(renderer.atlas())
+        .expect("the device accepts the tiles");
+    content.end_frame();
+    out
 }
 
 /// `shapes` on black under `placement`, drawn with `route` allowed, or through the general route
-/// alone.
+/// alone. The glyph route draws through `glyphs`.
 pub(crate) fn scene_of(shapes: &[Shape], route: Option<Route>, placement: Affine2) -> Scene {
+    scene_with(
+        shapes,
+        route,
+        placement,
+        &zgui_paint::content::NoVectorMasks,
+    )
+}
+
+/// `shapes` on black under `placement`, drawn through the path glyph route of a frame of
+/// `content`, whose tiles reach `renderer`.
+pub(crate) fn scene_of_glyphs(
+    shapes: &[Shape],
+    placement: Affine2,
+    content: &mut ContentCache,
+    renderer: &mut WgpuRenderer,
+) -> Scene {
+    with_glyphs(content, renderer, |glyphs| {
+        scene_with(shapes, Some(Route::Glyphs), placement, glyphs)
+    })
+}
+
+/// The transform `placement` stands for in `scene`.
+pub(crate) fn space(scene: &mut Scene, placement: Affine2) -> SpatialId {
+    if placement == Affine2::IDENTITY {
+        return SpatialId::VIEWPORT;
+    }
+    let viewport = scene.spatial.viewport();
+    let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    scene.spatial.space_of(
+        viewport,
+        owner,
+        OwnSpace::of(Some(placement.to_matrix4()), None, false),
+    )
+}
+
+/// `shapes` on black under `placement`, drawn with `route` allowed, the glyph route through
+/// `glyphs`.
+fn scene_with(
+    shapes: &[Shape],
+    route: Option<Route>,
+    placement: Affine2,
+    glyphs: &dyn VectorMaskSource,
+) -> Scene {
     let mut scene = super::scene();
     quad(
         &mut scene,
         rect(0.0, 0.0, SIDE as f32, SIDE as f32),
         opaque(0, 0, 0),
     );
-    let transform = if placement == Affine2::IDENTITY {
-        SpatialId::VIEWPORT
-    } else {
-        let viewport = scene.spatial.viewport();
-        let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
-        scene.spatial.space_of(
-            viewport,
-            owner,
-            OwnSpace::of(Some(placement.to_matrix4()), None, false),
-        )
-    };
+    let transform = space(&mut scene, placement);
     let paint = ShapePaint {
         fill: Color::WHITE,
         stroke: None,
@@ -86,6 +199,9 @@ pub(crate) fn scene_of(shapes: &[Shape], route: Option<Route>, placement: Affine
                 &MarksOnly,
                 placement,
             );
+        }
+        Some(Route::Glyphs) => {
+            draw_with_masks(&mut scene, VectorId(1), shapes, paint, glyphs, placement);
         }
         None => {
             draw(&mut scene, VectorId(1), shapes, paint, placement);
@@ -228,9 +344,28 @@ pub(crate) fn compare(name: &str, shapes: &[Shape], placement: Affine2, route: R
     let Some(mut harness) = harness(Which::Vello) else {
         return;
     };
-    let quick = scene_of(shapes, Some(route), placement);
+    let quick = match route {
+        Route::Glyphs => {
+            let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+            scene_of_glyphs(shapes, placement, &mut content, &mut harness.renderer)
+        }
+        _ => scene_of(shapes, Some(route), placement),
+    };
     let general = scene_of(shapes, None, placement);
     let exact = scene_of(&precise(shapes, placement), None, placement);
+    judge(name, &mut harness.renderer, &quick, &general, &exact, route);
+}
+
+/// Checks that `quick`, drawn through `route`, agrees with `general` as [`compare`] says, with
+/// `exact` as the true coverage.
+pub(crate) fn judge(
+    name: &str,
+    renderer: &mut WgpuRenderer,
+    quick: &Scene,
+    general: &Scene,
+    exact: &Scene,
+    route: Route,
+) {
     assert!(
         quick.primitives.vectors.is_empty(),
         "{name}: a shape left the {route:?} route"
@@ -245,7 +380,7 @@ pub(crate) fn compare(name: &str, shapes: &[Shape], placement: Affine2, route: R
             quick.primitives.quads.len() > 1,
             "{name}: the analytic picture drew no quad"
         ),
-        Route::Marks => {
+        Route::Marks | Route::Glyphs => {
             assert!(
                 !quick.primitives.marks.is_empty(),
                 "{name}: the marks picture drew no mark"
@@ -257,9 +392,9 @@ pub(crate) fn compare(name: &str, shapes: &[Shape], placement: Affine2, route: R
             );
         }
     }
-    let by_route = present(&mut harness.renderer, &quick);
-    let by_paths = present(&mut harness.renderer, &general);
-    let by_lines = present(&mut harness.renderer, &exact);
+    let by_route = present(renderer, quick);
+    let by_paths = present(renderer, general);
+    let by_lines = present(renderer, exact);
     let found = agreement(&by_route, &by_paths);
     let route_error = agreement(&by_route, &by_lines);
     let paths_error = agreement(&by_paths, &by_lines);
