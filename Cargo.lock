@@ -6204,6 +6204,7 @@ dependencies = [
  "zgui-arena",
  "zgui-atlas",
  "zgui-bits",
+ "zgui-canvas",
  "zgui-color",
  "zgui-css",
  "zgui-dom",

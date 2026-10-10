@@ -46,5 +46,8 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # and the two pictures are compared.
 zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
 
+# Canvas series and views, drawn by the real emitter and compared with fresh encodings.
+zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
+
 [lints]
 workspace = true
