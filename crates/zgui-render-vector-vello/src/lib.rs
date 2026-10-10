@@ -35,6 +35,9 @@
 //! ```
 
 #![deny(missing_docs)]
+// Proving a wgpu handle `Send` and `Sync` walks a type chain deeper than the default limit of 128,
+// which newer compilers report as a future error.
+#![recursion_limit = "256"]
 #![allow(unsafe_code)]
 
 pub mod device;

@@ -15,6 +15,10 @@
 //! * both scale, clip, sort and move exactly like any other box, because to the compositor they
 //!   are one more quad.
 
+// Proving a wgpu handle `Send` walks a type chain deeper than the default limit of 128, which newer
+// compilers report as a future error.
+#![recursion_limit = "256"]
+
 use zgui::prelude::*;
 use zgui::surface::{
     self as gpu, SurfaceConfig, SurfaceEvent, SurfaceIntrinsic, SurfaceRenderCx, wgpu,

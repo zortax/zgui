@@ -13,6 +13,10 @@
 //! Nothing here needs DRM master, and nothing here puts a picture on a screen. The display is read
 //! for one thing only: which layouts its primary plane can scan out.
 
+// Proving a wgpu handle `Send` walks a type chain deeper than the default limit of 128, which newer
+// compilers report as a future error.
+#![recursion_limit = "256"]
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
 use std::thread;

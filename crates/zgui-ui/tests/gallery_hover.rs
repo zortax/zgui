@@ -109,7 +109,7 @@ fn drive<'a>(
         let mut fails = failures.lock().unwrap_or_else(|held| held.into_inner());
         let mut entered = false;
         let frame = std::time::Duration::from_millis(8);
-        let mut check = |harness: &mut zgui_platform_headless::Harness<_>,
+        let check = |harness: &mut zgui_platform_headless::Harness<_>,
                          when: String,
                          fails: &mut Vec<String>| {
             harness.settle(16);

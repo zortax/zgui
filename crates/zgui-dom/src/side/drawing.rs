@@ -112,7 +112,7 @@ pub fn draws(store: &DocumentStore, node: NodeKey) -> bool {
 #[cfg(test)]
 mod tests {
     use zgui_interned::ElementName;
-    use zgui_vocab::{PropKey, PropValue, SharedString, prop::drawing};
+    use zgui_vocab::{PropKey, PropValue, prop::drawing};
 
     use crate::arena::document::Document;
     use crate::mutate::filter::EverythingMatters;

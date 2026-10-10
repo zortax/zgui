@@ -15,7 +15,7 @@ use zgui_custom::{CustomElement, CustomLayoutCx, CustomMeasured, ScenePainter};
 use zgui_geom::{Device, DevicePx, Size};
 use zgui_platform::{Surface, SurfaceEvent};
 use zgui_platform_headless::Harness;
-use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
+use zgui_profile::{COUNTERS_ENABLED, counter};
 use zgui_runtime::{App, AppError, Runtime};
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 

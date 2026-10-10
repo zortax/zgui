@@ -124,11 +124,17 @@ impl DirtyCell {
     pub fn retire_phase(&self, phase: Dirty, keep: Dirty) {
         let cleared = !subtree_half(phase);
         let restored = subtree_half(keep);
-        let _ = self
-            .0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
-                Some((word & cleared) | restored)
-            });
+        let mut word = self.0.load(Ordering::Acquire);
+        loop {
+            let next = (word & cleared) | restored;
+            match self
+                .0
+                .compare_exchange_weak(word, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(seen) => word = seen,
+            }
+        }
     }
 }
 

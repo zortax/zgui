@@ -31,6 +31,9 @@
 //! frame that samples them.
 
 #![forbid(unsafe_code)]
+// Proving a wgpu handle `Send` and `Sync` walks a type chain deeper than the default limit of 128,
+// which newer compilers report as a future error.
+#![recursion_limit = "256"]
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};

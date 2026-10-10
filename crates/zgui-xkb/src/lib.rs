@@ -56,6 +56,8 @@
 // takes them. Receiving one needs this feature, and a received message is one that never reached
 // standard error. See `log.rs`; nothing else in the crate uses it.
 #![feature(c_variadic)]
+// Newer toolchains ship the feature as stable and report the attribute; the pinned one needs it.
+#![allow(stable_features)]
 // This crate is on the unsafe ledger's allowlist for one reason: libxkbcommon is opened at run
 // time and called through the addresses that come back, so every entry point is an FFI call
 // through a resolved symbol. Every unsafe block states what makes it sound.

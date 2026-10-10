@@ -16,7 +16,7 @@ use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
 use zgui_runtime::{App, AppError, Runtime};
 use zgui_shader::{NoParams, ShaderEffect, ShaderParams, shader};
-use zgui_view::{Anchor, BuildCx, IntoView, View};
+use zgui_view::{BuildCx, IntoView, View};
 
 /// What the smoothing effect draws with.
 #[repr(C)]
