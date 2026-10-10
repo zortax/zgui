@@ -1,8 +1,9 @@
 //! Canvas series and canvas views on a real device.
 //!
 //! A pan of a view re-encodes the canvas chunk and keeps its payloads, so it uploads none and
-//! draws the pixels a fresh encoding draws. Markers keep their size under a zoom, data far from
-//! the origin lands on its pixel, and marks through a fit draw as the placed shapes do.
+//! draws the pixels a fresh encoding draws. Markers and lines keep their size under a zoom or a
+//! turn, data far from the origin lands on its pixel, and marks through a fit draw as the placed
+//! shapes do.
 
 mod support;
 
@@ -296,25 +297,41 @@ fn a_line_series_matches_the_same_polyline_shape() {
         return;
     };
 
+    let on_screen: Vec<kurbo::Point> = points
+        .iter()
+        .map(|&[x, y]| kurbo::Point::new(f64::from(x), f64::from(y)))
+        .collect();
+    let style = kurbo::Stroke::new(3.0)
+        .with_caps(kurbo::Cap::Round)
+        .with_join(kurbo::Join::Round);
+    let Some(expected) = polyline_shape(&on_screen, style) else {
+        return;
+    };
+    assert!(
+        line.max_difference(&expected) <= 1,
+        "the line series differs by {}",
+        line.max_difference(&expected)
+    );
+}
+
+/// The pixels of a polyline through `points` stroked with `style`, as one shape on the marks
+/// route with no fit.
+fn polyline_shape(points: &[kurbo::Point], style: kurbo::Stroke) -> Option<Pixels> {
     let mut path = BezPath::new();
-    path.move_to((f64::from(points[0][0]), f64::from(points[0][1])));
-    for &[x, y] in &points[1..] {
-        path.line_to((f64::from(x), f64::from(y)));
+    path.move_to(points[0]);
+    for &point in &points[1..] {
+        path.line_to(point);
     }
     let shape = Shape {
         path: Arc::new(path),
         fill: None,
         stroke: Some(Stroke {
             paint: Paint::Solid(Ink::Solid(Color::WHITE)),
-            style: kurbo::Stroke::new(3.0)
-                .with_caps(kurbo::Cap::Round)
-                .with_join(kurbo::Join::Round),
+            style,
         }),
         clips: Vec::new(),
     };
-    let Some(mut harness) = harness(Which::Vello) else {
-        return;
-    };
+    let mut harness = harness(Which::Vello)?;
     let mut scene = support::scene();
     quad(
         &mut scene,
@@ -335,12 +352,79 @@ fn a_line_series_matches_the_same_polyline_shape() {
         "the shape takes the marks route"
     );
     scene.finish(&DamageSet::full());
-    let expected = present(&mut harness.renderer, &scene);
-    assert!(
-        line.max_difference(&expected) <= 1,
-        "the line series differs by {}",
-        line.max_difference(&expected)
-    );
+    Some(present(&mut harness.renderer, &scene))
+}
+
+/// The summed coverage of the pixels whose centres lie within `radius` of `centre`.
+fn coverage_within(pixels: &Pixels, centre: kurbo::Point, radius: f64) -> f64 {
+    let mut sum = 0.0;
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            let at = kurbo::Point::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
+            if at.distance(centre) <= radius {
+                sum += f64::from(pixels.rgba(x, y)[0]) / 255.0;
+            }
+        }
+    }
+    sum
+}
+
+#[test]
+fn a_line_series_keeps_its_width_under_turned_and_stretched_axes() {
+    // A zigzag in canvas units, stretched apart in data space and turned and zoomed by the view.
+    let corners = [
+        (-20.0, -18.0),
+        (-8.0, 15.0),
+        (4.0, -12.0),
+        (16.0, 17.0),
+        (24.0, -14.0),
+    ];
+    let to_canvas = Affine::scale_non_uniform(3.0, 0.5);
+    let view = Affine::translate((64.0, 64.0))
+        * Affine::rotate(30.0_f64.to_radians())
+        * Affine::scale(2.0);
+    let data: Arc<[[f32; 2]]> = corners
+        .iter()
+        .map(|&(x, y)| [(x / 3.0) as f32, (y / 0.5) as f32])
+        .collect();
+    let on_screen: Vec<kurbo::Point> = data
+        .iter()
+        .map(|&[x, y]| view * to_canvas * kurbo::Point::new(f64::from(x), f64::from(y)))
+        .collect();
+    let width = 3.0;
+    for cap in [kurbo::Cap::Round, kurbo::Cap::Butt, kurbo::Cap::Square] {
+        let series = Series::Line {
+            data: Arc::clone(&data),
+            to_canvas,
+            stroke: kurbo::Stroke::new(width).with_caps(cap),
+            brush: white(),
+        };
+        let drawing = Drawing::canvas(&canvas(vec![series], Vec::new(), view), Affine::IDENTITY);
+        let Some(line) = fresh(&drawing) else {
+            return;
+        };
+        // The middle of the second segment, more than 20 px from every other segment.
+        let middle = on_screen[1].midpoint(on_screen[2]);
+        let across = coverage_within(&line, middle, 12.0);
+        println!("{cap:?}: {across:.2} of {:.2}", 24.0 * width);
+        assert!(
+            (across - 24.0 * width).abs() <= 0.05 * 24.0 * width,
+            "{cap:?}: the line covers {across:.2} of a 24 px chord, not {:.2}",
+            24.0 * width
+        );
+        let style = kurbo::Stroke::new(width)
+            .with_caps(cap)
+            .with_join(kurbo::Join::Round);
+        let Some(expected) = polyline_shape(&on_screen, style) else {
+            return;
+        };
+        assert!(coverage(&line) > 300.0, "{cap:?}: the line draws");
+        assert!(
+            line.max_difference(&expected) <= 1,
+            "{cap:?}: the line series differs from the shape by {}",
+            line.max_difference(&expected)
+        );
+    }
 }
 
 /// Circles as one path.
