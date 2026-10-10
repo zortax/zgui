@@ -314,3 +314,69 @@ fn a_layer_matches_the_general_route_on_the_conformance_set() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// A 3000 by 3000 document: a ramp over a quadrilateral, a radial disc, a clipped band and a stroke,
+/// each across the tile corner at (1024, 1024).
+const HUGE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 3000"><defs><linearGradient id="a" x1="900" y1="900" x2="1150" y2="1150" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#203040"/><stop offset="1" stop-color="#a0c0e0"/></linearGradient><radialGradient id="b" cx="1024" cy="1024" r="40" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffd166"/><stop offset="1" stop-color="#ef476f"/></radialGradient><clipPath id="c"><circle cx="1060" cy="1000" r="30"/></clipPath></defs><path d="M0 0 L3000 100 L2900 3000 L50 2950 Z" fill="url(#a)"/><circle cx="1024" cy="1024" r="40" fill="url(#b)"/><g clip-path="url(#c)"><rect x="1000" y="990" width="120" height="20" fill="#06d6a0"/></g><path d="M990 1110 L1110 1010" fill="none" stroke="#ffffff" stroke-width="5"/></svg>"##;
+
+#[test]
+fn tiles_of_a_huge_drawing_match_the_general_route() {
+    let Some(mut harness) = harness(Which::Vello) else {
+        return;
+    };
+    // The surface shows document units 1000 to 1128, on the whole grid and off it.
+    for (left, top) in [(-1000.0, -1000.0), (-1000.25, -999.5)] {
+        let case = Case {
+            box_: (left, top, 3000.0, 3000.0),
+            scale: 1.0,
+        };
+        let (mut scene, transform) = ground(case);
+        let (drawing, revision) = drawing_of(HUGE, case);
+        let mut content = ContentCache::new(AtlasLimits::default());
+        content.begin_frame();
+        let answer = content.layer(LayerRequest {
+            owner: VectorId(1),
+            revision,
+            drawing: &drawing,
+            paint: paint(),
+            spatial: Some(Affine2::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)),
+        });
+        let LayerAnswer::Tiles { tiles, .. } = answer else {
+            panic!("expected tiles, got {answer:?}");
+        };
+        let placement = VectorPlacement {
+            clip: ClipId::ROOT,
+            transform,
+            scale: 1.0,
+        };
+        for (name, path_rect) in tiles.sprites() {
+            let local = drawing.fit.transform_rect_bbox(path_rect);
+            let local = Rect::new(
+                Point::new(DevicePx(local.x0 as f32), DevicePx(local.y0 as f32)),
+                Size::new(
+                    DevicePx(local.width() as f32),
+                    DevicePx(local.height() as f32),
+                ),
+            );
+            scene.push_color_sprite(layer_sprite(local, name, placement, 1.0));
+        }
+        let owed = content.settle_layers(&mut scene, &DamageSet::full());
+        assert!(owed.is_empty(), "four tiles fit one frame's budget");
+        assert!(!scene.has_unresolved_resources());
+        scene.finish(&DamageSet::full());
+        content
+            .flush(harness.renderer.texture_sink())
+            .expect("the tiles' texels reach the device");
+        let by_tiles = present(&mut harness.renderer, &scene);
+        let by_paths = present(&mut harness.renderer, &general(HUGE, case));
+        let (mean, worst, at, count) = difference(&by_tiles, &by_paths);
+        println!("{left}, {top}: mean {mean:.3}, worst {worst} at {at:?} over {count} pixels");
+        assert!(count > 10_000, "the drawing covers the surface");
+        assert!(mean <= support::conformance::MEAN, "mean {mean:.3}");
+        // Off the pixel grid the sprites are filtered, and still within the conformance worst.
+        assert!(
+            worst <= support::conformance::WORST,
+            "worst {worst} at {at:?}"
+        );
+    }
+}

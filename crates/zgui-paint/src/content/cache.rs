@@ -201,6 +201,31 @@ impl ContentCache {
         vector_layers.layer(atlas, request, &mut named, &mut evict)
     }
 
+    /// Places, rasterises or blanks the tile sprites of `scene` against `damage`, outside a
+    /// frame's walk, and returns the rectangles of the tiles it deferred.
+    #[doc(hidden)]
+    pub fn settle_layers(
+        &mut self,
+        scene: &mut zgui_scene::Scene,
+        damage: &zgui_bits::DamageSet,
+    ) -> Vec<zgui_geom::Rect<i32, Device>> {
+        let Self {
+            atlas,
+            glyphs,
+            vector_masks,
+            vector_layers,
+            ..
+        } = self;
+        let mut evict = |atlas: &mut Atlas| {
+            let mut removed = Vec::new();
+            atlas.evict_least_recently_used_into(&mut removed);
+            glyphs.forget_tiles(&removed);
+            vector_masks.forget_tiles(&removed);
+            removed
+        };
+        vector_layers.settle(atlas, scene, damage, &mut evict)
+    }
+
     /// Removes the least recently drawn CPU vector layers nothing holds until `bytes` have gone,
     /// and reports how many went.
     ///
