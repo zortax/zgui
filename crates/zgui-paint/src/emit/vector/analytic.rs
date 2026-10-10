@@ -150,15 +150,15 @@ fn prims(found: &Decomposition, tau: f32) -> Option<Prims> {
 
 /// How one part of a shape is painted, read before anything is interned.
 #[derive(Clone, Copy, Debug)]
-struct Look {
+pub(super) struct Look {
     /// Whether it paints anything at all.
-    visible: bool,
+    pub(super) visible: bool,
     /// Whether it hides everything under it.
-    opaque: bool,
+    pub(super) opaque: bool,
 }
 
 /// How `paint` looks when it inherits `inherited`.
-fn look(paint: &zgui_svg::Paint, inherited: Color) -> Look {
+pub(super) fn look(paint: &zgui_svg::Paint, inherited: Color) -> Look {
     match paint {
         zgui_svg::Paint::Solid(ink) => of_color(ink.resolve(inherited)),
         zgui_svg::Paint::Gradient(ramp) => Look {
@@ -172,7 +172,7 @@ fn look(paint: &zgui_svg::Paint, inherited: Color) -> Look {
 }
 
 /// How one colour looks.
-fn of_color(color: Color) -> Look {
+pub(super) fn of_color(color: Color) -> Look {
     Look {
         visible: color.alpha() != 0.0,
         opaque: color.alpha() >= 1.0,
@@ -300,69 +300,17 @@ pub(super) fn emit_analytic(
         }
     }
 
-    // A clip the quad shader would test at pixel centres keeps its edge exact only where the edge
-    // is on a whole device pixel. A clip that reaches past every primitive's antialiased edge
-    // changes no pixel and is left out.
-    let mut links: SmallVec<[ClipLink; 2]> = SmallVec::new();
-    for (index, clip) in shape.clips.iter().enumerate() {
-        let found = recognised(
-            source,
-            Outline::Clip(index),
-            PartOf::Fill(clip.rule),
-            tau_local,
-            MAX_PRIMS,
-            masks,
-        )?;
-        let [prim] = found.boxes.as_slice() else {
-            return None;
-        };
-        if found.count != 1 || prim.exponent != CornerShape::ROUND.get() {
-            return None;
-        }
-        let [x0, y0, x1, y1] = prim.rect;
-        let reach = prim.radii.iter().copied().fold(0.0_f32, f32::max);
-        let inside = affine.transform_rect(Rect::<DevicePx, Device>::new(
-            Point::new(DevicePx(x0 + reach), DevicePx(y0 + reach)),
-            Size::new(
-                DevicePx((x1 - x0 - 2.0 * reach).max(0.0)),
-                DevicePx((y1 - y0 - 2.0 * reach).max(0.0)),
-            ),
-        ));
-        let [left, top, right, bottom] = [
-            inside.left().0,
-            inside.top().0,
-            inside.right().0,
-            inside.bottom().0,
-        ];
-        let holds = |ink: &Rect<DevicePx, Device>| {
-            left <= ink.left().0 - MARGIN
-                && top <= ink.top().0 - MARGIN
-                && right >= ink.right().0 + MARGIN
-                && bottom >= ink.bottom().0 + MARGIN
-        };
-        if device_fills.iter().chain(&device_strokes).all(holds) {
-            continue;
-        }
-        let rect = Rect::new(
-            Point::new(DevicePx(x0), DevicePx(y0)),
-            Size::new(DevicePx(x1 - x0), DevicePx(y1 - y0)),
-        );
-        let on_device = affine.transform_rect(rect);
-        let whole = |v: f32| (v - v.round()).abs() <= 1.0e-3;
-        let aligned = whole(on_device.left().0)
-            && whole(on_device.top().0)
-            && whole(on_device.right().0)
-            && whole(on_device.bottom().0);
-        if reach > 0.0 || !aligned {
-            return None;
-        }
-        links.push(ClipLink::shaped(
-            rect,
-            Corners::uniform(Vec2::splat(DevicePx(0.0))),
-            CornerShape::ROUND,
-            placement.transform,
-        ));
-    }
+    let inks: SmallVec<[Rect<DevicePx, Device>; 8]> =
+        fills.iter().chain(&strokes).map(Prim::bounds).collect();
+    let links = clip_links(
+        source,
+        &affine,
+        tau_local,
+        masks,
+        placement.transform,
+        &inks,
+        MARGIN / kx,
+    )?;
 
     // Everything is decided. From here on, the shape is drawn.
     let mut clip = placement.clip;
@@ -408,6 +356,73 @@ pub(super) fn emit_analytic(
     let mut pushed = run(scene, fill_quads.collect(), space);
     pushed += run(scene, stroke_quads.collect(), space);
     Some(pushed)
+}
+
+/// The links a shape's clips become, or `None` when one of them cannot be drawn as a link.
+///
+/// A clip that holds every one of `inks`, each grown by `margin` on every side, changes no pixel
+/// and is left out. Any other clip has to be a square-cornered rectangle whose edges land on whole
+/// device pixels under an axis-preserving `affine`: the shaders test a clip at pixel centres, which
+/// keeps its edge exact only there. `inks` and `margin` are in the shape's local space.
+pub(super) fn clip_links(
+    source: &ShapeSource<'_>,
+    affine: &zgui_geom::Affine2,
+    tau_local: f64,
+    masks: &dyn VectorMaskSource,
+    transform: zgui_scene::SpatialId,
+    inks: &[Rect<DevicePx, Device>],
+    margin: f32,
+) -> Option<SmallVec<[ClipLink; 2]>> {
+    let mut links: SmallVec<[ClipLink; 2]> = SmallVec::new();
+    for (index, clip) in source.shape.clips.iter().enumerate() {
+        let found = recognised(
+            source,
+            Outline::Clip(index),
+            PartOf::Fill(clip.rule),
+            tau_local,
+            MAX_PRIMS,
+            masks,
+        )?;
+        let [prim] = found.boxes.as_slice() else {
+            return None;
+        };
+        if found.count != 1 || prim.exponent != CornerShape::ROUND.get() {
+            return None;
+        }
+        let [x0, y0, x1, y1] = prim.rect;
+        let reach = prim.radii.iter().copied().fold(0.0_f32, f32::max);
+        let [left, top, right, bottom] = [x0 + reach, y0 + reach, x1 - reach, y1 - reach];
+        let holds = |ink: &Rect<DevicePx, Device>| {
+            left <= ink.left().0 - margin
+                && top <= ink.top().0 - margin
+                && right >= ink.right().0 + margin
+                && bottom >= ink.bottom().0 + margin
+        };
+        if inks.iter().all(holds) {
+            continue;
+        }
+        let rect = Rect::new(
+            Point::new(DevicePx(x0), DevicePx(y0)),
+            Size::new(DevicePx(x1 - x0), DevicePx(y1 - y0)),
+        );
+        let on_device = affine.transform_rect(rect);
+        let whole = |v: f32| (v - v.round()).abs() <= 1.0e-3;
+        let aligned = density_of(affine, false).is_some()
+            && whole(on_device.left().0)
+            && whole(on_device.top().0)
+            && whole(on_device.right().0)
+            && whole(on_device.bottom().0);
+        if reach > 0.0 || !aligned {
+            return None;
+        }
+        links.push(ClipLink::shaped(
+            rect,
+            Corners::uniform(Vec2::splat(DevicePx(0.0))),
+            CornerShape::ROUND,
+            transform,
+        ));
+    }
+    Some(links)
 }
 
 /// Pushes `quads` left to right as one run, and returns how many survived.

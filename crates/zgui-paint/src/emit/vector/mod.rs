@@ -33,6 +33,7 @@
 mod analytic;
 pub mod document;
 pub mod fit;
+mod marks;
 pub(crate) mod recognise;
 pub(crate) mod recognised;
 

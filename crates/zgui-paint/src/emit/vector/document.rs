@@ -29,6 +29,7 @@ use crate::content::vectors::{VectorMaskRequest, VectorMaskSource, VectorMaskSty
 use crate::emit::vector::{ShapePaint, ShapeSource, VectorPlacement, under};
 
 use super::analytic::emit_analytic;
+use super::marks::emit_marks;
 use super::{ShapeEmission, VectorRoute};
 
 /// Emits one shape, and returns how many primitives were pushed.
@@ -68,6 +69,13 @@ pub(crate) fn emit_tracked(
         return ShapeEmission {
             pushed,
             route: Some(VectorRoute::Analytic),
+        };
+    }
+    if let Some(pushed) = emit_marks(scene, id, source, paint, masks, placement) {
+        counter::bump(Counter::VectorRouteMarks);
+        return ShapeEmission {
+            pushed,
+            route: Some(VectorRoute::Marks),
         };
     }
     let shape = source.placed();

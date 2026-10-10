@@ -119,10 +119,10 @@ fn an_eligible_canvas_fill_uses_the_same_mask_route() {
 fn a_small_solid_canvas_stroke_uses_a_mask_instead_of_the_vector_rasteriser() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
-        // Diagonal, because a horizontal or vertical one is a quad on the analytic route.
+        // A curve, because a straight one is a quad on the analytic route or a mark.
         let mut path = zgui_scene::kurbo::BezPath::new();
         path.move_to((3.0, 3.0));
-        path.line_to((21.0, 21.0));
+        path.curve_to((9.0, 3.0), (15.0, 21.0), (21.0, 21.0));
         scene.push(
             zgui_canvas::ShapeBuilder::new(path)
                 .stroke(zgui_canvas::Brush::Inherited { alpha: 1.0 }, 2.0)
