@@ -1,9 +1,12 @@
 //! Lowering one run's style onto the engine's style properties.
 
 use core::ops::Range;
+use std::borrow::Cow;
 
+use parley::setting::{FontFeature, FontVariation};
 use parley::style::{FontFamily, FontFamilyName, FontVariations, LineHeight, StyleProperty};
 use parley::{FontFeatures, OverflowWrap, RangedBuilder, TextWrapMode, WordBreak};
+use smallvec::SmallVec;
 use zgui_geom::CssPx;
 use zgui_text::Brush;
 use zgui_text_style::{
@@ -14,50 +17,106 @@ use zgui_text_style::{
 use crate::font::resolve::generic_family;
 use crate::shape::brush::SlotBrush;
 
+/// The lists one run's style names, lowered once and borrowed by the engine's style.
+///
+/// Held inline, so a paragraph of one style lowers its style without a heap allocation.
+pub(crate) struct Lists {
+    /// The family list, in author order.
+    families: SmallVec<[FontFamilyName<'static>; 4]>,
+    /// The variable axes.
+    variations: SmallVec<[FontVariation; 4]>,
+    /// The OpenType features.
+    features: SmallVec<[FontFeature; 4]>,
+}
+
+impl Lists {
+    /// Lowers the lists of one style.
+    pub(crate) fn of(style: &TextStyle) -> Self {
+        Self {
+            families: family(&style.family),
+            variations: variations(style),
+            features: features(style),
+        }
+    }
+
+    /// The engine's whole style for one run and its brush, borrowing these lists.
+    ///
+    /// `space_advance` resolves the percentage half of `word-spacing`, which is measured against
+    /// the advance of a space in the face that was chosen and so cannot be resolved from a style
+    /// alone. Zero is the right value to pass when no face has been chosen yet, which leaves a
+    /// percentage word-spacing contributing nothing rather than contributing a guess.
+    ///
+    /// Every property this does not set keeps the engine's default, which is what a paragraph's
+    /// root style starts from too.
+    pub(crate) fn text_style(
+        &self,
+        style: &TextStyle,
+        brush: Brush,
+        space_advance: CssPx,
+    ) -> parley::TextStyle<'_, '_, SlotBrush> {
+        parley::TextStyle {
+            font_family: FontFamily::List(Cow::Borrowed(&self.families)),
+            font_size: style.size.0,
+            font_weight: parley::FontWeight::new(style.weight),
+            font_style: crate::font::resolve::slant(style.slant),
+            font_width: parley::FontWidth::from_ratio(style.width),
+            font_variations: FontVariations::List(Cow::Borrowed(&self.variations)),
+            font_features: FontFeatures::List(Cow::Borrowed(&self.features)),
+            line_height: line_height(style.line_height),
+            letter_spacing: style.letter_spacing.resolve(style.size).0,
+            word_spacing: style.word_spacing.resolve(space_advance).0,
+            word_break: match style.word_break {
+                CssWordBreak::Normal => WordBreak::Normal,
+                CssWordBreak::BreakAll => WordBreak::BreakAll,
+                CssWordBreak::KeepAll => WordBreak::KeepAll,
+            },
+            overflow_wrap: match style.overflow_wrap {
+                CssOverflowWrap::Normal => OverflowWrap::Normal,
+                CssOverflowWrap::BreakWord => OverflowWrap::BreakWord,
+                CssOverflowWrap::Anywhere => OverflowWrap::Anywhere,
+            },
+            text_wrap_mode: match style.wrap_mode {
+                WrapMode::Wrap => TextWrapMode::Wrap,
+                WrapMode::NoWrap => TextWrapMode::NoWrap,
+            },
+            brush: SlotBrush(brush),
+            ..parley::TextStyle::default()
+        }
+    }
+}
+
 /// The style properties one run contributes, in the engine's vocabulary.
 ///
-/// Built as an owned list rather than pushed directly because the family list has to outlive the
-/// call that pushes it, and because a paragraph's default style and a run's style are pushed
-/// through two different methods that must not drift apart.
+/// Built as an owned list rather than pushed directly because a paragraph's default style and a
+/// run's style are pushed through two different methods that must not drift apart. Taken from
+/// [`Lists::text_style`], so the ranged path and the single-style path lower a style the same way.
 pub(crate) struct LoweredStyle {
     /// The properties, in a fixed order.
     properties: Vec<StyleProperty<'static, SlotBrush>>,
 }
 
 impl LoweredStyle {
-    /// Lowers one style and its brush.
-    ///
-    /// `space_advance` resolves the percentage half of `word-spacing`, which is measured against
-    /// the advance of a space in the face that was chosen and so cannot be resolved from a style
-    /// alone. Zero is the right value to pass when no face has been chosen yet, which leaves a
-    /// percentage word-spacing contributing nothing rather than contributing a guess.
+    /// Lowers one style and its brush; see [`Lists::text_style`] for `space_advance`.
     pub(crate) fn of(style: &TextStyle, brush: Brush, space_advance: CssPx) -> Self {
+        let lists = Lists::of(style);
+        let lowered = lists.text_style(style, brush, space_advance);
         let properties = vec![
-            StyleProperty::FontFamily(family(&style.family)),
-            StyleProperty::FontSize(style.size.0),
-            StyleProperty::FontWeight(parley::FontWeight::new(style.weight)),
-            StyleProperty::FontStyle(crate::font::resolve::slant(style.slant)),
-            StyleProperty::FontWidth(parley::FontWidth::from_ratio(style.width)),
-            StyleProperty::FontVariations(variations(style)),
-            StyleProperty::FontFeatures(features(style)),
-            StyleProperty::LineHeight(line_height(style.line_height)),
-            StyleProperty::LetterSpacing(style.letter_spacing.resolve(style.size).0),
-            StyleProperty::WordSpacing(style.word_spacing.resolve(space_advance).0),
-            StyleProperty::WordBreak(match style.word_break {
-                CssWordBreak::Normal => WordBreak::Normal,
-                CssWordBreak::BreakAll => WordBreak::BreakAll,
-                CssWordBreak::KeepAll => WordBreak::KeepAll,
-            }),
-            StyleProperty::OverflowWrap(match style.overflow_wrap {
-                CssOverflowWrap::Normal => OverflowWrap::Normal,
-                CssOverflowWrap::BreakWord => OverflowWrap::BreakWord,
-                CssOverflowWrap::Anywhere => OverflowWrap::Anywhere,
-            }),
-            StyleProperty::TextWrapMode(match style.wrap_mode {
-                WrapMode::Wrap => TextWrapMode::Wrap,
-                WrapMode::NoWrap => TextWrapMode::NoWrap,
-            }),
-            StyleProperty::Brush(SlotBrush(brush)),
+            StyleProperty::FontFamily(FontFamily::List(Cow::Owned(lists.families.to_vec()))),
+            StyleProperty::FontSize(lowered.font_size),
+            StyleProperty::FontWeight(lowered.font_weight),
+            StyleProperty::FontStyle(lowered.font_style),
+            StyleProperty::FontWidth(lowered.font_width),
+            StyleProperty::FontVariations(FontVariations::List(Cow::Owned(
+                lists.variations.to_vec(),
+            ))),
+            StyleProperty::FontFeatures(FontFeatures::List(Cow::Owned(lists.features.to_vec()))),
+            StyleProperty::LineHeight(lowered.line_height),
+            StyleProperty::LetterSpacing(lowered.letter_spacing),
+            StyleProperty::WordSpacing(lowered.word_spacing),
+            StyleProperty::WordBreak(lowered.word_break),
+            StyleProperty::OverflowWrap(lowered.overflow_wrap),
+            StyleProperty::TextWrapMode(lowered.text_wrap_mode),
+            StyleProperty::Brush(lowered.brush),
         ];
         Self { properties }
     }
@@ -81,17 +140,15 @@ impl LoweredStyle {
     }
 }
 
-/// The engine's spelling of a family list, owned.
-fn family(list: &FontFamilyList) -> FontFamily<'static> {
-    let names: Vec<FontFamilyName<'static>> = list
-        .entries()
+/// The engine's spelling of a family list.
+fn family(list: &FontFamilyList) -> SmallVec<[FontFamilyName<'static>; 4]> {
+    list.entries()
         .iter()
         .map(|entry| match entry {
-            FamilyName::Named(name) => FontFamilyName::Named(name.as_str().into()),
+            FamilyName::Named(name) => FontFamilyName::Named(Cow::Borrowed(name.as_str())),
             FamilyName::Generic(generic) => FontFamilyName::Generic(generic_family(*generic)),
         })
-        .collect();
-    FontFamily::List(names.into())
+        .collect()
 }
 
 /// The variable axes this run is instanced at.
@@ -99,16 +156,15 @@ fn family(list: &FontFamilyList) -> FontFamily<'static> {
 /// Read through [`TextStyle::shaping_variations`] rather than off the field, because
 /// `font-optical-sizing` is a second property that lands on the same list and reading the field
 /// would drop it silently.
-fn variations(style: &TextStyle) -> FontVariations<'static> {
-    let list: Vec<parley::setting::FontVariation> = style
+fn variations(style: &TextStyle) -> SmallVec<[FontVariation; 4]> {
+    style
         .shaping_variations()
         .iter()
-        .map(|variation| parley::setting::FontVariation {
+        .map(|variation| FontVariation {
             tag: parley::setting::Tag::from_bytes(variation.tag.to_be_bytes()),
             value: variation.value,
         })
-        .collect();
-    FontVariations::List(list.into())
+        .collect()
 }
 
 /// The OpenType features this run is shaped with.
@@ -116,16 +172,15 @@ fn variations(style: &TextStyle) -> FontVariations<'static> {
 /// Read through [`TextStyle::shaping_features`] rather than off the field, because `font-kerning`
 /// and the five `font-variant-*` longhands all resolve into entries of this one list, and reading
 /// the field would lower six properties and hand over none of them.
-fn features(style: &TextStyle) -> FontFeatures<'static> {
-    let list: Vec<parley::setting::FontFeature> = style
+fn features(style: &TextStyle) -> SmallVec<[FontFeature; 4]> {
+    style
         .shaping_features()
         .iter()
-        .map(|feature| parley::setting::FontFeature {
+        .map(|feature| FontFeature {
             tag: parley::setting::Tag::from_bytes(feature.tag.to_be_bytes()),
             value: u16::try_from(feature.value).unwrap_or(u16::MAX),
         })
-        .collect();
-    FontFeatures::List(list.into())
+        .collect()
 }
 
 /// The engine's spelling of `line-height`.
