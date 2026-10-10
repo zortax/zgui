@@ -9,10 +9,16 @@
 //! one of them is never asked for again. Holding those paths costs more than recognising them,
 //! so an entry nothing has asked for again lives one frame only, and a frame that found nothing
 //! it held stops adding entries until a later frame tries again.
+//!
+//! No result depends on an entry: a path with none is recognised again. So a full map drops the
+//! entries touched least recently, and when a mark payload pins every entry, it keeps nothing new
+//! until a pin drops.
 
+use core::hash::Hash;
 use std::sync::{Arc, Weak};
 
 use rustc_hash::FxHashMap;
+use zgui_profile::{Counter, counter};
 use zgui_scene::kurbo::{self, BezPath};
 
 use crate::emit::vector::recognise::Decomposition;
@@ -30,8 +36,12 @@ const IDLE_MISSES: u32 = 16;
 /// drawings have stopped changing.
 const PROBE_FRAMES: u32 = 8;
 
-/// The most entries held. A full map keeps what it holds and adds nothing.
-const MAX_ENTRIES: usize = 4096;
+/// The most entries held. A full map drops [`EVICTED`] unpinned entries, those touched least
+/// recently first.
+pub(super) const MAX_ENTRIES: usize = 4096;
+
+/// How many entries a full map drops at once, so one scan for the oldest serves this many inserts.
+const EVICTED: usize = MAX_ENTRIES / 16;
 
 /// Which part of a shape a recognition was of: the interior, or the outline of one stroke style.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -87,6 +97,16 @@ struct Entry {
     proven: bool,
 }
 
+impl Entry {
+    /// Whether something besides the entry holds its result: a mark payload lowered from it is
+    /// still drawn.
+    fn pinned(&self) -> bool {
+        self.outcome
+            .as_ref()
+            .is_some_and(|found| Arc::strong_count(found) > 1)
+    }
+}
+
 /// Recognitions of paths, by the address of the path and the part recognised.
 #[doc(hidden)]
 #[derive(Debug)]
@@ -101,6 +121,8 @@ pub struct Recognitions {
     misses: u32,
     /// Whether this frame keeps what it recognises.
     keeping: bool,
+    /// Whether the map was full with every entry pinned this frame.
+    all_pinned: bool,
 }
 
 impl Default for Recognitions {
@@ -111,6 +133,7 @@ impl Default for Recognitions {
             hits: 0,
             misses: 0,
             keeping: true,
+            all_pinned: false,
         }
     }
 }
@@ -129,12 +152,9 @@ impl Recognitions {
     /// A result something else holds stays: a mark payload lowered from it is still drawn.
     pub(crate) fn end_frame(&mut self) {
         let frame = self.frame;
+        self.all_pinned = false;
         self.entries.retain(|_, entry| {
-            if entry
-                .outcome
-                .as_ref()
-                .is_some_and(|found| Arc::strong_count(found) > 1)
-            {
+            if entry.pinned() {
                 return true;
             }
             let kept = if entry.proven {
@@ -197,7 +217,14 @@ impl Recognitions {
         }
         let key = (key(path), part);
         if self.entries.len() >= MAX_ENTRIES && !self.entries.contains_key(&key) {
-            return;
+            self.all_pinned = self.all_pinned
+                || !evict(&mut self.entries, self.frame, EVICTED, |entry| {
+                    (entry.touched, entry.pinned())
+                });
+            if self.all_pinned {
+                counter::bump(Counter::MarksUncached);
+                return;
+            }
         }
         self.entries.insert(
             key,
@@ -227,4 +254,30 @@ impl Recognitions {
 /// The address a path is known by.
 fn key(path: &Arc<BezPath>) -> usize {
     Arc::as_ptr(path).addr()
+}
+
+/// Drops up to `count` entries of `map` that are not pinned, those touched least recently first,
+/// and returns whether it dropped any. `state` gives the frame an entry was last touched in and
+/// whether it is pinned.
+pub(crate) fn evict<K: Copy + Eq + Hash, V>(
+    map: &mut FxHashMap<K, V>,
+    frame: u32,
+    count: usize,
+    state: impl Fn(&V) -> (u32, bool),
+) -> bool {
+    let mut free: Vec<(u32, K)> = map
+        .iter()
+        .filter_map(|(key, entry)| {
+            let (touched, pinned) = state(entry);
+            (!pinned).then(|| (frame.wrapping_sub(touched), *key))
+        })
+        .collect();
+    if free.len() > count {
+        free.select_nth_unstable_by(count.max(1) - 1, |one, two| two.0.cmp(&one.0));
+        free.truncate(count.max(1));
+    }
+    for (_, key) in &free {
+        map.remove(key);
+    }
+    !free.is_empty()
 }

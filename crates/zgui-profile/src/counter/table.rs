@@ -463,6 +463,10 @@ counters! {
     /// Series payloads built.
     SeriesPayloadsBuilt => series_payloads_built, Group::BackendNeutral;
 
+    /// Recognitions and shape mark payloads kept nowhere, because every entry of their full cache
+    /// was pinned.
+    MarksUncached => marks_uncached, Group::BackendNeutral;
+
     /// Coverage masks rasterised because no tile held their geometry.
     VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;
 

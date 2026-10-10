@@ -156,9 +156,9 @@ impl VectorMaskSource for MarksOnly {
 #[derive(Debug, Default)]
 pub struct CachedMarks {
     /// The recognitions.
-    recognitions: core::cell::RefCell<super::recognitions::Recognitions>,
+    pub(crate) recognitions: core::cell::RefCell<super::recognitions::Recognitions>,
     /// The mark payloads.
-    payloads: core::cell::RefCell<super::payloads::MarkPayloads>,
+    pub(crate) payloads: core::cell::RefCell<super::payloads::MarkPayloads>,
 }
 
 impl CachedMarks {

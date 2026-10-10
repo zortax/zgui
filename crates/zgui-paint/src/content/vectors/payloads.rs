@@ -6,6 +6,10 @@
 //! zoom of a canvas view uploads no payload. A turn or a stretch of the view places each shape
 //! again, which is a new path and a new payload. A series keeps its payload under any view until
 //! a far pan measures it from a new centre.
+//!
+//! No picture depends on an entry: a source with none is lowered again, to a new allocation that
+//! uploads once more. So a full map drops the entries touched least recently, and when paint
+//! records pin every shape entry, it lowers new shapes with no entry until a pin drops.
 
 use std::sync::{Arc, Weak};
 
@@ -14,13 +18,19 @@ use zgui_profile::{Counter, counter};
 use zgui_scene::MarkPayload;
 use zgui_scene::kurbo::{Affine, Point};
 
+use super::recognitions::evict;
 use crate::emit::vector::recognise::Decomposition;
 
 /// How many frames a shape entry survives without a lookup once nothing else holds its payload.
 const SHAPE_FRAMES: u32 = 2;
 
-/// The most shape entries held. A full map keeps what it holds and adds nothing.
+/// The most shape entries held. A full map drops [`EVICTED_SHAPES`] entries no paint record pins,
+/// those touched least recently first.
 const MAX_SHAPES: usize = 4096;
+
+/// How many shape entries a full map drops at once, so one scan for the oldest serves this many
+/// inserts.
+const EVICTED_SHAPES: usize = MAX_SHAPES / 16;
 
 /// How many frames a series entry survives without a lookup.
 const SERIES_FRAMES: u32 = 600;
@@ -105,6 +115,15 @@ pub struct MarkPayloads {
     series: FxHashMap<SeriesKey, SeriesEntry>,
     /// The current frame.
     frame: u32,
+    /// Whether the shape map was full with every entry pinned this frame.
+    all_pinned: bool,
+}
+
+impl ShapeEntry {
+    /// Whether a paint record holds the payload: a drawing that may encode again draws it.
+    fn pinned(&self) -> bool {
+        Arc::strong_count(&self.payload) > 1
+    }
 }
 
 impl MarkPayloads {
@@ -116,12 +135,11 @@ impl MarkPayloads {
     /// Ends a frame: drops the entries whose source died or that no frame asked for lately.
     pub(crate) fn end_frame(&mut self) {
         let frame = self.frame;
+        self.all_pinned = false;
         // A payload a paint record holds belongs to a drawing that may encode again, as a canvas
         // panned after a pause does.
-        self.shapes.retain(|_, entry| {
-            Arc::strong_count(&entry.payload) > 1
-                || frame.wrapping_sub(entry.touched) < SHAPE_FRAMES
-        });
+        self.shapes
+            .retain(|_, entry| entry.pinned() || frame.wrapping_sub(entry.touched) < SHAPE_FRAMES);
         self.series.retain(|_, entry| {
             entry.data.strong_count() > 0 && frame.wrapping_sub(entry.touched) < SERIES_FRAMES
         });
@@ -148,7 +166,8 @@ impl MarkPayloads {
         Some((Arc::clone(&entry.payload), entry.flags))
     }
 
-    /// Keeps the payload and flags lowered from `found`. A full map adds nothing.
+    /// Keeps the payload and flags lowered from `found`. A full map whose every entry is pinned
+    /// keeps nothing.
     pub(crate) fn insert_shape(
         &mut self,
         found: &Arc<Decomposition>,
@@ -156,11 +175,19 @@ impl MarkPayloads {
         payload: Arc<MarkPayload>,
         flags: u32,
     ) {
-        if self.shapes.len() >= MAX_SHAPES {
-            return;
+        let key = (Arc::as_ptr(found) as usize, union);
+        if self.shapes.len() >= MAX_SHAPES && !self.shapes.contains_key(&key) {
+            self.all_pinned = self.all_pinned
+                || !evict(&mut self.shapes, self.frame, EVICTED_SHAPES, |entry| {
+                    (entry.touched, entry.pinned())
+                });
+            if self.all_pinned {
+                counter::bump(Counter::MarksUncached);
+                return;
+            }
         }
         self.shapes.insert(
-            (Arc::as_ptr(found) as usize, union),
+            key,
             ShapeEntry {
                 found: Arc::clone(found),
                 payload,
@@ -358,12 +385,19 @@ fn build(
 mod tests {
     use std::sync::Arc;
 
-    use zgui_scene::MarkPayload;
+    use zgui_canvas::{Brush, CanvasScene};
+    use zgui_color::Color;
+    use zgui_geom::Size;
+    use zgui_profile::Counter;
+    use zgui_scene::kurbo::{Affine, BezPath, Circle, Shape as _};
+    use zgui_scene::{ClipId, MarkPayload, Scene, SpatialId, VectorId};
 
-    use zgui_scene::kurbo::Affine;
-
-    use super::{MarkPayloads, SeriesPart, series_payload};
+    use super::{EVICTED_SHAPES, MAX_SHAPES, MarkPayloads, SeriesPart, series_payload};
+    use crate::content::Drawing;
+    use crate::content::vectors::recognitions::MAX_ENTRIES;
+    use crate::content::vectors::{CachedMarks, PartKey};
     use crate::emit::vector::recognise::{Decomposition, Orientation};
+    use crate::emit::vector::{ShapePaint, VectorPlacement, draw_drawing};
 
     /// A disc part of radius 3.
     const DISC: SeriesPart = SeriesPart::Disc {
@@ -526,5 +560,134 @@ mod tests {
         }
         assert!(payloads.shapes.is_empty());
         assert_eq!(Arc::strong_count(&found), 1, "the recognition is let go");
+    }
+
+    /// Draws `drawing` into a scene of its own and returns the payload of its one mark.
+    fn draw(drawing: &Drawing, source: &CachedMarks) -> Arc<MarkPayload> {
+        let mut scene = Scene::new();
+        scene.begin_frame(Size::new(64, 64));
+        let paint = ShapePaint {
+            fill: Color::WHITE,
+            stroke: None,
+            stroke_width: 1.0,
+        };
+        let placement = VectorPlacement {
+            clip: ClipId::ROOT,
+            transform: SpatialId::VIEWPORT,
+            scale: 1.0,
+        };
+        draw_drawing(&mut scene, VectorId(1), drawing, paint, source, placement);
+        assert_eq!(scene.primitives.marks.len(), 1, "the shape draws as a mark");
+        Arc::clone(&scene.primitives.mark_payloads[0])
+    }
+
+    #[test]
+    fn a_new_canvas_draws_when_pins_fill_every_cache() {
+        assert_eq!(MAX_SHAPES, MAX_ENTRIES);
+        let source = CachedMarks::new();
+        // Every entry of both maps belongs to a payload a paint record holds.
+        let mut pins = Vec::with_capacity(MAX_SHAPES);
+        for _ in 0..MAX_SHAPES {
+            let path = Arc::new(BezPath::new());
+            let found = found();
+            source.recognitions.borrow_mut().insert(
+                &path,
+                PartKey::Fill,
+                0,
+                1,
+                Some(Arc::clone(&found)),
+            );
+            let payload = Arc::new(MarkPayload::default());
+            source
+                .payloads
+                .borrow_mut()
+                .insert_shape(&found, false, Arc::clone(&payload), 0);
+            pins.push(payload);
+        }
+        source.end_frame();
+        assert_eq!(source.recognitions.borrow().len(), MAX_ENTRIES);
+        assert_eq!(source.payloads.borrow().shapes.len(), MAX_SHAPES);
+
+        let mut path = BezPath::new();
+        for (x, y) in [(10.0, 10.0), (30.0, 12.0), (20.0, 40.0)] {
+            path.extend(Circle::new((x, y), 4.0).path_elements(0.1));
+        }
+        let mut canvas = CanvasScene::default();
+        canvas.replace(vec![
+            zgui_canvas::ShapeBuilder::new(path)
+                .fill(Brush::Inherited { alpha: 1.0 })
+                .build(),
+        ]);
+        let drawing = Drawing::canvas(&canvas, Affine::IDENTITY);
+
+        let uncached = zgui_profile::counter::get(Counter::MarksUncached);
+        let first = draw(&drawing, &source);
+        let second = draw(&drawing, &source);
+        assert_eq!(first.discs.len(), 3, "the canvas draws in full");
+        assert_eq!(first.discs, second.discs);
+        assert!(!Arc::ptr_eq(&first, &second), "no entry keeps the payload");
+        if zgui_profile::COUNTERS_ENABLED {
+            assert!(zgui_profile::counter::get(Counter::MarksUncached) >= uncached + 2);
+        }
+
+        // Once the pins drop, the old entries expire and the canvas keeps its payload.
+        drop(pins);
+        let mut kept = None;
+        for frame in 0..4 {
+            source.end_frame();
+            let one = draw(&drawing, &source);
+            let two = draw(&drawing, &source);
+            assert_eq!(one.discs, first.discs);
+            if Arc::ptr_eq(&one, &two) {
+                kept = Some(frame);
+                break;
+            }
+        }
+        assert!(kept.is_some(), "the canvas caches again once the pins drop");
+        source.end_frame();
+        let held = draw(&drawing, &source);
+        assert!(Arc::ptr_eq(&held, &draw(&drawing, &source)));
+    }
+
+    #[test]
+    fn a_full_map_drops_the_oldest_unpinned_entries() {
+        let mut payloads = MarkPayloads::default();
+        payloads.begin_frame();
+        let mut pins = Vec::new();
+        let mut found_all = Vec::new();
+        for index in 0..MAX_SHAPES {
+            // The first four entries are a frame older than the rest.
+            if index == 4 {
+                payloads.end_frame();
+                payloads.begin_frame();
+            }
+            let found = found();
+            let payload = Arc::new(MarkPayload::default());
+            payloads.insert_shape(&found, false, Arc::clone(&payload), 0);
+            // Every other entry is pinned.
+            if index % 2 == 0 {
+                pins.push(payload);
+            }
+            found_all.push(found);
+        }
+        let extra = found();
+        payloads.insert_shape(&extra, false, Arc::new(MarkPayload::default()), 0);
+        assert_eq!(payloads.shapes.len(), MAX_SHAPES - EVICTED_SHAPES + 1);
+        assert!(
+            payloads.shape(&extra, false).is_some(),
+            "the new entry is kept"
+        );
+        for index in [1, 3] {
+            assert!(
+                payloads.shape(&found_all[index], false).is_none(),
+                "the oldest unpinned entries go first"
+            );
+        }
+        for found in found_all.iter().step_by(2) {
+            assert!(
+                payloads.shape(found, false).is_some(),
+                "a pinned entry stays"
+            );
+        }
     }
 }
