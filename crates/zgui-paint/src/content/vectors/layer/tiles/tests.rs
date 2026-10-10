@@ -368,3 +368,34 @@ fn a_source_nothing_draws_is_dropped() {
     }
     assert!(!fixture.cache.tiles_alive(tiled.id()));
 }
+
+#[test]
+fn an_edit_that_moves_the_bounds_keeps_every_raster_the_size_of_its_slot() {
+    let _turn = zgui_profile::counter::exclusive();
+    let mut fixture = Fixture::new();
+    let colour = Color::srgb(0.2, 0.6, 0.9, 1.0);
+    let top = solid(kurbo::Rect::new(0.0, 0.0, 100.0, 50.0), colour);
+    let bottom = solid(kurbo::Rect::new(0.0, 60.0, 90.0, 100.0), colour);
+    let drawing = Drawing::fitted_shared(Arc::from(vec![top.clone(), bottom]), Affine::IDENTITY);
+    tiles(fixture.ask(1, &drawing, 30.0, [0.0, 0.0]));
+    fixture.frame();
+    // The bottom shape grows past the top one, so the right edge of the drawing moves in the
+    // rows only the top shape meets.
+    let grown = solid(kurbo::Rect::new(0.0, 60.0, 101.0, 100.0), colour);
+    let drawing = Drawing::fitted_shared(Arc::from(vec![top, grown]), Affine::IDENTITY);
+    let second = tiles(fixture.ask(2, &drawing, 30.0, [0.0, 0.0]));
+    let rasters = &fixture.cache.tiles.rasters;
+    for slot in &second.0.slots {
+        let raster = &rasters[&slot.handle];
+        let made = &raster.source.slots[raster.slot as usize];
+        assert_eq!(made.texels, slot.texels, "the raster of {:?}", slot.texels);
+    }
+    assert!(
+        second
+            .0
+            .slots
+            .iter()
+            .any(|slot| slot.texels[2] == 3030 && slot.texels[1] == 0),
+        "the top row reaches the new edge"
+    );
+}

@@ -7,9 +7,9 @@
 //! [`VectorLayerCache::settle`] runs after the walk: it rasterises a tile only when the frame needs
 //! it, within the frame's layer budget, and draws nothing for a tile the frame does not need.
 //!
-//! A tile's raster is keyed by what it shows: the linear map, its cell, and the shapes that meet
-//! the cell, by path address and paint. An edit of one shape of a canvas makes a new source, and
-//! every tile that the shape does not meet finds its raster again.
+//! A tile's raster is keyed by what it shows: the linear map, its cell and texels, and the shapes
+//! that meet the cell, by path address and paint. An edit of one shape of a canvas makes a new
+//! source, and every tile that the shape does not meet finds its raster again.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -89,6 +89,10 @@ struct TileKey {
     column: i32,
     /// The cell's row.
     row: i32,
+    /// The texels of the cell the raster covers, as `[x0, y0, x1, y1]`.
+    ///
+    /// The drawing's bounds cut an edge cell, and an edit elsewhere can move them.
+    texels: [i32; 4],
     /// A hash of the shapes that meet the cell, in painting order, and the paint they read.
     deps: u64,
 }
@@ -416,10 +420,12 @@ impl TileCache {
                 if reads {
                     deps = deps.u64(inherited).u64(mapping.inherited_stroke.to_bits());
                 }
+                let texels = texels.map(|value| value as i32);
                 let tile = TileKey {
                     linear: key.linear,
                     column: cx as i32,
                     row: cy as i32,
+                    texels,
                     deps: deps.finish(),
                 };
                 let handle = match self.by_key.get(&tile) {
@@ -436,7 +442,7 @@ impl TileCache {
                 };
                 slots.push(Slot {
                     handle,
-                    texels: texels.map(|value| value as i32),
+                    texels,
                     path_rect: inverse.transform_rect_bbox(area),
                     shapes: indices.clone().into_boxed_slice(),
                     us,
