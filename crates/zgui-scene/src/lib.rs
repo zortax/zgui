@@ -112,7 +112,9 @@ pub use crate::order::BoundsTree;
 pub use crate::paint::{
     GradientKind, Paint, PaintKind, PaintRef, PaintTable, TextPaint, TextPaintTable,
 };
-pub use crate::pass::{Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassPlan};
+pub use crate::pass::{
+    MarkBin, MarkPlan, Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassPlan,
+};
 pub use crate::place::Placement;
 pub use crate::place::band::{Travel, Travels};
 pub use crate::prim::{

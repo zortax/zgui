@@ -38,6 +38,7 @@
 
 pub(crate) mod cells;
 pub mod coalesce;
+pub mod marks;
 pub mod overlap;
 pub mod plan;
 pub mod region;
@@ -49,6 +50,7 @@ mod fixture;
 #[cfg(test)]
 mod tests;
 
+pub use crate::pass::marks::{MarkBin, MarkPlan};
 pub use crate::pass::overlap::{Intervening, Overlap};
 pub use crate::pass::plan::{PlannedItem, PlannedPass, ScenePassPlan};
 pub use crate::pass::warning::PassWarning;

@@ -28,6 +28,16 @@ impl Scene {
         // Before the sort as well: the sweep is over the emission stream, and the log's indices
         // are the arrays' own for the whole of the frame — nothing rewrites them.
         self.plan_vector_passes(damage, overlap);
+        crate::pass::marks::plan(
+            crate::pass::marks::Input {
+                ops: &self.ops,
+                primitives: &self.primitives,
+                spatial: &self.spatial,
+                viewport: self.viewport,
+                damage,
+            },
+            &mut self.mark_plan,
+        );
         self.sort_remap();
         self.finished = true;
         self.check_order_overlap();

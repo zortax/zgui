@@ -174,6 +174,8 @@ pub struct Scene {
     markers: Markers,
     /// This frame's vector work.
     pass_plan: ScenePassPlan,
+    /// This frame's union bins for marks.
+    mark_plan: crate::pass::MarkPlan,
     /// The surface's extent, which pass regions are clamped to.
     viewport: Size<i32, Device>,
     /// What application effects are told about this frame.
@@ -299,6 +301,7 @@ impl Scene {
             forced_orders: Vec::new(),
             markers: Markers::default(),
             pass_plan: ScenePassPlan::default(),
+            mark_plan: crate::pass::MarkPlan::default(),
             viewport: Size::new(0, 0),
             frame_clock: FrameClock::default(),
             finished: false,
@@ -346,6 +349,7 @@ impl Scene {
         self.forced_orders.clear();
         self.markers.clear();
         self.pass_plan.clear();
+        self.mark_plan.clear();
         self.unresolved.clear();
         self.viewport = viewport;
         self.finished = false;
@@ -382,6 +386,11 @@ impl Scene {
     /// This frame's vector work, valid once [`Scene::finish`] has run.
     pub fn pass_plan(&self) -> &ScenePassPlan {
         &self.pass_plan
+    }
+
+    /// This frame's union bins for marks, valid once [`Scene::finish`] has run.
+    pub fn mark_plan(&self) -> &crate::pass::MarkPlan {
+        &self.mark_plan
     }
 
     /// The draw-order assigner, for a caller that needs to ask it a question directly.
