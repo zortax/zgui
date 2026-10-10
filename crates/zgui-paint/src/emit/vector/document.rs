@@ -51,7 +51,7 @@ pub(crate) fn emit_tracked(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> ShapeEmission {
-    if let Some(pushed) = emit_mask(scene, shape, paint, masks, placement) {
+    if let Some(pushed) = emit_mask(scene, id, shape, paint, masks, placement) {
         counter::bump(Counter::VectorRouteMask);
         return ShapeEmission {
             pushed,
@@ -190,6 +190,7 @@ fn density_of(affine: &zgui_geom::Affine2, stroked: bool) -> Option<[f32; 2]> {
 /// Emits a small solid translation-only shape as an atlas mask, or declines the fast path.
 fn emit_mask(
     scene: &mut Scene,
+    id: VectorId,
     shape: &zgui_svg::Shape,
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
@@ -242,6 +243,7 @@ fn emit_mask(
     // has no order between the halves, and one part alone draws a different picture.
     let filled = match fill {
         Some((color, rule)) => Some(mask_sprite(
+            id,
             shape,
             masks,
             placement,
@@ -254,6 +256,7 @@ fn emit_mask(
     };
     let stroked = match stroke {
         Some((color, style)) => Some(mask_sprite(
+            id,
             shape,
             masks,
             placement,
@@ -275,6 +278,7 @@ fn emit_mask(
 /// One part of a shape as a tinted sprite over a coverage tile, or `None` to decline the fast path.
 #[allow(clippy::too_many_arguments)]
 fn mask_sprite(
+    owner: VectorId,
     shape: &zgui_svg::Shape,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
@@ -310,6 +314,7 @@ fn mask_sprite(
         Size::new(width, height),
     );
     let mask = masks.vector_mask(VectorMaskRequest {
+        owner,
         path: &shape.path,
         style,
         density,

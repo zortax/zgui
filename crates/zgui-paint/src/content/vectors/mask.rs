@@ -10,7 +10,10 @@ use zgui_atlas::{Atlas, AtlasKey, AtlasTile, TextureKind};
 use zgui_geom::{Device, Rect, Size};
 use zgui_profile::{Counter, counter};
 use zgui_scene::kurbo::{self, BezPath, PathEl};
-use zgui_scene::peniko;
+use zgui_scene::{VectorId, peniko};
+
+#[cfg(test)]
+mod tests;
 
 /// How a path's coverage is produced.
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +27,11 @@ pub enum VectorMaskStyle<'a> {
 /// The geometry needed to request one coverage mask.
 #[derive(Clone, Copy, Debug)]
 pub struct VectorMaskRequest<'a> {
+    /// The shape that asks, as the emit walk names it.
+    ///
+    /// The cache keeps a short history per owner. A shape that changes in most frames stops
+    /// taking the mask route, because each change costs a raster and a tile.
+    pub owner: VectorId,
     /// The outline in the coordinates its own box is measured in.
     pub path: &'a BezPath,
     /// Whether the outline is filled or stroked.
@@ -101,11 +109,95 @@ enum Command {
     Close,
 }
 
+/// The route one part of a shape took the last time it asked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Routed {
+    /// It has not asked yet.
+    #[default]
+    None,
+    /// It got a mask.
+    Mask,
+    /// It was declined and took the general route.
+    Declined,
+}
+
+/// What the cache remembers about one owner across frames.
+#[derive(Clone, Copy, Debug, Default)]
+struct MaskHistory {
+    /// Bit `n` is set when the owner's request changed `n` frames ago. Bit 0 is this frame.
+    changes: u8,
+    /// The frame `changes` is shifted to.
+    frame: u32,
+    /// Whether the owner changes too often for the mask route.
+    volatile: bool,
+    /// The last stamp of each part, fill and stroke. Zero means none seen.
+    stamps: [u64; 2],
+    /// The route each part took last.
+    routed: [Routed; 2],
+}
+
+impl MaskHistory {
+    /// Shifts the change register to `frame`. A frame that did not touch the owner is stable.
+    fn advance(&mut self, frame: u32) {
+        let gap = frame.wrapping_sub(self.frame);
+        self.changes = if gap >= u8::BITS {
+            0
+        } else {
+            self.changes << gap
+        };
+        self.frame = frame;
+    }
+
+    /// Records the stamp `part` asks with this frame, and updates the volatile flag.
+    fn observe(&mut self, part: usize, stamp: u64) {
+        if self.stamps[part] != 0 && self.stamps[part] != stamp {
+            self.changes |= 1;
+        }
+        self.stamps[part] = stamp;
+        let recent = self.changes & RECENT;
+        if recent.count_ones() >= VOLATILE_CHANGES {
+            self.volatile = true;
+        } else if recent == 0 {
+            self.volatile = false;
+        }
+    }
+
+    /// Records the route `part` took, and counts a change between the mask and a decline.
+    fn route(&mut self, part: usize, routed: Routed) {
+        let was = self.routed[part];
+        if was != Routed::None && routed != Routed::None && was != routed {
+            counter::bump(Counter::VectorTierChanges);
+        }
+        self.routed[part] = routed;
+    }
+}
+
+/// The frames the volatile test reads: this one and the three before it.
+const RECENT: u8 = 0b1111;
+
+/// How many changes in [`RECENT`] make an owner volatile.
+const VOLATILE_CHANGES: u32 = 3;
+
+/// How many frames a history survives without a request.
+const HISTORY_FRAMES: u32 = 8;
+
+/// The most segments a volatile shape may have and keep the mask while vector raster is cold.
+///
+/// Past this a raster per frame costs more than the general rasteriser does once it is built.
+const COLD_SEGMENTS: usize = 4096;
+
 /// The sparse metadata beside monochrome atlas entries used by vector masks.
 #[derive(Debug)]
 pub(crate) struct VectorMaskCache {
     entries: FxHashMap<Fingerprint, AtlasKey>,
     next_handle: u64,
+    /// The recent requests of each owner.
+    histories: FxHashMap<VectorId, MaskHistory>,
+    /// The current frame, advanced by [`VectorMaskCache::begin_frame`].
+    frame: u32,
+    /// Whether the general vector rasteriser is built and can take a declined shape at no setup
+    /// cost.
+    raster_ready: bool,
 }
 
 /// A disjoint namespace from glyph handles in the monochrome atlas.
@@ -117,12 +209,36 @@ impl Default for VectorMaskCache {
         Self {
             entries: FxHashMap::default(),
             next_handle: MASK_NAMESPACE,
+            histories: FxHashMap::default(),
+            frame: 0,
+            raster_ready: false,
         }
     }
 }
 
 impl VectorMaskCache {
-    /// Looks up or builds one coverage tile.
+    /// Starts a frame.
+    pub(crate) fn begin_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+    }
+
+    /// Sets whether the general vector rasteriser is built.
+    pub(crate) fn set_raster_ready(&mut self, ready: bool) {
+        self.raster_ready = ready;
+    }
+
+    /// Ends a frame: forgets the owners no request touched for [`HISTORY_FRAMES`] frames.
+    pub(crate) fn end_frame(&mut self) {
+        let frame = self.frame;
+        self.histories
+            .retain(|_, history| frame.wrapping_sub(history.frame) < HISTORY_FRAMES);
+    }
+
+    /// Looks up or builds one coverage tile, or declines the request.
+    ///
+    /// An owner whose request changed in three of the last four frames is volatile. A volatile
+    /// owner is declined while the general rasteriser is built. While it is cold, only a shape of
+    /// more than [`COLD_SEGMENTS`] segments is declined, because a decline then builds it.
     pub(crate) fn tile_for(
         &mut self,
         atlas: &mut Atlas,
@@ -131,6 +247,21 @@ impl VectorMaskCache {
         let width = request.bounds.size.width;
         let height = request.bounds.size.height;
         if width <= 0 || height <= 0 {
+            return None;
+        }
+        let part = part_of(request.style);
+        let frame = self.frame;
+        let history = self
+            .histories
+            .entry(request.owner)
+            .or_insert_with(|| MaskHistory {
+                frame,
+                ..MaskHistory::default()
+            });
+        history.advance(frame);
+        history.observe(part, stamp(&request, part));
+        if history.volatile && (self.raster_ready || segments(request.path) > COLD_SEGMENTS) {
+            history.route(part, Routed::Declined);
             return None;
         }
         let commands = commands(
@@ -162,6 +293,9 @@ impl VectorMaskCache {
                 raster(&fingerprint)
             })
             .ok()?;
+        if let Some(history) = self.histories.get_mut(&request.owner) {
+            history.route(part, Routed::Mask);
+        }
         Some(VectorMask { tile, key })
     }
 
@@ -181,6 +315,7 @@ impl VectorMaskCache {
     /// Forgets every geometry identity after the atlas itself is cleared.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.histories.clear();
         self.next_handle = MASK_NAMESPACE;
     }
 
@@ -193,6 +328,48 @@ impl VectorMaskCache {
             }
         }
     }
+}
+
+/// The index of a request's part: 0 for the fill, 1 for the stroke.
+fn part_of(style: VectorMaskStyle<'_>) -> usize {
+    match style {
+        VectorMaskStyle::Fill(_) => 0,
+        VectorMaskStyle::Stroke(_) => 1,
+    }
+}
+
+/// A cheap identity of one request, which moves when its geometry is a new allocation.
+///
+/// The address is the address of the path inside its shared allocation. A new revision of a canvas
+/// and a new placement of a drawing allocate a new path, and a replayed or unchanged one keeps its
+/// own. An address the allocator reuses hides at most one change. The fingerprint still decides
+/// which tile is drawn, so the picture stays correct.
+fn stamp(request: &VectorMaskRequest<'_>, part: usize) -> u64 {
+    let mut hasher = FxHasher::default();
+    core::ptr::from_ref(request.path).addr().hash(&mut hasher);
+    request.path.elements().len().hash(&mut hasher);
+    request.bounds.origin.x.hash(&mut hasher);
+    request.bounds.origin.y.hash(&mut hasher);
+    request.bounds.size.width.hash(&mut hasher);
+    request.bounds.size.height.hash(&mut hasher);
+    request.density[0].to_bits().hash(&mut hasher);
+    request.density[1].to_bits().hash(&mut hasher);
+    request.scale.to_bits().hash(&mut hasher);
+    part.hash(&mut hasher);
+    hasher.finish().max(1)
+}
+
+/// How many drawing segments a path has: its lines, quadratics and cubics.
+fn segments(path: &BezPath) -> usize {
+    path.elements()
+        .iter()
+        .filter(|element| {
+            matches!(
+                element,
+                PathEl::LineTo(_) | PathEl::QuadTo(..) | PathEl::CurveTo(..)
+            )
+        })
+        .count()
 }
 
 fn commands(

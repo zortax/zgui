@@ -1349,6 +1349,10 @@ impl Window {
         let vector_before = self.renderer.vector_status();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
+        // A built rasteriser takes a shape the mask route declines at no setup cost, so the mask
+        // route may decline a shape that changes every frame. A cold one would be built by it.
+        self.content
+            .set_vector_raster_ready(vector_before.initialized);
         self.content.begin_frame();
         // Every fragment destroyed since the last painted frame, drained here — after all of this
         // frame's layout passes, before the emit walk — so the paint cache's records die exactly
@@ -1608,6 +1612,7 @@ impl Window {
             self.request_frame();
         }
         mark("p.budget");
+        self.content.end_frame();
         // After the walk and after the flush, and it can be nowhere else. Before the walk it would
         // be measured against the previous frame's working set; before the flush it would discard
         // the uploads this frame is about to draw from. Nothing at all happens to a cache that

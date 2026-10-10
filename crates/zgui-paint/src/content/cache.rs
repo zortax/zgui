@@ -114,12 +114,30 @@ impl ContentCache {
     /// Starts a frame, which is what makes eviction able to tell cold content from hot.
     pub fn begin_frame(&mut self) {
         self.atlas.begin_frame();
+        self.vector_masks.begin_frame();
         // What the frame inherited, published before it adds anything. A cache that is supposed to
         // reach a working set and stay there says so here; one that never stops growing says that
         // here too, and says it as a count rather than as a byte figure an allocator has smeared.
         counter::set(Counter::AtlasEntriesLive, self.atlas.len() as u64);
         counter::set(Counter::GlyphEntriesLive, self.glyphs.held() as u64);
         counter::set(Counter::VectorMaskTilesLive, self.vector_masks.len() as u64);
+    }
+
+    /// Says whether the general vector rasteriser is built.
+    ///
+    /// While it is, the mask route declines shapes that change in most frames, because the general
+    /// route draws them at no setup cost. While it is cold, a decline builds it, so the mask route
+    /// keeps every shape it can take. A cache that is never told assumes cold.
+    pub fn set_vector_raster_ready(&mut self, ready: bool) {
+        self.vector_masks.set_raster_ready(ready);
+    }
+
+    /// Ends a frame.
+    ///
+    /// Call after [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`]
+    /// gives.
+    pub fn end_frame(&mut self) {
+        self.vector_masks.end_frame();
     }
 
     /// What the cache is holding.

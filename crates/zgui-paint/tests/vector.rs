@@ -906,3 +906,103 @@ fn a_wide_thin_drawing_takes_the_atlas_and_a_large_square_does_not() {
         assert_eq!(vectors, 1);
     }
 }
+
+/// Replaces the canvas scene with a triangle moved by a fraction of a pixel per frame, tells the
+/// element, and lays it out again: one frame of a canvas whose drawing changes every frame.
+fn redraw(harness: &mut Harness, handle: &zgui_canvas::SceneHandle, frame: u32) {
+    let shift = f64::from(frame) * 0.1;
+    handle.edit(|scene| {
+        let mut path = zgui_scene::kurbo::BezPath::new();
+        path.move_to((1.0 + shift, 1.0));
+        path.line_to((22.0, 2.0 + shift));
+        path.line_to((3.0, 22.0));
+        path.close_path();
+        scene.clear();
+        scene.push(
+            zgui_canvas::ShapeBuilder::new(path)
+                .fill(zgui_canvas::Brush::Solid(zgui_color::Color::BLACK))
+                .build(),
+        );
+    });
+    let index = harness.element("mark");
+    let value = drawing::canvas_value(handle.token().0, handle.revision());
+    harness.edit_and_restyle(|edit| {
+        edit.set_property(
+            index,
+            PropKey::new(drawing::CANVAS),
+            Some(PropValue::Integer(value)),
+        );
+    });
+    harness.compose(200.0, 100.0);
+}
+
+/// Paints a canvas redrawn on each of `frames` frames, and reports whether each frame drew it as a
+/// mask.
+fn redrawn_canvas_masks(ready: bool, frames: u32) -> Vec<bool> {
+    let handle = zgui_canvas::SceneHandle::new();
+    let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
+    let mut harness = Harness::new(tree, CSS);
+    let vectors = VectorCache::new();
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    let raster = zgui_testkit_scene::MonoRaster::new();
+    (0..frames)
+        .map(|frame| {
+            redraw(&mut harness, &handle, frame);
+            harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, ready);
+            let primitives = &harness.scene().primitives;
+            assert_eq!(
+                primitives.mono_sprites.len() + primitives.vectors.len(),
+                1,
+                "frame {frame} drew the canvas once"
+            );
+            primitives.vectors.is_empty()
+        })
+        .collect()
+}
+
+/// A canvas redrawn every frame changes its mask every frame. Once the general rasteriser is built,
+/// it takes the shape and the atlas stops churning.
+#[test]
+fn a_canvas_redrawn_every_frame_leaves_the_mask_route_once_vector_raster_is_ready() {
+    assert_eq!(
+        redrawn_canvas_masks(true, 6),
+        [true, true, true, false, false, false]
+    );
+}
+
+/// While the general rasteriser is cold, a decline would build it, so a small shape keeps the mask.
+#[test]
+fn a_small_canvas_redrawn_every_frame_stays_on_the_mask_route_while_cold() {
+    assert!(redrawn_canvas_masks(false, 8).into_iter().all(|mask| mask));
+}
+
+/// An icon whose geometry does not change keeps its mask, however often it is emitted again.
+#[test]
+fn an_icon_grid_repainted_without_change_stays_on_the_mask_route() {
+    let tree = Element::new("root").children(
+        (0..6)
+            .map(|_| Element::new("mark").drawing(TRIANGLE, Some("0 0 24 24")))
+            .collect(),
+    );
+    let mut harness = Harness::new(tree, CSS);
+    let vectors = VectorCache::new();
+    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    let raster = zgui_testkit_scene::MonoRaster::new();
+    for frame in 0..8 {
+        // New fragments have no recorded painting, so every icon is emitted again. The placed
+        // outlines are kept by node, so no geometry moves.
+        harness.rebuild(200.0, 100.0);
+        let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+        assert_eq!(report.vector_routes.len(), 6, "frame {frame} encoded every icon");
+        assert!(
+            report
+                .vector_routes
+                .iter()
+                .all(|route| !route.routes.contains(zgui_paint::VectorRoute::GeneralRaster)),
+            "frame {frame} sent an icon to the general route"
+        );
+        assert_eq!(harness.scene().primitives.mono_sprites.len(), 6, "frame {frame}");
+        assert!(harness.scene().primitives.vectors.is_empty(), "frame {frame}");
+    }
+    assert_eq!(content.report().tiles, 1, "six icons, one geometry");
+}
