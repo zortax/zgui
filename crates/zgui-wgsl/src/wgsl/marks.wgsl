@@ -113,13 +113,80 @@ fn to_page(local: vec2<f32>, transform: u32) -> vec4<f32> {
     return to_target(local, transform, mark_draw.shift);
 }
 
-// The coverage of a signed distance in local units, antialiased over one device pixel.
+// A signed distance in payload units, negative inside, and its gradient.
+struct Distance {
+    d: f32,
+    gradient: vec2<f32>,
+}
+
+// The coverage of `distance`: the area of the pixel inside the edge.
 //
-// The derivatives turn the distance into device pixels along its own gradient, which is exact
-// under any scale or turn. Call it in uniform control flow.
-fn sdf_coverage(d: f32) -> f32 {
-    let step = max(length(vec2<f32>(dpdx(d), dpdy(d))), 1e-6);
-    return saturate(0.5 - d / step);
+// `across` and `down` are how far one device pixel moves the payload point, the derivatives of
+// the interpolated point, which are exact because the point is affine on the screen. The gradient
+// through them is the edge's normal on the screen and how far one pixel moves the distance, so
+// the coverage is right under any scale or turn. A gradient taken from the derivatives of the
+// distance itself would cancel across the ridge of a thin ring or a thin stroke and paint it
+// solid.
+fn sdf_coverage(distance: Distance, across: vec2<f32>, down: vec2<f32>) -> f32 {
+    let normal = vec2<f32>(dot(distance.gradient, across), dot(distance.gradient, down));
+    let step = max(length(normal), 1e-6);
+    let along = abs(normal) / step;
+    return edge_coverage(-distance.d / step, max(along.x, along.y), min(along.x, along.y));
+}
+
+// The area of a unit pixel on the inner side of a straight edge `inside` pixels from its centre,
+// for an edge whose unit normal has the components `a` and `b`, `a` the larger.
+//
+// The projection of the pixel onto the normal is spread like the sum of two uniform variables of
+// widths `a` and `b`: a trapezoid, flat over `a − b` and sloped over `b` at each end. Its area up to
+// `inside` is the coverage, exact for a straight edge at any angle.
+fn edge_coverage(inside: f32, a: f32, b: f32) -> f32 {
+    let outer = 0.5 * (a + b);
+    let inner = 0.5 * (a - b);
+    if inside <= -outer {
+        return 0.0;
+    }
+    if inside >= outer {
+        return 1.0;
+    }
+    if b < 1e-4 {
+        return saturate(0.5 + inside / a);
+    }
+    if inside < -inner {
+        let t = inside + outer;
+        return t * t / (2.0 * a * b);
+    }
+    if inside > inner {
+        let t = outer - inside;
+        return 1.0 - t * t / (2.0 * a * b);
+    }
+    return 0.5 + inside / a;
+}
+
+// The larger of two distances, with the gradient of that one.
+fn distance_max(one: Distance, two: Distance) -> Distance {
+    if two.d > one.d {
+        return two;
+    }
+    return one;
+}
+
+// The smaller of two distances, with the gradient of that one.
+fn distance_min(one: Distance, two: Distance) -> Distance {
+    if two.d < one.d {
+        return two;
+    }
+    return one;
+}
+
+// The distance from a disc of `radius` around `centre`, outward from it.
+fn radial(point: vec2<f32>, centre: vec2<f32>, radius: f32) -> Distance {
+    let along = point - centre;
+    let length_along = length(along);
+    var out: Distance;
+    out.d = length_along - radius;
+    out.gradient = select(vec2<f32>(1.0, 0.0), along / length_along, length_along > 0.0);
+    return out;
 }
 
 // The varying for one corner of a quad over `bounds` (x0 y0 x1 y1, payload space) of one prim.

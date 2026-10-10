@@ -15,12 +15,17 @@ fn disc_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
 }
 
 // Signed distance to a disc of radius z with a hole of radius w, negative inside.
-fn disc_distance(in: MarkVarying) -> f32 {
+fn disc_distance(in: MarkVarying) -> Distance {
     let item = marks[in.slot];
     let disc = mark_discs[in.prim];
-    let radius = length(payload_point(in, item) - disc.xy);
-    let outer = radius - disc.z;
-    return select(outer, max(outer, disc.w - radius), disc.w > 0.0);
+    let outer = radial(payload_point(in, item), disc.xy, disc.z);
+    var hole: Distance;
+    hole.d = disc.w - (outer.d + disc.z);
+    hole.gradient = -outer.gradient;
+    if disc.w > 0.0 {
+        return distance_max(outer, hole);
+    }
+    return outer;
 }
 
 @vertex
@@ -41,12 +46,16 @@ fn vs_disc_coverage(
 
 @fragment
 fn fs_disc_paint(in: MarkVarying) -> @location(0) vec4<f32> {
-    let coverage = sdf_coverage(disc_distance(in));
+    let across = dpdx(in.local);
+    let down = dpdy(in.local);
+    let coverage = sdf_coverage(disc_distance(in), across, down);
     return mark_paint(in, marks[in.slot], coverage);
 }
 
 @fragment
 fn fs_disc_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
-    let coverage = sdf_coverage(disc_distance(in));
+    let across = dpdx(in.local);
+    let down = dpdy(in.local);
+    let coverage = sdf_coverage(disc_distance(in), across, down);
     return mark_bin(in, coverage);
 }

@@ -19,14 +19,6 @@ fn segment_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
         out.prim = instance;
         return out;
     }
-    var start = CAP_ROUND;
-    var end = CAP_ROUND;
-    if is_separator(mark_vertices[instance - 1u]) {
-        start = (item.flags >> MARK_START_CAP_SHIFT) & 3u;
-    }
-    if is_separator(mark_vertices[instance + 2u]) {
-        end = (item.flags >> MARK_END_CAP_SHIFT) & 3u;
-    }
     let along = b - a;
     let length_along = length(along);
     let direction = select(vec2<f32>(1.0, 0.0), along / length_along, length_along > 0.0);
@@ -45,35 +37,81 @@ fn segment_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     out.shift = found.shift;
     out.slot = found.slot;
     out.prim = instance;
-    out.caps = start | (end << 2u);
+    out.caps = segment_caps(instance, item.flags);
     return out;
 }
 
-// Signed distance to one stroked segment with its caps, negative inside.
-fn segment_distance(in: MarkVarying) -> f32 {
-    let item = marks[in.slot];
-    let a = mark_vertices[in.prim];
-    let b = mark_vertices[in.prim + 1u];
-    let point = payload_point(in, item);
-    let half = item.half_width;
+// The caps of the segment from vertex `at` to vertex `at + 1`: an end beside a separator is an
+// outer end and takes the item's cap, and every other end is round.
+fn segment_caps(at: u32, flags: u32) -> u32 {
+    var start = CAP_ROUND;
+    var end = CAP_ROUND;
+    if is_separator(mark_vertices[at - 1u]) {
+        start = (flags >> MARK_START_CAP_SHIFT) & 3u;
+    }
+    if is_separator(mark_vertices[at + 2u]) {
+        end = (flags >> MARK_END_CAP_SHIFT) & 3u;
+    }
+    return start | (end << 2u);
+}
+
+// Signed distance to the segment from `a` to `b` stroked `half` wide on each side, with `caps`.
+fn segment_value(point: vec2<f32>, a: vec2<f32>, b: vec2<f32>, half: f32, caps: u32) -> Distance {
     let along = b - a;
     let length_along = length(along);
     let direction = select(vec2<f32>(1.0, 0.0), along / length_along, length_along > 0.0);
     let normal = vec2<f32>(-direction.y, direction.x);
     let u = dot(point - a, direction);
     let v = dot(point - a, normal);
-    let start = in.caps & 3u;
-    let end = (in.caps >> 2u) & 3u;
+    let start = caps & 3u;
+    let end = (caps >> 2u) & 3u;
     let reach_start = select(0.0, half, start == CAP_SQUARE);
     let reach_end = select(0.0, half, end == CAP_SQUARE);
-    var d = max(max(-reach_start - u, u - (length_along + reach_end)), abs(v) - half);
+    var before: Distance;
+    before.d = -reach_start - u;
+    before.gradient = -direction;
+    var after: Distance;
+    after.d = u - (length_along + reach_end);
+    after.gradient = direction;
+    var beside: Distance;
+    beside.d = abs(v) - half;
+    beside.gradient = normal * select(-1.0, 1.0, v >= 0.0);
+    var out = distance_max(distance_max(before, after), beside);
     if start == CAP_ROUND {
-        d = min(d, length(point - a) - half);
+        out = distance_min(out, radial(point, a, half));
     }
     if end == CAP_ROUND {
-        d = min(d, length(point - b) - half);
+        out = distance_min(out, radial(point, b, half));
     }
-    return d;
+    return out;
+}
+
+// Signed distance to the segment of `in`, and whether that segment is the nearest of its run.
+//
+// The segments of a run overlap at every join, and two coverages added at one antialiased edge
+// paint it too dark. So a pixel near a join is drawn only by the nearer of the two segments,
+// with that segment's distance, which is the distance to the run there.
+fn segment_distance(in: MarkVarying, owned: ptr<function, bool>) -> Distance {
+    let item = marks[in.slot];
+    let point = payload_point(in, item);
+    let half = item.half_width;
+    let at = in.prim;
+    let a = mark_vertices[at];
+    let b = mark_vertices[at + 1u];
+    let own = segment_value(point, a, b, half, in.caps);
+    var nearest = true;
+    let before = mark_vertices[at - 1u];
+    if !is_separator(before) {
+        let other = segment_value(point, before, a, half, segment_caps(at - 1u, item.flags));
+        nearest = nearest && own.d < other.d;
+    }
+    let after = mark_vertices[at + 2u];
+    if !is_separator(after) {
+        let other = segment_value(point, b, after, half, segment_caps(at + 1u, item.flags));
+        nearest = nearest && own.d <= other.d;
+    }
+    *owned = nearest;
+    return own;
 }
 
 @vertex
@@ -94,12 +132,18 @@ fn vs_segment_coverage(
 
 @fragment
 fn fs_segment_paint(in: MarkVarying) -> @location(0) vec4<f32> {
-    let coverage = sdf_coverage(segment_distance(in));
-    return mark_paint(in, marks[in.slot], coverage);
+    let across = dpdx(in.local);
+    let down = dpdy(in.local);
+    var owned = true;
+    let coverage = sdf_coverage(segment_distance(in, &owned), across, down);
+    return mark_paint(in, marks[in.slot], select(0.0, coverage, owned));
 }
 
 @fragment
 fn fs_segment_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
-    let coverage = sdf_coverage(segment_distance(in));
-    return mark_bin(in, coverage);
+    let across = dpdx(in.local);
+    let down = dpdy(in.local);
+    var owned = true;
+    let coverage = sdf_coverage(segment_distance(in, &owned), across, down);
+    return mark_bin(in, select(0.0, coverage, owned));
 }

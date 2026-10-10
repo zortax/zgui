@@ -25,23 +25,60 @@ fn box_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     return out;
 }
 
-// Signed distance to the box, or to its border when it has one, negative inside.
-fn box_distance(in: MarkVarying) -> f32 {
+// The coverage of the box `rect` (x0 y0 x1 y1) with `radii` and corner `shape` at `point`.
+//
+// Along a straight side the coverage is the product of the coverage across each axis, which is
+// the exact area of the pixel inside a square corner. Inside a rounded corner it is the coverage
+// of the corner's own distance.
+fn box_cover(
+    point: vec2<f32>,
+    rect: vec4<f32>,
+    radii: Radii,
+    shape: f32,
+    across: vec2<f32>,
+    down: vec2<f32>,
+) -> f32 {
+    let half = 0.5 * (rect.zw - rect.xy);
+    let centre_to_point = point - 0.5 * (rect.xy + rect.zw);
+    let flip = select(vec2<f32>(-1.0), vec2<f32>(1.0), centre_to_point >= vec2<f32>(0.0));
+    let r = pick_corner_radii(centre_to_point, radii);
+    let corner = abs(centre_to_point) - half;
+    let from_centre = corner + r;
+    if from_centre.x > 0.0 && from_centre.y > 0.0 && r.x > 0.0 && r.y > 0.0 {
+        var rounded: Distance;
+        rounded.d = quad_sdf_impl(from_centre, r, shape);
+        if shape == CORNER_ROUND && r.x == r.y {
+            rounded.gradient = normalize(from_centre) * flip;
+        } else {
+            let step = 0.01 * max(max(length(across), length(down)), 1e-6);
+            rounded.gradient = vec2<f32>(
+                quad_sdf_impl(from_centre + vec2<f32>(step, 0.0), r, shape) - rounded.d,
+                quad_sdf_impl(from_centre + vec2<f32>(0.0, step), r, shape) - rounded.d,
+            ) / step * flip;
+        }
+        return sdf_coverage(rounded, across, down);
+    }
+    var x: Distance;
+    x.d = corner.x;
+    x.gradient = vec2<f32>(flip.x, 0.0);
+    var y: Distance;
+    y.d = corner.y;
+    y.gradient = vec2<f32>(0.0, flip.y);
+    return sdf_coverage(x, across, down) * sdf_coverage(y, across, down);
+}
+
+// The coverage of one payload box: its area, less the area inside its border when it has one.
+fn box_coverage(in: MarkVarying, across: vec2<f32>, down: vec2<f32>) -> f32 {
     let item = marks[in.slot];
     let prim = mark_boxes[in.prim];
     let point = payload_point(in, item);
-    var outer_bounds: Bounds;
-    outer_bounds.x = prim.rect.x;
-    outer_bounds.y = prim.rect.y;
-    outer_bounds.w = prim.rect.z - prim.rect.x;
-    outer_bounds.h = prim.rect.w - prim.rect.y;
-    let outer = quad_sdf(point, outer_bounds, prim.radii, prim.shape.x);
+    let rect = vector4_of(prim.rect);
+    let outer = box_cover(point, rect, prim.radii, prim.shape.x, across, down);
     let border = prim.shape.y;
-    var inner_bounds: Bounds;
-    inner_bounds.x = outer_bounds.x + border;
-    inner_bounds.y = outer_bounds.y + border;
-    inner_bounds.w = max(outer_bounds.w - 2.0 * border, 0.0);
-    inner_bounds.h = max(outer_bounds.h - 2.0 * border, 0.0);
+    if border <= 0.0 {
+        return outer;
+    }
+    let inner_rect = vec4<f32>(rect.xy + vec2<f32>(border), max(rect.zw - vec2<f32>(border), rect.xy + vec2<f32>(border)));
     var inner_radii: Radii;
     inner_radii.tl_x = max(prim.radii.tl_x - border, 0.0);
     inner_radii.tl_y = max(prim.radii.tl_y - border, 0.0);
@@ -51,10 +88,8 @@ fn box_distance(in: MarkVarying) -> f32 {
     inner_radii.br_y = max(prim.radii.br_y - border, 0.0);
     inner_radii.bl_x = max(prim.radii.bl_x - border, 0.0);
     inner_radii.bl_y = max(prim.radii.bl_y - border, 0.0);
-    let inner = quad_sdf(point, inner_bounds, inner_radii, prim.shape.x);
-    // Both are measured for every box, so the result reaches the derivatives the same way for a
-    // filled box and a bordered one.
-    return select(outer, max(outer, -inner), border > 0.0);
+    let inner = box_cover(point, inner_rect, inner_radii, prim.shape.x, across, down);
+    return saturate(outer - inner);
 }
 
 @vertex
@@ -75,12 +110,14 @@ fn vs_box_coverage(
 
 @fragment
 fn fs_box_paint(in: MarkVarying) -> @location(0) vec4<f32> {
-    let coverage = sdf_coverage(box_distance(in));
-    return mark_paint(in, marks[in.slot], coverage);
+    let across = dpdx(in.local);
+    let down = dpdy(in.local);
+    return mark_paint(in, marks[in.slot], box_coverage(in, across, down));
 }
 
 @fragment
 fn fs_box_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
-    let coverage = sdf_coverage(box_distance(in));
-    return mark_bin(in, coverage);
+    let across = dpdx(in.local);
+    let down = dpdy(in.local);
+    return mark_bin(in, box_coverage(in, across, down));
 }
