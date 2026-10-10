@@ -16,6 +16,7 @@
 //! is one implementation of it.
 
 mod cache;
+mod cpu;
 mod mask;
 pub(crate) mod payloads;
 mod recognitions;
