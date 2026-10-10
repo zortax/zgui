@@ -48,6 +48,31 @@ pub(crate) const SLOT_BITS: u32 = 24;
 /// The mask that keeps a resolved remap entry's arena slot.
 pub(crate) const SLOT_MASK: u32 = (1 << SLOT_BITS) - 1;
 
+/// The bytes one kind holds in a chunk or in a frame's arrays, which share their field names.
+///
+/// One exhaustive match for every reader, so a new kind cannot be read through another kind's
+/// array. A kind with no lane holds no bytes here.
+macro_rules! lane_slice {
+    ($prims:expr, $kind:expr) => {{
+        let prims = &$prims;
+        let bytes: &[u8] = match $kind {
+            PrimitiveKind::Quad => bytemuck::cast_slice(&prims.quads),
+            PrimitiveKind::Shadow => bytemuck::cast_slice(&prims.shadows),
+            PrimitiveKind::Decoration => bytemuck::cast_slice(&prims.decorations),
+            PrimitiveKind::MonoSprite => bytemuck::cast_slice(&prims.mono_sprites),
+            PrimitiveKind::SubpixelSprite => bytemuck::cast_slice(&prims.subpixel_sprites),
+            PrimitiveKind::ColorSprite => bytemuck::cast_slice(&prims.color_sprites),
+            PrimitiveKind::Shaded => bytemuck::cast_slice(&prims.shaded),
+            PrimitiveKind::GroupStart
+            | PrimitiveKind::GroupEnd
+            | PrimitiveKind::Vector
+            | PrimitiveKind::External
+            | PrimitiveKind::Backdrop => &[],
+        };
+        bytes
+    }};
+}
+
 /// One resident chunk: its bytes, and where each lane's elements sit in the arenas.
 #[derive(Debug)]
 struct Resident {
@@ -432,42 +457,26 @@ impl ChunkStore {
         {
             return 0;
         }
-        let lanes: [&[u8]; LANES.len()] = [
-            bytemuck::cast_slice(&prims.quads),
-            bytemuck::cast_slice(&prims.shadows),
-            bytemuck::cast_slice(&prims.decorations),
-            bytemuck::cast_slice(&prims.mono_sprites),
-            bytemuck::cast_slice(&prims.subpixel_sprites),
-            bytemuck::cast_slice(&prims.color_sprites),
-            bytemuck::cast_slice(&prims.shaded),
-        ];
-        let counts = [
-            prims.quads.len() as u32,
-            prims.shadows.len() as u32,
-            prims.decorations.len() as u32,
-            prims.mono_sprites.len() as u32,
-            prims.subpixel_sprites.len() as u32,
-            prims.color_sprites.len() as u32,
-            prims.shaded.len() as u32,
-        ];
         let mut ranges: [Option<Range<u32>>; LANES.len()] = Default::default();
         let mut uploaded = 0;
-        for lane in 0..LANES.len() {
-            if counts[lane] == 0 {
+        for (lane, &kind) in LANES.iter().enumerate() {
+            let bytes = lane_slice!(prims, kind);
+            let count = (bytes.len() / self.arenas[lane].element as usize) as u32;
+            if count == 0 {
                 continue;
             }
-            let range = match self.arenas[lane].alloc(counts[lane]) {
+            let range = match self.arenas[lane].alloc(count) {
                 Some(range) => range,
                 None => {
                     // Grow the lane and settle every resident chunk into the new buffer, then
                     // take the range that now must fit.
-                    uploaded += self.grow(gpu, belt, encoder, lane, counts[lane]);
+                    uploaded += self.grow(gpu, belt, encoder, lane, count);
                     self.arenas[lane]
-                        .alloc(counts[lane])
+                        .alloc(count)
                         .expect("the arena was grown for exactly this request")
                 }
             };
-            uploaded += self.arenas[lane].upload(gpu, belt, encoder, range.start, lanes[lane]);
+            uploaded += self.arenas[lane].upload(gpu, belt, encoder, range.start, bytes);
             ranges[lane] = Some(range);
         }
         self.residence.insert(
@@ -515,14 +524,7 @@ impl ChunkStore {
         for revision in revisions {
             let (bytes, count) = {
                 let resident = &self.residence[&revision];
-                let bytes: Vec<u8> = match lane {
-                    0 => bytemuck::cast_slice(&resident.prims.quads).to_vec(),
-                    1 => bytemuck::cast_slice(&resident.prims.shadows).to_vec(),
-                    2 => bytemuck::cast_slice(&resident.prims.decorations).to_vec(),
-                    3 => bytemuck::cast_slice(&resident.prims.mono_sprites).to_vec(),
-                    4 => bytemuck::cast_slice(&resident.prims.subpixel_sprites).to_vec(),
-                    _ => bytemuck::cast_slice(&resident.prims.color_sprites).to_vec(),
-                };
+                let bytes: Vec<u8> = lane_slice!(resident.prims, LANES[lane]).to_vec();
                 let count = (bytes.len() as u32) / self.arenas[lane].element;
                 (bytes, count)
             };
@@ -687,13 +689,5 @@ fn resident_slot(
 
 /// The frame array of `lane`, as bytes.
 fn lane_bytes(scene: &Scene, lane: usize) -> &[u8] {
-    match lane {
-        0 => bytemuck::cast_slice(&scene.primitives.quads),
-        1 => bytemuck::cast_slice(&scene.primitives.shadows),
-        2 => bytemuck::cast_slice(&scene.primitives.decorations),
-        3 => bytemuck::cast_slice(&scene.primitives.mono_sprites),
-        4 => bytemuck::cast_slice(&scene.primitives.subpixel_sprites),
-        5 => bytemuck::cast_slice(&scene.primitives.color_sprites),
-        _ => bytemuck::cast_slice(&scene.primitives.shaded),
-    }
+    lane_slice!(scene.primitives, LANES[lane])
 }

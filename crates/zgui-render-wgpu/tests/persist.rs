@@ -9,13 +9,14 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{DevicePx, Size};
-use zgui_render_wgpu::Pixels;
-use zgui_scene::{ChunkPrims, PaintRef, Quad, Scene};
+use zgui_render_wgpu::{EffectProgram, ParamsField, ParamsLayout, Pixels};
+use zgui_scene::{ChunkPrims, PaintRef, Quad, Scene, ShadedQuad, ShaderId, ShaderParams};
+use zgui_wgsl::ShaderMode;
 
 use zgui_render::Renderer;
 
@@ -135,4 +136,103 @@ fn a_resident_chunk_replayed_in_place_uploads_no_primitive_bytes() {
         0,
         "the offset draw puts every primitive exactly where a fresh encoding would"
     );
+}
+
+/// The assembled translation unit of the paint effect, built once.
+static PAINT_UNIT: OnceLock<String> = OnceLock::new();
+
+/// An effect returning the colour its parameters name.
+const PAINT_SOURCE: &str = r#"
+struct Params {
+    color: vec4<f32>,
+}
+
+fn shade(in: ShaderInput, params: Params) -> vec4<f32> {
+    return params.color;
+}
+"#;
+
+/// Declares the paint effect.
+fn paint_effect() -> ShaderId {
+    let mode = ShaderMode::Paint;
+    let source = PAINT_UNIT.get_or_init(|| zgui_wgsl::effect(mode, PAINT_SOURCE));
+    let id = zgui_scene::declare_shader(
+        "test-persist-paint",
+        mode,
+        zgui_scene::ShaderReads::NOTHING,
+        &[],
+        0.0,
+    );
+    zgui_render_wgpu::declare(
+        id,
+        EffectProgram {
+            mode,
+            label: "test.persist.effect",
+            representation: &[],
+            source,
+            params: ParamsLayout {
+                size: 16,
+                fields: &[ParamsField {
+                    name: "color",
+                    offset: 0,
+                    size: 16,
+                }],
+            },
+        },
+    );
+    id
+}
+
+/// Pushes `count` shaded squares in one colour, in a row `down` from the top.
+fn push_shaded(scene: &mut Scene, effect: ShaderId, color: [f32; 4], down: f32, count: usize) {
+    let bytes: Vec<u8> = color.iter().flat_map(|c| c.to_ne_bytes()).collect();
+    let params = scene.shader_params.intern(ShaderParams::of(&bytes));
+    for at in 0..count {
+        let x = 2.0 + (at % 16) as f32 * 7.0;
+        let y = down + (at / 16) as f32 * 7.0;
+        scene.push_shaded(ShadedQuad::new(rect(x, y, 5.0, 5.0), effect, params));
+    }
+}
+
+#[test]
+fn a_growing_shaded_lane_keeps_its_own_bytes() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let effect = paint_effect();
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let green = [0.0, 1.0, 0.0, 1.0];
+
+    // Frame one: a chunk of two shaded squares is made resident in the smallest shaded arena.
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_shaded(&mut scene, effect, red, 2.0, 2);
+    let first = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(1, Arc::clone(&first));
+    scene.bind_capture(1);
+    scene.finish(&DamageSet::full());
+    draw_bytes(&mut renderer, &scene);
+    scene.clear_chunk_notes();
+
+    // Frame two: a second chunk outgrows the arena, and the first replays in place out of the
+    // grown buffer.
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let first_range = scene.replay_chunk(&first, Size::default(), 1);
+    assert_eq!(first_range.len(), 2);
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_shaded(&mut scene, effect, green, 40.0, 64);
+    let second = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(2, Arc::clone(&second));
+    scene.bind_capture(2);
+    scene.finish(&DamageSet::full());
+    let (_, grown) = draw_bytes(&mut renderer, &scene);
+
+    let [r, g, _, a] = grown.rgba(4, 4);
+    assert!(
+        r > 200 && g < 40 && a > 200,
+        "the resident chunk draws its own squares after the lane grew: {:?}",
+        grown.rgba(4, 4)
+    );
+    assert!(grown.rgba(4, 44)[1] > 200, "the new chunk draws as well");
 }
