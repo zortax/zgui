@@ -59,17 +59,46 @@ pub struct VectorMask {
     pub key: AtlasKey,
 }
 
-/// Paint-side source of small vector coverage masks.
+/// Paint-side source of small vector coverage masks, and the route history of each shape.
 pub trait VectorMaskSource {
     /// Returns a cached mask, rasterising it on a miss.
     fn vector_mask(&self, request: VectorMaskRequest<'_>) -> Option<VectorMask>;
+
+    /// Whether `owner` may try the analytic route this frame.
+    ///
+    /// False for a few frames after a large shape failed recognition, so a path that is no
+    /// analytic shape is not measured again on every frame.
+    fn analytic(&self, _owner: VectorId) -> bool {
+        true
+    }
+
+    /// Records that a large shape of `owner` failed recognition.
+    fn analytic_declined(&self, _owner: VectorId) {}
 }
 
-/// A source that declines every mask request.
+/// A source that declines every mask request and the analytic route.
+///
+/// Every shape drawn through it takes the general route.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NoVectorMasks;
 
 impl VectorMaskSource for NoVectorMasks {
+    fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
+        None
+    }
+
+    fn analytic(&self, _owner: VectorId) -> bool {
+        false
+    }
+}
+
+/// A source that declines every mask request and allows the analytic route.
+///
+/// It remembers nothing, so a shape that fails recognition is measured again on every frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AnalyticOnly;
+
+impl VectorMaskSource for AnalyticOnly {
     fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
         None
     }
@@ -123,7 +152,7 @@ enum Routed {
 
 /// What the cache remembers about one owner across frames.
 #[derive(Clone, Copy, Debug, Default)]
-struct MaskHistory {
+struct RouteHistory {
     /// Bit `n` is set when the owner's request changed `n` frames ago. Bit 0 is this frame.
     changes: u8,
     /// The frame `changes` is shifted to.
@@ -136,9 +165,11 @@ struct MaskHistory {
     routed: [Routed; 2],
     /// The tiles each part drew last, the current one first.
     tiles: [[Option<AtlasKey>; 2]; 2],
+    /// The frame a large shape of the owner last failed recognition in.
+    analytic_declined: Option<u32>,
 }
 
-impl MaskHistory {
+impl RouteHistory {
     /// Shifts the change register to `frame`. A frame that did not touch the owner is stable.
     fn advance(&mut self, frame: u32) {
         let gap = frame.wrapping_sub(self.frame);
@@ -246,7 +277,7 @@ pub(crate) struct VectorMaskCache {
     entries: FxHashMap<Fingerprint, AtlasKey>,
     next_handle: u64,
     /// The recent requests of each owner.
-    histories: FxHashMap<VectorId, MaskHistory>,
+    histories: FxHashMap<VectorId, RouteHistory>,
     /// The current frame, advanced by [`VectorMaskCache::begin_frame`].
     frame: u32,
     /// Whether the general vector rasteriser is built and can take a declined shape at no setup
@@ -340,13 +371,13 @@ impl VectorMaskCache {
         let part = part_of(request.style);
         let history = histories
             .entry(request.owner)
-            .or_insert_with(|| MaskHistory {
+            .or_insert_with(|| RouteHistory {
                 frame: *frame,
-                ..MaskHistory::default()
+                ..RouteHistory::default()
             });
         history.advance(*frame);
         let moved = history.observe(part, stamp(&request, part));
-        let decline = |history: &mut MaskHistory, superseded: &mut Vec<AtlasKey>| {
+        let decline = |history: &mut RouteHistory, superseded: &mut Vec<AtlasKey>| {
             history.give_back(part, superseded);
             history.route(part, Routed::Declined);
             None
@@ -415,6 +446,28 @@ impl VectorMaskCache {
         history.track(part, key, superseded);
         history.route(part, Routed::Mask);
         Some(VectorMask { tile, key })
+    }
+
+    /// Whether `owner` may try the analytic route: false for [`HISTORY_FRAMES`] frames after it
+    /// failed recognition.
+    pub(crate) fn analytic_allowed(&self, owner: VectorId) -> bool {
+        self.histories
+            .get(&owner)
+            .and_then(|history| history.analytic_declined)
+            .is_none_or(|declined| self.frame.wrapping_sub(declined) >= HISTORY_FRAMES)
+    }
+
+    /// Records that a large shape of `owner` failed recognition in this frame.
+    ///
+    /// The entry counts as touched, so the sweep keeps it for as long as the decline counts.
+    pub(crate) fn note_analytic_declined(&mut self, owner: VectorId) {
+        let frame = self.frame;
+        let history = self.histories.entry(owner).or_insert_with(|| RouteHistory {
+            frame,
+            ..RouteHistory::default()
+        });
+        history.advance(frame);
+        history.analytic_declined = Some(frame);
     }
 
     /// How many geometry identities map to a tile.

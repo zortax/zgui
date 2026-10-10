@@ -344,3 +344,56 @@ fn a_shape_placed_again_on_whole_pixels_is_not_a_change() {
     assert!(!rig.volatile(OWNER));
     assert_eq!(rig.cache.histories[&OWNER].changes, 0);
 }
+
+#[test]
+fn an_analytic_decline_is_remembered_for_eight_frames() {
+    let mut rig = Rig::new(false);
+    let other = VectorId(8);
+    rig.begin();
+    assert!(rig.cache.analytic_allowed(OWNER), "nothing declined yet");
+    rig.cache.note_analytic_declined(OWNER);
+    assert!(!rig.cache.analytic_allowed(OWNER));
+    assert!(
+        rig.cache.analytic_allowed(other),
+        "a decline names one owner"
+    );
+    rig.end();
+    for frame in 1..8 {
+        rig.begin();
+        assert!(!rig.cache.analytic_allowed(OWNER), "frame {frame}");
+        rig.end();
+    }
+    rig.begin();
+    assert!(rig.cache.analytic_allowed(OWNER), "frame 8 tries again");
+    rig.end();
+}
+
+#[test]
+fn an_analytic_decline_survives_the_sweep_while_it_counts() {
+    let mut rig = Rig::new(false);
+    // The owner's mask history is seven frames old when the decline arrives.
+    rig.frame(OWNER, &triangle(0.0));
+    for _ in 0..6 {
+        rig.begin();
+        rig.end();
+    }
+    rig.begin();
+    rig.cache.note_analytic_declined(OWNER);
+    rig.end();
+    for frame in 1..8 {
+        rig.begin();
+        rig.end();
+        assert!(
+            rig.cache.histories.contains_key(&OWNER),
+            "the decline counts in frame {frame}, so the sweep keeps it"
+        );
+        assert!(!rig.cache.analytic_allowed(OWNER), "frame {frame}");
+    }
+    rig.begin();
+    rig.end();
+    assert!(
+        !rig.cache.histories.contains_key(&OWNER),
+        "swept once it stops counting"
+    );
+    assert!(rig.cache.analytic_allowed(OWNER));
+}

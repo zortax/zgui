@@ -715,6 +715,17 @@ impl VectorMaskSource for FrameContent<'_> {
         named.push(mask.key);
         Some(mask)
     }
+
+    fn analytic(&self, owner: zgui_scene::VectorId) -> bool {
+        self.writing.borrow().vector_masks.analytic_allowed(owner)
+    }
+
+    fn analytic_declined(&self, owner: zgui_scene::VectorId) {
+        self.writing
+            .borrow_mut()
+            .vector_masks
+            .note_analytic_declined(owner);
+    }
 }
 
 impl ResourceOwner for FrameContent<'_> {
