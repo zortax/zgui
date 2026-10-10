@@ -985,24 +985,66 @@ fn an_icon_grid_repainted_without_change_stays_on_the_mask_route() {
             .collect(),
     );
     let mut harness = Harness::new(tree, CSS);
+    let marks = harness.elements("mark");
+    // A drawing's mask owner is its fragment, so the same fragments keep the same histories.
+    let fragments = |harness: &Harness| -> Vec<_> {
+        marks
+            .iter()
+            .map(|&mark| {
+                let node = harness.document().store().key_of(mark);
+                let boxed = harness.store().boxes_of(node)[0];
+                harness.store().fragments_of_box(boxed)[0]
+            })
+            .collect()
+    };
+    let owners = fragments(&harness);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
     let raster = zgui_testkit_scene::MonoRaster::new();
     for frame in 0..8 {
-        // New fragments have no recorded painting, so every icon is emitted again. The placed
-        // outlines are kept by node, so no geometry moves.
-        harness.rebuild(200.0, 100.0);
+        // The same outlines, spelled two ways: each frame writes a new drawing, so every icon
+        // encodes again and its placed path is a new allocation, while the geometry stays put.
+        let paths = if frame % 2 == 0 {
+            TRIANGLE
+        } else {
+            "M0,0 L24,0 L24,24 Z"
+        };
+        harness.edit_and_restyle(|edit| {
+            for &mark in &marks {
+                edit.set_property(
+                    mark,
+                    PropKey::new(drawing::PATHS),
+                    Some(PropValue::from(paths)),
+                );
+            }
+        });
+        harness.compose(200.0, 100.0);
         let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
-        assert_eq!(report.vector_routes.len(), 6, "frame {frame} encoded every icon");
+        assert_eq!(
+            report.vector_routes.len(),
+            6,
+            "frame {frame} encoded every icon"
+        );
         assert!(
-            report
-                .vector_routes
-                .iter()
-                .all(|route| !route.routes.contains(zgui_paint::VectorRoute::GeneralRaster)),
+            report.vector_routes.iter().all(|route| !route
+                .routes
+                .contains(zgui_paint::VectorRoute::GeneralRaster)),
             "frame {frame} sent an icon to the general route"
         );
-        assert_eq!(harness.scene().primitives.mono_sprites.len(), 6, "frame {frame}");
-        assert!(harness.scene().primitives.vectors.is_empty(), "frame {frame}");
+        assert_eq!(
+            harness.scene().primitives.mono_sprites.len(),
+            6,
+            "frame {frame}"
+        );
+        assert!(
+            harness.scene().primitives.vectors.is_empty(),
+            "frame {frame}"
+        );
+        assert_eq!(
+            fragments(&harness),
+            owners,
+            "frame {frame} kept the fragments"
+        );
     }
     assert_eq!(content.report().tiles, 1, "six icons, one geometry");
 }

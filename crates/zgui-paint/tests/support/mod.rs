@@ -439,6 +439,26 @@ impl Harness {
             .expect("every box produces its own piece")
     }
 
+    /// Every element with the given name, as document indices, in document order.
+    pub(crate) fn elements(&self, name: &str) -> Vec<NodeIndex> {
+        let mut out = Vec::new();
+        let mut stack = vec![self.root];
+        while let Some(index) = stack.pop() {
+            let core = self.document.store().core(index);
+            if core.local_name().as_str() == name {
+                out.push(index);
+            }
+            let mut children = Vec::new();
+            let mut child = core.first_child();
+            while let Some(index) = child {
+                children.push(index);
+                child = self.document.store().core(index).next_sibling();
+            }
+            stack.extend(children.into_iter().rev());
+        }
+        out
+    }
+
     /// The element with the given name, as a document index.
     pub(crate) fn element(&self, name: &str) -> NodeIndex {
         let mut stack = vec![self.root];
