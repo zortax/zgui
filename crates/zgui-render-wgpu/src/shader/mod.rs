@@ -170,7 +170,8 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 axes,
                 glyphs,
                 tiles,
-                texture
+                texture,
+                first
             ]
         ));
         structures.push(reflected!(

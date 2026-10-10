@@ -43,9 +43,9 @@ impl MarkFlags {
 
 /// One shape whose prims are discs, boxes, stroked polylines and glyphs, drawn with one paint.
 ///
-/// The geometry is in a [`MarkPayload`] beside the item, and the item holds only how many of
-/// each kind the payload has. So a hundred thousand circles are one item: one draw order, one
-/// clip, one paint and one ink rectangle.
+/// The geometry is in a [`MarkPayload`] beside the item, and the item holds only which prims of
+/// each kind it draws. So a hundred thousand circles are one item: one draw order, one clip, one
+/// paint and one ink rectangle.
 ///
 /// Every payload coordinate maps to local space by [`axes`](Self::axes) and then
 /// [`origin`](Self::origin). A replay that moves the item adds the offset to the origin and leaves
@@ -69,28 +69,35 @@ pub struct MarkItem {
     pub paint_origin: [f32; 2],
     /// What is added to every payload coordinate, as `[x, y]`.
     pub origin: [f32; 2],
-    /// How many discs the payload holds.
+    /// How many discs the item draws, from [`first`](Self::first).
     pub discs: u32,
-    /// How many boxes the payload holds.
+    /// How many boxes the item draws, from [`first`](Self::first).
     pub boxes: u32,
-    /// How many polyline vertices the payload holds, separators included.
+    /// How many polyline vertices the item reads, from [`first`](Self::first), separators
+    /// included. The first and the last vertex only end a segment.
     pub vertices: u32,
     /// Half the width of the polyline stroke.
     pub half_width: f32,
     /// The linear part of the map from payload to local space, as `[a, b, c, d]`:
     /// `x' = a·x + c·y` and `y' = b·x + d·y`.
     pub axes: [f32; 4],
-    /// How many glyph words the payload holds, the tile table included.
+    /// How many glyph words the item reads, from [`first`](Self::first). Words of the tile table
+    /// draw nothing.
     pub glyphs: u32,
-    /// How many of those words are the tile table, which comes first.
+    /// How many words of the payload are the tile table, which comes first.
     pub tiles: u32,
     /// The atlas texture the glyph cells lie in, packed as [`crate::SpriteTile::texture`].
     pub texture: u32,
+    /// The first prim the item draws in each payload kind it draws.
+    ///
+    /// Zero draws from the payload start. Only an item that draws one payload kind sets it, so
+    /// the item draws a part of a large payload.
+    pub first: u32,
 }
 
 impl MarkItem {
     /// An item over a payload of `counts` discs, boxes, vertices and glyph words, filling `bounds`
-    /// with `paint`.
+    /// with `paint`. It draws the whole payload.
     pub fn new(bounds: Rect<DevicePx, Device>, paint: PaintRef, counts: [u32; 4]) -> Self {
         Self {
             order: 0,
@@ -114,6 +121,7 @@ impl MarkItem {
             glyphs: counts[3],
             tiles: 0,
             texture: 0,
+            first: 0,
         }
     }
 

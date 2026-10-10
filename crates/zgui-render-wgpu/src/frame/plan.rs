@@ -110,26 +110,39 @@ fn draw_mark_kinds(
         MarkKind::ALL
     };
     for kind in kinds {
-        let count = match kind {
-            MarkKind::Disc => item.discs,
-            MarkKind::Box => item.boxes,
-            // A run is a separator, two vertices and a separator, and fewer strokes nothing.
-            MarkKind::Polyline => item.vertices.saturating_sub(2),
-            // The tile table comes first and draws nothing.
-            MarkKind::Glyph => item.glyphs.saturating_sub(item.tiles),
-        };
-        if count > 0 {
+        let instances = mark_instances(item, kind);
+        if !instances.is_empty() {
             let glyph = kind == MarkKind::Glyph;
             builder.draw(PlannedDraw::Marks {
                 kind,
                 coverage,
                 position,
                 block,
-                lead: if glyph { item.tiles } else { 0 },
+                instances: [instances.start, instances.end],
                 texture: glyph.then_some(item.texture),
             });
         }
     }
+}
+
+/// The instances of payload `kind` the mark `item` draws, counted from its payload start.
+///
+/// Instance `i` of a polyline strokes vertex `i` to vertex `i + 1`. The first vertex the item reads
+/// and the last two only end a segment: a run is a separator, two vertices and a separator, and
+/// fewer strokes nothing. A glyph item's tile table comes first and draws nothing.
+pub(crate) fn mark_instances(item: &zgui_scene::MarkItem, kind: MarkKind) -> core::ops::Range<u32> {
+    let first = item.first;
+    let (start, end) = match kind {
+        MarkKind::Disc => (first, first.saturating_add(item.discs)),
+        MarkKind::Box => (first, first.saturating_add(item.boxes)),
+        MarkKind::Polyline if item.vertices >= 3 => (
+            first.saturating_add(1),
+            first.saturating_add(item.vertices - 2),
+        ),
+        MarkKind::Polyline => (0, 0),
+        MarkKind::Glyph => (first.max(item.tiles), first.saturating_add(item.glyphs)),
+    };
+    start..end.max(start)
 }
 
 /// Plans one batch of marks into the pass open on `target` with `scissor`: each union item

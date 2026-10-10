@@ -62,8 +62,8 @@ pub enum PlannedDraw {
         position: usize,
         /// The dynamic offset of the item's block.
         block: u32,
-        /// How many leading payload elements no instance walks: a glyph item's tile table.
-        lead: u32,
+        /// The instances the draw walks, as `[start, end)` from the item's payload start.
+        instances: [u32; 2],
         /// The atlas texture a glyph item reads, packed as a sprite tile packs it.
         texture: Option<u32>,
     },

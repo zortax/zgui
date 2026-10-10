@@ -267,10 +267,11 @@ impl Recorder<'_> {
                 coverage,
                 position,
                 block,
-                lead,
+                instances,
                 texture,
             } => self.marks_draw(
-                pass, planned, tables, *kind, *coverage, *position, *block, *lead, *texture, format,
+                pass, planned, tables, *kind, *coverage, *position, *block, *instances, *texture,
+                format,
             ),
             PlannedDraw::MarksComposite { block } => {
                 let Some(view) = self.marks.array() else {
@@ -425,23 +426,15 @@ impl Recorder<'_> {
         coverage: bool,
         position: usize,
         block: u32,
-        lead: u32,
+        instances: [u32; 2],
         texture: Option<u32>,
         format: wgpu::TextureFormat,
     ) -> bool {
-        let range = self.buffers.chunks.mark_payload(position)[kind.lane()].clone();
-        // Instance `i` of a polyline strokes vertex `i` to vertex `i + 1`, and the first and last
-        // vertices are separators. A glyph item's tile table comes before its instances.
-        let range = match kind {
-            crate::pipeline::marks::MarkKind::Polyline if range.len() >= 3 => {
-                range.start + 1..range.end - 2
-            }
-            crate::pipeline::marks::MarkKind::Polyline => return false,
-            crate::pipeline::marks::MarkKind::Glyph => {
-                (range.start + lead).min(range.end)..range.end
-            }
-            _ => range,
-        };
+        let payload = self.buffers.chunks.mark_payload(position)[kind.lane()].clone();
+        // The instances count from the payload start and never leave the payload. The whole
+        // payload stays bound, so a segment at the start of the part still reads its neighbours.
+        let start = payload.start.saturating_add(instances[0]).min(payload.end);
+        let range = start..payload.start.saturating_add(instances[1]).min(payload.end);
         if range.is_empty() {
             return false;
         }

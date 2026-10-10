@@ -202,7 +202,7 @@ assert_instance_layout!(
 
 assert_instance_layout!(
     MarkItem,
-    size = 100,
+    size = 104,
     align = 4,
     fields = [
         order @ 0, 4;
@@ -221,6 +221,7 @@ assert_instance_layout!(
         glyphs @ 88, 4;
         tiles @ 92, 4;
         texture @ 96, 4;
+        first @ 100, 4;
     ],
 );
 
@@ -258,7 +259,7 @@ mod tests {
         assert_eq!(size_of::<MonoSprite>(), 72);
         assert_eq!(size_of::<SubpixelSprite>(), 72);
         assert_eq!(size_of::<ColorSprite>(), 108);
-        assert_eq!(size_of::<MarkItem>(), 100);
+        assert_eq!(size_of::<MarkItem>(), 104);
         assert_eq!(size_of::<MarkBox>(), 64);
     }
 

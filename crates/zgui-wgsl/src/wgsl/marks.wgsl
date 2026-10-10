@@ -1,7 +1,8 @@
 // Recognised shapes drawn from a shared payload: what every mark module shares.
 //
 // A mark item names its payload by count only. One draw call covers one payload kind of one item,
-// and its instances walk that kind's payload range, so `instance_index` names the prim. The item
+// and its instances walk the item's part of that kind's payload range, so `instance_index` names
+// the prim. The whole payload stays bound, so a prim reads its neighbours past the part. The item
 // itself is named by the draw's own block, through the remap and the chunk offsets every lane
 // reads.
 //
@@ -42,6 +43,8 @@ struct MarkItem {
     tiles: u32,
     // The atlas texture the glyph cells lie in.
     texture: u32,
+    // The first prim the item draws in its payload kind. The draw's instance range starts there.
+    first: u32,
 }
 
 // What one draw of one item reads beside the payload.
