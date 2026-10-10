@@ -829,6 +829,61 @@ impl VectorMaskSource for FrameContent<'_> {
     fn layers(&self) -> Option<&dyn VectorLayerSource> {
         Some(self)
     }
+
+    fn path_glyphs(&self, owner: zgui_scene::VectorId) -> bool {
+        self.writing
+            .borrow()
+            .vector_masks
+            .path_glyphs_allowed(owner)
+    }
+
+    fn path_glyphs_declined(&self, owner: zgui_scene::VectorId) {
+        self.writing
+            .borrow_mut()
+            .vector_masks
+            .note_path_glyphs_declined(owner);
+    }
+
+    fn glyph_splits(&self) -> Option<RefMut<'_, crate::content::vectors::Splits>> {
+        Some(RefMut::map(self.writing.borrow_mut(), |writing| {
+            &mut writing.vector_masks.path_glyphs.splits
+        }))
+    }
+
+    /// Every sheet handed out is named to the frame, so a record that replays keeps the sheets
+    /// its marks read.
+    fn glyph_sheets(
+        &self,
+        request: crate::content::vectors::GlyphRequest<'_>,
+    ) -> Option<crate::content::vectors::GlyphSheets> {
+        let mut writing = self.writing.borrow_mut();
+        let Rasterising {
+            glyphs,
+            atlas,
+            vector_masks,
+            vector_layers,
+            named,
+        } = &mut *writing;
+        let before = atlas.refusals();
+        let sheets = match vector_masks.glyph_sheets(atlas, request) {
+            Some(sheets) => sheets,
+            // A refusal between the two readings is this request's. One eviction step spares
+            // everything this frame has drawn and everything anything holds, so a single retry
+            // is safe.
+            None if atlas.refusals() != before => {
+                let mut removed = Vec::new();
+                let freed = atlas.evict_least_recently_used_into(&mut removed);
+                glyphs.forget_tiles(&removed);
+                vector_masks.forget_tiles(&removed);
+                vector_layers.forget_tiles(&removed);
+                counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
+                vector_masks.glyph_sheets(atlas, request)?
+            }
+            None => return None,
+        };
+        named.extend_from_slice(&sheets.keys);
+        Some(sheets)
+    }
 }
 
 impl VectorLayerSource for FrameContent<'_> {

@@ -19,6 +19,7 @@ mod cache;
 mod cpu;
 mod layer;
 mod mask;
+pub(crate) mod path_glyphs;
 pub(crate) mod payloads;
 mod recognitions;
 
@@ -35,6 +36,8 @@ pub use crate::content::vectors::mask::{
     AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,
     VectorMaskStyle,
 };
+#[doc(hidden)]
+pub use crate::content::vectors::path_glyphs::{GlyphRequest, GlyphSheets, Splits};
 #[doc(hidden)]
 pub use crate::content::vectors::payloads::MarkPayloads;
 pub(crate) use crate::content::vectors::recognitions::PartKey;

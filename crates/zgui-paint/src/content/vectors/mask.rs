@@ -101,9 +101,36 @@ pub trait VectorMaskSource {
     fn layers(&self) -> Option<&dyn super::layer::VectorLayerSource> {
         None
     }
+
+    /// Whether `owner` may try the path glyph route this frame.
+    ///
+    /// False for a few frames after a large shape failed to split into repeated outlines.
+    fn path_glyphs(&self, _owner: VectorId) -> bool {
+        true
+    }
+
+    /// Records that a large shape of `owner` failed to split into repeated outlines.
+    fn path_glyphs_declined(&self, _owner: VectorId) {}
+
+    /// Where path splits are kept between frames, if anywhere.
+    #[doc(hidden)]
+    fn glyph_splits(&self) -> Option<core::cell::RefMut<'_, super::path_glyphs::Splits>> {
+        None
+    }
+
+    /// The atlas cells of every outline of `request`, rasterising the missing ones, or `None` to
+    /// decline the path glyph route.
+    #[doc(hidden)]
+    fn glyph_sheets(
+        &self,
+        _request: super::path_glyphs::GlyphRequest<'_>,
+    ) -> Option<super::path_glyphs::GlyphSheets> {
+        None
+    }
 }
 
-/// A source that declines every mask request, the analytic route and the marks route.
+/// A source that declines every mask request, the analytic route, the marks route and the path
+/// glyph route.
 ///
 /// Every shape drawn through it takes the general route.
 #[derive(Clone, Copy, Debug, Default)]
@@ -121,9 +148,14 @@ impl VectorMaskSource for NoVectorMasks {
     fn marks(&self, _owner: VectorId) -> bool {
         false
     }
+
+    fn path_glyphs(&self, _owner: VectorId) -> bool {
+        false
+    }
 }
 
-/// A source that declines every mask request and the marks route, and allows the analytic route.
+/// A source that declines every mask request, the marks route and the path glyph route, and
+/// allows the analytic route.
 ///
 /// It remembers nothing, so a shape that fails recognition is measured again on every frame.
 #[derive(Clone, Copy, Debug, Default)]
@@ -137,9 +169,14 @@ impl VectorMaskSource for AnalyticOnly {
     fn marks(&self, _owner: VectorId) -> bool {
         false
     }
+
+    fn path_glyphs(&self, _owner: VectorId) -> bool {
+        false
+    }
 }
 
-/// A source that declines every mask request and the analytic route, and allows the marks route.
+/// A source that declines every mask request, the analytic route and the path glyph route, and
+/// allows the marks route.
 ///
 /// It remembers nothing, so a shape that fails recognition is measured again on every frame.
 #[derive(Clone, Copy, Debug, Default)]
@@ -153,10 +190,14 @@ impl VectorMaskSource for MarksOnly {
     fn analytic(&self, _owner: VectorId) -> bool {
         false
     }
+
+    fn path_glyphs(&self, _owner: VectorId) -> bool {
+        false
+    }
 }
 
-/// A source that declines every mask request and the analytic route, allows the marks route, and
-/// keeps recognitions and mark payloads between frames. For tests.
+/// A source that declines every mask request, the analytic route and the path glyph route, allows
+/// the marks route, and keeps recognitions and mark payloads between frames. For tests.
 #[doc(hidden)]
 #[derive(Debug, Default)]
 pub struct CachedMarks {
@@ -195,6 +236,10 @@ impl VectorMaskSource for CachedMarks {
         false
     }
 
+    fn path_glyphs(&self, _owner: VectorId) -> bool {
+        false
+    }
+
     fn recognitions(&self) -> Option<core::cell::RefMut<'_, super::recognitions::Recognitions>> {
         Some(self.recognitions.borrow_mut())
     }
@@ -215,7 +260,7 @@ struct Fingerprint {
 
 /// Raster style encoded without borrowing the source shape.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum Style {
+pub(super) enum Style {
     Fill(bool),
     Stroke {
         width: u32,
@@ -269,6 +314,8 @@ struct RouteHistory {
     analytic_declined: Option<u32>,
     /// The frame a large shape of the owner last failed recognition on the marks route in.
     marks_declined: Option<u32>,
+    /// The frame a large shape of the owner last failed to split into repeated outlines in.
+    glyphs_declined: Option<u32>,
 }
 
 impl RouteHistory {
@@ -376,21 +423,21 @@ const COLD_BUDGET_TEXELS: u64 = 1024 * 1024;
 
 /// What one frame has spent on new masks.
 #[derive(Clone, Copy, Debug, Default)]
-struct Budget {
+pub(super) struct Budget {
     /// Masks rasterised.
-    tiles: u32,
+    pub(super) tiles: u32,
     /// Texels they cover.
     texels: u64,
 }
 
 impl Budget {
     /// Whether one more mask of `texels` stays within `tiles` masks and `limit` texels.
-    fn admits(&self, texels: u64, tiles: u32, limit: u64) -> bool {
+    pub(super) fn admits(&self, texels: u64, tiles: u32, limit: u64) -> bool {
         self.tiles < tiles && self.texels + texels <= limit
     }
 
     /// Records one mask of `texels`.
-    fn spend(&mut self, texels: u64) {
+    pub(super) fn spend(&mut self, texels: u64) {
         self.tiles += 1;
         self.texels += texels;
     }
@@ -419,10 +466,12 @@ pub(crate) struct VectorMaskCache {
     pub(crate) recognitions: super::recognitions::Recognitions,
     /// The mark payloads lowered lately.
     pub(crate) payloads: super::payloads::MarkPayloads,
+    /// The path glyph sheets, and the splits of the paths drawn lately.
+    pub(crate) path_glyphs: super::path_glyphs::PathGlyphs,
 }
 
 /// A disjoint namespace from glyph handles in the monochrome atlas.
-const MASK_NAMESPACE: u64 = 0x7E00_0000_0000_0000;
+pub(super) const MASK_NAMESPACE: u64 = 0x7E00_0000_0000_0000;
 const HANDLE_BITS: u64 = 0x00FF_FFFF_FFFF_FFFF;
 
 impl Default for VectorMaskCache {
@@ -438,6 +487,7 @@ impl Default for VectorMaskCache {
             cold: Budget::default(),
             recognitions: super::recognitions::Recognitions::default(),
             payloads: super::payloads::MarkPayloads::default(),
+            path_glyphs: super::path_glyphs::PathGlyphs::default(),
         }
     }
 }
@@ -450,6 +500,7 @@ impl VectorMaskCache {
         self.cold = Budget::default();
         self.recognitions.begin_frame();
         self.payloads.begin_frame();
+        self.path_glyphs.begin_frame();
     }
 
     /// Sets whether the general vector rasteriser is built.
@@ -477,6 +528,7 @@ impl VectorMaskCache {
             .retain(|_, history| frame.wrapping_sub(history.frame) < HISTORY_FRAMES);
         self.recognitions.end_frame();
         self.payloads.end_frame();
+        self.path_glyphs.end_frame();
         removed.len()
     }
 
@@ -512,6 +564,7 @@ impl VectorMaskCache {
             cold,
             recognitions: _,
             payloads: _,
+            path_glyphs: _,
         } = self;
         let part = part_of(request.style);
         let history = histories
@@ -646,6 +699,38 @@ impl VectorMaskCache {
         history.marks_declined = Some(frame);
     }
 
+    /// Whether `owner` may try the path glyph route: false for [`HISTORY_FRAMES`] frames after a
+    /// large shape of it failed to split.
+    pub(crate) fn path_glyphs_allowed(&self, owner: VectorId) -> bool {
+        self.histories
+            .get(&owner)
+            .and_then(|history| history.glyphs_declined)
+            .is_none_or(|declined| self.frame.wrapping_sub(declined) >= HISTORY_FRAMES)
+    }
+
+    /// Records that a large shape of `owner` failed to split into repeated outlines in this
+    /// frame.
+    pub(crate) fn note_path_glyphs_declined(&mut self, owner: VectorId) {
+        let frame = self.frame;
+        let history = self.histories.entry(owner).or_insert_with(|| RouteHistory {
+            frame,
+            ..RouteHistory::default()
+        });
+        history.advance(frame);
+        history.glyphs_declined = Some(frame);
+    }
+
+    /// The sheets of every outline of `request`, rasterising the missing ones, or `None` to
+    /// decline the route.
+    pub(crate) fn glyph_sheets(
+        &mut self,
+        atlas: &mut Atlas,
+        request: super::path_glyphs::GlyphRequest<'_>,
+    ) -> Option<super::path_glyphs::GlyphSheets> {
+        self.path_glyphs
+            .sheets_for(atlas, &mut self.next_handle, request)
+    }
+
     /// How many geometry identities map to a tile.
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
@@ -657,6 +742,7 @@ impl VectorMaskCache {
             return;
         }
         self.entries.retain(|_, key| !removed.contains(key));
+        self.path_glyphs.forget_tiles(removed);
     }
 
     /// Forgets every geometry identity after the atlas itself is cleared.
@@ -666,12 +752,13 @@ impl VectorMaskCache {
         self.superseded.clear();
         self.recognitions.clear();
         self.payloads.clear();
+        self.path_glyphs.clear();
         self.next_handle = MASK_NAMESPACE;
     }
 }
 
 /// A mask key no tile holds, from the mask namespace.
-fn fresh_key(next_handle: &mut u64, atlas: &Atlas) -> AtlasKey {
+pub(super) fn fresh_key(next_handle: &mut u64, atlas: &Atlas) -> AtlasKey {
     loop {
         let key = AtlasKey::new(*next_handle, TextureKind::Mono);
         *next_handle = MASK_NAMESPACE | (next_handle.wrapping_add(1) & HANDLE_BITS);
@@ -789,9 +876,18 @@ fn raster(fingerprint: &Fingerprint) -> Vec<u8> {
             Command::Close => zeno::Command::Close,
         })
         .collect();
-    let mut mask = zeno::Mask::new(commands.as_slice());
+    raster_commands(&commands, &fingerprint.style, fingerprint.size)
+}
+
+/// The coverage of `commands` drawn in `style`, `size` texels from the origin, one byte a texel.
+pub(super) fn raster_commands(
+    commands: &[zeno::Command],
+    style: &Style,
+    size: [i32; 2],
+) -> Vec<u8> {
+    let mut mask = zeno::Mask::new(commands);
     let dashes;
-    match &fingerprint.style {
+    match style {
         Style::Fill(even_odd) => {
             mask.style(if *even_odd {
                 zeno::Fill::EvenOdd
@@ -824,10 +920,7 @@ fn raster(fingerprint: &Fingerprint) -> Vec<u8> {
             });
         }
     }
-    mask.size(
-        fingerprint.size[0].max(0) as u32,
-        fingerprint.size[1].max(0) as u32,
-    );
+    mask.size(size[0].max(0) as u32, size[1].max(0) as u32);
     mask.render().0
 }
 
@@ -837,7 +930,7 @@ fn raster(fingerprint: &Fingerprint) -> Vec<u8> {
 /// one number rather than two because stroking does not commute with a map that scales the two axes
 /// differently, and the caller declines the mask rather than ask this to draw the wrong outline.
 /// The miter limit is a ratio and is left alone.
-fn style(style: VectorMaskStyle<'_>, density: f32) -> Option<Style> {
+pub(super) fn style(style: VectorMaskStyle<'_>, density: f32) -> Option<Style> {
     match style {
         VectorMaskStyle::Fill(rule) => Some(Style::Fill(rule == peniko::Fill::EvenOdd)),
         VectorMaskStyle::Stroke(stroke) => {
