@@ -93,6 +93,13 @@ impl Drawing {
         self.placed[index].get_or_init(|| zgui_svg::document::place::shape(shape, self.fit))
     }
 
+    /// Every shape placed in the fragment's space, in painting order.
+    pub fn placed_all(&self) -> Vec<zgui_svg::Shape> {
+        (0..self.shapes.len())
+            .map(|index| self.placed(index).clone())
+            .collect()
+    }
+
     /// The cell shape `index` is placed into, for a drawing that places its shapes.
     pub(crate) fn cell(&self, index: usize) -> Option<&OnceLock<zgui_svg::Shape>> {
         self.placed.get(index)

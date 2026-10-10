@@ -176,7 +176,7 @@ impl VectorCache {
         }))
     }
 
-    /// The placed outlines a vector document draws.
+    /// The outlines a vector document draws, with the fit that places them.
     ///
     /// A document that cannot be read draws nothing rather than falling back to something else:
     /// the alternative is an element that silently draws a different picture from the one it was
@@ -188,8 +188,11 @@ impl VectorCache {
         };
         let placed = fit::onto(box_.content_box, Some(read.view_box()), box_.scale);
         let shapes = read.clone();
+        // The document's own shapes, placed by the fit where a route needs them: the source
+        // paths are the same allocations at every placement, so what recognition found in them
+        // is found again after a scroll.
         Some(self.store(node, source, placed, Some(read), move || {
-            Drawing::placed_shapes(shapes.placed(placed))
+            Drawing::fitted(shapes.shapes().to_vec(), placed)
         }))
     }
 }

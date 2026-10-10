@@ -112,7 +112,7 @@ fn scene_of(source: &str, drawn: Drawn) -> Scene {
     zgui_paint::emit::vector::draw(
         &mut scene,
         VectorId(1),
-        &drawing.shapes,
+        &drawing.placed_all(),
         ShapePaint {
             fill: drawn.color,
             stroke: None,
