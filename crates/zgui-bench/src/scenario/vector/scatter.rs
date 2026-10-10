@@ -5,8 +5,9 @@
 //! range, so every frame draws a path nothing has drawn before.
 //!
 //! `mask-512` and `mask-2k` are small enough for the mask route. `markers-200` is a grid of circles
-//! far enough apart for the analytic route. `10k` and `100k` are plot-sized and take the general
-//! route.
+//! far enough apart for the analytic route. `10k` and `100k` are plot-sized and take the marks
+//! route. `waves` copies a plot's waves example: a grid, a damped sine as joined line segments, and
+//! noisy cosine samples as circles, all with solid paints.
 
 use std::rc::Rc;
 
@@ -57,6 +58,8 @@ struct Plot {
     visible: usize,
     /// Whether the points stand on a grid rather than at random.
     grid: bool,
+    /// Whether it draws the waves plot rather than a scatter.
+    waves: bool,
 }
 
 /// The variant's plot.
@@ -67,6 +70,7 @@ fn plot(variant: &str) -> Plot {
         "markers-200" => ("plot-small", 240.0, 180.0, 200, true),
         "10k" => ("plot-large", 960.0, 540.0, 10_000, false),
         "100k" => ("plot-large", 960.0, 540.0, 100_000, false),
+        "waves" => ("plot-large", 960.0, 540.0, 0, false),
         other => panic!("unknown scatter-pan variant `{other}`"),
     };
     Plot {
@@ -75,6 +79,7 @@ fn plot(variant: &str) -> Plot {
         height,
         visible,
         grid,
+        waves: variant == "waves",
     }
 }
 
@@ -129,6 +134,84 @@ fn scatter_path(points: &[(f64, f64)], low: f64, width: f64, height: f64) -> Bez
     path
 }
 
+/// The waves plot over the range starting at `low`, in a box `width` by `height`.
+///
+/// The data runs over `x` in `0..4π`; the range is one period of the data wide and the pan moves
+/// it. Segments and samples outside the range plus the margin are left out, as the plot clips them.
+fn waves(low: f64, width: f64, height: f64) -> Vec<zgui::canvas::Shape> {
+    let span = 4.0 * std::f64::consts::PI;
+    let x_of = |x: f64| (x / span - (low - 1.0)) * width;
+    let y_of = |y: f64| (1.4 - y) / 2.8 * height;
+    let visible = |px: f64| (-MARGIN..=width + MARGIN).contains(&px);
+    let mut shapes = Vec::new();
+    // The grid: vertical lines at data values, horizontal lines at fixed heights, translucent.
+    let grid = Color::srgb(140.0 / 255.0, 150.0 / 255.0, 170.0 / 255.0, 0.28);
+    let mut vertical = BezPath::new();
+    for index in -12..=24 {
+        let px = x_of(f64::from(index) * span / 12.0);
+        if visible(px) {
+            vertical.move_to((px, 0.0));
+            vertical.line_to((px, height));
+        }
+    }
+    let mut horizontal = BezPath::new();
+    for index in 0..=7 {
+        let py = f64::from(index) * height / 7.0;
+        horizontal.move_to((0.0, py));
+        horizontal.line_to((width, py));
+    }
+    for path in [vertical, horizontal] {
+        if !path.is_empty() {
+            shapes.push(
+                ShapeBuilder::new(path)
+                    .stroke(Brush::Solid(grid), 1.0)
+                    .build(),
+            );
+        }
+    }
+    // The wave: 601 samples, one segment per pair, joined into one path.
+    let wave: Vec<(f64, f64)> = (0..=600)
+        .map(|i| {
+            let x = f64::from(i) * span / 600.0;
+            (x, x.sin() * (-x / 8.0).exp())
+        })
+        .collect();
+    let mut line = BezPath::new();
+    for pair in wave.windows(2) {
+        let (start, end) = (x_of(pair[0].0), x_of(pair[1].0));
+        if visible(start) || visible(end) {
+            line.move_to((start, y_of(pair[0].1)));
+            line.line_to((end, y_of(pair[1].1)));
+        }
+    }
+    if !line.is_empty() {
+        shapes.push(
+            ShapeBuilder::new(line)
+                .stroke(Brush::Solid(Color::srgb(0.43, 0.66, 1.0, 1.0)), 2.0)
+                .build(),
+        );
+    }
+    // The samples: 80 circles of radius 3.5.
+    let mut samples = BezPath::new();
+    for i in 0..80 {
+        let x = f64::from(i) * span / 79.0;
+        let jitter = (f64::from(i) * 12.9898).sin() * 43_758.545;
+        let y = x.cos() * 0.8 + (jitter - jitter.floor() - 0.5) * 0.3;
+        let px = x_of(x);
+        if visible(px) {
+            append_circle(&mut samples, px, y_of(y), RADIUS);
+        }
+    }
+    if !samples.is_empty() {
+        shapes.push(
+            ShapeBuilder::new(samples)
+                .fill(Brush::Solid(Color::srgb(1.0, 0.71, 0.28, 1.0)))
+                .build(),
+        );
+    }
+    shapes
+}
+
 /// The document: the canvas and sixteen tick labels.
 fn view(plot: Plot) -> impl IntoView {
     let points = data(plot);
@@ -164,6 +247,12 @@ fn view(plot: Plot) -> impl IntoView {
             let width = f64::from(cx.size.width.0);
             let height = f64::from(cx.size.height.0);
             if width <= 0.0 {
+                return;
+            }
+            if plot.waves {
+                for shape in waves(low.get(), width, height) {
+                    cx.scene.push(shape);
+                }
                 return;
             }
             let path = scatter_path(&points, low.get(), width, height);
