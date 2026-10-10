@@ -54,6 +54,13 @@ impl Canary {
     }
 }
 
+/// The accessibility adapter of the windowing backend, from its glue crate. Named, never built:
+/// building one needs an event loop.
+pub type AccessAdapter = accesskit_winit::Adapter;
+
+/// A reactive store, from the store layer over the reactive graph.
+pub type Store<T> = reactive_stores::Store<T>;
+
 impl Default for Canary {
     fn default() -> Self {
         Self::new()

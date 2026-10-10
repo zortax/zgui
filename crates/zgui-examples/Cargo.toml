@@ -18,6 +18,9 @@ publish = false
 # because an application that does not want a developer tool linked in should not have one.
 [dependencies]
 zgui = { path = "../zgui", version = "0.1.0" }
+
+# Named by examples only, so the library target does not link them.
+[dev-dependencies]
 zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
 # Temporary, for diagnosing the console backend. The rule above holds for every other example: an
 # application names the umbrella crate and nothing else. `tty` is the exception because the console

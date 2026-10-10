@@ -137,6 +137,10 @@
 // list measures something no caller of this crate ever sees.
 #![allow(clippy::too_many_arguments)]
 
+// The style sheets read the token sheet's variables at run time and name no item of its crate.
+// The dependency keeps the two released together.
+use zgui_ui_tokens as _;
+
 pub mod accordion;
 pub mod alert;
 pub mod alert_dialog;
