@@ -134,6 +134,8 @@ struct MaskHistory {
     stamps: [u64; 2],
     /// The route each part took last.
     routed: [Routed; 2],
+    /// The tiles each part drew last, the current one first.
+    tiles: [[Option<AtlasKey>; 2]; 2],
 }
 
 impl MaskHistory {
@@ -162,6 +164,34 @@ impl MaskHistory {
         }
     }
 
+    /// Makes `key` the current tile of `part`.
+    ///
+    /// The tile before it stays tracked, so a shape that toggles between two geometries keeps
+    /// hitting. The one before that is dropped. It goes to `superseded` when the owner changed at
+    /// least twice in eight frames, and to eviction otherwise: an icon swapped once may swap back.
+    fn track(&mut self, part: usize, key: AtlasKey, superseded: &mut Vec<AtlasKey>) {
+        let tiles = &mut self.tiles[part];
+        if tiles[0] == Some(key) {
+            return;
+        }
+        if tiles[1] == Some(key) {
+            tiles.swap(0, 1);
+            return;
+        }
+        let dropped = tiles[1];
+        *tiles = [Some(key), tiles[0]];
+        if let Some(dropped) = dropped
+            && self.changes.count_ones() >= RECLAIM_CHANGES
+        {
+            superseded.push(dropped);
+        }
+    }
+
+    /// Gives back every tile `part` tracks.
+    fn give_back(&mut self, part: usize, superseded: &mut Vec<AtlasKey>) {
+        superseded.extend(self.tiles[part].iter_mut().filter_map(Option::take));
+    }
+
     /// Records the route `part` took, and counts a change between the mask and a decline.
     fn route(&mut self, part: usize, routed: Routed) {
         let was = self.routed[part];
@@ -177,6 +207,9 @@ const RECENT: u8 = 0b1111;
 
 /// How many changes in [`RECENT`] make an owner volatile.
 const VOLATILE_CHANGES: u32 = 3;
+
+/// How many changes in eight frames make an owner's dropped tiles worth removing at once.
+const RECLAIM_CHANGES: u32 = 2;
 
 /// How many frames a history survives without a request.
 const HISTORY_FRAMES: u32 = 8;
@@ -198,6 +231,8 @@ pub(crate) struct VectorMaskCache {
     /// Whether the general vector rasteriser is built and can take a declined shape at no setup
     /// cost.
     raster_ready: bool,
+    /// Tiles their owners stopped drawing, removed when the frame ends.
+    superseded: Vec<AtlasKey>,
 }
 
 /// A disjoint namespace from glyph handles in the monochrome atlas.
@@ -212,6 +247,7 @@ impl Default for VectorMaskCache {
             histories: FxHashMap::default(),
             frame: 0,
             raster_ready: false,
+            superseded: Vec::new(),
         }
     }
 }
@@ -227,11 +263,25 @@ impl VectorMaskCache {
         self.raster_ready = ready;
     }
 
-    /// Ends a frame: forgets the owners no request touched for [`HISTORY_FRAMES`] frames.
-    pub(crate) fn end_frame(&mut self) {
+    /// Ends a frame, and reports how many tiles it removed.
+    ///
+    /// Removes the superseded tiles that nothing holds and this frame did not draw, then forgets
+    /// the owners no request touched for [`HISTORY_FRAMES`] frames. Call it after the frame's
+    /// uploads are flushed: a removal discards the tile's queued upload.
+    ///
+    /// Only mask tiles are ever superseded, so glyphs and images are never removed here.
+    pub(crate) fn end_frame(&mut self, atlas: &mut Atlas) -> usize {
+        let mut removed = Vec::new();
+        for key in self.superseded.drain(..) {
+            if !atlas.used_this_frame(key) && atlas.remove_if_unreferenced(key) {
+                removed.push(key);
+            }
+        }
+        self.forget_tiles(&removed);
         let frame = self.frame;
         self.histories
             .retain(|_, history| frame.wrapping_sub(history.frame) < HISTORY_FRAMES);
+        removed.len()
     }
 
     /// Looks up or builds one coverage tile, or declines the request.
@@ -261,6 +311,7 @@ impl VectorMaskCache {
         history.advance(frame);
         history.observe(part, stamp(&request, part));
         if history.volatile && (self.raster_ready || segments(request.path) > COLD_SEGMENTS) {
+            history.give_back(part, &mut self.superseded);
             history.route(part, Routed::Declined);
             return None;
         }
@@ -294,6 +345,7 @@ impl VectorMaskCache {
             })
             .ok()?;
         if let Some(history) = self.histories.get_mut(&request.owner) {
+            history.track(part, key, &mut self.superseded);
             history.route(part, Routed::Mask);
         }
         Some(VectorMask { tile, key })
@@ -316,6 +368,7 @@ impl VectorMaskCache {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.histories.clear();
+        self.superseded.clear();
         self.next_handle = MASK_NAMESPACE;
     }
 

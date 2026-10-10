@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use zgui_atlas::{Atlas, AtlasLimits};
+use zgui_atlas::{Atlas, AtlasKey, AtlasLimits, TextureKind};
 use zgui_geom::{Point, Rect, Size};
 use zgui_scene::VectorId;
 use zgui_scene::kurbo::BezPath;
@@ -66,7 +66,7 @@ impl Rig {
 
     /// Ends a frame, as the content cache does.
     fn end(&mut self) {
-        self.cache.end_frame();
+        self.cache.end_frame(&mut self.atlas);
     }
 
     /// Asks for `path`'s fill as `owner`.
@@ -180,4 +180,89 @@ fn an_owner_untouched_for_eight_frames_is_swept() {
     rig.begin();
     rig.end();
     assert!(!rig.cache.histories.contains_key(&OWNER), "eight frames");
+}
+
+#[test]
+fn a_churning_owner_keeps_at_most_two_live_tiles() {
+    let mut rig = Rig::new(false);
+    for frame in 0..20 {
+        assert!(rig.frame(OWNER, &triangle(f64::from(frame) * 0.01)).is_some());
+        assert!(rig.atlas.len() <= 2, "frame {frame}: {} tiles", rig.atlas.len());
+        assert!(rig.cache.entries.len() <= 2, "frame {frame}");
+    }
+}
+
+#[test]
+fn reclaim_spares_a_tile_a_record_holds() {
+    let mut rig = Rig::new(false);
+    let first = rig.frame(OWNER, &triangle(0.0)).expect("a mask").key;
+    // A recorded painting that draws the first tile holds it.
+    rig.atlas.retain(first);
+    for frame in 1..6 {
+        rig.frame(OWNER, &triangle(f64::from(frame) * 0.1));
+    }
+    assert!(rig.atlas.contains(first), "a held tile stays");
+    assert!(
+        rig.cache.entries.values().any(|key| *key == first),
+        "and so does its entry"
+    );
+}
+
+#[test]
+fn reclaim_never_touches_a_glyph_tile() {
+    let mut rig = Rig::new(false);
+    let glyph = AtlasKey::new(42, TextureKind::Mono);
+    rig.begin();
+    rig.atlas
+        .get_or_insert(glyph, Size::new(8, 8), || vec![0; 64])
+        .expect("room for a glyph");
+    rig.end();
+    for frame in 0..20 {
+        rig.frame(OWNER, &triangle(f64::from(frame) * 0.01));
+    }
+    assert!(rig.atlas.contains(glyph));
+}
+
+#[test]
+fn a_one_off_change_leaves_the_old_tile_for_eviction() {
+    let mut rig = Rig::new(false);
+    let first = triangle(0.0);
+    let old = rig.frame(OWNER, &first).expect("a mask").key;
+    let second = triangle(0.5);
+    for _ in 0..3 {
+        rig.frame(OWNER, &second);
+    }
+    assert!(rig.atlas.contains(old), "one change removes nothing");
+    let tiles = rig.atlas.len();
+    let back = rig.frame(OWNER, &first).expect("a mask").key;
+    assert_eq!(back, old, "swapping back hits the old tile");
+    assert_eq!(rig.atlas.len(), tiles);
+}
+
+#[test]
+fn a_declining_volatile_owner_gives_back_its_tiles() {
+    let mut rig = Rig::new(true);
+    let mut drawn = Vec::new();
+    for frame in 0..3 {
+        drawn.push(rig.frame(OWNER, &triangle(f64::from(frame) * 0.1)).expect("a mask").key);
+    }
+    assert!(rig.frame(OWNER, &triangle(0.3)).is_none(), "volatile and declined");
+    for key in drawn {
+        assert!(!rig.atlas.contains(key), "{key:?} was given back");
+    }
+    assert!(rig.cache.entries.is_empty());
+}
+
+#[test]
+fn reclaim_spares_a_tile_another_owner_drew_this_frame() {
+    let mut rig = Rig::new(false);
+    let shared = triangle(0.0);
+    let first = rig.frame(OWNER, &shared).expect("a mask").key;
+    rig.frame(OWNER, &triangle(0.1));
+    rig.begin();
+    // The owner drops the first tile in this frame, and another owner draws it with no hold.
+    rig.ask(OWNER, &triangle(0.2));
+    assert_eq!(rig.ask(VectorId(8), &shared).expect("a mask").key, first);
+    rig.end();
+    assert!(rig.atlas.contains(first));
 }

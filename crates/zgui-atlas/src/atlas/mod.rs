@@ -210,6 +210,17 @@ impl Atlas {
         self.index.contains_key(&key)
     }
 
+    /// Whether this frame looked `key` up, without marking it as used.
+    ///
+    /// A tile this frame drew is not safe to remove before the frame is drawn, whether or not
+    /// anything holds it.
+    pub fn used_this_frame(&self, key: AtlasKey) -> bool {
+        self.index
+            .get(&key)
+            .and_then(|slot| self.entries[*slot as usize].as_ref())
+            .is_some_and(|entry| entry.generation == self.generation)
+    }
+
     /// Every cached tile, in no particular order.
     ///
     /// Two tiles of one texture are always disjoint, which is the invariant a consumer that draws

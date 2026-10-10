@@ -134,10 +134,11 @@ impl ContentCache {
 
     /// Ends a frame.
     ///
-    /// Call after [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`]
-    /// gives.
+    /// This removes the mask tiles that shapes changing every frame stopped drawing, so a churning
+    /// shape holds at most two tiles and never pushes glyphs out of the atlas. Call it after
+    /// [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`] gives.
     pub fn end_frame(&mut self) {
-        self.vector_masks.end_frame();
+        self.vector_masks.end_frame(&mut self.atlas);
     }
 
     /// What the cache is holding.
