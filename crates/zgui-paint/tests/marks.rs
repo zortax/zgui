@@ -348,9 +348,10 @@ fn a_marks_canvas_replays_when_it_moves() {
         20.0,
         "the mark moved with its box"
     );
+    assert_eq!(before.origin, [0.0, 10.0], "the fit places the payload");
     assert_eq!(
         after.origin,
-        [0.0, 20.0],
+        [0.0, 30.0],
         "and its payload stayed where it was"
     );
     assert!(

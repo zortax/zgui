@@ -90,6 +90,12 @@ pub trait VectorMaskSource {
     fn recognitions(&self) -> Option<core::cell::RefMut<'_, super::recognitions::Recognitions>> {
         None
     }
+
+    /// Where mark payloads are kept between frames, if anywhere.
+    #[doc(hidden)]
+    fn payloads(&self) -> Option<core::cell::RefMut<'_, super::payloads::MarkPayloads>> {
+        None
+    }
 }
 
 /// A source that declines every mask request, the analytic route and the marks route.
@@ -141,6 +147,55 @@ impl VectorMaskSource for MarksOnly {
 
     fn analytic(&self, _owner: VectorId) -> bool {
         false
+    }
+}
+
+/// A source that declines every mask request and the analytic route, allows the marks route, and
+/// keeps recognitions and mark payloads between frames. For tests.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct CachedMarks {
+    /// The recognitions.
+    recognitions: core::cell::RefCell<super::recognitions::Recognitions>,
+    /// The mark payloads.
+    payloads: core::cell::RefCell<super::payloads::MarkPayloads>,
+}
+
+impl CachedMarks {
+    /// A source holding nothing yet, in its first frame.
+    pub fn new() -> Self {
+        let source = Self::default();
+        source.recognitions.borrow_mut().begin_frame();
+        source.payloads.borrow_mut().begin_frame();
+        source
+    }
+
+    /// Ends a frame and starts the next.
+    pub fn end_frame(&self) {
+        let mut recognitions = self.recognitions.borrow_mut();
+        recognitions.end_frame();
+        recognitions.begin_frame();
+        let mut payloads = self.payloads.borrow_mut();
+        payloads.end_frame();
+        payloads.begin_frame();
+    }
+}
+
+impl VectorMaskSource for CachedMarks {
+    fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
+        None
+    }
+
+    fn analytic(&self, _owner: VectorId) -> bool {
+        false
+    }
+
+    fn recognitions(&self) -> Option<core::cell::RefMut<'_, super::recognitions::Recognitions>> {
+        Some(self.recognitions.borrow_mut())
+    }
+
+    fn payloads(&self) -> Option<core::cell::RefMut<'_, super::payloads::MarkPayloads>> {
+        Some(self.payloads.borrow_mut())
     }
 }
 
@@ -357,6 +412,8 @@ pub(crate) struct VectorMaskCache {
     cold: Budget,
     /// What recognition found in the paths drawn lately.
     pub(crate) recognitions: super::recognitions::Recognitions,
+    /// The mark payloads lowered lately.
+    pub(crate) payloads: super::payloads::MarkPayloads,
 }
 
 /// A disjoint namespace from glyph handles in the monochrome atlas.
@@ -375,6 +432,7 @@ impl Default for VectorMaskCache {
             budget: Budget::default(),
             cold: Budget::default(),
             recognitions: super::recognitions::Recognitions::default(),
+            payloads: super::payloads::MarkPayloads::default(),
         }
     }
 }
@@ -386,6 +444,7 @@ impl VectorMaskCache {
         self.budget = Budget::default();
         self.cold = Budget::default();
         self.recognitions.begin_frame();
+        self.payloads.begin_frame();
     }
 
     /// Sets whether the general vector rasteriser is built.
@@ -412,6 +471,7 @@ impl VectorMaskCache {
         self.histories
             .retain(|_, history| frame.wrapping_sub(history.frame) < HISTORY_FRAMES);
         self.recognitions.end_frame();
+        self.payloads.end_frame();
         removed.len()
     }
 
@@ -446,6 +506,7 @@ impl VectorMaskCache {
             budget,
             cold,
             recognitions: _,
+            payloads: _,
         } = self;
         let part = part_of(request.style);
         let history = histories
@@ -598,6 +659,7 @@ impl VectorMaskCache {
         self.histories.clear();
         self.superseded.clear();
         self.recognitions.clear();
+        self.payloads.clear();
         self.next_handle = MASK_NAMESPACE;
     }
 }

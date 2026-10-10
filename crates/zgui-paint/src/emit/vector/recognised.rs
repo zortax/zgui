@@ -83,6 +83,29 @@ pub(crate) fn recognised(
     max_prims: usize,
     masks: &dyn VectorMaskSource,
 ) -> Option<Arc<Decomposition>> {
+    let (found, place) = recognised_in_source(source, outline, part, tau_local, max_prims, masks)?;
+    Some(if place == Affine::IDENTITY {
+        found
+    } else {
+        let [scale, _, _, _, x, y] = place.as_coeffs();
+        Arc::new(moved(&found, scale, Vec2::new(x, y)))
+    })
+}
+
+/// What [`recognised`] finds, in the units it was recognised in, and the matrix that maps it to
+/// the fragment's space.
+///
+/// The matrix is `translate(offset) * scale(s)` under a uniform fit, and the identity for a placed
+/// path. The result is the one the recognition cache holds, so a drawing whose fit changes keeps
+/// it.
+pub(crate) fn recognised_in_source(
+    source: &ShapeSource<'_>,
+    outline: Outline,
+    part: PartOf,
+    tau_local: f64,
+    max_prims: usize,
+    masks: &dyn VectorMaskSource,
+) -> Option<(Arc<Decomposition>, Affine)> {
     let (shape, path, scale, offset) = read(source, outline)?;
     let inherited;
     let part = match part {
@@ -126,11 +149,7 @@ pub(crate) fn recognised(
             outcome
         }
     }?;
-    Some(if scale == 1.0 && offset == Vec2::ZERO {
-        found
-    } else {
-        Arc::new(moved(&found, scale, offset))
-    })
+    Some((found, Affine::translate(offset) * Affine::scale(scale)))
 }
 
 /// `found`, scaled by `scale` and moved by `offset`.

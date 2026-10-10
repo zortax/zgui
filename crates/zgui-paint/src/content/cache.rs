@@ -743,6 +743,12 @@ impl VectorMaskSource for FrameContent<'_> {
             &mut writing.vector_masks.recognitions
         }))
     }
+
+    fn payloads(&self) -> Option<RefMut<'_, crate::content::vectors::MarkPayloads>> {
+        Some(RefMut::map(self.writing.borrow_mut(), |writing| {
+            &mut writing.vector_masks.payloads
+        }))
+    }
 }
 
 impl ResourceOwner for FrameContent<'_> {

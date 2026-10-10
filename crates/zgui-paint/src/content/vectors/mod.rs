@@ -16,14 +16,19 @@
 
 mod cache;
 mod mask;
+pub(crate) mod payloads;
 mod recognitions;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
+#[doc(hidden)]
+pub use crate::content::vectors::mask::CachedMarks;
 pub(crate) use crate::content::vectors::mask::VectorMaskCache;
 pub use crate::content::vectors::mask::{
     AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,
     VectorMaskStyle,
 };
+#[doc(hidden)]
+pub use crate::content::vectors::payloads::MarkPayloads;
 pub(crate) use crate::content::vectors::recognitions::PartKey;
 #[doc(hidden)]
 pub use crate::content::vectors::recognitions::Recognitions;

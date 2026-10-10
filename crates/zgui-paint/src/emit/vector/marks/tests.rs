@@ -118,7 +118,14 @@ fn an_overlapping_fill_with_a_hole_is_no_union() {
     };
     let affine = zgui_geom::Affine2::IDENTITY;
     let lowered = |found: &Decomposition, rule| {
-        super::lower(Arc::new(found.clone()), &affine, Some(rule)).is_some()
+        super::lower(
+            Arc::new(found.clone()),
+            zgui_scene::kurbo::Affine::IDENTITY,
+            &affine,
+            Some(rule),
+            &crate::content::vectors::NoVectorMasks,
+        )
+        .is_some()
     };
     assert!(!lowered(&ring, peniko::Fill::NonZero));
     let one_way = Decomposition {

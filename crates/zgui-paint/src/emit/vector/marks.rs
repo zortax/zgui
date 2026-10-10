@@ -4,18 +4,24 @@
 //! rectangles or simple strokes becomes one [`MarkItem`] over a shared payload of its prims. Prims
 //! two device pixels apart are painted one by one. Prims that come closer are summed into one
 //! coverage first and painted through the sum once, which is the union a path paints.
+//!
+//! The payload stays in the units the shape was recognised in, and the item maps it to the
+//! fragment's space. So a payload lowered from a recognition the cache holds is the same
+//! allocation under every fit, and a pan of a canvas view uploads none.
 
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-use zgui_scene::{MarkBox, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId, peniko};
+use zgui_scene::{
+    MarkBox, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId, kurbo, peniko,
+};
 
 use super::analytic::{clip_links, look, of_color};
 use super::document::{reference, stroke_paint};
 use super::recognise::{self, Decomposition, Orientation};
-use super::recognised::{Outline, PartOf, placed_paint, recognised, straight_on_axes};
+use super::recognised::{Outline, PartOf, placed_paint, recognised_in_source, straight_on_axes};
 use super::{ShapePaint, ShapeSource, VectorPlacement};
 use crate::content::vectors::VectorMaskSource;
 
@@ -37,13 +43,13 @@ const OVERDRAW: f32 = 8.0;
 
 /// One part's payload and flags, before its paint is interned.
 struct Lowered {
-    /// The prims.
-    payload: MarkPayload,
+    /// The prims, in the units they were recognised in.
+    payload: Arc<MarkPayload>,
     /// [`MarkFlags`] bits.
     flags: u32,
-    /// What the prims paint together, in the shape's local space.
+    /// What the prims paint together, in the fragment's space.
     ink: [f32; 4],
-    /// Half the polyline stroke width.
+    /// Half the polyline stroke width, in the units the prims were recognised in.
     half_width: f32,
 }
 
@@ -106,7 +112,8 @@ pub(super) fn emit_marks(
         }
         None
     };
-    let recognise_part = |part| recognised(source, Outline::Path, part, tau, MAX_MARK_PRIMS, masks);
+    let recognise_part =
+        |part| recognised_in_source(source, Outline::Path, part, tau, MAX_MARK_PRIMS, masks);
     let filled = match fill {
         Some(fill) => match recognise_part(PartOf::Fill(fill.rule)) {
             Some(found) => Some(found),
@@ -122,17 +129,19 @@ pub(super) fn emit_marks(
         None => None,
     };
     // A part with no prims encloses no area and draws nothing.
-    let filled = filled.filter(|found| found.count > 0);
-    let stroked = stroked.filter(|found| found.count > 0);
+    let filled = filled.filter(|(found, _)| found.count > 0);
+    let stroked = stroked.filter(|(found, _)| found.count > 0);
     if filled.is_none() && stroked.is_none() {
         return None;
     }
     let fills = match (filled, fill) {
-        (Some(found), Some(fill)) => Some(lower(found, &affine, Some(fill.rule))?),
+        (Some((found, place)), Some(fill)) => {
+            Some(lower(found, place, &affine, Some(fill.rule), masks)?)
+        }
         _ => None,
     };
     let strokes = match stroked {
-        Some(found) => Some(lower(found, &affine, None)?),
+        Some((found, place)) => Some(lower(found, place, &affine, None, masks)?),
         None => None,
     };
 
@@ -142,7 +151,7 @@ pub(super) fn emit_marks(
         let inks: SmallVec<[Rect<DevicePx, Device>; 2]> = [&fills, &strokes]
             .into_iter()
             .flatten()
-            .map(|lowered| rect(lowered.ink))
+            .map(|(lowered, _)| rect(lowered.ink))
             .collect();
         clip_links(
             source,
@@ -162,31 +171,36 @@ pub(super) fn emit_marks(
         scene.note_minted_clip(clip);
     }
     let mut pushed = 0;
-    if let (Some(lowered), Some(fill)) = (fills, fill) {
+    if let (Some((lowered, place)), Some(fill)) = (fills, fill) {
         let paint = reference(scene, &placed_paint(source, &fill.paint), paint.fill);
-        pushed += push(scene, lowered, paint, clip, placement);
+        pushed += push(scene, lowered, place, paint, clip, placement);
     }
-    if let Some(lowered) = strokes {
+    if let Some((lowered, place)) = strokes {
         let paint = stroke_paint(scene, source, paint);
-        pushed += push(scene, lowered, paint, clip, placement);
+        pushed += push(scene, lowered, place, paint, clip, placement);
     }
     Some(pushed)
 }
 
-/// Pushes one part as one mark, and returns how many survived.
+/// Pushes one part as one mark whose payload `place` maps to the fragment's space, and returns
+/// how many survived.
 fn push(
     scene: &mut Scene,
     lowered: Lowered,
+    place: kurbo::Affine,
     paint: PaintRef,
     clip: zgui_scene::ClipId,
     placement: VectorPlacement,
 ) -> usize {
     let mut item = MarkItem::new(rect(lowered.ink), paint, lowered.payload.counts());
+    let [a, b, c, d, e, f] = place.as_coeffs();
     item.flags = lowered.flags;
     item.clip = clip.0;
     item.transform = placement.transform.index();
     item.half_width = lowered.half_width;
-    usize::from(scene.push_marks(item, Arc::new(lowered.payload)).is_some())
+    item.axes = [a as f32, b as f32, c as f32, d as f32];
+    item.origin = [e as f32, f as f32];
+    usize::from(scene.push_marks(item, lowered.payload).is_some())
 }
 
 /// An `[x0, y0, x1, y1]` rectangle in the shape's space.
@@ -207,8 +221,12 @@ fn smallest_scale(affine: &zgui_geom::Affine2) -> f32 {
     ((p + q) / 2.0 - spread).max(0.0).sqrt().max(1.0e-6) as f32
 }
 
-/// The payload of one part, its flags and its ink, or `None` for polyline caps no item can draw,
-/// or for a fill whose prims overlap and are not one union.
+/// The payload of one part, its flags and its ink, with the matrix that maps the payload to the
+/// fragment's space, or `None` for polyline caps no item can draw, or for a fill whose prims
+/// overlap and are not one union.
+///
+/// `found` is in the units it was recognised in, `place` maps it to the fragment's space and
+/// `affine` maps that to the device.
 ///
 /// The interior of overlapping subpaths is their union under the nonzero rule when they all turn
 /// one way. Turning both ways, or under the even-odd rule, an inner subpath is a hole, which no
@@ -216,10 +234,13 @@ fn smallest_scale(affine: &zgui_geom::Affine2) -> f32 {
 /// is always the union of its segments'.
 fn lower(
     found: Arc<Decomposition>,
+    place: kurbo::Affine,
     affine: &zgui_geom::Affine2,
     rule: Option<peniko::Fill>,
-) -> Option<Lowered> {
-    let union = found.count > 1 && !apart(&found, affine);
+    masks: &dyn VectorMaskSource,
+) -> Option<(Lowered, kurbo::Affine)> {
+    let device = compose(affine, place);
+    let union = found.count > 1 && !apart(&found, &device);
     let holes = match rule {
         Some(peniko::Fill::EvenOdd) => true,
         Some(peniko::Fill::NonZero) => found.orientation == Orientation::Mixed,
@@ -228,6 +249,57 @@ fn lower(
     if union && holes {
         return None;
     }
+    let local = place.transform_rect_bbox(kurbo::Rect::new(
+        f64::from(found.ink[0]),
+        f64::from(found.ink[1]),
+        f64::from(found.ink[2]),
+        f64::from(found.ink[3]),
+    ));
+    let ink = [local.x0, local.y0, local.x1, local.y1].map(|value| value as f32);
+    let half_width = found.half_width;
+    // A recognition the cache holds is lowered once, and its payload is the same allocation on
+    // every encode.
+    let cached = Arc::strong_count(&found) > 1;
+    let held = cached
+        .then(|| masks.payloads()?.shape(&found, union))
+        .flatten();
+    if let Some((payload, flags)) = held {
+        let lowered = Lowered {
+            payload,
+            flags,
+            ink,
+            half_width,
+        };
+        return Some((lowered, place));
+    }
+    let (payload, flags) = if cached {
+        let (payload, flags) = payload_of(Arc::clone(&found), union)?;
+        let payload = Arc::new(payload);
+        if let Some(mut payloads) = masks.payloads() {
+            payloads.insert_shape(&found, union, Arc::clone(&payload), flags);
+        }
+        (payload, flags)
+    } else {
+        let (payload, flags) = payload_of(found, union)?;
+        (Arc::new(payload), flags)
+    };
+    let lowered = Lowered {
+        payload,
+        flags,
+        ink,
+        half_width,
+    };
+    Some((lowered, place))
+}
+
+/// `affine` after `place`: the map from the payload to the device.
+fn compose(affine: &zgui_geom::Affine2, place: kurbo::Affine) -> zgui_geom::Affine2 {
+    let [a, b, c, d, e, f] = place.as_coeffs().map(|value| value as f32);
+    zgui_geom::Affine2::new(a, b, c, d, e, f).then(*affine)
+}
+
+/// The payload of `found` and its flags, or `None` for polyline caps no item can draw.
+fn payload_of(found: Arc<Decomposition>, union: bool) -> Option<(MarkPayload, u32)> {
     let mut vertices = Vec::new();
     let mut flags = runs(&found, &mut vertices)?;
     // A result no cache holds is moved into the payload rather than copied.
@@ -249,12 +321,7 @@ fn lower(
         flags |= MarkFlags::UNION;
         dedupe(&mut payload.discs, found.ink);
     }
-    Some(Lowered {
-        payload,
-        flags,
-        ink: found.ink,
-        half_width: found.half_width,
-    })
+    Some((payload, flags))
 }
 
 /// Writes the capsules of `found` as polyline runs into `vertices`, and returns the cap flags.
