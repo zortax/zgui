@@ -38,13 +38,16 @@ use zgui_profile::{Counter, Counters};
 use crate::scenario::vector::timing::Frames;
 
 /// Every (scenario, variant) pair, in the order `all` runs them.
-pub(crate) const ALL: [(&str, &str); 10] = [
+pub(crate) const ALL: [(&str, &str); 13] = [
     ("scatter-pan", "mask-512"),
     ("scatter-pan", "mask-2k"),
     ("scatter-pan", "markers-200"),
     ("scatter-pan", "10k"),
     ("scatter-pan", "100k"),
     ("scatter-pan", "waves"),
+    ("scatter-pan", "series-100k"),
+    ("scatter-pan", "series-1m"),
+    ("scatter-pan", "waves-view"),
     ("icons-scroll", "icons"),
     ("icons-scroll", "gallery"),
     ("svg-static", "grid"),
@@ -55,7 +58,7 @@ pub(crate) const ALL: [(&str, &str); 10] = [
 pub(super) const TICK: Duration = Duration::from_micros(8_333);
 
 /// The counters a `VCOUNT` line prints, in order.
-const PRINTED: [Counter; 19] = [
+const PRINTED: [Counter; 20] = [
     Counter::VectorBackendBuilt,
     Counter::VelloRenders,
     Counter::VectorEncodeHits,
@@ -66,6 +69,7 @@ const PRINTED: [Counter; 19] = [
     Counter::VectorRouteMarks,
     Counter::MarksUnionBins,
     Counter::MarksPayloadBytes,
+    Counter::SeriesPayloadsBuilt,
     Counter::VectorMaskMisses,
     Counter::VectorMaskBudgetOverflow,
     Counter::VectorReplaysRefused,

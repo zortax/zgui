@@ -8,6 +8,10 @@
 //! far enough apart for the analytic route. `10k` and `100k` are plot-sized and take the marks
 //! route. `waves` copies a plot's waves example: a grid, a damped sine as joined line segments, and
 //! noisy cosine samples as circles, all with solid paints.
+//!
+//! `series-100k` and `series-1m` draw the scatter once as a canvas series and pan it through the
+//! canvas view. `waves-view` draws the waves over the whole data range once and pans it the same
+//! way. All three sit in a clipping box of the plot's size.
 
 use std::rc::Rc;
 
@@ -42,6 +46,7 @@ const SHEET: &str = zgui::css!(
      .vector-root { flex-direction: column; gap: 8px }
      .plot-small { width: 240px; height: 180px }
      .plot-large { width: 960px; height: 540px }
+     .plot-clip { overflow: hidden; width: 960px; height: 540px }
      .ticks { flex-direction: row; gap: 12px }"
 );
 
@@ -60,6 +65,8 @@ struct Plot {
     grid: bool,
     /// Whether it draws the waves plot rather than a scatter.
     waves: bool,
+    /// Whether it draws once and pans through the canvas view.
+    view: bool,
 }
 
 /// The variant's plot.
@@ -70,7 +77,9 @@ fn plot(variant: &str) -> Plot {
         "markers-200" => ("plot-small", 240.0, 180.0, 200, true),
         "10k" => ("plot-large", 960.0, 540.0, 10_000, false),
         "100k" => ("plot-large", 960.0, 540.0, 100_000, false),
-        "waves" => ("plot-large", 960.0, 540.0, 0, false),
+        "waves" | "waves-view" => ("plot-large", 960.0, 540.0, 0, false),
+        "series-100k" => ("plot-large", 960.0, 540.0, 100_000, false),
+        "series-1m" => ("plot-large", 960.0, 540.0, 1_000_000, false),
         other => panic!("unknown scatter-pan variant `{other}`"),
     };
     Plot {
@@ -79,7 +88,8 @@ fn plot(variant: &str) -> Plot {
         height,
         visible,
         grid,
-        waves: variant == "waves",
+        waves: variant.starts_with("waves"),
+        view: variant.starts_with("series") || variant == "waves-view",
     }
 }
 
@@ -137,12 +147,13 @@ fn scatter_path(points: &[(f64, f64)], low: f64, width: f64, height: f64) -> Bez
 /// The waves plot over the range starting at `low`, in a box `width` by `height`.
 ///
 /// The data runs over `x` in `0..4π`; the range is one period of the data wide and the pan moves
-/// it. Segments and samples outside the range plus the margin are left out, as the plot clips them.
-fn waves(low: f64, width: f64, height: f64) -> Vec<zgui::canvas::Shape> {
+/// it. Unless `whole`, segments and samples outside the range plus the margin are left out, as the
+/// plot clips them.
+fn waves(low: f64, width: f64, height: f64, whole: bool) -> Vec<zgui::canvas::Shape> {
     let span = 4.0 * std::f64::consts::PI;
     let x_of = |x: f64| (x / span - (low - 1.0)) * width;
     let y_of = |y: f64| (1.4 - y) / 2.8 * height;
-    let visible = |px: f64| (-MARGIN..=width + MARGIN).contains(&px);
+    let visible = |px: f64| whole || (-MARGIN..=width + MARGIN).contains(&px);
     let mut shapes = Vec::new();
     // The grid: vertical lines at data values, horizontal lines at fixed heights, translucent.
     let grid = Color::srgb(140.0 / 255.0, 150.0 / 255.0, 170.0 / 255.0, 0.28);
@@ -250,7 +261,7 @@ fn view(plot: Plot) -> impl IntoView {
                 return;
             }
             if plot.waves {
-                for shape in waves(low.get(), width, height) {
+                for shape in waves(low.get(), width, height, false) {
                     cx.scene.push(shape);
                 }
                 return;
@@ -274,10 +285,87 @@ fn view(plot: Plot) -> impl IntoView {
     }
 }
 
+/// The document for a variant that draws once and pans through the canvas view.
+///
+/// The scatter is one points series over twice the visible points, in data space; the waves are
+/// their shapes over the whole data range. The pan sets the view to `translate((1 − low) · width)`.
+fn viewed(plot: Plot) -> impl IntoView {
+    let handle = CanvasHandle::new();
+    let (width, height) = (f64::from(plot.width), f64::from(plot.height));
+    if plot.waves {
+        handle.draw(|scene| scene.replace(waves(1.0, width, height, true)));
+    } else {
+        let data: std::sync::Arc<[[f32; 2]]> = data(plot)
+            .iter()
+            .map(|&(x, y)| [x as f32, y as f32])
+            .collect();
+        handle.draw(|scene| {
+            scene.push_series(zgui::canvas::Series::Points {
+                data,
+                to_canvas: zgui::elements::kurbo::Affine::new([
+                    width, 0.0, 0.0, -height, -width, height,
+                ]),
+                marker: zgui::canvas::Marker::Circle { radius: RADIUS },
+                fill: Some(Brush::Solid(Color::srgb(0.36, 0.62, 1.0, 1.0))),
+                stroke: None,
+            });
+        });
+    }
+    let low = RwSignal::new_local(1.0_f64);
+    let grab: RwSignal<Option<f32>, zgui::reactive::LocalStorage> = RwSignal::new_local(None);
+    let panned = handle.clone();
+    let canvas = zgui::elements::canvas()
+        .class(plot.class)
+        .scene(&handle)
+        .on(
+            events::PointerDown,
+            move |cx: &mut EventCx<'_, events::PointerDown>| {
+                grab.set(Some(cx.position.x.0));
+                cx.capture_pointer();
+            },
+        )
+        .on(
+            events::PointerMove,
+            move |cx: &mut EventCx<'_, events::PointerMove>| {
+                if let Some(last) = grab.get_untracked() {
+                    let moved = f64::from(cx.position.x.0 - last);
+                    low.update(|low| *low -= moved / width);
+                    grab.set(Some(cx.position.x.0));
+                    panned.set_transform(zgui::elements::kurbo::Affine::translate((
+                        (1.0 - low.get_untracked()) * width,
+                        0.0,
+                    )));
+                }
+            },
+        )
+        .on(
+            events::PointerUp,
+            move |cx: &mut EventCx<'_, events::PointerUp>| {
+                grab.set(None);
+                cx.release_pointer();
+            },
+        );
+    view! {
+        column(class = "vector-root") {
+            box(class = "plot-clip") {
+                {canvas.into_view()}
+            }
+            row(class = "ticks") {
+                for index in move || 0..16_usize, key = |index: &usize| *index {
+                    text {{move || format!("{:.2}", index as f64 / 16.0)}}
+                }
+            }
+        }
+    }
+}
+
 /// Runs one variant.
 pub(super) fn run(variant: &str) {
     let plot = plot(variant);
     let runtime = crate::scenario::fixture::custom(SHEET, move |cx: &mut BuildCx<'_>| {
+        if plot.view {
+            return Box::new(viewed(plot).into_view().build(cx)) as Box<dyn Anchor>;
+        }
         Box::new(view(plot).into_view().build(cx)) as Box<dyn Anchor>
     });
     let mut harness = opened(runtime);
