@@ -11,9 +11,7 @@
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{
-    ClipId, ClipLink, ClipTable, CornerShape, PaintRef, Quad, Scene, VectorId, kurbo,
-};
+use zgui_scene::{ClipId, ClipLink, CornerShape, PaintRef, Quad, Scene, VectorId, kurbo};
 
 use super::document::{density_of, reference, stroke_of};
 use super::recognise::{self, Decomposition, Limits, Part};
@@ -300,6 +298,9 @@ pub(super) fn emit_analytic(
         }
     }
 
+    // A clip the quad shader would test at pixel centres keeps its edge exact only where the edge
+    // is on a whole device pixel. A clip that reaches past every primitive's antialiased edge
+    // changes no pixel and is left out.
     let mut links: SmallVec<[ClipLink; 2]> = SmallVec::new();
     for clip in &shape.clips {
         let found = recognise::recognise(&clip.path, Part::Fill(clip.rule), limits)?;
@@ -310,29 +311,48 @@ pub(super) fn emit_analytic(
             return None;
         }
         let [x0, y0, x1, y1] = prim.rect;
-        let radius = |at: usize| Vec2::new(DevicePx(prim.radii[at]), DevicePx(prim.radii[at + 1]));
-        links.push(ClipLink::shaped(
-            Rect::new(
-                Point::new(DevicePx(x0), DevicePx(y0)),
-                Size::new(DevicePx(x1 - x0), DevicePx(y1 - y0)),
+        let reach = prim.radii.iter().copied().fold(0.0_f32, f32::max);
+        let inside = affine.transform_rect(Rect::<DevicePx, Device>::new(
+            Point::new(DevicePx(x0 + reach), DevicePx(y0 + reach)),
+            Size::new(
+                DevicePx((x1 - x0 - 2.0 * reach).max(0.0)),
+                DevicePx((y1 - y0 - 2.0 * reach).max(0.0)),
             ),
-            Corners {
-                top_left: radius(0),
-                top_right: radius(2),
-                bottom_right: radius(4),
-                bottom_left: radius(6),
-            },
+        ));
+        let [left, top, right, bottom] = [
+            inside.left().0,
+            inside.top().0,
+            inside.right().0,
+            inside.bottom().0,
+        ];
+        let holds = |ink: &Rect<DevicePx, Device>| {
+            left <= ink.left().0 - MARGIN
+                && top <= ink.top().0 - MARGIN
+                && right >= ink.right().0 + MARGIN
+                && bottom >= ink.bottom().0 + MARGIN
+        };
+        if device_fills.iter().chain(&device_strokes).all(holds) {
+            continue;
+        }
+        let rect = Rect::new(
+            Point::new(DevicePx(x0), DevicePx(y0)),
+            Size::new(DevicePx(x1 - x0), DevicePx(y1 - y0)),
+        );
+        let on_device = affine.transform_rect(rect);
+        let whole = |v: f32| (v - v.round()).abs() <= 1.0e-3;
+        let aligned = whole(on_device.left().0)
+            && whole(on_device.top().0)
+            && whole(on_device.right().0)
+            && whole(on_device.bottom().0);
+        if reach > 0.0 || !aligned {
+            return None;
+        }
+        links.push(ClipLink::shaped(
+            rect,
+            Corners::uniform(Vec2::splat(DevicePx(0.0))),
             CornerShape::ROUND,
             placement.transform,
         ));
-    }
-    // A draw call applies only the outermost rounded tests of its chain, and the shape's clips are
-    // the innermost. The general route applies them inside the drawing.
-    let rounded = links.iter().filter(|link| link.is_rounded()).count();
-    if rounded > 0
-        && scene.clips.rounded_links(placement.clip) + rounded > ClipTable::MAX_INLINE_ROUNDED
-    {
-        return None;
     }
 
     // Everything is decided. From here on, the shape is drawn.

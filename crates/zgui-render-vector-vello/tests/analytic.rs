@@ -409,13 +409,13 @@ fn analytic_shapes_under_a_scale_match_the_general_route() {
 }
 
 #[test]
-fn an_analytic_clip_matches_the_general_route() {
+fn an_analytic_whole_pixel_clip_matches_the_general_route() {
     let mut shape = filled(
         kurbo::Rect::new(8.0, 8.0, 120.0, 120.0).to_path(0.1),
         white(1.0),
     );
     shape.clips.push(zgui_svg::Clip {
-        path: Arc::new(RoundedRect::new(20.25, 24.5, 100.75, 104.25, 18.0).to_path(0.1)),
+        path: Arc::new(kurbo::Rect::new(20.0, 24.0, 100.0, 104.0).to_path(0.1)),
         rule: peniko::Fill::NonZero,
     });
     compare("clip", &[shape], 1.0);
