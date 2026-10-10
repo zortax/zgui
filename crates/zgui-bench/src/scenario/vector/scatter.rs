@@ -490,8 +490,7 @@ pub(super) fn run(variant: &str) {
     let shown = handle.clone();
     let runtime = crate::scenario::fixture::custom(SHEET, move |cx: &mut BuildCx<'_>| {
         if plot.view {
-            return Box::new(viewed(plot, shown.clone()).into_view().build(cx))
-                as Box<dyn Anchor>;
+            return Box::new(viewed(plot, shown.clone()).into_view().build(cx)) as Box<dyn Anchor>;
         }
         Box::new(view(plot).into_view().build(cx)) as Box<dyn Anchor>
     });
