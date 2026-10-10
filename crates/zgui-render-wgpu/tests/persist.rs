@@ -333,6 +333,72 @@ fn a_moved_marks_chunk_uploads_no_payload() {
     );
 }
 
+#[test]
+fn a_moved_marks_chunk_with_an_origin_draws_as_a_fresh_encoding() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let counted = |what: &str, uploads: bool| {
+        if zgui_profile::COUNTERS_ENABLED {
+            let bytes = zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes);
+            assert_eq!(bytes > 0, uploads, "{what} uploads {bytes} payload bytes");
+        }
+    };
+
+    // Frame one: the payload is measured from an origin away from zero, and the chunk is made
+    // resident.
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_marks(&mut scene, 0.0, [12.0, -6.0]);
+    let chunk = Arc::new(scene.take_chunk_capture());
+    scene.note_chunk_inserted(1, Arc::clone(&chunk));
+    scene.bind_capture(1);
+    scene.finish(&DamageSet::full());
+    zgui_profile::counter::reset();
+    draw_bytes(&mut renderer, &scene);
+    counted("the encoded chunk", true);
+    scene.clear_chunk_notes();
+
+    // Frame two: a moved replay of the resident chunk, drawn through an offset slot.
+    let moved = |scene: &mut Scene, renderer: &mut support::TestRenderer| {
+        scene.begin_frame(Size::new(SIDE, SIDE));
+        scene.replay_chunk(&chunk, Size::new(DevicePx(5.0), DevicePx(7.0)), 1);
+        scene.finish(&DamageSet::full());
+        zgui_profile::counter::reset();
+        draw_bytes(renderer, scene).1
+    };
+    let resident = moved(&mut scene, &mut renderer);
+    counted("a moved replay of a resident chunk", false);
+
+    // Frame three: the same replay after the residence is released, gathered from the frame
+    // arrays.
+    renderer.release_idle_resources();
+    let transient = moved(&mut scene, &mut renderer);
+    counted("a replay of a released chunk", true);
+
+    // The control: the same marks encoded fresh at the moved position, on a renderer of its own.
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let mut control = Scene::new();
+    control.begin_frame(Size::new(SIDE, SIDE));
+    push_marks_at(&mut control, 5.0, 7.0);
+    control.finish(&DamageSet::full());
+    let (_, expected) = draw_bytes(&mut control_renderer, &control);
+    assert_eq!(
+        resident.max_difference(&expected),
+        0,
+        "the offset slot adds the origin as a fresh encoding does"
+    );
+    assert_eq!(
+        transient.max_difference(&expected),
+        0,
+        "the transient gather adds the moved origin as a fresh encoding does"
+    );
+}
+
 /// The marks of [`push_marks`], encoded at `(across, down)` with their payload there too.
 fn push_marks_at(scene: &mut Scene, across: f32, down: f32) {
     use zgui_scene::{MarkFlags, MarkItem, MarkPayload};
