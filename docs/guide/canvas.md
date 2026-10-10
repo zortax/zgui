@@ -60,6 +60,27 @@ precision: positions are stored relative to the centre of the data.
 `push_series` places the series above the shapes pushed so far. Series take no part in hit
 testing.
 
+## CPU layers
+
+A drawing with no series, and with a gradient or a clip that the analytic and marks routes cannot
+draw, can be drawn as one CPU layer. The paint stage rasterises the whole drawing into one tile of
+the image atlas and draws the tile as one sprite. The sprite takes the element's clip, transform
+and opacity. A scroll or a move by whole pixels draws the same sprite again. A static page of such
+drawings does not build the general rasteriser. Vector documents take the same route.
+
+- The element's transform must be a scale with two positive axes. A turn, a skew or a mirror
+  uses the general route.
+- One tile is exact for one scale and one sixteenth-pixel position. During a zoom, the tile of the
+  nearest scale (from half to twice) is stretched. Three frames after the zoom stops, the drawing
+  is rasterised again at its new scale. Two scales of one drawing are kept.
+- While the general rasteriser is not built, a frame rasterises tiles for about 8 ms of estimated
+  work. A drawing that does not fit waits at most two frames.
+- After that, one frame makes at most three new tiles in about 2 ms. A new drawing waits for two
+  stable frames unless it is cheap. A drawing that is rasterised three times in 30 frames gets no
+  new tile for the next 30 frames.
+- A tile is at most 2048 pixels on a side and 4 MiB. A larger drawing uses the general route.
+- The tiles are held to four surfaces of RGBA8, from 16 MiB to 128 MiB.
+
 ## Clipping
 
 A canvas does not clip its own drawing. To keep a plot inside its box, put the canvas in a box with
