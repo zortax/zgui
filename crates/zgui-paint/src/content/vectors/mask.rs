@@ -12,9 +12,6 @@ use zgui_profile::{Counter, counter};
 use zgui_scene::kurbo::{self, BezPath, PathEl};
 use zgui_scene::{VectorId, peniko};
 
-#[cfg(test)]
-mod tests;
-
 /// How a path's coverage is produced.
 #[derive(Clone, Copy, Debug)]
 pub enum VectorMaskStyle<'a> {
@@ -912,3 +909,6 @@ fn geometry_hash(fingerprint: &Fingerprint) -> u64 {
     fingerprint.hash(&mut hasher);
     hasher.finish()
 }
+
+#[cfg(test)]
+mod tests;

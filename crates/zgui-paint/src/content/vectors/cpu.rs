@@ -13,9 +13,6 @@ use zgui_scene::peniko;
 
 use crate::emit::vector::ShapePaint;
 
-#[cfg(test)]
-mod tests;
-
 /// Paints one drawing into a tile.
 ///
 /// A trait so that another CPU rasteriser can take the place of zeno.
@@ -471,3 +468,6 @@ fn extend(t: f32, repeating: bool) -> f32 {
         t.clamp(0.0, 1.0)
     }
 }
+
+#[cfg(test)]
+mod tests;

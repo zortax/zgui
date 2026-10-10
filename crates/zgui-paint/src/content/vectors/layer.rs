@@ -24,9 +24,6 @@ use crate::content::vectors::Drawing;
 use crate::content::vectors::cpu::{LayerJob, VectorPainter, Zeno};
 use crate::emit::vector::ShapePaint;
 
-#[cfg(test)]
-mod tests;
-
 /// What a drawing asks the layer cache for.
 #[derive(Clone, Copy, Debug)]
 pub struct LayerRequest<'a> {
@@ -1014,3 +1011,6 @@ fn mips(texels: Vec<u8>, width: u32, height: u32) -> Vec<Vec<u8>> {
     }
     levels
 }
+
+#[cfg(test)]
+mod tests;
