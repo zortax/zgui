@@ -1,20 +1,26 @@
-//! SVG static: a grid of multi-colour vector documents, left alone and then scrolled.
+//! SVG static: a grid of multi-colour vector documents, opened, left alone, scrolled, pinched and
+//! left to settle.
 //!
 //! Four distinct sources, each with solid colours, a linear and a radial gradient and a clip, so
-//! every document mixes shapes the mask route can take with shapes it cannot.
+//! every document mixes shapes the mask route can take with shapes it cannot. The pinch scales the
+//! port through an inline `transform`.
 
 use zgui::geom::{CssPx, Point};
 use zgui::prelude::*;
+use zgui::reactive::{LocalStorage, RwSignal};
 use zgui::view;
 use zgui::view::{Anchor, BuildCx, IntoView};
 
-use crate::scenario::vector::{Stretch, opened, scroll};
+use crate::scenario::vector::{Stretch, opened, scroll, settle};
 
 /// How many ticks the still stretch runs.
 const STILL_TICKS: usize = 60;
 
 /// How many ticks the scroll runs.
 const SCROLL_TICKS: usize = 300;
+
+/// How many ticks the pinch and the settle each run.
+const PINCH_TICKS: usize = 30;
 
 /// How many rows and columns the grid holds.
 const ROWS: usize = 8;
@@ -82,31 +88,40 @@ const SHEET: &str = zgui::css!(
      .svg-cell { width: 96px; height: 96px; flex: none }"
 );
 
-/// Eight rows of twelve documents.
-fn grid() -> impl IntoView {
-    view! {
-        column(class = "svg-port") {
-            for line in move || 0..ROWS, key = |line: &usize| *line {
-                row(class = "svg-row") {
-                    for index in move || 0..COLUMNS, key = |index: &usize| *index {
-                        {zgui::elements::vector()
-                            .class("svg-cell")
-                            .document(SOURCES[(line + index) % SOURCES.len()])
-                            .into_view()}
-                    }
+/// Eight rows of twelve documents, the port scaled by `zoom`.
+fn grid(zoom: RwSignal<f64, LocalStorage>) -> impl IntoView {
+    let rows = view! {
+        for line in move || 0..ROWS, key = |line: &usize| *line {
+            row(class = "svg-row") {
+                for index in move || 0..COLUMNS, key = |index: &usize| *index {
+                    {zgui::elements::vector()
+                        .class("svg-cell")
+                        .document(SOURCES[(line + index) % SOURCES.len()])
+                        .into_view()}
                 }
             }
         }
-    }
+    };
+    zgui::elements::column()
+        .class("svg-port")
+        .style_property("transform", move || {
+            let zoom = zoom.get();
+            (zoom != 1.0).then(|| format!("scale({zoom})"))
+        })
+        .child(rows)
 }
 
 /// Runs one variant.
 pub(super) fn run(variant: &str) {
     assert_eq!(variant, "grid", "unknown svg-static variant `{variant}`");
-    let runtime = crate::scenario::fixture::custom(SHEET, |cx: &mut BuildCx<'_>| {
-        Box::new(grid().into_view().build(cx)) as Box<dyn Anchor>
+    let zoom = RwSignal::new_local(1.0_f64);
+    let runtime = crate::scenario::fixture::custom(SHEET, move |cx: &mut BuildCx<'_>| {
+        Box::new(grid(zoom).into_view().build(cx)) as Box<dyn Anchor>
     });
+    // Counters only: opening runs its frames before any tick is measured.
+    let open = Stretch::begin("svg-static", variant, "open");
     let mut harness = opened(runtime);
+    open.end();
     let mut still = Stretch::begin("svg-static", variant, "static");
     for _ in 0..STILL_TICKS {
         still.tick(&mut harness);
@@ -118,4 +133,18 @@ pub(super) fn run(variant: &str) {
         Point::new(CssPx(600.0), CssPx(240.0)),
         SCROLL_TICKS,
     );
+
+    let mut pinch = Stretch::begin("svg-static", variant, "pinch");
+    for tick in 1..=PINCH_TICKS {
+        zoom.set(1.0 + 0.6 * tick as f64 / PINCH_TICKS as f64);
+        pinch.tick(&mut harness);
+    }
+    pinch.end();
+
+    let mut still = Stretch::begin("svg-static", variant, "settle");
+    for _ in 0..PINCH_TICKS {
+        still.tick(&mut harness);
+    }
+    still.end();
+    settle(&mut harness);
 }

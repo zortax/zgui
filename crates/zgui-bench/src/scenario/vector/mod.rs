@@ -18,7 +18,7 @@
 //! ```text
 //! VECTOR <scenario> <variant> <stretch> frames=N paint_p50=.. paint_p95=.. render_p50=.. render_p95=..
 //! VCOUNT <scenario> <variant> <stretch> <field>=<total> ...
-//! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_mask_tiles_live=<start>-><end>
+//! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_mask_tiles_live=<start>-><end> vector_layer_bytes_live=<start>-><end>
 //! ```
 
 mod icons;
@@ -58,7 +58,7 @@ pub(crate) const ALL: [(&str, &str); 13] = [
 pub(super) const TICK: Duration = Duration::from_micros(8_333);
 
 /// The counters a `VCOUNT` line prints, in order.
-const PRINTED: [Counter; 20] = [
+const PRINTED: [Counter; 29] = [
     Counter::VectorBackendBuilt,
     Counter::VelloRenders,
     Counter::VectorEncodeHits,
@@ -79,6 +79,15 @@ const PRINTED: [Counter; 20] = [
     Counter::RebuiltAfterEviction,
     Counter::ChunksReencoded,
     Counter::ChunksTranslated,
+    Counter::VectorRouteLayer,
+    Counter::VectorLayersRasterised,
+    Counter::VectorLayerRasterUs,
+    Counter::VectorLayerBytesUploaded,
+    Counter::VectorLayersProvisional,
+    Counter::VectorLayersDeferred,
+    Counter::VectorLayersDemoted,
+    Counter::VectorLayersEvicted,
+    Counter::VectorLayerFallbacks,
 ];
 
 /// Runs `scenario` at `variant`, or every pair when `scenario` is `all`.
@@ -209,9 +218,10 @@ impl Stretch {
             )
         };
         println!(
-            "VLIVE  {scenario} {variant} {name} {} {}",
+            "VLIVE  {scenario} {variant} {name} {} {} {}",
             live(Counter::AtlasEntriesLive),
             live(Counter::VectorMaskTilesLive),
+            live(Counter::VectorLayerBytesLive),
         );
     }
 }
