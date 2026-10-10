@@ -65,6 +65,12 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "loading libinput at run time, and every call made into it",
     ),
     (
+        "zgui-wgpu-import",
+        "making textures over a hardware decoder's own memory through wgpu's hal: Metal textures \
+         over a CoreVideo pixel buffer, a Vulkan image over a dma-buf, a Direct3D 12 resource \
+         opened from a shared handle",
+    ),
+    (
         "zgui-platform-drm",
         "the two `borrow_raw` calls that report a surface's DRM handles, and the Vulkan calls that \
          make the images a display scans out of — every one of those is reached through wgpu's hal",

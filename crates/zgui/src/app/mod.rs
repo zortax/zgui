@@ -143,6 +143,8 @@ pub struct App {
     fonts: std::cell::OnceCell<Fonts>,
     /// What draws its windows, when it is not this machine's own graphics device.
     renderer: Option<zgui_runtime::RendererFactory>,
+    /// The Vulkan device extensions the graphics device is opened with.
+    vulkan_extensions: Vec<&'static std::ffi::CStr>,
     /// The application's own context setup, held until the faces are known.
     ///
     /// Held here rather than passed straight down because the faces are provided in the same scope
@@ -171,6 +173,7 @@ impl App {
             inner: zgui_runtime::App::new(),
             fonts: std::cell::OnceCell::new(),
             renderer: None,
+            vulkan_extensions: Vec::new(),
             context: None,
         }
     }
@@ -444,6 +447,18 @@ impl App {
         self
     }
 
+    /// Opens the graphics device with `extensions` enabled, where it is a Vulkan one.
+    ///
+    /// A device extension can be enabled only while the device is opened, so a feature that
+    /// needs one states it here: importing a video decoder's dma-bufs needs
+    /// `zgui_wgpu_import::dma_buf::EXTENSIONS`. An adapter that has every name is preferred, and
+    /// a device without them still opens; the feature then reports what it lacks. The list has to
+    /// be dependency-closed, as [`zgui_render_wgpu::Gpu::open`] states.
+    pub fn with_vulkan_extensions(mut self, extensions: &[&'static std::ffi::CStr]) -> Self {
+        self.vulkan_extensions.extend_from_slice(extensions);
+        self
+    }
+
     /// The faces this application draws with, for registering one of its own.
     ///
     /// Asking settles the question [`App::with_fonts`] would otherwise answer: an application that
@@ -575,7 +590,10 @@ impl App {
         // opening the window and the graphics device rather than in front of them.
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
-        let renderer = self.renderer.unwrap_or_else(graphics::factory);
+        let extensions = self.vulkan_extensions;
+        let renderer = self
+            .renderer
+            .unwrap_or_else(|| graphics::factory(extensions));
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
         // therefore resolves them like any other context.

@@ -31,6 +31,8 @@ tracing.workspace = true
 workspace = true
 
 [dev-dependencies]
+zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }

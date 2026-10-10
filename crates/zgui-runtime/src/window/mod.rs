@@ -222,6 +222,8 @@ pub struct Window {
     custom_paint: Option<Box<dyn zgui_paint::content::custom::CustomPaintSource>>,
     /// Whether the last embed sync wanted a frame per refresh; one input to the animation gate.
     embed_animating: bool,
+    /// When the last embed sync said its next content is due.
+    embed_wake: Option<Instant>,
     /// The wake route this window was opened with, retained so the embed sync can hand it to
     /// producers on other threads.
     waker: Arc<crate::wake::RuntimeWaker>,
@@ -687,6 +689,7 @@ impl Window {
             custom_layout: None,
             custom_paint: None,
             embed_animating: false,
+            embed_wake: None,
             waker: Arc::clone(&waker),
             vectors: zgui_paint::VectorCache::new(),
             vector_routes: rustc_hash::FxHashMap::default(),
