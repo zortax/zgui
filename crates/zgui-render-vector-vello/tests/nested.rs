@@ -82,7 +82,7 @@ fn draw_document(scene: &mut Scene, id: u32, source: &str, box_: (f32, f32, f32,
     zgui_paint::emit::vector::draw(
         scene,
         VectorId(id),
-        &drawing.shapes,
+        &drawing.placed_all(),
         ShapePaint {
             fill: Color::srgb(0.0, 0.0, 0.0, 1.0),
             stroke: None,
