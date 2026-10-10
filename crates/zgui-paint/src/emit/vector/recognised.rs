@@ -11,7 +11,7 @@ use zgui_scene::kurbo::{self, Affine, BezPath, Vec2};
 use zgui_scene::peniko;
 
 use super::ShapeSource;
-use super::recognise::{self, Decomposition, Limits, Part};
+use super::recognise::{self, Declined, Decomposition, Limits, Part};
 use crate::content::vectors::{PartKey, VectorMaskSource};
 
 /// Which outline of a shape is recognised.
@@ -114,9 +114,14 @@ pub(crate) fn recognised(
                 tau: 2.0_f64.powi(class),
                 max_prims,
             };
-            let outcome = recognise::recognise(path, part, limits).map(Arc::new);
+            let (outcome, limit) = match recognise::recognise_or_decline(path, part, limits) {
+                Ok(found) => (Some(Arc::new(found)), max_prims),
+                Err(Declined::Limit) => (None, max_prims),
+                // A subpath that is no shape is no shape at any limit.
+                Err(Declined::Shape) => (None, usize::MAX),
+            };
             if let Some(mut cache) = masks.recognitions() {
-                cache.insert(path, key, class, max_prims, outcome.clone());
+                cache.insert(path, key, class, limit, outcome.clone());
             }
             outcome
         }

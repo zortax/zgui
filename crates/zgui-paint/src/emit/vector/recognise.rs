@@ -137,45 +137,74 @@ pub(crate) fn tau(affine: &zgui_geom::Affine2) -> Option<f64> {
 }
 
 /// The primitives `part` of `path` is made of, or `None` when one subpath is no accepted shape.
+#[cfg(test)]
 pub(crate) fn recognise(path: &BezPath, part: Part<'_>, limits: Limits) -> Option<Decomposition> {
+    recognise_or_decline(path, part, limits).ok()
+}
+
+/// Why a path is no decomposition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Declined {
+    /// It has more subpaths or prims than the limit allows. A higher limit may accept it.
+    Limit,
+    /// One of its subpaths is no accepted shape, or the part cannot be drawn. No limit accepts it.
+    Shape,
+}
+
+/// The primitives `part` of `path` is made of, or why it is not made of any.
+pub(crate) fn recognise_or_decline(
+    path: &BezPath,
+    part: Part<'_>,
+    limits: Limits,
+) -> Result<Decomposition, Declined> {
     let tau = limits.tau;
     if !tau.is_finite() || tau <= 0.0 {
-        return None;
+        return Err(Declined::Shape);
     }
     let elements = path.elements();
     if let Part::Stroke(style) = part {
         let width = style.width;
         if !style.dash_pattern.is_empty() || !width.is_finite() || width <= 0.0 {
-            return None;
+            return Err(Declined::Shape);
         }
         if !style.miter_limit.is_finite() {
-            return None;
+            return Err(Declined::Shape);
         }
     }
-    let threads = std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
-        .min(MAX_THREADS);
-    let found = if elements.len() >= PARALLEL_ELEMENTS && threads > 1 {
-        recognise_in_parallel(elements, part, tau, limits.max_prims, threads)?
+    let found = if elements.len() >= PARALLEL_ELEMENTS && threads() > 1 {
+        recognise_in_parallel(elements, part, tau, limits.max_prims, threads())?
     } else {
         let moves = elements
             .iter()
             .filter(|element| matches!(element, PathEl::MoveTo(_)))
             .count();
         if moves > limits.max_prims {
-            return None;
+            return Err(Declined::Limit);
         }
-        recognise_run(elements, part, tau)?
+        recognise_run(elements, part, tau).ok_or(Declined::Shape)?
     };
-    found.finish(limits.max_prims)
+    found.finish(limits.max_prims).ok_or(Declined::Limit)
 }
 
 /// How many path elements make a path worth recognising on several threads: about 16 384
 /// circles of a move, four cubics and a close.
-const PARALLEL_ELEMENTS: usize = 16_384 * 6;
+pub(crate) const PARALLEL_ELEMENTS: usize = 16_384 * 6;
 
 /// The most threads one recognition uses.
 const MAX_THREADS: usize = 8;
+
+/// How many threads a large recognition is split across.
+///
+/// Asked once: the answer reads the process's scheduling limits, which costs more than
+/// recognising a small path does.
+fn threads() -> usize {
+    static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *THREADS.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(MAX_THREADS)
+    })
+}
 
 /// What the subpaths of `elements` are, or `None` when one of them is no accepted shape.
 fn recognise_run(elements: &[PathEl], part: Part<'_>, tau: f64) -> Option<Found> {
@@ -349,7 +378,7 @@ fn recognise_in_parallel(
     tau: f64,
     max_prims: usize,
     threads: usize,
-) -> Option<Found> {
+) -> Result<Found, Declined> {
     let mut starts = Vec::with_capacity(threads + 1);
     starts.push(0);
     for share in 1..threads {
@@ -361,21 +390,24 @@ fn recognise_in_parallel(
         starts.push(at);
     }
     starts.push(elements.len());
-    let runs: Vec<Option<Found>> = std::thread::scope(|scope| {
+    let runs: Vec<Result<Found, Declined>> = std::thread::scope(|scope| {
         let handles: Vec<_> = starts
             .windows(2)
             .filter(|bounds| bounds[0] < bounds[1])
             .map(|bounds| {
                 let run = &elements[bounds[0]..bounds[1]];
                 scope.spawn(move || {
-                    let found = recognise_run(run, part, tau)?;
-                    (found.subpaths <= max_prims).then_some(found)
+                    let found = recognise_run(run, part, tau).ok_or(Declined::Shape)?;
+                    if found.subpaths > max_prims {
+                        return Err(Declined::Limit);
+                    }
+                    Ok(found)
                 })
             })
             .collect();
         handles
             .into_iter()
-            .map(|handle| handle.join().ok().flatten())
+            .map(|handle| handle.join().unwrap_or(Err(Declined::Shape)))
             .collect()
     });
     let mut joined: Option<Found> = None;
@@ -389,7 +421,11 @@ fn recognise_in_parallel(
             }
         });
     }
-    joined.filter(|found| found.subpaths <= max_prims)
+    match joined {
+        Some(found) if found.subpaths <= max_prims => Ok(found),
+        Some(_) => Err(Declined::Limit),
+        None => Err(Declined::Shape),
+    }
 }
 
 /// Whether the device rectangles `rects`, each as `[x0, y0, x1, y1]` and inflated by `margin` on
@@ -398,30 +434,40 @@ fn recognise_in_parallel(
 /// Touching edges count as disjoint. A grid cell crowded past a fixed count answers false, which
 /// means "not proven" and keeps the cost linear.
 pub(crate) fn separated(rects: &[[f32; 4]], margin: f32) -> bool {
-    if rects.len() < 2 {
-        return true;
-    }
-    let inflated: Vec<[f32; 4]> = rects
-        .iter()
-        .map(|rect| {
-            [
-                rect[0] - margin,
-                rect[1] - margin,
-                rect[2] + margin,
-                rect[3] + margin,
-            ]
-        })
-        .collect();
-    // The cell is as large as the largest rectangle, so each one meets at most four cells.
-    let cell = inflated
+    let largest = rects
         .iter()
         .map(|rect| (rect[2] - rect[0]).max(rect[3] - rect[1]))
         .fold(0.0f32, f32::max);
-    if !cell.is_finite() || cell <= 0.0 || inflated.iter().flatten().any(|v| !v.is_finite()) {
+    separated_with(rects.len(), largest, margin, |index| rects[index])
+}
+
+/// [`separated`] over `count` rectangles made one at a time by `rect`, none of whose sides is
+/// longer than `largest`.
+///
+/// The rectangles are made only as far as the first overlap, so a path of many overlapping prims
+/// answers after a few of them.
+pub(crate) fn separated_with(
+    count: usize,
+    largest: f32,
+    margin: f32,
+    rect: impl Fn(usize) -> [f32; 4],
+) -> bool {
+    if count < 2 {
+        return true;
+    }
+    // The cell is as large as the largest rectangle, so each one meets at most four cells.
+    let cell = largest + 2.0 * margin;
+    if !cell.is_finite() || cell <= 0.0 {
         return false;
     }
+    let mut inflated: Vec<[f32; 4]> = Vec::new();
     let mut grid: FxHashMap<(i32, i32), SmallVec<[u32; 4]>> = FxHashMap::default();
-    for (index, rect) in inflated.iter().enumerate() {
+    for index in 0..count {
+        let [x0, y0, x1, y1] = rect(index);
+        let rect = [x0 - margin, y0 - margin, x1 + margin, y1 + margin];
+        if rect.iter().any(|value| !value.is_finite()) {
+            return false;
+        }
         let cells =
             |low: f32, high: f32| ((low / cell).floor() as i32)..=((high / cell).floor() as i32);
         for x in cells(rect[0], rect[2]) {
@@ -443,6 +489,7 @@ pub(crate) fn separated(rects: &[[f32; 4]], margin: f32) -> bool {
                 }
             }
         }
+        inflated.push(rect);
     }
     true
 }

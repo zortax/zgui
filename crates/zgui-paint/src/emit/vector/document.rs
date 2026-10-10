@@ -64,14 +64,20 @@ pub(crate) fn emit_tracked(
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> ShapeEmission {
-    if let Some(pushed) = emit_analytic(scene, id, source, paint, masks, placement) {
+    // Resolved once for both recognising routes, which read the same matrix.
+    let affine = scene
+        .spatial
+        .resolve(placement.transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2);
+    if let Some(pushed) = emit_analytic(scene, id, source, paint, masks, placement, affine) {
         counter::bump(Counter::VectorRouteAnalytic);
         return ShapeEmission {
             pushed,
             route: Some(VectorRoute::Analytic),
         };
     }
-    if let Some(pushed) = emit_marks(scene, id, source, paint, masks, placement) {
+    if let Some(pushed) = emit_marks(scene, id, source, paint, masks, placement, affine) {
         counter::bump(Counter::VectorRouteMarks);
         return ShapeEmission {
             pushed,

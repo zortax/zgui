@@ -57,6 +57,7 @@ pub(super) fn emit_marks(
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
+    affine: Option<zgui_geom::Affine2>,
 ) -> Option<usize> {
     if !masks.marks(id) {
         return None;
@@ -68,11 +69,7 @@ pub(super) fn emit_marks(
         masks.marks_declined(id);
         return None;
     }
-    let affine = scene
-        .spatial
-        .resolve(placement.transform)
-        .as_ref()
-        .and_then(zgui_geom::Matrix4::to_affine2)?;
+    let affine = affine?;
     let tau = recognise::tau(&affine)?;
     let fill = shape
         .fill
@@ -92,8 +89,9 @@ pub(super) fn emit_marks(
         return None;
     }
     // A polygon fails recognition anyway; this finds out in one pass with no allocation. A stroke
-    // may run in any direction, so only the fill is asked.
-    if fill.is_some() {
+    // may run in any direction, so only the fill is asked. A path long enough to be recognised on
+    // several threads is left to them: there, the pass would cost a read of every element.
+    if fill.is_some() && elements < recognise::PARALLEL_ELEMENTS {
         let (path, scale) = match super::recognised::uniform(source.fit) {
             Some((scale, _)) => (&shape.path, scale),
             None => (&source.placed().path, 1.0),
@@ -129,30 +127,33 @@ pub(super) fn emit_marks(
     if filled.is_none() && stroked.is_none() {
         return None;
     }
-    let fills = match &filled {
+    let fills = match filled {
         Some(found) => Some(lower(found, &affine)?),
         None => None,
     };
-    let strokes = match &stroked {
+    let strokes = match stroked {
         Some(found) => Some(lower(found, &affine)?),
         None => None,
     };
 
-    let margin = MARGIN / smallest_scale(&affine);
-    let inks: SmallVec<[Rect<DevicePx, Device>; 2]> = [&fills, &strokes]
-        .into_iter()
-        .flatten()
-        .map(|lowered| rect(lowered.ink))
-        .collect();
-    let links = clip_links(
-        source,
-        &affine,
-        tau,
-        masks,
-        placement.transform,
-        &inks,
-        margin,
-    )?;
+    let links = if shape.clips.is_empty() {
+        SmallVec::new()
+    } else {
+        let inks: SmallVec<[Rect<DevicePx, Device>; 2]> = [&fills, &strokes]
+            .into_iter()
+            .flatten()
+            .map(|lowered| rect(lowered.ink))
+            .collect();
+        clip_links(
+            source,
+            &affine,
+            tau,
+            masks,
+            placement.transform,
+            &inks,
+            MARGIN / smallest_scale(&affine),
+        )?
+    };
 
     // Everything is decided. From here on, the shape is drawn.
     let mut clip = placement.clip;
@@ -207,9 +208,14 @@ fn smallest_scale(affine: &zgui_geom::Affine2) -> f32 {
 }
 
 /// The payload of one part, its flags and its ink, or `None` for polyline caps no item can draw.
-fn lower(found: &Decomposition, affine: &zgui_geom::Affine2) -> Option<Lowered> {
+fn lower(found: Arc<Decomposition>, affine: &zgui_geom::Affine2) -> Option<Lowered> {
+    let union = found.count > 1 && !apart(&found, affine);
+    let mut vertices = Vec::new();
+    let mut flags = runs(&found, &mut vertices)?;
+    // A result no cache holds is moved into the payload rather than copied.
+    let found = Arc::unwrap_or_clone(found);
     let mut payload = MarkPayload {
-        discs: found.discs.clone(),
+        discs: found.discs,
         boxes: found
             .boxes
             .iter()
@@ -219,11 +225,9 @@ fn lower(found: &Decomposition, affine: &zgui_geom::Affine2) -> Option<Lowered> 
                 shape: [prim.exponent, prim.border, 0.0, 0.0],
             })
             .collect(),
-        vertices: Vec::new(),
+        vertices,
     };
-    let caps = runs(found, &mut payload.vertices)?;
-    let mut flags = caps;
-    if found.count > 1 && !apart(found, affine) {
+    if union {
         flags |= MarkFlags::UNION;
         dedupe(&mut payload.discs, found.ink);
     }
@@ -285,30 +289,37 @@ fn runs(found: &Decomposition, vertices: &mut Vec<[f32; 2]>) -> Option<u32> {
 }
 
 /// Whether the prims of `found` are at least two device pixels apart.
+///
+/// Measured one prim at a time, so prims that overlap answer after the first overlap.
 fn apart(found: &Decomposition, affine: &zgui_geom::Affine2) -> bool {
     let half = found.half_width;
     let device = |bounds: [f32; 4]| {
         let on = affine.transform_rect(rect(bounds));
         [on.left().0, on.top().0, on.right().0, on.bottom().0]
     };
-    let mut rects: Vec<[f32; 4]> = Vec::with_capacity(found.count);
-    rects.extend(
-        found
-            .discs
-            .iter()
-            .map(|&[cx, cy, outer, _]| device([cx - outer, cy - outer, cx + outer, cy + outer])),
-    );
-    rects.extend(found.boxes.iter().map(|prim| device(prim.rect)));
-    rects.extend(found.capsules.iter().map(|&[x0, y0, x1, y1]| {
-        // Every end reaches at most half the width past its point, whatever its cap.
-        device([
-            x0.min(x1) - half,
-            y0.min(y1) - half,
-            x0.max(x1) + half,
-            y0.max(y1) + half,
-        ])
-    }));
-    recognise::separated(&rects, MARGIN)
+    let (discs, boxes) = (found.discs.len(), found.boxes.len());
+    let local = |index: usize| {
+        if index < discs {
+            let [cx, cy, outer, _] = found.discs[index];
+            [cx - outer, cy - outer, cx + outer, cy + outer]
+        } else if index < discs + boxes {
+            found.boxes[index - discs].rect
+        } else {
+            // Every end reaches at most half the width past its point, whatever its cap.
+            let [x0, y0, x1, y1] = found.capsules[index - discs - boxes];
+            [
+                x0.min(x1) - half,
+                y0.min(y1) - half,
+                x0.max(x1) + half,
+                y0.max(y1) + half,
+            ]
+        }
+    };
+    // A side of a prim's bounds is at most its longest extent and a stroke width; a matrix
+    // stretches a side by at most the sum of the magnitudes of its row.
+    let stretch = (affine.a.abs() + affine.c.abs()).max(affine.b.abs() + affine.d.abs());
+    let largest = (found.max_extent + 2.0 * half) * stretch;
+    recognise::separated_with(found.count, largest, MARGIN, |index| device(local(index)))
 }
 
 /// Drops discs identical to one already held, once the discs cover their ink many times over.

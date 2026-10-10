@@ -190,6 +190,7 @@ pub(super) fn emit_analytic(
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
+    affine: Option<zgui_geom::Affine2>,
 ) -> Option<usize> {
     if !masks.analytic(id) {
         return None;
@@ -200,11 +201,7 @@ pub(super) fn emit_analytic(
         masks.analytic_declined(id);
         return None;
     }
-    let affine = scene
-        .spatial
-        .resolve(placement.transform)
-        .as_ref()
-        .and_then(zgui_geom::Matrix4::to_affine2)?;
+    let affine = affine?;
     // Axis-aligned and the same scale on both axes: the quad shader measures one pixel as the
     // larger of its two axis steps, which is exact only there.
     let [kx, ky] = density_of(&affine, true)?;
@@ -300,17 +297,21 @@ pub(super) fn emit_analytic(
         }
     }
 
-    let inks: SmallVec<[Rect<DevicePx, Device>; 8]> =
-        fills.iter().chain(&strokes).map(Prim::bounds).collect();
-    let links = clip_links(
-        source,
-        &affine,
-        tau_local,
-        masks,
-        placement.transform,
-        &inks,
-        MARGIN / kx,
-    )?;
+    let links = if shape.clips.is_empty() {
+        SmallVec::new()
+    } else {
+        let inks: SmallVec<[Rect<DevicePx, Device>; 8]> =
+            fills.iter().chain(&strokes).map(Prim::bounds).collect();
+        clip_links(
+            source,
+            &affine,
+            tau_local,
+            masks,
+            placement.transform,
+            &inks,
+            MARGIN / kx,
+        )?
+    };
 
     // Everything is decided. From here on, the shape is drawn.
     let mut clip = placement.clip;
