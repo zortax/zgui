@@ -8,6 +8,7 @@
 //! do not. So a part of more than one primitive takes this route only while the primitives are at
 //! least two device pixels apart, which leaves no pixel that two of them reach.
 
+use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_scene::{ClipId, ClipLink, CornerShape, PaintRef, Quad, Scene, VectorId, kurbo};
@@ -127,9 +128,12 @@ impl Prim {
     }
 }
 
+/// The primitives of one part, held inline while there are few of them.
+type Prims = SmallVec<[Prim; 4]>;
+
 /// The primitives of one decomposition, or `None` when one of them is no quad.
-fn prims(found: &Decomposition, tau: f32) -> Option<Vec<Prim>> {
-    let mut prims = Vec::with_capacity(found.count);
+fn prims(found: &Decomposition, tau: f32) -> Option<Prims> {
+    let mut prims = Prims::with_capacity(found.count);
     prims.extend(found.discs.iter().map(|disc| Prim::disc(*disc)));
     prims.extend(found.boxes.iter().map(|prim| Prim {
         rect: prim.rect,
@@ -264,16 +268,16 @@ pub(super) fn emit_analytic(
     let tau = tau as f32;
     let fills = match &filled {
         Some(found) => prims(found, tau)?,
-        None => Vec::new(),
+        None => Prims::new(),
     };
     let strokes = match &stroked {
         Some(found) => prims(found, tau)?,
-        None => Vec::new(),
+        None => Prims::new(),
     };
 
     // Each part on its own: a fill and a stroke of one subpath always overlap, and draw in the
     // order the general route draws them.
-    let on_device = |prims: &[Prim]| -> Vec<Rect<DevicePx, Device>> {
+    let on_device = |prims: &[Prim]| -> SmallVec<[Rect<DevicePx, Device>; 4]> {
         prims
             .iter()
             .map(|prim| affine.transform_rect(prim.bounds()))
@@ -282,6 +286,9 @@ pub(super) fn emit_analytic(
     let device_fills = on_device(&fills);
     let device_strokes = on_device(&strokes);
     for device in [&device_fills, &device_strokes] {
+        if device.len() < 2 {
+            continue;
+        }
         let rects: Vec<[f32; 4]> = device
             .iter()
             .map(|rect| [rect.left().0, rect.top().0, rect.right().0, rect.bottom().0])
@@ -291,7 +298,7 @@ pub(super) fn emit_analytic(
         }
     }
 
-    let mut clips = Vec::with_capacity(shape.clips.len());
+    let mut clips: SmallVec<[recognise::BoxPrim; 2]> = SmallVec::new();
     for clip in &shape.clips {
         let found = recognise::recognise(&clip.path, Part::Fill(clip.rule), limits)?;
         let [prim] = found.boxes.as_slice() else {
@@ -404,9 +411,17 @@ fn straight_on_axes(path: &kurbo::BezPath, tau: f64) -> bool {
 }
 
 /// Pushes `quads` left to right as one run, and returns how many survived.
-fn run(scene: &mut Scene, mut quads: Vec<(f32, Quad)>, (clip, space): (ClipId, u32)) -> usize {
+fn run(
+    scene: &mut Scene,
+    mut quads: SmallVec<[(f32, Quad); 4]>,
+    (clip, space): (ClipId, u32),
+) -> usize {
+    if let [(_, quad)] = quads.as_slice() {
+        return usize::from(scene.push_quad(*quad).is_some());
+    }
     quads.sort_by(|one, two| one.0.total_cmp(&two.0));
-    let inks: Vec<_> = quads.iter().map(|(_, quad)| quad.ink()).collect();
+    let inks: SmallVec<[Rect<DevicePx, Device>; 4]> =
+        quads.iter().map(|(_, quad)| quad.ink()).collect();
     scene.begin_run(&inks, clip, space);
     let mut pushed = 0;
     for (_, quad) in quads {

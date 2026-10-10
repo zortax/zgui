@@ -150,13 +150,13 @@ pub(crate) fn recognise(path: &BezPath, part: Part<'_>, limits: Limits) -> Optio
     if moves > limits.max_prims {
         return None;
     }
-    let subpaths = subpaths(path, tau)?;
     let mut found = Found::default();
+    let mut scratch = Segments::new();
     match part {
         Part::Fill(_) => {
-            for subpath in subpaths {
-                fill(subpath, tau, &mut found)?;
-            }
+            each_subpath(path, tau, |subpath| {
+                fill(subpath, tau, &mut found, &mut scratch)
+            })?;
         }
         Part::Stroke(style) => {
             let width = style.width;
@@ -167,9 +167,9 @@ pub(crate) fn recognise(path: &BezPath, part: Part<'_>, limits: Limits) -> Optio
                 return None;
             }
             found.half_width = width / 2.0;
-            for subpath in subpaths {
-                stroke(subpath, style, tau, &mut found)?;
-            }
+            each_subpath(path, tau, |subpath| {
+                stroke(subpath, style, tau, &mut found, &mut scratch)
+            })?;
         }
     }
     found.finish(limits.max_prims)
@@ -257,11 +257,14 @@ impl Segment {
     }
 }
 
+/// The segments of one subpath, held inline while there are few of them.
+type Segments = SmallVec<[Segment; 8]>;
+
 /// One subpath as written, with its degenerate segments dropped.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Subpath {
     /// The segments.
-    segments: Vec<Segment>,
+    segments: Segments,
     /// The point its move went to.
     start: Point,
     /// The point it ended at.
@@ -272,29 +275,38 @@ struct Subpath {
     drawn: bool,
 }
 
-/// The subpaths of `path`, or `None` for a quadratic, a non-finite point, a segment before any
-/// move, or too many segments in one subpath.
-fn subpaths(path: &BezPath, tau: f64) -> Option<Vec<Subpath>> {
+/// Calls `visit` with each subpath of `path`, and answers `None` as soon as one call does.
+///
+/// Also `None` for a quadratic, a non-finite point, a segment before any move, or too many
+/// segments in one subpath. One subpath is held at a time, in storage reused for the next.
+fn each_subpath(
+    path: &BezPath,
+    tau: f64,
+    mut visit: impl FnMut(&Subpath) -> Option<()>,
+) -> Option<()> {
     let short = tau / 8.0;
     let finite = |point: Point| point.is_finite().then_some(point);
-    let mut out = Vec::new();
-    let mut open: Option<Subpath> = None;
+    let mut subpath = Subpath::default();
+    let mut open = false;
     for element in path.elements() {
         match *element {
             PathEl::MoveTo(point) => {
                 let point = finite(point)?;
-                out.extend(open.take());
-                open = Some(Subpath {
-                    segments: Vec::new(),
-                    start: point,
-                    end: point,
-                    closed: false,
-                    drawn: false,
-                });
+                if open {
+                    visit(&subpath)?;
+                }
+                subpath.segments.clear();
+                subpath.start = point;
+                subpath.end = point;
+                subpath.closed = false;
+                subpath.drawn = false;
+                open = true;
             }
             PathEl::LineTo(point) => {
                 let point = finite(point)?;
-                let subpath = open.as_mut()?;
+                if !open {
+                    return None;
+                }
                 subpath.drawn = true;
                 if (point - subpath.end).hypot() >= short {
                     subpath.segments.push(Segment::Line(subpath.end, point));
@@ -303,7 +315,9 @@ fn subpaths(path: &BezPath, tau: f64) -> Option<Vec<Subpath>> {
             }
             PathEl::CurveTo(first, second, point) => {
                 let [first, second, point] = [finite(first)?, finite(second)?, finite(point)?];
-                let subpath = open.as_mut()?;
+                if !open {
+                    return None;
+                }
                 subpath.drawn = true;
                 let points = [subpath.end, first, second, point];
                 if spread(&points) >= short {
@@ -318,21 +332,23 @@ fn subpaths(path: &BezPath, tau: f64) -> Option<Vec<Subpath>> {
             }
             PathEl::QuadTo(..) => return None,
             PathEl::ClosePath => {
-                let mut subpath = open.take()?;
+                if !open {
+                    return None;
+                }
                 subpath.closed = true;
                 subpath.drawn = true;
-                out.push(subpath);
+                visit(&subpath)?;
+                open = false;
             }
         }
-        if open
-            .as_ref()
-            .is_some_and(|subpath| subpath.segments.len() > SEGMENTS)
-        {
+        if subpath.segments.len() > SEGMENTS {
             return None;
         }
     }
-    out.extend(open);
-    Some(out)
+    if open {
+        visit(&subpath)?;
+    }
+    Some(())
 }
 
 /// The largest distance between two of `points`.
@@ -346,22 +362,31 @@ fn spread(points: &[Point]) -> f64 {
     largest
 }
 
-/// The segments of `subpath`, closed by a line back to its start when `close` and the gap is
-/// longer than `gap`, with collinear lines merged.
-fn normalised(subpath: &Subpath, close: bool, gap: f64, tau: f64) -> Vec<Segment> {
-    let mut segments = subpath.segments.clone();
-    if close && (subpath.start - subpath.end).hypot() >= gap {
-        segments.push(Segment::Line(subpath.end, subpath.start));
-    }
-    merged(segments, close, tau / 8.0)
+/// Writes the segments of `subpath` into `out`, closed by a line back to its start when `close`
+/// and the gap is longer than `gap`, with collinear lines merged.
+fn normalise(subpath: &Subpath, close: bool, gap: f64, tau: f64, out: &mut Segments) {
+    let closing = (close && (subpath.start - subpath.end).hypot() >= gap)
+        .then_some(Segment::Line(subpath.end, subpath.start));
+    merge(
+        subpath.segments.iter().copied().chain(closing),
+        close,
+        tau / 8.0,
+        out,
+    );
 }
 
-/// `segments` with each run of collinear lines that go one way merged into one line.
+/// Writes `segments` into `out` with each run of collinear lines that go one way merged into one
+/// line.
 ///
 /// Every point inside a run lies within `tolerance` of the merged line. When `cyclic`, a run may
 /// continue from the last segment into the first.
-fn merged(segments: Vec<Segment>, cyclic: bool, tolerance: f64) -> Vec<Segment> {
-    let mut out: Vec<Segment> = Vec::with_capacity(segments.len());
+fn merge(
+    segments: impl Iterator<Item = Segment>,
+    cyclic: bool,
+    tolerance: f64,
+    out: &mut Segments,
+) {
+    out.clear();
     // The points inside the run the last output line stands for.
     let mut inside: SmallVec<[Point; 4]> = SmallVec::new();
     for segment in segments {
@@ -384,9 +409,7 @@ fn merged(segments: Vec<Segment>, cyclic: bool, tolerance: f64) -> Vec<Segment> 
         out[0] = Segment::Line(start, end);
         out.pop();
     }
-    out
 }
-
 /// Whether the line from `start` to `end` stands for a run through `joint` and `inside` that goes
 /// one way.
 fn run_holds(start: Point, joint: Point, end: Point, inside: &[Point], tolerance: f64) -> bool {
@@ -400,20 +423,39 @@ fn run_holds(start: Point, joint: Point, end: Point, inside: &[Point], tolerance
 }
 
 /// What the subpaths of one part became so far.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Found {
     /// Discs and rings.
-    discs: Vec<[f64; 4]>,
+    discs: Vec<[f32; 4]>,
     /// Boxes.
     boxes: Vec<BoxPrim>,
     /// Capsules.
-    capsules: Vec<[f64; 4]>,
+    capsules: Vec<[f32; 4]>,
     /// Their caps.
     caps: Vec<u8>,
     /// Half the stroke width.
     half_width: f64,
     /// Whether a closed subpath turned each way.
     turned: [bool; 2],
+    /// The union of the bounds so far.
+    ink: [f64; 4],
+    /// The longest side of any bounds so far.
+    max_extent: f64,
+}
+
+impl Default for Found {
+    fn default() -> Self {
+        Self {
+            discs: Vec::new(),
+            boxes: Vec::new(),
+            capsules: Vec::new(),
+            caps: Vec::new(),
+            half_width: 0.0,
+            turned: [false; 2],
+            ink: [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
+            max_extent: 0.0,
+        }
+    }
 }
 
 impl Found {
@@ -422,64 +464,75 @@ impl Found {
         self.turned[usize::from(sign < 0.0)] = true;
     }
 
+    /// Takes the bounds of one more primitive into the ink.
+    fn bounded(&mut self, bounds: [f64; 4]) {
+        self.ink = [
+            self.ink[0].min(bounds[0]),
+            self.ink[1].min(bounds[1]),
+            self.ink[2].max(bounds[2]),
+            self.ink[3].max(bounds[3]),
+        ];
+        self.max_extent = self
+            .max_extent
+            .max(bounds[2] - bounds[0])
+            .max(bounds[3] - bounds[1]);
+    }
+
+    /// Adds a disc or a ring.
+    fn disc(&mut self, [cx, cy, outer, inner]: [f64; 4]) {
+        self.bounded([cx - outer, cy - outer, cx + outer, cy + outer]);
+        self.discs
+            .push([cx, cy, outer, inner].map(|value| value as f32));
+    }
+
+    /// Adds a box whose outer edge is `rect`.
+    fn boxed(&mut self, rect: [f64; 4], radii: [f32; 8], exponent: f32, border: f32) {
+        self.bounded(rect);
+        self.boxes.push(BoxPrim {
+            rect: rect.map(|value| value as f32),
+            radii,
+            exponent,
+            border,
+        });
+    }
+
+    /// Adds a capsule from `start` to `end` with `caps`.
+    fn capsule(&mut self, start: Point, end: Point, caps: u8) {
+        let capsule = [start.x, start.y, end.x, end.y];
+        self.bounded(capsule_bounds(capsule, caps, self.half_width));
+        self.capsules.push(capsule.map(|value| value as f32));
+        self.caps.push(caps);
+    }
+
     /// The decomposition, or `None` past `max_prims`.
     fn finish(self, max_prims: usize) -> Option<Decomposition> {
         let count = self.discs.len() + self.boxes.len() + self.capsules.len();
         if count > max_prims {
             return None;
         }
-        let mut bounds: Vec<[f64; 4]> = Vec::with_capacity(count);
-        bounds.extend(self.discs.iter().map(|disc| {
-            [
-                disc[0] - disc[2],
-                disc[1] - disc[2],
-                disc[0] + disc[2],
-                disc[1] + disc[2],
-            ]
-        }));
-        bounds.extend(self.boxes.iter().map(|prim| prim.rect.map(f64::from)));
-        bounds.extend(
-            self.capsules
-                .iter()
-                .zip(&self.caps)
-                .map(|(capsule, caps)| capsule_bounds(*capsule, *caps, self.half_width)),
-        );
-        let ink = bounds
-            .iter()
-            .copied()
-            .reduce(|one, two| {
-                [
-                    one[0].min(two[0]),
-                    one[1].min(two[1]),
-                    one[2].max(two[2]),
-                    one[3].max(two[3]),
-                ]
-            })
-            .unwrap_or_default();
-        let max_extent = bounds
-            .iter()
-            .map(|rect| (rect[2] - rect[0]).max(rect[3] - rect[1]))
-            .fold(0.0f64, f64::max);
         let orientation = match self.turned {
             [_, false] => Orientation::Positive,
             [false, true] => Orientation::Negative,
             [true, true] => Orientation::Mixed,
         };
-        let narrow = |values: [f64; 4]| values.map(|value| value as f32);
+        let ink = if count == 0 {
+            [0.0; 4]
+        } else {
+            self.ink.map(|value| value as f32)
+        };
         Some(Decomposition {
-            discs: self.discs.into_iter().map(narrow).collect(),
+            discs: self.discs,
             boxes: self.boxes,
-            capsules: self.capsules.into_iter().map(narrow).collect(),
+            capsules: self.capsules,
             caps: self.caps,
             half_width: self.half_width as f32,
-            ink: narrow(ink),
+            ink,
             orientation,
             count,
-            max_extent: max_extent as f32,
+            max_extent: self.max_extent as f32,
         })
     }
 }
-
 /// The bounds a capsule paints, with its caps and its width.
 fn capsule_bounds(capsule: [f64; 4], caps: u8, half: f64) -> [f64; 4] {
     let start = Point::new(capsule[0], capsule[1]);
@@ -529,37 +582,35 @@ fn capsule_bounds(capsule: [f64; 4], caps: u8, half: f64) -> [f64; 4] {
 /// Adds the primitive one filled subpath is, or `None` when it is no accepted shape.
 ///
 /// A subpath that encloses no area adds nothing.
-fn fill(subpath: Subpath, tau: f64, found: &mut Found) -> Option<()> {
+fn fill(subpath: &Subpath, tau: f64, found: &mut Found, scratch: &mut Segments) -> Option<()> {
     // A fill closes every subpath. One that already ends within tau of its start is a ring.
-    let segments = normalised(&subpath, true, tau, tau);
-    if segments.is_empty() || flat(&segments, tau / 4.0) {
+    normalise(subpath, true, tau, tau, scratch);
+    let segments = &scratch[..];
+    if segments.is_empty() || flat(segments, tau / 4.0) {
         return Some(());
     }
-    if let Some(ellipse) = ellipse(&segments, tau) {
+    if let Some(ellipse) = ellipse(segments, tau) {
         found.turned(ellipse.sign);
         let [cx, cy] = [ellipse.centre.x, ellipse.centre.y];
         if (ellipse.rx - ellipse.ry).abs() <= tau {
-            found
-                .discs
-                .push([cx, cy, (ellipse.rx + ellipse.ry) / 2.0, 0.0]);
+            found.disc([cx, cy, (ellipse.rx + ellipse.ry) / 2.0, 0.0]);
         } else {
             let (rx, ry) = (ellipse.rx as f32, ellipse.ry as f32);
-            found.boxes.push(BoxPrim {
-                rect: [
+            found.boxed(
+                [
                     cx - ellipse.rx,
                     cy - ellipse.ry,
                     cx + ellipse.rx,
                     cy + ellipse.ry,
-                ]
-                .map(|value| value as f32),
-                radii: [rx, ry, rx, ry, rx, ry, rx, ry],
-                exponent: 2.0,
-                border: 0.0,
-            });
+                ],
+                [rx, ry, rx, ry, rx, ry, rx, ry],
+                2.0,
+                0.0,
+            );
         }
         return Some(());
     }
-    let shape = rounded_box(&segments, tau)?;
+    let shape = rounded_box(segments, tau)?;
     found.turned(shape.sign);
     let mut radii = [0.0f32; 8];
     for (at, corner) in shape.corners.iter().enumerate() {
@@ -568,12 +619,7 @@ fn fill(subpath: Subpath, tau: f64, found: &mut Found) -> Option<()> {
             radii[at * 2 + 1] = ry as f32;
         }
     }
-    found.boxes.push(BoxPrim {
-        rect: shape.rect.map(|value| value as f32),
-        radii,
-        exponent: 2.0,
-        border: 0.0,
-    });
+    found.boxed(shape.rect, radii, 2.0, 0.0);
     Some(())
 }
 
@@ -602,9 +648,16 @@ fn flat(segments: &[Segment], tolerance: f64) -> bool {
 }
 
 /// Adds the primitives one stroked subpath is, or `None` when it is no accepted shape.
-fn stroke(subpath: Subpath, style: &kurbo::Stroke, tau: f64, found: &mut Found) -> Option<()> {
+fn stroke(
+    subpath: &Subpath,
+    style: &kurbo::Stroke,
+    tau: f64,
+    found: &mut Found,
+    scratch: &mut Segments,
+) -> Option<()> {
     let half = style.width / 2.0;
-    let segments = normalised(&subpath, subpath.closed, tau / 8.0, tau);
+    normalise(subpath, subpath.closed, tau / 8.0, tau, scratch);
+    let segments = &scratch[..];
     if segments.is_empty() {
         if !subpath.drawn {
             return Some(());
@@ -616,9 +669,7 @@ fn stroke(subpath: Subpath, style: &kurbo::Stroke, tau: f64, found: &mut Found) 
         // nothing.
         return match (style.start_cap, style.end_cap) {
             (kurbo::Cap::Round, kurbo::Cap::Round) => {
-                let at = subpath.start;
-                found.capsules.push([at.x, at.y, at.x, at.y]);
-                found.caps.push(ROUND | (ROUND << 2));
+                found.capsule(subpath.start, subpath.start, ROUND | (ROUND << 2));
                 Some(())
             }
             (kurbo::Cap::Butt, kurbo::Cap::Butt) => Some(()),
@@ -626,15 +677,15 @@ fn stroke(subpath: Subpath, style: &kurbo::Stroke, tau: f64, found: &mut Found) 
         };
     }
     if !subpath.closed {
-        return polyline(&segments, style, tau, found);
+        return polyline(segments, style, tau, found);
     }
-    if let Some(ellipse) = ellipse(&segments, tau) {
+    if let Some(ellipse) = ellipse(segments, tau) {
         let radius = (ellipse.rx + ellipse.ry) / 2.0;
         if (ellipse.rx - ellipse.ry).abs() > tau || radius <= half {
             return None;
         }
         found.turned(ellipse.sign);
-        found.discs.push([
+        found.disc([
             ellipse.centre.x,
             ellipse.centre.y,
             radius + half,
@@ -642,7 +693,7 @@ fn stroke(subpath: Subpath, style: &kurbo::Stroke, tau: f64, found: &mut Found) 
         ]);
         return Some(());
     }
-    let shape = rounded_box(&segments, tau)?;
+    let shape = rounded_box(segments, tau)?;
     found.turned(shape.sign);
     let join = join_of(style);
     let arcs = shape
@@ -676,12 +727,12 @@ fn stroke(subpath: Subpath, style: &kurbo::Stroke, tau: f64, found: &mut Found) 
         radii[at * 2 + 1] = radius as f32;
     }
     let [x0, y0, x1, y1] = shape.rect;
-    found.boxes.push(BoxPrim {
-        rect: [x0 - half, y0 - half, x1 + half, y1 + half].map(|value| value as f32),
+    found.boxed(
+        [x0 - half, y0 - half, x1 + half, y1 + half],
         radii,
         exponent,
-        border: style.width as f32,
-    });
+        style.width as f32,
+    );
     Some(())
 }
 
@@ -703,13 +754,10 @@ fn polyline(
     tau: f64,
     found: &mut Found,
 ) -> Option<()> {
-    let lines: Vec<(Point, Point)> = segments
-        .iter()
-        .map(|segment| match *segment {
-            Segment::Line(start, end) => Some((start, end)),
-            Segment::Cubic(_) => None,
-        })
-        .collect::<Option<_>>()?;
+    let line = |at: usize| match segments[at] {
+        Segment::Line(start, end) => Some((start, end)),
+        Segment::Cubic(_) => None,
+    };
     let join = join_of(style);
     // The cap an inner end takes so the union of two capsules draws the join between them.
     let inner = |one: (Point, Point), two: (Point, Point)| match join {
@@ -721,22 +769,20 @@ fn polyline(
         }
         kurbo::Join::Bevel => None,
     };
-    let last = lines.len() - 1;
-    for (at, line) in lines.iter().enumerate() {
+    let last = segments.len() - 1;
+    for at in 0..segments.len() {
+        let here = line(at)?;
         let start = if at == 0 {
             cap_code(style.start_cap)
         } else {
-            inner(lines[at - 1], *line)?
+            inner(line(at - 1)?, here)?
         };
         let end = if at == last {
             cap_code(style.end_cap)
         } else {
-            inner(*line, lines[at + 1])?
+            inner(here, line(at + 1)?)?
         };
-        found
-            .capsules
-            .push([line.0.x, line.0.y, line.1.x, line.1.y]);
-        found.caps.push(start | (end << 2));
+        found.capsule(here.0, here.1, start | (end << 2));
     }
     Some(())
 }
@@ -936,8 +982,10 @@ struct Item {
     enters: Vec2,
     /// The axis step it ends along.
     leaves: Vec2,
-    /// The segments it is made of: one line, or up to [`CORNER_CUBICS`] cubics.
-    segments: SmallVec<[Segment; 2]>,
+    /// Where its segments start in the subpath.
+    first: usize,
+    /// How many segments it has: one line, or up to [`CORNER_CUBICS`] cubics.
+    count: usize,
 }
 
 /// The rectangle or rounded rectangle `segments` draw, or `None`.
@@ -960,35 +1008,37 @@ fn rounded_box(segments: &[Segment], tau: f64) -> Option<RoundedBox> {
         }
     };
     let first = (0..count).find(|&at| splits(at))?;
-    let mut items: Vec<Item> = Vec::new();
+    // The segments of one item, in order.
+    let of = |first: usize, len: usize| (0..len).map(move |step| segments[(first + step) % count]);
+    let mut items: SmallVec<[Item; 8]> = SmallVec::new();
     for step in 0..count {
         let at = (first + step) % count;
-        let segment = segments[at];
         if step > 0
             && !splits(at)
             && let Some(item) = items.last_mut()
         {
-            item.segments.push(segment);
+            item.count += 1;
             continue;
         }
         items.push(Item {
             enters: Vec2::ZERO,
             leaves: Vec2::ZERO,
-            segments: SmallVec::from_elem(segment, 1),
+            first: at,
+            count: 1,
         });
     }
     for item in &mut items {
-        match item.segments[0] {
+        match segments[item.first] {
             Segment::Line(start, end) => {
                 let axis = axis_of_line(end - start, tau)?;
                 item.enters = axis;
                 item.leaves = axis;
             }
             Segment::Cubic(first) => {
-                if item.segments.len() > CORNER_CUBICS {
+                if item.count > CORNER_CUBICS {
                     return None;
                 }
-                let Segment::Cubic(last) = item.segments[item.segments.len() - 1] else {
+                let Segment::Cubic(last) = segments[(item.first + item.count - 1) % count] else {
                     return None;
                 };
                 item.enters = axis_of_tangent(start_tangent(&first))?;
@@ -1014,11 +1064,11 @@ fn rounded_box(segments: &[Segment], tau: f64) -> Option<RoundedBox> {
     let mut corners: SmallVec<[Turn; 4]> = SmallVec::new();
     for (at, item) in items.iter().enumerate() {
         let next = &items[(at + 1) % items.len()];
-        let line = matches!(item.segments[0], Segment::Line(..));
-        let next_line = matches!(next.segments[0], Segment::Line(..));
+        let line = matches!(segments[item.first], Segment::Line(..));
+        let next_line = matches!(segments[next.first], Segment::Line(..));
         if !line {
-            let start = item.segments[0].start();
-            let end = item.segments[item.segments.len() - 1].end();
+            let start = segments[item.first].start();
+            let end = segments[(item.first + item.count - 1) % count].end();
             corners.push(Turn {
                 enters: item.enters,
                 leaves: item.leaves,
@@ -1030,7 +1080,7 @@ fn rounded_box(segments: &[Segment], tau: f64) -> Option<RoundedBox> {
             if item.leaves.dot(next.enters) != 0.0 {
                 return None;
             }
-            let vertex = item.segments[0].end();
+            let vertex = segments[item.first].end();
             corners.push(Turn {
                 enters: item.leaves,
                 leaves: next.enters,
@@ -1110,10 +1160,11 @@ fn rounded_box(segments: &[Segment], tau: f64) -> Option<RoundedBox> {
                 if (centre - expected).hypot() > tau {
                     return None;
                 }
-                let follows_arc = items[at].segments.iter().all(|segment| match segment {
-                    Segment::Cubic(cubic) => follows(cubic, centre, rx, ry, tau),
-                    Segment::Line(..) => false,
-                });
+                let follows_arc =
+                    of(items[at].first, items[at].count).all(|segment| match segment {
+                        Segment::Cubic(cubic) => follows(&cubic, centre, rx, ry, tau),
+                        Segment::Line(..) => false,
+                    });
                 if !follows_arc {
                     return None;
                 }
