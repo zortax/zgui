@@ -36,6 +36,7 @@ pub mod fit;
 mod marks;
 pub(crate) mod recognise;
 pub(crate) mod recognised;
+mod series;
 
 use std::sync::{Arc, OnceLock};
 
@@ -345,10 +346,25 @@ pub(crate) fn draw_with_masks_tracked(
     emitted
 }
 
-/// Emits every shape of a drawing from its source, and records all raster paths selected.
+/// Emits every shape and series of a drawing from its source, and returns how many primitives
+/// were pushed.
+pub fn draw_drawing(
+    scene: &mut Scene,
+    base: VectorId,
+    drawing: &crate::content::Drawing,
+    paint: ShapePaint,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> usize {
+    draw_drawing_tracked(scene, base, drawing, paint, masks, placement).pushed
+}
+
+/// Emits every shape and series of a drawing from its source, and records all raster paths
+/// selected.
 ///
 /// A route that reads the source never places it, and the placed shape is made only for a route
-/// that needs it.
+/// that needs it. A series is drawn before the shape its position names, and after the last shape
+/// when it names none.
 pub(crate) fn draw_drawing_tracked(
     scene: &mut Scene,
     base: VectorId,
@@ -358,19 +374,42 @@ pub(crate) fn draw_drawing_tracked(
     placement: VectorPlacement,
 ) -> DrawingEmission {
     let mut emitted = DrawingEmission::default();
+    let mut note = |shape: ShapeEmission| {
+        emitted.pushed += shape.pushed;
+        if let Some(route) = shape.route {
+            emitted.routes.insert(route);
+        }
+    };
+    let mut series = drawing.series.iter().peekable();
     for index in 0..drawing.shapes.len() {
-        let shape = document::emit_tracked(
+        while let Some(at) = series.next_if(|at| at.before <= index) {
+            note(series::emit_series(
+                scene,
+                &at.series,
+                drawing.fit,
+                &paint,
+                masks,
+                placement,
+            ));
+        }
+        note(document::emit_tracked(
             scene,
             outline_id(base, index),
             &ShapeSource::of(drawing, index),
             &paint,
             masks,
             placement,
-        );
-        emitted.pushed += shape.pushed;
-        if let Some(route) = shape.route {
-            emitted.routes.insert(route);
-        }
+        ));
+    }
+    for at in series {
+        note(series::emit_series(
+            scene,
+            &at.series,
+            drawing.fit,
+            &paint,
+            masks,
+            placement,
+        ));
     }
     emitted
 }

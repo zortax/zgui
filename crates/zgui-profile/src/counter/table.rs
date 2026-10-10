@@ -460,6 +460,9 @@ counters! {
     /// Mark payload bytes uploaded.
     MarksPayloadBytes => marks_payload_bytes, Group::RendererSpecific;
 
+    /// Series payloads built.
+    SeriesPayloadsBuilt => series_payloads_built, Group::BackendNeutral;
+
     /// Coverage masks rasterised because no tile held their geometry.
     VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;
 
