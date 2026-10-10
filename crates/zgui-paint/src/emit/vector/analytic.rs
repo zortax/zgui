@@ -20,6 +20,10 @@ use crate::content::vectors::VectorMaskSource;
 /// The most primitives one part of a shape may become.
 const MAX_PRIMS: usize = 256;
 
+/// The most path elements one primitive is written with: a move, sixteen cubics on each corner of
+/// a rounded rectangle, its edges and a close.
+const ELEMENTS_PER_PRIM: usize = 72;
+
 /// How many path elements make a failed recognition worth remembering.
 ///
 /// A small path fails fast, and it is tried again on every frame. A large one is not tried again
@@ -185,6 +189,11 @@ pub(super) fn emit_analytic(
     if !masks.analytic(id) {
         return None;
     }
+    // Too long to be written as the most primitives a shape may become.
+    if shape.path.elements().len() > MAX_PRIMS * ELEMENTS_PER_PRIM {
+        masks.analytic_declined(id);
+        return None;
+    }
     let affine = scene
         .spatial
         .resolve(placement.transform)
@@ -219,6 +228,9 @@ pub(super) fn emit_analytic(
     }
 
     let tau = recognise::tau(&affine)?;
+    if !straight_on_axes(&shape.path, tau) {
+        return None;
+    }
     let limits = Limits {
         tau,
         max_prims: MAX_PRIMS,
@@ -351,6 +363,44 @@ pub(super) fn emit_analytic(
     let mut pushed = run(scene, fill_quads.collect(), space);
     pushed += run(scene, stroke_quads.collect(), space);
     Some(pushed)
+}
+
+/// Whether every line of `path`, closing lines included, runs along an axis within a quarter of
+/// `tau`, and no segment is a quadratic.
+///
+/// No quad draws a slanted edge, so a polygon or a slanted polyline fails here in one pass over
+/// its elements, before recognition allocates anything.
+fn straight_on_axes(path: &kurbo::BezPath, tau: f64) -> bool {
+    let off = tau / 4.0;
+    let axial = |from: kurbo::Point, to: kurbo::Point| {
+        let step = to - from;
+        step.x.abs() <= off || step.y.abs() <= off
+    };
+    let mut start = kurbo::Point::ZERO;
+    let mut at = kurbo::Point::ZERO;
+    for element in path.elements() {
+        match *element {
+            kurbo::PathEl::MoveTo(point) => {
+                start = point;
+                at = point;
+            }
+            kurbo::PathEl::LineTo(point) => {
+                if !axial(at, point) {
+                    return false;
+                }
+                at = point;
+            }
+            kurbo::PathEl::CurveTo(_, _, point) => at = point,
+            kurbo::PathEl::QuadTo(..) => return false,
+            kurbo::PathEl::ClosePath => {
+                if !axial(at, start) {
+                    return false;
+                }
+                at = start;
+            }
+        }
+    }
+    true
 }
 
 /// Pushes `quads` left to right as one run, and returns how many survived.
