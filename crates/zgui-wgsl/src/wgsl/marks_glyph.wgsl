@@ -58,7 +58,15 @@ fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
     let entry = mark_glyphs[base + 16u * record.z + phase];
     let size = vec2<u32>(entry.y & 0xffffu, entry.y >> 16u);
     let corner = split.xy + vec2<f32>(bitcast<vec2<i32>>(entry.zw));
-    let device = corner + unit_corner(vertex) * vec2<f32>(size);
+    var device = corner + unit_corner(vertex) * vec2<f32>(size);
+    if !coverage {
+        // Out to whole texels of the target: a half-resolution texel holds two device pixels, and
+        // a cell that ends on an odd one still has to reach the texel of its last pixel.
+        let scale = globals.viewport.zw;
+        let low = floor(corner * scale) / scale;
+        let high = ceil((corner + vec2<f32>(size)) * scale) / scale;
+        device = low + unit_corner(vertex) * (high - low);
+    }
     // Back into the item's space, for the paint: the transform is affine on this route.
     let linear = mat2x2<f32>(matrix[0].xy, matrix[1].xy);
     let determinant = linear[0].x * linear[1].y - linear[1].x * linear[0].y;
