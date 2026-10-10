@@ -161,7 +161,9 @@ pub(crate) struct LayerHistory {
     demoted_until: u32,
     /// How many frames in a row it was deferred.
     deferred: u8,
-    /// Whether its shapes took no general route, so a layer saves it nothing.
+    /// The revision and shapes address of the source it asked for last.
+    source: (u64, usize),
+    /// Whether the shapes of that source took no general route, so a layer saves it nothing.
     per_shape: bool,
 }
 
@@ -506,7 +508,7 @@ impl VectorLayerCache {
         self.next_handle = LAYER_NAMESPACE;
     }
 
-    /// Records that `owner`'s shapes took no general route.
+    /// Records that the shapes of `owner`'s last source took no general route.
     pub(crate) fn per_shape_suffices(&mut self, owner: VectorId) {
         let frame = self.frame;
         let history = self.histories.entry(owner).or_default();
@@ -526,15 +528,17 @@ impl VectorLayerCache {
         named: &mut Vec<AtlasKey>,
         evict: &mut dyn FnMut(&mut Atlas) -> Vec<AtlasKey>,
     ) -> LayerAnswer {
-        if self
-            .histories
-            .get(&request.owner)
-            .is_some_and(|history| history.per_shape)
-        {
-            return LayerAnswer::Items(LayerFallback::PerShape);
-        }
         let drawing = request.drawing;
         let source = (request.revision, Arc::as_ptr(&drawing.shapes).addr());
+        let history = self.histories.entry(request.owner).or_default();
+        // A new source can need the general route, so it asks again.
+        if history.source != source {
+            history.source = source;
+            history.per_shape = false;
+        }
+        if history.per_shape {
+            return LayerAnswer::Items(LayerFallback::PerShape);
+        }
         let cost = *self
             .costs
             .entry(source)

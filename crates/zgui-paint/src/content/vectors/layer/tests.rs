@@ -160,6 +160,25 @@ fn an_inherited_drawing_keys_its_paint_and_an_own_coloured_one_does_not() {
 }
 
 #[test]
+fn a_new_source_asks_again_after_its_shapes_sufficed() {
+    let mut fixture = Fixture::new(false);
+    let plain = square();
+    fixture.ask(1, 1, &plain, 1.0);
+    fixture.cache.per_shape_suffices(VectorId(1));
+    fixture.frame();
+    assert!(matches!(
+        fixture.ask(1, 1, &plain, 1.0),
+        LayerAnswer::Items(LayerFallback::PerShape)
+    ));
+
+    let next = square();
+    assert!(
+        matches!(fixture.ask(1, 2, &next, 1.0), LayerAnswer::Sprite { .. }),
+        "a new source on the same element can need the general route"
+    );
+}
+
+#[test]
 fn a_scale_change_is_provisional_until_three_stable_frames() {
     let mut fixture = Fixture::new(false);
     let shared = square();
