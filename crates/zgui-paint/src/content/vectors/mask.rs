@@ -32,8 +32,10 @@ pub struct VectorMaskRequest<'a> {
     /// The cache keeps a short history per owner. A shape that changes in most frames stops
     /// taking the mask route, because each change costs a raster and a tile.
     pub owner: VectorId,
-    /// The outline in the coordinates its own box is measured in.
+    /// The outline in its own space.
     pub path: &'a BezPath,
+    /// What places the outline in the coordinates its own box is measured in.
+    pub placement: zgui_scene::kurbo::Affine,
     /// Whether the outline is filled or stroked.
     pub style: VectorMaskStyle<'a>,
     /// Mask texels per unit of each of the path's own axes.
@@ -531,6 +533,7 @@ impl VectorMaskCache {
         }
         let commands = commands(
             request.path,
+            request.placement,
             request.density,
             request.bounds.origin.x,
             request.bounds.origin.y,
@@ -683,12 +686,13 @@ fn part_of(style: VectorMaskStyle<'_>) -> usize {
     }
 }
 
-/// A cheap identity of one request, which moves when its geometry is a new allocation.
+/// A cheap identity of one request, which moves when its geometry is a new allocation or a new
+/// placement.
 ///
 /// The address is the address of the path inside its shared allocation. A new revision of a canvas
-/// and a new placement of a drawing allocate a new path, and a replayed or unchanged one keeps its
-/// own. An address the allocator reuses hides at most one change. The fingerprint still decides
-/// which tile is drawn, so the picture stays correct.
+/// allocates a new path, a new fit of a drawing is a new placement, and a replayed or unchanged one
+/// keeps both. An address the allocator reuses hides at most one change. The fingerprint still
+/// decides which tile is drawn, so the picture stays correct.
 fn stamp(request: &VectorMaskRequest<'_>, part: usize) -> u64 {
     let mut hasher = FxHasher::default();
     core::ptr::from_ref(request.path).addr().hash(&mut hasher);
@@ -699,6 +703,9 @@ fn stamp(request: &VectorMaskRequest<'_>, part: usize) -> u64 {
     request.bounds.size.height.hash(&mut hasher);
     request.density[0].to_bits().hash(&mut hasher);
     request.density[1].to_bits().hash(&mut hasher);
+    for coefficient in request.placement.as_coeffs() {
+        coefficient.to_bits().hash(&mut hasher);
+    }
     request.scale.to_bits().hash(&mut hasher);
     part.hash(&mut hasher);
     hasher.finish().max(1)
@@ -723,8 +730,10 @@ fn segments(path: &BezPath) -> usize {
         .count()
 }
 
+/// The path's commands in mask texels: placed, scaled by the density and moved to the origin.
 fn commands(
     path: &BezPath,
+    placement: zgui_scene::kurbo::Affine,
     density: [f32; 2],
     origin_x: i32,
     origin_y: i32,
@@ -733,7 +742,9 @@ fn commands(
     let y = f64::from(origin_y);
     let kx = f64::from(density[0]);
     let ky = f64::from(density[1]);
+    let placed = placement != zgui_scene::kurbo::Affine::IDENTITY;
     let point = |point: zgui_scene::kurbo::Point| {
+        let point = if placed { placement * point } else { point };
         let point = [(point.x * kx - x) as f32, (point.y * ky - y) as f32];
         (point[0].is_finite() && point[1].is_finite())
             .then_some([point[0].to_bits(), point[1].to_bits()])

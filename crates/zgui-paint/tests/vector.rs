@@ -317,7 +317,7 @@ fn a_drawing_is_fitted_to_the_box_its_style_gave_it() {
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
     let item = &harness.scene().primitives.vectors[0];
-    let bounds = zgui_scene::kurbo::Shape::bounding_box(&*item.path);
+    let bounds = item.placed_bounds();
     assert_eq!(
         (bounds.width(), bounds.height()),
         (16.0, 16.0),
@@ -328,7 +328,7 @@ fn a_drawing_is_fitted_to_the_box_its_style_gave_it() {
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
     let item = &harness.scene().primitives.vectors[0];
-    let bounds = zgui_scene::kurbo::Shape::bounding_box(&*item.path);
+    let bounds = item.placed_bounds();
     assert_eq!((bounds.width(), bounds.height()), (48.0, 48.0));
 }
 
@@ -347,9 +347,64 @@ fn a_drawing_is_placed_at_its_own_boxs_content_box() {
         .expect("the drawing produced a fragment")
         .content_box;
     let item = &harness.scene().primitives.vectors[0];
-    let bounds = zgui_scene::kurbo::Shape::bounding_box(&*item.path);
+    let bounds = item.placed_bounds();
     assert_eq!(bounds.x0 as f32, content_box.origin.x.0);
     assert_eq!(bounds.y0 as f32, content_box.origin.y.0);
+}
+
+/// The general route draws the drawing's own source path, with the fit as the item's placement.
+#[test]
+fn a_general_shape_draws_its_source_path_under_the_fit() {
+    let mut harness = Harness::new(tree(), CSS);
+    let cache = VectorCache::new();
+    harness.paint_vectors(&cache);
+
+    let fragment = harness
+        .store()
+        .fragment(harness.fragment_of("mark"))
+        .expect("the drawing produced a fragment");
+    let node = harness.document().store().key_of(harness.element("mark"));
+    let drawing = zgui_paint::VectorSource::drawing(
+        &cache.frame(harness.document()),
+        node,
+        zgui_paint::content::vectors::Placement {
+            content_box: fragment.content_box,
+            scale: 1.0,
+        },
+    )
+    .expect("the element draws");
+    let item = &harness.scene().primitives.vectors[0];
+    assert!(
+        std::sync::Arc::ptr_eq(&item.path, &drawing.shapes[0].path),
+        "the item draws the source path, not a placed copy"
+    );
+    assert_eq!(item.placement, drawing.fit);
+}
+
+/// An inherited stroke is a width in device pixels, so the fit that scales the path does not
+/// scale it.
+#[test]
+fn an_inherited_stroke_keeps_its_device_width_under_a_fit() {
+    let css = "root { display: block; width: 200px; height: 100px;
+                      --zgui-stroke: rgb(0, 200, 0); --zgui-stroke-width: 3px }
+               mark { display: block; width: 48px; height: 48px }";
+    let mut harness = Harness::new(tree(), css);
+    let cache = VectorCache::new();
+    harness.paint_vectors(&cache);
+
+    let item = harness
+        .scene()
+        .primitives
+        .vectors
+        .iter()
+        .find(|item| item.stroke.is_some())
+        .expect("a stroked item");
+    assert_eq!(item.placed_scale(), 2.0, "a 24 unit drawing in a 48 px box");
+    let width = item.stroke.as_ref().expect("a stroke").style.width * item.placed_scale();
+    assert!(
+        (width - 3.0).abs() < 1.0e-9,
+        "the stroke is {width} px wide on the device"
+    );
 }
 
 /// The custom-property scheme is what themes a drawing, since this engine build has no `fill`.
@@ -526,7 +581,7 @@ fn changing_only_the_outlines_redraws_the_element() {
     let mut harness = Harness::new(tree(), CSS);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
-    let before = harness.scene().primitives.vectors[0].path.to_svg();
+    let before = harness.scene().primitives.vectors[0].placed_path().to_svg();
 
     let index = harness.element("mark");
     harness.edit_and_restyle(|edit| {
@@ -539,7 +594,7 @@ fn changing_only_the_outlines_redraws_the_element() {
     harness.compose(200.0, 100.0);
     harness.paint_vectors(&cache);
 
-    let after = harness.scene().primitives.vectors[0].path.to_svg();
+    let after = harness.scene().primitives.vectors[0].placed_path().to_svg();
     assert_ne!(
         before, after,
         "the outlines changed and the frame replayed the ones that were there"
@@ -637,8 +692,7 @@ fn a_drawing_with_no_view_box_is_drawn_in_css_pixels_from_its_content_box() {
         .fragment(harness.fragment_of("mark"))
         .expect("a fragment")
         .content_box;
-    let bounds =
-        zgui_scene::kurbo::Shape::bounding_box(&*harness.scene().primitives.vectors[0].path);
+    let bounds = harness.scene().primitives.vectors[0].placed_bounds();
     assert_eq!(
         (bounds.width(), bounds.height()),
         (10.0, 10.0),

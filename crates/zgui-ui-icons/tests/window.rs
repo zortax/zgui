@@ -74,13 +74,12 @@ impl zgui::render::Renderer for Recorder {
         scene: &zgui::scene::Scene,
         _damage: &zgui::bits::DamageSet,
     ) -> zgui::render::FrameOutcome {
-        use zgui::elements::kurbo::Shape as _;
         let frame = scene
             .primitives
             .vectors
             .iter()
             .map(|item| {
-                let bounds = item.path.bounding_box();
+                let bounds = item.placed_bounds();
                 Shape {
                     width: bounds.width(),
                     height: bounds.height(),

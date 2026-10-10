@@ -1,12 +1,13 @@
 //! The outlines a drawing draws, from the text they are written in to the curves a rasteriser
 //! flattens.
 //!
-//! A drawing arrives as path notation on an element, and what a rasteriser wants is Béziers already
-//! placed in the fragment's own space. Doing that conversion per frame would be a parse and a
-//! re-place per icon per frame — and worse than the cost, it would hand the rasteriser a new
-//! allocation every frame, which its encoding cache recognises by identity and would therefore miss
-//! on every single time. So the conversion is memoised here, by node, and the *same* shared path is
-//! handed back for as long as neither the notation nor the box it is fitted to has moved.
+//! A drawing arrives as path notation or as a document on an element. Its outlines stay in their
+//! own space, and the fit that places them in the fragment's space travels beside them. Parsing per
+//! frame would be a parse per icon per frame — and worse than the cost, it would hand the
+//! rasteriser a new allocation every frame, which its encoding cache recognises by identity and
+//! would therefore miss every single time. So a source text is read once for every element that
+//! draws it, and the *same* shared paths are handed back for as long as the text stands. A new box
+//! is a new fit and no new path.
 //!
 //! # Why this is a trait and not a function over the document
 //!
@@ -74,11 +75,10 @@ impl Drawing {
         }
     }
 
-    /// A drawing of `shapes` in their own space, placed by `fit` only where a route needs the
-    /// placed path.
+    /// A drawing of `shapes` in their own space, placed by `fit`.
     ///
-    /// A route that draws from the source shape, as recognition does, never places it, so a
-    /// hundred thousand markers never become a second path.
+    /// Every route draws from the source shape, so a hundred thousand markers never become a
+    /// second path. Only recognition under a fit that scales its axes differently places a shape.
     pub fn fitted(shapes: Vec<zgui_svg::Shape>, fit: Affine) -> Self {
         Self::fitted_shared(Arc::from(shapes), fit)
     }
@@ -97,9 +97,9 @@ impl Drawing {
     /// The drawing of a canvas scene, placed by `fit` times the scene's view transform.
     ///
     /// The shapes and the series keep their source allocations, so a pan or a zoom alone
-    /// recognises nothing again and builds no new series payload. A route that draws the placed
-    /// path places a shape again under each new view, and so does recognition under a turn or a
-    /// stretch.
+    /// recognises nothing again, builds no new series payload and encodes no general shape again.
+    /// A mask-route shape rasterises again under each new view, and recognition places a shape
+    /// again under a turn or a stretch.
     pub fn canvas(scene: &zgui_canvas::CanvasScene, fit: Affine) -> Self {
         Self {
             series: Arc::from(scene.series()),
@@ -109,8 +109,8 @@ impl Drawing {
 
     /// Shape `index` placed in the fragment's space.
     ///
-    /// Placed on first use and kept, so the placed path is one allocation for as long as the
-    /// drawing is held: a rasteriser's encoding cache recognises it by that identity.
+    /// Placed on first use and kept for as long as the drawing is held. Recognition under a fit
+    /// that scales its axes differently reads it, and so do tests.
     ///
     /// # Panics
     ///

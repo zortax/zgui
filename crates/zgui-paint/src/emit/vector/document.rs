@@ -54,8 +54,9 @@ pub fn emit(
 
 /// Emits one shape and reports which raster path it selected.
 ///
-/// The recognising routes read the source shape. The mask and the general route read the placed
-/// one, which is made here only when one of them is reached.
+/// Every route reads the source shape in its own space. The mask route maps it through the fit as
+/// it rasterises, and the general route hands the source path to the rasteriser with the fit as
+/// the item's placement, so a new fit makes no new path.
 pub(crate) fn emit_tracked(
     scene: &mut Scene,
     id: VectorId,
@@ -84,8 +85,12 @@ pub(crate) fn emit_tracked(
             route: Some(VectorRoute::Marks),
         };
     }
-    let shape = source.placed();
-    if let Some(pushed) = emit_mask(scene, id, shape, paint, masks, placement) {
+    // A fit with no area is a box of no size, and nothing drawn into it reaches a pixel.
+    let area = source.fit.determinant();
+    if !area.is_finite() || area.abs() <= 1.0e-12 {
+        return ShapeEmission::default();
+    }
+    if let Some(pushed) = emit_mask(scene, id, source, paint, masks, placement) {
         counter::bump(Counter::VectorRouteMask);
         return ShapeEmission {
             pushed,
@@ -99,6 +104,9 @@ pub(crate) fn emit_tracked(
     if flattened(scene, placement) {
         return ShapeEmission::default();
     }
+    // The source path, clips and paints, in the shape's own space: the fit is the items'
+    // placement, so the rasteriser's encoding of the path outlives a new fit.
+    let shape = source.shape;
     let clips: Vec<VectorClip> = shape
         .clips
         .iter()
@@ -107,15 +115,25 @@ pub(crate) fn emit_tracked(
             rule: clip.rule,
         })
         .collect();
-    let stroke = stroke_of(scene, shape, paint);
+    let stroke = stroke_of(scene, shape, paint, source.fit);
     let has_stroke = stroke.is_some();
-    let local = ink_of(shape, stroke.as_ref());
+    // Both items take the ink of the stroked shape, so the fill and the stroke order as one.
+    let reach = stroke
+        .as_ref()
+        .map_or(0.0, |stroke| f64::from(stroke.reach()));
+    let local = ink_of_bounds(
+        source
+            .fit
+            .transform_rect_bbox(shape.path.control_box().inflate(reach, reach)),
+        0.0,
+    );
     let ink = under(scene, placement.transform, local);
 
     let mut pushed = 0;
     if let Some(fill) = &shape.fill {
         let reference = reference(scene, &fill.paint, paint.fill);
         let mut item = VectorItem::filled(id, Arc::clone(&shape.path), reference)
+            .placed(source.fit)
             .clipped(placement.clip)
             .inside(clips.clone());
         item.fill_rule = fill.rule;
@@ -126,6 +144,7 @@ pub(crate) fn emit_tracked(
     }
     if let Some(stroke) = stroke {
         let mut item = VectorItem::styled(id, Arc::clone(&shape.path), stroke)
+            .placed(source.fit)
             .clipped(placement.clip)
             .inside(clips);
         item.ink = ink;
@@ -221,15 +240,19 @@ pub(super) fn density_of(affine: &zgui_geom::Affine2, stroked: bool) -> Option<[
     Some([kx, ky])
 }
 
-/// Emits a small solid translation-only shape as an atlas mask, or declines the fast path.
+/// Emits a small solid shape as an atlas mask, or declines the fast path.
+///
+/// The mask is rasterised from the source path through the fit, so no placed copy of the path is
+/// made.
 fn emit_mask(
     scene: &mut Scene,
     id: VectorId,
-    shape: &zgui_svg::Shape,
+    source: &ShapeSource<'_>,
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> Option<usize> {
+    let shape = source.shape;
     if !shape.clips.is_empty() {
         return None;
     }
@@ -240,13 +263,23 @@ fn emit_mask(
         }
         zgui_svg::Paint::Gradient(_) => None,
     });
+    // The mask is measured in the fragment's space: the shape's own stroke is scaled by the fit,
+    // and an inherited stroke is in device pixels already.
+    let own_stroke = shape.stroke.as_ref().map(|stroke| {
+        zgui_svg::document::place::scaled(
+            &stroke.style,
+            zgui_svg::document::place::uniform_scale(source.fit),
+        )
+    });
     let inherited_stroke = (shape.stroke.is_none() && paint.stroke.is_some())
         .then(|| kurbo::Stroke::new(f64::from(paint.stroke_width)));
     let stroke = match &shape.stroke {
         Some(stroke) => match &stroke.paint {
             zgui_svg::Paint::Solid(ink) => {
                 let color = ink.resolve(paint.stroke.unwrap_or(paint.fill));
-                (color.alpha() != 0.0).then_some((color, &stroke.style))
+                (color.alpha() != 0.0)
+                    .then_some(color)
+                    .zip(own_stroke.as_ref())
             }
             zgui_svg::Paint::Gradient(_) => None,
         },
@@ -256,6 +289,11 @@ fn emit_mask(
             .zip(inherited_stroke.as_ref()),
     };
     if fill.is_none() && stroke.is_none() {
+        return None;
+    }
+    // The general route strokes with the pen the fit stretches, and one mask width cannot say
+    // that. The same rule `density_of` applies to the transform.
+    if stroke.is_some() && !uniform_axes(source.fit) {
         return None;
     }
     let affine = scene
@@ -275,29 +313,30 @@ fn emit_mask(
     //
     // Both parts qualify or neither does. Half a shape from a sprite and half from a vector pass
     // has no order between the halves, and one part alone draws a different picture.
+    let bounds = source.fit.transform_rect_bbox(shape.path.control_box());
     let filled = match fill {
         Some((color, rule)) => Some(mask_sprite(
             id,
-            shape,
+            source,
             masks,
             placement,
             density,
             color,
             VectorMaskStyle::Fill(rule),
-            None,
+            ink_of_bounds(bounds, 0.0),
         )?),
         None => None,
     };
     let stroked = match stroke {
         Some((color, style)) => Some(mask_sprite(
             id,
-            shape,
+            source,
             masks,
             placement,
             density,
             color,
             VectorMaskStyle::Stroke(style),
-            outline.as_ref(),
+            ink_of_bounds(bounds, outline.as_ref().map_or(0.0, VectorStroke::reach)),
         )?),
         None => None,
     };
@@ -310,19 +349,20 @@ fn emit_mask(
 }
 
 /// One part of a shape as a tinted sprite over a coverage tile, or `None` to decline the fast path.
+///
+/// `local` is the part's ink in the fragment's space.
 #[allow(clippy::too_many_arguments)]
 fn mask_sprite(
     owner: VectorId,
-    shape: &zgui_svg::Shape,
+    source: &ShapeSource<'_>,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
     density: [f32; 2],
     color: Color,
     style: VectorMaskStyle<'_>,
-    stroke_for_ink: Option<&VectorStroke>,
+    local: Rect<DevicePx, Device>,
 ) -> Option<MonoSprite> {
     let [kx, ky] = density;
-    let local = ink_of(shape, stroke_for_ink);
     // Measured in mask space, which is the shape's own space scaled by the density. The sprite is
     // handed back the same rectangle divided out again, so it keeps riding `placement.transform`
     // and every clip, draw order and replay offset is stated where it always was.
@@ -349,7 +389,8 @@ fn mask_sprite(
     );
     let mask = masks.vector_mask(VectorMaskRequest {
         owner,
-        path: &shape.path,
+        path: &source.shape.path,
+        placement: source.fit,
         style,
         density,
         scale: placement.scale,
@@ -364,15 +405,17 @@ fn mask_sprite(
     Some(sprite)
 }
 
-/// What strokes one shape, which is the shape's own stroke or the element's.
+/// What strokes one shape in its own space, which is the shape's own stroke or the element's.
 ///
 /// A shape that named no stroke is stroked only when the element asked for one through
 /// `--zgui-stroke`. That is what makes a bare outline strokeable from a stylesheet without giving
-/// every shape of a vector document a stroke it never asked for.
+/// every shape of a vector document a stroke it never asked for. The element's width is in device
+/// pixels, so it is divided by the scale `fit` applies; a fit with no scale strokes nothing.
 pub(super) fn stroke_of(
     scene: &mut Scene,
     shape: &zgui_svg::Shape,
     paint: &ShapePaint,
+    fit: kurbo::Affine,
 ) -> Option<VectorStroke> {
     match &shape.stroke {
         Some(stroke) => Some(VectorStroke {
@@ -381,12 +424,39 @@ pub(super) fn stroke_of(
         }),
         None => {
             let color = paint.stroke?;
-            Some(VectorStroke::solid(
-                PaintRef::solid(scene.paints.solid(color)),
-                paint.stroke_width,
-            ))
+            let width =
+                f64::from(paint.stroke_width) / zgui_svg::document::place::uniform_scale(fit);
+            if !width.is_finite() {
+                return None;
+            }
+            Some(VectorStroke {
+                paint: PaintRef::solid(scene.paints.solid(color)),
+                style: kurbo::Stroke::new(width),
+            })
         }
     }
+}
+
+/// Whether `fit` scales both of its axes alike, within [`EPSILON`] of the larger.
+fn uniform_axes(fit: kurbo::Affine) -> bool {
+    let [a, b, c, d, _, _] = fit.as_coeffs();
+    let (kx, ky) = (a.hypot(b), c.hypot(d));
+    (kx - ky).abs() <= f64::from(EPSILON) * kx.max(ky)
+}
+
+/// `bounds` grown by `reach` on every side.
+fn ink_of_bounds(bounds: kurbo::Rect, reach: f32) -> Rect<DevicePx, Device> {
+    let reach = f64::from(reach);
+    Rect::new(
+        Point::new(
+            DevicePx((bounds.x0 - reach) as f32),
+            DevicePx((bounds.y0 - reach) as f32),
+        ),
+        Size::new(
+            DevicePx((bounds.width() + 2.0 * reach) as f32),
+            DevicePx((bounds.height() + 2.0 * reach) as f32),
+        ),
+    )
 }
 
 /// The paint the stroke of `source` is drawn with, placed in the fragment's space: the shape's
@@ -405,16 +475,6 @@ pub(super) fn stroke_paint(
         None => paint.stroke.map_or(PaintRef::NONE, |color| {
             PaintRef::solid(scene.paints.solid(color))
         }),
-    }
-}
-
-/// The rectangle one shape can put ink in, in its own space.
-fn ink_of(shape: &zgui_svg::Shape, stroke: Option<&VectorStroke>) -> Rect<DevicePx, Device> {
-    match stroke {
-        Some(stroke) => {
-            VectorItem::styled(VectorId(0), Arc::clone(&shape.path), stroke.clone()).ink
-        }
-        None => VectorItem::filled(VectorId(0), Arc::clone(&shape.path), PaintRef::NONE).ink,
     }
 }
 

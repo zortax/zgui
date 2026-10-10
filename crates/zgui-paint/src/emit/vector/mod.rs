@@ -150,6 +150,17 @@ impl<'a> ShapeSource<'a> {
         }
     }
 
+    /// A shape in the painter's coordinates, moved by `offset` into the fragment's space.
+    ///
+    /// A translation is a uniform fit, so no route places the shape.
+    pub(crate) fn translated(shape: &'a zgui_svg::Shape, offset: zgui_scene::kurbo::Vec2) -> Self {
+        Self {
+            shape,
+            fit: zgui_scene::kurbo::Affine::translate(offset),
+            cell: None,
+        }
+    }
+
     /// Shape `index` of `drawing`.
     pub(crate) fn of(drawing: &'a crate::content::Drawing, index: usize) -> Self {
         Self {
@@ -160,6 +171,8 @@ impl<'a> ShapeSource<'a> {
     }
 
     /// The shape in the fragment's space, placed on first use.
+    ///
+    /// Only recognition under a fit that scales its axes differently reads it.
     pub(crate) fn placed(&self) -> &'a zgui_svg::Shape {
         if self.fit == zgui_scene::kurbo::Affine::IDENTITY {
             return self.shape;
@@ -282,8 +295,8 @@ pub(crate) fn under(
 
 /// Emits every shape of one drawing, and returns how many primitives were pushed.
 ///
-/// The outlines are already in the fragment's local space — fitted to its box by [`fit::onto`]
-/// before they were cached — so nothing here measures or moves a curve. Each takes its own
+/// The outlines are already in the fragment's local space, so nothing here measures or moves a
+/// curve. Each takes its own
 /// identity, derived from the fragment's and its position in the list, so a rasteriser's cached
 /// encoding of one outline survives a sibling changing.
 ///
@@ -362,9 +375,9 @@ pub fn draw_drawing(
 /// Emits every shape and series of a drawing from its source, and records all raster paths
 /// selected.
 ///
-/// A route that reads the source never places it, and the placed shape is made only for a route
-/// that needs it. A series is drawn before the shape its position names, and after the last shape
-/// when it names none.
+/// No route places a shape, except recognition under a fit that scales its axes differently. A
+/// series is drawn before the shape its position names, and after the last shape when it names
+/// none.
 pub(crate) fn draw_drawing_tracked(
     scene: &mut Scene,
     base: VectorId,

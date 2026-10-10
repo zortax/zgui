@@ -324,3 +324,91 @@ fn space(scene: &mut Scene, owner: u64, matrix: zgui_geom::Matrix4) -> zgui_scen
     let own = zgui_scene::OwnSpace::of(Some(matrix), None, false);
     scene.spatial.space_of(viewport, owner, own)
 }
+
+/// A canvas panned to a new fit keeps the encodings of its general shapes.
+///
+/// The fit is the items' placement, so a pan changes no path and no paint: the second frame draws
+/// every shape from the encoding the first one made.
+#[test]
+fn a_panned_canvas_keeps_its_general_encodings() {
+    let Some(harness) = harness(Which::Vello) else {
+        return;
+    };
+    let gpu = Arc::clone(harness.gpu());
+    let mut raster = VelloRaster::new(&gpu, 128, 128).expect("a rasteriser");
+    let ramp = zgui_svg::Paint::Gradient(zgui_svg::Gradient::padded(
+        zgui_svg::GradientKind::Linear {
+            start: kurbo::Point::new(0.0, 0.0),
+            end: kurbo::Point::new(16.0, 0.0),
+        },
+        [
+            zgui_svg::Stop {
+                offset: 0.0,
+                color: zgui_svg::Ink::Solid(opaque(255, 0, 0)),
+            },
+            zgui_svg::Stop {
+                offset: 1.0,
+                color: zgui_svg::Ink::Solid(opaque(0, 0, 255)),
+            },
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    // Triangles, which no recognising route takes.
+    let shapes: Vec<zgui_svg::Shape> = (0..3)
+        .map(|index| {
+            let x = f64::from(index) * 20.0;
+            let mut path = kurbo::BezPath::new();
+            path.move_to((x, 0.0));
+            path.line_to((x + 16.0, 2.0));
+            path.line_to((x + 5.0, 14.0));
+            path.close_path();
+            zgui_svg::Shape {
+                path: Arc::new(path),
+                fill: Some(zgui_svg::Fill {
+                    paint: ramp.clone(),
+                    rule: peniko::Fill::NonZero,
+                }),
+                stroke: None,
+                clips: Vec::new(),
+            }
+        })
+        .collect();
+    let shapes: Arc<[zgui_svg::Shape]> = Arc::from(shapes);
+    let drawn = |fit: kurbo::Affine| {
+        let mut scene = scene();
+        let drawing = zgui_paint::Drawing::fitted_shared(Arc::clone(&shapes), fit);
+        let pushed = zgui_paint::emit::vector::draw_drawing(
+            &mut scene,
+            VectorId(1),
+            &drawing,
+            zgui_paint::emit::vector::ShapePaint {
+                fill: opaque(255, 255, 255),
+                stroke: None,
+                stroke_width: 1.0,
+            },
+            &zgui_paint::content::NoVectorMasks,
+            zgui_paint::emit::vector::VectorPlacement {
+                clip: ClipId::ROOT,
+                transform: zgui_scene::SpatialId::VIEWPORT,
+                scale: 1.0,
+            },
+        );
+        assert_eq!(pushed, 3);
+        scene.finish(&DamageSet::full());
+        scene
+    };
+
+    rasterise(
+        &mut raster,
+        &drawn(kurbo::Affine::translate((4.0, 8.0)) * kurbo::Affine::scale(1.5)),
+    );
+    let (_, (hits, misses)) = raster.cache();
+    assert_eq!((hits, misses), (0, 3));
+    rasterise(
+        &mut raster,
+        &drawn(kurbo::Affine::translate((-9.5, 30.25)) * kurbo::Affine::scale(1.5)),
+    );
+    let (_, (_, after)) = raster.cache();
+    assert_eq!(after, misses, "the pan encoded a general shape again");
+}

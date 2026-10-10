@@ -102,7 +102,8 @@ impl Renderer for Recorder {
                 .iter()
                 .map(|item| Drawn {
                     stroke: item.stroke.as_ref().and_then(|stroke| {
-                        solid(stroke.paint).map(|color| (color, stroke.width()))
+                        solid(stroke.paint)
+                            .map(|color| (color, stroke.width() * item.placed_scale() as f32))
                     }),
                 })
                 .collect(),

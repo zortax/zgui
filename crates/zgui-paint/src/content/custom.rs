@@ -181,12 +181,11 @@ impl ScenePainter<'_> {
     /// element's `color`. Dearer than [`fill`](ScenePainter::fill) — a shape is rasterised — so a
     /// widget reaches for it for the geometry quads cannot say.
     pub fn shape(&mut self, shape: &zgui_svg::Shape) {
-        let placed = zgui_svg::document::place::shape(
-            shape,
-            kurbo::Affine::translate((
-                f64::from(self.content_box.origin.x.0),
-                f64::from(self.content_box.origin.y.0),
-            )),
+        // The painter's coordinates start at the content box, so the shape is placed there by a
+        // translation and the path itself is not copied.
+        let offset = kurbo::Vec2::new(
+            f64::from(self.content_box.origin.x.0),
+            f64::from(self.content_box.origin.y.0),
         );
         self.shapes_pushed += 1;
         // The fragment's identity in the high bits, the shape's index in the low: stable across
@@ -196,7 +195,7 @@ impl ScenePainter<'_> {
         let emitted = crate::emit::vector::document::emit_tracked(
             self.scene,
             id,
-            &crate::emit::vector::ShapeSource::placed_shape(&placed),
+            &crate::emit::vector::ShapeSource::translated(shape, offset),
             &self.shape_paint,
             self.vector_masks,
             crate::emit::vector::VectorPlacement {
@@ -455,6 +454,47 @@ mod tests {
             vector_routes: crate::emit::vector::VectorRoutes::NONE,
             pushed: 0,
         }
+    }
+
+    /// A shape is drawn from its own path, placed at the content box by a translation.
+    #[test]
+    fn a_custom_shape_is_placed_at_its_content_box() {
+        let mut scene = Scene::new();
+        scene.begin_frame(Size::new(200, 100));
+        let placements = FixedTiles::default();
+        let mut path = zgui_scene::kurbo::BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((12.0, 1.0));
+        path.line_to((3.0, 9.0));
+        path.close_path();
+        let shape = zgui_svg::Shape {
+            path: std::sync::Arc::new(path),
+            fill: Some(zgui_svg::Fill {
+                paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
+                rule: zgui_scene::peniko::Fill::NonZero,
+            }),
+            stroke: None,
+            clips: Vec::new(),
+        };
+        let mut painter = painter(&mut scene, &placements, false, 1.0);
+        painter.clip = ClipId::ROOT;
+        painter.shape(&shape);
+
+        let item = &scene.primitives.vectors[0];
+        assert!(
+            std::sync::Arc::ptr_eq(&item.path, &shape.path),
+            "the painter's own path is drawn, not a copy"
+        );
+        assert_eq!(
+            item.placement,
+            zgui_scene::kurbo::Affine::translate((10.5, 20.25))
+        );
+        let bounds = item.placed_bounds();
+        assert_eq!((bounds.x0, bounds.y0), (10.5, 20.25));
+        assert_eq!(
+            item.local_ink.origin,
+            Point::new(DevicePx(10.5), DevicePx(20.25))
+        );
     }
 
     #[test]

@@ -74,12 +74,23 @@ impl Rig {
 
     /// Asks for `path`'s fill as `owner`.
     fn ask(&mut self, owner: VectorId, path: &Arc<BezPath>) -> Option<VectorMask> {
+        self.ask_placed(owner, path, zgui_scene::kurbo::Affine::IDENTITY)
+    }
+
+    /// Asks for `path`'s fill under `placement` as `owner`.
+    fn ask_placed(
+        &mut self,
+        owner: VectorId,
+        path: &Arc<BezPath>,
+        placement: zgui_scene::kurbo::Affine,
+    ) -> Option<VectorMask> {
         self.paths.push(Arc::clone(path));
         self.cache.tile_for(
             &mut self.atlas,
             VectorMaskRequest {
                 owner,
                 path,
+                placement,
                 style: VectorMaskStyle::Fill(peniko::Fill::NonZero),
                 density: [1.0, 1.0],
                 scale: 1.0,
@@ -100,6 +111,33 @@ impl Rig {
     fn volatile(&self, owner: VectorId) -> bool {
         self.cache.histories[&owner].volatile
     }
+}
+
+/// A source path through a placement is the same raster as the placed path, so the two share one
+/// tile.
+#[test]
+fn a_mask_through_a_placement_matches_the_placed_path() {
+    let mut rig = Rig::new(false);
+    let fit =
+        zgui_scene::kurbo::Affine::translate((3.0, 2.0)) * zgui_scene::kurbo::Affine::scale(1.5);
+    let source = triangle(0.0);
+    let shape = zgui_svg::Shape {
+        path: Arc::clone(&source),
+        fill: None,
+        stroke: None,
+        clips: Vec::new(),
+    };
+    let placed = zgui_svg::document::place::shape(&shape, fit).path;
+    rig.begin();
+    let through = rig
+        .ask_placed(OWNER, &source, fit)
+        .expect("a mask through the fit");
+    let direct = rig
+        .ask(VectorId(OWNER.0 + 1), &placed)
+        .expect("a mask of the placed path");
+    rig.end();
+    assert_eq!(through.key, direct.key, "one raster, one atlas entry");
+    assert_eq!(through.tile, direct.tile);
 }
 
 #[test]
