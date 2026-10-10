@@ -17,6 +17,13 @@ impl MarkFlags {
     /// Without it, every prim is drawn on its own: the prims are apart, and no pixel takes
     /// coverage from two of them.
     pub const UNION: u32 = 1;
+    /// Payload positions map by [`MarkItem::axes`] and [`MarkItem::origin`] to local space, and
+    /// payload lengths are local units.
+    ///
+    /// Without it, the whole payload maps by `axes` and `origin`, and lengths scale with it.
+    pub const SCREEN: u32 = 2;
+    /// The discs are squares of half side `outer`, with a square hole of half side `inner`.
+    pub const SQUARE_DISCS: u32 = 4;
     /// Where the cap of every run start is stored: two bits from bit 8.
     pub const START_CAP_SHIFT: u32 = 8;
     /// Where the cap of every run end is stored: two bits from bit 10.
@@ -40,9 +47,9 @@ impl MarkFlags {
 /// each kind the payload has. So a hundred thousand circles are one item: one draw order, one
 /// clip, one paint and one ink rectangle.
 ///
-/// Every payload coordinate is measured from [`origin`](Self::origin). A replay that moves the
-/// item adds the offset to the origin and leaves the payload as it is, so a payload is shared by
-/// every copy of the item.
+/// Every payload coordinate maps to local space by [`axes`](Self::axes) and then
+/// [`origin`](Self::origin). A replay that moves the item adds the offset to the origin and leaves
+/// the payload as it is, so a payload is shared by every copy of the item.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct MarkItem {
@@ -70,6 +77,9 @@ pub struct MarkItem {
     pub vertices: u32,
     /// Half the width of the polyline stroke.
     pub half_width: f32,
+    /// The linear part of the map from payload to local space, as `[a, b, c, d]`:
+    /// `x' = a·x + c·y` and `y' = b·x + d·y`.
+    pub axes: [f32; 4],
 }
 
 impl MarkItem {
@@ -94,6 +104,7 @@ impl MarkItem {
             boxes: counts[1],
             vertices: counts[2],
             half_width: 0.0,
+            axes: [1.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -113,6 +124,8 @@ impl MarkItem {
     }
 
     /// Moves the item by `by`: its ink, its payload origin and its paint origin.
+    ///
+    /// The origin is in local space under every flag, so a move adds to it.
     pub fn reanchor(&mut self, by: Size<DevicePx, Device>) {
         self.bounds[0] += by.width.0;
         self.bounds[1] += by.height.0;
@@ -169,5 +182,28 @@ impl MarkPayload {
             self.boxes.len() as u32,
             self.vertices.len() as u32,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_geom::{DevicePx, Point, Rect, Size};
+
+    use super::{MarkFlags, MarkItem};
+    use crate::paint::PaintRef;
+
+    #[test]
+    fn a_new_mark_maps_its_payload_by_the_identity() {
+        let bounds = Rect::new(
+            Point::new(DevicePx(1.0), DevicePx(2.0)),
+            Size::new(DevicePx(3.0), DevicePx(4.0)),
+        );
+        let mut mark = MarkItem::new(bounds, PaintRef::NONE, [1, 0, 0]);
+        assert_eq!(mark.axes, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(mark.origin, [0.0, 0.0]);
+        assert_eq!(mark.flags & (MarkFlags::SCREEN | MarkFlags::SQUARE_DISCS), 0);
+        mark.reanchor(Size::new(DevicePx(5.0), DevicePx(-1.0)));
+        assert_eq!(mark.origin, [5.0, -1.0]);
+        assert_eq!(mark.axes, [1.0, 0.0, 0.0, 1.0], "a move keeps the axes");
     }
 }

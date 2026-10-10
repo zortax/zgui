@@ -14,10 +14,10 @@ fn box_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     let found = item_of(mark_draw.position);
     let item = marks[found.slot];
     let prim = mark_boxes[instance];
-    let margin = vec2<f32>(margin_local(item.transform));
+    let margin = vec2<f32>(margin_space(item));
     let bounds = vec4<f32>(
-        vec2<f32>(prim.rect.x, prim.rect.y) - margin,
-        vec2<f32>(prim.rect.z, prim.rect.w) + margin,
+        to_space(item, vec2<f32>(prim.rect.x, prim.rect.y)) - margin,
+        to_space(item, vec2<f32>(prim.rect.z, prim.rect.w)) + margin,
     );
     var out = mark_corner(vertex, bounds, item, found.shift, coverage);
     out.slot = found.slot;
@@ -71,8 +71,11 @@ fn box_cover(
 fn box_coverage(in: MarkVarying, across: vec2<f32>, down: vec2<f32>) -> f32 {
     let item = marks[in.slot];
     let prim = mark_boxes[in.prim];
-    let point = payload_point(in, item);
-    let rect = vector4_of(prim.rect);
+    let point = payload_point(in);
+    let rect = vec4<f32>(
+        to_space(item, vec2<f32>(prim.rect.x, prim.rect.y)),
+        to_space(item, vec2<f32>(prim.rect.z, prim.rect.w)),
+    );
     let outer = box_cover(point, rect, prim.radii, prim.shape.x, across, down);
     let border = prim.shape.y;
     if border <= 0.0 {
@@ -110,14 +113,14 @@ fn vs_box_coverage(
 
 @fragment
 fn fs_box_paint(in: MarkVarying) -> @location(0) vec4<f32> {
-    let across = dpdx(in.local);
-    let down = dpdy(in.local);
+    let across = dpdx(in.point);
+    let down = dpdy(in.point);
     return mark_paint(in, marks[in.slot], box_coverage(in, across, down));
 }
 
 @fragment
 fn fs_box_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
-    let across = dpdx(in.local);
-    let down = dpdy(in.local);
+    let across = dpdx(in.point);
+    let down = dpdy(in.point);
     return mark_bin(in, box_coverage(in, across, down));
 }

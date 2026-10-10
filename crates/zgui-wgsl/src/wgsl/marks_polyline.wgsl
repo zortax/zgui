@@ -9,32 +9,27 @@
 fn segment_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     let found = item_of(mark_draw.position);
     let item = marks[found.slot];
-    let a = mark_vertices[instance];
-    let b = mark_vertices[instance + 1u];
+    let raw_a = mark_vertices[instance];
+    let raw_b = mark_vertices[instance + 1u];
     var out: MarkVarying;
-    if is_separator(a) || is_separator(b) {
+    if is_separator(raw_a) || is_separator(raw_b) {
         // A degenerate quad: every corner at one point covers no pixel.
         out.position = vec4<f32>(-2.0, -2.0, 0.0, 1.0);
         out.slot = found.slot;
         out.prim = instance;
         return out;
     }
+    let a = to_space(item, raw_a);
+    let b = to_space(item, raw_b);
     let along = b - a;
     let length_along = length(along);
     let direction = select(vec2<f32>(1.0, 0.0), along / length_along, length_along > 0.0);
     let normal = vec2<f32>(-direction.y, direction.x);
-    let reach = item.half_width + margin_local(item.transform);
+    let reach = item.half_width + margin_space(item);
     let corner = unit_corner(vertex);
     let lengthwise = select(a - direction * reach, b + direction * reach, corner.x > 0.5);
-    let payload = lengthwise + normal * select(-reach, reach, corner.y > 0.5);
-    let local = payload + vec2<f32>(item.origin.x, item.origin.y) + found.shift;
-    if coverage {
-        out.position = to_page(local, item.transform);
-    } else {
-        out.position = to_target(local, item.transform, vec2<f32>(0.0));
-    }
-    out.local = local;
-    out.shift = found.shift;
+    let q = lengthwise + normal * select(-reach, reach, corner.y > 0.5);
+    out = mark_point(q, item, found.shift, coverage);
     out.slot = found.slot;
     out.prim = instance;
     out.caps = segment_caps(instance, item.flags);
@@ -102,21 +97,33 @@ fn segment_value(point: vec2<f32>, a: vec2<f32>, b: vec2<f32>, half: f32, caps: 
 // with that segment's distance, which is the distance to the run there.
 fn segment_distance(in: MarkVarying, owned: ptr<function, bool>) -> Distance {
     let item = marks[in.slot];
-    let point = payload_point(in, item);
+    let point = payload_point(in);
     let half = item.half_width;
     let at = in.prim;
-    let a = mark_vertices[at];
-    let b = mark_vertices[at + 1u];
+    let a = to_space(item, mark_vertices[at]);
+    let b = to_space(item, mark_vertices[at + 1u]);
     let own = segment_value(point, a, b, half, in.caps);
     var nearest = true;
     let before = mark_vertices[at - 1u];
     if !is_separator(before) {
-        let other = segment_value(point, before, a, half, segment_caps(at - 1u, item.flags));
+        let other = segment_value(
+            point,
+            to_space(item, before),
+            a,
+            half,
+            segment_caps(at - 1u, item.flags),
+        );
         nearest = nearest && own.d < other.d;
     }
     let after = mark_vertices[at + 2u];
     if !is_separator(after) {
-        let other = segment_value(point, b, after, half, segment_caps(at + 1u, item.flags));
+        let other = segment_value(
+            point,
+            b,
+            to_space(item, after),
+            half,
+            segment_caps(at + 1u, item.flags),
+        );
         nearest = nearest && own.d <= other.d;
     }
     *owned = nearest;
@@ -141,8 +148,8 @@ fn vs_segment_coverage(
 
 @fragment
 fn fs_segment_paint(in: MarkVarying) -> @location(0) vec4<f32> {
-    let across = dpdx(in.local);
-    let down = dpdy(in.local);
+    let across = dpdx(in.point);
+    let down = dpdy(in.point);
     var owned = true;
     let coverage = sdf_coverage(segment_distance(in, &owned), across, down);
     return mark_paint(in, marks[in.slot], select(0.0, coverage, owned));
@@ -150,8 +157,8 @@ fn fs_segment_paint(in: MarkVarying) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_segment_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
-    let across = dpdx(in.local);
-    let down = dpdy(in.local);
+    let across = dpdx(in.point);
+    let down = dpdy(in.point);
     var owned = true;
     let coverage = sdf_coverage(segment_distance(in, &owned), across, down);
     return mark_bin(in, select(0.0, coverage, owned));

@@ -145,6 +145,15 @@ pub fn marks(scene: &Scene, mark: &MarkItem) -> String {
     if mark.is_union() {
         line.push_str(" union");
     }
+    if mark.flags & MarkFlags::SCREEN != 0 {
+        line.push_str(" screen");
+    }
+    if mark.flags & MarkFlags::SQUARE_DISCS != 0 {
+        line.push_str(" square_discs");
+    }
+    if mark.axes != [1.0, 0.0, 0.0, 1.0] {
+        line.push_str(&format!(" axes={}", list(&mark.axes)));
+    }
     if mark.vertices > 0 {
         line.push_str(&format!(
             " half_width={} caps={}/{}",

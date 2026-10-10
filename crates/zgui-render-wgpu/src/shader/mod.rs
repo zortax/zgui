@@ -158,7 +158,8 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 discs,
                 boxes,
                 vertices,
-                half_width
+                half_width,
+                axes
             ]
         ));
         structures.push(reflected!(

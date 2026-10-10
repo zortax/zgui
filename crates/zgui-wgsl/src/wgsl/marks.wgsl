@@ -5,6 +5,10 @@
 // itself is named by the draw's own block, through the remap and the chunk offsets every lane
 // reads.
 //
+// A payload maps to the item's local space by the item's axes and origin. Distances are measured in
+// a *distance space*: payload units without the screen flag, so every length scales with the
+// axes, and local units with it, so a marker keeps its size under any axes.
+//
 // A draw paints in one of two ways. A *paint* draw writes paint times coverage times clip into the
 // target, which is exact when the prims are apart. A *coverage* draw adds the coverage alone into a
 // single-channel bin, and one composite later paints the item through the sum: the union of
@@ -25,6 +29,8 @@ struct MarkItem {
     boxes: u32,
     vertices: u32,
     half_width: f32,
+    // The linear part of the payload-to-local map: x' = a x + c y, y' = b x + d y.
+    axes: Vector4,
 }
 
 // What one draw of one item reads beside the payload.
@@ -48,6 +54,8 @@ struct MarkDraw {
 @group(2) @binding(0) var<uniform> mark_draw: MarkDraw;
 
 const MARK_UNION: u32 = 1u;
+const MARK_SCREEN: u32 = 2u;
+const MARK_SQUARE_DISCS: u32 = 4u;
 const MARK_START_CAP_SHIFT: u32 = 8u;
 const MARK_END_CAP_SHIFT: u32 = 10u;
 const CAP_BUTT: u32 = 0u;
@@ -64,6 +72,8 @@ struct MarkVarying {
     @location(3) @interpolate(flat) prim: u32,
     // The polyline caps: start in bits 0 and 1, end in bits 2 and 3.
     @location(4) @interpolate(flat) caps: u32,
+    // The point in distance space, with no chunk offset.
+    @location(5) point: vec2<f32>,
 }
 
 // The item a draw names: its arena slot, and the chunk offset it is drawn shifted by.
@@ -85,14 +95,52 @@ fn item_of(position: u32) -> MarkRef {
 // antialiased edge under any scale or turn.
 fn margin_local(transform: u32) -> f32 {
     let matrix = spatial[transform].matrix;
-    let x = matrix[0].xy;
-    let y = matrix[1].xy;
+    return margin_of(matrix[0].xy, matrix[1].xy);
+}
+
+// One over the smallest singular value of the matrix with columns `x` and `y`, at most 1e4.
+fn margin_of(x: vec2<f32>, y: vec2<f32>) -> f32 {
     let p = dot(x, x);
     let q = dot(y, y);
     let r = dot(x, y);
     let spread = sqrt(max(0.25 * (p - q) * (p - q) + r * r, 0.0));
     let smallest = sqrt(max(0.5 * (p + q) - spread, 1e-12));
     return min(1.0 / smallest, 1e4);
+}
+
+// The item's axes as a matrix.
+fn mark_axes(item: MarkItem) -> mat2x2<f32> {
+    return mat2x2<f32>(item.axes.x, item.axes.y, item.axes.z, item.axes.w);
+}
+
+fn is_screen(item: MarkItem) -> bool {
+    return (item.flags & MARK_SCREEN) != 0u;
+}
+
+// A payload position in distance space.
+fn to_space(item: MarkItem, p: vec2<f32>) -> vec2<f32> {
+    if is_screen(item) {
+        return mark_axes(item) * p + vec2<f32>(item.origin.x, item.origin.y);
+    }
+    return p;
+}
+
+// A point in distance space, in the item's local space.
+fn to_local(item: MarkItem, q: vec2<f32>) -> vec2<f32> {
+    if is_screen(item) {
+        return q;
+    }
+    return mark_axes(item) * q + vec2<f32>(item.origin.x, item.origin.y);
+}
+
+// The length in distance units of the shortest device pixel.
+fn margin_space(item: MarkItem) -> f32 {
+    if is_screen(item) {
+        return margin_local(item.transform);
+    }
+    let matrix = spatial[item.transform].matrix;
+    let linear = mat2x2<f32>(matrix[0].xy, matrix[1].xy) * mark_axes(item);
+    return margin_of(linear[0], linear[1]);
 }
 
 // A point in the item's space, on the device and moved by `shift`, in the target's clip space.
@@ -204,17 +252,9 @@ fn radial(point: vec2<f32>, centre: vec2<f32>, radius: f32) -> Distance {
     return out;
 }
 
-// The varying for one corner of a quad over `bounds` (x0 y0 x1 y1, payload space) of one prim.
-fn mark_corner(
-    vertex: u32,
-    bounds: vec4<f32>,
-    item: MarkItem,
-    shift: vec2<f32>,
-    coverage: bool,
-) -> MarkVarying {
-    let corner = unit_corner(vertex);
-    let payload = bounds.xy + corner * (bounds.zw - bounds.xy);
-    let local = payload + vec2<f32>(item.origin.x, item.origin.y) + shift;
+// The varying for the point `q` in distance space of one prim.
+fn mark_point(q: vec2<f32>, item: MarkItem, shift: vec2<f32>, coverage: bool) -> MarkVarying {
+    let local = to_local(item, q) + shift;
     var out: MarkVarying;
     if coverage {
         out.position = to_page(local, item.transform);
@@ -224,12 +264,25 @@ fn mark_corner(
     out.local = local;
     out.shift = shift;
     out.caps = 0u;
+    out.point = q;
     return out;
 }
 
-// Where a fragment's sample lies in payload space.
-fn payload_point(in: MarkVarying, item: MarkItem) -> vec2<f32> {
-    return in.local - in.shift - vec2<f32>(item.origin.x, item.origin.y);
+// The varying for one corner of a quad over `bounds` (x0 y0 x1 y1, distance space) of one prim.
+fn mark_corner(
+    vertex: u32,
+    bounds: vec4<f32>,
+    item: MarkItem,
+    shift: vec2<f32>,
+    coverage: bool,
+) -> MarkVarying {
+    let corner = unit_corner(vertex);
+    return mark_point(bounds.xy + corner * (bounds.zw - bounds.xy), item, shift, coverage);
+}
+
+// Where a fragment's sample lies in distance space.
+fn payload_point(in: MarkVarying) -> vec2<f32> {
+    return in.point;
 }
 
 // The premultiplied colour a paint draw writes for `coverage`.

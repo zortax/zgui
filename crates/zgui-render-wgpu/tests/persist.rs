@@ -463,3 +463,88 @@ fn marks_arenas_hold_still_over_a_hundred_redraws() {
         "retired payloads are reused, so the arenas do not grow"
     );
 }
+
+/// A union of two discs, a box with a border and a round-capped polyline, with every payload
+/// position and length multiplied by `k`, mapped to local space by `axes` and `[3, 4]`.
+fn push_scaled_marks(scene: &mut Scene, k: f32, axes: [f32; 4]) {
+    use zgui_scene::{MarkBox, MarkFlags, MarkItem, MarkPayload};
+
+    let paint = PaintRef::solid(scene.paints.solid(Color::srgb_u8(200, 60, 20, 255)));
+    let mut push = |payload: MarkPayload, bounds: [f32; 4], flags: u32, half_width: f32| {
+        let mut item = MarkItem::new(
+            rect(bounds[0], bounds[1], bounds[2], bounds[3]),
+            paint,
+            payload.counts(),
+        );
+        item.flags = flags;
+        item.origin = [3.0, 4.0];
+        item.axes = axes;
+        item.half_width = half_width * k;
+        scene.push_marks(item, Arc::new(payload));
+    };
+    push(
+        MarkPayload {
+            discs: vec![
+                [6.1 * k, 6.3 * k, 3.7 * k, 0.0],
+                [9.0 * k, 7.0 * k, 3.1 * k, 1.2 * k],
+            ],
+            ..MarkPayload::default()
+        },
+        [0.0, 0.0, 40.0, 40.0],
+        MarkFlags::UNION,
+        0.0,
+    );
+    push(
+        MarkPayload {
+            boxes: vec![MarkBox {
+                rect: [20.2 * k, 3.1 * k, 34.7 * k, 11.9 * k],
+                radii: [2.0 * k; 8],
+                shape: [2.0, 1.3 * k, 0.0, 0.0],
+            }],
+            ..MarkPayload::default()
+        },
+        [50.0, 0.0, 80.0, 40.0],
+        0,
+        0.0,
+    );
+    let nan = f32::NAN;
+    push(
+        MarkPayload {
+            vertices: vec![
+                [nan, nan],
+                [4.0 * k, 20.0 * k],
+                [14.3 * k, 31.1 * k],
+                [30.2 * k, 22.4 * k],
+                [nan, nan],
+            ],
+            ..MarkPayload::default()
+        },
+        [0.0, 40.0, 100.0, 90.0],
+        MarkFlags::UNION | MarkFlags::caps(MarkFlags::ROUND, MarkFlags::ROUND),
+        1.1,
+    );
+}
+
+#[test]
+fn mark_axes_draw_as_the_mapped_payload() {
+    let draw = |k: f32, axes: [f32; 4]| {
+        let mut renderer = plain_renderer()?;
+        let mut scene = Scene::new();
+        scene.begin_frame(Size::new(SIDE, SIDE));
+        push_scaled_marks(&mut scene, k, axes);
+        scene.finish(&DamageSet::full());
+        Some(draw_bytes(&mut renderer, &scene).1)
+    };
+    let Some(mapped) = draw(1.0, [2.5, 0.0, 0.0, 2.5]) else {
+        return;
+    };
+    let Some(expected) = draw(2.5, [1.0, 0.0, 0.0, 1.0]) else {
+        return;
+    };
+    assert!(expected.rgba(18, 19)[3] > 200, "the control draws");
+    assert!(
+        mapped.max_difference(&expected) <= 1,
+        "axes map the payload as a pre-scaled payload draws: {}",
+        mapped.max_difference(&expected)
+    );
+}
