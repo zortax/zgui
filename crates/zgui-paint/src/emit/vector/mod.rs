@@ -429,10 +429,9 @@ pub(crate) fn draw_drawing_tracked(
 
 /// The identity of one outline of a drawing whose first outline is `base`.
 ///
-/// A collision between two drawings costs a re-encoding and never a wrong picture: the rasteriser
-/// holds a fingerprint of the geometry beside each cached encoding and re-encodes whenever it does
-/// not match, so an identity is a hint about what is worth keeping rather than a promise about what
-/// a shape is.
+/// A collision between two drawings costs nothing in the picture: the rasteriser keys its
+/// encodings on content, and the mask route keys its tiles on the raster. An identity names an
+/// owner for the mask route's history, and it is no promise about what a shape is.
 fn outline_id(base: VectorId, index: usize) -> VectorId {
     VectorId(
         base.0

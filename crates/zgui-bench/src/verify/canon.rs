@@ -24,13 +24,12 @@
 //!
 //! # The vector identity is the same kind of thing
 //!
-//! A vector item carries an id the rasteriser keeps its encoded geometry under. It is derived from
-//! the arena slot of the fragment that emitted it, so like an atlas address it is decided by how the
-//! window that drew it came to be rather than by what it draws — and the engine says so where it is
-//! built: a collision "costs a re-encoding and never a wrong picture … an identity is a hint about
-//! what is worth keeping rather than a promise about what a shape is". Two windows that have laid
-//! out different numbers of times allocate different slots, so the same path is drawn under a
-//! different id in each.
+//! A vector item carries an id. It is derived from the arena slot of the fragment that emitted it,
+//! so like an atlas address it is decided by how the window that drew it came to be rather than by
+//! what it draws — and the engine says so where it is built: a collision "costs nothing in the
+//! picture … it is no promise about what a shape is". Two windows that have laid out different
+//! numbers of times allocate different slots, so the same path is drawn under a different id in
+//! each.
 //!
 //! It is renumbered exactly as a tile address is, and for exactly as much: the *n*-th distinct id of
 //! this list, numbered where it first appears. What that keeps is the *pattern* — a window that drew

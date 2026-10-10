@@ -21,15 +21,14 @@
 //! perfectly damaged rectangle. A counter going from `1` to `7` is the whole failure: same width,
 //! same line, same everything the geometry can see, and the old digit back on the screen.
 //!
-//! # Why a chunk with a vector item in it replays only in place
+//! # How a chunk with a vector item in it replays
 //!
 //! A record's chunk is captured at the pushes, before the clip cull, so it is the fragment's
 //! complete painting: a row arriving at the edge of a scroll port replays the whole of itself and
 //! the cull admits the part that has come into view. A **vector item** replays too — re-pushed
-//! into the frame's pass planning exactly as a fresh emission pushes it — with one restriction:
-//! only where the fragment has not moved. Its curves are placed in device coordinates and shared
-//! by pointer with the rasteriser's encoding cache, so translating them means copying the path,
-//! and a moved drawing is encoded at its new position instead.
+//! into the frame's pass planning exactly as a fresh emission pushes it. Its path is in path space
+//! and shared by pointer with the rasteriser's encoding cache, so a moved drawing replays with its
+//! placement moved and the rasteriser keeps its encoding.
 //!
 //! # The invariant a replay depends on
 //!
