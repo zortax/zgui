@@ -304,6 +304,16 @@ const BUDGET_TILES: u32 = 32;
 /// The most texels those new masks may cover together.
 const BUDGET_TEXELS: u64 = 128 * 1024;
 
+/// The most new masks of volatile shapes one frame rasterises while the general rasteriser is
+/// cold.
+///
+/// A volatile shape rasterises again in most frames. Past this the frame declines the rest, and a
+/// decline builds the general rasteriser, which then takes every volatile shape.
+const COLD_BUDGET_TILES: u32 = 256;
+
+/// The most texels those new masks may cover together.
+const COLD_BUDGET_TEXELS: u64 = 1024 * 1024;
+
 /// What one frame has spent on new masks.
 #[derive(Clone, Copy, Debug, Default)]
 struct Budget {
@@ -311,6 +321,19 @@ struct Budget {
     tiles: u32,
     /// Texels they cover.
     texels: u64,
+}
+
+impl Budget {
+    /// Whether one more mask of `texels` stays within `tiles` masks and `limit` texels.
+    fn admits(&self, texels: u64, tiles: u32, limit: u64) -> bool {
+        self.tiles < tiles && self.texels + texels <= limit
+    }
+
+    /// Records one mask of `texels`.
+    fn spend(&mut self, texels: u64) {
+        self.tiles += 1;
+        self.texels += texels;
+    }
 }
 
 /// The sparse metadata beside monochrome atlas entries used by vector masks.
@@ -329,6 +352,9 @@ pub(crate) struct VectorMaskCache {
     superseded: Vec<AtlasKey>,
     /// What this frame has spent on new masks.
     budget: Budget,
+    /// What this frame has spent on new masks of volatile shapes while the general rasteriser is
+    /// cold.
+    cold: Budget,
     /// What recognition found in the paths drawn lately.
     pub(crate) recognitions: super::recognitions::Recognitions,
 }
@@ -347,6 +373,7 @@ impl Default for VectorMaskCache {
             raster_ready: false,
             superseded: Vec::new(),
             budget: Budget::default(),
+            cold: Budget::default(),
             recognitions: super::recognitions::Recognitions::default(),
         }
     }
@@ -357,6 +384,7 @@ impl VectorMaskCache {
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
         self.budget = Budget::default();
+        self.cold = Budget::default();
         self.recognitions.begin_frame();
     }
 
@@ -395,7 +423,9 @@ impl VectorMaskCache {
     /// more than [`COLD_SEGMENTS`] segments is declined, because a decline then builds it.
     ///
     /// While the general rasteriser is built, a frame also rasterises at most [`BUDGET_TILES`] new
-    /// masks covering [`BUDGET_TEXELS`], and declines the rest. A hit costs nothing.
+    /// masks covering [`BUDGET_TEXELS`], and declines the rest. While it is cold, a frame
+    /// rasterises at most [`COLD_BUDGET_TILES`] new masks of volatile owners covering
+    /// [`COLD_BUDGET_TEXELS`], and declines the rest of those owners. A hit costs nothing.
     pub(crate) fn tile_for(
         &mut self,
         atlas: &mut Atlas,
@@ -414,6 +444,7 @@ impl VectorMaskCache {
             raster_ready,
             superseded,
             budget,
+            cold,
             recognitions: _,
         } = self;
         let part = part_of(request.style);
@@ -464,13 +495,20 @@ impl VectorMaskCache {
             }
         }
         let texels = u64::from(width.unsigned_abs()) * u64::from(height.unsigned_abs());
-        if *raster_ready
-            && !held.is_some_and(|key| atlas.contains(key))
-            && (budget.tiles >= BUDGET_TILES || budget.texels + texels > BUDGET_TEXELS)
-        {
+        let fresh = |atlas: &Atlas| !held.is_some_and(|key| atlas.contains(key));
+        if *raster_ready && !budget.admits(texels, BUDGET_TILES, BUDGET_TEXELS) && fresh(atlas) {
             counter::bump(Counter::VectorMaskBudgetOverflow);
             history.route(part, Routed::Declined);
             return None;
+        }
+        // The volatile owner asks again next frame, so its raster is a cost of every frame.
+        let volatile_cold = !*raster_ready && history.volatile;
+        if volatile_cold
+            && !cold.admits(texels, COLD_BUDGET_TILES, COLD_BUDGET_TEXELS)
+            && fresh(atlas)
+        {
+            counter::bump(Counter::VectorMaskBudgetOverflow);
+            return decline(history, superseded);
         }
         let key = if let Some(key) = held {
             key
@@ -488,8 +526,10 @@ impl VectorMaskCache {
             })
             .ok()?;
         if missed {
-            budget.tiles += 1;
-            budget.texels += texels;
+            budget.spend(texels);
+            if volatile_cold {
+                cold.spend(texels);
+            }
         }
         history.track(part, key, superseded);
         history.route(part, Routed::Mask);

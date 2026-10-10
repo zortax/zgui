@@ -8,7 +8,10 @@ use zgui_scene::VectorId;
 use zgui_scene::kurbo::BezPath;
 use zgui_scene::peniko;
 
-use super::{COLD_SEGMENTS, VectorMask, VectorMaskCache, VectorMaskRequest, VectorMaskStyle};
+use super::{
+    COLD_BUDGET_TILES, COLD_SEGMENTS, VectorMask, VectorMaskCache, VectorMaskRequest,
+    VectorMaskStyle,
+};
 
 /// The owner most cases ask as.
 const OWNER: VectorId = VectorId(7);
@@ -331,6 +334,30 @@ fn the_budget_does_not_apply_while_vector_raster_is_cold() {
     rig.begin();
     assert!(new_masks(&mut rig, 0, 64).into_iter().all(|mask| mask));
     rig.end();
+}
+
+#[test]
+fn the_cold_budget_declines_volatile_misses_past_its_limit() {
+    let mut rig = Rig::new(false);
+    let owners = COLD_BUDGET_TILES + 1;
+    // Every owner asks with new geometry in each frame. The fourth frame makes them all volatile.
+    let frame = |rig: &mut Rig, frame: u32| {
+        rig.begin();
+        let masks: Vec<bool> = (0..owners)
+            .map(|owner| {
+                let shift = f64::from(frame) * 0.1 + f64::from(owner) * 1e-4;
+                rig.ask(VectorId(100 + owner), &triangle(shift)).is_some()
+            })
+            .collect();
+        rig.end();
+        masks
+    };
+    for index in 0..3 {
+        assert!(frame(&mut rig, index).into_iter().all(|mask| mask));
+    }
+    let masks = frame(&mut rig, 3);
+    assert!(masks[..COLD_BUDGET_TILES as usize].iter().all(|mask| *mask));
+    assert!(!masks[COLD_BUDGET_TILES as usize]);
 }
 
 #[test]
