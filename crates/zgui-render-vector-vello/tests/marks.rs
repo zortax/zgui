@@ -2,7 +2,8 @@
 //!
 //! One list of shapes is drawn through the marks route and through the general route, by the path
 //! renderer. See [`support::conformance`] for the rule. Two more tests check what only a union
-//! gets right: a translucent overlap painted once, and two abutting boxes with no seam.
+//! gets right: a translucent overlap painted once, and two abutting boxes with no seam. The last
+//! checks that strokes and rings thinner than a pixel cover their width.
 
 mod support;
 
@@ -232,5 +233,86 @@ fn abutting_boxes_leave_no_seam() {
             interior.abs_diff(seam) <= 1,
             "column 10 at row {y} is {seam} where the interior is {interior}"
         );
+    }
+}
+
+/// Polylines stroked `width` wide: level, upright and slanted, on and between pixel centres.
+fn hairline_polylines(width: f64) -> Vec<Shape> {
+    [
+        "M8.25 10.5 L120.75 10.5",
+        "M8.5 20 L120.25 20",
+        "M8.75 30.25 L120.5 30.25",
+        "M10.5 40.25 L10.5 120.75",
+        "M20.25 44.5 L64.75 76.25 L118.5 50.75",
+        "M20.5 118.25 L70.25 88.5 L118.75 112.25",
+    ]
+    .into_iter()
+    .map(|path| {
+        outline(
+            BezPath::from_svg(path).expect("a path"),
+            white(1.0),
+            kurbo::Stroke::new(width),
+        )
+    })
+    .collect()
+}
+
+/// Rings stroked `width` wide.
+fn hairline_rings(width: f64) -> Vec<Shape> {
+    vec![outline(
+        circles(&[
+            (24.5, 24.5, 14.0),
+            (64.25, 30.75, 18.5),
+            (100.6, 28.3, 12.25),
+            (36.4, 84.2, 24.0),
+            (96.5, 92.5, 20.5),
+        ]),
+        white(1.0),
+        kurbo::Stroke::new(width),
+    )]
+}
+
+/// The coverage a picture of white on black holds, in pixels.
+fn coverage(pixels: &zgui_render_wgpu::Pixels) -> f64 {
+    let mut sum = 0u64;
+    for y in 0..support::SIDE {
+        for x in 0..support::SIDE {
+            sum += u64::from(pixels.rgba(x, y)[0]);
+        }
+    }
+    sum as f64 / 255.0
+}
+
+#[test]
+fn hairlines_cover_their_width() {
+    let Some(mut harness) = harness(Which::Vello) else {
+        return;
+    };
+    for width in [0.25, 0.5] {
+        for (name, shapes) in [
+            ("polylines", hairline_polylines(width)),
+            ("rings", hairline_rings(width)),
+        ] {
+            let quick = scene_of(&shapes, Some(Route::Marks), Affine2::IDENTITY);
+            assert!(
+                quick.primitives.vectors.is_empty() && !quick.primitives.marks.is_empty(),
+                "{name} {width}: a shape left the marks route"
+            );
+            let exact = scene_of(
+                &conformance::precise(&shapes, Affine2::IDENTITY),
+                None,
+                Affine2::IDENTITY,
+            );
+            let by_marks = coverage(&present(&mut harness.renderer, &quick));
+            let by_lines = coverage(&present(&mut harness.renderer, &exact));
+            println!(
+                "{name} {width}: marks cover {by_marks:.1} pixels, the true coverage {by_lines:.1}"
+            );
+            assert!(
+                (by_marks / by_lines - 1.0).abs() <= 0.02,
+                "{name} {width}: marks cover {by_marks:.1} pixels where the true coverage is \
+                 {by_lines:.1}"
+            );
+        }
     }
 }

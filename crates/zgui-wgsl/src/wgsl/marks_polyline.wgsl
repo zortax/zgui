@@ -67,21 +67,30 @@ fn segment_value(point: vec2<f32>, a: vec2<f32>, b: vec2<f32>, half: f32, caps: 
     let end = (caps >> 2u) & 3u;
     let reach_start = select(0.0, half, start == CAP_SQUARE);
     let reach_end = select(0.0, half, end == CAP_SQUARE);
+    // Every side is the near edge of a band: the stroke across, the segment with its caps along.
+    let lengthwise = reach_start + length_along + reach_end;
     var before: Distance;
     before.d = -reach_start - u;
     before.gradient = -direction;
+    before.band = lengthwise;
     var after: Distance;
     after.d = u - (length_along + reach_end);
     after.gradient = direction;
+    after.band = lengthwise;
     var beside: Distance;
     beside.d = abs(v) - half;
     beside.gradient = normal * select(-1.0, 1.0, v >= 0.0);
+    beside.band = 2.0 * half;
     var out = distance_max(distance_max(before, after), beside);
     if start == CAP_ROUND {
-        out = distance_min(out, radial(point, a, half));
+        var cap = radial(point, a, half);
+        cap.band = 2.0 * half;
+        out = distance_min(out, cap);
     }
     if end == CAP_ROUND {
-        out = distance_min(out, radial(point, b, half));
+        var cap = radial(point, b, half);
+        cap.band = 2.0 * half;
+        out = distance_min(out, cap);
     }
     return out;
 }

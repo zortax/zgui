@@ -117,6 +117,9 @@ fn to_page(local: vec2<f32>, transform: u32) -> vec4<f32> {
 struct Distance {
     d: f32,
     gradient: vec2<f32>,
+    // The width of the shape behind the edge, against the gradient: a band, such as a ring or a
+    // stroke, ends at a far edge this far from the near one. Zero for a shape with no far edge.
+    band: f32,
 }
 
 // The coverage of `distance`: the area of the pixel inside the edge.
@@ -127,11 +130,22 @@ struct Distance {
 // the coverage is right under any scale or turn. A gradient taken from the derivatives of the
 // distance itself would cancel across the ridge of a thin ring or a thin stroke and paint it
 // solid.
+//
+// A band thinner than a pixel can end inside the pixel on both sides. The area past its far edge
+// is then removed, so a hairline covers its own width. A band wider than about one and a half
+// pixels removes nothing.
 fn sdf_coverage(distance: Distance, across: vec2<f32>, down: vec2<f32>) -> f32 {
     let normal = vec2<f32>(dot(distance.gradient, across), dot(distance.gradient, down));
     let step = max(length(normal), 1e-6);
     let along = abs(normal) / step;
-    return edge_coverage(-distance.d / step, max(along.x, along.y), min(along.x, along.y));
+    let a = max(along.x, along.y);
+    let b = min(along.x, along.y);
+    let inside = -distance.d / step;
+    let near = edge_coverage(inside, a, b);
+    if distance.band <= 0.0 {
+        return near;
+    }
+    return max(near - edge_coverage(inside - distance.band / step, a, b), 0.0);
 }
 
 // The area of a unit pixel on the inner side of a straight edge `inside` pixels from its centre,
@@ -186,6 +200,7 @@ fn radial(point: vec2<f32>, centre: vec2<f32>, radius: f32) -> Distance {
     var out: Distance;
     out.d = length_along - radius;
     out.gradient = select(vec2<f32>(1.0, 0.0), along / length_along, length_along > 0.0);
+    out.band = 0.0;
     return out;
 }
 

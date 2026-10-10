@@ -15,17 +15,21 @@ fn disc_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
 }
 
 // Signed distance to a disc of radius z with a hole of radius w, negative inside.
+//
+// A ring is a band z − w wide, so a pixel that holds both edges of a thin ring covers its width.
 fn disc_distance(in: MarkVarying) -> Distance {
     let item = marks[in.slot];
     let disc = mark_discs[in.prim];
-    let outer = radial(payload_point(in, item), disc.xy, disc.z);
+    var outer = radial(payload_point(in, item), disc.xy, disc.z);
+    if disc.w <= 0.0 {
+        return outer;
+    }
+    outer.band = disc.z - disc.w;
     var hole: Distance;
     hole.d = disc.w - (outer.d + disc.z);
     hole.gradient = -outer.gradient;
-    if disc.w > 0.0 {
-        return distance_max(outer, hole);
-    }
-    return outer;
+    hole.band = outer.band;
+    return distance_max(outer, hole);
 }
 
 @vertex
