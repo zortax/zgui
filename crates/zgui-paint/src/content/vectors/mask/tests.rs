@@ -312,3 +312,15 @@ fn the_budget_does_not_apply_while_vector_raster_is_cold() {
     assert!(new_masks(&mut rig, 0, 64).into_iter().all(|mask| mask));
     rig.end();
 }
+
+#[test]
+fn a_shape_placed_again_on_whole_pixels_is_not_a_change() {
+    let mut rig = Rig::new(true);
+    // A new allocation every frame, as a scrolled drawing is placed again, on the same tile.
+    let masks: Vec<_> = (0..8)
+        .map(|_| rig.frame(OWNER, &triangle(0.0)).map(|mask| mask.key))
+        .collect();
+    assert!(masks.iter().all(|key| *key == masks[0] && key.is_some()));
+    assert!(!rig.volatile(OWNER));
+    assert_eq!(rig.cache.histories[&OWNER].changes, 0);
+}

@@ -150,12 +150,18 @@ impl MaskHistory {
         self.frame = frame;
     }
 
-    /// Records the stamp `part` asks with this frame, and updates the volatile flag.
-    fn observe(&mut self, part: usize, stamp: u64) {
-        if self.stamps[part] != 0 && self.stamps[part] != stamp {
+    /// Records the stamp `part` asks with this frame, and reports whether it moved.
+    fn observe(&mut self, part: usize, stamp: u64) -> bool {
+        let moved = self.stamps[part] != 0 && self.stamps[part] != stamp;
+        self.stamps[part] = stamp;
+        moved
+    }
+
+    /// Records a change in this frame when `changed`, and updates the volatile flag.
+    fn note(&mut self, changed: bool) {
+        if changed {
             self.changes |= 1;
         }
-        self.stamps[part] = stamp;
         let recent = self.changes & RECENT;
         if recent.count_ones() >= VOLATILE_CHANGES {
             self.volatile = true;
@@ -305,7 +311,8 @@ impl VectorMaskCache {
 
     /// Looks up or builds one coverage tile, or declines the request.
     ///
-    /// An owner whose request changed in three of the last four frames is volatile. A volatile
+    /// A request changes when its stamp moved and it needs a tile its owner does not track. An
+    /// owner whose request changed in three of the last four frames is volatile. A volatile
     /// owner is declined while the general rasteriser is built. While it is cold, only a shape of
     /// more than [`COLD_SEGMENTS`] segments is declined, because a decline then builds it.
     ///
@@ -321,21 +328,33 @@ impl VectorMaskCache {
         if width <= 0 || height <= 0 {
             return None;
         }
+        let Self {
+            entries,
+            next_handle,
+            histories,
+            frame,
+            raster_ready,
+            superseded,
+            budget,
+        } = self;
         let part = part_of(request.style);
-        let frame = self.frame;
-        let history = self
-            .histories
-            .entry(request.owner)
-            .or_insert_with(|| MaskHistory {
-                frame,
-                ..MaskHistory::default()
-            });
-        history.advance(frame);
-        history.observe(part, stamp(&request, part));
-        if history.volatile && (self.raster_ready || segments(request.path) > COLD_SEGMENTS) {
-            history.give_back(part, &mut self.superseded);
+        let history = histories.entry(request.owner).or_insert_with(|| MaskHistory {
+            frame: *frame,
+            ..MaskHistory::default()
+        });
+        history.advance(*frame);
+        let moved = history.observe(part, stamp(&request, part));
+        let decline = |history: &mut MaskHistory, superseded: &mut Vec<AtlasKey>| {
+            history.give_back(part, superseded);
             history.route(part, Routed::Declined);
-            return None;
+            None
+        };
+        // A volatile owner is declined before its geometry is read, so a moved stamp alone counts.
+        if history.volatile {
+            history.note(moved);
+            if history.volatile && declines(*raster_ready, request.path) {
+                return decline(history, superseded);
+            }
         }
         let commands = commands(
             request.path,
@@ -353,24 +372,30 @@ impl VectorMaskCache {
             size: [width, height],
         };
 
-        let held = self.entries.get(&fingerprint).copied();
+        let held = entries.get(&fingerprint).copied();
+        // A stable owner changes only when it needs a tile it does not track. A drawing placed
+        // again on whole pixels, as a scrolled one is, keeps its tile and is not a change.
+        if !history.volatile {
+            let tracked = held.is_some_and(|key| history.tiles[part].contains(&Some(key)));
+            history.note(moved && !tracked);
+            if history.volatile && declines(*raster_ready, request.path) {
+                return decline(history, superseded);
+            }
+        }
         let texels = u64::from(width.unsigned_abs()) * u64::from(height.unsigned_abs());
-        if self.raster_ready
+        if *raster_ready
             && !held.is_some_and(|key| atlas.contains(key))
-            && (self.budget.tiles >= BUDGET_TILES
-                || self.budget.texels + texels > BUDGET_TEXELS)
+            && (budget.tiles >= BUDGET_TILES || budget.texels + texels > BUDGET_TEXELS)
         {
             counter::bump(Counter::VectorMaskBudgetOverflow);
-            if let Some(history) = self.histories.get_mut(&request.owner) {
-                history.route(part, Routed::Declined);
-            }
+            history.route(part, Routed::Declined);
             return None;
         }
         let key = if let Some(key) = held {
             key
         } else {
-            let key = self.fresh_key(atlas);
-            self.entries.insert(fingerprint.clone(), key);
+            let key = fresh_key(next_handle, atlas);
+            entries.insert(fingerprint.clone(), key);
             key
         };
         let mut missed = false;
@@ -382,13 +407,11 @@ impl VectorMaskCache {
             })
             .ok()?;
         if missed {
-            self.budget.tiles += 1;
-            self.budget.texels += texels;
+            budget.tiles += 1;
+            budget.texels += texels;
         }
-        if let Some(history) = self.histories.get_mut(&request.owner) {
-            history.track(part, key, &mut self.superseded);
-            history.route(part, Routed::Mask);
-        }
+        history.track(part, key, superseded);
+        history.route(part, Routed::Mask);
         Some(VectorMask { tile, key })
     }
 
@@ -412,14 +435,15 @@ impl VectorMaskCache {
         self.superseded.clear();
         self.next_handle = MASK_NAMESPACE;
     }
+}
 
-    fn fresh_key(&mut self, atlas: &Atlas) -> AtlasKey {
-        loop {
-            let key = AtlasKey::new(self.next_handle, TextureKind::Mono);
-            self.next_handle = MASK_NAMESPACE | (self.next_handle.wrapping_add(1) & HANDLE_BITS);
-            if !atlas.contains(key) {
-                return key;
-            }
+/// A mask key no tile holds, from the mask namespace.
+fn fresh_key(next_handle: &mut u64, atlas: &Atlas) -> AtlasKey {
+    loop {
+        let key = AtlasKey::new(*next_handle, TextureKind::Mono);
+        *next_handle = MASK_NAMESPACE | (next_handle.wrapping_add(1) & HANDLE_BITS);
+        if !atlas.contains(key) {
+            return key;
         }
     }
 }
@@ -451,6 +475,12 @@ fn stamp(request: &VectorMaskRequest<'_>, part: usize) -> u64 {
     request.scale.to_bits().hash(&mut hasher);
     part.hash(&mut hasher);
     hasher.finish().max(1)
+}
+
+/// Whether a volatile shape is declined: always while the general rasteriser is built, and only
+/// past [`COLD_SEGMENTS`] while it is cold.
+fn declines(raster_ready: bool, path: &BezPath) -> bool {
+    raster_ready || segments(path) > COLD_SEGMENTS
 }
 
 /// How many drawing segments a path has: its lines, quadratics and cubics.
