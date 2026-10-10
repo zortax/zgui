@@ -56,6 +56,11 @@ pub(crate) enum SeriesPart {
     },
     /// The polyline through the points.
     Line,
+    /// Copies of one outline, drawn from the cells of this sheet.
+    Glyph {
+        /// The atlas handle of the sheet, which the payload's table names.
+        sheet: u64,
+    },
 }
 
 /// What a series payload is keyed by: the data's allocation, its length and the part.
@@ -240,13 +245,15 @@ impl MarkPayloads {
 /// Built once per data allocation, measured from the centre of the data's bounds, and held in
 /// `cache`. A payload whose centre `to_local` takes more than [`FAR`] from the local origin is
 /// built again around the point `to_local` takes to the origin, which keeps every position within
-/// 1/128 of a unit. Each payload holds at most `max_prims` prims.
+/// 1/128 of a unit. Each payload holds at most `max_prims` prims. A glyph payload starts with
+/// `table`, the tile table of its sheet.
 pub(crate) fn series_payload(
     mut cache: Option<&mut MarkPayloads>,
     data: &Arc<[[f32; 2]]>,
     part: SeriesPart,
     to_local: Affine,
     max_prims: usize,
+    table: &[[u32; 4]],
 ) -> Option<SeriesPayload> {
     let key = SeriesKey {
         data: Arc::as_ptr(data) as *const u8 as usize,
@@ -261,7 +268,7 @@ pub(crate) fn series_payload(
         None => {
             let bounds = bounds_of(data)?;
             let centre = [(bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0];
-            let payload = build(data, part, centre, bounds, max_prims);
+            let payload = build(data, part, centre, bounds, max_prims, table);
             if let Some(cache) = cache.as_deref_mut() {
                 cache.insert_series(key, data, payload.clone());
             }
@@ -273,7 +280,14 @@ pub(crate) fn series_payload(
         return Some(payload);
     }
     let centre = to_local.inverse() * Point::ORIGIN;
-    let payload = build(data, part, [centre.x, centre.y], payload.bounds, max_prims);
+    let payload = build(
+        data,
+        part,
+        [centre.x, centre.y],
+        payload.bounds,
+        max_prims,
+        table,
+    );
     if let Some(cache) = cache {
         cache.insert_series(key, data, payload.clone());
     }
@@ -296,13 +310,14 @@ fn bounds_of(data: &[[f32; 2]]) -> Option<[f64; 4]> {
     bounds
 }
 
-/// The payloads of `part` of `data`, measured from `centre`.
+/// The payloads of `part` of `data`, measured from `centre`, a glyph payload after `table`.
 fn build(
     data: &[[f32; 2]],
     part: SeriesPart,
     centre: [f64; 2],
     bounds: [f64; 4],
     max_prims: usize,
+    table: &[[u32; 4]],
 ) -> SeriesPayload {
     counter::bump(Counter::SeriesPayloadsBuilt);
     let at = |[x, y]: [f32; 2]| {
@@ -327,6 +342,25 @@ fn build(
             for chunk in discs.chunks(max_prims) {
                 payloads.push(Arc::new(MarkPayload {
                     discs: chunk.to_vec(),
+                    ..MarkPayload::default()
+                }));
+            }
+        }
+        SeriesPart::Glyph { .. } => {
+            let anchors: Vec<[f32; 2]> = data
+                .iter()
+                .filter(|[x, y]| x.is_finite() && y.is_finite())
+                .map(|&point| at(point))
+                .collect();
+            let lead = table.len() as u32;
+            for chunk in anchors.chunks(max_prims) {
+                let mut glyphs = Vec::with_capacity(table.len() + chunk.len());
+                glyphs.extend_from_slice(table);
+                for (index, [x, y]) in chunk.iter().enumerate() {
+                    glyphs.push([x.to_bits(), y.to_bits(), 0, lead + index as u32]);
+                }
+                payloads.push(Arc::new(MarkPayload {
+                    glyphs,
                     ..MarkPayload::default()
                 }));
             }
@@ -424,19 +458,27 @@ mod tests {
         let mut cache = MarkPayloads::default();
         cache.begin_frame();
         let data = data();
-        let first = series_payload(Some(&mut cache), &data, DISC, Affine::IDENTITY, 1 << 22)
-            .expect("finite points");
+        let first = series_payload(
+            Some(&mut cache),
+            &data,
+            DISC,
+            Affine::IDENTITY,
+            1 << 22,
+            &[],
+        )
+        .expect("finite points");
         assert_eq!(
             first.payloads[0].discs.len(),
             10,
             "the NaN point is skipped"
         );
         let pan = Affine::translate((-40.0, 7.0)) * Affine::scale(3.0);
-        let second =
-            series_payload(Some(&mut cache), &data, DISC, pan, 1 << 22).expect("finite points");
+        let second = series_payload(Some(&mut cache), &data, DISC, pan, 1 << 22, &[])
+            .expect("finite points");
         assert!(Arc::ptr_eq(&first.payloads[0], &second.payloads[0]));
         let other: Arc<[[f32; 2]]> = data.iter().copied().collect();
-        let third = series_payload(Some(&mut cache), &other, DISC, pan, 1 << 22).expect("points");
+        let third =
+            series_payload(Some(&mut cache), &other, DISC, pan, 1 << 22, &[]).expect("points");
         assert!(
             !Arc::ptr_eq(&first.payloads[0], &third.payloads[0]),
             "equal data in another allocation is another payload"
@@ -446,7 +488,8 @@ mod tests {
     #[test]
     fn a_series_payload_is_rebased_on_its_data() {
         let data = data();
-        let built = series_payload(None, &data, DISC, Affine::IDENTITY, 1 << 22).expect("points");
+        let built =
+            series_payload(None, &data, DISC, Affine::IDENTITY, 1 << 22, &[]).expect("points");
         assert_eq!(built.bounds, [1000.0, -4.0, 1010.0, 4.0]);
         assert_eq!(built.centre, [1005.0, 0.0]);
         for &[x, y, outer, _] in &built.payloads[0].discs {
@@ -456,8 +499,15 @@ mod tests {
             );
             assert_eq!(outer, 3.0);
         }
-        let line = series_payload(None, &data, SeriesPart::Line, Affine::IDENTITY, 1 << 22)
-            .expect("points");
+        let line = series_payload(
+            None,
+            &data,
+            SeriesPart::Line,
+            Affine::IDENTITY,
+            1 << 22,
+            &[],
+        )
+        .expect("points");
         let vertices = &line.payloads[0].vertices;
         assert!(vertices[0][0].is_nan() && vertices[vertices.len() - 1][0].is_nan());
         assert_eq!(vertices.len(), 13, "two runs of five, three separators");
@@ -474,18 +524,21 @@ mod tests {
             DISC,
             Affine::translate((-1000.0, 0.0)),
             1 << 22,
+            &[],
         )
         .expect("points");
         assert_eq!(near.centre, [1005.0, 0.0]);
         let far = Affine::translate((70_000.0, 0.0));
-        let moved = series_payload(Some(&mut cache), &data, DISC, far, 1 << 22).expect("points");
+        let moved =
+            series_payload(Some(&mut cache), &data, DISC, far, 1 << 22, &[]).expect("points");
         assert_eq!(
             moved.centre,
             [-70_000.0, 0.0],
             "the centre is where the origin lands"
         );
         assert!(!Arc::ptr_eq(&near.payloads[0], &moved.payloads[0]));
-        let again = series_payload(Some(&mut cache), &data, DISC, far, 1 << 22).expect("points");
+        let again =
+            series_payload(Some(&mut cache), &data, DISC, far, 1 << 22, &[]).expect("points");
         assert!(
             Arc::ptr_eq(&moved.payloads[0], &again.payloads[0]),
             "the rebased payload replaces the entry"
@@ -497,7 +550,15 @@ mod tests {
         let mut cache = MarkPayloads::default();
         cache.begin_frame();
         let data = data();
-        series_payload(Some(&mut cache), &data, DISC, Affine::IDENTITY, 1 << 22).expect("points");
+        series_payload(
+            Some(&mut cache),
+            &data,
+            DISC,
+            Affine::IDENTITY,
+            1 << 22,
+            &[],
+        )
+        .expect("points");
         cache.end_frame();
         cache.begin_frame();
         assert_eq!(cache.series.len(), 1);

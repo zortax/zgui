@@ -598,11 +598,18 @@ pub(crate) fn draw_drawing_tracked(
             emitted.routes.insert(route);
         }
     };
-    let mut series = drawing.series.iter().peekable();
+    // A series that draws through the general route takes an identity past every shape's.
+    let mut series = drawing
+        .series
+        .iter()
+        .enumerate()
+        .map(|(index, at)| (outline_id(base, drawing.shapes.len() + index), at))
+        .peekable();
     for index in 0..drawing.shapes.len() {
-        while let Some(at) = series.next_if(|at| at.before <= index) {
+        while let Some((id, at)) = series.next_if(|(_, at)| at.before <= index) {
             note(series::emit_series(
                 scene,
+                id,
                 &at.series,
                 drawing.fit,
                 &paint,
@@ -619,9 +626,10 @@ pub(crate) fn draw_drawing_tracked(
             placement,
         ));
     }
-    for at in series {
+    for (id, at) in series {
         note(series::emit_series(
             scene,
+            id,
             &at.series,
             drawing.fit,
             &paint,

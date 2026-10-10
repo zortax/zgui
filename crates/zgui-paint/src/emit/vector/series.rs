@@ -3,16 +3,24 @@
 //! A part of a series is one union mark over a payload built once per data allocation. The item
 //! maps the payload to the fragment's space by the matrix of the drawing, and the payload's
 //! lengths are local units, so a change of the canvas view changes the item and keeps the payload.
+//!
+//! A path marker is drawn as glyphs: its outline is rasterised once per device scale into the cells
+//! of one sheet, and the payload holds the sheet's table and one anchor per point. A marker the
+//! glyph route cannot take draws through the general route, placed at every point.
 
+use std::sync::Arc;
+
+use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::kurbo::{self, Affine};
-use zgui_scene::{MarkFlags, MarkItem, PaintRef, Scene};
+use zgui_scene::kurbo::{self, Affine, BezPath};
+use zgui_scene::{MarkFlags, MarkItem, PaintRef, Scene, VectorId, VectorItem, VectorStroke};
 
-use super::document::reference;
+use super::document::{density_of, reference};
 use super::marks::MAX_MARK_PRIMS;
-use super::{ShapeEmission, ShapePaint, VectorPlacement, VectorRoute};
-use crate::content::vectors::VectorMaskSource;
+use super::split::geometry_of;
+use super::{ShapeEmission, ShapePaint, VectorPlacement, VectorRoute, under};
 use crate::content::vectors::payloads::{SeriesPart, series_payload};
+use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
 
 /// One part of a series before its payload is found.
 struct Part<'a> {
@@ -30,12 +38,15 @@ struct Part<'a> {
     inherited: zgui_color::Color,
 }
 
-/// Emits one series as one union mark per part, and reports the marks route.
+/// Emits one series as one union mark per part, and reports the marks route, or the path glyph
+/// route for a path marker.
 ///
 /// `fit` places canvas units in the fragment's space. A series whose matrix is not finite or has
-/// no area draws nothing. Series take no other route.
+/// no area draws nothing. Only a path marker takes another route, the general one, and `id` names
+/// its items there.
 pub(super) fn emit_series(
     scene: &mut Scene,
+    id: VectorId,
     series: &zgui_canvas::Series,
     fit: Affine,
     paint: &ShapePaint,
@@ -65,9 +76,38 @@ pub(super) fn emit_series(
             stroke,
             ..
         } => {
-            let (radius, square) = match *marker {
-                zgui_canvas::Marker::Circle { radius } => (radius, false),
-                zgui_canvas::Marker::Square { half } => (half, true),
+            let (radius, square) = match marker {
+                zgui_canvas::Marker::Circle { radius } => (*radius, false),
+                zgui_canvas::Marker::Square { half } => (*half, true),
+                zgui_canvas::Marker::Path(outline) => {
+                    let mut parts: smallvec::SmallVec<[MarkerPart<'_>; 2]> =
+                        smallvec::SmallVec::new();
+                    if let Some(brush) = fill {
+                        parts.push(MarkerPart {
+                            width: None,
+                            brush,
+                            inherited: paint.fill,
+                        });
+                    }
+                    if let Some((brush, width)) = stroke {
+                        parts.push(MarkerPart {
+                            width: Some(*width),
+                            brush,
+                            inherited: stroke_colour,
+                        });
+                    }
+                    let markers = Markers {
+                        outline,
+                        data,
+                        to_local,
+                        fit,
+                        parts: &parts,
+                    };
+                    return match emit_path_markers(scene, id, &markers, masks, placement) {
+                        Some(emitted) => emitted,
+                        None => emit_placed_markers(scene, id, &markers, placement),
+                    };
+                }
                 // A marker this lowering does not know draws nothing.
                 _ => return ShapeEmission::default(),
             };
@@ -126,6 +166,7 @@ pub(super) fn emit_series(
                 part.part,
                 to_local,
                 MAX_MARK_PRIMS,
+                &[],
             )
         };
         let Some(built) = payloads else {
@@ -167,6 +208,206 @@ pub(super) fn emit_series(
         pushed,
         route: Some(VectorRoute::Marks),
     }
+}
+
+/// One part of a path marker: its fill, or its stroke of a width in CSS pixels.
+struct MarkerPart<'a> {
+    /// The stroke width, or `None` for the fill.
+    width: Option<f64>,
+    /// What paints the part.
+    brush: &'a zgui_canvas::Brush,
+    /// The colour an inherited brush takes.
+    inherited: zgui_color::Color,
+}
+
+/// A path marker series, as both of its routes read it.
+struct Markers<'a> {
+    /// The marker, in CSS pixels about its origin.
+    outline: &'a Arc<BezPath>,
+    /// The points, in data space.
+    data: &'a Arc<[[f32; 2]]>,
+    /// Data space to the fragment's space.
+    to_local: Affine,
+    /// Canvas units to the fragment's space, which places a ramp.
+    fit: Affine,
+    /// The fill, then the stroke.
+    parts: &'a [MarkerPart<'a>],
+}
+
+/// Emits a path marker series as one union glyph mark per part, or `None` when the glyph route
+/// cannot take it: a transform that turns or shears, a marker over 64 device pixels across, or no
+/// sheet.
+fn emit_path_markers(
+    scene: &mut Scene,
+    id: VectorId,
+    markers: &Markers<'_>,
+    masks: &dyn VectorMaskSource,
+    placement: VectorPlacement,
+) -> Option<ShapeEmission> {
+    if !masks.path_glyphs(id) {
+        return None;
+    }
+    let affine = scene
+        .spatial
+        .resolve(placement.transform)
+        .as_ref()
+        .and_then(zgui_geom::Matrix4::to_affine2)?;
+    let scale = placement.scale;
+    // A marker is in CSS pixels, which the scale and the transform alone take to the device.
+    let linear = [affine.a, affine.b, affine.c, affine.d].map(|value| f64::from(value * scale));
+    let stroked = markers.parts.iter().any(|part| part.width.is_some());
+    let [l0, l1, l2, l3] = linear.map(|value| value as f32);
+    let density = density_of(&zgui_geom::Affine2::new(l0, l1, l2, l3, 0.0, 0.0), stroked)?;
+    let spatial = density_of(&affine, false)?;
+    let geometry = geometry_of(markers.outline, linear).ok()?;
+    let mut drawn: smallvec::SmallVec<[(GlyphSheets, &MarkerPart<'_>); 2]> =
+        smallvec::SmallVec::new();
+    for part in markers.parts {
+        let stroke = part.width.map(kurbo::Stroke::new);
+        let style = match &stroke {
+            Some(stroke) => VectorMaskStyle::Stroke(stroke),
+            None => VectorMaskStyle::Fill(zgui_scene::peniko::Fill::NonZero),
+        };
+        let sheets = masks.glyph_sheets(GlyphRequest {
+            geometries: core::slice::from_ref(&geometry),
+            style,
+            scale: f64::from(density[0]),
+        })?;
+        drawn.push((sheets, part));
+    }
+
+    let [a, b, c, d, _, _] = markers.to_local.as_coeffs();
+    let mut pushed = 0;
+    let mut drew = false;
+    for (sheets, part) in drawn {
+        let reach = sheets.reach[0];
+        let sheet = sheets.keys[0].handle();
+        let built = {
+            let mut cache = masks.payloads();
+            series_payload(
+                cache.as_deref_mut(),
+                markers.data,
+                SeriesPart::Glyph { sheet },
+                markers.to_local,
+                MAX_MARK_PRIMS,
+                &sheets.table,
+            )
+        };
+        let Some(built) = built else {
+            continue;
+        };
+        // Every copy lies within its cells from the pixel of its anchor, and that pixel within a
+        // pixel of the anchor.
+        let farthest = reach
+            .iter()
+            .map(|edge| edge.unsigned_abs())
+            .max()
+            .unwrap_or(0) as f32;
+        let margin = f64::from((farthest + 1.0) / spatial[0].min(spatial[1]));
+        let origin = markers.to_local * kurbo::Point::new(built.centre[0], built.centre[1]);
+        let [x0, y0, x1, y1] = built.bounds;
+        let ink = markers
+            .to_local
+            .transform_rect_bbox(kurbo::Rect::new(x0, y0, x1, y1))
+            .inflate(margin, margin);
+        let bounds = Rect::new(
+            Point::new(DevicePx(ink.x0 as f32), DevicePx(ink.y0 as f32)),
+            Size::new(DevicePx(ink.width() as f32), DevicePx(ink.height() as f32)),
+        );
+        let paint_ref = brush_paint(scene, part.brush, markers.fit, part.inherited);
+        for payload in built.payloads {
+            let mut item = MarkItem::new(bounds, paint_ref, payload.counts());
+            item.flags = MarkFlags::UNION | MarkFlags::SCREEN;
+            item.clip = placement.clip.0;
+            item.transform = placement.transform.index();
+            item.axes = [a as f32, b as f32, c as f32, d as f32];
+            item.origin = [origin.x as f32, origin.y as f32];
+            item.tiles = sheets.table.len() as u32;
+            item.texture = sheets.texture;
+            pushed += usize::from(scene.push_marks(item, payload).is_some());
+            drew = true;
+        }
+    }
+    if !drew {
+        return Some(ShapeEmission::default());
+    }
+    counter::bump(Counter::VectorRoutePathGlyphs);
+    Some(ShapeEmission {
+        pushed,
+        route: Some(VectorRoute::PathGlyphs),
+    })
+}
+
+/// Emits a path marker series through the general route: one item per part, the marker placed
+/// at every finite point in the fragment's space.
+fn emit_placed_markers(
+    scene: &mut Scene,
+    id: VectorId,
+    markers: &Markers<'_>,
+    placement: VectorPlacement,
+) -> ShapeEmission {
+    let scale = f64::from(placement.scale);
+    let mut path = BezPath::new();
+    for &[x, y] in markers.data.iter() {
+        if !(x.is_finite() && y.is_finite()) {
+            continue;
+        }
+        let at = markers.to_local * kurbo::Point::new(f64::from(x), f64::from(y));
+        let place = Affine::translate(at.to_vec2()) * Affine::scale(scale);
+        path.extend(
+            markers
+                .outline
+                .elements()
+                .iter()
+                .map(|element| place * *element),
+        );
+    }
+    if path.is_empty() {
+        return ShapeEmission::default();
+    }
+    let path = Arc::new(path);
+    let bounds = kurbo::Shape::bounding_box(&*path);
+    let mut pushed = 0;
+    for part in markers.parts {
+        let paint_ref = brush_paint(scene, part.brush, markers.fit, part.inherited);
+        let mut item = match part.width {
+            None => VectorItem::filled(id, Arc::clone(&path), paint_ref),
+            Some(width) => VectorItem::styled(
+                id,
+                Arc::clone(&path),
+                VectorStroke {
+                    paint: paint_ref,
+                    style: kurbo::Stroke::new(width * scale),
+                },
+            ),
+        };
+        let reach = item
+            .stroke
+            .as_ref()
+            .map_or(0.0, |stroke| f64::from(stroke.reach()));
+        let local = rect_of(bounds.inflate(reach, reach));
+        item.ink = under(scene, placement.transform, local);
+        item.local_ink = local;
+        item.transform = Some(placement.transform);
+        let item = item.clipped(placement.clip);
+        pushed += usize::from(scene.push_vector(item).is_some());
+    }
+    counter::bump(Counter::VectorRouteGeneral);
+    ShapeEmission {
+        pushed,
+        route: Some(VectorRoute::GeneralRaster),
+    }
+}
+
+/// A kurbo rectangle in the geometry the display list is written in.
+fn rect_of(rect: kurbo::Rect) -> Rect<DevicePx, Device> {
+    Rect::new(
+        Point::new(DevicePx(rect.x0 as f32), DevicePx(rect.y0 as f32)),
+        Size::new(
+            DevicePx(rect.width() as f32),
+            DevicePx(rect.height() as f32),
+        ),
+    )
 }
 
 /// The interned paint of `brush`, placed by `fit`. A colour does not move; a ramp does.

@@ -5,13 +5,15 @@
 
 mod support;
 
+use std::sync::Arc;
 use zgui_atlas::AtlasLimits;
-use zgui_canvas::{Brush, SceneHandle, ShapeBuilder};
+
+use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
 use zgui_scene::MarkItem;
-use zgui_scene::kurbo::BezPath;
+use zgui_scene::kurbo::{Affine, BezPath};
 use zgui_testkit_scene::counters::Recording;
 
 use support::{Element, Harness};
@@ -32,8 +34,13 @@ struct Window {
 impl Window {
     /// A canvas of `shapes`, with `style` added to the stylesheet.
     fn new(shapes: Vec<zgui_canvas::Shape>, style: &str) -> Self {
+        Self::canvas(|scene| scene.replace(shapes), style)
+    }
+
+    /// A canvas over a scene `draw` fills, with `style` added to the stylesheet.
+    fn canvas(draw: impl FnOnce(&mut zgui_canvas::CanvasScene), style: &str) -> Self {
         let handle = SceneHandle::new();
-        handle.edit(|scene| scene.replace(shapes));
+        handle.edit(draw);
         let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
         Self {
             harness: Harness::new(tree, &format!("{CSS}\n{style}")),
@@ -143,12 +150,8 @@ fn scattered_triangles_are_one_union_glyph_mark() {
     assert_eq!(measured.get(Counter::VectorRouteMask), 0);
 
     // A pan of the view by a fraction of a pixel finds the split, the sheet and the payload.
-    let payload = std::sync::Arc::clone(&window.harness.scene().primitives.mark_payloads[0]);
-    assert!(
-        window
-            .handle
-            .set_transform(zgui_scene::kurbo::Affine::translate((5.25, -3.5)))
-    );
+    let payload = Arc::clone(&window.harness.scene().primitives.mark_payloads[0]);
+    assert!(window.handle.set_transform(Affine::translate((5.25, -3.5))));
     window.harness.write_canvas_view("mark", &window.handle);
     let measured = recording.measure(|| {
         window.paint();
@@ -162,10 +165,7 @@ fn scattered_triangles_are_one_union_glyph_mark() {
     let [again] = window.harness.scene().primitives.mark_payloads.as_slice() else {
         panic!("one payload");
     };
-    assert!(
-        std::sync::Arc::ptr_eq(again, &payload),
-        "a pan keeps the payload"
-    );
+    assert!(Arc::ptr_eq(again, &payload), "a pan keeps the payload");
 }
 
 #[test]
@@ -280,4 +280,98 @@ fn a_stroke_under_a_non_uniform_scale_declines() {
     let mut window = Window::new(vec![stroked()], "mark { transform: scale(2, 1) }");
     let report = window.paint();
     assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
+}
+
+/// A points series of 40 points over a canvas of 200 by 100, with a triangle of circumradius 4
+/// about each.
+fn markers() -> Series {
+    let mut outline = BezPath::new();
+    triangle(&mut outline, (0.0, 0.0), 4.0, false);
+    Series::Points {
+        data: (0..40)
+            .map(|index| {
+                let t = index as f32 / 39.0;
+                [t, (t * 6.0).sin() * 0.4 + 0.5]
+            })
+            .collect(),
+        to_canvas: Affine::new([200.0, 0.0, 0.0, -100.0, 10.0, 110.0]),
+        marker: Marker::Path(Arc::new(outline)),
+        fill: Some(Brush::Solid(Color::srgb_u8(255, 0, 0, 255))),
+        stroke: None,
+    }
+}
+
+#[test]
+fn a_path_marker_series_is_one_glyph_mark() {
+    let mut window = Window::canvas(|scene| scene.push_series(markers()), "");
+    let mut recording = Recording::begin();
+    let mut report = None;
+    let measured = recording.measure(|| report = Some(window.paint()));
+    let report = report.expect("a frame");
+    assert!(routes(&report).contains(VectorRoute::PathGlyphs));
+    let [mark] = window.marks() else {
+        panic!("{} marks", window.marks().len());
+    };
+    assert!(mark.is_union());
+    assert_ne!(mark.flags & zgui_scene::MarkFlags::SCREEN, 0);
+    assert_eq!((mark.tiles, mark.glyphs), (16, 16 + 40));
+    assert!(window.harness.scene().primitives.vectors.is_empty());
+    assert_eq!(measured.get(Counter::VectorRoutePathGlyphs), 1);
+    assert_eq!(measured.get(Counter::PathGlyphTilesRasterised), 16);
+}
+
+#[test]
+fn a_view_pan_keeps_the_path_marker_payload() {
+    let mut window = Window::canvas(|scene| scene.push_series(markers()), "");
+    let mut recording = Recording::begin();
+    window.paint();
+    let payload = Arc::clone(&window.harness.scene().primitives.mark_payloads[0]);
+    for (step, transform) in [
+        Affine::translate((13.25, -7.5)),
+        Affine::translate((40.0, 0.0)) * Affine::scale(1.5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert!(window.handle.set_transform(transform));
+        window.harness.write_canvas_view("mark", &window.handle);
+        let measured = recording.measure(|| {
+            window.paint();
+        });
+        assert_eq!(
+            measured.get(Counter::VectorRoutePathGlyphs),
+            1,
+            "step {step}"
+        );
+        assert_eq!(measured.get(Counter::SeriesPayloadsBuilt), 0, "step {step}");
+        assert_eq!(
+            measured.get(Counter::PathGlyphTilesRasterised),
+            0,
+            "step {step}"
+        );
+        let [again] = window.harness.scene().primitives.mark_payloads.as_slice() else {
+            panic!("one payload");
+        };
+        assert!(
+            Arc::ptr_eq(again, &payload),
+            "step {step} keeps the payload"
+        );
+    }
+}
+
+#[test]
+fn a_turned_path_marker_series_draws_through_the_general_route() {
+    let mut window = Window::canvas(
+        |scene| scene.push_series(markers()),
+        "mark { transform: rotate(30deg) }",
+    );
+    let _recording = Recording::begin();
+    let report = window.paint();
+    assert!(routes(&report).contains(VectorRoute::GeneralRaster));
+    assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
+    assert!(window.marks().is_empty());
+    let vectors = &window.harness.scene().primitives.vectors;
+    assert_eq!(vectors.len(), 1, "one item for the fill");
+    // Forty triangles of a move, two lines and a close.
+    assert_eq!(vectors[0].path.elements().len(), 40 * 4);
 }

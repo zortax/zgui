@@ -204,7 +204,7 @@ pub enum Series {
 }
 
 /// The marker of a points series, in CSS pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum Marker {
     /// A circle.
@@ -217,6 +217,13 @@ pub enum Marker {
         /// Half the side.
         half: f64,
     },
+    /// Any outline, in CSS pixels, with its origin on the point.
+    ///
+    /// It is drawn from tiles rasterised once per device scale, so a pan or a zoom of the view
+    /// rasterises nothing. A marker is at most 64 device pixels across. A larger marker, and a
+    /// marker under a transform that turns or shears the element, draws through the general
+    /// route.
+    Path(Arc<kurbo::BezPath>),
 }
 
 /// One item of a scene in painting order.

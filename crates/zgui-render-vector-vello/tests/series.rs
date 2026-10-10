@@ -186,7 +186,7 @@ fn a_series_marker_keeps_its_size_under_a_zoom() {
             let series = Series::Points {
                 data: Arc::from([[0.5_f32, 0.5]]),
                 to_canvas: Affine::new([40.0, 0.0, 0.0, 40.0, 44.3, 43.6]),
-                marker,
+                marker: marker.clone(),
                 fill: Some(white()),
                 stroke: None,
             };
