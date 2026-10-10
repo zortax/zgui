@@ -331,6 +331,10 @@ impl zgui::render::Renderer for Listed {
     fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
         self.inner.texture_sink()
     }
+
+    fn vector_status(&self) -> zgui::render::VectorStatus {
+        self.inner.vector_status()
+    }
 }
 
 /// What one comparison found.
@@ -575,6 +579,10 @@ impl zgui::render::Renderer for Recorded {
 
     fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
         self.inner.texture_sink()
+    }
+
+    fn vector_status(&self) -> zgui::render::VectorStatus {
+        self.inner.vector_status()
     }
 }
 
