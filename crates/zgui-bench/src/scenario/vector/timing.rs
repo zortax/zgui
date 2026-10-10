@@ -3,6 +3,9 @@
 //! Paint is `f.paint` to `p.draw`: the emit walk, the flush and the budgets. Render is `p.draw` to
 //! `f.painted`: what the renderer does with the display list. A tick that ran no frame has no
 //! `f.paint` and is not sampled.
+//!
+//! With `ZGUI_BENCH_FRAMES` set, each rendered frame also prints one `FRAME` line: the render time,
+//! then each mark from `p.draw` to `f.painted` with the time since the mark before it.
 
 use zgui_profile::latency::Recorded;
 
@@ -23,9 +26,10 @@ pub(super) struct Frames {
 impl Frames {
     /// Adds every complete frame in `marks`.
     pub(super) fn read(&mut self, marks: &[Recorded]) {
+        let dump = std::env::var_os("ZGUI_BENCH_FRAMES").is_some();
         let mut paint = None;
         let mut draw = None;
-        for recorded in marks {
+        for (index, recorded) in marks.iter().enumerate() {
             match recorded.stage {
                 "f.paint" => {
                     paint = Some(recorded.at_ns);
@@ -34,12 +38,15 @@ impl Frames {
                 "p.draw" => {
                     if let Some(started) = paint.take() {
                         self.paint.push(millis(recorded.at_ns - started));
-                        draw = Some(recorded.at_ns);
+                        draw = Some(index);
                     }
                 }
                 "f.painted" => {
-                    if let Some(started) = draw.take() {
-                        self.render.push(millis(recorded.at_ns - started));
+                    if let Some(from) = draw.take() {
+                        self.render.push(millis(recorded.at_ns - marks[from].at_ns));
+                        if dump {
+                            println!("{}", frame_line(&marks[from..=index]));
+                        }
                     }
                     paint = None;
                 }
@@ -57,6 +64,25 @@ impl Frames {
     pub(super) fn spreads(&mut self) -> ((f64, f64), (f64, f64)) {
         (spread(&mut self.paint), spread(&mut self.render))
     }
+}
+
+/// One frame's render time and the time before each of its marks, from `p.draw` to `f.painted`.
+fn frame_line(marks: &[Recorded]) -> String {
+    use core::fmt::Write as _;
+
+    let (Some(first), Some(last)) = (marks.first(), marks.last()) else {
+        return String::new();
+    };
+    let mut line = format!("FRAME render={:.3}", millis(last.at_ns - first.at_ns));
+    for pair in marks.windows(2) {
+        let _ = write!(
+            line,
+            " {}={:.3}",
+            pair[1].stage,
+            millis(pair[1].at_ns - pair[0].at_ns)
+        );
+    }
+    line
 }
 
 /// Nanoseconds as milliseconds.
