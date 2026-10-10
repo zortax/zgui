@@ -24,7 +24,7 @@ use zgui_scene::{ContentHash, ResourceGeneration, ResourceKey, Scene, Settle};
 
 use super::{
     COLD_US, DEFER_FRAMES, HISTORY_FRAMES, LayerAnswer, LayerFallback, LayerKey, LayerRequest,
-    Mapping, SETTLE_FRAMES, US_PER_PIXEL, US_PER_SEGMENT, VectorLayerCache, paint_hash, reach,
+    Mapping, SETTLE_FRAMES, VectorLayerCache, paint_hash, reach,
 };
 use crate::content::vectors::cpu::{LayerJob, VectorPainter};
 use crate::emit::vector::ShapePaint;
@@ -47,6 +47,41 @@ const HANDLE_BITS: u64 = 0x00FF_FFFF_FFFF_FFFF;
 /// The cold cap of whole layers, warm or cold: a tile is rasterised only where the frame shows it,
 /// so what a frame spends is bounded by the surface.
 pub(crate) const TILE_FRAME_US: f64 = COLD_US;
+
+/// Estimated microseconds per texel a shape inks in a tile, measured by
+/// `calibrate_the_tile_cost_model`.
+const TILE_US_PER_PIXEL: f64 = 0.0007;
+
+/// Estimated microseconds per path element of a shape in a tile, measured by
+/// `calibrate_the_tile_cost_model`.
+const TILE_US_PER_SEGMENT: f64 = 0.3;
+
+/// Estimated microseconds per shape in a tile, measured by `calibrate_the_tile_cost_model`.
+const TILE_US_PER_SHAPE: f64 = 12.0;
+
+/// What one tile costs to rasterise.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TileCost {
+    /// The texels each shape inks in the tile, summed over the shapes.
+    pixels: f64,
+    /// How many path elements the shapes have.
+    segments: usize,
+    /// How many shapes meet the tile.
+    shapes: usize,
+}
+
+impl TileCost {
+    /// The estimated microseconds.
+    ///
+    /// A tile is one cell of a large drawing, so most of its shapes are large and a part of each
+    /// is in it. Their cost per texel is lower than the cost per texel of a whole small drawing,
+    /// and each shape has a fixed cost.
+    fn us(&self) -> f64 {
+        TILE_US_PER_PIXEL * self.pixels
+            + TILE_US_PER_SEGMENT * self.segments as f64
+            + TILE_US_PER_SHAPE * self.shapes as f64
+    }
+}
 
 /// The most tiles one source may have.
 pub(crate) const MAX_TILES: usize = 4096;
@@ -110,8 +145,8 @@ pub(crate) struct Slot {
     path_rect: kurbo::Rect,
     /// The indices of the shapes that meet it, in painting order.
     shapes: Box<[u32]>,
-    /// Its estimated microseconds.
-    us: f64,
+    /// What it costs to rasterise.
+    cost: TileCost,
 }
 
 /// One drawing at one linear map, cut into tiles.
@@ -425,15 +460,16 @@ impl TileCache {
                     texels[3] as f64,
                 );
                 let mut deps = ContentHash::new();
-                let mut us = 0.0;
+                let mut cost = TileCost::default();
                 let mut reads = false;
                 for &index in indices {
                     let shape = &shapes[index as usize];
                     deps = deps.u64(hashes[index as usize]);
                     reads |= reads_paint(shape);
                     if let Some(ink) = boxes[index as usize] {
-                        us += US_PER_PIXEL * ink.intersect(area).area()
-                            + US_PER_SEGMENT * shape.path.elements().len() as f64;
+                        cost.pixels += ink.intersect(area).area();
+                        cost.segments += shape.path.elements().len();
+                        cost.shapes += 1;
                     }
                 }
                 if reads {
@@ -465,7 +501,7 @@ impl TileCache {
                     texels,
                     path_rect: inverse.transform_rect_bbox(area),
                     shapes: indices.clone().into_boxed_slice(),
-                    us,
+                    cost,
                 });
             }
         }
@@ -826,7 +862,7 @@ impl VectorLayerCache {
             let Some(raster) = self.tiles.rasters.get(&handle) else {
                 continue;
             };
-            let us = raster.source.slots[raster.slot as usize].us;
+            let us = raster.source.slots[raster.slot as usize].cost.us();
             let streak = raster.streak(frame);
             if streak >= DEFER_FRAMES || self.admits_tile(us) {
                 let tile = self.raster_tile(atlas, handle, evict);
@@ -848,7 +884,7 @@ impl VectorLayerCache {
             let Some(raster) = self.tiles.rasters.get(&handle) else {
                 continue;
             };
-            let us = raster.source.slots[raster.slot as usize].us;
+            let us = raster.source.slots[raster.slot as usize].cost.us();
             if self.spent.us + us <= TILE_FRAME_US {
                 let tile = self.raster_tile(atlas, handle, evict);
                 answers.insert(handle, tile);
@@ -919,9 +955,10 @@ impl VectorLayerCache {
         );
         counter::add(Counter::VectorLayerBytesUploaded, bytes);
         self.spent.layers += 1;
-        self.spent.us += slot.us;
+        let us = slot.cost.us();
+        self.spent.us += us;
         if !self.raster_ready {
-            self.spent.cold_us += slot.us;
+            self.spent.cold_us += us;
         }
         let frame = self.frame;
         if let Some(raster) = self.tiles.rasters.get_mut(&handle) {

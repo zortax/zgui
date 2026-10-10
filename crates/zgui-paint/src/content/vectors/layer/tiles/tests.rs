@@ -129,9 +129,10 @@ fn quarters(side: f64) -> Vec<zgui_svg::Shape> {
     shapes
 }
 
-/// Ten by ten zigzags over 0..100 in both axes, each of 400 lines in new paths.
+/// Ten by ten low zigzags over 0..100 in both axes, each of 2000 lines in new paths.
 ///
-/// Many segments per tile, so each tile costs more than the frame's budget allows twice.
+/// Many segments per tile and few texels, so the frame's budget admits few tiles and each
+/// rasterises quickly.
 fn zigzags() -> Vec<zgui_svg::Shape> {
     let mut shapes = Vec::new();
     for row in 0..10 {
@@ -139,9 +140,9 @@ fn zigzags() -> Vec<zgui_svg::Shape> {
             let mut path = kurbo::BezPath::new();
             let (x, y) = (f64::from(column) * 10.0, f64::from(row) * 10.0);
             path.move_to((x, y));
-            for step in 0..400 {
-                let t = f64::from(step) / 400.0;
-                path.line_to((x + 10.0 * t, y + if step % 2 == 0 { 0.0 } else { 9.0 }));
+            for step in 0..2000 {
+                let t = f64::from(step) / 2000.0;
+                path.line_to((x + 10.0 * t, y + if step % 2 == 0 { 0.0 } else { 1.0 }));
             }
             path.close_path();
             shapes.push(zgui_svg::Shape {
@@ -487,4 +488,161 @@ fn a_tile_deferred_on_earlier_frames_waits_for_the_budget_again() {
         "the tiles deferred twice before are not forced past the budget"
     );
     assert!(get(Counter::VectorLayerTilesRasterised) - before <= 2);
+}
+
+/// A 6000 by 4000 illustration like the bench's huge one: a ground, polygons in solid colours,
+/// ramps and clips, and strokes.
+fn illustration() -> String {
+    let mut seed = 0x00C0_FFEE_u64;
+    let mut next = move || {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (seed >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    let palette = [
+        "#4f8cff", "#ef476f", "#06d6a0", "#ffd166", "#8338ec", "#118ab2",
+    ];
+    let (width, height) = (6000.0, 4000.0);
+    let mut defs = String::new();
+    let mut body =
+        format!(r##"<rect x="0" y="0" width="{width}" height="{height}" fill="#1b1e26"/>"##);
+    for index in 0..480 {
+        let (cx, cy) = (next() * width, next() * height);
+        let radius = 40.0 + next() * 260.0;
+        let corners = 3 + (next() * 5.0) as usize;
+        let mut path = String::new();
+        for corner in 0..corners {
+            let angle = std::f64::consts::TAU * corner as f64 / corners as f64 + next();
+            let reach = radius * (0.6 + 0.4 * next());
+            let (x, y) = (cx + reach * angle.cos(), cy + reach * angle.sin());
+            path.push_str(&format!(
+                "{}{x:.1} {y:.1} ",
+                if corner == 0 { "M" } else { "L" }
+            ));
+        }
+        path.push('Z');
+        let (first, second) = (palette[index % 6], palette[(index * 3 + 1) % 6]);
+        let fill = if index % 3 == 0 {
+            defs.push_str(&format!(
+                r##"<linearGradient id="l{index}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{first}"/><stop offset="1" stop-color="{second}"/></linearGradient>"##
+            ));
+            format!("url(#l{index})")
+        } else {
+            first.to_owned()
+        };
+        if index % 8 == 5 {
+            defs.push_str(&format!(
+                r##"<clipPath id="c{index}"><circle cx="{cx:.1}" cy="{cy:.1}" r="{:.1}"/></clipPath>"##,
+                radius * 0.7
+            ));
+            body.push_str(&format!(
+                r##"<g clip-path="url(#c{index})"><path d="{path}" fill="{fill}"/></g>"##
+            ));
+        } else {
+            body.push_str(&format!(r##"<path d="{path}" fill="{fill}"/>"##));
+        }
+    }
+    for index in 0..160 {
+        let (mut x, mut y) = (next() * width, next() * height);
+        let mut path = format!("M{x:.1} {y:.1}");
+        for _ in 0..12 {
+            x += (next() - 0.5) * 300.0;
+            y += (next() - 0.5) * 300.0;
+            path.push_str(&format!(" L{x:.1} {y:.1}"));
+        }
+        let colour = palette[(index + 3) % 6];
+        body.push_str(&format!(
+            r##"<path d="{path}" fill="none" stroke="{colour}" stroke-width="6"/>"##
+        ));
+    }
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}"><defs>{defs}</defs>{body}</svg>"##
+    )
+}
+
+/// Measures the painter on every tile of a large illustration and compares each tile's estimate
+/// with its time.
+///
+/// A measurement, so it runs only when `ZGUI_CALIBRATE` is set:
+///
+/// ```text
+/// ZGUI_CALIBRATE=1 cargo test -p zgui-paint --release calibrate_the_tile_cost_model -- --nocapture
+/// ```
+#[test]
+fn calibrate_the_tile_cost_model() {
+    use crate::content::vectors::cpu::{LayerJob, VectorPainter as _};
+
+    if std::env::var_os("ZGUI_CALIBRATE").is_none() {
+        eprintln!(
+            "calibrate_the_tile_cost_model: set ZGUI_CALIBRATE to measure the tile estimates"
+        );
+        return;
+    }
+    let document = zgui_svg::parse(&illustration()).expect("the illustration parses");
+    let drawing = Drawing::fitted_shared(Arc::from(document.shapes()), Affine::IDENTITY);
+    let mut fixture = Fixture::new();
+    let tiled = tiles(fixture.ask(1, &drawing, 1.0, [0.0, 0.0]));
+    let source = &tiled.0;
+    let mut rows = Vec::new();
+    for slot in &source.slots {
+        let [x0, y0, x1, y1] = slot.texels;
+        let (width, height) = ((x1 - x0) as u32, (y1 - y0) as u32);
+        let mut texels = vec![0; width as usize * height as usize * 4];
+        let job = LayerJob {
+            shapes: &source.shapes,
+            only: Some(&slot.shapes),
+            paint: source.paint,
+            map: Affine::translate((-f64::from(x0), -f64::from(y0))) * source.linear,
+            stroke_scale: source.stroke_scale,
+            inherited_stroke: source.inherited_stroke,
+            width,
+            height,
+        };
+        fixture.cache.painter.paint(&job, &mut texels);
+        let runs = 5;
+        let start = std::time::Instant::now();
+        for _ in 0..runs {
+            fixture.cache.painter.paint(&job, &mut texels);
+        }
+        let us = start.elapsed().as_secs_f64() * 1.0e6 / f64::from(runs);
+        rows.push((slot.cost, us));
+    }
+    // Least squares over us = a·pixels + b·segments + c·shapes.
+    let terms = |cost: &super::TileCost| [cost.pixels, cost.segments as f64, cost.shapes as f64];
+    let mut normal = [[0.0_f64; 4]; 3];
+    for (cost, us) in &rows {
+        let terms = terms(cost);
+        for row in 0..3 {
+            for column in 0..3 {
+                normal[row][column] += terms[row] * terms[column];
+            }
+            normal[row][3] += terms[row] * us;
+        }
+    }
+    for pivot in 0..3 {
+        for row in 0..3 {
+            if row != pivot {
+                let factor = normal[row][pivot] / normal[pivot][pivot];
+                let above = normal[pivot];
+                for (value, from) in normal[row].iter_mut().zip(above) {
+                    *value -= factor * from;
+                }
+            }
+        }
+    }
+    let fit: Vec<f64> = (0..3)
+        .map(|row| normal[row][3] / normal[row][row])
+        .collect();
+    println!(
+        "TILE_US_PER_PIXEL = {:.5}, TILE_US_PER_SEGMENT = {:.3}, TILE_US_PER_SHAPE = {:.1}",
+        fit[0], fit[1], fit[2]
+    );
+    let measured: f64 = rows.iter().map(|(_, us)| us).sum();
+    let estimated: f64 = rows.iter().map(|(cost, _)| cost.us()).sum();
+    println!(
+        "{} tiles: {measured:.0} us measured, {estimated:.0} us estimated, ratio {:.3}",
+        rows.len(),
+        estimated / measured
+    );
 }
