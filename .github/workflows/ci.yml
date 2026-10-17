@@ -213,6 +213,37 @@ jobs:
             --exclude zgui-drm --exclude zgui-evdev --exclude zgui-libinput --exclude zgui-seat \
             --exclude zgui-xkb
 
+  text-selection:
+    name: Text selection (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libx11-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfontconfig1-dev fonts-dejavu-core
+      - name: Show pinned toolchain
+        run: rustc --version --verbose
+      - uses: Swatinem/rust-cache@v2
+      - name: Test word boundaries
+        run: cargo test --locked -p zgui-edit --lib
+      - name: Test runtime text selection
+        run: cargo test --locked -p zgui-runtime --test text_multiclick --test double_click --test caret --test editing --test pointer_capture
+      - name: Test Input and Textarea
+        run: cargo test --locked -p zgui-ui --test text_selection
+      - name: Test desktop pointer normalization
+        run: cargo test --locked -p zgui-platform-winit --lib input::pointer::tests
+
   cross:
     # Type-checks for Windows and macOS. It does not link or run anything. It catches Linux-only
     # imports, ungated dependencies and bounds that only one platform satisfies.

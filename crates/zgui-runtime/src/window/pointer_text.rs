@@ -5,6 +5,10 @@
 //! its own text interaction — a code editor with rectangular selection, a field that selects a whole
 //! token on click — cancels the press and gets the whole gesture to itself.
 //!
+//! Single presses place a caret, double presses select the word/punctuation/space run,
+//! and triple presses select the rendered line. A drag extends by that same unit;
+//! releasing the pointer keeps the selection. Only primary presses participate.
+//!
 //! The offset a press lands on is asked of the layout the frame produced, never of the string: the
 //! bytes of a line are drawn in the order shaping decided, which on a line holding two directions
 //! is not the order they are written in.
@@ -12,7 +16,18 @@
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point};
 use zgui_platform::SurfaceEvent;
-use zgui_vocab::{PointerAction, PointerEvent};
+use zgui_vocab::{PointerAction, PointerButton, PointerEvent, Timestamp};
+
+mod clicks;
+pub(super) use clicks::TextClicks;
+
+/// The unit a text-selection drag extends by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unit {
+    Caret,
+    Word,
+    Line,
+}
 
 use crate::window::Window;
 
@@ -23,6 +38,10 @@ pub struct Selecting {
     pub node: NodeKey,
     /// The offset the press landed on, which the selection is anchored to for the whole drag.
     pub anchor: usize,
+    /// The other end of the initially selected word or line.
+    end: usize,
+    /// Latched when pressed so drags extend whole words or whole rendered lines.
+    unit: Unit,
 }
 
 impl Window {
@@ -36,6 +55,7 @@ impl Window {
         let SurfaceEvent::Pointer {
             action,
             event: pointer,
+            timestamp,
             ..
         } = event
         else {
@@ -46,10 +66,13 @@ impl Window {
                 // A press puts the caret somewhere of its own, which ends any run of vertical
                 // arrow motions and the column it was aiming for.
                 self.vertical_goal = None;
-                self.press_into_text(pointer, target)
+                self.press_into_text(pointer, target, *timestamp)
             }
             PointerAction::Moved => self.drag_through_text(pointer),
             PointerAction::Released | PointerAction::Cancelled => {
+                if *action == PointerAction::Cancelled {
+                    self.text_clicks.forget();
+                }
                 // A drag that ended is not a caret that moved, so this reports nothing: reporting
                 // it would take the release away from every other default, including the
                 // activation a click on a button is.
@@ -61,25 +84,71 @@ impl Window {
     }
 
     /// Places the caret where a press landed, and anchors a drag there.
-    fn press_into_text(&mut self, pointer: &PointerEvent, target: Option<NodeKey>) -> bool {
+    fn press_into_text(
+        &mut self,
+        pointer: &PointerEvent,
+        target: Option<NodeKey>,
+        timestamp: Timestamp,
+    ) -> bool {
+        // Legacy mouse events may omit button identity; secondary/middle presses never select.
+        if pointer
+            .button
+            .is_some_and(|button| button != PointerButton::Primary)
+        {
+            self.selecting = None;
+            self.text_clicks.forget();
+            return false;
+        }
         let Some(node) = self.selectable_text_at(target) else {
             self.selecting = None;
+            self.text_clicks.forget();
             return false;
         };
         // `user-select: none` on the field, or on anything above it that the field has not
         // overridden, means a press here is a press and not the start of a drag.
         if !self.selectable_at(node) {
             self.selecting = None;
+            self.text_clicks.forget();
             return false;
         }
         let Some((offset, affinity)) = self.offset_at(node, self.device_point(pointer)) else {
             return false;
         };
+        let count = self.text_clicks.note(node, timestamp, pointer.position);
+        let unit = match count {
+            2 => Unit::Word,
+            3 => Unit::Line,
+            _ => Unit::Caret,
+        };
+        if unit == Unit::Caret {
+            self.selecting = Some(Selecting {
+                node,
+                anchor: offset,
+                end: offset,
+                unit,
+            });
+            return self.write_caret(node, offset, offset, affinity);
+        }
+        // Attach/synchronize the editor before asking its current text for word boundaries.
+        if !self.write_caret(node, offset, offset, affinity) {
+            return false;
+        }
+        let range = self
+            .selection_unit(node, offset, affinity, unit)
+            .unwrap_or(offset..offset);
         self.selecting = Some(Selecting {
             node,
-            anchor: offset,
+            anchor: range.start,
+            end: range.end,
+            unit,
         });
-        self.write_caret(node, offset, offset, affinity)
+        // Expanded selection ends before the next run/soft-wrapped line.
+        let focus_affinity = if range.is_empty() {
+            affinity
+        } else {
+            zgui_edit::Affinity::Upstream
+        };
+        self.write_caret(node, range.start, range.end, focus_affinity)
     }
 
     /// Extends the live drag's selection to wherever the pointer is now.
@@ -90,7 +159,49 @@ impl Window {
         let Some((offset, affinity)) = self.offset_at(drag.node, self.device_point(pointer)) else {
             return false;
         };
-        self.write_caret(drag.node, drag.anchor, offset, affinity)
+        if drag.unit == Unit::Caret {
+            if offset != drag.anchor {
+                self.text_clicks.forget();
+            }
+            return self.write_caret(drag.node, drag.anchor, offset, affinity);
+        }
+        let Some(range) = self.selection_unit(drag.node, offset, affinity, drag.unit) else {
+            return false;
+        };
+        if range.start != drag.anchor || range.end != drag.end {
+            self.text_clicks.forget();
+        }
+        let (anchor, focus) = if range.end <= drag.anchor {
+            (drag.end, range.start)
+        } else {
+            (drag.anchor, range.end.max(drag.end))
+        };
+        let focus_affinity = if focus < anchor {
+            zgui_edit::Affinity::Downstream
+        } else if focus > anchor {
+            zgui_edit::Affinity::Upstream
+        } else {
+            affinity
+        };
+        self.write_caret(drag.node, anchor, focus, focus_affinity)
+    }
+
+    /// Expands a pointer's hit using model words or the frame's actual rendered lines.
+    fn selection_unit(
+        &self,
+        node: NodeKey,
+        offset: usize,
+        affinity: zgui_edit::Affinity,
+        unit: Unit,
+    ) -> Option<core::ops::Range<usize>> {
+        match unit {
+            Unit::Caret => Some(offset..offset),
+            Unit::Word => self.editors.word_at(node, offset, affinity),
+            Unit::Line => {
+                let layout = self.layout.borrow();
+                crate::caret::Located::of(&layout, &self.text, node)?.line_range(offset, affinity)
+            }
+        }
     }
 
     /// Writes one selection into the model and into the record, and restarts the blink.

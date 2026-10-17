@@ -308,6 +308,22 @@ impl Editors {
         self.attached.get(&node).map(|held| held.editor.selection())
     }
 
+    /// The run under a pointer's caret reading, without changing the editing model.
+    pub(crate) fn word_at(
+        &self,
+        node: NodeKey,
+        offset: usize,
+        affinity: zgui_edit::Affinity,
+    ) -> Option<core::ops::Range<usize>> {
+        // Read only hit paragraph; dragging must not copy the entire document.
+        let buffer = self.attached.get(&node)?.editor.buffer();
+        let position = buffer.position_of(offset);
+        let text = buffer.paragraph(position.paragraph)?;
+        let range = zgui_edit::select::word::at(text, position.offset, affinity);
+        let start = buffer.start_of(position.paragraph);
+        Some(start + range.start..start + range.end)
+    }
+
     /// Puts an element's caret at `focus`, with `anchor` as the end that stays put.
     ///
     /// Separate from [`Editors::select`] because a range cannot say which end moves, and a drag

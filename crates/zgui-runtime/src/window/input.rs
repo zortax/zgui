@@ -153,7 +153,11 @@ impl Window {
             SurfaceEvent::Key {
                 state: zgui_vocab::KeyState::Pressed,
                 ..
-            } => self.focus_modality = zgui_input::FocusSource::Keyboard,
+            } => {
+                self.focus_modality = zgui_input::FocusSource::Keyboard;
+                self.selecting = None;
+                self.text_clicks.forget();
+            }
             SurfaceEvent::Pointer {
                 action: zgui_vocab::PointerAction::Pressed,
                 ..
@@ -296,6 +300,17 @@ impl Window {
         // those is meaningless if the first has not happened yet.
         if dispatched.default_allowed {
             self.point_at_text(event, target);
+        } else if matches!(
+            event,
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Pressed
+                    | zgui_vocab::PointerAction::Released
+                    | zgui_vocab::PointerAction::Cancelled,
+                ..
+            }
+        ) {
+            self.selecting = None;
+            self.text_clicks.forget();
         }
         // A finger produces presses and moves and nothing else; what those *mean* is read here and
         // acted on after the listeners, exactly as the wheel's own default is. A handler that took

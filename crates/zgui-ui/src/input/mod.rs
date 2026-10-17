@@ -108,6 +108,11 @@ const SHEET: &str = "zui-input";
 /// Leave `secure` out for a field that is never secure, which then costs nothing extra. A field
 /// given `secure` is built empty and loads its value through the editing model, so the view never
 /// holds the value as text.
+///
+/// # Pointer selection
+///
+/// The framework selects a word on double-click and a rendered line on triple-click.
+/// Dragging after either extends the selection by words or lines, respectively.
 #[component]
 pub fn Input(
     /// The text, when the caller holds it.

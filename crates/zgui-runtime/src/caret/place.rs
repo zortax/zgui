@@ -221,6 +221,19 @@ impl Located {
         Some((self.to_model(source), hit.affinity))
     }
 
+    /// The rendered line containing one reading of a model offset, in model bytes.
+    /// Soft wraps and transformed text use the same shaping as pointer hit testing.
+    pub fn line_range(&self, offset: usize, affinity: Affinity) -> Option<core::ops::Range<usize>> {
+        let line = self.caret(offset, affinity)?.line;
+        let text = &self.lines.lines().get(line)?.geometry.text;
+        let source = |offset| {
+            self.map
+                .to_source(offset)
+                .or_else(|| self.map.to_source_snapped(offset))
+        };
+        Some(self.to_model(source(text.start)?)..self.to_model(source(text.end)?))
+    }
+
     /// Where the caret for a model offset is drawn, in the paragraph's own coordinates.
     ///
     /// A field a person has just emptied is the one paragraph no offset maps through. The map
