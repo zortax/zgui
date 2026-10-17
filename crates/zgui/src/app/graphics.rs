@@ -67,8 +67,8 @@ fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent
 /// to the window, naming every one that was tried, and [`AppError::Platform`] when the window
 /// offers no handles a graphics API can draw into at all. Neither is answered with a renderer that
 /// draws nowhere: a window that opens and never paints looks like a program that has hung.
-pub(crate) fn factory() -> RendererFactory {
-    let graphics = SharedGraphics::new();
+pub(crate) fn factory(extensions: Vec<&'static std::ffi::CStr>) -> RendererFactory {
+    let graphics = SharedGraphics::with_extensions(extensions);
     Box::new(move |surface, target| renderer(&graphics, surface, target))
 }
 
@@ -134,6 +134,6 @@ mod tests {
         // Making the factory must not enumerate adapters: it is built while the application is
         // still being described, on a thread that may have no display connection yet, and the
         // device is opened by the first window instead.
-        let _factory = factory();
+        let _factory = factory(Vec::new());
     }
 }

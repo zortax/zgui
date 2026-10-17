@@ -1,0 +1,39 @@
+[package]
+name = "zgui-wgpu-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
+#
+# Hardware-decoded video frames on zgui's device without a copy: a CoreVideo pixel buffer on
+# macOS, a dma-buf on Linux, a shared Direct3D 12 resource on Windows. Each becomes a
+# `zgui_wgpu::VideoFrame` whose planes are textures over the decoder's own memory. This is the one
+# crate that reaches through wgpu's hal for video, and it names wgpu only through
+# zgui-render-wgpu's re-export.
+[dependencies]
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-wgpu = { path = "../zgui-wgpu", version = "0.1.0" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-video.workspace = true
+objc2-metal.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Vulkan, at the version wgpu-hal links: a dma-buf becomes a Vulkan image with a DRM format
+# modifier, and only the finished image reaches wgpu.
+ash.workspace = true
+# `poll`, which waits for the decoder's writes to a dma-buf to finish before the image is read.
+rustix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }

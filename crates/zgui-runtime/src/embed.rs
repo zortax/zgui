@@ -18,6 +18,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
@@ -67,6 +68,12 @@ pub struct EmbedSyncCx<'a> {
     pub occluded: bool,
     /// The frame's own clock reading, the same one animations are stepped with.
     pub timestamp: Timestamp,
+    /// When the platform expects this frame to reach the screen: its next refresh, predicted from
+    /// presentation timing where the platform reports it, and one refresh interval ahead where it
+    /// does not.
+    pub presents_at: Instant,
+    /// How long one refresh of the output this window is on lasts.
+    pub refresh_interval: Duration,
     /// The thread-safe wake route a host hands to producers.
     pub waker: &'a Arc<RuntimeWaker>,
 }
@@ -84,7 +91,8 @@ pub struct EmbedMaintenanceCx<'a> {
 /// Device texture bytes retained by embeds, split by allocation ownership.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EmbedMemoryReport {
-    /// Textures zgui allocated for callback renderers; included in zgui-owned memory.
+    /// Textures zgui allocated for callback renderers and converted video; included in zgui-owned
+    /// memory.
     pub callback_owned: u64,
     /// Textures supplied by producers; diagnostic only and never automatically released.
     pub producer_owned: u64,
@@ -114,6 +122,9 @@ pub struct EmbedSyncReport {
     /// declared a cadence. Feeds the window's animation gate, never a direct frame request:
     /// requesting from inside the frame is the machine-rate spin the loop exists to prevent.
     pub animating: bool,
+    /// The moment some embed has its next piece of content due, such as a queued video frame.
+    /// The window schedules a frame for it, and leaves the refreshes before it alone.
+    pub wake_at: Option<Instant>,
 }
 
 /// A per-window host for embedded producers.
