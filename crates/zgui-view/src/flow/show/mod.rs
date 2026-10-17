@@ -326,4 +326,23 @@ mod tests {
         assert_eq!(f.text(), "shown");
         f.window.unmount();
     }
+
+    #[test]
+    fn a_dropped_branch_drops_its_content_at_once() {
+        // See `a_dropped_hole_drops_its_content_at_once` in `view::reactive`.
+        let f = Fixture::new();
+        let source = f.window.with(|| RwSignal::new(0));
+        f.window.with(|| on_cleanup_local(move || source.set(1)));
+        let state = f.window.with(|| {
+            Show::new(
+                || true,
+                move || AnyView::new(move || move || source.get().to_string()),
+            )
+            .build(&mut f.cx())
+        });
+
+        drop(state);
+        f.window.unmount();
+        flush();
+    }
 }
