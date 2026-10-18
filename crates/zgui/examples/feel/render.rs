@@ -169,10 +169,6 @@ pub(crate) fn build(
     } else {
         builder
     };
-    let drawable = builder
-        .instance()
-        .create_surface(handles)
-        .map_err(|error| PlatformError::Backend(error.to_string()))?;
-    let inner = builder.for_surface(target, drawable)?;
+    let inner = builder.for_surface(target, handles)?;
     Ok(Box::new(Timed::new(inner, tape)))
 }

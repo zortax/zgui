@@ -1,5 +1,6 @@
 //! Choosing an adapter, and refusing to guess when none of them works.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use zgui_render::GpuUnavailable;
@@ -70,6 +71,102 @@ pub fn tiers(backends: wgpu::Backends) -> Vec<wgpu::Backends> {
         .into_iter()
         .filter(|tier| !tier.is_empty())
         .collect()
+}
+
+/// How many instances containing GL this process has created.
+static GL_INSTANCES: AtomicU64 = AtomicU64::new(0);
+
+/// How many times this process has created an instance containing GL.
+///
+/// Creating one loads and initialises the vendor's EGL, which costs more than 20 MB of resident
+/// memory on NVIDIA. On a machine where the primary backend works this number is zero.
+pub fn gl_instances() -> u64 {
+    GL_INSTANCES.load(Ordering::Relaxed)
+}
+
+/// One instance per backend tier, each created when something first asks for it.
+///
+/// wgpu initialises every backend of an instance when it creates the instance. One instance for
+/// all tiers therefore loads the GL driver on every machine, also where the primary tier opens a
+/// device. Each tier has its own instance here, so the fallback driver loads only when the
+/// candidate loop reaches its tier.
+#[derive(Debug)]
+pub(crate) struct Instances {
+    /// The tiers in the order they are tried, each with its instance once created.
+    tiers: Vec<(wgpu::Backends, OnceLock<wgpu::Instance>)>,
+}
+
+impl Instances {
+    /// The instances of the tiers of `backends`, none of them created yet.
+    ///
+    /// The empty request keeps one empty tier, so that [`Instances::primary`] has an instance to
+    /// give. That instance enumerates no adapters.
+    pub(crate) fn new(backends: wgpu::Backends) -> Self {
+        let mut tiers = tiers(backends);
+        if tiers.is_empty() {
+            tiers.push(backends);
+        }
+        Self {
+            tiers: tiers
+                .into_iter()
+                .map(|tier| (tier, OnceLock::new()))
+                .collect(),
+        }
+    }
+
+    /// One tier of `backends`, served by `instance`, which already exists.
+    pub(crate) fn existing(instance: wgpu::Instance, backends: wgpu::Backends) -> Self {
+        Self {
+            tiers: vec![(backends, OnceLock::from(instance))],
+        }
+    }
+
+    /// The instance of the first tier, created if necessary.
+    pub(crate) fn primary(&self) -> &wgpu::Instance {
+        let (tier, instance) = &self.tiers[0];
+        instance.get_or_init(|| create(*tier))
+    }
+
+    /// Each tier with its instance, in order. The iterator creates an instance when it reaches the
+    /// tier, so a loop that stops early creates none of the tiers after it.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (wgpu::Backends, &wgpu::Instance)> {
+        self.tiers
+            .iter()
+            .map(|(tier, instance)| (*tier, instance.get_or_init(|| create(*tier))))
+    }
+}
+
+/// Creates an instance over `backends`, and counts it if it contains GL.
+fn create(backends: wgpu::Backends) -> wgpu::Instance {
+    if backends.intersects(wgpu::Backends::GL) {
+        GL_INSTANCES.fetch_add(1, Ordering::Relaxed);
+    }
+    wgpu::Instance::new(instance_descriptor(backends))
+}
+
+/// The flags every instance is created with.
+///
+/// Release builds remove wgpu's indirect-call validation. With it, each new device builds compute
+/// pipelines to check indirect arguments, and on NVIDIA that loads a second compiler path: 21 MB of
+/// resident memory. The renderer makes no indirect calls. The vector rasteriser makes two indirect
+/// dispatches, and its own shaders write their counts: zero after an overflow, at most 8 192
+/// otherwise, which is below the dispatch limit. Debug builds keep the check, and
+/// `WGPU_VALIDATION_INDIRECT_CALL=1` enables it in a release build.
+pub fn instance_flags() -> wgpu::InstanceFlags {
+    let mut flags = wgpu::InstanceFlags::from_build_config();
+    if !cfg!(debug_assertions) {
+        flags.remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+    }
+    flags.with_env()
+}
+
+/// The descriptor of an instance over `backends`.
+pub fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
+    wgpu::InstanceDescriptor {
+        backends,
+        flags: instance_flags(),
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    }
 }
 
 /// The backends to enumerate, after the environment has had its say.
@@ -173,7 +270,19 @@ pub fn unavailable(rejections: Vec<(String, String)>) -> GpuUnavailable {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, parse_backends, sort_key, tiers, unavailable};
+    use super::{describe, instance_flags, parse_backends, sort_key, tiers, unavailable};
+
+    #[test]
+    fn only_debug_instances_validate_indirect_calls() {
+        // The environment overrides the build's choice.
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_some() {
+            return;
+        }
+        assert_eq!(
+            instance_flags().contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL),
+            cfg!(debug_assertions)
+        );
+    }
 
     #[test]
     fn gl_is_a_tier_of_its_own_behind_the_native_backends() {

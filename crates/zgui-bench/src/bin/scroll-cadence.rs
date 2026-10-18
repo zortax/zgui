@@ -416,11 +416,7 @@ fn open_device(
     } else {
         builder
     };
-    let drawable = builder
-        .instance()
-        .create_surface(handles)
-        .map_err(|error| zgui::platform::PlatformError::Backend(error.to_string()))?;
-    let mut renderer = builder.for_surface(target, drawable)?;
+    let mut renderer = builder.for_surface(target, handles)?;
     zgui_render_vector_vello::attach(&mut renderer, target.size);
     Ok(Box::new(renderer))
 }

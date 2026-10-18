@@ -416,8 +416,8 @@ fn an_adapter_that_grants_the_list_is_preferred_over_one_that_does_not() {
     // opens. Every adapter is opened on its own here and asked. A machine where one of them says
     // yes is a machine where the loop chose the wrong one and copies every frame through the
     // processor for the rest of the process, with one log line to say so.
-    let instance = graphics.instance().clone();
     for tier in adapter::tiers(graphics.backends()) {
+        let instance = wgpu::Instance::new(adapter::instance_descriptor(tier));
         for candidate in adapter::candidates(&instance, tier) {
             let name = adapter::describe(&candidate.get_info());
             match Gpu::open(instance.clone(), candidate, &DMA_BUF) {

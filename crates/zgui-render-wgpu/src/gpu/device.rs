@@ -19,6 +19,26 @@ fn optional_features() -> wgpu::Features {
     wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::PIPELINE_CACHE
 }
 
+/// The smallest memory block the allocator reserves on a device.
+const MIN_MEMORY_BLOCK: u64 = 8 << 20;
+
+/// The largest memory block the allocator reserves on a device.
+const MAX_MEMORY_BLOCK: u64 = 256 << 20;
+
+/// How the device's allocator sizes its memory blocks.
+///
+/// wgpu's default reserves a 128 MiB device block and a 64 MiB host block for the first
+/// allocations, and a small window uses less than 8 MiB of them. On an integrated GPU, all of that
+/// is system memory. Here the first blocks are 8 MiB and 4 MiB, and each new block is twice the
+/// size of the last up to 256 MiB, so a large document gets the default's block size after five
+/// more allocations. An allocation larger than the current block gets a block of its own, as with
+/// the default.
+fn memory_hints() -> wgpu::MemoryHints {
+    wgpu::MemoryHints::Manual {
+        suballocated_device_memory_block_size: MIN_MEMORY_BLOCK..MAX_MEMORY_BLOCK,
+    }
+}
+
 /// A device, its queue, the adapter they came from and the instance behind all three.
 ///
 /// One of these per graphics device, shared by every surface drawn on it — which is what
@@ -100,6 +120,7 @@ impl Gpu {
             label: Some("zgui.device"),
             required_features: optional_features() & adapter.features(),
             required_limits: limits,
+            memory_hints: memory_hints(),
             ..Default::default()
         };
         let (device, queue, extensions) = match extensions::open(&adapter, extensions, &descriptor)

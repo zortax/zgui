@@ -313,6 +313,24 @@ fn what_the_renderer_holds_is_reported_in_the_parts_a_budget_is_written_against(
 }
 
 #[test]
+fn a_small_renderer_reserves_small_memory_blocks() {
+    let Some(renderer) = plain_renderer() else {
+        return;
+    };
+    // Only a backend with a block allocator gives a report.
+    let Some(report) = renderer.gpu().device().generate_allocator_report() else {
+        return;
+    };
+    // With wgpu's default hints, the first blocks are 128 MiB and 64 MiB.
+    assert!(
+        report.total_reserved_bytes <= 32 << 20,
+        "a renderer that holds a few textures reserves {} bytes in {} blocks",
+        report.total_reserved_bytes,
+        report.blocks.len()
+    );
+}
+
+#[test]
 fn a_lost_device_is_rebuilt_and_the_frame_after_it_draws_the_same_pixels() {
     let Some(mut renderer) = plain_renderer() else {
         return;

@@ -37,7 +37,7 @@ use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
 use crate::gpu::surface::{ConfiguredSurface, PresentPacing, SurfaceSetup};
 use crate::pipeline::Pipelines;
-use crate::renderer::builder::open_device;
+use crate::renderer::builder::{Proof, WindowSurface, open_device};
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
 use crate::target::swapchain::{Offscreen, Presentation, Supplied};
 
@@ -74,8 +74,8 @@ pub struct SharedGraphics(Rc<Shared>);
 
 /// What a [`SharedGraphics`] holds.
 struct Shared {
-    /// The instance every surface is created from.
-    instance: wgpu::Instance,
+    /// One instance per backend tier, each created when the candidate loop reaches it.
+    instances: adapter::Instances,
     /// Which backends may be enumerated.
     backends: wgpu::Backends,
     /// The Vulkan device extensions every device opened here asks for.
@@ -152,10 +152,7 @@ impl SharedGraphics {
         extensions: Vec<&'static CStr>,
     ) -> Self {
         Self(Rc::new(Shared {
-            instance: wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends,
-                ..wgpu::InstanceDescriptor::new_without_display_handle()
-            }),
+            instances: adapter::Instances::new(backends),
             backends,
             extensions,
             adopted: false,
@@ -189,7 +186,7 @@ impl SharedGraphics {
     pub fn with_gpu(gpu: Arc<Gpu>) -> Self {
         let backends = wgpu::Backends::from(gpu.adapter().get_info().backend);
         Self(Rc::new(Shared {
-            instance: gpu.instance().clone(),
+            instances: adapter::Instances::existing(gpu.instance().clone(), backends),
             backends,
             extensions: gpu.vulkan_extensions().to_vec(),
             adopted: true,
@@ -226,9 +223,13 @@ impl SharedGraphics {
         self.0.adopted
     }
 
-    /// The instance, so that whatever owns a native window can create a surface from it.
+    /// The instance of the first backend tier.
+    ///
+    /// A surface made from it cannot present on a fallback tier.
+    /// [`SharedGraphics::renderer_for_surface`] takes the window's handles and makes the surface
+    /// on the instance of each device it tries.
     pub fn instance(&self) -> &wgpu::Instance {
-        &self.0.instance
+        self.0.instances.primary()
     }
 
     /// Which backends this will enumerate.
@@ -271,13 +272,14 @@ impl SharedGraphics {
 
     /// A renderer for one more window, on the shared device where it can present there.
     ///
-    /// The surface must have been created from [`SharedGraphics::instance`]. A surface the primary
-    /// adapter cannot present to — a second monitor on another card — gets a device of its own, and
-    /// windows in that position share *that* device with each other.
+    /// `window` gives the window's handles. Each device that is tried gets a new surface, made from
+    /// them on that device's instance. A window the primary adapter cannot present to — a second
+    /// monitor on another card — gets a device of its own, and windows in that position share
+    /// *that* device with each other.
     pub fn renderer_for_surface(
         &self,
         target: RenderTarget,
-        surface: wgpu::Surface<'static>,
+        window: impl Into<wgpu::SurfaceTarget<'static>> + Clone,
         pacing: PresentPacing,
         pre_present: Option<PrePresent>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
@@ -290,7 +292,7 @@ impl SharedGraphics {
         // A device that has been lost is not a device to hand another window: the next frame on it
         // would do nothing but notice the loss again.
         if let Some(state) = self.usable_primary() {
-            match self.present_on(&state, surface, setup) {
+            match present_on(&state, &window, setup) {
                 Ok(presentation) => {
                     return Ok(self.assemble(
                         state,
@@ -300,34 +302,17 @@ impl SharedGraphics {
                         Origin::Surface,
                     ));
                 }
-                Err(Rejected::Incompatible(surface)) => {
-                    return self.on_another_device(target, surface, setup, pre_present);
+                Err(Rejected::Incompatible) => {
+                    return self.on_another_device(target, &window, setup, pre_present);
                 }
                 Err(Rejected::Failed(reason)) => {
-                    // The surface was consumed proving the adapter cannot use it, so there is
-                    // nothing left to try another adapter with. Whoever owns the window makes
-                    // another surface and asks again — the same contract the candidate loop has.
                     return Err(GpuUnavailable::new().rejected(state.gpu.describe(), reason));
                 }
             }
         }
 
         // The first surface: no device has been opened yet, so this is what chooses one.
-        let mut surface = Some(surface);
-        let (gpu, presentation) = self.open_one(|gpu| {
-            let surface = surface
-                // A surface is configured for the adapter that accepted it, and a configured
-                // surface cannot be handed to a second one. When the first candidate fails, the
-                // window has to produce another surface, which is a decision for whoever owns it.
-                .take()
-                .ok_or_else(|| "the surface was consumed by an earlier candidate".to_owned())?;
-            if surface.get_capabilities(gpu.adapter()).formats.is_empty() {
-                return Err("the surface is not compatible with this adapter".to_owned());
-            }
-            Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-                gpu, surface, setup,
-            ))))
-        })?;
+        let (gpu, presentation) = self.open_one(WindowSurface::new(window, setup))?;
         let state = DeviceState::new(gpu);
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
         Ok(self.assemble(state, presentation, target, pre_present, Origin::Surface))
@@ -357,7 +342,7 @@ impl SharedGraphics {
             ));
             return Ok(self.assemble(state, presentation, target, None, origin));
         }
-        let (gpu, presentation) = self.open_one(|gpu| {
+        let (gpu, presentation) = self.open_one(|gpu: &Arc<Gpu>| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
                 extent,
@@ -471,7 +456,7 @@ impl SharedGraphics {
     /// Recovery has nothing else to use, the window's own surface having died with the device, and
     /// neither has a caller that has yet to create anything.
     fn open_primary(&self) -> Result<Rc<DeviceState>, GpuUnavailable> {
-        let (gpu, _) = self.open_one(|gpu| {
+        let (gpu, _) = self.open_one(|gpu: &Arc<Gpu>| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
                 Size::new(1, 1),
@@ -492,10 +477,7 @@ impl SharedGraphics {
     /// Vulkan device extensions matter most: a replacement device that read a different list would
     /// leave a program running on a device its buffers cannot be imported into, and there is no
     /// later point at which that could be noticed.
-    fn open_one(
-        &self,
-        present: impl FnMut(&Arc<Gpu>) -> Result<Presentation, String>,
-    ) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
+    fn open_one(&self, present: impl Proof) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
         if self.0.adopted {
             // The host owns the device. A device opened here would be one the host's resources
             // cannot be used with, and one the host does not know it has to keep alive.
@@ -505,12 +487,7 @@ impl SharedGraphics {
                  lost or cannot present here: the host gives a new one with SharedGraphics::adopt",
             ));
         }
-        open_device(
-            &self.0.instance,
-            self.0.backends,
-            &self.0.extensions,
-            present,
-        )
+        open_device(&self.0.instances, &self.0.extensions, present)
     }
 
     /// The primary device, if there is one and it is still alive.
@@ -522,48 +499,17 @@ impl SharedGraphics {
             .map(Rc::clone)
     }
 
-    /// Configures `surface` for an already-open device, saying which kind of failure it was.
-    ///
-    /// Compatibility is asked before anything is consumed, so a surface the adapter cannot use
-    /// comes back intact and can be offered to another one.
-    fn present_on(
-        &self,
-        state: &Rc<DeviceState>,
-        surface: wgpu::Surface<'static>,
-        setup: SurfaceSetup,
-    ) -> Result<Presentation, Rejected> {
-        if surface
-            .get_capabilities(state.gpu.adapter())
-            .formats
-            .is_empty()
-        {
-            return Err(Rejected::Incompatible(surface));
-        }
-        let scope = state
-            .gpu
-            .device()
-            .push_error_scope(wgpu::ErrorFilter::Validation);
-        let presentation =
-            Presentation::Surface(Box::new(ConfiguredSurface::new(&state.gpu, surface, setup)));
-        match futures::executor::block_on(scope.pop()) {
-            None => Ok(presentation),
-            Some(error) => Err(Rejected::Failed(error.to_string())),
-        }
-    }
-
-    /// A renderer for a surface the primary adapter cannot present to.
+    /// A renderer for a window the primary adapter cannot present to.
     ///
     /// Windows in this position — a second monitor on another card — share a device with each other
     /// rather than each opening one, which is the same rule the primary follows.
     fn on_another_device(
         &self,
         target: RenderTarget,
-        surface: wgpu::Surface<'static>,
+        window: &(impl Into<wgpu::SurfaceTarget<'static>> + Clone),
         setup: SurfaceSetup,
         pre_present: Option<PrePresent>,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let mut surface = Some(surface);
-
         self.0.fallbacks.borrow_mut().retain(|state| {
             state
                 .upgrade()
@@ -577,8 +523,7 @@ impl SharedGraphics {
             .filter_map(Weak::upgrade)
             .collect();
         for state in known {
-            let Some(offered) = surface.take() else { break };
-            match self.present_on(&state, offered, setup) {
+            match present_on(&state, window, setup) {
                 Ok(presentation) => {
                     return Ok(self.assemble(
                         state,
@@ -588,31 +533,14 @@ impl SharedGraphics {
                         Origin::Surface,
                     ));
                 }
-                Err(Rejected::Incompatible(returned)) => surface = Some(returned),
+                Err(Rejected::Incompatible) => {}
                 Err(Rejected::Failed(reason)) => {
                     return Err(GpuUnavailable::new().rejected(state.gpu.describe(), reason));
                 }
             }
         }
 
-        let Some(surface) = surface else {
-            return Err(GpuUnavailable::new().rejected(
-                "every known device",
-                "the surface was consumed by an earlier candidate",
-            ));
-        };
-        let mut surface = Some(surface);
-        let (gpu, presentation) = self.open_one(|gpu| {
-            let surface = surface
-                .take()
-                .ok_or_else(|| "the surface was consumed by an earlier candidate".to_owned())?;
-            if surface.get_capabilities(gpu.adapter()).formats.is_empty() {
-                return Err("the surface is not compatible with this adapter".to_owned());
-            }
-            Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-                gpu, surface, setup,
-            ))))
-        })?;
+        let (gpu, presentation) = self.open_one(WindowSurface::new(window.clone(), setup))?;
         let state = DeviceState::new(gpu);
         self.0.fallbacks.borrow_mut().push(Rc::downgrade(&state));
         Ok(self.assemble(state, presentation, target, pre_present, Origin::Surface))
@@ -639,11 +567,42 @@ impl SharedGraphics {
     }
 }
 
-/// Why a device would not take a surface.
+/// Configures a new surface for `window` on an already-open device, saying which kind of failure
+/// it was.
+fn present_on(
+    state: &Rc<DeviceState>,
+    window: &(impl Into<wgpu::SurfaceTarget<'static>> + Clone),
+    setup: SurfaceSetup,
+) -> Result<Presentation, Rejected> {
+    let surface = state
+        .gpu
+        .instance()
+        .create_surface(window.clone())
+        .map_err(|_| Rejected::Incompatible)?;
+    if surface
+        .get_capabilities(state.gpu.adapter())
+        .formats
+        .is_empty()
+    {
+        return Err(Rejected::Incompatible);
+    }
+    let scope = state
+        .gpu
+        .device()
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let presentation =
+        Presentation::Surface(Box::new(ConfiguredSurface::new(&state.gpu, surface, setup)));
+    match futures::executor::block_on(scope.pop()) {
+        None => Ok(presentation),
+        Some(error) => Err(Rejected::Failed(error.to_string())),
+    }
+}
+
+/// Why a device would not take a window.
 enum Rejected {
-    /// The adapter cannot present to it. The surface comes back untouched, for another adapter.
-    Incompatible(wgpu::Surface<'static>),
-    /// The adapter accepted it and then failed, consuming it in the process.
+    /// The adapter cannot present to it, and another adapter can try.
+    Incompatible,
+    /// The adapter accepted it and then failed to configure it.
     Failed(String),
 }
 

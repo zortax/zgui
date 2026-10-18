@@ -129,11 +129,7 @@ fn renderer(
     // The surface has to be created from the instance the device is opened from, which is why the
     // window's handles are handed to the renderer rather than the other way round. The shared
     // handle keeps the window alive for as long as anything draws through it.
-    let drawable = builder
-        .instance()
-        .create_surface(handles)
-        .map_err(|error| PlatformError::Backend(error.to_string()))?;
-    builder.for_surface(target, drawable).map_or_else(
+    builder.for_surface(target, handles).map_or_else(
         |unavailable| {
             // A machine with no usable device is a fact about the machine, not a defect. It is
             // recorded so the program can say so out loud rather than report a silent zero.

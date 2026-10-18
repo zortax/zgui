@@ -428,6 +428,7 @@ impl Renderer for WgpuRenderer {
     fn release_idle_resources(&mut self) -> u64 {
         let mut freed = self.release_cached_targets();
         freed += self.buffers.release_idle(&self.gpu);
+        freed += self.atlas.release_idle();
         if let Some(vectors) = self.vectors.as_mut() {
             freed += vectors.release_idle_resources();
         }

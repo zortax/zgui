@@ -119,6 +119,11 @@ impl AtlasTextures {
     pub fn staging_oneshot_bytes(&self) -> u64 {
         self.uploader.oneshot_bytes()
     }
+
+    /// Drops the completed upload buffers, and returns how many bytes they held.
+    pub fn release_idle(&mut self) -> u64 {
+        self.uploader.release_idle()
+    }
 }
 
 impl TextureSink for AtlasTextures {
