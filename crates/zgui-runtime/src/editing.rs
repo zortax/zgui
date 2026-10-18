@@ -308,6 +308,41 @@ impl Editors {
         self.attached.get(&node).map(|held| held.editor.selection())
     }
 
+    /// The run under a pointer's caret reading, without changing the editing model.
+    ///
+    /// A secure element answers with its whole value, as word motion does: a run would show
+    /// where the secret has spaces.
+    pub(crate) fn word_at(
+        &self,
+        node: NodeKey,
+        offset: usize,
+        affinity: zgui_edit::Affinity,
+    ) -> Option<core::ops::Range<usize>> {
+        let editor = &self.attached.get(&node)?.editor;
+        let buffer = editor.buffer();
+        if editor.is_secure() {
+            return Some(0..buffer.len());
+        }
+        // Only the paragraph that was hit, so that a drag does not copy the whole text.
+        let position = buffer.position_of(offset);
+        let text = buffer.paragraph(position.paragraph)?;
+        let range = zgui_edit::select::word::at(text, position.offset, affinity);
+        let start = buffer.start_of(position.paragraph);
+        Some(start + range.start..start + range.end)
+    }
+
+    /// The paragraph that holds an offset, without its line break.
+    pub(crate) fn paragraph_at(
+        &self,
+        node: NodeKey,
+        offset: usize,
+    ) -> Option<core::ops::Range<usize>> {
+        let buffer = self.attached.get(&node)?.editor.buffer();
+        let paragraph = buffer.position_of(offset).paragraph;
+        let start = buffer.start_of(paragraph);
+        Some(start..start + buffer.paragraph(paragraph)?.len())
+    }
+
     /// Puts an element's caret at `focus`, with `anchor` as the end that stays put.
     ///
     /// Separate from [`Editors::select`] because a range cannot say which end moves, and a drag

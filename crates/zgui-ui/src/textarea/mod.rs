@@ -42,6 +42,11 @@ const SHEET: &str = "zui-textarea";
 /// around the field to act on. That difference is the element's — `editor` rather than `field` — so
 /// it is the editing model that makes it, not a key handler here. <kbd>Tab</kbd> still leaves,
 /// because a text area that swallowed tab would be one nobody can get out of without a mouse.
+///
+/// # Pointer selection
+///
+/// A double click selects a word and a triple click selects the paragraph. A drag after either
+/// extends the selection by words or by paragraphs.
 #[component]
 pub fn Textarea(
     /// The text, when the caller holds it.

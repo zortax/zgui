@@ -27,12 +27,9 @@ impl ClickCount {
     /// Notes a pointer activation of `node` at `at` and `when`, and answers whether it completes
     /// a double click.
     pub(crate) fn note(&mut self, node: NodeKey, when: Timestamp, at: Point<CssPx, Css>) -> bool {
-        let double = self.last.is_some_and(|(held, then, there)| {
-            held == node
-                && when.saturating_since(then) <= INTERVAL
-                && (at.x.0 - there.x.0).abs() <= SLOP
-                && (at.y.0 - there.y.0).abs() <= SLOP
-        });
+        let double = self
+            .last
+            .is_some_and(|(held, then, there)| follows((held, then, there), (node, when, at)));
         self.last = if double { None } else { Some((node, when, at)) };
         double
     }
@@ -41,4 +38,16 @@ impl ClickCount {
     pub(crate) fn forget(&mut self) {
         self.last = None;
     }
+}
+
+/// Whether a press of `node` at `at` and `when` follows the earlier one soon enough and near
+/// enough to count with it.
+pub(crate) fn follows(
+    (held, then, there): (NodeKey, Timestamp, Point<CssPx, Css>),
+    (node, when, at): (NodeKey, Timestamp, Point<CssPx, Css>),
+) -> bool {
+    held == node
+        && when.saturating_since(then) <= INTERVAL
+        && (at.x.0 - there.x.0).abs() <= SLOP
+        && (at.y.0 - there.y.0).abs() <= SLOP
 }

@@ -12,7 +12,8 @@
 //! * a step backwards is its mirror: skip any space, then the run of one class.
 //!
 //! A component that needs a different rule computes its own boundaries and moves the selection to
-//! them; nothing here is reached except through a word-granularity motion.
+//! them. Word-granularity motion uses [`next`] and [`previous`]. A double press selects the run
+//! that [`at`] finds, which stops before the space after a word.
 
 /// What kind of character something is, as far as word motion is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +35,43 @@ fn class(character: char) -> Class {
     } else {
         Class::Punctuation
     }
+}
+
+/// The run of word characters, punctuation or space under one reading of an offset.
+///
+/// The run stops before the space after a word. When the offset is between two runs, the
+/// affinity chooses the run: upstream the one before, downstream the one after. The run
+/// boundaries are grapheme boundaries, so a combining mark or a joined emoji stays whole.
+pub fn at(text: &str, offset: usize, affinity: super::Affinity) -> core::ops::Range<usize> {
+    use super::{Affinity, grapheme};
+    if text.is_empty() {
+        return 0..0;
+    }
+    let offset = clamp(text, offset);
+    let mut start = if offset == text.len() || (offset > 0 && affinity == Affinity::Upstream) {
+        grapheme::previous(text, offset)
+    } else {
+        offset
+    };
+    if start > 0 {
+        let previous = grapheme::previous(text, start);
+        if grapheme::next(text, previous) > start {
+            start = previous;
+        }
+    }
+    let wanted = class(char_at(text, start).expect("inside text"));
+    let mut end = grapheme::next(text, start);
+    while start > 0 {
+        let previous = grapheme::previous(text, start);
+        if class(char_at(text, previous).expect("inside text")) != wanted {
+            break;
+        }
+        start = previous;
+    }
+    while end < text.len() && class(char_at(text, end).expect("inside text")) == wanted {
+        end = grapheme::next(text, end);
+    }
+    start..end
 }
 
 /// The offset at the start of the next word after `offset`.
@@ -147,5 +185,32 @@ mod tests {
         assert_eq!(next("", 0), 0);
         assert_eq!(previous("", 0), 0);
         assert_eq!(next("ab", 2), 2);
+    }
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::at;
+    use crate::Affinity::{Downstream, Upstream};
+
+    #[test]
+    fn selecting_a_run_does_not_swallow_adjacent_spaces_or_punctuation() {
+        let text = "one_two -> three";
+        assert_eq!(at(text, 4, Downstream), 0..7);
+        assert_eq!(at(text, 7, Upstream), 0..7);
+        assert_eq!(at(text, 7, Downstream), 7..8);
+        assert_eq!(at(text, 9, Downstream), 8..10);
+        assert_eq!(at(text, text.len(), Upstream), 11..16);
+        assert_eq!(at("", 99, Downstream), 0..0);
+    }
+
+    #[test]
+    fn unicode_words_and_combining_sequences_stay_whole() {
+        let text = "caf\u{e9} e\u{301}lan";
+        assert_eq!(at(text, 3, Downstream), 0..5);
+        assert_eq!(at(text, 9, Upstream), 6..text.len());
+        assert_eq!(at(text, 7, Downstream), 6..text.len());
+        let emoji = "\u{1f469}\u{200d}\u{1f4bb}";
+        assert_eq!(at(emoji, emoji.len(), Upstream), 0..emoji.len());
     }
 }
