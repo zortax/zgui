@@ -83,10 +83,9 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
     /// an inline formatting context whose atomic inlines size their block axis with a percentage
     /// keeps the parent's block size in its question.
     ///
-    /// Every box the engine sees no children of is answered by the [leaf
-    /// shell](crate::inline::leaf_shell), which reads the available space on an axis only when the
-    /// question leaves that axis unknown, as [`NodeKind::Leaf`] requires. Its measurement may read
-    /// the available height, so it is not [`NodeKind::LeafIgnoringHeight`].
+    /// Every box the engine sees no children of is answered by the engine's leaf algorithm through
+    /// the [leaf shell](crate::inline::leaf_shell), so it is [`NodeKind::Leaf`]. Its measurement
+    /// may read the available height, so it is not [`NodeKind::LeafIgnoringHeight`].
     #[inline]
     fn query_meta(&self, node: NodeId) -> QueryMeta {
         let key = from_node_id(node);
