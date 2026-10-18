@@ -5,6 +5,7 @@
 //! entry per distinct value keeps the column of a 10 000-box document small, and lets the engine
 //! borrow a style by reference for as long as it needs it.
 
+use cephal::compute::plan::StylePlan;
 use rustc_hash::FxHashMap;
 
 /// One interned engine style.
@@ -17,6 +18,9 @@ struct Entry {
     /// [`cephal::Style::parent_size_dependency`], computed once per distinct style because the
     /// engine asks for it on every child query.
     dependency: cephal::Size<bool>,
+    /// The style's lengths resolved once, when none of them needs a parent size; the engine's
+    /// algorithms and the leaf shell read these instead of resolving per question.
+    plan: Option<StylePlan>,
     refs: u32,
 }
 
@@ -40,6 +44,7 @@ impl EngineStyles {
         }
         let entry = Entry {
             dependency: style.parent_size_dependency(),
+            plan: StylePlan::from_style(&style),
             style: style.clone(),
             refs: 1,
         };
@@ -92,6 +97,15 @@ impl EngineStyles {
             .as_ref()
             .expect("a live engine style");
         (&entry.style, entry.dependency)
+    }
+
+    /// The resolved lengths of the style one identifier names, if it has no relative ones.
+    pub(crate) fn plan(&self, id: EngineStyleId) -> Option<&StylePlan> {
+        self.entries[id.0 as usize]
+            .as_ref()
+            .expect("a live engine style")
+            .plan
+            .as_ref()
     }
 
     /// How many distinct styles are held.

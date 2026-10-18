@@ -41,7 +41,8 @@ euclid = "0.22.14"
 # A retained, incremental engine written against a host-owned tree. `block`, `flex` and `grid` are
 # the three algorithms the box tree dispatches to; the workspace drives its own layout pool through
 # the engine's batching seam.
-cephal = { version = "0.1.1", default-features = false, features = [
+# Temporarily the local checkout of cephal's `perf/cold-layout` branch.
+cephal = { path = "../cephal", version = "0.1.1", default-features = false, features = [
     "block",
     "flex",
     "grid",

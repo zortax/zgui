@@ -73,6 +73,9 @@ pub struct LayoutTree<'a, C> {
     /// Boxes a batch worker's probes noted, merged into [`LayoutStore`]'s list when the batch
     /// finishes. An exclusive pass notes them on the store directly.
     probed: Vec<BoxKey>,
+    /// The axes on which the answers computed since the engine last asked told min-content from
+    /// max-content available space; see [`cephal::tree::LayoutTree::take_observed`].
+    observed: u8,
 }
 
 impl<'a, C: MeasureContent> LayoutTree<'a, C> {
@@ -94,6 +97,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             speculation: 0,
             touched: Vec::new(),
             probed: Vec::new(),
+            observed: 0,
         }
     }
 

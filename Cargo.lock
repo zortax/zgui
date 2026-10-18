@@ -692,8 +692,6 @@ dependencies = [
 [[package]]
 name = "cephal"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b74eac90bccfd105751a15dcf6e16206b3ba0c837575dd7c4f9993c35e4b014"
 
 [[package]]
 name = "cexpr"

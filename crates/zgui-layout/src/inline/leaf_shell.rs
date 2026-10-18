@@ -9,9 +9,11 @@
 //! are carried out in the answer.
 
 use cephal::compute::block::BlockContext;
+use cephal::compute::leaf::LeafBox;
 use cephal::style::{BoxSizing, Overflow};
 use cephal::tree::{
-    Baselines, CollapsibleMarginSet, LayoutInput, LayoutOutput, NodeId, RunMode, SizingMode,
+    Baselines, CollapsibleMarginSet, LayoutInput, LayoutOutput, LayoutTree as EngineTree, NodeId,
+    RunMode, SizingMode,
 };
 use cephal::{AvailableSpace, MaybeMath, Rect, Size};
 
@@ -38,76 +40,37 @@ pub(crate) fn compute<C: MeasureContent>(
     // Everything up to the measurement is a pure function of the style and the inputs, so it runs
     // under a shared borrow that is released before the tree is used exclusively below.
     let prepared = {
-        let style = tree.engine_style(from_node_id(node));
-        let calc = |id, basis| tree.resolve_calc(id, basis);
-        // Both axes resolve percentage padding and border against the containing block's *inline*
-        // size. That is not an oversight in CSS; it is what the specification says.
-        let margin = style
-            .margin
-            .map(|m| m.resolve_or_zero(parent_size.width, &calc));
-        let padding = style
-            .padding
-            .map(|p| p.resolve_or_zero(parent_size.width, &calc));
-        let border = style
-            .border
-            .map(|b| b.resolve_or_zero(parent_size.width, &calc));
-        let padding_border = padding + border;
-        let pb_sum = padding_border.sum_axes();
-        let box_sizing_adjustment = if style.box_sizing == BoxSizing::ContentBox {
-            pb_sum
-        } else {
-            Size::ZERO
+        let key = from_node_id(node);
+        let style = tree.engine_style(key);
+        let resolved = match tree.structure().engine_style_plan(key) {
+            // Resolved once for the style, to the same bits as below: none of its lengths reads
+            // the parent size.
+            Some(plan) => Resolved::from_plan(&plan.leaf),
+            None => {
+                let calc = |id, basis| tree.resolve_calc(id, basis);
+                Resolved::of(style, parent_size, &calc)
+            }
         };
         let (node_size, node_min_size, node_max_size, aspect_ratio) = match sizing_mode {
             SizingMode::ContentSize => (known_dimensions, Size::NONE, Size::NONE, None),
-            SizingMode::InherentSize => {
-                let aspect_ratio = style.aspect_ratio;
-                let style_size = Size {
-                    width: style.size.width.resolve(parent_size.width, &calc),
-                    height: style.size.height.resolve(parent_size.height, &calc),
-                }
-                .maybe_apply_aspect_ratio(aspect_ratio)
-                .maybe_add(box_sizing_adjustment);
-                let style_min_size = Size {
-                    width: style.min_size.width.resolve(parent_size.width, &calc),
-                    height: style.min_size.height.resolve(parent_size.height, &calc),
-                }
-                .maybe_apply_aspect_ratio(aspect_ratio)
-                .maybe_add(box_sizing_adjustment);
-                let style_max_size = Size {
-                    width: style.max_size.width.resolve(parent_size.width, &calc),
-                    height: style.max_size.height.resolve(parent_size.height, &calc),
-                }
-                .maybe_add(box_sizing_adjustment);
-                (
-                    known_dimensions.or(style_size),
-                    style_min_size,
-                    style_max_size,
-                    aspect_ratio,
-                )
-            }
+            SizingMode::InherentSize => (
+                known_dimensions.or(resolved.size),
+                resolved.min_size,
+                resolved.max_size,
+                resolved.aspect_ratio,
+            ),
         };
-        // The axes are transposed: a box that scrolls vertically needs *horizontal* space for the
-        // scrollbar.
-        let overflow = style.overflow;
-        let scrollbar_gutter = Size {
-            width: if overflow.y == Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            },
-            height: if overflow.x == Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            },
-        };
-        let mut content_box_inset = padding_border;
-        content_box_inset.right += scrollbar_gutter.width;
-        content_box_inset.bottom += scrollbar_gutter.height;
+        let Resolved {
+            margin,
+            padding,
+            border,
+            padding_border,
+            content_box_inset,
+            scroll_container,
+            ..
+        } = resolved;
         let cannot_collapse_through = !style.is_block()
-            || overflow.x.is_scroll_container()
-            || overflow.y.is_scroll_container()
+            || scroll_container
             || style.position.is_out_of_flow()
             || padding.top > 0.0
             || padding.bottom > 0.0
@@ -116,7 +79,7 @@ pub(crate) fn compute<C: MeasureContent>(
             || matches!(node_size.height, Some(height) if height > 0.0)
             || matches!(node_min_size.height, Some(height) if height > 0.0);
         Prepared {
-            scroll_container: overflow.x.is_scroll_container() || overflow.y.is_scroll_container(),
+            scroll_container,
             padding,
             padding_border,
             content_box_inset,
@@ -179,6 +142,13 @@ pub(crate) fn compute<C: MeasureContent>(
             }),
     };
     let basis_height = percentage_basis_height(tree, node, parent_size, &prepared);
+    // The question reaches the content only through `measure_space`, so the answer can tell
+    // min-content from max-content exactly on the axes left indefinite there. What the nested
+    // layouts below observe is about questions the content chose, and is replaced by that, which
+    // also keeps the record independent of which nested answers were memoised.
+    let outer = EngineTree::take_observed(tree);
+    let observed = (cephal::compute::OBSERVED_WIDTH * u8::from(!measure_space.width.is_definite()))
+        | (cephal::compute::OBSERVED_HEIGHT * u8::from(!measure_space.height.is_definite()));
     // The measurement takes the tree, because an atomic inline's content is a nested layout of
     // boxes this tree owns.
     let measured = crate::inline::measure_leaf(
@@ -196,6 +166,8 @@ pub(crate) fn compute<C: MeasureContent>(
         basis_height,
         block,
     );
+    EngineTree::take_observed(tree);
+    EngineTree::note_observed(tree, outer | observed);
     let measured_size = measured.size;
     let clamped_size = known_dimensions
         .or(prepared.node_size)
@@ -270,6 +242,113 @@ fn percentage_basis_height<C: MeasureContent>(
             - prepared.content_box_inset.vertical_axis_sum())
         .max(0.0)
     })
+}
+
+/// A leaf style's lengths, resolved against the parent size.
+struct Resolved {
+    margin: Rect<f32>,
+    padding: Rect<f32>,
+    border: Rect<f32>,
+    padding_border: Rect<f32>,
+    /// Padding, border and the scrollbar gutter.
+    content_box_inset: Rect<f32>,
+    /// Border-box sizes, after the aspect ratio and the `box-sizing` adjustment.
+    size: Size<Option<f32>>,
+    min_size: Size<Option<f32>>,
+    max_size: Size<Option<f32>>,
+    aspect_ratio: Option<f32>,
+    scroll_container: bool,
+}
+
+impl Resolved {
+    /// The values the engine resolved once for a style none of whose lengths is relative; they
+    /// are what [`Resolved::of`] computes for that style, bit for bit.
+    fn from_plan(leaf: &LeafBox) -> Self {
+        Self {
+            margin: leaf.margin,
+            padding: leaf.padding,
+            border: leaf.border,
+            padding_border: leaf.padding + leaf.border,
+            content_box_inset: leaf.content_box_inset,
+            size: leaf.size,
+            min_size: leaf.min_size,
+            max_size: leaf.max_size,
+            aspect_ratio: leaf.aspect_ratio,
+            scroll_container: leaf.scrolls,
+        }
+    }
+
+    fn of(
+        style: &cephal::Style,
+        parent_size: Size<Option<f32>>,
+        calc: &impl Fn(cephal::style::CalcId, f32) -> f32,
+    ) -> Self {
+        // Both axes resolve percentage padding and border against the containing block's *inline*
+        // size. That is not an oversight in CSS; it is what the specification says.
+        let margin = style
+            .margin
+            .map(|m| m.resolve_or_zero(parent_size.width, calc));
+        let padding = style
+            .padding
+            .map(|p| p.resolve_or_zero(parent_size.width, calc));
+        let border = style
+            .border
+            .map(|b| b.resolve_or_zero(parent_size.width, calc));
+        let padding_border = padding + border;
+        let box_sizing_adjustment = if style.box_sizing == BoxSizing::ContentBox {
+            padding_border.sum_axes()
+        } else {
+            Size::ZERO
+        };
+        let aspect_ratio = style.aspect_ratio;
+        let size = Size {
+            width: style.size.width.resolve(parent_size.width, calc),
+            height: style.size.height.resolve(parent_size.height, calc),
+        }
+        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_add(box_sizing_adjustment);
+        let min_size = Size {
+            width: style.min_size.width.resolve(parent_size.width, calc),
+            height: style.min_size.height.resolve(parent_size.height, calc),
+        }
+        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_add(box_sizing_adjustment);
+        let max_size = Size {
+            width: style.max_size.width.resolve(parent_size.width, calc),
+            height: style.max_size.height.resolve(parent_size.height, calc),
+        }
+        .maybe_add(box_sizing_adjustment);
+        // The axes are transposed: a box that scrolls vertically needs *horizontal* space for the
+        // scrollbar.
+        let overflow = style.overflow;
+        let scrollbar_gutter = Size {
+            width: if overflow.y == Overflow::Scroll {
+                style.scrollbar_width
+            } else {
+                0.0
+            },
+            height: if overflow.x == Overflow::Scroll {
+                style.scrollbar_width
+            } else {
+                0.0
+            },
+        };
+        let mut content_box_inset = padding_border;
+        content_box_inset.right += scrollbar_gutter.width;
+        content_box_inset.bottom += scrollbar_gutter.height;
+        Self {
+            margin,
+            padding,
+            border,
+            padding_border,
+            content_box_inset,
+            size,
+            min_size,
+            max_size,
+            aspect_ratio,
+            scroll_container: overflow.x.is_scroll_container() || overflow.y.is_scroll_container(),
+        }
+    }
 }
 
 /// What the style and the inputs decide before the content is asked.

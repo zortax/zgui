@@ -9,7 +9,7 @@ use cephal::compute::block::BlockContext;
 use cephal::schedule::Incremental;
 use cephal::tree::{
     AnswerSource, CacheAccess, ChildRequest, IdentSuffix, LayoutInput, LayoutOutput,
-    LayoutTree as EngineTree, NodeCache, NodeId, QueryMeta, RunMode,
+    LayoutTree as EngineTree, NodeCache, NodeId, NodeKind, QueryMeta, RunMode,
 };
 use cephal::{Layout, Style};
 use zgui_profile::{Counter, counter};
@@ -82,6 +82,11 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
     /// The engine's own derivation, read from the interned style, plus one fact the style lacks:
     /// an inline formatting context whose atomic inlines size their block axis with a percentage
     /// keeps the parent's block size in its question.
+    ///
+    /// Every box the engine sees no children of is answered by the [leaf
+    /// shell](crate::inline::leaf_shell), which reads the available space on an axis only when the
+    /// question leaves that axis unknown, as [`NodeKind::Leaf`] requires. Its measurement may read
+    /// the available height, so it is not [`NodeKind::LeafIgnoringHeight`].
     #[inline]
     fn query_meta(&self, node: NodeId) -> QueryMeta {
         let key = from_node_id(node);
@@ -89,6 +94,7 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         let (style, mut dependency) = structure.engine_style_with_dependency(key);
         let box_node = structure.node(key);
         dependency.height |= box_node.atomic_percent_block;
+        let leaf = !engine_sees_children(box_node.fc) || box_node.children.is_empty();
         QueryMeta {
             hidden: style.generates_no_box(),
             // `child_count == 0 && leaf_is_cheap`, from the one record.
@@ -97,7 +103,27 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
                 FormattingContext::Block | FormattingContext::Flex | FormattingContext::Grid
             ) && box_node.children.is_empty(),
             dependency,
+            kind: if leaf {
+                NodeKind::Leaf
+            } else {
+                NodeKind::of_container(style)
+            },
         }
+    }
+
+    #[inline]
+    fn style_plan(&self, node: NodeId) -> Option<&cephal::compute::plan::StylePlan> {
+        self.structure().engine_style_plan(from_node_id(node))
+    }
+
+    #[inline]
+    fn take_observed(&mut self) -> u8 {
+        core::mem::take(&mut self.observed)
+    }
+
+    #[inline]
+    fn note_observed(&mut self, axes: u8) {
+        self.observed |= axes;
     }
 
     fn leaf_is_cheap(&self, node: NodeId) -> bool {
@@ -134,11 +160,13 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
                 self.touched.push((key, before));
             }
             let state = self.state_mut(key);
-            state.unrounded = *layout;
             // Until the snapping pass runs, the snapped result is the unrounded one, so a caller
             // that reads a layout between the two passes reads geometry rather than nothing.
             state.snapped = *layout;
         }
+        // Written even when equal: equal layouts may differ in the sign of a zero, and the next
+        // pass reads these bits back.
+        self.state_mut(key).unrounded = *layout;
     }
 
     fn unrounded_layout(&self, node: NodeId) -> Option<Layout> {
@@ -163,6 +191,11 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         cephal::compute::compute_child_layout(self, node, inputs, block_ctx)
+    }
+
+    #[inline]
+    fn forwards_child_layout(&self) -> bool {
+        true
     }
 
     fn observe_answer(
