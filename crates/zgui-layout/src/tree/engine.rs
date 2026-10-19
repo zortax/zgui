@@ -179,8 +179,30 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         self.state_mut(from_node_id(node)).absolute = Some(Box::new(context));
     }
 
-    fn absolute_context(&self, node: NodeId) -> Option<cephal::tree::AbsoluteContext> {
-        self.state(from_node_id(node))?.absolute.as_deref().cloned()
+    fn clear_absolute_context(&mut self, node: NodeId) {
+        if self.speculation > 0 {
+            return;
+        }
+        self.state_mut(from_node_id(node)).absolute = None;
+    }
+
+    fn absolute_context(&self, node: NodeId) -> Option<&cephal::tree::AbsoluteContext> {
+        self.state(from_node_id(node))?.absolute.as_deref()
+    }
+
+    /// Every box claims its out-of-flow children: the box tree already parents an absolutely or
+    /// fixed positioned box under its containing block (see `boxtree::absolute`), so the engine's
+    /// own hoisting finds it there.
+    #[inline]
+    fn containing_block_claims(&self, _node: NodeId) -> u8 {
+        cephal::compute::oof::OOF_ALL
+    }
+
+    /// A fixed box's parent only stands in for the viewport, which is its containing block; it
+    /// scrolls with nothing, so it adds nothing to the parent's scrollable overflow.
+    #[inline]
+    fn out_of_flow_overflow(&self, _node: NodeId) -> u8 {
+        cephal::compute::oof::OOF_ABSOLUTE
     }
 
     fn compute_child_layout(

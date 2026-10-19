@@ -77,10 +77,11 @@ pub(crate) fn template(
             BoxSizingValue::BorderBox => BoxSizing::BorderBox,
         },
         direction: if rtl { Direction::Rtl } else { Direction::Ltr },
+        // Static boxes ignore their insets; sticky ones are laid out as static ones.
         position: match box_.position {
-            PositionValue::Static | PositionValue::Relative | PositionValue::Sticky => {
-                Position::Relative
-            }
+            PositionValue::Static => Position::Static,
+            PositionValue::Relative => Position::Relative,
+            PositionValue::Sticky => Position::Sticky,
             PositionValue::Absolute => Position::Absolute,
             PositionValue::Fixed => Position::Fixed,
         },
