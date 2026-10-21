@@ -99,7 +99,7 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
             // `child_count == 0 && leaf_is_cheap`, from the one record.
             cheap_leaf: matches!(
                 box_node.fc,
-                FormattingContext::Block | FormattingContext::Flex | FormattingContext::Grid
+                FormattingContext::Block | FormattingContext::Flex
             ) && box_node.children.is_empty(),
             dependency,
             kind: if leaf {
@@ -129,11 +129,11 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         // An empty block-level box measures nothing: its answer is its own padding and border.
         // Everything else that reaches the leaf path has content to ask, and the asking is
         // exactly what the cache exists to avoid.
+        // An empty grid is not: its explicit tracks still size it, and the engine lays it out as a
+        // grid.
         let node = self.node_of(node);
-        matches!(
-            node.fc,
-            FormattingContext::Block | FormattingContext::Flex | FormattingContext::Grid
-        ) && node.children.is_empty()
+        matches!(node.fc, FormattingContext::Block | FormattingContext::Flex)
+            && node.children.is_empty()
     }
 
     fn compute_leaf(
