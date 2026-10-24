@@ -36,10 +36,12 @@ pub(crate) fn run() -> Outcome {
         let index = step % rows;
         let at = fixture::table_row_centre(index);
         let mark = zgui_profile::counter::snapshot();
+        let gpu = crate::gpu_time::phase("hover.crossing");
         let started = std::time::Instant::now();
         harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
         let ran = harness.settle(64);
         samples.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
         let moved = mark.delta(&zgui_profile::counter::snapshot());
         frames += ran;
         emitted += moved.primitives_emitted;

@@ -56,9 +56,11 @@ pub(crate) fn run() -> Outcome {
     let mut turns = Vec::with_capacity(TURNS);
     for _ in 0..TURNS {
         harness.advance(std::time::Duration::from_micros(16_667));
+        let gpu = crate::gpu_time::phase("idle.turn");
         let started = std::time::Instant::now();
         frames += harness.pump();
         turns.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
     }
     let moved = before.delta(&zgui_profile::counter::snapshot());
     let pace = Pace::of(&turns, INTERVAL_US);

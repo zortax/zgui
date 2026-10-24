@@ -78,6 +78,7 @@ mod shell;
 mod draw;
 mod drive;
 mod gallery;
+mod gpu_time;
 mod growth;
 mod input;
 mod inspect;

@@ -83,10 +83,12 @@ pub(crate) fn run() -> Outcome {
             continue;
         }
         let mark = zgui_profile::counter::snapshot();
+        let gpu = crate::gpu_time::phase("scroll.tick");
         let started = std::time::Instant::now();
         harness.advance(std::time::Duration::from_micros(8_333));
         let ran = harness.pump();
         let cost = started.elapsed().as_secs_f64() * 1e6;
+        drop(gpu);
         if ran == 0 {
             continue;
         }

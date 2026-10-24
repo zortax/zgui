@@ -31,6 +31,7 @@ use crate::scenario::{Outcome, counters};
 /// Runs the scenario.
 pub(crate) fn run() -> Outcome {
     let before = zgui_profile::counter::snapshot();
+    let gpu = crate::gpu_time::phase("cold.first_frame");
     let started = std::time::Instant::now();
 
     let mut harness = zgui_platform_headless::Harness::new(crate::gallery::runtime("s13"));
@@ -40,6 +41,7 @@ pub(crate) fn run() -> Outcome {
     )));
     harness.settle(256);
     let elapsed = started.elapsed();
+    drop(gpu);
     let moved = before.delta(&zgui_profile::counter::snapshot());
 
     let boxes = harness.app().windows()[0].layout().borrow().keys().len();

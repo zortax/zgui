@@ -216,6 +216,7 @@ fn tooltips(harness: &mut Harness<Runtime>) -> Tooltips {
     let before = zgui_profile::counter::snapshot();
     for _ in 0..SWEEPS {
         for &at in &aims {
+            let _gpu = crate::gpu_time::phase("shell.tooltip_crossing");
             let started = std::time::Instant::now();
             harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
             harness.settle(64);
@@ -276,10 +277,12 @@ fn drag(harness: &mut Harness<Runtime>) -> Drag {
         } else {
             DRAG_STEP
         };
+        let gpu = crate::gpu_time::phase("shell.drag_step");
         steps.push(timed(
             harness,
             crate::input::pointer(PointerAction::Moved, Point::new(start.x, CssPx(y))),
         ));
+        drop(gpu);
         harness.advance(Duration::from_micros(8_333));
     }
     let moved = before.delta(&zgui_profile::counter::snapshot());
@@ -324,10 +327,12 @@ fn resize(harness: &mut Harness<Runtime>) -> Resize {
             DevicePx(crate::gallery::WIDTH - shrink),
             DevicePx(crate::gallery::HEIGHT - shrink / 2.0),
         );
+        let gpu = crate::gpu_time::phase("shell.resize_step");
         let started = std::time::Instant::now();
         harness.deliver_to_first(SurfaceEvent::Resized(size));
         harness.settle(64);
         steps.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
         harness.advance(Duration::from_micros(16_667));
         harness.pump();
     }

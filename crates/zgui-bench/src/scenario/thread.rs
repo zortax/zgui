@@ -273,10 +273,12 @@ pub(crate) fn run() -> Outcome {
         )]
         let width = crate::gallery::WIDTH + (step % CYCLE) as f32 * 8.0;
         let mark = counter::snapshot();
+        let gpu = crate::gpu_time::phase("thread.resize");
         let started = std::time::Instant::now();
         harness.deliver_to_first(SurfaceEvent::Resized(wide(width)));
         harness.settle(64);
         let cost = started.elapsed().as_secs_f64() * 1e3;
+        drop(gpu);
         let moved = mark.delta(&counter::snapshot());
         steps.cost_ms.push(cost);
         steps.relaid.push(sample(moved.nodes_relaid_out));
@@ -334,6 +336,7 @@ pub(crate) fn run() -> Outcome {
     let declined_before = harness.app().windows()[0].declined_frames();
     let deferred_before = harness.app().windows()[0].deferred_resizes();
     let mut width = crate::gallery::WIDTH;
+    let gpu = crate::gpu_time::phase("thread.drag");
     for _ in 0..DRAG_MILLIS {
         harness.deliver(surface, SurfaceEvent::Resized(wide(width)));
         width += 1.0;
@@ -346,6 +349,7 @@ pub(crate) fn run() -> Outcome {
         harness.advance(Duration::from_millis(1));
         harness.pump();
     }
+    drop(gpu);
     let drag_layouts = counter::get(Counter::LayoutReachedRoot) - layouts_before;
     let declined = harness.app().windows()[0].declined_frames() - declined_before;
     let deferred = harness.app().windows()[0].deferred_resizes() - deferred_before;
