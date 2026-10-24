@@ -32,13 +32,13 @@ fn gated(store: &mut LayoutStore, content: &mut Content, width: f32, height: f32
     tree.relayout_root(cephal::Size { width, height })
 }
 
-/// How many boxes were laid out and how many measurements were served while `body` ran.
+/// How many boxes were laid out and how many sizes were measured while `body` ran.
 fn cost(body: impl FnOnce()) -> (u64, u64) {
     counter::reset();
     body();
     (
         counter::get(Counter::NodesRelaidOut),
-        counter::get(Counter::SizesHeld),
+        counter::get(Counter::SizesMeasured),
     )
 }
 
@@ -211,7 +211,7 @@ fn a_document_with_no_boxes_is_reported_rather_than_held() {
 /// The engine's own per-box cache keeps nine slots chosen by the *shape* of the question, so the
 /// min-content and max-content probes grid track sizing repeats against a moving grid-area estimate
 /// all land in the same slot and evict each other. Each eviction is a whole nested layout of the
-/// panel. This asserts that they are served instead, and — the half that matters — that serving
+/// panel. This asserts that they are not taken again, and — the half that matters — that skipping
 /// them changes no number anywhere.
 #[test]
 fn a_grid_serves_its_repeated_probes_rather_than_re_measuring() {
@@ -223,7 +223,7 @@ fn a_grid_serves_its_repeated_probes_rather_than_re_measuring() {
     let fixture = Fixture::new(panels(9), SHEET);
     let mut cold = fixture.box_tree();
     let mut cold_content = measurer();
-    let (cold_relaid_out, _) = cost(|| {
+    let (cold_relaid_out, cold_measured) = cost(|| {
         lay_out_only(&mut cold, &mut cold_content, VIEWPORT.0, VIEWPORT.1);
     });
     let cold_text = print::to_text(&cold);
@@ -241,7 +241,7 @@ fn a_grid_serves_its_repeated_probes_rather_than_re_measuring() {
         .expect("the fixture has a leaf");
     zgui_layout::tree::dirty::mark_dirty(&mut store, leaf);
 
-    let (warm_relaid_out, served) = cost(|| {
+    let (warm_relaid_out, warm_measured) = cost(|| {
         assert_eq!(
             gated(&mut store, &mut content, VIEWPORT.0, VIEWPORT.1),
             Relayout::Ran
@@ -254,7 +254,13 @@ fn a_grid_serves_its_repeated_probes_rather_than_re_measuring() {
         "the pass that served its measurements from the memo produced different geometry from a \
          cold one"
     );
-    assert!(served > 0, "no measurement was served from the memo at all");
+    // Served from the cache, or never asked again: the engine shares one answer between
+    // questions that differ only in inputs the panel does not read.
+    assert!(
+        warm_measured * 4 < cold_measured,
+        "a change to one leaf measured {warm_measured} sizes against a cold document's \
+         {cold_measured}"
+    );
     assert!(
         warm_relaid_out * 4 < cold_relaid_out,
         "a change to one leaf cost {warm_relaid_out} box layouts against a cold document's \

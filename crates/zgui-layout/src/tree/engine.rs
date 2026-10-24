@@ -9,7 +9,7 @@ use cephal::compute::block::BlockContext;
 use cephal::schedule::Incremental;
 use cephal::tree::{
     AnswerSource, CacheAccess, ChildRequest, IdentSuffix, LayoutInput, LayoutOutput,
-    LayoutTree as EngineTree, NodeCache, NodeId, QueryMeta, RunMode,
+    LayoutTree as EngineTree, NodeCache, NodeId, NodeKind, QueryMeta, RunMode,
 };
 use cephal::{Layout, Style};
 use zgui_profile::{Counter, counter};
@@ -82,6 +82,10 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
     /// The engine's own derivation, read from the interned style, plus one fact the style lacks:
     /// an inline formatting context whose atomic inlines size their block axis with a percentage
     /// keeps the parent's block size in its question.
+    ///
+    /// Every box the engine sees no children of is answered by the engine's leaf algorithm through
+    /// the [leaf shell](crate::inline::leaf_shell), so it is [`NodeKind::Leaf`]. Its measurement
+    /// may read the available height, so it is not [`NodeKind::LeafIgnoringHeight`].
     #[inline]
     fn query_meta(&self, node: NodeId) -> QueryMeta {
         let key = from_node_id(node);
@@ -89,26 +93,47 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         let (style, mut dependency) = structure.engine_style_with_dependency(key);
         let box_node = structure.node(key);
         dependency.height |= box_node.atomic_percent_block;
+        let leaf = !engine_sees_children(box_node.fc) || box_node.children.is_empty();
         QueryMeta {
             hidden: style.generates_no_box(),
             // `child_count == 0 && leaf_is_cheap`, from the one record.
             cheap_leaf: matches!(
                 box_node.fc,
-                FormattingContext::Block | FormattingContext::Flex | FormattingContext::Grid
+                FormattingContext::Block | FormattingContext::Flex
             ) && box_node.children.is_empty(),
             dependency,
+            kind: if leaf {
+                NodeKind::Leaf
+            } else {
+                NodeKind::of_container(style)
+            },
         }
+    }
+
+    #[inline]
+    fn style_plan(&self, node: NodeId) -> Option<&cephal::compute::plan::StylePlan> {
+        self.structure().engine_style_plan(from_node_id(node))
+    }
+
+    #[inline]
+    fn take_observed(&mut self) -> u8 {
+        core::mem::take(&mut self.observed)
+    }
+
+    #[inline]
+    fn note_observed(&mut self, axes: u8) {
+        self.observed |= axes;
     }
 
     fn leaf_is_cheap(&self, node: NodeId) -> bool {
         // An empty block-level box measures nothing: its answer is its own padding and border.
         // Everything else that reaches the leaf path has content to ask, and the asking is
         // exactly what the cache exists to avoid.
+        // An empty grid is not: its explicit tracks still size it, and the engine lays it out as a
+        // grid.
         let node = self.node_of(node);
-        matches!(
-            node.fc,
-            FormattingContext::Block | FormattingContext::Flex | FormattingContext::Grid
-        ) && node.children.is_empty()
+        matches!(node.fc, FormattingContext::Block | FormattingContext::Flex)
+            && node.children.is_empty()
     }
 
     fn compute_leaf(
@@ -134,11 +159,13 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
                 self.touched.push((key, before));
             }
             let state = self.state_mut(key);
-            state.unrounded = *layout;
             // Until the snapping pass runs, the snapped result is the unrounded one, so a caller
             // that reads a layout between the two passes reads geometry rather than nothing.
             state.snapped = *layout;
         }
+        // Written even when equal: equal layouts may differ in the sign of a zero, and the next
+        // pass reads these bits back.
+        self.state_mut(key).unrounded = *layout;
     }
 
     fn unrounded_layout(&self, node: NodeId) -> Option<Layout> {
@@ -152,8 +179,30 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         self.state_mut(from_node_id(node)).absolute = Some(Box::new(context));
     }
 
-    fn absolute_context(&self, node: NodeId) -> Option<cephal::tree::AbsoluteContext> {
-        self.state(from_node_id(node))?.absolute.as_deref().cloned()
+    fn clear_absolute_context(&mut self, node: NodeId) {
+        if self.speculation > 0 {
+            return;
+        }
+        self.state_mut(from_node_id(node)).absolute = None;
+    }
+
+    fn absolute_context(&self, node: NodeId) -> Option<&cephal::tree::AbsoluteContext> {
+        self.state(from_node_id(node))?.absolute.as_deref()
+    }
+
+    /// Every box claims its out-of-flow children: the box tree already parents an absolutely or
+    /// fixed positioned box under its containing block (see `boxtree::absolute`), so the engine's
+    /// own hoisting finds it there.
+    #[inline]
+    fn containing_block_claims(&self, _node: NodeId) -> u8 {
+        cephal::compute::oof::OOF_ALL
+    }
+
+    /// A fixed box's parent only stands in for the viewport, which is its containing block; it
+    /// scrolls with nothing, so it adds nothing to the parent's scrollable overflow.
+    #[inline]
+    fn out_of_flow_overflow(&self, _node: NodeId) -> u8 {
+        cephal::compute::oof::OOF_ABSOLUTE
     }
 
     fn compute_child_layout(
@@ -163,6 +212,11 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         cephal::compute::compute_child_layout(self, node, inputs, block_ctx)
+    }
+
+    #[inline]
+    fn forwards_child_layout(&self) -> bool {
+        true
     }
 
     fn observe_answer(

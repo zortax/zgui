@@ -676,6 +676,24 @@ impl<'a> Structure<'a> {
         self.engine_styles.with_dependency(id)
     }
 
+    /// A live box's engine style with its lengths resolved, if none of them is relative.
+    ///
+    /// # Panics
+    ///
+    /// If the key names no live box, or no pass has refreshed the engine styles yet.
+    pub(crate) fn engine_style_plan(
+        &self,
+        key: BoxKey,
+    ) -> Option<&'a cephal::compute::plan::StylePlan> {
+        let id = self
+            .engine_style
+            .get(key)
+            .copied()
+            .flatten()
+            .expect("a live box holds an engine style");
+        self.engine_styles.plan(id)
+    }
+
     /// Resolves a `calc()` identifier a template embedded.
     pub(crate) fn resolve_calc_id(&self, id: cephal::style::CalcId, basis: f32) -> f32 {
         self.styles.resolve_calc_id(id, basis)
