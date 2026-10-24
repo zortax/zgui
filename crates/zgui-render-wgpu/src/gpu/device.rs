@@ -15,8 +15,16 @@ use crate::gpu::loss::DeviceLoss;
 /// drivers. Nothing here is required: a missing feature changes which primitives are emitted, and
 /// a device that refuses to open because it lacks one would be a device that renders nothing at
 /// all rather than one that renders slightly worse text.
+///
+/// Timestamp queries are asked for only when [pass timing](crate::gpu::timing) was asked for, so
+/// the default device keeps its default feature set.
 fn optional_features() -> wgpu::Features {
-    wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::PIPELINE_CACHE
+    let features = wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::PIPELINE_CACHE;
+    if crate::gpu::timing::requested() {
+        features | wgpu::Features::TIMESTAMP_QUERY
+    } else {
+        features
+    }
 }
 
 /// The smallest memory block the allocator reserves on a device.

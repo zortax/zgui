@@ -13,6 +13,7 @@ use crate::frame::damage;
 use crate::frame::pass::{Recorded, Recorder};
 use crate::frame::plan::plan_segments;
 use crate::frame::present;
+use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::WgpuRenderer;
 use crate::target::acquire::{Acquisition, SurfaceAction};
@@ -154,6 +155,9 @@ impl Renderer for WgpuRenderer {
         zgui_profile::latency::mark("r.tables");
         self.buffers.prepare_tables(scene);
         self.buffers.begin_frame(&self.gpu);
+        if let Some(timer) = &mut self.timer {
+            timer.begin(&self.gpu);
+        }
         // Staged before the plan, because the plan stages the target blocks into the same frame
         // and a slot allocator hands out offsets in the order it is asked.
         self.buffers.stage_effect_params(scene);
@@ -308,7 +312,13 @@ impl Renderer for WgpuRenderer {
             self.blit(&mut encoder, view, formats.blit_undoes_srgb());
             draw_calls += 1;
         }
+        if let Some(timer) = &mut self.timer {
+            timer.finish(&mut encoder);
+        }
         self.gpu.queue().submit([encoder.finish()]);
+        if let Some(timer) = &mut self.timer {
+            timer.submitted();
+        }
         // Ties the frame's retired arena ranges to the submission just made, so they come back
         // only once nothing in flight can read them.
         self.buffers.chunks.submitted(&self.gpu);
@@ -554,6 +564,10 @@ impl WgpuRenderer {
         let Some(raster) = self.vectors.as_deref_mut() else {
             return Ok(());
         };
+        let span = self
+            .timer
+            .as_mut()
+            .and_then(|timer| timer.open_vectors(&self.gpu));
         // Mandatory, and before anything reads: a rasterisation that fails while reporting success
         // would otherwise leave the previous round's content in a reused scratch, which composites
         // as wrong pixels rather than as missing ones and has nothing to notice it by.
@@ -567,7 +581,11 @@ impl WgpuRenderer {
             &placements,
         )
         .in_round(round);
-        raster.prepare(&mut frame)
+        let prepared = raster.prepare(&mut frame);
+        if let Some(span) = &span {
+            GpuTimer::close_vectors(&self.gpu, span);
+        }
+        prepared
     }
 
     /// Rasterises a round after the first, between two submissions of the frame.
@@ -603,7 +621,7 @@ impl WgpuRenderer {
     /// One borrow of the pipelines per run, released before anything else on this device asks for
     /// the pipelines it shares with the other windows.
     fn record(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         plan: &crate::frame::build::FramePlan,
         segments: &[crate::frame::segment::Segment],
@@ -622,6 +640,7 @@ impl WgpuRenderer {
             vectors: self.vectors.as_deref(),
             marks: &self.marks_scratch,
             mark_extent,
+            timer: self.timer.as_mut(),
         }
         .record(encoder, plan, segments)
     }
@@ -647,6 +666,10 @@ impl WgpuRenderer {
         let Some(pipeline) = pipelines.get(&self.gpu, kind, format) else {
             return;
         };
+        let queries = self
+            .timer
+            .as_mut()
+            .and_then(|timer| timer.pass(TimedWork::Blit));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zgui.present"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -661,7 +684,7 @@ impl WgpuRenderer {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: queries.as_ref().map(PassQueries::render),
             occlusion_query_set: None,
             multiview_mask: None,
         });

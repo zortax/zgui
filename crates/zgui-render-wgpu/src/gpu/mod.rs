@@ -8,3 +8,4 @@ pub mod loader;
 pub mod loss;
 pub mod pipeline_cache;
 pub mod surface;
+pub mod timing;

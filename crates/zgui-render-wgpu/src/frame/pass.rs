@@ -11,6 +11,7 @@ use crate::frame::build::FramePlan;
 use crate::frame::segment::{EncoderOp, PassLoad, PlannedDraw, PlannedPass, Segment};
 use crate::frame::target::TargetRef;
 use crate::gpu::device::Gpu;
+use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::Pipelines;
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
@@ -65,6 +66,8 @@ pub struct Recorder<'frame> {
     pub marks: &'frame crate::target::marks::MarksScratch,
     /// The device extent of one bin page, which a page pass's block describes.
     pub mark_extent: zgui_geom::Size<i32, Device>,
+    /// The frame's pass timing, when timing is on.
+    pub(crate) timer: Option<&'frame mut GpuTimer>,
 }
 
 impl Recorder<'_> {
@@ -144,17 +147,22 @@ impl Recorder<'_> {
         planned: &PlannedPass,
         recorded: &mut Recorded,
     ) {
-        let Some(view) = self.view(planned.target) else {
-            return;
-        };
         let Some(format) = self.format(planned.target) else {
             return;
         };
         let extent = self.extent(planned.target);
         let scissor = scaled(planned.scissor, planned.target, extent);
-        if scissor.is_empty() {
+        if scissor.is_empty() || self.view(planned.target).is_none() {
             return;
         }
+        // Taken only for a pass that opens, because a query nothing writes would resolve to noise.
+        let queries = self
+            .timer
+            .as_deref_mut()
+            .and_then(|timer| timer.pass(timed_work(planned.target)));
+        let Some(view) = self.view(planned.target) else {
+            return;
+        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zgui.pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -170,7 +178,7 @@ impl Recorder<'_> {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: queries.as_ref().map(PassQueries::render),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -674,6 +682,14 @@ impl Recorder<'_> {
             TargetRef::Pool(slot) => slot.scale().extent(self.pool.region()),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
+    }
+}
+
+/// The kind of work a pass into `target` is timed as.
+fn timed_work(target: TargetRef) -> TimedWork {
+    match target {
+        TargetRef::Pool(_) => TimedWork::Groups,
+        TargetRef::Composed | TargetRef::MarksPage(_) => TimedWork::Draws,
     }
 }
 

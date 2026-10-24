@@ -379,6 +379,12 @@ counters! {
     /// that persists means large uploads on every frame.
     StagingOneShotBytes => staging_one_shot_bytes, Group::RendererSpecific;
 
+    /// Nanoseconds the GPU spent in the renderer's timed passes.
+    ///
+    /// Zero unless GPU pass timing is on. A frame's time is added when its result is read back,
+    /// one or two frames after the frame was drawn.
+    GpuTimeNs => gpu_time_ns, Group::RendererSpecific;
+
     /// Frames the loop actually drew.
     ///
     /// Named for what it counts. A window with nothing moving in it is supposed to leave this

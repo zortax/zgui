@@ -31,6 +31,7 @@ use crate::frame::vector::VectorSource;
 /// A backend companion's lazy vector-rasteriser constructor.
 pub type VectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSource>;
 use crate::gpu::device::Gpu;
+use crate::gpu::timing::{GpuTimer, GpuTiming};
 use crate::pipeline::Pipelines;
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
@@ -158,6 +159,8 @@ pub struct WgpuRenderer {
     backends: wgpu::Backends,
     /// Whether a frame with more vector passes than the scratch can hold stops the program.
     vector_shortfall_is_fatal: bool,
+    /// The pass timing, when timing was asked for and the device has timestamp queries.
+    timer: Option<GpuTimer>,
 }
 
 impl std::fmt::Debug for WgpuRenderer {
@@ -194,6 +197,7 @@ impl WgpuRenderer {
             pipelines.borrow().layouts().sampled.clone(),
         );
         let buffers = FrameBuffers::new(&gpu);
+        let timer = GpuTimer::new(&gpu);
         let groups = GroupPool::scaled(target.size);
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zgui.sampler.filtering"),
@@ -260,6 +264,7 @@ impl WgpuRenderer {
             // that runs out of capacity has reached a ceiling rather than a condition anyone chose,
             // and it costs real content either way.
             vector_shortfall_is_fatal: cfg!(debug_assertions),
+            timer,
         }
     }
 
@@ -356,6 +361,41 @@ impl WgpuRenderer {
         // Nothing the old device held survives, least of all the target frames were composed into.
         self.full_damage_next = true;
         Ok(())
+    }
+
+    /// Whether this renderer times its passes on the GPU.
+    ///
+    /// See [`gpu::timing`](crate::gpu::timing) for when it does.
+    pub fn gpu_timing_enabled(&self) -> bool {
+        self.timer.is_some()
+    }
+
+    /// The most recent GPU timing result.
+    ///
+    /// A result arrives one or two frames after the frame it describes. `None` when timing is off
+    /// or no result has arrived yet.
+    pub fn gpu_timing(&self) -> Option<GpuTiming> {
+        self.timer.as_ref().and_then(GpuTimer::latest)
+    }
+
+    /// Reads completed GPU timing results without waiting, and hands over each one held, oldest
+    /// first.
+    ///
+    /// Empty when timing is off. After [`Gpu::wait`], it holds every frame drawn before the wait
+    /// that got a query set. It keeps only the latest 1024 results since the last call.
+    pub fn take_gpu_timings(&mut self) -> Vec<GpuTiming> {
+        match &mut self.timer {
+            Some(timer) => timer.take(&self.gpu),
+            None => Vec::new(),
+        }
+    }
+
+    /// How many frames began recording since the renderer was built, when timing is on.
+    ///
+    /// The frame a [`GpuTiming`] names is this count as it was before that frame began, so a
+    /// caller that reads the count around a draw can find the result of that draw later.
+    pub fn gpu_timed_frames(&self) -> Option<u64> {
+        self.timer.as_ref().map(GpuTimer::frames)
     }
 
     /// The device everything is drawn on.

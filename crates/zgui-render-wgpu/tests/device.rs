@@ -331,6 +331,32 @@ fn a_small_renderer_reserves_small_memory_blocks() {
 }
 
 #[test]
+fn a_default_device_asks_for_no_timestamp_queries_and_times_nothing() {
+    if zgui_render_wgpu::gpu::timing::requested() {
+        eprintln!("skipped: GPU pass timing was asked for through the environment");
+        return;
+    }
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    assert!(
+        !renderer
+            .gpu()
+            .device()
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY),
+        "timestamp queries are asked for only when timing is on"
+    );
+    assert!(!renderer.gpu_timing_enabled());
+    assert_eq!(renderer.gpu_timed_frames(), None);
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.finish(&DamageSet::full());
+    present(&mut renderer, &scene);
+    assert!(renderer.take_gpu_timings().is_empty());
+}
+
+#[test]
 fn a_lost_device_is_rebuilt_and_the_frame_after_it_draws_the_same_pixels() {
     let Some(mut renderer) = plain_renderer() else {
         return;
