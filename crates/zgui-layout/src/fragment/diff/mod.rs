@@ -537,22 +537,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // pieces once they are written, or whatever came before the box when it has none.
         let mut cursor = if order.1 > 0 { order.1 } else { between.0 };
 
+        // The children are walked in painting order. A box born anywhere below one of them is
+        // placed between the order keys of what was walked before it and the next sibling, so
+        // those have to be its neighbours in painting order.
         let children_mark = self.scratch.children.len();
-        self.scratch
-            .children
-            .extend_from_slice(&self.store.node(key).children);
+        self.scratch.children.extend_from_slice(
+            &crate::fragment::stacking::children_in_paint_order(self.store, key),
+        );
         let children_end = self.scratch.children.len();
-        // A child with no fragments yet is about to be born among its siblings, and it is placed
-        // by their layout positions. Where the box paints its children in another order that
-        // placement is wrong, and the whole index is numbered again instead.
-        if (children_mark..children_end).any(|index| {
-            self.store
-                .fragments_of_box(self.scratch.children[index])
-                .is_empty()
-        }) && !crate::fragment::stacking::children_in_layout_order(self.store, key)
-        {
-            self.restacked = true;
-        }
         let first_fragment = (!fragments.is_empty()).then(|| self.scratch.written[fragments.start]);
         let mut blending = placed.blends;
         let mut below = false;
@@ -977,16 +969,21 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     }
 
     /// The first order key indexed below `key`, or `after` when nothing below it is indexed yet.
+    ///
+    /// The lowest key of all the children, because a box can paint its children in another order
+    /// than it lays them out.
     fn first_indexed_below(&self, key: BoxKey, after: HitOrder) -> HitOrder {
-        for &child in &self.store.node(key).children {
-            if let Some(&frag) = self.store.fragments_of_box(child).first()
-                && let Some(fragment) = self.store.fragment(frag)
-                && fragment.subtree_order.0 != HitOrder::MAX
-            {
-                return fragment.subtree_order.0;
-            }
-        }
-        after
+        self.store
+            .node(key)
+            .children
+            .iter()
+            .filter_map(|&child| {
+                let &frag = self.store.fragments_of_box(child).first()?;
+                let order = self.store.fragment(frag)?.subtree_order.0;
+                (order != HitOrder::MAX).then_some(order)
+            })
+            .min()
+            .unwrap_or(after)
     }
 
     /// Drops every fragment of a box beyond the first `keep`, damaging what they covered.

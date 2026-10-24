@@ -300,6 +300,10 @@ pub fn children_in_layout_order(store: &LayoutStore, key: BoxKey) -> bool {
     let Some(node) = store.get(key) else {
         return true;
     };
+    // One child is in order with itself, and its key is the costly part.
+    if node.children.len() < 2 {
+        return true;
+    }
     let mut ranks = node
         .children
         .iter()
