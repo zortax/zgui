@@ -5716,14 +5716,18 @@ name = "zgui-bench"
 version = "0.1.0"
 dependencies = [
  "zgui",
+ "zgui-a11y",
+ "zgui-dom",
  "zgui-geom",
  "zgui-layout",
+ "zgui-paint",
  "zgui-platform-headless",
  "zgui-platform-winit",
  "zgui-profile",
  "zgui-render-vector-vello",
  "zgui-render-wgpu",
  "zgui-testkit-scene",
+ "zgui-text-parley",
  "zgui-ui",
  "zgui-ui-icons",
  "zgui-ui-primitives",

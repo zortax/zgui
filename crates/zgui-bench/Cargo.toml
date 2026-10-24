@@ -31,6 +31,21 @@ zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+# Named by `mem-probe` alone, for the sizes of the records it reports.
+zgui-a11y = { path = "../zgui-a11y", version = "0.1.0" }
+zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
+zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
+zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
+
+[features]
+# The allocation tags `mem-probe` charges each allocation to. A feature of its own, so the timed
+# binaries beside it are built without them.
+mem-probe = ["zgui-profile/alloc-tags"]
+
+[[bin]]
+name = "mem-probe"
+path = "src/bin/mem-probe.rs"
+required-features = ["mem-probe"]
 
 [lints]
 workspace = true
