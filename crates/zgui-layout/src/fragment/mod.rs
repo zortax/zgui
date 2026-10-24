@@ -177,8 +177,20 @@ impl FragmentFlags {
     /// Read where a box decides whether it needs a target of its own: a backdrop root isolates
     /// only for such a reader.
     pub const READS_BACKDROP_BELOW: Self = Self(1 << 9);
+    /// The box applies an effect to everything below it: an opacity below one, a filter or a
+    /// blend mode, from its style or from a running animation.
+    ///
+    /// Read where damage is weighed: a repaint of such a box changes every pixel its subtree
+    /// paints. Its own ink does not hold the pixels the subtree paints outside it, which are all
+    /// of them when the box paints nothing.
+    pub const GROUPS_SUBTREE: Self = Self(1 << 10);
     /// The flags the unwind writes from the subtree, which a comparison of the box itself ignores.
     pub const FOLDED: Self = Self::HAS_BLENDING_DESCENDANT.union(Self::READS_BACKDROP_BELOW);
+    /// The flags a comparison of the box's geometry ignores.
+    ///
+    /// The subtree's flags, and [`FragmentFlags::GROUPS_SUBTREE`]: a change of that one owes the
+    /// subtree's ink, which the repaint mark that comes with it already damages.
+    pub const UNCOMPARED: Self = Self::FOLDED.union(Self::GROUPS_SUBTREE);
     /// The flags that say this fragment or one below it reads what is painted behind it.
     pub const READS_BACKDROP: Self = Self::HAS_BLENDING_DESCENDANT
         .union(Self::FILTERS_BACKDROP)

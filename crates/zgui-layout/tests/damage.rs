@@ -134,6 +134,49 @@ fn a_repaint_mark_on_a_paintless_box_damages_nothing() {
 }
 
 #[test]
+fn a_repaint_mark_on_a_translucent_paintless_box_damages_its_subtree() {
+    // An opacity applies to everything below the box, so a repaint of it changes every pixel
+    // its subtree paints. The box paints nothing, and its child reaches below it, so neither its
+    // own ink nor its border box holds those pixels.
+    let fixture = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("a"),
+            Element::new("b").children(vec![Element::new("c")]),
+        ]),
+        "root { display: block; width: 200px }
+         a { display: block; height: 30px }
+         b { display: block; height: 10px; opacity: 0.5 }
+         c { display: block; height: 30px; background-color: #246 }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 200.0);
+
+    let target = second_child(&store);
+    let child = store.node(target).children[0];
+    let ink = {
+        let frag = store.fragments_of_box(child)[0];
+        store.fragment(frag).expect("live").ink
+    };
+    let node = store.node(target).source;
+
+    frame.damage = DamageSet::new();
+    let root = store.root().expect("a root");
+    let mut dirty = OnlyThis {
+        node,
+        bits: Dirty::REPAINT,
+        marked: Vec::new(),
+    };
+    fragments(&mut frame, &mut store, root, &mut dirty);
+
+    assert!(
+        covers(&frame.damage, ink),
+        "the faded child is not in {:?}",
+        frame.damage.rects()
+    );
+}
+
+#[test]
 fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_places() {
     // Scrolling is the case exactly: every piece inside the scrollport keeps its size and its
     // shape and lands somewhere else. The paint stage services that by offsetting what it recorded

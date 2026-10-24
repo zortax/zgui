@@ -1285,6 +1285,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             // moved while its rectangle stood still is re-encoded only if the fragment says so.
             fragment.content_hash = next.content_hash;
             fragment.flags = next.flags.union(kept);
+            // The style's half is decided where the box is placed; an animated opacity lives in
+            // the document, beside the shared style.
+            if kind == FragmentKind::Box && self.dirty.animates_opacity(node) {
+                fragment.flags = fragment.flags.union(FragmentFlags::GROUPS_SUBTREE);
+            }
             if change != Change::Identical {
                 counter::bump(Counter::FragmentsRebuilt);
             }
@@ -1415,6 +1420,29 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 self.touch_hit(frag, change, stood);
             }
         }
+        // An opacity, filter or blend mode applied to the subtree changes every pixel the subtree
+        // paints. The box's own ink does not hold the pixels its subtree paints outside it, which
+        // are all of them when the box paints nothing. A box that moved also owes the subtree at
+        // its new place: the pixels a scroll shifts there carry the old effect. Cut to the chain,
+        // which keeps a translucent pane as tall as its list to the part of it on the screen.
+        // Any repaint mark fires this, also one a structural edit below the box puts on it.
+        if kind == FragmentKind::Box
+            && own.contains(Dirty::REPAINT)
+            && let Some(previous) = &previous
+        {
+            let groups = self
+                .store
+                .fragment(frag)
+                .is_some_and(|fragment| fragment.flags.contains(FragmentFlags::GROUPS_SUBTREE));
+            if groups || previous.flags.contains(FragmentFlags::GROUPS_SUBTREE) {
+                self.damage_beyond_a_move(previous.subtree_ink, admitted);
+                let shift = next.border_box.origin - previous.border_box.origin;
+                if shift != zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)) {
+                    let carried = previous.subtree_ink.translate(Size::new(shift.x, shift.y));
+                    self.damage_beyond_a_move(carried, admitted);
+                }
+            }
+        }
         change
     }
 
@@ -1432,7 +1460,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         kind: FragmentKind,
         next: &Geometry,
     ) -> Option<[Option<Rect<DevicePx, Device>>; 4]> {
-        let unflagged = |flags: FragmentFlags| flags.without(FragmentFlags::FOLDED);
+        let unflagged = |flags: FragmentFlags| flags.without(FragmentFlags::UNCOMPARED);
         if kind != FragmentKind::Box
             || previous.kind != kind
             || unflagged(previous.flags) != unflagged(next.flags)

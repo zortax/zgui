@@ -164,6 +164,15 @@ pub struct Tables<'a> {
     pub placements: &'a [(zgui_dom::NodeKey, zgui_dom::side::AnimPlacement)],
 }
 
+/// Whether `style` applies an effect to the whole subtree: an opacity below one, a filter or a
+/// blend mode.
+fn groups_subtree(style: &zgui_css::ComputedStyle) -> bool {
+    let effects = style.get_effects();
+    effects.opacity < 1.0
+        || !effects.filter.0.is_empty()
+        || effects.mix_blend_mode != zgui_css::values::effect::MixBlendModeValue::Normal
+}
+
 /// Composes one box against its parent.
 pub(crate) fn place(
     store: &LayoutStore,
@@ -354,6 +363,9 @@ pub(crate) fn place(
     }
     if filter::filters_backdrop(&node.style) {
         flags = flags.union(FragmentFlags::FILTERS_BACKDROP);
+    }
+    if groups_subtree(&node.style) {
+        flags = flags.union(FragmentFlags::GROUPS_SUBTREE);
     }
 
     Some(Placed {

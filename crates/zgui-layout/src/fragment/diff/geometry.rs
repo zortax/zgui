@@ -55,7 +55,7 @@ pub(super) struct Geometry {
 /// comparison does not measure, and each of those is rare enough to pay the two rectangles.
 pub(super) fn repositioned_within(previous: &Fragment, next: &Geometry) -> bool {
     let plain = |flags: FragmentFlags| {
-        flags.without(FragmentFlags::FOLDED) == FragmentFlags::PAINTS_NOTHING
+        flags.without(FragmentFlags::UNCOMPARED) == FragmentFlags::PAINTS_NOTHING
     };
     plain(next.flags)
         && plain(previous.flags)
@@ -123,8 +123,8 @@ pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
         // narrowing the box a `white-space: nowrap` label sits in changes neither the line's width
         // nor its position, and changes exactly which of its clusters are painted.
         && previous.content_hash == next.content_hash
-        && previous.flags.without(FragmentFlags::FOLDED)
-            == next.flags.without(FragmentFlags::FOLDED);
+        && previous.flags.without(FragmentFlags::UNCOMPARED)
+            == next.flags.without(FragmentFlags::UNCOMPARED);
     if !same_shape {
         return Change::Changed;
     }
