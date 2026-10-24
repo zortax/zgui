@@ -72,7 +72,11 @@ const LEDGER: &[(&str, &[&str])] = &[
     // the kernel as a dma-buf, and wgpu's API has a word for none of that. A second crate reaching
     // past wgpu into the driver would be a second place a device can be left holding an image
     // nothing gives back.
-    ("ash", &["zgui-platform-drm"]),
+    //
+    // `zgui-wgpu-import` is the one exception, for the opposite direction: a video decoder's
+    // dma-buf becomes an image this device samples. The image is wgpu's to destroy through the
+    // same drop callback, so nothing it makes outlives the texture wgpu holds.
+    ("ash", &["zgui-platform-drm", "zgui-wgpu-import"]),
     ("winit", &["zgui-platform-winit"]),
     ("accesskit_winit", &["zgui-platform-winit"]),
     ("arboard", &["zgui-platform-winit"]),
@@ -115,7 +119,9 @@ const LEDGER: &[(&str, &[&str])] = &[
     // eventfd its wake channel is, the `poll` its frame loop parks in, the monotonic clock an
     // input report is stamped against, and the `fstat` its tests read an exported descriptor with.
     // `zgui-platform-wayland` is on it for a clock as well: the one the compositor stamps its
-    // presentation feedback in. A row is read by its first match, so the four share one.
+    // presentation feedback in. `zgui-wgpu-import` issues no ioctl either: it is on the row for
+    // the `poll` that waits for a decoder's writes to a dma-buf to finish, and for the `fstat` that
+    // names a dma-buf it already imported. A row is read by its first match, so the five share one.
     (
         "rustix",
         &[
@@ -123,6 +129,7 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-platform-drm",
             "zgui-evdev",
             "zgui-platform-wayland",
+            "zgui-wgpu-import",
         ],
     ),
     // Both uapi crates read vendored kernel headers at build time. An ioctl request number is
