@@ -163,6 +163,37 @@ impl BoxLayout {
         self.cache.clear();
     }
 
+    /// An estimate of the heap bytes this box's layout state holds, one level deep.
+    ///
+    /// Counts the boxed records and the capacity of the vectors directly inside them. Content that
+    /// is shared through an `Arc`, and the engine's own cache records, are left out.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use core::mem::size_of;
+        let probe = self.probe_memo.as_deref().map_or(0, |memo| {
+            size_of::<crate::inline::measure::ProbeMemo>() + memo.heap_bytes()
+        });
+        let absolute = self
+            .absolute
+            .as_ref()
+            .map_or(0, |_| size_of::<cephal::tree::AbsoluteContext>());
+        let inline = self.inline.as_deref().map_or(0, |inline| {
+            size_of::<InlineResolution>() + inline.heap_bytes()
+        });
+        let flattened = self.flattened.as_deref().map_or(0, |flattened| {
+            size_of::<Flattened>() + flattened.heap_bytes()
+        });
+        let atomic = self
+            .atomic
+            .as_ref()
+            .map_or(0, |_| size_of::<crate::inline::atomic::AtomicAnswers>());
+        let fragments = if self.fragments.spilled() {
+            self.fragments.capacity() * size_of::<crate::fragment::FragKey>()
+        } else {
+            0
+        };
+        probe + absolute + inline + flattened + atomic + fragments
+    }
+
     /// Whether this box is holding no answer about its own size.
     pub(crate) fn holds_no_layout(&self) -> bool {
         self.cache.is_empty()
@@ -215,6 +246,20 @@ impl BoxLayout {
 }
 
 impl LayoutStore {
+    /// The sum of `BoxLayout::heap_bytes` over every box, for a memory report.
+    #[doc(hidden)]
+    pub fn layout_heap_bytes(&self) -> usize {
+        self.keys()
+            .into_iter()
+            .filter_map(|key| self.state(key))
+            .map(BoxLayout::heap_bytes)
+            .sum()
+    }
+
+    /// The size of one box's layout state record, for a memory report.
+    #[doc(hidden)]
+    pub const BOX_LAYOUT_SIZE: usize = core::mem::size_of::<BoxLayout>();
+
     /// What one box measured on one axis, if it is still holding the answer.
     pub(crate) fn intrinsic(&self, key: BoxKey, axis: Axis) -> Option<IntrinsicSizes> {
         self.state(key)?.intrinsic[axis.index()]

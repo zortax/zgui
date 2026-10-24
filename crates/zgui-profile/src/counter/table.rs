@@ -566,6 +566,12 @@ counters! {
     /// everywhere and moving it is not re-anchoring anything.
     PaintsReanchored => paints_reanchored, Group::BackendNeutral;
 
+    /// Bytes the text engine's shaped paragraphs hold right now, as the engine estimates them.
+    ///
+    /// A trend figure: compare it between runs. The allocation tags for shaping and breaking give
+    /// the absolute bytes. Zero for an engine that makes no estimate.
+    ParagraphBytesLive => paragraph_bytes_live, Group::Live;
+
     /// Shaped paragraphs thrown away.
     ParagraphsForgotten => paragraphs_forgotten, Group::BackendNeutral;
 

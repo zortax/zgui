@@ -68,6 +68,7 @@ pub struct Rebuilt {
 ///
 /// Panics if `owed` names a node that is not live in `document`.
 pub fn rebuild(store: &mut LayoutStore, document: &Document, owed: &Owed) -> Option<Rebuilt> {
+    let _tag = zgui_profile::alloc_tag::enter(zgui_profile::alloc_tag::Tag::BoxTree);
     let targets = target::containers(document, owed)?;
     let targets = target::with_boxes(store, document, targets)?;
     let mut done = Rebuilt::default();

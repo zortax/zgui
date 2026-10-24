@@ -59,6 +59,11 @@ impl Renderer for WgpuRenderer {
         Some(self)
     }
 
+    /// The shared form of the same door, for a caller that only reads, such as a memory report.
+    fn as_any(&self) -> Option<&dyn core::any::Any> {
+        Some(self)
+    }
+
     /// Yes: this renderer composes every frame into a target that outlives it, so the pixels a
     /// scroll moves are already here.
     fn shifts_composed_pixels(&self) -> bool {
@@ -82,7 +87,7 @@ impl Renderer for WgpuRenderer {
     }
 
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let _frame = Phase::Render.span().entered();
+        let _frame = Phase::Render.enter();
         zgui_profile::latency::mark("draw.in");
 
         // A surface whose configuration was thrown away is configured again here rather than at the

@@ -47,6 +47,13 @@ impl Flattened {
         (self.scale == scale && self.pieces == pieces).then(|| Arc::clone(&self.content))
     }
 
+    /// The capacity of the pieces this form was built from, in bytes.
+    ///
+    /// The flattened form itself is shared, and is left out.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        self.pieces.capacity() * core::mem::size_of::<Piece>()
+    }
+
     /// The string a shaper was handed.
     pub(crate) fn generated(&self) -> &std::sync::Arc<Generated> {
         &self.content

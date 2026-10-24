@@ -113,6 +113,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
         let Some(root) = self.store.get().root() else {
             return false;
         };
+        let _tag = zgui_profile::alloc_tag::enter(zgui_profile::alloc_tag::Tag::LayoutEngine);
         counter::bump(Counter::LayoutReachedRoot);
         let available = Size {
             width: AvailableSpace::Definite(viewport.width),

@@ -1151,6 +1151,18 @@ impl Window {
         self.renderer.as_ref()
     }
 
+    /// The painter and the paint records it holds, for a memory report.
+    #[doc(hidden)]
+    pub fn painter(&self) -> &Painter {
+        &self.painter
+    }
+
+    /// How many paragraphs the text engine holds shaped, for a memory report.
+    #[doc(hidden)]
+    pub fn shaped_held(&self) -> crate::text::ShapedHeld {
+        self.text.shaped_held()
+    }
+
     /// The raster paths most recently selected by `node`'s own vector content.
     pub fn vector_routes(&self, node: zgui_dom::NodeKey) -> zgui_paint::VectorRoutes {
         self.vector_routes

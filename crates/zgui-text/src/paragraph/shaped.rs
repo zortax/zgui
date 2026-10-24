@@ -54,6 +54,8 @@ pub struct ShapedParagraph<E> {
     broken: Option<BreakingKey>,
     /// The line boxes the last few breaking passes produced, by the key they were taken under.
     recalled: Recalled,
+    /// The engine's estimate of its heap bytes, as the cache last recorded it.
+    engine_bytes: usize,
     /// The shaper's own result.
     pub engine: E,
 }
@@ -83,6 +85,7 @@ impl<E> ShapedParagraph<E> {
             boxes: boxes.into_iter().collect(),
             broken: None,
             recalled: Recalled::default(),
+            engine_bytes: 0,
             engine,
         }
     }
@@ -115,6 +118,18 @@ impl<E> ShapedParagraph<E> {
     /// The atomic inlines at the geometry the last break used.
     pub fn boxes(&self) -> &[InlineBoxGeometry] {
         &self.boxes
+    }
+
+    /// The engine's estimate of its heap bytes, as
+    /// [`ParagraphCache::restate_engine_bytes`](crate::ParagraphCache::restate_engine_bytes) last
+    /// recorded it.
+    pub fn engine_bytes(&self) -> usize {
+        self.engine_bytes
+    }
+
+    /// Records the engine's estimate of its heap bytes.
+    pub(crate) fn set_engine_bytes(&mut self, bytes: usize) {
+        self.engine_bytes = bytes;
     }
 
     /// Which break the glyphs currently reflect, or `None` if none has been taken yet.

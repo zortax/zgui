@@ -28,3 +28,58 @@ pub struct ShapedLayout {
     /// text forces a break.
     pub(crate) wraps: bool,
 }
+
+/// The size of the engine's layout record itself, without what it holds on the heap.
+#[doc(hidden)]
+pub const LAYOUT_SIZE: usize = core::mem::size_of::<parley::Layout<SlotBrush>>();
+
+/// Approximate sizes of the per-item records parley 0.11 keeps in private vectors.
+///
+/// The records are private, so their sizes are estimated from their fields. The public metric
+/// structs inside them are measured.
+mod record {
+    /// One cluster: its character, flags, glyph and text offsets, and its advance.
+    pub(super) const CLUSTER: usize = 28;
+    /// One shaped run, before its metrics: the font, its attributes and synthesis, and four ranges.
+    pub(super) const RUN: usize = 128;
+    /// One line, before its metrics: two ranges, the break reason, the advance and the indent.
+    pub(super) const LINE: usize = 56;
+    /// One item of a line: its kind, index, level, advance and two ranges.
+    pub(super) const LINE_ITEM: usize = 56;
+    /// One layout item: its kind, index and level.
+    pub(super) const ITEM: usize = 24;
+}
+
+impl ShapedLayout {
+    /// An estimate of the heap bytes the engine's layout holds.
+    ///
+    /// Computed from what the layout holds, so equal paragraphs broken at equal widths report
+    /// equal bytes. The cost is one step per line and per run. A layout that has no lines yet
+    /// reports its styles and inline boxes only, because its runs are reachable through its lines
+    /// alone.
+    ///
+    /// The estimate is approximate. A run that wraps is counted once per line. Glyphs held out of
+    /// line (ligatures, complex scripts), vector capacity and fonts are not counted.
+    pub fn heap_bytes(&self) -> usize {
+        let layout = &self.layout;
+        let mut bytes =
+            core::mem::size_of_val(layout.styles()) + core::mem::size_of_val(layout.inline_boxes());
+        for line in layout.lines() {
+            bytes += record::LINE + core::mem::size_of::<parley::LineMetrics>();
+            for item in line.items() {
+                bytes += record::LINE_ITEM + record::ITEM;
+                let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                    continue;
+                };
+                let run = glyph_run.run();
+                // A cluster with one plain glyph holds it inline, so the clusters alone are
+                // counted. The cost of the estimate thus grows with the lines and runs only.
+                bytes += record::RUN
+                    + core::mem::size_of::<parley::RunMetrics>()
+                    + core::mem::size_of_val(run.normalized_coords())
+                    + run.len() * record::CLUSTER;
+            }
+        }
+        bytes
+    }
+}

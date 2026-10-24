@@ -137,7 +137,8 @@ impl Document {
             document: self,
             filter,
         };
-        let outcome = body(&mut edit);
+        let outcome =
+            zgui_profile::alloc_tag::scope(zgui_profile::alloc_tag::Tag::Dom, || body(&mut edit));
         drop(guard);
         Ok(outcome)
     }

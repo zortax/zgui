@@ -130,6 +130,16 @@ pub(crate) struct ProbeMemo {
     computed: Vec<LineBox>,
 }
 
+impl ProbeMemo {
+    /// The capacity of the vectors this memo holds, in bytes.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use core::mem::size_of;
+        self.run_extents.capacity() * size_of::<crate::inline::strut::RunExtents>()
+            + self.computed.capacity() * size_of::<LineBox>()
+            + self.boxes.heap_bytes()
+    }
+}
+
 /// The constraint of one ask, as the memo records it.
 fn constraint_bits(ask: &Ask) -> u32 {
     match ask.constraint() {

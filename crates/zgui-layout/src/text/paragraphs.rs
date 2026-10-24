@@ -118,6 +118,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
             self.cache.insert(shaped);
         }
         self.workers.push(worker);
+        self.publish_bytes();
     }
 
     /// Shapes the given paragraphs before layout asks for them, across `pool`'s workers.
@@ -170,7 +171,9 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
                 let (key, content) = &jobs[index];
                 let shaped = self.shaper.shape_keyed(*key, content);
                 self.cache.insert(shaped);
+                self.restate_bytes(*key);
             }
+            self.publish_bytes();
             return;
         }
         let per_chunk = misses.len().div_ceil(self.forks.len());
@@ -193,7 +196,36 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         });
         // Chunking preserved miss order, so this insertion order is the serial one.
         for shaped in outs.into_iter().flatten() {
+            let key = shaped.key();
             self.cache.insert(shaped);
+            self.restate_bytes(key);
+        }
+        self.publish_bytes();
+    }
+
+    /// Records the engine's byte estimate for the result held under `key`.
+    ///
+    /// Only when the counters are compiled in, because the sum is read through
+    /// [`Counter::ParagraphBytesLive`] alone.
+    fn restate_bytes(&mut self, key: ParagraphKey) {
+        if !zgui_profile::COUNTERS_ENABLED {
+            return;
+        }
+        let shaper = &self.shaper;
+        self.cache
+            .restate_engine_bytes(key, |shaped| shaper.engine_bytes(shaped));
+    }
+
+    /// Publishes the sum of the engine byte estimates.
+    ///
+    /// A batch worker publishes nothing: its cache holds a part of the frame's results, and the sum
+    /// moves back with them when the worker is absorbed.
+    fn publish_bytes(&self) {
+        if !self.sealed_paints {
+            counter::set(
+                Counter::ParagraphBytesLive,
+                self.cache.engine_bytes() as u64,
+            );
         }
     }
 
@@ -226,6 +258,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
     pub fn forget_shaped(&mut self) -> usize {
         let dropped = self.cache.clear();
         counter::add(Counter::ParagraphsForgotten, dropped as u64);
+        self.publish_bytes();
         dropped
     }
 
@@ -246,6 +279,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
             }
         }
         counter::add(Counter::ParagraphsEvicted, dropped as u64);
+        self.publish_bytes();
         dropped
     }
 
@@ -253,6 +287,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
     pub fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
         let dropped = self.cache.evict_inactive(active, count);
         counter::add(Counter::ParagraphsEvicted, dropped as u64);
+        self.publish_bytes();
         dropped
     }
 }
@@ -294,6 +329,8 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         if !self.cache.holds(key) {
             let shaped = self.shaper.shape_keyed(key, content);
             self.cache.insert(shaped);
+            self.restate_bytes(key);
+            self.publish_bytes();
         }
         let widths = self
             .cache
@@ -307,7 +344,16 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         let Some(shaped) = self.cache.get_mut(key) else {
             return BrokenParagraph::default();
         };
-        self.shaper.break_lines(shaped, request)
+        let before = zgui_profile::COUNTERS_ENABLED.then(|| shaped.broken_as());
+        let broken = self.shaper.break_lines(shaped, request);
+        // Only a pass that was owed moves the engine's laid-out form, and only such a pass adopts a
+        // new breaking key.
+        let moved = before.is_some_and(|before| shaped.broken_as() != before);
+        if moved {
+            self.restate_bytes(key);
+            self.publish_bytes();
+        }
+        broken
     }
 
     fn breaks_reflect(&self, key: ParagraphKey) -> Option<zgui_text_style::BreakingKey> {

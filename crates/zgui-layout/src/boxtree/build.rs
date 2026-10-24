@@ -104,6 +104,7 @@ pub fn retire(document: &mut Document, root: NodeIndex) -> Owed {
 /// Returns the root box, or nothing if the document generates none — which an empty document and a
 /// document whose root element is hidden both do.
 pub fn build(store: &mut LayoutStore, document: &Document) -> Option<BoxKey> {
+    let _tag = zgui_profile::alloc_tag::enter(zgui_profile::alloc_tag::Tag::BoxTree);
     let root = document.root_index()?;
     counter::bump(Counter::BoxTreeBuilds);
     // The tree that was there is removed before the new one is built. A rebuild issues fresh keys

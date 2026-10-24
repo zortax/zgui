@@ -27,6 +27,8 @@ pub struct ParagraphCache<E> {
     hits: Cell<u64>,
     /// Monotonic access order for entry-local LRU eviction.
     clock: Cell<u64>,
+    /// The sum of the engine byte estimates the held results carry.
+    engine_bytes: usize,
 }
 
 #[derive(Debug)]
@@ -42,7 +44,32 @@ impl<E> ParagraphCache<E> {
             entries: FxHashMap::default(),
             hits: Cell::new(0),
             clock: Cell::new(0),
+            engine_bytes: 0,
         }
+    }
+
+    /// The sum of the engine byte estimates that the held results carry.
+    ///
+    /// Zero unless the owner records estimates with [`ParagraphCache::restate_engine_bytes`].
+    pub fn engine_bytes(&self) -> usize {
+        self.engine_bytes
+    }
+
+    /// Records what `estimate` answers as the engine byte estimate of the result held under `key`.
+    ///
+    /// Counts no lookup. The estimate moves with the result, so a result taken out and put back
+    /// keeps it.
+    pub fn restate_engine_bytes(
+        &mut self,
+        key: ParagraphKey,
+        estimate: impl FnOnce(&ShapedParagraph<E>) -> usize,
+    ) {
+        let Some(entry) = self.entries.get_mut(&key) else {
+            return;
+        };
+        let bytes = estimate(&entry.shaped);
+        self.engine_bytes = self.engine_bytes - entry.shaped.engine_bytes() + bytes;
+        entry.shaped.set_engine_bytes(bytes);
     }
 
     /// How many lookups have found a held result since the cache was built.
@@ -99,13 +126,17 @@ impl<E> ParagraphCache<E> {
     /// under a key that does not describe it and serve it to a different one later.
     pub fn insert(&mut self, shaped: ShapedParagraph<E>) {
         let last_used = self.tick();
-        self.entries.insert(
+        self.engine_bytes += shaped.engine_bytes();
+        let replaced = self.entries.insert(
             shaped.key(),
             Entry {
                 shaped,
                 last_used: Cell::new(last_used),
             },
         );
+        if let Some(replaced) = replaced {
+            self.engine_bytes -= replaced.shaped.engine_bytes();
+        }
     }
 
     /// Takes every shaped result out, in no particular order.
@@ -113,6 +144,7 @@ impl<E> ParagraphCache<E> {
     /// For a worker cache being absorbed into the one the frame reads: the entries move whole,
     /// break state included, so the lines a worker kept are the lines later stages find.
     pub fn drain_shaped(&mut self) -> impl Iterator<Item = ShapedParagraph<E>> + '_ {
+        self.engine_bytes = 0;
         self.entries.drain().map(|(_, entry)| entry.shaped)
     }
 
@@ -122,7 +154,7 @@ impl<E> ParagraphCache<E> {
     /// will break a paragraph has to own it for the duration, and the frame's cache gets it back
     /// when the worker is absorbed.
     pub fn take(&mut self, key: ParagraphKey) -> Option<ShapedParagraph<E>> {
-        self.entries.remove(&key).map(|entry| entry.shaped)
+        self.remove(key)
     }
 
     /// Drops everything, and reports how many results that threw away.
@@ -132,12 +164,13 @@ impl<E> ParagraphCache<E> {
     pub fn clear(&mut self) -> usize {
         let held = self.entries.len();
         self.entries.clear();
+        self.engine_bytes = 0;
         held
     }
 
     /// Drops one entry.
     pub fn forget(&mut self, key: ParagraphKey) {
-        self.entries.remove(&key);
+        self.remove(key);
     }
 
     /// Drops up to `count` least-recently-used entries not named by an active layout resolution.
@@ -155,9 +188,16 @@ impl<E> ParagraphCache<E> {
         candidates.sort_unstable();
         let take = count.min(candidates.len());
         for (_, key) in candidates.into_iter().take(take) {
-            self.entries.remove(&key);
+            self.remove(key);
         }
         take
+    }
+
+    /// Removes one entry, and takes its estimate off the sum.
+    fn remove(&mut self, key: ParagraphKey) -> Option<ShapedParagraph<E>> {
+        let entry = self.entries.remove(&key)?;
+        self.engine_bytes -= entry.shaped.engine_bytes();
+        Some(entry.shaped)
     }
 
     fn tick(&self) -> u64 {
@@ -228,5 +268,37 @@ mod tests {
         assert_eq!(cache.evict_inactive(&[ParagraphKey(3)], usize::MAX), 1);
         assert_eq!(cache.len(), 1);
         assert!(cache.holds(ParagraphKey(3)));
+    }
+
+    #[test]
+    fn the_byte_sum_follows_every_way_in_and_out() {
+        let mut cache = ParagraphCache::new();
+        for key in 1..=4 {
+            cache.insert(shaped(key));
+            cache.restate_engine_bytes(ParagraphKey(key), |_| 100 * key as usize);
+        }
+        assert_eq!(cache.engine_bytes(), 1_000);
+
+        cache.restate_engine_bytes(ParagraphKey(4), |_| 40);
+        assert_eq!(cache.engine_bytes(), 640);
+
+        // A result taken out and put back keeps its estimate.
+        let taken = cache.take(ParagraphKey(3)).expect("held");
+        assert_eq!(cache.engine_bytes(), 340);
+        cache.insert(taken);
+        assert_eq!(cache.engine_bytes(), 640);
+
+        // A result under a held key replaces the old estimate.
+        cache.insert(shaped(2));
+        assert_eq!(cache.engine_bytes(), 440);
+
+        cache.forget(ParagraphKey(1));
+        assert_eq!(cache.engine_bytes(), 340);
+        // Three went back in before two, so it is the colder of the two inactive results.
+        assert_eq!(cache.evict_inactive(&[ParagraphKey(4)], 1), 1);
+        assert!(!cache.holds(ParagraphKey(3)));
+        assert_eq!(cache.engine_bytes(), 40);
+        cache.clear();
+        assert_eq!(cache.engine_bytes(), 0);
     }
 }

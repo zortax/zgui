@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use zgui_geom::CssPx;
+use zgui_profile::alloc_tag::{self, Tag};
 use zgui_text::{
     BreakRequest, BrokenParagraph, ParagraphContent, ParagraphShaper, ShapedParagraph,
     ShapedRunOwned, StrutMetrics,
@@ -171,14 +172,16 @@ impl ParagraphShaper for Shaper {
             Some(run) => self.strut(&run.style),
             None => self.strut(&TextStyle::initial()),
         };
-        build::shape(
-            key,
-            content,
-            strut,
-            self.controls,
-            &mut self.context,
-            &mut self.scratch,
-        )
+        alloc_tag::scope(Tag::Shaping, || {
+            build::shape(
+                key,
+                content,
+                strut,
+                self.controls,
+                &mut self.context,
+                &mut self.scratch,
+            )
+        })
     }
 
     fn break_lines(
@@ -186,7 +189,7 @@ impl ParagraphShaper for Shaper {
         shaped: &mut ShapedParagraph<Self::Engine>,
         request: &BreakRequest<'_>,
     ) -> BrokenParagraph {
-        breaking::break_lines(shaped, request)
+        alloc_tag::scope(Tag::Break, || breaking::break_lines(shaped, request))
     }
 
     fn strut(&mut self, style: &TextStyle) -> StrutMetrics {
@@ -210,6 +213,10 @@ impl ParagraphShaper for Shaper {
         visit: &mut dyn FnMut(zgui_text::ClusterRun<'_>),
     ) {
         crate::shape::clusters::visit_clusters(&shaped.engine, line, visit);
+    }
+
+    fn engine_bytes(&self, shaped: &ShapedParagraph<Self::Engine>) -> usize {
+        shaped.engine.heap_bytes()
     }
 }
 
