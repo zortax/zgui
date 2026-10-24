@@ -1291,6 +1291,7 @@ impl Window {
             self.damage_before_layout = self.damage;
         }
         self.layout_passes += 1;
+        counter::bump(Counter::LayoutPasses);
         let moved = zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,

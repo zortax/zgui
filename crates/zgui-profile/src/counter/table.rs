@@ -70,6 +70,14 @@ counters! {
     /// Times a layout pass had to start from the document root instead of a subtree.
     LayoutReachedRoot => layout_reached_root, Group::BackendNeutral;
 
+    /// Layout passes a window ran. Each composes the fragments again; a pass that is not held also
+    /// measures what is owed.
+    ///
+    /// A frame runs one, and one more after each delivery that leaves work owed: a scroll
+    /// handler's, and each geometry observation's. A held pass counts too, so read
+    /// [`Counter::LayoutsHeld`] beside it.
+    LayoutPasses => layout_passes, Group::BackendNeutral;
+
     /// Batches of child layouts that ran across the layout pool's workers.
     ///
     /// Zero on a steady frame: the executor distributes only past its cold-work gates, so this
