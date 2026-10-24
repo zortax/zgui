@@ -22,6 +22,11 @@ fn no_gl_adapter_is_enumerated_when_a_native_device_opens() {
         0,
         "nothing has asked for an adapter yet"
     );
+    assert_eq!(
+        adapter::gl_instances(),
+        0,
+        "nothing has created an instance yet"
+    );
 
     let built = Builder::new().offscreen(target(), wgpu::TextureFormat::Bgra8Unorm, false);
 
@@ -34,12 +39,21 @@ fn no_gl_adapter_is_enumerated_when_a_native_device_opens() {
                     0,
                     "a native device opened, so GL's adapters were never asked for"
                 );
+                assert_eq!(
+                    adapter::gl_instances(),
+                    0,
+                    "a native device opened, so GL's driver was never loaded"
+                );
             } else {
                 // The complement, on a machine whose primary backend produced nothing: the
                 // fallback tier was enumerated and it is what opened the device.
                 assert!(
                     adapter::gl_enumerations() > 0,
                     "a GL device can only have come from an enumerated fallback"
+                );
+                assert!(
+                    adapter::gl_instances() > 0,
+                    "the fallback has an instance of its own"
                 );
                 eprintln!("no native device here; the fallback opened {backend:?}");
             }

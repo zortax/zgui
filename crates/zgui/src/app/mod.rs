@@ -492,6 +492,9 @@ impl App {
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
+        // Before the font thread below, which is the first thread this process starts: the guard
+        // inside changes the environment only while the process has one thread.
+        zgui_render_wgpu::gpu::loader::prefer_hardware_vulkan();
         // The last point at which the application could have named its own faces has passed, so
         // this is where enumerating the machine's starts — on a thread of its own, alongside
         // opening the window and the graphics device rather than in front of them.

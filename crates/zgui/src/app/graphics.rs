@@ -87,14 +87,10 @@ fn renderer(
     // The surface has to be created from the instance the device is opened from, which is why the
     // window's handles go to the renderer rather than the other way round. The shared handle keeps
     // the window alive for as long as anything draws through it.
-    let drawable = graphics
-        .instance()
-        .create_surface(handles)
-        .map_err(|error| PlatformError::Backend(error.to_string()))?;
     let pacing = pacing_of(surface);
     let mut renderer = graphics.renderer_for_surface(
         target,
-        drawable,
+        handles,
         pacing,
         notify_wanted(pacing).then(|| pre_present(surface)),
     )?;

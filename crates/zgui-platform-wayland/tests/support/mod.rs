@@ -262,11 +262,7 @@ pub(crate) fn renderer(
     let builder = Builder::new()
         .with_present_pacing(pacing)
         .with_pre_present(Box::new(move || notified.pre_present_notify()));
-    let drawable = builder
-        .instance()
-        .create_surface(handles)
-        .map_err(|error| PlatformError::Backend(error.to_string()))?;
-    builder.for_surface(target, drawable).map_or_else(
+    builder.for_surface(target, handles).map_or_else(
         |unavailable| {
             NO_DEVICE.store(true, Ordering::Relaxed);
             Err(AppError::from(unavailable))

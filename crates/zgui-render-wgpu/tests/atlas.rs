@@ -111,6 +111,33 @@ fn an_oversized_upload_leaves_no_staging_behind() {
     }
 }
 
+/// The atlas's staging is trimmed when the window goes idle, like the frame's.
+#[test]
+fn idle_trimming_releases_atlas_staging_and_keeps_the_tile() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let tile = upload(&mut renderer, 1, TextureKind::Color, ramp(true));
+    let first = over_grey(&mut renderer, tile);
+    over_grey(&mut renderer, tile);
+    assert!(
+        renderer.atlas().staging_bytes() > 0,
+        "a small upload keeps its chunk for reuse"
+    );
+
+    renderer.release_idle_resources();
+    assert_eq!(
+        renderer.atlas().staging_bytes(),
+        0,
+        "an idle window holds no atlas staging"
+    );
+    assert_eq!(
+        over_grey(&mut renderer, tile),
+        first,
+        "the tile lives in the atlas texture, which trimming keeps"
+    );
+}
+
 #[test]
 fn a_premultiplied_tile_composites_its_soft_edge_without_blooming() {
     let Some(mut renderer) = plain_renderer() else {
