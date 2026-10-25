@@ -179,8 +179,12 @@ pub fn rebuild_in(
     // This also clears what the walk itself marked, and that is the point rather than a casualty:
     // those marks record what this pass has just finished doing to a fragment, so carrying them
     // into the next frame would repaint an unchanged fragment once more for every time it changed.
+    //
+    // A rebreak is marked only with a relayout, and the layout pass before this one serviced
+    // both. Nothing else retires it, and a rebreak left set makes every later delivery in every
+    // frame restyle and lay out the document again.
     let root_source = pass.store.node(root).source;
-    pass.dirty.retire(root_source, ENTERS);
+    pass.dirty.retire(root_source, ENTERS | Dirty::REBREAK);
     let restacked = pass.restacked || pass.renumber;
     // Every fragment that ceased to exist since the last pass, including the ones belonging to
     // boxes this walk never reached because they are no longer in the tree. Their entries would
