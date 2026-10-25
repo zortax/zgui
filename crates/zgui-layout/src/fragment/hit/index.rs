@@ -5,7 +5,7 @@ use zgui_arena::SlotVec;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Point};
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ClipTable, SpatialTree};
+use zgui_scene::{ClipId, ClipLink, ClipNode, ClipTable, SpatialId, SpatialTree};
 
 use crate::fragment::FragKey;
 use crate::fragment::hit::HitOrder;
@@ -399,6 +399,7 @@ impl HitIndex {
         // of what a query costs beyond the descents it is made of.
         let mut candidates: SmallVec<[FragKey; 16]> = SmallVec::new();
         let mut hits: SmallVec<[(HitOrder, FragKey); 8]> = SmallVec::new();
+        let mut others = Others::at(point);
         for (space, tree) in self.forest.trees() {
             // Once per coordinate system rather than once per candidate, and a system that
             // collapses the plane — a `scale(0)`, a rotation seen exactly edge-on — dismisses
@@ -418,20 +419,10 @@ impl HitIndex {
                 if !entry.covers(local) {
                     continue;
                 }
-                // The clip chain is tested in the space it was measured in, which is this
-                // fragment's own unless the fragment carries a transform: the clip belongs to
-                // whichever ancestor imposed it, and a clip tested in the wrong space is a clip
-                // applied in the wrong place on the screen.
-                let clipped = if entry.clip_space == space {
-                    local
-                } else {
-                    let Some(mapped) = transform::into_local(point, entry.clip_space, spatial)
-                    else {
-                        continue;
-                    };
-                    mapped
-                };
-                if !clipped_in(clips, entry.clip, clipped) {
+                // Each link of the chain is tested in the space it was measured in: the clip
+                // belongs to whichever ancestor imposed it, and a link tested in another space is
+                // a clip applied in the wrong place on the screen.
+                if !clipped_in(clips, entry.clip, (space, local), spatial, &mut others) {
                     continue;
                 }
                 hits.push((entry.order, frag));
@@ -445,31 +436,90 @@ impl HitIndex {
     }
 }
 
-/// Whether a point survives every link of a clip chain.
-fn clipped_in(clips: &ClipTable, clip: zgui_scene::ClipId, point: Point<DevicePx, Device>) -> bool {
-    if clip.is_root() {
-        return true;
+/// A point on the device, or in one coordinate system.
+type Spot = Point<DevicePx, Device>;
+
+/// The query point, as already carried into the coordinate systems a query's clip links named
+/// apart from the hierarchy being queried.
+///
+/// One query meets few such systems and asks about each of them many times: every candidate under
+/// a transformed box tests the links of the clipping ancestors outside it. A lookup here is cheaper
+/// than a walk of the spatial chain out to the root for each one.
+struct Others {
+    /// The point on the device.
+    point: Spot,
+    /// Each system carried into so far, and the point in it; nothing where the system collapses
+    /// the plane or no longer resolves.
+    held: SmallVec<[(SpatialId, Option<Spot>); 4]>,
+}
+
+impl Others {
+    /// A query at `point` that has carried it nowhere yet.
+    fn at(point: Spot) -> Self {
+        Self {
+            point,
+            held: SmallVec::new(),
+        }
     }
-    for link in clips.links(clip) {
-        match link {
-            zgui_scene::ClipLink::RoundedRect { rect, radii, .. } => {
-                if !crate::fragment::hit::entry::covers_rounded(rect, radii, point) {
-                    return false;
-                }
-            }
+
+    /// The point in `space`, carried there on first use.
+    fn carried(&mut self, space: SpatialId, spatial: &SpatialTree) -> Option<Spot> {
+        if let Some((_, local)) = self.held.iter().find(|(held, _)| *held == space) {
+            return *local;
+        }
+        let local = transform::into_local(self.point, Some(space), spatial);
+        self.held.push((space, local));
+        local
+    }
+}
+
+/// Whether a device point survives every link of a clip chain.
+///
+/// Each link is tested in its own coordinate system. A chain crosses a system boundary wherever a
+/// transformed box sits between two clipping ancestors, and the links on either side of it measure
+/// their rectangles in different coordinates. `current` is the hierarchy being queried and the
+/// point in it, which most links name. A link whose system collapses the plane or no longer
+/// resolves admits nothing; paint places such a link where it was interned instead.
+fn clipped_in(
+    clips: &ClipTable,
+    clip: ClipId,
+    current: (Option<SpatialId>, Spot),
+    spatial: &SpatialTree,
+    others: &mut Others,
+) -> bool {
+    let mut carried = |space: SpatialId| {
+        if current.0 == Some(space) {
+            Some(current.1)
+        } else {
+            others.carried(space, spatial)
+        }
+    };
+    // Inner links first. Intersection does not depend on the order, and the innermost link is
+    // usually the tightest one, so a miss is usually found soonest.
+    let mut cursor = clip;
+    while let Some(ClipNode::Link { link, parent, .. }) = clips.get(cursor) {
+        let inside = match *link {
+            ClipLink::RoundedRect {
+                rect, radii, space, ..
+            } => carried(space).is_some_and(|local| {
+                crate::fragment::hit::entry::covers_rounded(rect, radii, local)
+            }),
             // A sampled mask decides coverage per pixel, which is a question for whatever holds the
             // coverage tile. Its rectangle is the most this index can test.
-            zgui_scene::ClipLink::Mask { tile, .. } => {
+            ClipLink::Mask {
+                tile, transform, ..
+            } => carried(transform).is_some_and(|local| {
                 let bounds = tile.bounds;
-                if point.x.0 < bounds.origin.x as f32
-                    || point.y.0 < bounds.origin.y as f32
-                    || point.x.0 > (bounds.origin.x + bounds.size.width) as f32
-                    || point.y.0 > (bounds.origin.y + bounds.size.height) as f32
-                {
-                    return false;
-                }
-            }
+                local.x.0 >= bounds.origin.x as f32
+                    && local.y.0 >= bounds.origin.y as f32
+                    && local.x.0 <= (bounds.origin.x + bounds.size.width) as f32
+                    && local.y.0 <= (bounds.origin.y + bounds.size.height) as f32
+            }),
+        };
+        if !inside {
+            return false;
         }
+        cursor = *parent;
     }
     true
 }

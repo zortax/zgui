@@ -208,6 +208,99 @@ fn a_transformed_box_answers_only_where_its_ancestors_clip_shows_it() {
     assert!(!answers(20.0));
 }
 
+/// Whether the box named `leaf` answers at `(x, y)` in a port that clips a transformed box.
+///
+/// `port` clips in the viewport's space. `turned` carries `transform`, and clips in its own space
+/// when `turned_clips` is set. `leaf` fills `turned`, so its clip chain names a space other than
+/// its own.
+fn leaf_under_turned_clip(
+    port: &str,
+    transform: &str,
+    turned_clips: bool,
+) -> impl Fn(f32, f32) -> bool {
+    let overflow = if turned_clips { "hidden" } else { "visible" };
+    let css = format!(
+        "root {{ display: block; width: 400px }}
+         port {{ display: block; {port}; overflow: hidden }}
+         turned {{ display: block; width: 150px; height: 50px; overflow: {overflow};
+                   transform-origin: 0 0; transform: {transform} }}
+         leaf {{ display: block; width: 150px; height: 50px }}"
+    );
+    let fixture = Fixture::new(
+        Element::new("root").children(vec![Element::new("port").children(vec![
+            Element::new("turned").children(vec![Element::new("leaf")]),
+        ])]),
+        &css,
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let frame = lay_out(&mut store, &mut content, 400.0, 400.0);
+    let leaf = box_named(&store, &fixture, "leaf");
+    move |x, y| {
+        frame
+            .hit
+            .hit(
+                Point::new(DevicePx(x), DevicePx(y)),
+                &frame.clips,
+                &frame.spatial,
+            )
+            .iter()
+            .any(|hit| store.fragment(*hit).expect("live").box_ == leaf)
+    }
+}
+
+#[test]
+fn a_clip_outside_a_scaled_clipping_box_is_tested_in_its_own_space() {
+    // `turned` doubles its 150px box to 300px on the device and clips its child to that. The port
+    // clips at 200px in the viewport's space. Tested in `turned`'s space, the port's clip would
+    // reach out to 400px on the device.
+    let answers = leaf_under_turned_clip("width: 200px; height: 200px", "scale(2)", true);
+    assert!(answers(10.0, 10.0), "inside both clips");
+    assert!(answers(199.5, 90.0), "just inside the port's edge");
+    assert!(!answers(200.5, 90.0), "just outside the port's edge");
+    assert!(
+        !answers(250.0, 50.0),
+        "drawn by `turned`, cut away by the port"
+    );
+    assert!(!answers(150.0, 100.5), "below `turned`, scaled with it");
+}
+
+#[test]
+fn a_clip_outside_a_scaled_box_that_does_not_clip_is_tested_in_its_own_space() {
+    // `turned` doubles its 150px box to 300px on the device and clips nothing. The leaf's only
+    // link is the port's, which clips at 200px in the viewport's space. Tested in `turned`'s
+    // space, the port's clip would reach out to 400px on the device.
+    let answers = leaf_under_turned_clip("width: 200px; height: 200px", "scale(2)", false);
+    assert!(answers(10.0, 10.0), "inside the port");
+    assert!(answers(199.5, 90.0), "just inside the port's edge");
+    assert!(!answers(200.5, 90.0), "just outside the port's edge");
+    assert!(
+        !answers(250.0, 50.0),
+        "drawn by `turned`, cut away by the port"
+    );
+}
+
+#[test]
+fn a_clip_outside_a_rotated_clipping_box_is_tested_in_its_own_space() {
+    // `turned` is turned a quarter and moved 100px right, so its 150 by 50 box is drawn over
+    // x 50..100 and y 0..150. The port is 100px wide and 120px tall, so it cuts the box at
+    // y = 120. Tested in `turned`'s space, where y on the device is x, the port's 100px width
+    // would cut it at y = 100 and miss a strip that is on the screen.
+    let answers = leaf_under_turned_clip(
+        "width: 100px; height: 120px",
+        "translate(100px, 0) rotate(90deg)",
+        true,
+    );
+    assert!(answers(75.0, 10.0), "inside both clips");
+    assert!(
+        answers(75.0, 110.0),
+        "on the strip the port's own width does not reach"
+    );
+    assert!(answers(75.0, 119.5), "just inside the port's bottom edge");
+    assert!(!answers(75.0, 120.5), "just outside the port's bottom edge");
+    assert!(!answers(49.5, 60.0), "outside `turned`, turned with it");
+}
+
 #[test]
 fn a_box_taken_out_of_the_tree_stops_answering_where_it_used_to_be() {
     // The walk that keeps the index in step visits boxes that are still in the tree, so a box that

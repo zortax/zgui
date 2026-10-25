@@ -276,21 +276,13 @@ pub struct Fragment {
     pub padding: Edges<DevicePx>,
     /// The chain of clips this fragment is drawn under.
     pub clip: ClipId,
-    /// The matrix the clip chain's own rectangles are measured in, if it is not the identity.
+    /// The coordinate system this fragment's parent laid out in, set only when the fragment is
+    /// clipped.
     ///
-    /// A clip is recorded in the space of the box that imposed it, which is *not* the space of the
-    /// content it clips as soon as that content carries a transform of its own: a box translated
-    /// three hundred pixels sideways keeps its rectangle at the origin and is drawn elsewhere, so
-    /// testing its ancestor's clip against a point in the box's own space would test the clip in
-    /// the wrong place and let the box answer where nothing is drawn. This is the matrix that puts
-    /// the clip's rectangles back where they were measured.
-    ///
-    /// It differs from [`Fragment::transform`] exactly by this fragment's own transform.
-    ///
-    /// One matrix describes the whole chain, which is exact unless a transformed box sits *between*
-    /// two clipping ancestors — then the outer links were measured before that transform and this
-    /// names only the inner ones' space. Such a chain is tested slightly too permissively, which
-    /// costs an extra answer at the edge of the outer clip and never a missing one.
+    /// It differs from [`Fragment::transform`] exactly by this fragment's own transform. It is the
+    /// space of the clip chain's links only when no transformed box sits between this fragment's
+    /// parent and the ancestors that clip it. Each link names its own space, and the hit index
+    /// reads that. The fragment diff compares this field between frames.
     pub clip_transform: Option<SpatialId>,
     /// The transform applied to it, if any.
     pub transform: Option<SpatialId>,
