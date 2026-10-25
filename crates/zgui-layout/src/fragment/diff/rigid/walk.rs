@@ -201,6 +201,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             self.tables.clips,
             clip,
             style,
+            self.store.custom_properties(key, style),
             padding_box,
             border,
             scale,

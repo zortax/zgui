@@ -1479,6 +1479,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let node = self.store.get(previous.box_)?;
         let reach = crate::fragment::ink::edge_reach(
             &node.style,
+            self.store.custom_properties(previous.box_, &node.style),
             node.painted,
             previous.border_box,
             next.border_box,

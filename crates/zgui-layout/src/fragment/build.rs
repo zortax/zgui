@@ -182,6 +182,7 @@ pub(crate) fn place(
 ) -> Option<Placed> {
     let node = store.get(key)?;
     let state = store.state(key)?;
+    let declared = store.custom_properties(key, &node.style);
     let unrounded = state.unrounded;
     // Read before the walk overwrites it: what the descendants were snapped against is only the
     // same origin if this box's own result is the one they were composed from.
@@ -286,7 +287,7 @@ pub(crate) fn place(
     let local_ink = if nested_inline {
         Rect::new(border_box.origin, Size::new(DevicePx(0.0), DevicePx(0.0)))
     } else {
-        ink::of(&node.style, border_box, scale)
+        ink::of(&node.style, declared, border_box, scale)
     };
     let device_ink = match matrix {
         Some(matrix) => transform::transformed_bounds(&matrix, local_ink),
@@ -306,6 +307,7 @@ pub(crate) fn place(
         tables.clips,
         from.clip,
         &node.style,
+        declared,
         padding_box,
         border,
         scale,
@@ -361,7 +363,7 @@ pub(crate) fn place(
     if nested_inline || ink::paints_nothing(&node.style, border) {
         flags = flags.union(FragmentFlags::PAINTS_NOTHING);
     }
-    if filter::filters_backdrop(&node.style) {
+    if filter::filters_backdrop(&node.style, declared) {
         flags = flags.union(FragmentFlags::FILTERS_BACKDROP);
     }
     if groups_subtree(&node.style) {
@@ -383,7 +385,7 @@ pub(crate) fn place(
         transform_hash,
         stacking,
         scroll,
-        reads_outside: filter::reads_outside(&node.style, scale),
+        reads_outside: filter::reads_outside(&node.style, declared, scale),
         blends: node.style.get_effects().mix_blend_mode
             != zgui_css::values::effect::MixBlendModeValue::Normal,
         snapped,

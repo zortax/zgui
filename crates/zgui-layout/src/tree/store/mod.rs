@@ -29,6 +29,7 @@ use zgui_dom::side::{BoxKey, BoxList};
 use zgui_profile::{Counter, counter};
 
 use crate::boxtree::absolute::Declared;
+use crate::fragment::custom_properties::CustomProperties;
 use crate::fragment::{FragKey, FragList, Fragment};
 use crate::key::{named, slot};
 use crate::node::box_node::BoxNode;
@@ -307,6 +308,22 @@ impl LayoutStore {
         self.classify(key, style);
         self.engine_pending.push(key);
         true
+    }
+
+    /// The framework custom properties `style` declares, where `style` is the style of box `key`.
+    ///
+    /// Recorded once per distinct style, so that a reader on a per-frame path skips the reads of
+    /// properties the style does not declare.
+    ///
+    /// [`CustomProperties::ALL`] for a box that holds no slot, or whose slot names a style other
+    /// than `style`.
+    pub fn custom_properties(&self, key: BoxKey, style: &ComputedStyle) -> CustomProperties {
+        self.style_slots
+            .get(key)
+            .copied()
+            .flatten()
+            .and_then(|slot| self.styles.declared(slot, style))
+            .unwrap_or(CustomProperties::ALL)
     }
 
     /// The style a box's interned slot names, if the box holds a slot.
