@@ -69,6 +69,33 @@ pub(crate) struct Descent {
     /// where its size is felt below — a sticky descendant, a percentage — the pass finds out from
     /// the descendant itself.
     pub(crate) origin_stable: bool,
+    /// What a `position: fixed` box below is composed against in place of the fields above.
+    pub(crate) fixed: FixedParent,
+    /// Whether a scroll of a container above moves this box's children.
+    pub(crate) in_scroll: bool,
+}
+
+/// What a `position: fixed` box is composed against: the nearest box above it that has a
+/// coordinate system of its own, with the content spaces of scroll containers left out.
+///
+/// A fixed box takes none of the scroll offsets above it. A content space is such an offset, so
+/// the fixed box hangs from the space above the content space and does not move when it moves.
+/// Without content spaces, these fields equal [`Descent::spatial`], [`Descent::anchor`] and
+/// [`Descent::matrix`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FixedParent {
+    /// The coordinate system a fixed box below is drawn in.
+    pub(crate) spatial: SpatialId,
+    /// The coordinate system it measures its ink in.
+    pub(crate) anchor: SpatialId,
+    /// The matrix from that coordinate system to the anchor, if it is not the identity.
+    pub(crate) matrix: Option<zgui_geom::Matrix4>,
+    /// The scroll offsets of the content spaces entered since [`FixedParent::spatial`].
+    ///
+    /// The scrollport moves into a content space by this much. A fixed box moves it back out.
+    pub(crate) offset: (f32, f32),
+    /// Whether [`FixedParent::spatial`] is a transformed or sticky box that a scroll moves.
+    pub(crate) scrolled: bool,
 }
 
 impl Descent {
@@ -92,6 +119,14 @@ impl Descent {
             scrollport: viewport,
             containing: viewport,
             origin_stable: true,
+            fixed: FixedParent {
+                spatial,
+                anchor: spatial,
+                matrix: None,
+                offset: (0.0, 0.0),
+                scrolled: false,
+            },
+            in_scroll: false,
         }
     }
 }
@@ -149,6 +184,10 @@ pub(crate) struct Placed {
     pub(crate) scrolls: bool,
     /// Where this box is scrolled to, which is zero unless it is a scroll container.
     pub(crate) offset: (f32, f32),
+    /// Whether this box is `position: fixed`.
+    pub(crate) fixed: bool,
+    /// What this box itself adds to the [`FragmentFlags::BOUND`] flags its subtree folds up.
+    pub(crate) bound: FragmentFlags,
     /// What this box's children are composed against.
     pub(crate) descent: Descent,
 }
@@ -161,8 +200,17 @@ impl Placed {
     /// offset, and the scrollport and the containing block move into the content space with it.
     /// The matrix to the anchor is the identity, because the content space is the children's
     /// anchor. The clip chain stays as it is, because the box measured its port in its own space.
+    /// A fixed box below hangs from the box's own space, so its parent is left as it is and only
+    /// the offset it moves the scrollport back by grows.
     pub(crate) fn content_descent(&self, content: SpatialId) -> Descent {
         let by = Size::new(DevicePx(self.offset.0), DevicePx(self.offset.1));
+        let fixed = FixedParent {
+            offset: (
+                self.descent.fixed.offset.0 + self.offset.0,
+                self.descent.fixed.offset.1 + self.offset.1,
+            ),
+            ..self.descent.fixed
+        };
         Descent {
             shift: (
                 self.descent.shift.0 + self.offset.0,
@@ -173,6 +221,7 @@ impl Placed {
             anchor: content,
             scrollport: self.descent.scrollport.translate(by),
             containing: self.descent.containing.translate(by),
+            fixed,
             ..self.descent
         }
     }
@@ -243,10 +292,14 @@ pub(crate) fn place(
     // A `position: fixed` box is in the viewport rather than in whatever is scrolling around it,
     // so it takes none of the shift the scroll containers above it accumulated — and neither does
     // anything inside it, which is why the shift is dropped here rather than only for this box.
-    let inherited = if anchored::ignores_scroll(&node.style) {
-        (0.0, 0.0)
+    let fixed = anchored::ignores_scroll(&node.style);
+    let inherited = if fixed { (0.0, 0.0) } else { from.shift };
+    // For the same reason a fixed box is drawn in the coordinate system its parent's fixed
+    // descendants hang from, which leaves out the content spaces of the scroll containers above.
+    let (parent_spatial, parent_anchor, parent_matrix) = if fixed {
+        (from.fixed.spatial, from.fixed.anchor, from.fixed.matrix)
     } else {
-        from.shift
+        (from.spatial, from.anchor, from.matrix)
     };
 
     let flow = Rect::from_corners(
@@ -294,7 +347,7 @@ pub(crate) fn place(
         zgui_dom::side::AnimPlacement::group,
     );
     let own_matrix = transform::matrix_of(box_, border_box, scale);
-    let matrix = match (from.matrix, own_matrix) {
+    let matrix = match (parent_matrix, own_matrix) {
         (None, None) => None,
         (Some(outer), None) => Some(outer),
         (None, Some(own)) => Some(own),
@@ -309,14 +362,10 @@ pub(crate) fn place(
     // scrollable region without being a box; without that, a box whose stickiness has no named port
     // would answer that it moves with everything around it, which is the one thing sticky is not.
     let sticky_port = is_sticky.then(|| from.scroll.unwrap_or(zgui_scene::ScrollFrameId::VIEWPORT));
-    let own_space = OwnSpace::of(
-        own_matrix,
-        sticky_port,
-        anchored::ignores_scroll(&node.style),
-    );
+    let own_space = OwnSpace::of(own_matrix, sticky_port, fixed);
     let space = tables
         .spatial
-        .space_of(from.spatial, PropertyOwner::of(key), own_space);
+        .space_of(parent_spatial, PropertyOwner::of(key), own_space);
     let transform = Some(space);
     let transform_hash = {
         use zgui_scene::Content;
@@ -377,6 +426,11 @@ pub(crate) fn place(
     };
     let scrollport = if scrolls {
         padding_box
+    } else if fixed {
+        // Out of the content spaces the fixed box does not move with.
+        let back = from.fixed.offset;
+        from.scrollport
+            .translate(Size::new(DevicePx(-back.0), DevicePx(-back.1)))
     } else {
         from.scrollport
     };
@@ -392,6 +446,30 @@ pub(crate) fn place(
     // Read from the box's own space only. The content space a scroll container may give its
     // children moves with the container, so it leaves this answer as it is.
     let rigid = own_space.is_none();
+
+    // A box with a space of its own is what a fixed box below hangs from. A transformed or sticky
+    // box below a scroll container moves when the container scrolls.
+    let fixed_parent = if own_space.is_some() {
+        FixedParent {
+            spatial: space,
+            anchor: parent_anchor,
+            matrix,
+            offset: (0.0, 0.0),
+            scrolled: !fixed && from.in_scroll,
+        }
+    } else {
+        from.fixed
+    };
+    let mut bound = FragmentFlags::EMPTY;
+    if is_sticky {
+        bound = bound.union(FragmentFlags::STICKY_BELOW);
+    }
+    if fixed {
+        bound = bound.union(FragmentFlags::FIXED_BELOW);
+        if from.fixed.scrolled {
+            bound = bound.union(FragmentFlags::FIXED_UNDER_SCROLLED);
+        }
+    }
 
     let mut flags = FragmentFlags::EMPTY;
     if clips_children {
@@ -428,7 +506,7 @@ pub(crate) fn place(
         clip: from.clip,
         clip_transform,
         transform,
-        anchor: from.anchor,
+        anchor: parent_anchor,
         transform_hash,
         stacking,
         scroll,
@@ -439,6 +517,8 @@ pub(crate) fn place(
         rigid,
         scrolls,
         offset: (offset.x.0, offset.y.0),
+        fixed,
+        bound,
         descent: Descent {
             layout,
             rounded,
@@ -446,12 +526,14 @@ pub(crate) fn place(
             clip: child_clip,
             matrix,
             spatial: space,
-            anchor: from.anchor,
+            anchor: parent_anchor,
             stacking,
             scroll,
             scrollport,
             containing: content_box,
             origin_stable,
+            fixed: fixed_parent,
+            in_scroll: scrolls || (!fixed && from.in_scroll),
         },
     })
 }

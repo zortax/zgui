@@ -19,6 +19,10 @@
 //! and no move is reported at all — the layout tree's fragment diff decides that in
 //! `can_translate`. By the time anything asks this question, the only
 //! subtrees that moved are ones every piece of which moved by the same vector.
+//!
+//! A scroll container that draws its content in a space of its own reports one move for the whole
+//! port. A sticky or fixed box below it does not move with the content, and the fragment pass
+//! damages it beyond the move: where the moved pixels put it, and where it is now.
 
 use zgui_css::ComputedStyle;
 use zgui_css::values::image::ImageValue;

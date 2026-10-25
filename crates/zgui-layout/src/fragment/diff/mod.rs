@@ -163,6 +163,7 @@ pub fn rebuild_in(
         passes: split::current(),
         scroll_nodes: crate::fragment::scroll_nodes::enabled(),
         refused: None,
+        chase: Chase::default(),
     };
     for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
@@ -420,8 +421,8 @@ struct Held {
     transform_hash: u64,
     /// Its flags.
     flags: FragmentFlags,
-    /// Whether its whole subtree moved rigidly.
-    rigid: bool,
+    /// The union of its ink and everything below it.
+    subtree_ink: Rect<DevicePx, Device>,
     /// Its padding box, which is a scroll container's port.
     padding_box: Rect<DevicePx, Device>,
     /// The coordinate system its ink was measured in.
@@ -435,7 +436,7 @@ impl Held {
             transform: fragment.transform,
             transform_hash: fragment.transform_hash,
             flags: fragment.flags,
-            rigid: fragment.subtree_rigid,
+            subtree_ink: fragment.subtree_ink,
             padding_box: fragment.padding_box,
             anchor: fragment.anchor,
         }
@@ -467,6 +468,14 @@ struct Folded {
     rigid: bool,
     /// The range of hit-order keys the subtree spans, `(MAX, 0)` when it indexes nothing.
     order: (HitOrder, HitOrder),
+    /// The coordinate system [`Folded::subtree_ink`] is measured in, or `None` for a subtree with
+    /// no piece.
+    ///
+    /// The anchor the box above hands its children, except for a fixed box inside a content
+    /// space: it measures its ink where it hangs from.
+    anchor: Option<zgui_scene::SpatialId>,
+    /// The [`FragmentFlags::BOUND`] flags of the subtree.
+    bound: FragmentFlags,
 }
 
 impl Folded {
@@ -479,6 +488,77 @@ impl Folded {
             disjoint: true,
             rigid: true,
             order: (HitOrder::MAX, 0),
+            anchor: None,
+            bound: FragmentFlags::EMPTY,
+        }
+    }
+}
+
+/// Which boxes below a content space that moved in this frame are visited all the same.
+///
+/// A scroll that writes a content space leaves the boxes in it as they are. Two kinds of box do
+/// not move with the content: a sticky box, whose shift is measured against the port, and a fixed
+/// box, which takes no scroll offset. Each is composed again, and so is the path down to it, so the
+/// subtree inks folded above it say where it is.
+#[derive(Clone, Copy, Debug, Default)]
+struct Chase {
+    /// How far the innermost content space that moved in this frame moved, on the device.
+    by: Option<(f32, f32)>,
+    /// Whether the sticky boxes of that content space's port are visited.
+    sticky: bool,
+    /// Whether the fixed boxes below are visited.
+    fixed: bool,
+}
+
+impl Chase {
+    /// Whether a child whose first piece holds the flags `bound` is visited.
+    fn wants(self, bound: FragmentFlags) -> bool {
+        (self.sticky && bound.contains(FragmentFlags::STICKY_BELOW))
+            || (self.fixed && bound.contains(FragmentFlags::FIXED_BELOW))
+    }
+
+    /// What the children of `placed` are visited under, when its content space moved by `moved`
+    /// in this frame.
+    ///
+    /// `previous` is the box's flags from its last composition. Only a box whose subtree then held
+    /// a sticky or fixed box has one to visit. A box with no previous flags checks every child.
+    fn below(
+        self,
+        placed: &Placed,
+        moved: Option<(f32, f32)>,
+        previous: Option<FragmentFlags>,
+    ) -> Self {
+        let chase = if let Some(by) = moved {
+            Self {
+                by: Some(by),
+                sticky: true,
+                fixed: true,
+            }
+        } else if placed.fixed {
+            // Nothing below a fixed box moves with the content around it.
+            Self::default()
+        } else if placed.scrolls {
+            // The sticky boxes below are sticky against this port, which did not scroll.
+            Self {
+                sticky: false,
+                ..self
+            }
+        } else {
+            self
+        };
+        let Some(flags) = previous else {
+            return chase;
+        };
+        // A scroll container stops STICKY_BELOW and keeps STICKY_IN_PORT in its place.
+        let sticky = if moved.is_some() {
+            FragmentFlags::STICKY_IN_PORT
+        } else {
+            FragmentFlags::STICKY_BELOW
+        };
+        Self {
+            sticky: chase.sticky && flags.contains(sticky),
+            fixed: chase.fixed && flags.contains(FragmentFlags::FIXED_BELOW),
+            ..chase
         }
     }
 }
@@ -516,9 +596,11 @@ struct Pass<'a, 'b, D: FrameDirty> {
     passes: split::Passes,
     /// Whether scroll containers may draw their content in a space of their own.
     scroll_nodes: bool,
-    /// The box being composed again without a content space, because its content stopped moving
-    /// rigidly.
+    /// The box being composed again without a content space, because a fixed box below it hangs
+    /// from a transformed or sticky box the space would move.
     refused: Option<BoxKey>,
+    /// Which children of the box being visited are visited because a content space above moved.
+    chase: Chase,
 }
 
 impl<D: FrameDirty> Pass<'_, '_, D> {
@@ -643,14 +725,20 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // down. A scroll of a box that draws its children in a content space moves that space
         // and nothing the children are composed against.
         let mut leading = own;
+        // How far the content space moved in this frame, when the children stay where they are in
+        // it.
+        let mut content_moved = None;
         if let Some(content) = content {
             placed.flags = placed.flags.union(FragmentFlags::SCROLLS_CONTENT);
             placed.descent = placed.content_descent(content.id);
             leading = own.difference(Dirty::SCROLL);
             if space_stable && let Some(by) = content.moved {
                 self.scroll_content(&placed, previous, by);
+                content_moved = Some(by);
             }
         }
+        // Where this box is: below a content space that moved in this frame, or not.
+        let here = self.chase;
         let state = self.store.state_mut(key);
         state.snapped = placed.snapped;
         // Read before it is replaced: whether this box's size is what its children were composed
@@ -662,7 +750,18 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // have moved since they were last composed, which is the whole input to the offsetting path.
         let previous_shift = state.composed_shift;
         state.composed_shift = placed.descent.shift;
-        let movement = self.movement(&placed, previous_shift);
+        // Inside a content space that moved in this frame, the content moved by the space's
+        // vector, so a box that moved by anything else moved by more than the frame's move.
+        let movement = self.movement(&placed, previous_shift).map(|movement| {
+            if here.by.is_some() {
+                rigid::Move {
+                    kind: rigid::MoveKind::Layout,
+                    ..movement
+                }
+            } else {
+                movement
+            }
+        });
 
         // A stacking change reorders what this box's children are painted after; the keys the
         // index carries for them are then numbered for an order that no longer holds.
@@ -712,11 +811,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let mut below = false;
         let mut disjoint = true;
         let mut rigid = placed.rigid;
-        // Whether every child's subtree moves rigidly, which is what a content space rests on.
-        let mut children_rigid = true;
+        // The flags the children's subtrees fold up, before this box adds its own.
+        let mut children_bound = FragmentFlags::EMPTY;
         // What puts a child's ink, measured in the content space, into this box's anchor.
         let into_anchor =
             content.map(|_| Size::new(DevicePx(-placed.offset.0), DevicePx(-placed.offset.1)));
+        self.chase = here.below(&placed, content_moved, previous.map(|held| held.flags));
         let mut subtree_ink = self.scratch.child_inks[inks_mark..]
             .iter()
             .fold(ink, |held, piece| held.union(*piece));
@@ -768,6 +868,15 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     owed.node,
                     child_between,
                 ),
+                // A sticky or fixed box below a content space that moved, or the path down to
+                // one: it does not move with the content.
+                _ if self.chases(child) => self.visit(
+                    child,
+                    placed.descent,
+                    first_fragment,
+                    owed.node,
+                    child_between,
+                ),
                 _ if settled && clean && (size_stable || self.can_translate(child)) => {
                     self.cached(child)
                 }
@@ -776,7 +885,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     && size_stable
                     && self.drawn_under(child, placed.descent.clip) =>
                 {
-                    self.rematrix(child, placed.descent.matrix)
+                    self.rematrix(child, placed.descent.matrix, placed.descent.fixed.matrix)
                 }
                 Some(movement) if clean && self.can_translate(child) => {
                     self.translate(child, movement)
@@ -804,15 +913,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 },
             };
             let mut folded = folded;
-            if let Some(by) = into_anchor {
-                folded.subtree_ink = folded.subtree_ink.translate(by);
+            match folded.anchor {
+                // A fixed box inside a content space measures its ink where it hangs from.
+                Some(anchor) if anchor != placed.descent.anchor => {
+                    folded.subtree_ink = self.reanchor(folded.subtree_ink, anchor, placed.anchor);
+                }
+                _ => {
+                    if let Some(by) = into_anchor {
+                        folded.subtree_ink = folded.subtree_ink.translate(by);
+                    }
+                }
             }
             self.scratch.child_inks.push(folded.subtree_ink);
             blending |= folded.blending;
             below |= folded.reads;
             disjoint &= folded.disjoint;
             rigid &= folded.rigid;
-            children_rigid &= folded.rigid;
+            children_bound = children_bound.union(folded.bound);
             subtree_ink = subtree_ink.union(folded.subtree_ink);
             if folded.order.1 > 0 {
                 cursor = cursor.max(folded.order.1);
@@ -830,7 +947,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         disjoint &= !child_inks.iter().any(|child| overlaps(ink, *child));
         disjoint &= pairwise_disjoint(child_inks);
 
+        self.chase = here;
+        // A scroll container is the port of the sticky boxes below it, so it stops STICKY_BELOW.
+        // It keeps STICKY_IN_PORT on itself, which does not fold up. A fixed box stops every bound
+        // flag except FIXED_UNDER_SCROLLED.
+        let mut bound = children_bound;
         let mut folded = FragmentFlags::EMPTY;
+        if placed.scrolls {
+            if bound.contains(FragmentFlags::STICKY_BELOW) {
+                folded = FragmentFlags::STICKY_IN_PORT;
+            }
+            bound = bound.without(FragmentFlags::STICKY_BELOW);
+        }
+        if placed.fixed {
+            bound = bound.intersection(FragmentFlags::FIXED_UNDER_SCROLLED);
+        }
+        let bound = bound.union(placed.bound);
+        folded = folded.union(bound);
         if blending {
             folded = folded.union(FragmentFlags::HAS_BLENDING_DESCENDANT);
         }
@@ -848,17 +981,33 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         self.scratch.child_inks.truncate(inks_mark);
         self.scratch.children.truncate(children_mark);
         self.scratch.written.truncate(fragments.start);
-        // A content space holds only content that moves rigidly. A box below that turned sticky,
-        // fixed or transformed in this frame was composed in it all the same, and a fixed one is
-        // then drawn where the scroll puts it. So the box is composed again without one, which
-        // composes every child again in the box's own space. The entries the first composition
-        // carried are settled first, because the second one may write the same entries again.
-        if content.is_some() && !children_rigid {
+        // A fixed box that hangs from a transformed or sticky box in the content space moves with
+        // the space. A box below that took that shape in this frame was composed in it all the same.
+        // So the box is composed again without one, which composes every child again in the
+        // box's own space. The entries the first composition carried are settled first, because
+        // the second one may write the same entries again.
+        if content.is_some() && children_bound.contains(FragmentFlags::FIXED_UNDER_SCROLLED) {
             self.hit.settle();
             let outer = self.refused.replace(key);
             let again = self.visit(key, from, parent, generator, between);
             self.refused = outer;
             return again;
+        }
+        // The frame may answer the content's move by moving the port's pixels. A box that does
+        // not move with the content then owes where those pixels put it, and a fixed box also
+        // owes where it is.
+        if let Some(by) = here.by
+            && (placed.fixed || moved)
+        {
+            let admitted = self.admitted(placed.clip);
+            if let Some(held) = previous {
+                let was = self.device_before(held.subtree_ink, held.anchor);
+                let carried = was.translate(Size::new(DevicePx(by.0), DevicePx(by.1)));
+                self.damage_beyond_a_move(carried, admitted);
+            }
+            if placed.fixed {
+                self.damage_beyond_a_move(self.device_now(subtree_ink, placed.anchor), admitted);
+            }
         }
         Folded {
             subtree_ink,
@@ -867,6 +1016,44 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             disjoint,
             rigid,
             order,
+            anchor: Some(placed.anchor),
+            bound,
+        }
+    }
+
+    /// Whether `child` is visited because a content space above moved, read off the
+    /// [`FragmentFlags::BOUND`] flags its subtree folded up when it was last composed.
+    fn chases(&self, child: BoxKey) -> bool {
+        if !self.chase.sticky && !self.chase.fixed {
+            return false;
+        }
+        self.store
+            .fragments_of_box(child)
+            .first()
+            .and_then(|frag| self.store.fragment(*frag))
+            .is_some_and(|fragment| self.chase.wants(fragment.flags))
+    }
+
+    /// `rect`, measured in `from`, measured in `to` instead, through this walk's matrices.
+    fn reanchor(
+        &self,
+        rect: Rect<DevicePx, Device>,
+        from: zgui_scene::SpatialId,
+        to: zgui_scene::SpatialId,
+    ) -> Rect<DevicePx, Device> {
+        if rect.is_empty() || from == to {
+            return rect;
+        }
+        let spatial = &*self.tables.spatial;
+        let (Some(from), Some(to)) = (spatial.resolve(from), spatial.resolve(to)) else {
+            return rect;
+        };
+        if let (Some(from), Some(to)) = (from.plane_translation(), to.plane_translation()) {
+            return rect.translate(Size::new(DevicePx(from.0 - to.0), DevicePx(from.1 - to.1)));
+        }
+        match to.invert() {
+            Some(into) => crate::fragment::transform::transformed_bounds(&from.then(&into), rect),
+            None => rect,
         }
     }
 
@@ -874,10 +1061,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     ///
     /// A scroll container takes one when the switch is on (see
     /// [`scroll_nodes`](crate::fragment::scroll_nodes)), it clips its children, nothing between it
-    /// and its anchor is transformed, its whole subtree moved rigidly when it was last composed,
-    /// and it either held a content space already or scrolls in this frame. The space is taken
-    /// at the first scroll and not before, because taking it composes and paints every child
-    /// again once.
+    /// and its anchor is transformed, no fixed box below hangs from a transformed or sticky box
+    /// below it (see [`FragmentFlags::FIXED_UNDER_SCROLLED`]), and it either held a content space already
+    /// or scrolls in this frame. The space is taken at the first scroll and not before, because
+    /// taking it composes and paints every child again once.
     ///
     /// The space is written here: its parent is the box's own space and its matrix is the box's
     /// scroll offset. A box that no longer qualifies gives its space back.
@@ -895,8 +1082,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             && placed.scrolls
             && placed.flags.contains(FragmentFlags::CLIPS_CHILDREN)
             && placed.descent.matrix.is_none()
-            && previous
-                .is_some_and(|previous| previous.rigid && (held || own.contains(Dirty::SCROLL)));
+            && previous.is_some_and(|previous| {
+                !previous.flags.contains(FragmentFlags::FIXED_UNDER_SCROLLED)
+                    && (held || own.contains(Dirty::SCROLL))
+            });
         if !wanted {
             if held {
                 self.tables.spatial.release(owner);
@@ -1121,6 +1310,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let mut disjoint = true;
         let mut rigid = true;
         let mut order = (HitOrder::MAX, 0);
+        let mut anchor = None;
+        let mut bound = FragmentFlags::EMPTY;
         for (index, frag) in fragments.iter().enumerate() {
             let Some(fragment) = self.store.fragment(*frag) else {
                 continue;
@@ -1130,6 +1321,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             } else {
                 subtree_ink.union(fragment.subtree_ink)
             };
+            anchor = anchor.or(Some(fragment.anchor));
+            bound = bound.union(fragment.flags.intersection(FragmentFlags::BOUND));
             blending |= fragment
                 .flags
                 .contains(FragmentFlags::HAS_BLENDING_DESCENDANT);
@@ -1148,6 +1341,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             disjoint,
             rigid,
             order,
+            anchor,
+            bound,
         }
     }
 

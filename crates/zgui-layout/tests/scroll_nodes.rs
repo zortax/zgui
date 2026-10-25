@@ -420,7 +420,10 @@ fn fixed_row(scroll_too: bool) {
         let held = store
             .fragment(store.fragments_of_box(port_box)[0])
             .is_some_and(|piece| piece.flags.contains(FragmentFlags::SCROLLS_CONTENT));
-        assert!(!held, "the port kept its content space over a fixed row");
+        assert_eq!(
+            held, nodes,
+            "a fixed row hangs outside the content space, so the port keeps it"
+        );
         answers.push(drawn(&frame, &store));
     }
     scroll_nodes::set_enabled(false);
@@ -547,4 +550,547 @@ fn a_content_space_under_a_panel_that_takes_a_transform_is_drawn_and_damaged_whe
         offset_damage, spaced_damage,
         "under the panel's new matrix, the content space damages somewhere else"
     );
+}
+
+/// What each of the three documents of [`three_ways`] draws after every scroll, and whether the
+/// port of the second held a content space.
+type ThreeWays = (Vec<Vec<Drawn>>, Vec<Vec<Drawn>>, Vec<Vec<Drawn>>, Vec<bool>);
+
+/// The same scrolls over a document built from `make`, three ways: offsetting the content,
+/// drawing it in a content space, and composed fresh at each offset without a scroll before it.
+///
+/// Answers what each draws after every scroll, and whether the port of the second held a content
+/// space after every scroll.
+fn three_ways(make: &dyn Fn() -> Fixture, offsets: &[f32]) -> ThreeWays {
+    let mut answers = Vec::new();
+    let mut held = Vec::new();
+    for nodes in [false, true] {
+        scroll_nodes::set_enabled(nodes);
+        let fixture = make();
+        let mut store = fixture.box_tree();
+        let mut content = measurer();
+        let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+        let element = port(&store);
+        let mut after = Vec::new();
+        for &by in offsets {
+            frame
+                .scroll
+                .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
+            compose(&mut frame, &mut store, &mut Scrolled { node: element });
+            after.push(drawn(&frame, &store));
+            if nodes {
+                held.push(scrolls_content(&store, port_box(&store)));
+            }
+        }
+        answers.push(after);
+    }
+    scroll_nodes::set_enabled(false);
+    let mut fresh = Vec::new();
+    for &by in offsets {
+        let fixture = make();
+        let mut store = fixture.box_tree();
+        let mut content = measurer();
+        support::lay_out_only(&mut store, &mut content, 300.0, 240.0);
+        let mut frame = Frame::new();
+        frame
+            .scroll
+            .place(port(&store), Point::new(DevicePx(0.0), DevicePx(by)));
+        compose(
+            &mut frame,
+            &mut store,
+            &mut zgui_layout::fragment::diff::Everything,
+        );
+        fresh.push(drawn(&frame, &store));
+    }
+    let spaced = answers.pop().expect("both documents ran");
+    let offset = answers.pop().expect("both documents ran");
+    (offset, spaced, fresh, held)
+}
+
+/// Whether `key` draws its children in a content space.
+fn scrolls_content(store: &LayoutStore, key: zgui_layout::BoxKey) -> bool {
+    store
+        .fragment(store.fragments_of_box(key)[0])
+        .is_some_and(|piece| piece.flags.contains(FragmentFlags::SCROLLS_CONTENT))
+}
+
+/// Asserts the three answers of [`three_ways`] agree after every scroll.
+fn agree(offset: &[Vec<Drawn>], spaced: &[Vec<Drawn>], fresh: &[Vec<Drawn>]) {
+    for (step, ((offset, spaced), fresh)) in offset.iter().zip(spaced).zip(fresh).enumerate() {
+        assert_eq!(
+            offset, fresh,
+            "after scroll {step}, offsetting the content draws a piece somewhere a fresh build \
+             does not"
+        );
+        assert_eq!(
+            spaced, fresh,
+            "after scroll {step}, the content space draws a piece somewhere a fresh build does not"
+        );
+    }
+}
+
+/// A scrollport with a sticky header of its own, then sections that each hold a sticky header
+/// and rows of clipped cards.
+fn sticky_page() -> Fixture {
+    let section = || {
+        let mut children = vec![Element::new("head").text("alpha bravo")];
+        for _ in 0..5 {
+            children.push(
+                Element::new("row")
+                    .children(vec![Element::new("card").text("alpha bravo delta gamma")]),
+            );
+        }
+        Element::new("section").children(children)
+    };
+    let mut children = vec![Element::new("top").text("delta gamma")];
+    children.extend((0..6).map(|_| section()));
+    Fixture::new(
+        Element::new("root").children(vec![Element::new("port").children(children)]),
+        "root    { display: block; width: 300px; height: 240px }
+         port    { display: block; height: 200px; overflow: scroll; margin-top: 20px }
+         top     { display: block; height: 16px; position: sticky; top: 0px }
+         section { display: block }
+         head    { display: block; height: 16px; position: sticky; top: 16px }
+         row     { display: block; height: 20px }
+         card    { display: block; overflow: hidden; border-radius: 4px; height: 18px }",
+    )
+}
+
+/// The offsets the sticky and fixed pages are scrolled through: past the first header, back,
+/// by a fraction, past several sections' ends and back to the top.
+const STEPS: [f32; 8] = [10.0, 37.0, 120.0, 12.5, 250.0, 251.0, 400.0, 0.0];
+
+#[test]
+fn a_sticky_header_in_a_content_space_sticks_at_the_port_edge_where_a_fresh_build_puts_it() {
+    let _guard = exclusive();
+    let (offset, spaced, fresh, held) = three_ways(&sticky_page, &STEPS);
+    assert!(
+        held.iter().all(|held| *held),
+        "the port gave its content space up over sticky headers: {held:?}"
+    );
+    agree(&offset, &spaced, &fresh);
+
+    // The port's own header sticks at the top edge of the port whenever the port is scrolled.
+    scroll_nodes::set_enabled(true);
+    let fixture = sticky_page();
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+    let element = port(&store);
+    let port_key = port_box(&store);
+    let top = store.node(port_key).children[0];
+    for by in STEPS {
+        frame
+            .scroll
+            .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
+        compose(&mut frame, &mut store, &mut Scrolled { node: element });
+        let placements = Placements::of(&frame.spatial);
+        let piece = |key| {
+            let fragment = store
+                .fragment(store.fragments_of_box(key)[0])
+                .expect("a live piece");
+            onto_device(fragment.border_box, fragment.transform, &placements)
+        };
+        let port_piece = store
+            .fragment(store.fragments_of_box(port_key)[0])
+            .expect("a port piece");
+        let port_top = onto_device(port_piece.padding_box, port_piece.transform, &placements)
+            .origin
+            .y
+            .0;
+        assert_eq!(
+            piece(top).origin.y.0,
+            port_top,
+            "scrolled to {by}, the port's header is not at the port's top edge"
+        );
+    }
+    scroll_nodes::set_enabled(false);
+}
+
+#[test]
+fn a_scroll_past_a_sticky_header_visits_the_header_and_no_row() {
+    let _guard = exclusive();
+    let page =
+        |rows: usize| {
+            let mut children = vec![Element::new("top").text("delta gamma")];
+            children.extend((0..rows).map(|_| {
+                Element::new("row").children(vec![Element::new("card").text("alpha bravo")])
+            }));
+            Fixture::new(
+                Element::new("root").children(vec![Element::new("port").children(children)]),
+                "root { display: block; width: 300px; height: 240px }
+             port { display: block; height: 200px; overflow: scroll; margin-top: 20px }
+             top  { display: block; height: 16px; position: sticky; top: 0px }
+             row  { display: block; height: 20px }
+             card { display: block; overflow: hidden; border-radius: 4px; height: 18px }",
+            )
+        };
+    let mut visited = Vec::new();
+    for nodes in [false, true] {
+        scroll_nodes::set_enabled(nodes);
+        let fixture = page(1000);
+        let mut store = fixture.box_tree();
+        let mut content = measurer();
+        let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+        let element = port(&store);
+        for by in [40.0, 60.0] {
+            frame
+                .scroll
+                .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
+            counter::reset();
+            compose(&mut frame, &mut store, &mut Scrolled { node: element });
+        }
+        visited.push(counter::get(Counter::NodesVisited));
+        assert_eq!(scrolls_content(&store, port_box(&store)), nodes);
+    }
+    scroll_nodes::set_enabled(false);
+    if !COUNTERS_ENABLED {
+        return;
+    }
+    assert!(
+        visited[0] > 1000,
+        "the control visited {} boxes, so it did not carry the rows",
+        visited[0]
+    );
+    assert!(
+        visited[1] <= 8,
+        "a scroll visited {} boxes; the path down to the port and the header is a handful",
+        visited[1]
+    );
+}
+
+/// A positioned scrollport holding a fixed box of its own and, in one positioned row, a fixed
+/// box positioned against that row.
+fn fixed_page() -> Fixture {
+    let mut rows: Vec<Element> = (0..12)
+        .map(|_| Element::new("row").children(vec![Element::new("card").text("alpha bravo")]))
+        .collect();
+    rows[3] = Element::new("held").children(vec![
+        Element::new("card").text("alpha bravo"),
+        Element::new("badge").text("delta"),
+    ]);
+    rows.push(Element::new("fab").text("gamma"));
+    Fixture::new(
+        Element::new("root").children(vec![Element::new("port").children(rows)]),
+        "root  { display: block; width: 300px; height: 240px }
+         port  { display: block; position: relative; height: 200px; overflow: scroll;
+                 margin-top: 20px }
+         row   { display: block; height: 20px }
+         held  { display: block; height: 20px; position: relative }
+         card  { display: block; overflow: hidden; border-radius: 4px; height: 18px }
+         fab   { display: block; position: fixed; top: 150px; left: 200px; width: 40px;
+                 height: 30px }
+         badge { display: block; position: fixed; top: 4px; left: 250px; width: 20px;
+                 height: 10px }",
+    )
+}
+
+#[test]
+fn a_fixed_box_inside_a_content_space_stays_where_a_fresh_build_puts_it() {
+    let _guard = exclusive();
+    let (offset, spaced, fresh, held) = three_ways(&fixed_page, &STEPS);
+    assert!(
+        held.iter().all(|held| *held),
+        "the port gave its content space up over fixed boxes: {held:?}"
+    );
+    agree(&offset, &spaced, &fresh);
+
+    // Both fixed boxes stay where they were drawn before any scroll, and the damage of a scroll
+    // that writes the content space holds them where they are and where moving the port's
+    // pixels would put them.
+    scroll_nodes::set_enabled(true);
+    let fixture = fixed_page();
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+    let element = port(&store);
+    let port_key = port_box(&store);
+    let fixed: Vec<zgui_layout::BoxKey> = store
+        .keys()
+        .into_iter()
+        .filter(|&key| {
+            store
+                .fragments_of_box(key)
+                .first()
+                .and_then(|frag| store.fragment(*frag))
+                .is_some_and(|piece| piece.flags.contains(FragmentFlags::FIXED_BELOW))
+                && store.node(key).children.iter().all(|child| {
+                    store
+                        .fragments_of_box(*child)
+                        .first()
+                        .and_then(|frag| store.fragment(*frag))
+                        .is_none_or(|piece| !piece.flags.contains(FragmentFlags::FIXED_BELOW))
+                })
+                && key != port_key
+        })
+        .collect();
+    let device = |store: &LayoutStore, frame: &Frame, key| {
+        let fragment = store
+            .fragment(store.fragments_of_box(key)[0])
+            .expect("a live piece");
+        onto_device(
+            fragment.border_box,
+            fragment.transform,
+            &Placements::of(&frame.spatial),
+        )
+    };
+    let standing: Vec<_> = fixed
+        .iter()
+        .map(|key| device(&store, &frame, *key))
+        .collect();
+    assert_eq!(standing.len(), 2, "the page has two fixed boxes: {fixed:?}");
+    let mut last = 0.0;
+    for by in STEPS {
+        frame
+            .scroll
+            .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
+        let moves = compose(&mut frame, &mut store, &mut Scrolled { node: element });
+        let placements = Placements::of(&frame.spatial);
+        for (key, was) in fixed.iter().zip(&standing) {
+            let now = device(&store, &frame, *key);
+            assert_eq!(now, *was, "scrolled to {by}, a fixed box moved");
+            // The paint walk skips a subtree by its folded ink, so every box above a fixed box
+            // folds the fixed box's ink where it is drawn.
+            let ink = store
+                .fragment(store.fragments_of_box(*key)[0])
+                .expect("a live piece")
+                .device_ink(&placements);
+            let mut above = store.node(*key).parent;
+            while let Some(parent) = above {
+                let folded = store
+                    .fragment(store.fragments_of_box(parent)[0])
+                    .expect("a live piece")
+                    .device_subtree_ink(&placements);
+                assert!(
+                    folded.contains_rect(ink),
+                    "scrolled to {by}, box {parent:?} folds {folded:?}, which leaves the fixed \
+                     box's ink {ink:?} out"
+                );
+                above = store.node(parent).parent;
+            }
+            if moves.by.is_some() {
+                let shifted =
+                    now.translate(zgui_geom::Size::new(DevicePx(0.0), DevicePx(last - by)));
+                // What the port's clip admits of each is what can be drawn there.
+                let port_piece = store
+                    .fragment(store.fragments_of_box(port_key)[0])
+                    .expect("a port piece");
+                let port_rect =
+                    onto_device(port_piece.padding_box, port_piece.transform, &placements);
+                for rect in [now, shifted] {
+                    let Some(rect) = rect.intersection(port_rect) else {
+                        continue;
+                    };
+                    let pixels = zgui_layout::fragment::diff::pixels(rect);
+                    assert!(
+                        moves
+                            .beyond
+                            .rects()
+                            .iter()
+                            .any(|held| held.contains_rect(pixels)),
+                        "scrolled to {by}, the damage beyond the move {:?} leaves {pixels:?} out",
+                        moves.beyond.rects()
+                    );
+                }
+            }
+        }
+        last = by;
+    }
+    scroll_nodes::set_enabled(false);
+}
+
+/// The scrollport of [`page`] with transformed rows, and optionally a fixed box inside one of
+/// them.
+fn transformed_page(with_fixed: bool) -> Fixture {
+    let mut rows: Vec<Element> = (0..12)
+        .map(|_| Element::new("row").children(vec![Element::new("card").text("alpha bravo")]))
+        .collect();
+    if with_fixed {
+        rows[2] = Element::new("row").children(vec![
+            Element::new("card").text("alpha bravo"),
+            Element::new("badge").text("delta"),
+        ]);
+    }
+    Fixture::new(
+        Element::new("root").children(vec![Element::new("port").children(rows)]),
+        "root  { display: block; width: 300px; height: 240px }
+         port  { display: block; height: 200px; overflow: scroll; margin-top: 20px }
+         row   { display: block; height: 20px; position: relative;
+                 transform: translate(3px, 1px) }
+         card  { display: block; overflow: hidden; border-radius: 4px; height: 18px }
+         badge { display: block; position: fixed; top: 2px; left: 250px; width: 20px;
+                 height: 10px }",
+    )
+}
+
+#[test]
+fn transformed_rows_take_a_content_space_and_are_drawn_where_a_fresh_build_puts_them() {
+    let _guard = exclusive();
+    let (offset, spaced, fresh, held) = three_ways(&|| transformed_page(false), &STEPS);
+    assert!(
+        held.iter().all(|held| *held),
+        "the port gave its content space up over transformed rows: {held:?}"
+    );
+    agree(&offset, &spaced, &fresh);
+}
+
+#[test]
+fn a_fixed_box_in_a_transformed_row_keeps_the_port_out_of_a_content_space() {
+    let _guard = exclusive();
+    let (offset, spaced, fresh, held) = three_ways(&|| transformed_page(true), &STEPS);
+    assert!(
+        held.iter().all(|held| !held),
+        "the port took a content space that would carry the row's fixed box: {held:?}"
+    );
+    agree(&offset, &spaced, &fresh);
+}
+
+/// The scrollport of [`page`] with one row that holds a sticky box, and optionally transformed
+/// rows and a fixed box inside the sticky box.
+fn sticky_in_row_page(transformed: bool, with_fixed: bool) -> Fixture {
+    let mut rows: Vec<Element> = (0..12)
+        .map(|_| Element::new("row").children(vec![Element::new("card").text("alpha bravo")]))
+        .collect();
+    let mut inner = vec![Element::new("card").text("alpha bravo")];
+    if with_fixed {
+        inner.push(Element::new("badge").text("delta"));
+    }
+    rows[2] = Element::new("row").children(vec![Element::new("wrap").children(inner)]);
+    let transform = if transformed {
+        "transform: translate(3px, 1px)"
+    } else {
+        ""
+    };
+    Fixture::new(
+        Element::new("root").children(vec![Element::new("port").children(rows)]),
+        &format!(
+            "root  {{ display: block; width: 300px; height: 240px }}
+             port  {{ display: block; height: 200px; overflow: scroll; margin-top: 20px }}
+             row   {{ display: block; height: 20px; position: relative; {transform} }}
+             wrap  {{ display: block; height: 10px; position: sticky; top: 0px }}
+             card  {{ display: block; overflow: hidden; border-radius: 4px; height: 8px }}
+             badge {{ display: block; position: fixed; top: 2px; left: 250px; width: 20px;
+                     height: 10px }}"
+        ),
+    )
+}
+
+#[test]
+fn a_sticky_box_in_a_transformed_row_takes_a_content_space_and_is_drawn_where_a_fresh_build_puts_it()
+ {
+    let _guard = exclusive();
+    let (offset, spaced, fresh, held) = three_ways(&|| sticky_in_row_page(true, false), &STEPS);
+    assert!(
+        held.iter().all(|held| *held),
+        "the port gave its content space up over a sticky box in a transformed row: {held:?}"
+    );
+    agree(&offset, &spaced, &fresh);
+}
+
+#[test]
+fn a_fixed_box_in_a_sticky_box_keeps_the_port_out_of_a_content_space() {
+    let _guard = exclusive();
+    for transformed in [false, true] {
+        let (offset, spaced, fresh, held) =
+            three_ways(&|| sticky_in_row_page(transformed, true), &STEPS);
+        assert!(
+            held.iter().all(|held| !held),
+            "transformed rows {transformed}: the port took a content space that would carry the \
+             sticky box's fixed box: {held:?}"
+        );
+        agree(&offset, &spaced, &fresh);
+    }
+}
+
+#[test]
+fn a_row_that_layout_moves_as_its_port_scrolls_damages_where_the_moved_pixels_put_it() {
+    let _guard = exclusive();
+    scroll_nodes::set_enabled(true);
+    let mut fixture = page(12);
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+    let element = port(&store);
+    for by in [30.0, 40.0] {
+        frame
+            .scroll
+            .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
+        compose(&mut frame, &mut store, &mut Scrolled { node: element });
+    }
+    let port_key = port_box(&store);
+    assert!(scrolls_content(&store, port_key));
+    let rows = store.node(port_key).children.clone();
+    let device_of = |store: &LayoutStore, frame: &Frame, key| {
+        store
+            .fragment(store.fragments_of_box(key)[0])
+            .expect("a live piece")
+            .device_subtree_ink(&Placements::of(&frame.spatial))
+    };
+    let before: Vec<_> = rows[4..9]
+        .iter()
+        .map(|key| device_of(&store, &frame, *key))
+        .collect();
+
+    // Row 3 grows, so layout moves every row after it, and the port scrolls in the same frame.
+    let target = store
+        .node(rows[3])
+        .source
+        .expect("the row came from an element");
+    let index = fixture
+        .document
+        .store()
+        .index_of(target)
+        .expect("a live element");
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.set_style_property(index, "height", Some("30px"));
+    });
+    support::lay_out_only(&mut store, &mut content, 300.0, 240.0);
+    let root = store.root().expect("a root box");
+    let above = vec![
+        store
+            .node(root)
+            .source
+            .expect("the root came from an element"),
+        element,
+    ];
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(55.0)));
+    let mut dirty = Owing {
+        target,
+        above,
+        bits: Dirty::RELAYOUT | Dirty::REPAINT,
+        scrolled: Some(element),
+    };
+    let moves = compose(&mut frame, &mut store, &mut dirty);
+    scroll_nodes::set_enabled(false);
+    assert!(scrolls_content(&store, port_key));
+    let by = moves.by.expect("the frame reports the port's move");
+    let placements = Placements::of(&frame.spatial);
+    let port_piece = store
+        .fragment(store.fragments_of_box(port_key)[0])
+        .expect("a port piece");
+    let port_rect = onto_device(port_piece.padding_box, port_piece.transform, &placements);
+    for (key, was) in rows[4..9].iter().zip(before) {
+        assert_ne!(
+            device_of(&store, &frame, *key),
+            was.translate(zgui_geom::Size::new(DevicePx(by.0), DevicePx(by.1))),
+            "row {key:?} moved with the port only, so layout did not move it"
+        );
+        // Moving the port's pixels puts the row's old image here, so it is drawn again.
+        let carried = was.translate(zgui_geom::Size::new(DevicePx(by.0), DevicePx(by.1)));
+        let Some(rect) = carried.intersection(port_rect) else {
+            continue;
+        };
+        let pixels = zgui_layout::fragment::diff::pixels(rect);
+        assert!(
+            moves
+                .beyond
+                .rects()
+                .iter()
+                .any(|held| held.contains_rect(pixels)),
+            "row {key:?}: the damage beyond the move {:?} leaves {pixels:?} out",
+            moves.beyond.rects()
+        );
+    }
 }

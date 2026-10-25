@@ -153,6 +153,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             disjoint: fragment.subtree_disjoint,
             rigid: true,
             order: fragment.subtree_order,
+            anchor: Some(anchor),
+            bound: fragment.flags.intersection(FragmentFlags::BOUND),
         };
         match moved.kind {
             MoveKind::Scroll => {
@@ -172,6 +174,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 self.damage_beyond_a_move(was, super::Admitted::everything());
                 let is = self.device_now(folded.subtree_ink, anchor);
                 self.damage_beyond_a_move(is, admitted);
+                // Inside a content space that moved, the frame may move the port's pixels by the
+                // space's vector, and the subtree's old pixels go with them. For a row that layout
+                // moved in the frame the port scrolled, no box above damages that rectangle.
+                if let Some(by) = self.chase.by {
+                    let carried = was.translate(Size::new(DevicePx(by.0), DevicePx(by.1)));
+                    self.damage_beyond_a_move(carried, admitted);
+                }
             }
         }
 

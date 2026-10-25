@@ -192,8 +192,38 @@ impl FragmentFlags {
     /// Set when the box is placed. Read where the box is placed again: a box that starts or stops
     /// doing so hands its children another coordinate system, so they are composed again.
     pub const SCROLLS_CONTENT: Self = Self(1 << 11);
+    /// This box or one below it is sticky against the scrollport of a box above this one.
+    ///
+    /// Folded on the unwind and stopped at a scroll container, which is the port of the sticky
+    /// boxes below it. A scroll that writes only a content space visits the boxes that carry it,
+    /// because their shift is measured against a port the content moves past.
+    pub const STICKY_BELOW: Self = Self(1 << 12);
+    /// This box or one below it is `position: fixed`.
+    ///
+    /// Folded on the unwind and stopped at the fixed box. A scroll that writes only a content space
+    /// visits the boxes that carry it: a fixed box stays where it is while the content moves, so
+    /// the subtree inks above it are folded again.
+    pub const FIXED_BELOW: Self = Self(1 << 13);
+    /// A fixed box at or below this one hangs from a transformed or sticky box that a scroll
+    /// moves.
+    ///
+    /// Folded on the unwind. A scroll container above it keeps its children in its own space,
+    /// because a content space moves the transformed or sticky box and with it the fixed box.
+    pub const FIXED_UNDER_SCROLLED: Self = Self(1 << 14);
+    /// A sticky box below this scroll container is sticky against its port.
+    ///
+    /// Written on the scroll container only, where [`FragmentFlags::STICKY_BELOW`] stops. A scroll
+    /// that writes the container's content space visits its sticky boxes only when it is set.
+    pub const STICKY_IN_PORT: Self = Self(1 << 15);
+    /// The flags that say which boxes below a scroll depends on beyond its content space.
+    pub const BOUND: Self = Self::STICKY_BELOW
+        .union(Self::FIXED_BELOW)
+        .union(Self::FIXED_UNDER_SCROLLED);
     /// The flags the unwind writes from the subtree, which a comparison of the box itself ignores.
-    pub const FOLDED: Self = Self::HAS_BLENDING_DESCENDANT.union(Self::READS_BACKDROP_BELOW);
+    pub const FOLDED: Self = Self::HAS_BLENDING_DESCENDANT
+        .union(Self::READS_BACKDROP_BELOW)
+        .union(Self::BOUND)
+        .union(Self::STICKY_IN_PORT);
     /// The flags a comparison of the box's geometry ignores.
     ///
     /// The subtree's flags, [`FragmentFlags::GROUPS_SUBTREE`] and

@@ -1,10 +1,17 @@
 //! Whether a scroll container draws its content in a coordinate system of its own.
 //!
-//! With the switch on, a scroll container whose content moves rigidly gives its children a space
-//! that its scroll offset moves, the first time it scrolls. A scroll frame then writes that
-//! space's matrix and leaves every piece below the container as it is: their rectangles, clip
-//! chains and hit entries are measured in the content space, which the scroll does not change.
-//! With the switch off, the fragment pass offsets every piece below the container instead.
+//! With the switch on, a scroll container gives its children a space that its scroll offset
+//! moves, the first time it scrolls. A scroll frame then writes that space's matrix and leaves
+//! every piece below the container as it is: their rectangles, clip chains and hit entries are
+//! measured in the content space, which the scroll does not change. With the switch off, the
+//! fragment pass offsets every piece below the container instead.
+//!
+//! Two kinds of box do not move with the content. A `position: fixed` box hangs from the space
+//! above the content space, so the scroll does not move it. A sticky box is measured against the
+//! port, so a scroll composes it again against the moved port. A scroll frame visits both, and the
+//! path down to each, so the subtree inks above them stay true. A container keeps its children in
+//! its own space when a fixed box below hangs from a transformed or sticky box below it, because
+//! the content space would move that box.
 //!
 //! Set `ZGUI_SCROLL_NODES=1` to turn it on. [`set_enabled`] overrides the environment for the
 //! process.
