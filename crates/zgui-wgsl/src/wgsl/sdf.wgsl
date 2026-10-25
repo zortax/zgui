@@ -108,23 +108,37 @@ fn rect_coverage(point: vec2<f32>, bounds: Bounds, radii: Radii, shape: f32) -> 
     return saturate(0.5 - quad_sdf(point, bounds, radii, shape));
 }
 
+// Whether a point lies outside an upright box.
+fn outside_bounds(point: vec2<f32>, b: Bounds) -> bool {
+    return point.x < b.x || point.y < b.y || point.x > b.x + b.w || point.y > b.y + b.h;
+}
+
 // Coverage of a device pixel by a whole clip chain. Every pipeline that draws into the composed
 // target applies exactly this function, so one clip means one thing whatever draws through it.
 fn clip_coverage(point: vec2<f32>, clip_id: u32) -> f32 {
     let clip = clips[clip_id];
     // The intersection rectangle is a hard edge: it is an axis-aligned box in device space, and
     // antialiasing it would bleed content one pixel outside a scrollport.
-    let aabb = clip.aabb;
-    if point.x < aabb.x || point.y < aabb.y
-        || point.x > aabb.x + aabb.w || point.y > aabb.y + aabb.h {
+    if outside_bounds(point, clip.aabb) {
         return 0.0;
+    }
+    // The kept links are tested in their own system, which only translates: the point moves
+    // back by that translation.
+    var kept = point;
+    if clip.space != NO_SPACE {
+        kept = point - spatial[clip.space].matrix[3].xy;
+        if outside_bounds(kept, clip.kept_aabb) {
+            return 0.0;
+        }
     }
     var coverage = 1.0;
     if clip.count > 0u {
-        coverage *= rect_coverage(point, clip.first.rect, clip.first.radii, clip.first.shape);
+        let at = select(point, kept, (clip.kept_tests & 1u) != 0u);
+        coverage *= rect_coverage(at, clip.first.rect, clip.first.radii, clip.first.shape);
     }
     if clip.count > 1u {
-        coverage *= rect_coverage(point, clip.second.rect, clip.second.radii, clip.second.shape);
+        let at = select(point, kept, (clip.kept_tests & 2u) != 0u);
+        coverage *= rect_coverage(at, clip.second.rect, clip.second.radii, clip.second.shape);
     }
     return coverage;
 }

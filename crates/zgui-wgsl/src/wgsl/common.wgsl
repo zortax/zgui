@@ -116,14 +116,26 @@ struct Rounded {
 }
 
 // A whole clip chain, flattened into what one draw call applies.
+//
+// The links measured in one coordinate system that only translates can stay in its coordinates:
+// `space` names its slot, and `kept_aabb` and the tests `kept_tests` marks are tested at the
+// device point moved back by its translation. Then a move of that system changes no clip.
 struct Clip {
     aabb: Bounds,
     first: Rounded,
     second: Rounded,
     count: u32,
-    has_mask: u32,
-    mask: Tile,
+    // The slot of the kept coordinate system, or NO_SPACE when every link is on the device.
+    space: u32,
+    // The intersection of the kept links, in the kept system's coordinates.
+    kept_aabb: Bounds,
+    // Bit 0 for `first`, bit 1 for `second`: set when the test is in the kept system.
+    kept_tests: u32,
+    pad: u32,
 }
+
+// What `Clip.space` holds when no link is kept in a coordinate system of its own.
+const NO_SPACE: u32 = 0xffffffffu;
 
 // One paint source.
 struct Paint {
