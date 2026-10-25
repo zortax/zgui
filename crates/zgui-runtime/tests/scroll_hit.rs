@@ -53,7 +53,7 @@ type Clicked = Rc<RefCell<Vec<usize>>>;
 /// Whether the port draws its rows in a content space or keeps them in its own space.
 #[derive(Clone, Copy, PartialEq)]
 enum Port {
-    /// A plain list, which takes a content space at its first scroll.
+    /// A plain list, which takes a content space when it is first composed.
     Spaced,
     /// A list after a transformed row that holds a fixed box, which a content space would move.
     /// A scroll of this port carries every row.
@@ -296,42 +296,36 @@ fn a_scroll_of_a_content_space_moves_no_row_entry() {
     let mut recording = Recording::begin();
     let (mut harness, rebuilds) = built(&mut recording, &clicked, Port::Spaced);
 
-    // A port that draws its rows in a content space takes the space at its first scroll, which
-    // writes every row's entry again once and can rebuild the index once. After that a scroll
-    // moves the space and no row's entry.
-    let before = row_extents(&harness);
-    wheel(&mut harness, 3.0);
-    let after = row_extents(&harness);
-    assert!(
-        after[0].0 < before[0].0 - 1.0,
-        "a scroll that moved nothing touches no entry and satisfies every budget here"
-    );
+    // A port that draws its rows in a content space takes the space when it is first composed.
+    // Every scroll, the first one too, then moves the space and no row's entry.
     assert!(
         port_has_content_space(&harness),
-        "the port took no content space"
+        "the new port took no content space"
     );
-
-    let before = row_extents(&harness);
-    let again = recording.measure(|| {
-        wheel(&mut harness, 3.0);
-    });
-    let after = row_extents(&harness);
-    assert!(
-        after[0].0 < before[0].0 - 1.0,
-        "the second scroll moved nothing"
-    );
-    assert_eq!(
-        again.get(Counter::HitEntriesReinserted),
-        0,
-        "a scroll of a content space searched a new home for an entry"
-    );
-    again.assert_zero(Counter::HitIndexRebuilds, &rebuilds);
-    assert!(
-        again.get(Counter::HitEntriesUpdated) <= FRAMES as u64,
-        "a scroll of a content space rewrote {} hit entries; only the thumb may move, once \
-         per frame",
-        again.get(Counter::HitEntriesUpdated)
-    );
+    for scroll in ["the first scroll", "the second scroll"] {
+        let before = row_extents(&harness);
+        let cost = recording.measure(|| {
+            wheel(&mut harness, 3.0);
+        });
+        let after = row_extents(&harness);
+        assert!(
+            after[0].0 < before[0].0 - 1.0,
+            "{scroll} moved nothing, and a scroll that moved nothing touches no entry and \
+             satisfies every budget here"
+        );
+        assert_eq!(
+            cost.get(Counter::HitEntriesReinserted),
+            0,
+            "{scroll} of a content space searched a new home for an entry"
+        );
+        cost.assert_zero(Counter::HitIndexRebuilds, &rebuilds);
+        assert!(
+            cost.get(Counter::HitEntriesUpdated) <= FRAMES as u64,
+            "{scroll} of a content space rewrote {} hit entries; only the thumb may move, once \
+             per frame",
+            cost.get(Counter::HitEntriesUpdated)
+        );
+    }
 }
 
 /// A port kept out of a content space carries every row's entry on a scroll. The carry rewrites

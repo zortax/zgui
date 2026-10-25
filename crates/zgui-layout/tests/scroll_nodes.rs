@@ -126,10 +126,18 @@ type Drawn = (String, [f32; 4], [f32; 4], [f32; 4]);
 
 /// Every fragment in painting order, as it is drawn on the device.
 fn drawn(frame: &Frame, store: &LayoutStore) -> Vec<Drawn> {
+    drawn_except(frame, store, &[])
+}
+
+/// The same, without the fragments of the boxes in `skip`.
+fn drawn_except(frame: &Frame, store: &LayoutStore, skip: &[zgui_layout::BoxKey]) -> Vec<Drawn> {
     let placements = Placements::of(&frame.spatial);
     let root = store.root().expect("a root box");
     let mut out = Vec::new();
     for box_ in zgui_layout::fragment::stacking::paint_order(store, root) {
+        if skip.contains(&box_) {
+            continue;
+        }
         for frag in store.fragments_of_box(box_) {
             let fragment = store.fragment(*frag).expect("a live fragment");
             let clip = frame
@@ -283,6 +291,71 @@ fn a_scroll_after_the_first_visits_the_path_down_and_no_row() {
     assert!(
         entries <= bars,
         "a scroll updated {entries} hit entries; only the port's {bars} bar pieces may move"
+    );
+}
+
+#[test]
+fn a_new_port_takes_its_content_space_and_its_first_scroll_visits_no_row() {
+    let _guard = exclusive();
+    let fixture = page(1000);
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+    assert!(
+        scrolls_content(&store, port_box(&store)),
+        "the new port took no content space at its first composition"
+    );
+    let element = port(&store);
+    let bars = store.fragments_of_box(port_box(&store)).len() as u64 - 1;
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(40.0)));
+    counter::reset();
+    let moves = compose(&mut frame, &mut store, &mut Scrolled { node: element });
+    let visited = counter::get(Counter::NodesVisited);
+    let entries = counter::get(Counter::HitEntriesUpdated);
+    assert_eq!(moves.by, Some((0.0, -40.0)), "the move is the first offset");
+    assert_eq!(moves.count, 1, "one move for the whole container");
+    if !COUNTERS_ENABLED {
+        return;
+    }
+    assert!(
+        visited <= 2,
+        "the first scroll visited {visited} boxes; the path down to the port is two"
+    );
+    assert!(
+        entries <= bars,
+        "the first scroll updated {entries} hit entries; only the port's {bars} bar pieces may move"
+    );
+}
+
+#[test]
+fn a_new_port_composed_at_an_offset_draws_every_piece_where_a_scrolled_one_does() {
+    let _guard = exclusive();
+    let (scrolled, _, held) = two_ways(&|| page(12), &[0.0, 37.0]);
+    assert!(held[1], "the scrolled port gave its content space up");
+    let fixture = page(12);
+    let element = port(&fixture.box_tree());
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    support::lay_out_only(&mut store, &mut content, 300.0, 240.0);
+    let mut frame = Frame::new();
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(37.0)));
+    compose(
+        &mut frame,
+        &mut store,
+        &mut zgui_layout::fragment::diff::Everything,
+    );
+    assert!(
+        scrolls_content(&store, port_box(&store)),
+        "a port composed first at an offset took no content space"
+    );
+    assert_eq!(
+        drawn(&frame, &store),
+        scrolled[1],
+        "a port composed first at an offset draws a piece somewhere the scrolled port does not"
     );
 }
 
@@ -887,6 +960,79 @@ fn a_fixed_box_in_a_transformed_row_keeps_the_port_out_of_a_content_space() {
         "the port took a content space that would carry the row's fixed box: {held:?}"
     );
     agree(&spaced, &fresh);
+}
+
+#[test]
+fn a_new_port_with_a_fixed_box_in_a_transformed_row_takes_no_content_space() {
+    let _guard = exclusive();
+    let fixture = transformed_page(true);
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+    let key = port_box(&store);
+    assert!(
+        !scrolls_content(&store, key),
+        "the new port took a content space that would carry the row's fixed box"
+    );
+    assert!(
+        frame
+            .spatial
+            .of(zgui_scene::PropertyOwner::of(key).content())
+            .is_none(),
+        "the new port kept the content space it gave back"
+    );
+}
+
+#[test]
+fn a_content_space_draws_every_row_where_a_port_kept_out_of_one_draws_it() {
+    let _guard = exclusive();
+    // The same rows, scrolled the same way, once in a content space and once in the port's own
+    // space, which a fixed box in one row keeps the port in. The fixed box is left out of the
+    // comparison.
+    let run = |with_fixed: bool| -> (Vec<Vec<Drawn>>, Vec<bool>) {
+        let fixture = transformed_page(with_fixed);
+        let mut store = fixture.box_tree();
+        let mut content = measurer();
+        let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+        let element = port(&store);
+        let mut skip = Vec::new();
+        if with_fixed {
+            let row = store.node(port_box(&store)).children[2];
+            let mut stack = vec![store.node(row).children[1]];
+            while let Some(key) = stack.pop() {
+                skip.push(key);
+                stack.extend_from_slice(&store.node(key).children);
+            }
+        }
+        let mut drawn = vec![drawn_except(&frame, &store, &skip)];
+        let mut held = vec![scrolls_content(&store, port_box(&store))];
+        for by in STEPS {
+            frame
+                .scroll
+                .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
+            compose(&mut frame, &mut store, &mut Scrolled { node: element });
+            drawn.push(drawn_except(&frame, &store, &skip));
+            held.push(scrolls_content(&store, port_box(&store)));
+        }
+        (drawn, held)
+    };
+    let (spaced, spaced_held) = run(false);
+    let (kept, kept_held) = run(true);
+    assert!(
+        spaced_held.iter().all(|held| *held),
+        "the port without a fixed box gave its content space up: {spaced_held:?}"
+    );
+    assert!(
+        kept_held.iter().all(|held| !held),
+        "the port with a fixed box took a content space: {kept_held:?}"
+    );
+    for (step, (spaced, kept)) in spaced.iter().zip(&kept).enumerate() {
+        assert!(spaced.len() > 30, "too few fragments to compare");
+        assert_eq!(
+            spaced, kept,
+            "at step {step}, the content space draws a row somewhere the port's own space does not"
+        );
+    }
 }
 
 /// The scrollport of [`page`] with one row that holds a sticky box, and optionally transformed

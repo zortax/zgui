@@ -1048,9 +1048,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// A scroll container takes one (see [`scroll_nodes`](crate::fragment::scroll_nodes)) when it
     /// clips its children, nothing between it and its anchor is transformed, no fixed box below
     /// hangs from a transformed or sticky box below it (see
-    /// [`FragmentFlags::FIXED_UNDER_SCROLLED`]), and it either held a content space already or
-    /// scrolls in this frame. The space is taken at the first scroll and not before, because
-    /// taking it composes and paints every child again once.
+    /// [`FragmentFlags::FIXED_UNDER_SCROLLED`]), and it is composed for the first time, held a
+    /// content space already or scrolls in this frame. A new box takes the space at once, because
+    /// its children are composed in this frame anyway: its first scroll is then a write of the
+    /// space. A box that was composed without one takes it at its first scroll, because taking it
+    /// composes and paints every child again once. A new box does not know yet whether a fixed box
+    /// below keeps it out; the walk composes it again without the space when one does.
     ///
     /// The space is written here: its parent is the box's own space and its matrix is the box's
     /// scroll offset. A box that no longer qualifies gives its space back.
@@ -1067,7 +1070,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             && placed.scrolls
             && placed.flags.contains(FragmentFlags::CLIPS_CHILDREN)
             && placed.descent.matrix.is_none()
-            && previous.is_some_and(|previous| {
+            && previous.is_none_or(|previous| {
                 !previous.flags.contains(FragmentFlags::FIXED_UNDER_SCROLLED)
                     && (held || own.contains(Dirty::SCROLL))
             });

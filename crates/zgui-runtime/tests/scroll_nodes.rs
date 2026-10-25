@@ -1,9 +1,10 @@
 //! What a scroll of a long list costs when its port draws the rows in a content space.
 //!
-//! The claim: after the first scroll, which gives the port its content space, a scroll frame
-//! visits the path down to the port and moves no hit entry and no accessibility rectangle of any
-//! row. The rows still have to end up where the scroll put them, for the screen, for the pointer
-//! and for an assistive technology, so the test reads all three back.
+//! The claim: a scroll frame visits the path down to the port and moves no hit entry and no
+//! accessibility rectangle of any row. The port takes its content space when it is first composed,
+//! so the first scroll is no exception. The rows still have to end up where the scroll put them,
+//! for the screen, for the pointer and for an assistive technology, so the test reads all three
+//! back.
 //!
 //! Its own test target, because the counters are process-wide.
 
@@ -114,13 +115,13 @@ struct Scrolled {
     harness: Harness<Runtime>,
 }
 
-/// Scrolls once to warm up, then measures a scroll of three lines.
-fn scroll(watched: NodeRef) -> Scrolled {
+/// Measures a scroll of three lines, after a scroll of one line when `warm` is set.
+fn scroll(watched: NodeRef, warm: bool) -> Scrolled {
     let mut harness = listing(watched, 16);
     harness.settle(8);
-    // The first scroll gives the port its content space, which composes and paints every row on
-    // the screen once more. The claim is about every scroll after it.
-    wheel(&mut harness, 1.0);
+    if warm {
+        wheel(&mut harness, 1.0);
+    }
     let before = drawn(&harness, watched).origin.y.0;
     let start = counter::snapshot();
     wheel(&mut harness, 3.0);
@@ -135,14 +136,26 @@ fn scroll(watched: NodeRef) -> Scrolled {
 #[test]
 fn a_scroll_of_a_long_list_visits_the_path_down_and_moves_no_row_entry() {
     let _turn = counter::exclusive();
-    let watched = NodeRef::new();
-    let spaced = scroll(watched);
+    for warm in [true, false] {
+        let watched = NodeRef::new();
+        let spaced = scroll(watched, warm);
+        assert_cheap(&spaced, watched, warm);
+    }
+}
 
+/// Asserts that the measured scroll of `spaced` moved the watched row and visited, updated and
+/// measured no more than the path down to the port.
+fn assert_cheap(spaced: &Scrolled, watched: NodeRef, warm: bool) {
+    let scroll = if warm {
+        "a later scroll"
+    } else {
+        "the first scroll"
+    };
     let after = drawn(&spaced.harness, watched).origin.y.0;
     assert!(
         after < spaced.before - ROW,
-        "the row did not move: {} to {after}. A scroll that moved nothing satisfies every count \
-         below",
+        "{scroll}: the row did not move: {} to {after}. A scroll that moved nothing satisfies \
+         every count below",
         spaced.before
     );
     if !zgui_profile::COUNTERS_ENABLED {
@@ -151,18 +164,19 @@ fn a_scroll_of_a_long_list_visits_the_path_down_and_moves_no_row_entry() {
     let passes = spaced.cost.layout_passes.max(1);
     assert!(
         spaced.cost.fragment_boxes_visited <= 4 * passes,
-        "the fragment pass reached {} boxes over {passes} walks: more than the path down to the \
-         port",
+        "{scroll}: the fragment pass reached {} boxes over {passes} walks: more than the path \
+         down to the port",
         spaced.cost.fragment_boxes_visited
     );
     assert!(
         spaced.cost.hit_entries_updated <= 2 * passes,
-        "{} hit entries updated over {passes} walks: more than the port's own bar pieces",
+        "{scroll}: {} hit entries updated over {passes} walks: more than the port's own bar pieces",
         spaced.cost.hit_entries_updated
     );
     assert!(
         spaced.cost.a11y_remeasured <= 2 * passes,
-        "{} accessibility rectangles measured over {passes} walks: more than the port's own",
+        "{scroll}: {} accessibility rectangles measured over {passes} walks: more than the port's \
+         own",
         spaced.cost.a11y_remeasured
     );
 }
@@ -171,7 +185,7 @@ fn a_scroll_of_a_long_list_visits_the_path_down_and_moves_no_row_entry() {
 fn a_row_in_a_content_space_is_hit_and_reported_where_it_is_drawn() {
     let _turn = counter::exclusive();
     let watched = NodeRef::new();
-    let spaced = scroll(watched);
+    let spaced = scroll(watched, false);
     let harness = spaced.harness;
     let border = drawn(&harness, watched);
     assert!(

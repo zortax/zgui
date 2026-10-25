@@ -149,8 +149,7 @@ fn scroll_does_not_restyle_relayout_or_reencode() {
     let encode = built.control(Counter::ChunksReencoded);
     let rebuild = built.control(Counter::HitIndexRebuilds);
 
-    // One scroll before the measured one. A port that draws its rows in a content space takes
-    // the space at its first scroll, which paints the rows on the screen once more.
+    // One scroll before the measured one, so the measured one starts from a scrolled port.
     wheel(&mut harness, 1.0);
     let before = topmost_row(&harness);
     let scrolled = recording.measure(|| {

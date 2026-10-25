@@ -1,9 +1,10 @@
 //! How a scroll container draws its content in a coordinate system of its own.
 //!
-//! A scroll container gives its children a space that its scroll offset moves, the first time it
-//! scrolls. A scroll frame then writes that space's matrix and leaves every piece below the
-//! container as it is: their rectangles, clip chains and hit entries are measured in the content
-//! space, which the scroll does not change.
+//! A scroll container gives its children a space that its scroll offset moves. It takes the space
+//! when it is first composed, or at its first scroll when it was composed without one. A scroll
+//! frame then writes that space's matrix and leaves every piece below the container as it is:
+//! their rectangles, clip chains and hit entries are measured in the content space, which the
+//! scroll does not change.
 //!
 //! Two kinds of box do not move with the content. A `position: fixed` box hangs from the space
 //! above the content space, so the scroll does not move it. A sticky box is measured against the

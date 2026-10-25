@@ -184,10 +184,12 @@ fn a_repaint_mark_on_a_translucent_paintless_box_damages_its_subtree() {
 
 #[test]
 fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_places() {
-    // Scrolling is the case exactly: every piece inside the scrollport keeps its size and its
-    // shape and lands somewhere else. The paint stage services that by offsetting what it recorded
-    // rather than producing it again, and both rectangles have to be redrawn — the one being
-    // vacated as much as the one being filled.
+    // Scrolling a port that keeps its rows in its own space is the case exactly: every piece
+    // inside the scrollport keeps its size and its shape and lands somewhere else. The paint stage
+    // services that by offsetting what it recorded rather than producing it again, and both
+    // rectangles have to be redrawn — the one being vacated as much as the one being filled. The
+    // fixed box in a transformed box keeps the port out of a content space. In a content space, a
+    // scroll moves no row.
     //
     // The two are not cut to the same thing, and the asymmetry is deliberate. Where the piece has
     // *arrived* is cut to what its clip chain admits, because a primitive the chain admits nothing
@@ -197,12 +199,17 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
     // rectangle to a region that has since moved is how a scrolled row's old pixels get left on
     // the screen.
     let fixture = Fixture::new(
-        Element::new("root").children(vec![
-            Element::new("port").children(vec![Element::new("row")]),
-        ]),
+        Element::new("root").children(vec![Element::new("port").children(vec![
+            Element::new("row"),
+            Element::new("holder").children(vec![Element::new("badge")]),
+        ])]),
         "root { display: block; width: 300px }
          port { display: block; height: 100px; overflow: scroll }
-         row { display: block; height: 400px }",
+         row { display: block; height: 400px }
+         holder { display: block; height: 10px; position: relative;
+                  transform: translate(1px, 0px) }
+         badge { display: block; position: fixed; top: 2px; left: 2px; width: 4px;
+                 height: 4px }",
     );
     let mut store = fixture.box_tree();
     let mut content = measurer();
@@ -211,6 +218,14 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
     let root = store.root().expect("a root");
     let port = store.node(root).children[0];
     let row = store.node(port).children[0];
+    assert!(
+        store
+            .fragment(store.fragments_of_box(port)[0])
+            .is_some_and(|piece| !piece
+                .flags
+                .contains(zgui_layout::FragmentFlags::SCROLLS_CONTENT)),
+        "the port took a content space, so no row moves"
+    );
     let node = store.node(row).source;
     let before = {
         let frag = store.fragments_of_box(row)[0];
