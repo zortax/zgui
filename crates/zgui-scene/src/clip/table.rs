@@ -8,7 +8,7 @@ const UNMOVED: Size<DevicePx, Device> = Size::ZERO;
 use zgui_profile::{Counter, counter};
 
 use crate::clip::link::{ClipLink, ClipNode};
-use crate::clip::resolved::{ResolvedClip, RoundedTest};
+use crate::clip::resolved::{KeptClip, ResolvedClip, RoundedTest};
 use crate::id::ClipId;
 use crate::spatial::SpatialId;
 use crate::table::Table;
@@ -260,6 +260,86 @@ impl ClipTable {
         }
         resolved.rounded_count = tests.len().min(Self::MAX_INLINE_ROUNDED) as u32;
         resolved
+    }
+
+    /// The chain flattened as [`ClipTable::resolve_placed`] flattens it, with the links measured
+    /// in `kept` left in `kept`'s own coordinates.
+    ///
+    /// For a system that only translates: what applies the clip moves a device point back by that
+    /// translation before it tests the kept links, so the result holds while the system moves.
+    /// The kept links are intersected apart from the others, and [`KeptClip::kept_tests`] says
+    /// which rounded tests they gave.
+    ///
+    /// `None` for a chain of more than two rounded links. Which of its tests are inert depends on
+    /// where both parts are, so it holds only for one translation.
+    pub fn resolve_kept(
+        &self,
+        id: ClipId,
+        matrix_of: &dyn Fn(SpatialId) -> Option<Matrix4>,
+        kept: SpatialId,
+    ) -> Option<KeptClip> {
+        let mut resolved = ResolvedClip::unbounded();
+        let mut kept_aabb = ResolvedClip::unbounded().aabb;
+        let mut kept_tests = 0u32;
+        let mut rounded = 0usize;
+        // Innermost first, as in `resolve_placed`.
+        let mut cursor = id;
+        while let Some(node) = self.get(cursor) {
+            let ClipNode::Link { link, parent, .. } = node else {
+                break;
+            };
+            match *link {
+                ClipLink::RoundedRect {
+                    rect,
+                    radii,
+                    shape,
+                    space,
+                } => {
+                    let local = space == kept;
+                    let (rect, radii) = if local {
+                        (rect, radii)
+                    } else {
+                        placed(rect, radii, matrix_of(space))
+                    };
+                    intersect(
+                        if local {
+                            &mut kept_aabb
+                        } else {
+                            &mut resolved.aabb
+                        },
+                        rect,
+                    );
+                    if link.is_rounded() {
+                        if rounded == Self::MAX_INLINE_ROUNDED {
+                            return None;
+                        }
+                        let test = test_of(rect, radii, shape.get());
+                        if rounded == 0 {
+                            resolved.rounded[0] = test;
+                            kept_tests = u32::from(local);
+                            rounded = 1;
+                        } else {
+                            resolved.rounded[1] = resolved.rounded[0];
+                            resolved.rounded[0] = test;
+                            kept_tests = (kept_tests << 1) | u32::from(local);
+                            rounded = Self::MAX_INLINE_ROUNDED;
+                        }
+                    }
+                }
+                ClipLink::Mask { tile, .. } => {
+                    if resolved.mask.is_none() {
+                        resolved.mask = Some(tile);
+                    }
+                }
+            }
+            cursor = *parent;
+        }
+        resolved.rounded_count = rounded as u32;
+        Some(KeptClip {
+            clip: resolved,
+            kept_aabb,
+            kept_tests,
+        })
     }
 
     /// How many links of `id` need a rounded-corner test.

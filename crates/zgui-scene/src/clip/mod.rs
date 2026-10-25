@@ -9,5 +9,5 @@ pub mod table;
 mod tests;
 
 pub use crate::clip::link::{ClipLink, ClipNode, MaskSource};
-pub use crate::clip::resolved::{ResolvedClip, RoundedTest};
+pub use crate::clip::resolved::{KeptClip, ResolvedClip, RoundedTest};
 pub use crate::clip::table::ClipTable;

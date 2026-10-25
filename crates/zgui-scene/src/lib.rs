@@ -101,7 +101,9 @@ pub use kurbo;
 pub use peniko;
 
 pub use crate::batch::{Batch, Batches};
-pub use crate::clip::{ClipLink, ClipNode, ClipTable, MaskSource, ResolvedClip, RoundedTest};
+pub use crate::clip::{
+    ClipLink, ClipNode, ClipTable, KeptClip, MaskSource, ResolvedClip, RoundedTest,
+};
 pub use crate::content::{Content, ContentHash};
 pub use crate::group::{BackdropFilter, Filter, GroupBoundary, read_extent};
 pub use crate::id::{
