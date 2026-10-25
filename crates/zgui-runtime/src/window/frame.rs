@@ -39,6 +39,12 @@ use zgui_render::{FrameOutcome, RenderTarget, SkipReason};
 
 use crate::window::Window;
 
+/// The fewest document nodes a broad restyle hands to the cascade pool.
+///
+/// The count includes text nodes. A smaller document cascades on the frame thread, so an
+/// application that shows only small documents never starts the pool.
+const POOLED_RESTYLE_MIN_NODES: usize = 64;
+
 /// What one frame did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameReport {
@@ -1025,11 +1031,12 @@ impl Window {
     pub(crate) fn restyle(&mut self) -> usize {
         let mut document = self.document.borrow_mut();
         // The pool serves broad cascades and the frame thread serves incremental ones — see
-        // `Window::broad_restyle` for the measurement behind the split.
-        let pool = self
-            .broad_restyle
+        // `Window::broad_restyle` for the measurement behind the split. A document under
+        // `POOLED_RESTYLE_MIN_NODES` stays on the frame thread too.
+        let pool = (self.broad_restyle && document.len() >= POOLED_RESTYLE_MIN_NODES)
             .then_some(())
-            .and(self.style_pool.as_deref());
+            .and(self.style_pool.as_deref())
+            .map(crate::app::StylePoolCell::get);
         let pass = self.engine.restyle(&mut document, pool);
         self.broad_restyle = false;
         let mut layout = self.layout.borrow_mut();

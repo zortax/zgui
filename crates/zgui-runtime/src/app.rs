@@ -501,26 +501,50 @@ pub struct Runtime {
     failure: Failure,
     /// The cascade's worker pool, shared by every window.
     ///
-    /// Built eagerly so the first restyle — the largest cascade the application will ever run —
-    /// is the first to use it. `None` when the application asked for a serial cascade.
-    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
-    /// The layout engine's worker pool, shared the same way and for the same reason.
+    /// Its workers start on the first broad restyle of a document large enough to use them.
+    /// `None` when the application asked for a serial cascade.
+    style_pool: Option<Rc<StylePoolCell>>,
+    /// The layout engine's worker pool, shared the same way.
+    ///
+    /// Its workers start on the first batch or pre-shape that layout distributes.
     layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
+}
+
+/// The cascade's worker pool, started on first use.
+pub(crate) struct StylePoolCell {
+    /// How many workers the pool starts.
+    width: usize,
+    /// The pool, once a restyle asks for it.
+    pool: std::cell::OnceCell<zgui_style::engine::thread_pool::StylePool>,
+}
+
+impl StylePoolCell {
+    /// A cell for a pool of `width` workers, with no worker started.
+    fn new(width: usize) -> Self {
+        Self {
+            width,
+            pool: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The pool, started on the first call.
+    pub(crate) fn get(&self) -> &zgui_style::engine::thread_pool::StylePool {
+        self.pool
+            .get_or_init(|| zgui_style::engine::thread_pool::StylePool::new(self.width))
+    }
 }
 
 /// The cascade pool an application runs with, from the environment or its builder.
 ///
 /// `ZGUI_STYLE_THREADS` overrides the builder so a run can be forced serial, or to an exact
 /// width, without a rebuild.
-fn style_pool_for(
-    requested: Option<usize>,
-) -> Option<Rc<zgui_style::engine::thread_pool::StylePool>> {
+fn style_pool_for(requested: Option<usize>) -> Option<Rc<StylePoolCell>> {
     let width = style_pool_width(
         std::env::var("ZGUI_STYLE_THREADS").ok().as_deref(),
         requested,
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
     );
-    (width > 1).then(|| Rc::new(zgui_style::engine::thread_pool::StylePool::new(width)))
+    (width > 1).then(|| Rc::new(StylePoolCell::new(width)))
 }
 
 /// How wide the cascade pool should be, with the environment over the builder over the machine.

@@ -138,7 +138,7 @@ pub struct Window {
     /// The rule set and the device.
     engine: StyleEngine,
     /// The application's cascade pool, when it runs one.
-    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
+    style_pool: Option<Rc<crate::app::StylePoolCell>>,
     /// Whether the next restyle is a broad one, which is what the pool is for.
     ///
     /// True for the first cascade — the largest this window will ever run — and again whenever
@@ -1315,7 +1315,7 @@ impl Window {
     }
 
     /// Hands this window the application's cascade pool.
-    pub(crate) fn set_style_pool(&mut self, pool: Rc<zgui_style::engine::thread_pool::StylePool>) {
+    pub(crate) fn set_style_pool(&mut self, pool: Rc<crate::app::StylePoolCell>) {
         self.style_pool = Some(pool);
     }
 
