@@ -30,6 +30,9 @@ fn a_pair_that_fires_where_it_should_and_is_silent_where_it_should_not_passes() 
     );
 }
 
+// This refusal and the two after it read a moved counter, so they exist only where the counters
+// are compiled in.
+#[cfg(any(feature = "counters", debug_assertions))]
 #[test]
 #[should_panic(expected = "which is the situation the skip exists for")]
 fn a_skip_that_never_fires_is_refused() {
@@ -42,6 +45,7 @@ fn a_skip_that_never_fires_is_refused() {
     );
 }
 
+#[cfg(any(feature = "counters", debug_assertions))]
 #[test]
 #[should_panic(expected = "where nothing may be reused")]
 fn a_skip_that_fires_where_it_must_not_is_refused() {
@@ -52,6 +56,7 @@ fn a_skip_that_fires_where_it_must_not_is_refused() {
     );
 }
 
+#[cfg(any(feature = "counters", debug_assertions))]
 #[test]
 #[should_panic(expected = "would hold over a scenario that does nothing at all")]
 fn a_silent_scenario_that_never_reached_the_stage_is_refused() {
