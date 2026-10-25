@@ -261,6 +261,8 @@ pub struct PreparedTables {
     deps: ClipDependents,
     /// The space slots one chain puts on the device, reused from chain to chain.
     chain_spaces: Vec<u32>,
+    /// How many clip slots the last update resolved again, changed or not.
+    refreshed: usize,
 }
 
 /// The tag a membership of [`ClipDependents::keepers`] carries in a slot's registered list.
@@ -282,9 +284,10 @@ fn parent_of(node: Option<&ClipNode>) -> u32 {
 /// space it puts on the device, of the keepers of the space it keeps, and of its parent's
 /// children. Each refresh records what it read.
 ///
-/// Edges are only ever added: a slot that no longer reads a space leaves its old membership
-/// standing as a false candidate, which costs one wasted comparison and never a wrong pixel. The
-/// whole index is rebuilt when the stale memberships outnumber the live ones.
+/// A slot that no longer reads a space leaves its old membership standing until that space next
+/// queues its members, which drops it. A stale parent edge stands as a false candidate, which
+/// costs one wasted comparison and never a wrong pixel. The whole index is rebuilt when the stale
+/// edges outnumber the live ones.
 #[derive(Clone, Debug, Default)]
 struct ClipDependents {
     /// The parent each clip slot was last indexed under.
@@ -402,20 +405,37 @@ impl ClipDependents {
         }
     }
 
-    /// Queues every recorded member of one space's users, or of its keepers.
+    /// Queues every live member of one space's users, or of its keepers, and drops the stale ones.
+    ///
+    /// A slot whose last refresh did not record the membership cannot change when the space
+    /// moves. Without the drop, a slot that changed from a user to a keeper of a scrolled space
+    /// would refresh again on every later scroll.
     fn queue_members(&mut self, keepers: bool, space: u32) {
-        let lists = if keepers { &self.keepers } else { &self.users };
-        let Some(members) = lists.get(space as usize) else {
+        let (lists, membership) = if keepers {
+            (&mut self.keepers, space | KEEPS)
+        } else {
+            (&mut self.users, space)
+        };
+        let Some(members) = lists.get_mut(space as usize) else {
             return;
         };
-        // A member was registered by a refresh, so `queued` already reaches it.
-        for &slot in members {
-            let queued = &mut self.queued[slot as usize];
+        let (registered, queued, stack) = (&self.registered, &mut self.queued, &mut self.stack);
+        let before = members.len();
+        // A member was registered by a refresh, so `registered` and `queued` already reach it.
+        members.retain(|&slot| {
+            if !registered[slot as usize].contains(&membership) {
+                return false;
+            }
+            let queued = &mut queued[slot as usize];
             if !*queued {
                 *queued = true;
-                self.stack.push(slot);
+                stack.push(slot);
             }
-        }
+            true
+        });
+        let dropped = before - members.len();
+        self.stale -= dropped;
+        self.edges -= dropped;
     }
 
     /// The next queued slot, with everything applied directly inside it queued behind it.
@@ -457,6 +477,7 @@ impl PreparedTables {
         self.moved_space_count = 0;
         self.moved_names.clear();
         self.unkept.clear();
+        self.refreshed = 0;
 
         let clip_coverage = scene
             .clips
@@ -647,6 +668,7 @@ impl PreparedTables {
             if slot as usize >= self.tables.clips.len() {
                 continue;
             }
+            self.refreshed += 1;
             let value = resolve_slot(
                 table,
                 ClipId(slot),
@@ -1260,6 +1282,62 @@ mod tests {
             );
             assert_same_coverage(&scene, &prepared);
         }
+    }
+
+    #[test]
+    fn a_space_born_at_the_identity_refreshes_its_rows_once_when_it_first_translates() {
+        let mut scene = zgui_scene::Scene::new();
+        let owner = PropertyOwner::new(2).expect("a handle is never empty");
+        let content = scene.spatial.space_of(
+            scene.spatial.viewport(),
+            owner,
+            OwnSpace::of(Some(Matrix4::IDENTITY), None, false),
+        );
+        let port = scene
+            .clips
+            .only(ClipLink::rect(rect(0.0, 0.0, 100.0, 100.0)));
+        let rows: Vec<ClipId> = (0..1_000)
+            .map(|row| {
+                scene.clips.push(
+                    port,
+                    ClipLink::rect_in(rect(0.0, row as f32 * 20.0, 80.0, 20.0), content),
+                )
+            })
+            .collect();
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+        assert_eq!(
+            prepared.tables().clips[rows[0].0 as usize].space,
+            NO_SPACE,
+            "a row at the identity is put on the device"
+        );
+
+        // The first move turns every row into a keeper of the space.
+        scene
+            .spatial
+            .place(content, Matrix4::translation(0.0, -40.0, 0.0));
+        prepared.update(&scene);
+        assert!(prepared.refreshed >= rows.len());
+        assert_eq!(
+            prepared.tables().clips[rows[0].0 as usize].space,
+            content.index()
+        );
+        assert_same_coverage(&scene, &prepared);
+
+        // The rows left their user memberships stale, and a later move refreshes none of them.
+        for offset in [-55.0, -70.0, -12.5] {
+            scene
+                .spatial
+                .place(content, Matrix4::translation(0.0, offset, 0.0));
+            prepared.update(&scene);
+            assert!(prepared.dirty().clips.slots.is_empty());
+            assert_eq!(
+                prepared.refreshed, 0,
+                "a scroll of {offset} resolves no clip slot again"
+            );
+            assert_same_coverage(&scene, &prepared);
+        }
+        assert!(prepared.deps.stale < 1_024);
     }
 
     #[test]
