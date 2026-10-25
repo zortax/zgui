@@ -241,17 +241,25 @@ impl SpatialTree {
     /// assert_eq!(tree.relative(card, label), None, "the label is below the card, not above it");
     /// ```
     pub fn relative(&self, id: SpatialId, ancestor: SpatialId) -> Option<Matrix4> {
-        let mut matrix = Matrix4::IDENTITY;
+        // A search for what is drawn under one node asks this for every primitive, and most of
+        // them are outside that node. So the chain is first walked by name, and the products are
+        // made only for a chain that reaches `ancestor`.
         let mut next = Some(id);
-        while let Some(current) = next {
+        loop {
+            let current = next?;
             if current == ancestor {
-                return Some(matrix);
+                break;
             }
+            next = self.get(current)?.parent;
+        }
+        let mut matrix = Matrix4::IDENTITY;
+        let mut current = id;
+        while current != ancestor {
             let node = self.get(current)?;
             matrix = matrix.then(&node.local);
-            next = node.parent;
+            current = node.parent?;
         }
-        None
+        Some(matrix)
     }
 
     /// The nearest coordinate system at or above `id` that is not the content of a scroll
