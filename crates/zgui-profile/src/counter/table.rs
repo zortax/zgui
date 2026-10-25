@@ -106,6 +106,10 @@ counters! {
     /// Paragraphs broken into lines again while reusing the shaping they already had.
     TextRebroken => text_rebroken, Group::BackendNeutral;
 
+    /// Breaking passes that produced the lines of the pass before them, so the reported lines and
+    /// inline-box placements were kept and not read again.
+    TextLinesKept => text_lines_kept, Group::Skip { done: Counter::TextRebroken };
+
     /// Shaped paragraphs broken back to their kept lines after a size probe moved them.
     TextFormsRestored => text_forms_restored, Group::BackendNeutral;
 

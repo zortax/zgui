@@ -216,6 +216,8 @@ struct Steps {
     relaid: Vec<f64>,
     /// Paragraphs broken into lines again.
     rebroken: Vec<f64>,
+    /// Of those, the breaks that gave the lines of the break before them.
+    kept: Vec<f64>,
     /// Text runs shaped, which a width step owes none of.
     shaped: Vec<f64>,
     /// Layout passes that started from the document root.
@@ -283,6 +285,7 @@ pub(crate) fn run() -> Outcome {
         steps.cost_ms.push(cost);
         steps.relaid.push(sample(moved.nodes_relaid_out));
         steps.rebroken.push(sample(moved.text_rebroken));
+        steps.kept.push(sample(moved.text_lines_kept));
         steps.shaped.push(sample(moved.text_shaped));
         steps.roots.push(sample(moved.layout_reached_root));
         steps.batches.push(sample(moved.layout_batches_distributed));
@@ -375,6 +378,7 @@ pub(crate) fn run() -> Outcome {
     let cost = Spread::of(&mut steps.cost_ms);
     let relaid = Spread::of(&mut steps.relaid);
     let rebroken = Spread::of(&mut steps.rebroken);
+    let kept = Spread::of(&mut steps.kept);
     let reencoded = Spread::of(&mut steps.reencoded);
     let translated = Spread::of(&mut steps.translated);
     let uploaded = Spread::of(&mut steps.uploaded);
@@ -482,11 +486,12 @@ pub(crate) fn run() -> Outcome {
         notes: vec![
             format!(
                 "one step relays out {:.0} nodes (p50) against {boxes} boxes and re-breaks {:.0} \
-                 of {} paragraphs; {:.0} layout passes reached the root and the pool distributed \
-                 {:.0} batches",
+                 of {} paragraphs, {:.0} of them into the lines of the step before; {:.0} layout \
+                 passes reached the root and the pool distributed {:.0} batches",
                 relaid.p50,
                 rebroken.p50,
                 paragraphs(),
+                kept.p50,
                 roots.p50,
                 batches.p50,
             ),

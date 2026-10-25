@@ -112,6 +112,7 @@ fn the_declared_skips_are_exactly_the_ones_this_workspace_has_registered() {
         vec![
             "layouts_held",
             "sizes_held",
+            "text_lines_kept",
             "place_writes_without_reemit",
             "chunks_translated",
             "primitives_culled",

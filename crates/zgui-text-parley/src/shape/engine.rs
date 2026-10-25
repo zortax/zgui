@@ -1,5 +1,6 @@
 //! The shaper's own shaped form.
 
+use smallvec::SmallVec;
 use zgui_text::BrokenParagraph;
 
 use crate::shape::brush::SlotBrush;
@@ -24,6 +25,12 @@ pub struct ShapedLayout {
     /// The lines the current break produced, kept so that a request the glyphs already reflect can
     /// be answered without breaking again.
     pub(crate) last: BrokenParagraph,
+    /// How many items each line of the current break holds, when the next break may keep
+    /// [`last`](ShapedLayout::last).
+    ///
+    /// Empty after a banded or justified pass. A break always gives at least one line. See
+    /// [`lines::unchanged`](crate::shape::lines::unchanged).
+    pub(crate) items: SmallVec<[u32; 4]>,
     /// Whether any run of the paragraph may wrap. A paragraph with none breaks only where its
     /// text forces a break.
     pub(crate) wraps: bool,

@@ -55,8 +55,12 @@ pub(crate) fn shape(
             .runs
             .iter()
             .any(|run| run.style.wrap_mode == zgui_text_style::WrapMode::Wrap);
+    let mut items = smallvec::SmallVec::new();
+    crate::shape::lines::items(&layout, &mut items);
     let engine = ShapedLayout {
         last: crate::shape::lines::read(&layout, has_boxes, prefix.len()),
+        // The first break is neither banded nor justified, so the next one may keep its lines.
+        items,
         layout,
         prefix: prefix.len(),
         wraps,

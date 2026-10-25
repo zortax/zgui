@@ -1,6 +1,7 @@
 //! Breaking already shaped glyphs into lines.
 
 use parley::{Alignment, AlignmentOptions, IndentOptions};
+use zgui_profile::{Counter, counter};
 use zgui_text::{BreakRequest, BrokenParagraph, Plan, ShapedParagraph};
 use zgui_text_style::TextAlign;
 
@@ -24,13 +25,16 @@ pub(crate) fn break_lines(
         Plan::Owed => {}
     }
     let has_boxes = !request.boxes.is_empty();
+    let banded = !request.bands.is_empty();
     let indent = request.indent();
     let alignment = alignment(request.paragraph.align);
-    let prefix = shaped.engine.prefix;
-    let wraps = shaped.engine.wraps;
-    let layout = &mut shaped.engine.layout;
+    let justified = alignment == Alignment::Justify;
+    let engine = &mut shaped.engine;
+    let prefix = engine.prefix;
+    let wraps = engine.wraps;
+    let layout = &mut engine.layout;
 
-    boxes::push_geometry(layout, request.boxes);
+    let boxes_moved = boxes::push_geometry(layout, request.boxes);
     // Set unconditionally, including back to zero: an indent left over from a previous request
     // would otherwise survive a re-style that removed it.
     layout.set_text_indent(
@@ -40,7 +44,7 @@ pub(crate) fn break_lines(
             hanging: request.paragraph.indent.hanging,
         },
     );
-    if request.bands.is_empty() {
+    if !banded {
         let mut max_advance = request.max_advance.map(|width| width.0);
         // The engine marks a break after every inline box, whatever the wrap mode. A line that
         // may not wrap and overflows would break back at such a box, so it is broken at a width
@@ -65,8 +69,28 @@ pub(crate) fn break_lines(
         },
     );
 
-    let broken = lines::read(layout, has_boxes, prefix);
-    shaped.engine.last = broken.clone();
+    // A width step in a drag mostly gives the lines of the step before it. The engine has broken
+    // the glyphs again either way, so painting reads the new break. The reported lines and box
+    // placements are kept when they are equal bit for bit, which saves the walk over every glyph
+    // that placing the boxes costs.
+    let kept = !banded
+        && !justified
+        && !boxes_moved
+        && !engine.items.is_empty()
+        && lines::unchanged(layout, &engine.last, &engine.items, has_boxes, prefix);
+    let broken = if kept {
+        counter::bump(Counter::TextLinesKept);
+        engine.last.clone()
+    } else {
+        let broken = lines::read(layout, has_boxes, prefix);
+        engine.last = broken.clone();
+        broken
+    };
+    if banded || justified {
+        engine.items.clear();
+    } else if !kept {
+        lines::items(layout, &mut engine.items);
+    }
     // Filed under the key the pass was taken for, which is the one `plan_break` just adopted, so a
     // later probe at the same width is answered from here without moving the laid-out form.
     shaped.remember(request.key(), broken.clone());
