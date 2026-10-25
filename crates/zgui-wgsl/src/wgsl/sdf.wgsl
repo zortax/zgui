@@ -115,30 +115,39 @@ fn outside_bounds(point: vec2<f32>, b: Bounds) -> bool {
 
 // Coverage of a device pixel by a whole clip chain. Every pipeline that draws into the composed
 // target applies exactly this function, so one clip means one thing whatever draws through it.
+//
+// Each field is read where it is used, through the array. Some drivers load all fields of a copy
+// of the whole record before the first branch, so every fragment then pays for the kept part and
+// for both rounded tests, also when the chain has none of them.
 fn clip_coverage(point: vec2<f32>, clip_id: u32) -> f32 {
-    let clip = clips[clip_id];
     // The intersection rectangle is a hard edge: it is an axis-aligned box in device space, and
     // antialiasing it would bleed content one pixel outside a scrollport.
-    if outside_bounds(point, clip.aabb) {
+    if outside_bounds(point, clips[clip_id].aabb) {
         return 0.0;
     }
     // The kept links are tested in their own system, which only translates: the point moves
     // back by that translation.
-    var kept = point;
-    if clip.space != NO_SPACE {
-        kept = point - spatial[clip.space].matrix[3].xy;
-        if outside_bounds(kept, clip.kept_aabb) {
+    var first = point;
+    var second = point;
+    let space = clips[clip_id].space;
+    if space != NO_SPACE {
+        let kept = point - spatial[space].matrix[3].xy;
+        if outside_bounds(kept, clips[clip_id].kept_aabb) {
             return 0.0;
         }
+        let tests = clips[clip_id].kept_tests;
+        first = select(point, kept, (tests & 1u) != 0u);
+        second = select(point, kept, (tests & 2u) != 0u);
     }
+    let count = clips[clip_id].count;
     var coverage = 1.0;
-    if clip.count > 0u {
-        let at = select(point, kept, (clip.kept_tests & 1u) != 0u);
-        coverage *= rect_coverage(at, clip.first.rect, clip.first.radii, clip.first.shape);
+    if count > 0u {
+        let test = clips[clip_id].first;
+        coverage *= rect_coverage(first, test.rect, test.radii, test.shape);
     }
-    if clip.count > 1u {
-        let at = select(point, kept, (clip.kept_tests & 2u) != 0u);
-        coverage *= rect_coverage(at, clip.second.rect, clip.second.radii, clip.second.shape);
+    if count > 1u {
+        let test = clips[clip_id].second;
+        coverage *= rect_coverage(second, test.rect, test.radii, test.shape);
     }
     return coverage;
 }

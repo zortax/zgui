@@ -270,6 +270,37 @@ mod tests {
         );
     }
 
+    /// Every pipeline runs the clip function per fragment, so it reads each field of the record
+    /// where it is used. On some drivers a copy of the whole record loads the kept part and both
+    /// rounded tests for every fragment.
+    #[test]
+    fn the_clip_function_reads_the_record_field_by_field() {
+        let source = part("sdf");
+        let start = source
+            .find("fn clip_coverage(")
+            .expect("the clip function is in its part");
+        let body = &source[start..];
+        let body = &body[..body.find("\n}\n").expect("the function ends")];
+        for (at, _) in body.match_indices("clips[") {
+            let rest = &body[at..];
+            let close = rest.find(']').expect("the index closes");
+            assert!(
+                rest[close + 1..].starts_with('.'),
+                "the clip function copies the whole record; read each field through the array"
+            );
+        }
+        let branch = body
+            .find("if space != NO_SPACE")
+            .expect("the kept part is behind one test of the space");
+        for field in ["kept_aabb", "kept_tests", "spatial["] {
+            let at = body.find(field).expect("the kept part reads the field");
+            assert!(
+                at > branch,
+                "`{field}` is read before the test of the space; read the kept part only in the branch"
+            );
+        }
+    }
+
     /// Whatever an effect does, exactly one binding sits at each slot of each group it uses.
     #[test]
     fn no_mode_declares_two_things_at_one_binding() {
