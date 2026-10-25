@@ -178,6 +178,17 @@ impl Placements {
         }
     }
 
+    /// Whether `other` holds the same occupant and the same matrix bits in every slot.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        let bits = |matrix: &Matrix4| matrix.columns.map(|column| column.map(f32::to_bits));
+        self.slots.len() == other.slots.len()
+            && self.slots.iter().zip(&other.slots).all(|(left, right)| {
+                left.occupant == right.occupant
+                    && left.identity == right.identity
+                    && bits(&left.matrix) == bits(&right.matrix)
+            })
+    }
+
     /// The matrix `id` names, or `None` when the slot has moved on to another occupant.
     pub fn get(&self, id: SpatialId) -> Option<&Matrix4> {
         let slot = self.slots.get(id.index() as usize)?;

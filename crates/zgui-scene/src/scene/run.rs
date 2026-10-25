@@ -15,6 +15,7 @@ use zgui_geom::{Device, DevicePx, Rect};
 
 use crate::id::{ClipId, DrawOrder};
 use crate::scene::Scene;
+use crate::scene::device::place;
 
 /// The orders a run hands out, one per primitive in pushing order.
 #[derive(Debug, Default)]
@@ -67,8 +68,11 @@ impl Scene {
         if inks.len() < 2 {
             return;
         }
-        let placed: Vec<Rect<DevicePx, Device>> =
-            inks.iter().map(|ink| self.on_device(space, *ink)).collect();
+        let matrix = self.device_matrix(space);
+        let placed: Vec<Rect<DevicePx, Device>> = inks
+            .iter()
+            .map(|ink| place(matrix.as_ref(), *ink))
+            .collect();
         let Some(local) = local_orders(&placed) else {
             return;
         };
@@ -78,7 +82,7 @@ impl Scene {
             let admitted = self.clips.bounds_in(clip, space);
             inks.iter()
                 .filter_map(|ink| ink.intersection(admitted))
-                .map(|clipped| self.on_device(space, clipped))
+                .map(|clipped| place(matrix.as_ref(), clipped))
                 .reduce(Rect::union)
                 .map(|union| self.order.insert_block(union, span))
         } else {

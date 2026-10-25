@@ -579,7 +579,7 @@ impl WgpuRenderer {
         // would otherwise leave the previous round's content in a reused scratch, which composites
         // as wrong pixels rather than as missing ones and has nothing to notice it by.
         raster.clear_targets(plan, round);
-        let placements = zgui_scene::Placements::of(&scene.spatial);
+        let placements = scene.placements();
         let mut frame = zgui_render::VectorFrame::new(
             plan,
             &scene.primitives.vectors,

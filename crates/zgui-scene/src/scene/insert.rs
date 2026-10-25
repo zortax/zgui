@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use zgui_geom::{Device, DevicePx, Rect};
+use zgui_geom::{Device, DevicePx, Matrix4, Rect};
 use zgui_profile::{Counter, counter};
 
 use crate::group::{BackdropFilter, GroupBoundary};
@@ -533,17 +533,20 @@ impl Scene {
     ///
     /// The rectangle itself for the viewport and for a slot nothing occupies.
     pub(crate) fn on_device(
-        &self,
+        &mut self,
         slot: u32,
         rect: Rect<DevicePx, Device>,
     ) -> Rect<DevicePx, Device> {
-        if slot == SpatialId::VIEWPORT.index() {
-            return rect;
-        }
-        match self.spatial.resolve_at(slot) {
-            Some(matrix) => zgui_geom::transformed_bounds(&matrix, rect),
-            None => rect,
-        }
+        let matrix = self.device_matrix(slot);
+        crate::scene::device::place(matrix.as_ref(), rect)
+    }
+
+    /// The matrix the coordinate system occupying `slot` maps onto the device.
+    ///
+    /// `None` for the viewport and for a slot nothing occupies. Kept per slot until the tree is
+    /// next written.
+    pub(crate) fn device_matrix(&mut self, slot: u32) -> Option<Matrix4> {
+        self.device.at(&self.spatial, slot)
     }
 
     /// The name occupying a primitive's slot, for a primitive that carries only the slot.

@@ -1,5 +1,7 @@
 //! Property nodes: storage whose names outlive the values held under them.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use rustc_hash::FxHashMap;
 use zgui_arena::{ChunkArena, DomainId};
 
@@ -54,6 +56,16 @@ pub struct PropertyTree<I: PropertyId<Node = N>, N: PropertyNode<I>> {
     /// nothing new and rewrote nothing, which is every frame of a document that is not animating,
     /// scrolling stickily or being restructured.
     written: bool,
+    /// The stamp of the last change to any name's answer. See [`PropertyTree::writes`].
+    writes: u64,
+}
+
+/// The source of write stamps, shared by every tree so that no two states of two trees share one.
+static NEXT_WRITE: AtomicU64 = AtomicU64::new(1);
+
+/// A write stamp no tree has held before.
+fn next_write() -> u64 {
+    NEXT_WRITE.fetch_add(1, Ordering::Relaxed)
 }
 
 impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
@@ -68,6 +80,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
             by_slot: Vec::new(),
             released: Vec::new(),
             written: false,
+            writes: next_write(),
         }
     }
 
@@ -142,7 +155,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
                     .expect("a name this tree still hands out resolves to a node");
                 if *held != node {
                     *held = node;
-                    self.written = true;
+                    self.touch();
                 }
                 id
             }
@@ -154,7 +167,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
                     self.by_slot.resize(slot + 1, None);
                 }
                 self.by_slot[slot] = Some(fresh);
-                self.written = true;
+                self.touch();
                 fresh
             }
         }
@@ -169,6 +182,37 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
     /// which is a comparison per coordinate system per frame it does not pay.
     pub const fn written_since_recycle(&self) -> bool {
         self.written
+    }
+
+    /// A stamp that changes whenever the answer for any name or slot can have changed.
+    ///
+    /// Each establishment, rewrite and release takes a new stamp, and so does the end of a frame
+    /// that gave a slot back. Stamps are unique across all trees, so a reader that keeps answers
+    /// under a stamp can reuse them while the stamp is equal, even when the tree was replaced.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let slid = |x| OwnSpace::of(Some(Matrix4::translation(x, 0.0, 0.0)), None, false);
+    /// let card = tree.space_of(tree.viewport(), owner, slid(4.0));
+    ///
+    /// let stamp = tree.writes();
+    /// tree.space_of(tree.viewport(), owner, slid(4.0));
+    /// assert_eq!(tree.writes(), stamp, "the same matrix again");
+    /// assert!(tree.place(card, Matrix4::translation(9.0, 0.0, 0.0)));
+    /// assert_ne!(tree.writes(), stamp);
+    /// ```
+    pub const fn writes(&self) -> u64 {
+        self.writes
+    }
+
+    /// Records a change to what a name or slot resolves to.
+    fn touch(&mut self) {
+        self.written = true;
+        self.writes = next_write();
     }
 
     /// The node a name refers to, or `None` if that name is no longer live.
@@ -187,7 +231,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
     /// and changes it has to say so, or every reader that skips comparing on
     /// [`PropertyTree::written_since_recycle`] skips the frame the write happened on.
     pub fn note_written(&mut self) {
-        self.written = true;
+        self.touch();
     }
 
     /// Whether a name still refers to the node it was handed out for.
@@ -205,7 +249,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
         let id = self.named.remove(&owner)?;
         self.nodes.remove(id.key());
         self.released.push(id.key().index());
-        self.written = true;
+        self.touch();
         Some(id)
     }
 
@@ -230,6 +274,10 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
     /// Each slot moves on to its next occupancy counter as its value is dropped, so every name into
     /// this frame's releases stops resolving here, all at once.
     pub fn recycle(&mut self) {
+        // A slot given back stops resolving here, which changes its answer.
+        if !self.released.is_empty() {
+            self.writes = next_write();
+        }
         for slot in self.released.drain(..) {
             self.by_slot[slot as usize] = None;
         }

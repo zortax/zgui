@@ -3,6 +3,7 @@
 pub mod batching;
 pub mod chunk;
 pub mod depends;
+pub(crate) mod device;
 pub mod finish;
 pub mod insert;
 pub(crate) mod live;
@@ -145,6 +146,15 @@ pub struct Scene {
     chunk_offsets: rustc_hash::FxHashMap<u64, [f32; 2]>,
     /// The draw-order assigner.
     order: BoundsTree,
+    /// The device matrix of each slot an order was placed through, kept between tree writes.
+    device: crate::scene::device::DeviceMatrices,
+    /// Every slot's matrix, resolved by [`Scene::finish`] at the tree's stamp in `kept_stamp`.
+    ///
+    /// Read through [`Scene::placements`].
+    kept_placements: crate::spatial::Placements,
+    /// The tree's [write stamp](crate::PropertyTree::writes) when `kept_placements` was resolved;
+    /// zero before that.
+    kept_stamp: u64,
     /// The region each moving coordinate system declared it would visit.
     ///
     /// Read when a matrix is written after the ordering is done, which is the one moment the
@@ -294,6 +304,9 @@ impl Scene {
             chunk_notes: Vec::new(),
             chunk_offsets: rustc_hash::FxHashMap::default(),
             order: BoundsTree::new(),
+            device: Default::default(),
+            kept_placements: crate::spatial::Placements::new(),
+            kept_stamp: 0,
             travel: Travels::new(),
             layer_stack: Vec::new(),
             forced_orders: Vec::new(),
