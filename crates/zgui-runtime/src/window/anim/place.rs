@@ -80,7 +80,8 @@ impl Writing<'_> {
         };
         for frag in self.layout.fragments_of_box(*box_key) {
             if let Some(fragment) = self.layout.fragment(*frag) {
-                self.damage.absorb(whole(fragment.subtree_ink));
+                let ink = fragment.on_device_in(fragment.subtree_ink, &self.scene.spatial);
+                self.damage.absorb(whole(ink));
             }
         }
     }

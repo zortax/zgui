@@ -771,9 +771,11 @@ impl Window {
 
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
+        let placements = self.host.placements();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
             layout: &self.layout,
+            placements: &placements,
             renderer: &mut *self.renderer,
             content: &mut self.content,
             damage: &mut self.damage,
@@ -1277,9 +1279,13 @@ impl Window {
         };
         let mut document = self.document.borrow_mut();
         let scroll = self.scroll.borrow();
+        // The matrices the standing fragments were composed against, published after the last
+        // pass. The walk puts their old ink on the device through these.
+        let drawn = self.host.placements();
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.scene.clips,
             spatial: &mut self.scene.spatial,
+            drawn: &drawn,
             device,
             scroll: scroll.composed(),
             // Written by this frame's own animation tick, which ran before the restyle. An element
@@ -1312,6 +1318,7 @@ impl Window {
         // out inside the frame that delivered it, so the frame's answer is every pass's together.
         // The walk seeds its own `beyond` from whatever the frame had already damaged.
         self.rigid_moves = self.rigid_moves.and(moved);
+        drop(drawn);
         layout.reclaim_paragraphs();
         // The fragments name their matrices by an index into the table that was just filled, so
         // the two go to the view layer together: a box's place on the screen is only answerable
@@ -1434,7 +1441,13 @@ impl Window {
                 )
             });
             mark("p.expand");
-            zgui_paint::expand(&layout, &mut self.damage, viewport, self.scale);
+            zgui_paint::expand(
+                &layout,
+                &mut self.damage,
+                viewport,
+                self.scale,
+                &self.host.placements(),
+            );
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
             // reads any of it, so a document with no effect in it pays three floats.

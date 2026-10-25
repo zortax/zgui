@@ -130,11 +130,12 @@ fn row_extents(
             if matches!(fragment.kind, zgui_layout::FragmentKind::Scrollbar { .. }) {
                 continue;
             }
-            if (fragment.border_box.size.height.0 - 20.0).abs() > 0.5 {
+            let border = fragment.on_device(fragment.border_box, &window.placements());
+            if (border.size.height.0 - 20.0).abs() > 0.5 {
                 continue;
             }
-            let top = fragment.border_box.origin.y.0;
-            rows.push((top, top + fragment.border_box.size.height.0));
+            let top = border.origin.y.0;
+            rows.push((top, top + border.size.height.0));
         }
     }
     rows.sort_by(|one, two| one.0.total_cmp(&two.0));

@@ -15,10 +15,10 @@
 //! as the content it clips, so a clip inside a rotated box rotates with it rather than being
 //! flattened to a rectangle.
 //!
-//! [`Fragment::ink`](crate::Fragment::ink), by contrast, is in **device** space, because it is what damage is computed
-//! from and damage is measured in real pixels. A transformed box's ink is therefore the
-//! axis-aligned bounds of its transformed painting area, which is what has to be redrawn when it
-//! moves.
+//! [`Fragment::ink`](crate::Fragment::ink), by contrast, is in the **anchor** space
+//! [`Fragment::anchor`](crate::Fragment::anchor) names, because it is what damage is computed from
+//! and one matrix puts it on the device. A transformed box's ink is therefore the axis-aligned
+//! bounds of its transformed painting area, which is what has to be redrawn when it moves.
 
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Point, Rect, Size};
@@ -43,12 +43,14 @@ pub(crate) struct Descent {
     pub(crate) shift: (f32, f32),
     /// The clip chain this box is drawn under.
     pub(crate) clip: ClipId,
-    /// The accumulated matrix mapping this box's local space onto the device, if it is not the
-    /// identity. Carried as the matrix rather than as its name so a child composes onto it without
-    /// walking the tree.
+    /// The accumulated matrix mapping this box's local space into [`Descent::anchor`], if it is
+    /// not the identity. Carried as the matrix rather than as its name so a child composes onto
+    /// it without walking the tree.
     pub(crate) matrix: Option<zgui_geom::Matrix4>,
     /// The coordinate system this box's content is drawn in.
     pub(crate) spatial: SpatialId,
+    /// The coordinate system this box's children measure their ink in.
+    pub(crate) anchor: SpatialId,
     /// The stacking context this box is painted in.
     pub(crate) stacking: Option<StackingContextId>,
     /// The scrollable region this box moves with.
@@ -71,8 +73,12 @@ pub(crate) struct Descent {
 
 impl Descent {
     /// The state a document's root box is composed against.
+    ///
+    /// `spatial` is the document's root space. The viewport rectangle starts at the poison offset,
+    /// which is zero outside the poison test mode — see [`zgui_scene::spatial::poison`].
     pub(crate) fn root(viewport: Size<DevicePx, Device>, spatial: SpatialId) -> Self {
-        let viewport = Rect::new(Point::new(DevicePx(0.0), DevicePx(0.0)), viewport);
+        let poison = DevicePx(zgui_scene::spatial::poison::origin());
+        let viewport = Rect::new(Point::new(poison, poison), viewport);
         Self {
             layout: (0.0, 0.0),
             rounded: (0.0, 0.0),
@@ -80,6 +86,7 @@ impl Descent {
             clip: ClipId::ROOT,
             matrix: None,
             spatial,
+            anchor: spatial,
             stacking: None,
             scroll: None,
             scrollport: viewport,
@@ -102,7 +109,7 @@ pub(crate) struct Placed {
     pub(crate) border: Edges<DevicePx>,
     /// The snapped padding widths.
     pub(crate) padding: Edges<DevicePx>,
-    /// Everything this box paints, in device space.
+    /// Everything this box paints, in [`Placed::anchor`]'s space.
     pub(crate) ink: Rect<DevicePx, Device>,
     /// The same, in the box's own space.
     pub(crate) local_ink: Rect<DevicePx, Device>,
@@ -114,6 +121,8 @@ pub(crate) struct Placed {
     pub(crate) clip_transform: Option<SpatialId>,
     /// The coordinate system this box's own content is drawn in.
     pub(crate) transform: Option<SpatialId>,
+    /// The coordinate system [`Placed::ink`] is measured in.
+    pub(crate) anchor: SpatialId,
     /// A fingerprint of what that coordinate system currently resolves to.
     ///
     /// The name is structural and survives the matrix under it being rewritten, which is the whole
@@ -150,6 +159,12 @@ pub struct Tables<'a> {
     pub clips: &'a mut ClipTable,
     /// Where coordinate systems are named.
     pub spatial: &'a mut SpatialTree,
+    /// The matrices the standing fragments were composed against, from the last published frame.
+    ///
+    /// Read where a fragment's old ink is put on the device. A coordinate system these do not
+    /// resolve is resolved in [`Tables::spatial`] instead, which is the answer for a caller that has
+    /// published nothing yet: [`Placements::EMPTY`](zgui_scene::Placements::EMPTY).
+    pub drawn: &'a zgui_scene::Placements,
     /// The two numbers no style carries.
     pub device: DeviceStyle,
     /// Where each scroll container is scrolled to.
@@ -382,6 +397,7 @@ pub(crate) fn place(
         clip: from.clip,
         clip_transform,
         transform,
+        anchor: from.anchor,
         transform_hash,
         stacking,
         scroll,
@@ -397,6 +413,7 @@ pub(crate) fn place(
             clip: child_clip,
             matrix,
             spatial: space,
+            anchor: from.anchor,
             stacking,
             scroll,
             scrollport,

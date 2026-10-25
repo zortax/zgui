@@ -634,7 +634,7 @@ fn changing_the_outlines_damages_the_element_that_draws_them() {
         .store()
         .fragment(harness.fragment_of("mark"))
         .expect("a fragment")
-        .ink;
+        .device_ink(&zgui_scene::Placements::of(&harness.scene.spatial));
     let damage = &harness.damage;
     assert!(
         !damage.is_full(),

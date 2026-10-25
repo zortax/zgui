@@ -117,6 +117,16 @@ impl PropertyOwner {
         None => unreachable!(),
     };
 
+    /// The owner of the document's coordinate system, which only the poison test mode
+    /// establishes.
+    ///
+    /// See [`poison`](crate::spatial::poison). Named after the word below
+    /// [`PropertyOwner::VIEWPORT`], for the same reason.
+    pub const DOCUMENT: Self = match NonZeroU64::new(u64::MAX - 1) {
+        Some(packed) => Self(packed),
+        None => unreachable!(),
+    };
+
     /// The owner a handle names.
     ///
     /// ```

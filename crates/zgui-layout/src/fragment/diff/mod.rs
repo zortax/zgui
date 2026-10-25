@@ -113,12 +113,16 @@ pub fn rebuild_in(
     // than beside the side tables' own frame boundary because the side tables begin their frame at
     // emit time, which is after this walk has already released and re-established.
     tables.spatial.recycle();
+    // The poison offset is a whole number, so rounding against it rounds as at the origin.
+    let poison = zgui_scene::spatial::poison::origin();
     let seed = crate::round::snap::seed(store, root);
+    let seed = (seed.0 + poison, seed.1 + poison);
     let descent = Descent {
         layout: seed,
         rounded: (seed.0.round(), seed.1.round()),
-        ..Descent::root(viewport_of(store, root), tables.spatial.viewport())
+        ..Descent::root(viewport_of(store, root), tables.spatial.document())
     };
+    let anchors = Anchors::of(tables, descent.anchor);
     let scale = tables.device.scale;
     // Every piece of a box that left the tree before this walk began. The walk descends the boxes
     // that are there now, so it never reaches one of these, and the rectangle a departed piece
@@ -128,12 +132,12 @@ pub fn rebuild_in(
     // A box that painted nothing leaves nothing behind of its own: the pieces below it left with
     // it and are in this list too. Its subtree's rectangle would add only what lay between them —
     // for the band an overlay is mounted on, the whole window.
-    let vacated: Vec<Rect<DevicePx, Device>> = store
+    let vacated: Vec<(Rect<DevicePx, Device>, zgui_scene::SpatialId)> = store
         .retired_fragments()
         .iter()
         .filter_map(|frag| store.fragment(*frag))
         .filter(|piece| !paints_nothing_itself(piece.kind, piece.flags))
-        .map(|piece| piece.subtree_ink)
+        .map(|piece| (piece.subtree_ink, piece.anchor))
         .collect();
     // Deliberately *not* seeded with what the set already holds. A frame runs this walk more than
     // once — a scroll is delivered to the document between two of them — and the damage standing at
@@ -152,15 +156,16 @@ pub fn rebuild_in(
         restacked: false,
         renumber: false,
         born_order: None,
+        anchors,
         moves: RigidMoves::default(),
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
         // decided before the frame and must not change part-way through one.
         passes: split::current(),
     };
-    for gone in vacated {
+    for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
         // that is gone.
-        pass.damage_beyond_a_move(gone, Admitted::everything());
+        pass.damage_beyond_a_move(pass.device_before(gone, anchor), Admitted::everything());
     }
     pass.visit(root, descent, None, None, (0, HitOrder::MAX));
     let moves = pass.moves;
@@ -224,7 +229,51 @@ pub fn rebuild_in(
     moves
 }
 
-/// Where a rectangle in a box's own space is drawn on the device, through the box's matrix.
+/// The matrices that put a walk's anchored rectangles on the device.
+///
+/// Resolved once per walk for the anchor nearly every fragment names, so the common case costs a
+/// comparison of two names and no arithmetic.
+#[derive(Clone, Copy, Debug)]
+struct Anchors {
+    /// The document's root space.
+    root: zgui_scene::SpatialId,
+    /// What the root space resolves to in the tree this walk writes, when that is not the
+    /// identity.
+    now: Option<zgui_geom::Matrix4>,
+    /// What it resolved to when the standing fragments were composed, when that is not the
+    /// identity.
+    before: Option<zgui_geom::Matrix4>,
+}
+
+impl Anchors {
+    /// The answers for `root`.
+    fn of(tables: &Tables<'_>, root: zgui_scene::SpatialId) -> Self {
+        let now = tables.spatial.resolve(root);
+        let before = tables.drawn.get(root).copied().or(now);
+        let moving = |matrix: Option<zgui_geom::Matrix4>| {
+            matrix.filter(|matrix| *matrix != zgui_geom::Matrix4::IDENTITY)
+        };
+        Self {
+            root,
+            now: moving(now),
+            before: moving(before),
+        }
+    }
+}
+
+/// `rect` through `matrix`, or as it is when there is none.
+fn through(
+    matrix: Option<zgui_geom::Matrix4>,
+    rect: Rect<DevicePx, Device>,
+) -> Rect<DevicePx, Device> {
+    match matrix {
+        Some(matrix) => crate::fragment::transform::transformed_bounds(&matrix, rect),
+        None => rect,
+    }
+}
+
+/// Where a rectangle in a box's own space is drawn in its anchor's space, through the box's
+/// matrix.
 fn on_device(placed: &Placed, rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
     match placed.descent.matrix {
         Some(matrix) => crate::fragment::transform::transformed_bounds(&matrix, rect),
@@ -415,6 +464,8 @@ struct Pass<'a, 'b, D: FrameDirty> {
     /// The order key the fragment about to be born takes, handed from the box that placed it to
     /// the index write that files it.
     born_order: Option<HitOrder>,
+    /// What puts the walk's anchored rectangles on the device.
+    anchors: Anchors,
     /// What the walk's rigid moves add up to.
     moves: RigidMoves,
     /// Whether a subtree that only moved is offset in one descent or in one descent per duty.
@@ -434,6 +485,41 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         };
         absorb(&mut self.moves.beyond, rect);
         absorb(self.damage, rect);
+    }
+
+    /// `rect`, measured in `anchor` as this walk composes it, in device pixels.
+    ///
+    /// For new ink. Damage is measured on the device, and an anchored rectangle is device pixels
+    /// only through its anchor's matrix.
+    fn device_now(
+        &self,
+        rect: Rect<DevicePx, Device>,
+        anchor: zgui_scene::SpatialId,
+    ) -> Rect<DevicePx, Device> {
+        if anchor == self.anchors.root {
+            return through(self.anchors.now, rect);
+        }
+        through(self.tables.spatial.resolve(anchor), rect)
+    }
+
+    /// `rect`, measured in `anchor` as the standing fragments were composed, in device pixels.
+    ///
+    /// For old ink: where a piece was is where the last published matrices put it.
+    fn device_before(
+        &self,
+        rect: Rect<DevicePx, Device>,
+        anchor: zgui_scene::SpatialId,
+    ) -> Rect<DevicePx, Device> {
+        if anchor == self.anchors.root {
+            return through(self.anchors.before, rect);
+        }
+        let tables = &*self.tables;
+        let matrix = tables
+            .drawn
+            .get(anchor)
+            .copied()
+            .or_else(|| tables.spatial.resolve(anchor));
+        through(matrix, rect)
     }
 
     /// What a fragment's clip chain admits, in device pixels.
@@ -1003,10 +1089,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             let frag = self.scratch.stale[index];
             // Where a destroyed piece *was*, so it is cut to nothing for the same reason a
             // vacated rectangle is: the chain it named is last frame's.
-            let Some(gone) = self.store.fragment(frag).map(|it| it.subtree_ink) else {
+            let Some((gone, anchor)) = self
+                .store
+                .fragment(frag)
+                .map(|it| (it.subtree_ink, it.anchor))
+            else {
                 continue;
             };
-            self.damage_beyond_a_move(gone, Admitted::everything());
+            self.damage_beyond_a_move(self.device_before(gone, anchor), Admitted::everything());
         }
         self.scratch.stale.truncate(mark);
         // The index is not touched here: `truncate_fragments` records what it destroyed, and the
@@ -1075,6 +1165,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 clip: placed.clip,
                 clip_transform: placed.clip_transform,
                 transform: placed.transform,
+                anchor: placed.anchor,
                 transform_hash: placed.transform_hash,
                 stacking: placed.stacking,
                 scroll: placed.scroll,
@@ -1100,6 +1191,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 clip: placed.clip,
                 clip_transform: placed.clip_transform,
                 transform: placed.transform,
+                anchor: placed.anchor,
                 transform_hash: placed.transform_hash,
                 stacking: placed.stacking,
                 scroll: placed.scroll,
@@ -1152,6 +1244,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             // own space — the space its own transform maps onto the device.
             clip_transform: placed.transform,
             transform: placed.transform,
+            anchor: placed.anchor,
             transform_hash: placed.transform_hash,
             stacking: placed.stacking,
             scroll: placed.scroll,
@@ -1282,6 +1375,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             fragment.clip = next.clip;
             fragment.clip_transform = next.clip_transform;
             fragment.transform = next.transform;
+            fragment.anchor = next.anchor;
             fragment.transform_hash = next.transform_hash;
             fragment.stacking = next.stacking;
             fragment.scroll = next.scroll;
@@ -1335,7 +1429,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 let vacuous =
                     kind == FragmentKind::Box && next.flags.contains(FragmentFlags::PAINTS_NOTHING);
                 if own.intersects(REPAINTS_IN_PLACE) && !vacuous {
-                    self.damage_beyond_a_move(next.ink, admitted);
+                    self.damage_beyond_a_move(self.device_now(next.ink, next.anchor), admitted);
                 }
                 if own.contains(Dirty::REHIT) {
                     self.touch_hit(frag, change, false);
@@ -1354,9 +1448,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     self.dirty.moved(node);
                 }
                 if let Some(previous) = &previous {
-                    self.damage_beyond_a_move(previous.ink, Admitted::everything());
+                    let was = self.device_before(previous.ink, previous.anchor);
+                    self.damage_beyond_a_move(was, Admitted::everything());
                 }
-                self.damage_beyond_a_move(next.ink, admitted);
+                self.damage_beyond_a_move(self.device_now(next.ink, next.anchor), admitted);
                 self.touch_hit(frag, change, false);
             }
             Change::Changed => {
@@ -1408,9 +1503,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                         }
                         None => {
                             if let Some(previous) = &previous {
-                                self.damage_beyond_a_move(previous.ink, Admitted::everything());
+                                let was = self.device_before(previous.ink, previous.anchor);
+                                self.damage_beyond_a_move(was, Admitted::everything());
                             }
-                            self.damage_beyond_a_move(next.ink, admitted);
+                            let is = self.device_now(next.ink, next.anchor);
+                            self.damage_beyond_a_move(is, admitted);
                         }
                     }
                 }
@@ -1439,10 +1536,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 .fragment(frag)
                 .is_some_and(|fragment| fragment.flags.contains(FragmentFlags::GROUPS_SUBTREE));
             if groups || previous.flags.contains(FragmentFlags::GROUPS_SUBTREE) {
-                self.damage_beyond_a_move(previous.subtree_ink, admitted);
+                let was = self.device_before(previous.subtree_ink, previous.anchor);
+                self.damage_beyond_a_move(was, admitted);
                 let shift = next.border_box.origin - previous.border_box.origin;
                 if shift != zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)) {
                     let carried = previous.subtree_ink.translate(Size::new(shift.x, shift.y));
+                    let carried = self.device_now(carried, next.anchor);
                     self.damage_beyond_a_move(carried, admitted);
                 }
             }
@@ -1472,6 +1571,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             || next.flags.contains(FragmentFlags::HAS_READ_EXTENT)
             || previous.border != next.border
             || previous.transform != next.transform
+            || previous.anchor != next.anchor
             || previous.transform_hash != next.transform_hash
             || previous.clip_transform != next.clip_transform
             || previous.content_hash != next.content_hash
@@ -1490,7 +1590,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             next.border,
             self.tables.device.scale,
         )?;
-        Some(edge_strips(previous.ink, next.ink, reach))
+        Some(edge_strips(
+            self.device_before(previous.ink, previous.anchor),
+            self.device_now(next.ink, next.anchor),
+            reach,
+        ))
     }
 
     /// The accessibility bit a moved fragment owes, which is none unless its node means something.

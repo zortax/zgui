@@ -90,6 +90,7 @@ fn a_transform_transition_updates_only_its_own_subtree_in_the_hit_index() {
     let mut tables = zgui_layout::fragment::build::Tables {
         clips: &mut frame.clips,
         spatial: &mut frame.spatial,
+        drawn: &zgui_scene::Placements::EMPTY,
         device: zgui_layout::DeviceStyle::default(),
         scroll: &frame.scroll,
         placements: &[],

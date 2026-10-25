@@ -17,7 +17,7 @@ pub(super) struct Geometry {
     pub(super) border: Edges<DevicePx>,
     /// The snapped padding widths.
     pub(super) padding: Edges<DevicePx>,
-    /// Everything it paints, in device space.
+    /// Everything it paints, in [`Geometry::anchor`]'s space.
     pub(super) ink: Rect<DevicePx, Device>,
     /// The same, in its own space.
     pub(super) local_ink: Rect<DevicePx, Device>,
@@ -29,6 +29,8 @@ pub(super) struct Geometry {
     pub(super) clip_transform: Option<zgui_scene::SpatialId>,
     /// The coordinate system it is drawn in.
     pub(super) transform: Option<zgui_scene::SpatialId>,
+    /// The coordinate system its ink is measured in.
+    pub(super) anchor: zgui_scene::SpatialId,
     /// A fingerprint of the matrix that coordinate system resolves to.
     pub(super) transform_hash: u64,
     /// The stacking context it belongs to.
@@ -64,6 +66,7 @@ pub(super) fn repositioned_within(previous: &Fragment, next: &Geometry) -> bool 
         && previous.clip == next.clip
         && previous.clip_transform == next.clip_transform
         && previous.transform == next.transform
+        && previous.anchor == next.anchor
         && previous.transform_hash == next.transform_hash
         && previous.stacking == next.stacking
         && previous.scroll == next.scroll
@@ -112,6 +115,8 @@ pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
         && previous.clip == next.clip
         && previous.clip_transform == next.clip_transform
         && previous.transform == next.transform
+        // Ink in another space is another rectangle, however equal the numbers are.
+        && previous.anchor == next.anchor
         // The name of a coordinate system is structural, so it is the same name for a box that has
         // been moved; without the fingerprint, a movement whose device ink happens to land where
         // the last one did — a square rotated through a right angle, a scale about its own centre —
@@ -167,6 +172,7 @@ mod tests {
             clip: fragment.clip,
             clip_transform: fragment.clip_transform,
             transform: fragment.transform,
+            anchor: fragment.anchor,
             transform_hash: fragment.transform_hash,
             stacking: fragment.stacking,
             scroll: fragment.scroll,

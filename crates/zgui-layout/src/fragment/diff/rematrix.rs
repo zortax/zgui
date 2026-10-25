@@ -44,12 +44,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             .fragments_of_box(key)
             .first()
             .and_then(|frag| self.store.fragment(*frag))
-            .map(|fragment| fragment.subtree_ink);
+            .map(|fragment| (fragment.subtree_ink, fragment.anchor));
         let folded = self.rematrix_box(key, outer);
-        if let Some(before) = before {
-            absorb(self.damage, before);
+        // A box with no piece of its own still raises where its subtree is now, in the root space.
+        let anchor = before.map_or(self.anchors.root, |(_, anchor)| anchor);
+        if let Some((before, _)) = before {
+            absorb(self.damage, self.device_before(before, anchor));
         }
-        absorb(self.damage, folded.subtree_ink);
+        absorb(self.damage, self.device_now(folded.subtree_ink, anchor));
         folded
     }
 

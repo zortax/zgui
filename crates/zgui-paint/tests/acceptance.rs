@@ -69,7 +69,8 @@ fn every_fragment_the_damage_reaches_is_emitted() {
     harness.damage.absorb(rect(0, 0, 300, 30));
     harness.expand();
     let report = harness.paint();
-    report.assert_emission_complete(&harness.store, &harness.damage);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
 #[test]
@@ -121,7 +122,8 @@ fn a_blurred_panel_over_animating_content_has_its_source_region_repainted() {
     );
 
     let report = harness.paint();
-    report.assert_emission_complete(&harness.store, &harness.damage);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
 #[test]
@@ -174,7 +176,11 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
     harness.paint_everything();
 
     let key = harness.document.store().key_of(harness.element("gone"));
-    let vacated_ink = zgui_layout::fragment::index::ink_of(&harness.store, key);
+    let vacated_ink = zgui_layout::fragment::index::device_ink_of(
+        &harness.store,
+        key,
+        &zgui_scene::Placements::of(&harness.scene.spatial),
+    );
     assert!(
         !vacated_ink.is_empty(),
         "the fixture's removed box has to have painted something"
@@ -184,7 +190,12 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
     harness.edit_and_restyle(|batch| batch.remove(gone));
     harness.clear_damage();
 
-    let absorbed = zgui_paint::vacated(&mut harness.document, &harness.store, &mut harness.damage);
+    let absorbed = zgui_paint::vacated(
+        &mut harness.document,
+        &harness.store,
+        &mut harness.damage,
+        &zgui_scene::Placements::of(&harness.scene.spatial),
+    );
     assert_eq!(absorbed, 1, "one root was removed and one contributed");
     assert!(
         harness
@@ -198,7 +209,12 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
 
     // The list is consumed rather than borrowed, which is why there is exactly one consumer and
     // this is it: a second reader would find it emptied and absorb nothing, silently.
-    let again = zgui_paint::vacated(&mut harness.document, &harness.store, &mut harness.damage);
+    let again = zgui_paint::vacated(
+        &mut harness.document,
+        &harness.store,
+        &mut harness.damage,
+        &zgui_scene::Placements::of(&harness.scene.spatial),
+    );
     assert_eq!(again, 0);
 }
 

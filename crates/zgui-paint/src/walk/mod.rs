@@ -207,6 +207,8 @@ impl PaintReport {
 
     /// Fails if any fragment whose ink meets the damage was not emitted.
     ///
+    /// `placements` puts each fragment's ink on the device, where the damage is measured.
+    ///
     /// This is the direct test of the expansion's placement, and a damage-rectangle assertion
     /// structurally cannot make it: moving the expansion after this walk leaves the damage set
     /// looking exactly as it should while the fragments inside the newly added region were never
@@ -217,7 +219,12 @@ impl PaintReport {
     /// Panics naming the first fragment the damage reaches that nothing emitted for, and panics
     /// outright if the walk was not asked to record what it emitted — an oracle run against a list
     /// nobody filled would pass over every document there is.
-    pub fn assert_emission_complete(&self, store: &LayoutStore, damage: &DamageSet) {
+    pub fn assert_emission_complete(
+        &self,
+        store: &LayoutStore,
+        damage: &DamageSet,
+        placements: &zgui_scene::Placements,
+    ) {
         assert!(
             self.recorded,
             "the walk was not asked to record what it emitted, so this would assert nothing: set \
@@ -231,11 +238,11 @@ impl PaintReport {
                 if fragment.ink.is_empty() {
                     continue;
                 }
-                let reached = damage.is_full() || damage.intersects(pixels(fragment.ink));
+                let ink = fragment.device_ink(placements);
+                let reached = damage.is_full() || damage.intersects(pixels(ink));
                 assert!(
                     !reached || self.emitted(*frag),
-                    "the damage reaches {frag:?} at {:?} and nothing emitted for it",
-                    fragment.ink
+                    "the damage reaches {frag:?} at {ink:?} and nothing emitted for it"
                 );
             }
         }
@@ -580,7 +587,7 @@ impl Pass<'_, '_> {
             let Some(fragment) = self.input.store.fragment(*frag) else {
                 continue;
             };
-            let mut ink = self.where_drawn(fragment.subtree_ink, fragment.transform);
+            let mut ink = self.where_drawn(fragment, fragment.subtree_ink);
             if let Some(marks) = crate::damage::marks::extent(
                 fragment,
                 self.input.highlights,
@@ -621,15 +628,37 @@ impl Pass<'_, '_> {
     /// of both readings is taken rather than a choice between them, because for a transform the
     /// build did resolve the ink is already on the device and re-placing it would move it away —
     /// a union only ever grows, and a cull too large is a fragment emitted for nothing.
+    ///
+    /// `rect` is measured in `fragment`'s anchor, so the build's reading is that rectangle put on
+    /// the device through the anchor.
     fn where_drawn(
         &self,
+        fragment: &Fragment,
         rect: Rect<DevicePx, Device>,
-        transform: Option<zgui_scene::SpatialId>,
     ) -> Rect<DevicePx, Device> {
         match self.input.placements {
-            Some(placements) => rect.union(zgui_layout::fragment::transform::placed::onto_device(
-                rect, transform, placements,
-            )),
+            Some(placements) => fragment.on_device(rect, placements).union(
+                zgui_layout::fragment::transform::placed::onto_device(
+                    rect,
+                    fragment.transform,
+                    placements,
+                ),
+            ),
+            None => rect,
+        }
+    }
+
+    /// `rect`, measured in `fragment`'s anchor, in device pixels.
+    ///
+    /// Without a composed frame the rectangle stays as it is, which is exact while the anchor is
+    /// the viewport.
+    fn anchored(
+        &self,
+        fragment: &Fragment,
+        rect: Rect<DevicePx, Device>,
+    ) -> Rect<DevicePx, Device> {
+        match self.input.placements {
+            Some(placements) => fragment.on_device(rect, placements),
             None => rect,
         }
     }
@@ -863,8 +892,8 @@ impl Pass<'_, '_> {
         // only thing it paints: an emptied field's line box has no width, so its ink alone is a
         // rectangle no damage can reach and the caret standing on it would be culled away.
         let mut cull = self.where_drawn(
+            fragment,
             crate::damage::ink::cull_rect(store, fragment, self.input.scale),
-            fragment.transform,
         );
         if let Some(marks) = crate::damage::marks::extent(
             fragment,
@@ -1193,7 +1222,7 @@ impl stacking::Visitor for Pass<'_, '_> {
         // The outline is drawn after the box's descendants, which is Appendix E's step ten.
         if let Some((frag, style_ref)) = self.outlines.pop().flatten()
             && let Some(fragment) = store.fragment(frag)
-            && self.reaches(fragment.ink)
+            && self.reaches(self.anchored(fragment, fragment.ink))
             && let Some(entry) = self.painter.styles.get(style_ref)
         {
             // Copied only for an animating box, for the reason `enter` gives.

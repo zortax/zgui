@@ -195,7 +195,8 @@ fn box_of(
             return None;
         }
         let frag = *layout.fragments_of_box(key).first()?;
-        Some(layout.fragment(frag)?.border_box)
+        let fragment = layout.fragment(frag)?;
+        Some(fragment.on_device(fragment.border_box, &window.placements()))
     })
 }
 

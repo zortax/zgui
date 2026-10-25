@@ -27,8 +27,10 @@ impl AnimOverrides for OneAnimating {
 /// Emits a frame against the harness damage with `anim` driving the overrides.
 fn paint_with(harness: &mut Harness, anim: &dyn AnimOverrides) -> PaintReport {
     harness.scene.begin_frame(harness.viewport);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
     let mut input = PaintInput::new(&harness.store, &harness.damage);
     input.anim = anim;
+    input.placements = Some(&placements);
     let report = harness.painter.emit(&input, &mut harness.scene);
     harness.scene.finish(&harness.damage);
     report

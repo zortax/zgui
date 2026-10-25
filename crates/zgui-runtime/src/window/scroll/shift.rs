@@ -90,7 +90,7 @@ impl Window {
 
         let port = {
             let layout = self.layout.borrow();
-            shiftable::port_may_be_shifted(&layout, scrolled.container)
+            shiftable::port_may_be_shifted(&layout, scrolled.container, &self.host.placements())
                 .map_err(Refused::Document)?
         };
         let surface = Rect::new(zgui_geom::Point::new(0, 0), viewport);

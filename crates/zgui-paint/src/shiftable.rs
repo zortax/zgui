@@ -48,10 +48,12 @@ pub enum Refusal {
 
 /// Whether `container`'s scrollport may have its pixels moved, and the port if it may.
 ///
-/// The port is in device pixels, in the same space the damage set is measured in.
+/// The port is in device pixels, in the same space the damage set is measured in: `placements`
+/// puts it there. The tests below compare it against fragments in the container's anchor space.
 pub fn port_may_be_shifted(
     store: &LayoutStore,
     container: NodeKey,
+    placements: &zgui_scene::Placements,
 ) -> Result<Rect<DevicePx, Device>, Refusal> {
     let Some(&box_key) = store.boxes_of(container).first() else {
         return Err(Refusal::NotAScroller);
@@ -59,7 +61,7 @@ pub fn port_may_be_shifted(
     if scroll_region::region_of(store, box_key).is_none() {
         return Err(Refusal::NotAScroller);
     }
-    let Some(port) = scrollport_on_device(store, box_key) else {
+    let Some(port) = scrollport_of(store, box_key) else {
         return Err(Refusal::NotAScroller);
     };
     // Two independent conditions, and neither implies the other. A port with an opaque background
@@ -69,18 +71,23 @@ pub fn port_may_be_shifted(
         return Err(Refusal::Overdrawn);
     }
     backing(store, box_key, port)?;
-    Ok(port)
+    let piece = store
+        .fragments_of_box(box_key)
+        .first()
+        .and_then(|frag| store.fragment(*frag))
+        .ok_or(Refusal::NotAScroller)?;
+    Ok(piece.on_device(port, placements))
 }
 
-/// Where the pixels `box_key` scrolls stand on the device.
+/// Where the pixels `box_key` scrolls stand, in the container's own space.
 ///
-/// A scroll region reports its port in the container's own space, at the origin, because that is
-/// the space its offsets are measured in. The composed target and the damage set are measured on
-/// the device, and every test below compares the port against fragments that are. So the port is
-/// taken from the container's own fragment: the padding box, less the scrollbar gutter on the
-/// sides the layout engine took it off. A port read at the origin names the pixels at the top left
-/// of the window, which only coincide with the list's when the list stands there.
-fn scrollport_on_device(store: &LayoutStore, box_key: BoxKey) -> Option<Rect<DevicePx, Device>> {
+/// That is its anchor space while the container has no transform of its own. A scroll region
+/// reports its port at the origin, because that is the space its offsets are measured in. Every
+/// test below compares the port against fragments, which are measured in the anchor space. So the
+/// port is taken from the container's own fragment: the padding box, less the scrollbar gutter on
+/// the sides the layout engine took it off. A port read at the origin names the pixels at the top
+/// left of the window, which only coincide with the list's when the list stands there.
+fn scrollport_of(store: &LayoutStore, box_key: BoxKey) -> Option<Rect<DevicePx, Device>> {
     let layout = store.layout_of(box_key)?;
     let piece = store.fragment(*store.fragments_of_box(box_key).first()?)?;
     let padding = piece.padding_box;

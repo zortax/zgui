@@ -77,7 +77,10 @@ fn a_paint_only_change_still_damages_the_fragment_it_repainted() {
     let target = second_child(&store);
     let ink = {
         let frag = store.fragments_of_box(target)[0];
-        store.fragment(frag).expect("live").ink
+        store
+            .fragment(frag)
+            .expect("live")
+            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
     };
     let node = store.node(target).source;
 
@@ -156,7 +159,10 @@ fn a_repaint_mark_on_a_translucent_paintless_box_damages_its_subtree() {
     let child = store.node(target).children[0];
     let ink = {
         let frag = store.fragments_of_box(child)[0];
-        store.fragment(frag).expect("live").ink
+        store
+            .fragment(frag)
+            .expect("live")
+            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
     };
     let node = store.node(target).source;
 
@@ -208,7 +214,10 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
     let node = store.node(row).source;
     let before = {
         let frag = store.fragments_of_box(row)[0];
-        store.fragment(frag).expect("live").ink
+        store
+            .fragment(frag)
+            .expect("live")
+            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
     };
 
     frame.damage = DamageSet::new();
@@ -229,7 +238,10 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
 
     let after = {
         let frag = store.fragments_of_box(row)[0];
-        store.fragment(frag).expect("live").ink
+        store
+            .fragment(frag)
+            .expect("live")
+            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
     };
     assert_eq!(after.origin.y.0, before.origin.y.0 - 40.0);
     assert_eq!(after.size, before.size, "it moved and did nothing else");
@@ -280,7 +292,10 @@ fn a_box_that_stops_producing_a_piece_damages_where_that_piece_was() {
     let lines = store.fragments_of_box(inline).len();
     assert!(lines > 2, "the paragraph wrapped");
     let last = *store.fragments_of_box(inline).last().expect("a line");
-    let vacated = store.fragment(last).expect("live").ink;
+    let vacated = store
+        .fragment(last)
+        .expect("live")
+        .device_ink(&zgui_scene::Placements::of(&frame.spatial));
 
     // Laid out much wider, the paragraph fits on fewer lines and the last of them ceases to exist.
     frame.damage = DamageSet::new();
@@ -473,7 +488,10 @@ fn a_repaint_of_a_painted_span_damages_the_line_that_paints_it() {
     let (mut store, _fixture, mut frame, para) = spanned("background-color: #246");
     let span = span_of(&store, para);
     let line = store.fragments_of_box(para)[1];
-    let ink = store.fragment(line).expect("live").ink;
+    let ink = store
+        .fragment(line)
+        .expect("live")
+        .device_ink(&zgui_scene::Placements::of(&frame.spatial));
 
     frame.damage = DamageSet::new();
     let root = store.root().expect("a root");
@@ -484,4 +502,146 @@ fn a_repaint_of_a_painted_span_damages_the_line_that_paints_it() {
     };
     fragments(&mut frame, &mut store, root, &mut dirty);
     assert!(covers(&frame.damage, ink), "the line was not repainted");
+}
+
+#[test]
+fn a_repaint_damages_its_ink_where_the_document_space_draws_it() {
+    // Ink is measured in the fragment's anchor and damage on the device. Here the document's own
+    // space is moved 300px to the right, as the poison test mode moves it to the left, so a pass
+    // that absorbed the raw ink would damage pixels 300px away from the repainted box.
+    let fixture = Fixture::new(
+        Element::new("root").children(vec![Element::new("a"), Element::new("b")]),
+        "root { display: block; width: 200px }
+         a { display: block; height: 30px }
+         b { display: block; height: 30px; background-color: #246 }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 200.0);
+
+    let viewport = frame.spatial.viewport();
+    let held = frame
+        .spatial
+        .resolve(frame.spatial.document())
+        .expect("the document space resolves");
+    let document = frame.spatial.establish(
+        zgui_scene::PropertyOwner::DOCUMENT,
+        zgui_scene::SpatialNode {
+            parent: Some(viewport),
+            local: held.then(&zgui_geom::Matrix4::translation(300.0, 0.0, 0.0)),
+            anchoring: zgui_scene::Anchoring::Scrolling,
+        },
+    );
+    let root = store.root().expect("a root");
+    fragments(&mut frame, &mut store, root, &mut Everything);
+
+    let target = second_child(&store);
+    let placements = zgui_scene::Placements::of(&frame.spatial);
+    let (raw, device) = {
+        let fragment = store
+            .fragment(store.fragments_of_box(target)[0])
+            .expect("live");
+        assert_eq!(
+            fragment.anchor, document,
+            "the ink is measured in the document space"
+        );
+        (fragment.ink, fragment.device_ink(&placements))
+    };
+    assert_eq!(device.origin.x.0, raw.origin.x.0 + 300.0 + held.get(0, 3));
+
+    frame.damage = DamageSet::new();
+    let mut dirty = OnlyThis {
+        node: store.node(target).source,
+        bits: Dirty::REPAINT,
+        marked: Vec::new(),
+    };
+    fragments(&mut frame, &mut store, root, &mut dirty);
+
+    assert!(
+        covers(&frame.damage, device),
+        "the repainted piece is not damaged where it is drawn: {:?}",
+        frame.damage.rects()
+    );
+    assert!(
+        !covers(&frame.damage, raw),
+        "the raw ink was damaged as device pixels: {:?}",
+        frame.damage.rects()
+    );
+}
+
+#[test]
+fn a_resized_box_damages_its_old_ink_where_the_last_publish_drew_it() {
+    // Old ink goes on the device through the matrices of the last publish, and new ink through the
+    // tree the pass writes. Here the document's space moves 300px back to the left between the two,
+    // so a pass that put the old ink through the current tree would leave the old pixels standing.
+    let mut fixture = Fixture::new(
+        Element::new("root").children(vec![Element::new("a"), Element::new("b")]),
+        "root { display: block; width: 200px }
+         a { display: block; height: 30px }
+         b { display: block; height: 30px; background-color: #246 }
+         b.tall { height: 50px }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 200.0);
+
+    let viewport = frame.spatial.viewport();
+    let held = frame
+        .spatial
+        .resolve(frame.spatial.document())
+        .expect("the document space resolves");
+    let document_at = |offset: f32| zgui_scene::SpatialNode {
+        parent: Some(viewport),
+        local: held.then(&zgui_geom::Matrix4::translation(offset, 0.0, 0.0)),
+        anchoring: zgui_scene::Anchoring::Scrolling,
+    };
+    frame
+        .spatial
+        .establish(zgui_scene::PropertyOwner::DOCUMENT, document_at(300.0));
+    let root = store.root().expect("a root");
+    fragments(&mut frame, &mut store, root, &mut Everything);
+
+    let target = second_child(&store);
+    let ink_of = |store: &LayoutStore, placements: &zgui_scene::Placements| {
+        store
+            .fragment(store.fragments_of_box(target)[0])
+            .expect("live")
+            .device_ink(placements)
+    };
+    let drawn = zgui_scene::Placements::of(&frame.spatial);
+    let old = ink_of(&store, &drawn);
+
+    frame
+        .spatial
+        .establish(zgui_scene::PropertyOwner::DOCUMENT, document_at(0.0));
+    let node = store.node(target).source;
+    let index = fixture
+        .document
+        .store()
+        .index_of(node.expect("the box came from an element"))
+        .expect("a live element");
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.add_class(index, zgui_interned::ClassName::new("tall"));
+    });
+    support::lay_out_only(&mut store, &mut content, 200.0, 200.0);
+    frame.damage = DamageSet::new();
+    let mut dirty = OnlyThis {
+        node,
+        bits: Dirty::RELAYOUT,
+        marked: Vec::new(),
+    };
+    support::fragments_after(&mut frame, &mut store, root, &mut dirty, &drawn);
+    let new = ink_of(&store, &zgui_scene::Placements::of(&frame.spatial));
+
+    assert_eq!(old.origin.x.0 - new.origin.x.0, 300.0);
+    assert!(
+        covers(&frame.damage, old),
+        "the old ink is not damaged where the last publish drew it: {old:?} in {:?}",
+        frame.damage.rects()
+    );
+    assert!(
+        covers(&frame.damage, new),
+        "the new ink is not damaged where it is drawn: {new:?} in {:?}",
+        frame.damage.rects()
+    );
 }

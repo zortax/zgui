@@ -168,12 +168,13 @@ fn topmost_row_top(window: &zgui_runtime::Window, height: f32) -> f32 {
             if matches!(fragment.kind, zgui_layout::FragmentKind::Scrollbar { .. }) {
                 continue;
             }
-            if (fragment.border_box.size.height.0 - height).abs() > 0.5 {
+            let border = fragment.on_device(fragment.border_box, &window.placements());
+            if (border.size.height.0 - height).abs() > 0.5 {
                 continue;
             }
             top = Some(match top {
-                Some(held) => held.min(fragment.border_box.origin.y.0),
-                None => fragment.border_box.origin.y.0,
+                Some(held) => held.min(border.origin.y.0),
+                None => border.origin.y.0,
             });
         }
     }
@@ -432,7 +433,7 @@ fn scrollport(window: &zgui_runtime::Window) -> Rect<DevicePx, Device> {
             let frag = layout.fragments_of_box(key).first().copied();
             if let Some(fragment) = frag.and_then(|frag| layout.fragment(frag)) {
                 let _ = region;
-                return fragment.content_box;
+                return fragment.on_device(fragment.content_box, &window.placements());
             }
         }
     }

@@ -143,6 +143,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             return Folded::empty();
         };
         let before = fragment.subtree_ink;
+        let anchor = fragment.anchor;
         let folded = Folded {
             subtree_ink: before.translate(moved.size()),
             blending: fragment
@@ -158,8 +159,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 // Recorded before the damage rather than after, so that a caller reading
                 // [`RigidMoves`](super::RigidMoves) sees every move that put a rectangle in the set.
                 self.moves.moved(moved.by);
-                absorb(self.damage, before);
-                absorb(self.damage, folded.subtree_ink);
+                absorb(self.damage, self.device_before(before, anchor));
+                absorb(self.damage, self.device_now(folded.subtree_ink, anchor));
             }
             MoveKind::Layout => {
                 // Not a move the frame's pixels can be shifted by: what was under the subtree is
@@ -167,8 +168,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 // any rigid move the frame reports, so a caller translating pixels for a scroll
                 // in the same frame still draws them.
                 let admitted = self.admitted(moved.clip);
-                self.damage_beyond_a_move(before, super::Admitted::everything());
-                self.damage_beyond_a_move(folded.subtree_ink, admitted);
+                let was = self.device_before(before, anchor);
+                self.damage_beyond_a_move(was, super::Admitted::everything());
+                let is = self.device_now(folded.subtree_ink, anchor);
+                self.damage_beyond_a_move(is, admitted);
             }
         }
 

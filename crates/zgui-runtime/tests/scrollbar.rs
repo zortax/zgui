@@ -74,7 +74,7 @@ fn bars(
             let FragmentKind::Scrollbar { axis, part } = fragment.kind else {
                 continue;
             };
-            let box_ = fragment.border_box;
+            let box_ = fragment.on_device(fragment.border_box, &window.placements());
             found.push((
                 axis,
                 part,
@@ -540,7 +540,8 @@ fn at_a_fractional_scale_the_track_begins_exactly_where_the_content_ends() {
         let layout = window.layout().borrow();
         let root = layout.root().expect("a root box");
         let frag = layout.fragments_of_box(root)[0];
-        layout.fragment(frag).expect("a fragment").content_box
+        let fragment = layout.fragment(frag).expect("a fragment");
+        fragment.on_device(fragment.content_box, &window.placements())
     };
     assert_eq!(
         track[0],

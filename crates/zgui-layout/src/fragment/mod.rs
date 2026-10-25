@@ -231,7 +231,10 @@ impl FragmentFlags {
     }
 }
 
-/// One painted piece of one box, in absolute device pixels.
+/// One painted piece of one box, in absolute layout pixels.
+///
+/// The rectangles are device pixels only after a matrix is applied: [`Fragment::transform`] for the
+/// border, padding and content boxes, and [`Fragment::anchor`] for the ink.
 #[derive(Clone, Debug)]
 pub struct Fragment {
     /// This fragment's own name.
@@ -249,19 +252,20 @@ pub struct Fragment {
     /// Content box, on the same terms.
     pub content_box: Rect<DevicePx, Device>,
     /// Union of everything this fragment *paints*, including shadow spread, outline offset and
-    /// the bleed of any filter applied to it.
+    /// the bleed of any filter applied to it, in [`Fragment::anchor`]'s space.
     ///
     /// This is what damage is computed from, and under-reporting it leaves stale pixels behind. It
     /// is deliberately not what a fragment *reads*: a blurred or backdrop-filtered fragment samples
     /// pixels outside every rectangle it writes, and that extent is carried separately so that the
     /// many fragments which read nothing do not inflate damage.
     pub ink: Rect<DevicePx, Device>,
-    /// The same union, in this fragment's own space rather than on the device.
+    /// The same union, in this fragment's own space rather than in the anchor's.
     ///
-    /// The two differ by exactly the matrix [`Fragment::transform`] names, and both are kept
-    /// because they answer different questions. Damage is measured in real pixels and wants the
-    /// device rectangle. The hit index wants this one: an entry filed under the rectangle it
-    /// occupies *on the device* stops being true the moment its coordinate system moves, and
+    /// The two differ by the matrix from [`Fragment::transform`] to [`Fragment::anchor`], and both
+    /// are kept because they answer different questions. Damage is measured in real pixels and
+    /// wants the anchored rectangle, which one matrix puts on the device. The hit index wants this
+    /// one: an entry filed under the rectangle it occupies *on the device* stops being true the
+    /// moment its coordinate system moves, and
     /// nothing walks a fragment whose matrix changed under it — see
     /// [`hit::HitEntry::envelope`](crate::fragment::hit::HitEntry::envelope).
     pub local_ink: Rect<DevicePx, Device>,
@@ -286,6 +290,13 @@ pub struct Fragment {
     pub clip_transform: Option<SpatialId>,
     /// The transform applied to it, if any.
     pub transform: Option<SpatialId>,
+    /// The coordinate system [`Fragment::ink`] and [`Fragment::subtree_ink`] are measured in.
+    ///
+    /// Those two rectangles are device pixels only after this system's matrix is applied. Today it
+    /// is the document's root space, which resolves to the identity unless the poison test mode is
+    /// on — see [`zgui_scene::spatial::poison`]. Use [`Fragment::on_device`] and the accessors
+    /// beside it, never the raw rectangles, wherever device pixels are meant.
+    pub anchor: SpatialId,
     /// A fingerprint of the matrix that coordinate system resolved to when this was composed.
     ///
     /// Held because the name does not move when the matrix under it does: a box being moved
@@ -356,6 +367,7 @@ impl Fragment {
             clip: ClipId::ROOT,
             clip_transform: None,
             transform: None,
+            anchor: SpatialId::VIEWPORT,
             transform_hash: 0,
             stacking: None,
             scroll: None,
@@ -367,11 +379,108 @@ impl Fragment {
             subtree_order: (u64::MAX, 0),
         }
     }
+
+    /// A rectangle measured in [`Fragment::anchor`], put on the device through `placements`.
+    ///
+    /// This is the step from [`Fragment::ink`], [`Fragment::subtree_ink`] and any rectangle
+    /// measured beside them to device pixels. The viewport anchor costs one comparison. Another
+    /// anchor that resolves to the identity costs one slot read and no arithmetic. An anchor
+    /// `placements` does not resolve leaves the rectangle as it is.
+    pub fn on_device(
+        &self,
+        rect: Rect<DevicePx, Device>,
+        placements: &zgui_scene::Placements,
+    ) -> Rect<DevicePx, Device> {
+        if self.anchor == SpatialId::VIEWPORT {
+            return rect;
+        }
+        transform::placed::onto_device(rect, Some(self.anchor), placements)
+    }
+
+    /// The same step through `tree` itself, for a caller between two publications of the
+    /// placements.
+    pub fn on_device_in(
+        &self,
+        rect: Rect<DevicePx, Device>,
+        tree: &zgui_scene::SpatialTree,
+    ) -> Rect<DevicePx, Device> {
+        if self.anchor == SpatialId::VIEWPORT {
+            return rect;
+        }
+        match tree.resolve(self.anchor) {
+            Some(matrix) if matrix != zgui_geom::Matrix4::IDENTITY => {
+                transform::transformed_bounds(&matrix, rect)
+            }
+            _ => rect,
+        }
+    }
+
+    /// [`Fragment::ink`] in device pixels.
+    pub fn device_ink(&self, placements: &zgui_scene::Placements) -> Rect<DevicePx, Device> {
+        self.on_device(self.ink, placements)
+    }
+
+    /// [`Fragment::subtree_ink`] in device pixels.
+    pub fn device_subtree_ink(
+        &self,
+        placements: &zgui_scene::Placements,
+    ) -> Rect<DevicePx, Device> {
+        self.on_device(self.subtree_ink, placements)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::FragmentFlags;
+
+    #[test]
+    fn ink_is_put_on_the_device_through_the_anchor() {
+        use zgui_geom::{DevicePx, Matrix4, Point, Rect, Size};
+        use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+
+        let mut tree = SpatialTree::with_viewport();
+        let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+        let moved = tree.space_of(
+            tree.viewport(),
+            owner,
+            OwnSpace::of(Some(Matrix4::translation(5.0, 7.0, 0.0)), None, false),
+        );
+        let generation = zgui_arena::Generation::FIRST;
+        let domain = zgui_arena::DomainId::FIRST;
+        let mut fragment = super::Fragment::new(
+            zgui_arena::Key::new(0, generation, domain),
+            zgui_arena::Key::new(1, generation, domain),
+            super::FragmentKind::Box,
+        );
+        let ink = Rect::new(
+            Point::new(DevicePx(10.0), DevicePx(20.0)),
+            Size::new(DevicePx(30.0), DevicePx(40.0)),
+        );
+        fragment.ink = ink;
+        fragment.subtree_ink = ink;
+        let placements = Placements::of(&tree);
+        assert_eq!(
+            fragment.device_ink(&placements),
+            ink,
+            "the viewport moves nothing"
+        );
+
+        fragment.anchor = moved;
+        let shifted = ink.translate(Size::new(DevicePx(5.0), DevicePx(7.0)));
+        assert_eq!(fragment.device_ink(&placements), shifted);
+        assert_eq!(fragment.device_subtree_ink(&placements), shifted);
+        assert_eq!(fragment.on_device_in(ink, &tree), shifted);
+        assert_eq!(
+            fragment.device_ink(&Placements::EMPTY),
+            ink,
+            "an anchor the placements do not resolve leaves the rectangle as it is"
+        );
+    }
+
+    #[test]
+    fn a_fragment_stays_within_four_cache_lines() {
+        assert!(size_of::<super::Fragment>() <= 256);
+    }
 
     #[test]
     fn flags_union_and_remove_independently() {

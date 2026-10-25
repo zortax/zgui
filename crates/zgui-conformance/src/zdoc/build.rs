@@ -160,6 +160,7 @@ fn fragments(store: &mut LayoutStore, tables: &mut Tables) {
     let mut build = zgui_layout::fragment::build::Tables {
         clips: &mut tables.clips,
         spatial: &mut tables.spatial,
+        drawn: &zgui_scene::Placements::EMPTY,
         device: DeviceStyle::default(),
         scroll: &scroll,
         placements: &[],

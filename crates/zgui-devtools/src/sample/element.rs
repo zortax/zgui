@@ -171,11 +171,15 @@ pub(crate) fn sample_element(window: &Window, node: NodeId, restyle: bool) -> Op
     // fragments of one box, and showing the first while saying how many there are is the honest
     // rendering: the panel is about one element, and the element genuinely has more than one box.
     let first = fragments.first().and_then(|key| layout.fragment(*key))?;
+    // Through the anchor alone, so the panel shows the box model as laid out, in device pixels.
+    // This keeps today's behaviour and ignores the element's own transform.
+    let placements = window.placements();
     let boxes = BoxModel {
-        border: first.border_box,
-        padding: first.padding_box,
-        content: first.content_box,
+        border: first.on_device(first.border_box, &placements),
+        padding: first.on_device(first.padding_box, &placements),
+        content: first.on_device(first.content_box, &placements),
     };
+    drop(placements);
 
     let style = if restyle {
         record.primary_style().map(declarations).unwrap_or_default()

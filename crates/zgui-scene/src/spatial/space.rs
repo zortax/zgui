@@ -25,9 +25,23 @@ impl SpatialTree {
     /// assert_eq!(tree.viewport(), SpatialId::VIEWPORT);
     /// assert_eq!(tree.resolve(SpatialId::VIEWPORT), Some(Matrix4::IDENTITY));
     /// ```
+    ///
+    /// Under the poison test mode the tree also holds the document's own coordinate system, a
+    /// child of the viewport — see [`SpatialTree::document`].
     pub fn with_viewport() -> Self {
         let mut tree = Self::new(SPATIAL_DOMAIN);
-        tree.root(PropertyOwner::VIEWPORT);
+        let viewport = tree.root(PropertyOwner::VIEWPORT);
+        let poison = crate::spatial::poison::origin();
+        if poison != 0.0 {
+            tree.establish(
+                PropertyOwner::DOCUMENT,
+                SpatialNode {
+                    parent: Some(viewport),
+                    local: Matrix4::translation(-poison, -poison, 0.0),
+                    anchoring: Anchoring::Scrolling,
+                },
+            );
+        }
         tree
     }
 
@@ -35,6 +49,34 @@ impl SpatialTree {
     pub fn viewport(&self) -> SpatialId {
         self.of(PropertyOwner::VIEWPORT)
             .unwrap_or(SpatialId::VIEWPORT)
+    }
+
+    /// The coordinate system the document's root box is laid out in.
+    ///
+    /// The node [`PropertyOwner::DOCUMENT`] established, which only the poison test mode
+    /// establishes, and the viewport otherwise. See [`poison`](crate::spatial::poison).
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::new(zgui_scene::SPATIAL_DOMAIN);
+    /// let viewport = tree.root(PropertyOwner::VIEWPORT);
+    /// assert_eq!(tree.document(), viewport);
+    ///
+    /// let document = tree.establish(
+    ///     PropertyOwner::DOCUMENT,
+    ///     SpatialNode {
+    ///         parent: Some(viewport),
+    ///         local: Matrix4::translation(-8.0, -8.0, 0.0),
+    ///         anchoring: Anchoring::Scrolling,
+    ///     },
+    /// );
+    /// assert_eq!(tree.document(), document);
+    /// ```
+    pub fn document(&self) -> SpatialId {
+        self.of(PropertyOwner::DOCUMENT)
+            .unwrap_or_else(|| self.viewport())
     }
 
     /// The coordinate system everything else is expressed in.
