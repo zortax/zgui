@@ -29,7 +29,7 @@ use crate::scene::resolve::Unresolved;
 use crate::shader::{FrameClock, ShaderParamsTable};
 use crate::spatial::{SpatialId, SpatialTree};
 
-pub use crate::scene::chunk::{ChunkPrims, ChunkSlot, ChunkUpload, TableHolds};
+pub use crate::scene::chunk::{ChunkNote, ChunkPrims, ChunkSlot, TableHolds};
 pub use crate::scene::depends::SpatialFault;
 pub use crate::scene::ordering::OrderOverlap;
 pub use crate::scene::primitives::Primitives;
@@ -134,10 +134,9 @@ pub struct Scene {
     /// Positions pushed under the open capture, awaiting the revision the encoding is stamped
     /// with: (kind, index in the frame array, index in the capture's lane).
     capture_stamped: Vec<(PrimitiveKind, u32, u32)>,
-    /// Chunks encoded since the notes were last cleared — see [`Scene::chunk_inserted`].
-    chunk_inserted: Vec<crate::scene::chunk::ChunkUpload>,
-    /// Chunk revisions dropped since the notes were last cleared.
-    chunk_retired: Vec<u64>,
+    /// Chunks encoded and dropped since the notes were last cleared, in note order — see
+    /// [`Scene::chunk_notes`].
+    chunk_notes: Vec<crate::scene::chunk::ChunkNote>,
     /// How far each chunk replayed away from where it was encoded, this frame, by revision.
     ///
     /// What lets a moved replay keep its resident bytes: the renderer serves the encode-position
@@ -292,8 +291,7 @@ impl Scene {
             remap: Remap::default(),
             provenance: Default::default(),
             capture_stamped: Vec::new(),
-            chunk_inserted: Vec::new(),
-            chunk_retired: Vec::new(),
+            chunk_notes: Vec::new(),
             chunk_offsets: rustc_hash::FxHashMap::default(),
             order: BoundsTree::new(),
             travel: Travels::new(),

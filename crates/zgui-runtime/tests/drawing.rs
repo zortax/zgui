@@ -19,7 +19,7 @@ use zgui_render::{
     TextureHandle, VectorBackend, VectorStatus,
 };
 use zgui_runtime::{App, AppError};
-use zgui_scene::Scene;
+use zgui_scene::{ChunkNote, Scene};
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 /// One vector item of a frame, reduced to what these cases ask about.
@@ -122,9 +122,11 @@ impl Renderer for Recorder {
             full: damage.is_full(),
             damaged: damage.bounds(),
             encoded_drawings: scene
-                .chunk_inserted()
+                .chunk_notes()
                 .iter()
-                .filter(|upload| !upload.prims.vectors.is_empty())
+                .filter(|note| {
+                    matches!(note, ChunkNote::Inserted { prims, .. } if !prims.vectors.is_empty())
+                })
                 .count(),
         });
         FrameOutcome::Presented(zgui_render::FrameStats {
