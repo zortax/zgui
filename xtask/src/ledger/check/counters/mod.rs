@@ -11,10 +11,14 @@
 //! stage has not been written yet from a counter whose producer was deleted, and it shrinks: a
 //! counter that has acquired a producer while still being listed is a violation too, so the promise
 //! is retired by the change that keeps it.
+//!
+//! The check also holds the release build: no normal dependency entry of a member turns the counters
+//! on. A crate feature that forwards to them is allowed, because an application can turn it off.
 
 mod awaiting;
 pub(crate) mod declared;
 mod produced;
+mod release;
 pub(crate) mod shipped;
 
 use crate::ledger::report::Report;
@@ -23,6 +27,9 @@ use crate::ledger::tree::Tree;
 /// Runs the check.
 pub(crate) fn check(tree: &Tree) -> Report {
     let mut report = Report::clean();
+    for member in &tree.members {
+        release::check(&member.name, &member.manifest, &mut report);
+    }
     let Some(declaration) = declared::find(tree) else {
         report.skip("no crate in this tree declares a counter set".to_owned());
         return report;
