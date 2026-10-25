@@ -1,5 +1,6 @@
 //! The spatial tree: which coordinate system a box's content is drawn in, and what it resolves to.
 
+use smallvec::SmallVec;
 use zgui_geom::Matrix4;
 
 use crate::spatial::id::{PropertyOwner, SPATIAL_DOMAIN, SpatialId};
@@ -184,6 +185,12 @@ impl SpatialTree {
     /// the chain has been given back: a name that no longer resolves has no answer rather than a
     /// plausible one.
     ///
+    /// The product is composed from the root down: a root resolves to its own transform, and every
+    /// other node to its own transform followed by its parent's answer. [`Placements`] composes in
+    /// the same order from each parent's kept answer, so the two agree in every bit.
+    ///
+    /// [`Placements`]: crate::Placements
+    ///
     /// ```
     /// use zgui_arena::DomainId;
     /// use zgui_geom::Matrix4;
@@ -200,9 +207,16 @@ impl SpatialTree {
     /// assert_eq!(tree.resolve(inner), Some(Matrix4::translation(14.0, 0.0, 0.0)));
     /// ```
     pub fn resolve(&self, id: SpatialId) -> Option<Matrix4> {
-        self.fold_up(id, Matrix4::IDENTITY, |matrix, node| {
-            matrix.then(&node.local)
-        })
+        let mut chain = SmallVec::<[&Matrix4; 8]>::new();
+        let mut next = Some(id);
+        while let Some(current) = next {
+            let node = self.get(current)?;
+            chain.push(&node.local);
+            next = node.parent;
+        }
+        let mut down = chain.into_iter().rev();
+        let root = *down.next()?;
+        Some(down.fold(root, |above, local| local.then(&above)))
     }
 
     /// The matrix mapping `id`'s own coordinates into `ancestor`'s.
