@@ -20,6 +20,8 @@
 //! equivalent and are not, and the difference is only visible in the frame where something under an
 //! untouched blurred panel animates.
 
+use core::cell::Cell;
+
 use zgui_bits::{DamageSet, Dirty};
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
@@ -163,6 +165,7 @@ pub fn rebuild_in(
         passes: split::current(),
         refused: None,
         chase: Chase::default(),
+        resolved: [Cell::new(None), Cell::new(None)],
     };
     for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
@@ -598,6 +601,20 @@ struct Pass<'a, 'b, D: FrameDirty> {
     refused: Option<BoxKey>,
     /// Which children of the box being visited are visited because a content space above moved.
     chase: Chase,
+    /// The last two coordinate systems [`Pass::resolve`] answered, kept while the tree holds
+    /// still.
+    resolved: [Cell<Option<Resolved>>; 2],
+}
+
+/// One coordinate system's matrix, under the spatial tree's write stamp it was resolved at.
+#[derive(Clone, Copy, Debug)]
+struct Resolved {
+    /// The coordinate system.
+    id: zgui_scene::SpatialId,
+    /// [`PropertyTree::writes`](zgui_scene::PropertyTree::writes) when it was resolved.
+    stamp: u64,
+    /// What [`SpatialTree::resolve`](zgui_scene::SpatialTree::resolve) gave.
+    matrix: Option<zgui_geom::Matrix4>,
 }
 
 impl<D: FrameDirty> Pass<'_, '_, D> {
@@ -627,7 +644,40 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         if anchor == self.anchors.root {
             return through(self.anchors.now, rect);
         }
-        through(self.tables.spatial.resolve(anchor), rect)
+        through(self.resolve(anchor), rect)
+    }
+
+    /// What `id` resolves to in the tree this walk writes.
+    ///
+    /// The answer [`SpatialTree::resolve`](zgui_scene::SpatialTree::resolve) gives, in every bit.
+    /// The last two answers are kept under the tree's
+    /// [write stamp](zgui_scene::PropertyTree::writes): the rows of one content space name the
+    /// same anchor, and their clip chains the space above it, so each is resolved once.
+    fn resolve(&self, id: zgui_scene::SpatialId) -> Option<zgui_geom::Matrix4> {
+        let spatial = &*self.tables.spatial;
+        let stamp = spatial.writes();
+        let [last, before] = &self.resolved;
+        let kept =
+            |held: Option<Resolved>| held.filter(|held| held.id == id && held.stamp == stamp);
+        let matrix = match kept(last.get()).or_else(|| kept(before.get())) {
+            Some(held) => held.matrix,
+            None => {
+                let matrix = spatial.resolve(id);
+                before.set(last.get());
+                last.set(Some(Resolved { id, stamp, matrix }));
+                matrix
+            }
+        };
+        debug_assert!(
+            {
+                let bits = |matrix: Option<zgui_geom::Matrix4>| {
+                    matrix.map(|matrix| matrix.columns.map(|column| column.map(f32::to_bits)))
+                };
+                bits(matrix) == bits(spatial.resolve(id))
+            },
+            "the kept matrix of {id:?} is not the one the tree resolves"
+        );
+        matrix
     }
 
     /// `rect`, measured in `anchor` as the standing fragments were composed, in device pixels.
@@ -668,9 +718,9 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// transformed subtree interned its rectangles in that subtree's coordinates and the subtree
     /// moves without the links being interned again.
     fn admits(&self, clip: ClipId) -> Rect<DevicePx, Device> {
-        let tables = &*self.tables;
-        let spatial = &tables.spatial;
-        tables.clips.bounds_placed(clip, &|id| spatial.resolve(id))
+        self.tables
+            .clips
+            .bounds_placed(clip, &|id| self.resolve(id))
     }
 
     /// What a fragment's chain admits, as a region damage may be cut to.
@@ -1030,8 +1080,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         if rect.is_empty() || from == to {
             return rect;
         }
-        let spatial = &*self.tables.spatial;
-        let (Some(from), Some(to)) = (spatial.resolve(from), spatial.resolve(to)) else {
+        let (Some(from), Some(to)) = (self.resolve(from), self.resolve(to)) else {
             return rect;
         };
         if let (Some(from), Some(to)) = (from.plane_translation(), to.plane_translation()) {
