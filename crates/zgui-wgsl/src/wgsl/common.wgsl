@@ -195,6 +195,11 @@ fn bounds_size(b: Bounds) -> vec2<f32> {
     return vec2<f32>(b.w, b.h);
 }
 
+// The same bounds, measured from `origin`.
+fn bounds_from(b: Bounds, origin: vec2<f32>) -> Bounds {
+    return Bounds(b.x - origin.x, b.y - origin.y, b.w, b.h);
+}
+
 fn rgba_of(c: Rgba) -> vec4<f32> {
     return vec4<f32>(c.r, c.g, c.b, c.a);
 }
@@ -240,10 +245,19 @@ fn inflated_corner(vertex: u32, b: Bounds) -> vec2<f32> {
     return origin + unit_corner(vertex) * size;
 }
 
+// The same corner as `inflated_corner`, measured from the bounds' origin.
+//
+// A fragment stage reads its point as this offset, interpolated, plus the origin, flat. The
+// interpolated part is then as small as the primitive, so a primitive far from the origin of its
+// space keeps the precision it has near it.
+fn inflated_offset(vertex: u32, b: Bounds) -> vec2<f32> {
+    return unit_corner(vertex) * (bounds_size(b) + vec2<f32>(2.0)) - vec2<f32>(1.0);
+}
+
 // A resolved remap entry: the arena slot in the low bits, and above them the index of the frame
 // chunk offset the instance is drawn shifted by. The offsets are what let a chunk that merely
 // moved keep its resident bytes — the geometry shifts here, in the vertex stage, and a fragment
-// stage comparing against encode-space fields subtracts the same shift from its sample point.
+// stage comparing against encode-space fields takes its sample point without the shift.
 // The widths mirror SLOT_BITS in buffer/persist.rs.
 const REMAP_SLOT_MASK: u32 = 0xFFFFFFu;
 const REMAP_OFFSET_SHIFT: u32 = 24u;

@@ -37,10 +37,12 @@ const GRAYSCALE: u32 = 1u;
 
 struct SpriteVarying {
     @builtin(position) position: vec4<f32>,
+    // The point, from the sprite's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
     @location(1) texel: vec2<f32>,
     @location(2) @interpolate(flat) instance: u32,
-    @location(3) @interpolate(flat) shift: vec2<f32>,
+    // The sprite's origin in that space.
+    @location(3) @interpolate(flat) origin: vec2<f32>,
 }
 
 // Where in the atlas a unit-square corner reads from, in texels.

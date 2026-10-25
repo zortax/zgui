@@ -28,9 +28,9 @@ const DECORATION_DOUBLE: u32 = 4u;
 
 struct DecorationVarying {
     @builtin(position) position: vec4<f32>,
+    // The point, from the decoration's origin.
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) instance: u32,
-    @location(2) @interpolate(flat) shift: vec2<f32>,
 }
 
 @vertex
@@ -45,9 +45,8 @@ fn vs_decoration(
     let local = inflated_corner(vertex, decoration.bounds) + shift;
     var out: DecorationVarying;
     out.position = to_clip_position(local, decoration.transform);
-    out.local = local;
+    out.local = inflated_offset(vertex, decoration.bounds);
     out.instance = slot;
-    out.shift = shift;
     return out;
 }
 
@@ -59,9 +58,8 @@ fn fs_decoration(in: DecorationVarying) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0);
     }
 
-    let origin = bounds_origin(decoration.bounds);
     let size = bounds_size(decoration.bounds);
-    let local = in.local - in.shift - origin;
+    let local = in.local;
     let thickness = max(decoration.thickness, 1.0);
     let style = decoration.style;
 

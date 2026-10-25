@@ -30,9 +30,11 @@ struct Shadow {
 
 struct ShadowVarying {
     @builtin(position) position: vec4<f32>,
+    // The point, from the shadow's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) instance: u32,
-    @location(2) @interpolate(flat) shift: vec2<f32>,
+    // The shadow's origin in that space.
+    @location(2) @interpolate(flat) origin: vec2<f32>,
 }
 
 @vertex
@@ -49,9 +51,9 @@ fn vs_shadow(
     let local = inflated_corner(vertex, shadow.bounds) + shift;
     var out: ShadowVarying;
     out.position = to_clip_position(local, shadow.transform);
-    out.local = local;
+    out.local = inflated_offset(vertex, shadow.bounds);
     out.instance = slot;
-    out.shift = shift;
+    out.origin = bounds_origin(shadow.bounds);
     return out;
 }
 
@@ -112,11 +114,13 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     }
 
     // The blurred shape: the element box offset and grown by the spread for a drop shadow, and the
-    // hole the shadow leaves open for an inset one.
-    let casting = shadow.shape_bounds;
+    // hole the shadow leaves open for an inset one. All distances are from the shadow's origin, so
+    // they keep their precision far from the origin of the space.
+    let casting = bounds_from(shadow.shape_bounds, in.origin);
+    let element = bounds_from(shadow.element_bounds, in.origin);
     let half_size = bounds_size(casting) * 0.5;
     let center = bounds_origin(casting) + half_size;
-    let local = in.local - in.shift;
+    let local = in.local;
     let center_to_point = local - center;
     let corner = pick_corner_radii(center_to_point, shadow.radii);
 
@@ -150,13 +154,13 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     if shadow.inset != 0u {
         // An inset shadow is the complement of the blurred hole, clipped to the element it sits in.
         alpha = 1.0 - alpha;
-        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii, shadow.shape);
+        let element_distance = quad_sdf(local, element, shadow.element_radii, shadow.shape);
         alpha *= saturate(0.5 - element_distance);
     } else {
         // An outer shadow is never painted within the box that casts it. Behind a filled box the
         // difference cannot be seen, but a box with no fill of its own — a field that is a hole in
         // the page — would otherwise wear its own shadow as a wash over its whole interior.
-        let element_distance = quad_sdf(local, shadow.element_bounds, shadow.element_radii, shadow.shape);
+        let element_distance = quad_sdf(local, element, shadow.element_radii, shadow.shape);
         alpha *= saturate(0.5 + element_distance);
     }
 

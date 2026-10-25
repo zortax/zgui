@@ -39,9 +39,11 @@ const BORDER_DOTTED: u32 = 2u;
 
 struct QuadVarying {
     @builtin(position) position: vec4<f32>,
+    // The point, from the quad's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) instance: u32,
-    @location(2) @interpolate(flat) shift: vec2<f32>,
+    // The quad's origin in that space.
+    @location(2) @interpolate(flat) origin: vec2<f32>,
 }
 
 @vertex
@@ -56,9 +58,9 @@ fn vs_quad(
     let local = inflated_corner(vertex, quad.bounds) + shift;
     var out: QuadVarying;
     out.position = to_clip_position(local, quad.transform);
-    out.local = local;
+    out.local = inflated_offset(vertex, quad.bounds);
     out.instance = slot;
-    out.shift = shift;
+    out.origin = bounds_origin(quad.bounds);
     return out;
 }
 
@@ -74,13 +76,13 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let point = in.local - in.shift;
+    let point = in.origin + in.local;
     let paint_origin = vec2<f32>(quad.paint_origin.x, quad.paint_origin.y);
     let background = paint_color(quad.fill, point, paint_origin);
 
     let size = bounds_size(quad.bounds);
     let half_size = size * 0.5;
-    let center_to_point = point - (bounds_origin(quad.bounds) + half_size);
+    let center_to_point = in.local - half_size;
 
     // Half a device pixel is the largest distance between a pixel's centre and an edge that covers
     // it. The distances below are in the primitive's own space, so under a scale the band is
