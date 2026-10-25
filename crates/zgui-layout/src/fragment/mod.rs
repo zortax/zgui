@@ -434,6 +434,7 @@ impl Fragment {
     /// measured beside them to device pixels. The viewport anchor costs one comparison. Another
     /// anchor that resolves to the identity costs one slot read and no arithmetic. An anchor
     /// `placements` does not resolve leaves the rectangle as it is.
+    #[inline]
     pub fn on_device(
         &self,
         rect: Rect<DevicePx, Device>,

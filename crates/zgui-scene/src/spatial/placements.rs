@@ -30,7 +30,7 @@
 //! ```
 
 use zgui_arena::Generation;
-use zgui_geom::Matrix4;
+use zgui_geom::{Device, DevicePx, Matrix4, Rect};
 
 use crate::spatial::id::SpatialId;
 use crate::spatial::space::SpatialTree;
@@ -61,6 +61,12 @@ struct Slot {
     /// consumer placing a rectangle per fragment per frame wants to skip the arithmetic rather
     /// than perform a transform that lands where it started.
     identity: bool,
+    /// The translation in the plane that matrix is, when it is one, decided at the same time.
+    ///
+    /// Nearly every coordinate system that does move is a scroll container's content, which only
+    /// translates. A consumer placing a rectangle per fragment then adds four numbers and does not
+    /// test the matrix again.
+    plane: Option<(f32, f32)>,
 }
 
 impl Default for Slot {
@@ -69,6 +75,7 @@ impl Default for Slot {
             occupant: None,
             matrix: Matrix4::IDENTITY,
             identity: true,
+            plane: Some((0.0, 0.0)),
         }
     }
 }
@@ -173,6 +180,7 @@ impl Placements {
                 occupant: Some(id.generation()),
                 matrix,
                 identity: matrix == Matrix4::IDENTITY,
+                plane: matrix.plane_translation(),
             },
             None => Slot::default(),
         }
@@ -205,6 +213,41 @@ impl Placements {
         (slot.occupant == Some(id.generation()) && !slot.identity).then_some(&slot.matrix)
     }
 
+    /// `rect`, measured in the coordinate system `id` names, where the device shows it.
+    ///
+    /// The rectangle as it is where the slot has moved on or the answer is the identity. Equal in
+    /// bits to [`transformed_bounds`](zgui_geom::transformed_bounds) through
+    /// [`Placements::moves`], and a translation in the plane costs no test of the matrix.
+    ///
+    /// ```
+    /// use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
+    /// use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let moved = Matrix4::translation(8.0, -3.0, 0.0);
+    /// let card = tree.space_of(tree.viewport(), owner, OwnSpace::of(Some(moved), None, false));
+    /// let rect: Rect<DevicePx, Device> =
+    ///     Rect::new(Point::new(DevicePx(1.0), DevicePx(2.0)), Size::new(DevicePx(4.0), DevicePx(5.0)));
+    ///
+    /// let placements = Placements::of(&tree);
+    /// assert_eq!(placements.place(card, rect), zgui_geom::transformed_bounds(&moved, rect));
+    /// assert_eq!(placements.place(tree.viewport(), rect), rect);
+    /// ```
+    #[inline]
+    pub fn place(&self, id: SpatialId, rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
+        let Some(slot) = self.slots.get(id.index() as usize) else {
+            return rect;
+        };
+        if slot.occupant != Some(id.generation()) || slot.identity {
+            return rect;
+        }
+        match slot.plane {
+            Some((x, y)) => zgui_geom::translated_bounds(x, y, rect),
+            None => zgui_geom::transformed_bounds(&slot.matrix, rect),
+        }
+    }
+
     /// Every slot's matrix, in slot order, with the identity where nothing is live.
     ///
     /// What a shader's storage buffer is filled from: a primitive names its coordinate system by
@@ -221,5 +264,74 @@ impl Placements {
     /// Whether nothing is addressed.
     pub fn is_empty(&self) -> bool {
         self.slots.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size, transformed_bounds};
+
+    use super::Placements;
+    use crate::{OwnSpace, PropertyOwner, SpatialTree};
+
+    #[test]
+    fn a_placed_rectangle_is_the_one_the_matrix_gives() {
+        let mut tree = SpatialTree::with_viewport();
+        let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
+        let space = |matrix| OwnSpace::of(Some(matrix), None, false);
+        let still = tree.space_of(tree.viewport(), owner(2), space(Matrix4::IDENTITY));
+        let slid = tree.space_of(
+            tree.viewport(),
+            owner(3),
+            space(Matrix4::translation(0.1, -22_000.0, 0.0)),
+        );
+        let scaled = tree.space_of(slid, owner(4), space(Matrix4::scale(2.0, 0.5, 1.0)));
+        let placements = Placements::of(&tree);
+        let bits = |rect: Rect<DevicePx, Device>| {
+            [
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height,
+            ]
+            .map(|v| v.0.to_bits())
+        };
+        for rect in [
+            Rect::new(
+                Point::new(DevicePx(0.3), DevicePx(22_040.0)),
+                Size::new(DevicePx(1265.0), DevicePx(22.0)),
+            ),
+            Rect::new(
+                Point::new(DevicePx(-0.0), DevicePx(5.0)),
+                Size::new(DevicePx(0.0), DevicePx(-1.0)),
+            ),
+            Rect::new(
+                Point::new(DevicePx(f32::NAN), DevicePx(1.0)),
+                Size::new(DevicePx(2.0), DevicePx(3.0)),
+            ),
+        ] {
+            for id in [tree.viewport(), still, slid, scaled] {
+                let expected = match placements.moves(id) {
+                    Some(matrix) => transformed_bounds(matrix, rect),
+                    None => rect,
+                };
+                assert_eq!(
+                    bits(placements.place(id, rect)),
+                    bits(expected),
+                    "{id:?} {rect:?}"
+                );
+            }
+        }
+        // A name its box gave back answers nothing, for `place` as for `moves`.
+        tree.release(owner(4));
+        tree.release(owner(3));
+        tree.recycle();
+        let placements = Placements::of(&tree);
+        let rect = Rect::new(
+            Point::new(DevicePx(1.0), DevicePx(2.0)),
+            Size::new(DevicePx(3.0), DevicePx(4.0)),
+        );
+        assert!(placements.moves(slid).is_none());
+        assert_eq!(placements.place(slid, rect), rect);
     }
 }
