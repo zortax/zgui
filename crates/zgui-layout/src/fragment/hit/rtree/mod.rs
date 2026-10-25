@@ -24,8 +24,9 @@
 //! still lies inside its own leaf's envelope can be rewritten where it lies: every ancestor already
 //! contains that envelope, so every ancestor already contains the new rectangle, and no envelope
 //! anywhere needs touching. An entry that has left that envelope but still meets it has stayed
-//! among the same neighbours, so it keeps its leaf and the envelopes above it are recomputed. Only
-//! an entry that has gone somewhere else entirely is searched for a new home. See
+//! among the same neighbours, so it keeps its leaf and the envelopes above it are recomputed. An
+//! entry that only grew where it was also keeps its leaf. Only an entry that has gone somewhere
+//! else entirely is searched for a new home. See
 //! [`place::at`](place::at) for the whole of that reasoning; between them the first two answers are
 //! what a scrolled document does to this structure between two frames.
 
