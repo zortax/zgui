@@ -920,3 +920,44 @@ fn assert_hit_follows_paint(store: &LayoutStore, frame: &support::Frame) {
         }
     }
 }
+
+#[test]
+fn a_z_index_restyle_reorders_the_children_the_fragment_walk_remembered_in_layout_order() {
+    let _recording = Recording::begin();
+    let mut fixture = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("a"),
+            Element::new("b"),
+            Element::new("c"),
+        ]),
+        "root { display: block; width: 200px }
+         a, b, c { display: block; position: relative; height: 20px }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 200.0);
+    let root = store.root().expect("a root");
+    assert!(zgui_layout::fragment::stacking::children_in_layout_order(
+        &store, root
+    ));
+
+    let a = element(&fixture, "a");
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.set_style_property(a, "z-index", Some("1"));
+    });
+    support::relayout(&mut frame, &mut store, &mut content, 200.0, 200.0);
+    assert!(
+        !zgui_layout::fragment::stacking::children_in_layout_order(&store, root),
+        "the root kept a layout order its children no longer paint in"
+    );
+    let order = zgui_layout::fragment::stacking::paint_order(&store, root);
+    let place = |name| {
+        let key = boxes(&store, &fixture, name)[0];
+        order.iter().position(|&it| it == key).expect("painted")
+    };
+    assert!(
+        place("b") < place("c") && place("c") < place("a"),
+        "`a` does not paint last after its z-index"
+    );
+    assert_hit_follows_paint(&store, &frame);
+}

@@ -300,7 +300,13 @@ impl LayoutStore {
         if crate::style::same_cascade(&node.style, style) {
             return false;
         }
+        let sorted = crate::fragment::stacking::sort_inputs(node);
         node.style = style.clone();
+        if crate::fragment::stacking::sort_inputs(node) != sorted
+            && let Some(parent) = node.parent
+        {
+            self.forget_layout_order(parent);
+        }
         let slot = self.styles.intern(style);
         if let Some(held) = self.style_slots.replace(key, Some(slot)) {
             self.styles.release(held);
@@ -537,8 +543,23 @@ impl LayoutStore {
     }
 
     /// The record for one box, for modification.
+    ///
+    /// The write can change the box's child list and where the box sorts among its siblings, so
+    /// the box and its parent forget whether their children paint in layout order.
     pub fn get_mut(&mut self, key: BoxKey) -> Option<&mut BoxNode> {
-        self.boxes.get_mut(slot(key))
+        if let Some(parent) = self.boxes.get(slot(key))?.parent {
+            self.forget_layout_order(parent);
+        }
+        let node = self.boxes.get_mut(slot(key))?;
+        node.layout_order.clear();
+        Some(node)
+    }
+
+    /// Clears the memo of whether `key`'s children paint in layout order.
+    fn forget_layout_order(&mut self, key: BoxKey) {
+        if let Some(node) = self.boxes.get_mut(slot(key)) {
+            node.layout_order.clear();
+        }
     }
 
     /// The record for one box, which must exist.
@@ -558,6 +579,9 @@ impl LayoutStore {
     /// Removes one box. Its record stays readable until the frame is recycled.
     pub fn remove(&mut self, key: BoxKey) -> bool {
         self.retired_boxes.push(key);
+        if let Some(parent) = self.get(key).and_then(|node| node.parent) {
+            self.forget_layout_order(parent);
+        }
         // The pieces this box was painted as cease to exist with it, and everything that named
         // them — the read-extent registry, the element's own list — has to be told.
         self.clear_fragments(key);
@@ -599,6 +623,9 @@ impl LayoutStore {
 
     /// Records where an out-of-flow box was written.
     pub(crate) fn set_declared(&mut self, key: BoxKey, declared: Option<Declared>) {
+        if let Some(parent) = self.get(key).and_then(|node| node.parent) {
+            self.forget_layout_order(parent);
+        }
         self.declared.replace(key, declared);
     }
 
