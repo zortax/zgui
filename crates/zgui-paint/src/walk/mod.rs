@@ -631,21 +631,34 @@ impl Pass<'_, '_> {
     ///
     /// `rect` is measured in `fragment`'s anchor, so the build's reading is that rectangle put on
     /// the device through the anchor.
+    ///
+    /// A fragment drawn in its anchor's own system, which is every untransformed box inside a
+    /// content space, gets the same answer from both readings, so it is put on the device once.
+    #[inline]
     fn where_drawn(
         &self,
         fragment: &Fragment,
         rect: Rect<DevicePx, Device>,
     ) -> Rect<DevicePx, Device> {
-        match self.input.placements {
-            Some(placements) => fragment.on_device(rect, placements).union(
-                zgui_layout::fragment::transform::placed::onto_device(
-                    rect,
-                    fragment.transform,
-                    placements,
-                ),
-            ),
-            None => rect,
+        let Some(placements) = self.input.placements else {
+            return rect;
+        };
+        let built = fragment.on_device(rect, placements);
+        if fragment.anchor != zgui_scene::SpatialId::VIEWPORT
+            && fragment.transform == Some(fragment.anchor)
+        {
+            // The union of `built` with itself, in bits: the rectangle its own corners give.
+            return if built.is_empty() {
+                built
+            } else {
+                Rect::from_corners(built.origin, built.far_corner())
+            };
         }
+        built.union(zgui_layout::fragment::transform::placed::onto_device(
+            rect,
+            fragment.transform,
+            placements,
+        ))
     }
 
     /// `rect`, measured in `fragment`'s anchor, in device pixels.
