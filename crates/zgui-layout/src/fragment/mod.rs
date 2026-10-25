@@ -18,6 +18,7 @@ pub mod filter;
 pub mod hit;
 pub mod index;
 pub mod ink;
+pub mod scroll_nodes;
 pub mod stacking;
 pub mod sticky;
 pub mod transform;
@@ -185,13 +186,23 @@ impl FragmentFlags {
     /// paints. Its own ink does not hold the pixels the subtree paints outside it, which are all
     /// of them when the box paints nothing.
     pub const GROUPS_SUBTREE: Self = Self(1 << 10);
+    /// This scroll container draws its children in a coordinate system of its own, which its
+    /// scroll offset moves.
+    ///
+    /// Set when the box is placed. Read where the box is placed again: a box that starts or stops
+    /// doing so hands its children another coordinate system, so they are composed again.
+    pub const SCROLLS_CONTENT: Self = Self(1 << 11);
     /// The flags the unwind writes from the subtree, which a comparison of the box itself ignores.
     pub const FOLDED: Self = Self::HAS_BLENDING_DESCENDANT.union(Self::READS_BACKDROP_BELOW);
     /// The flags a comparison of the box's geometry ignores.
     ///
-    /// The subtree's flags, and [`FragmentFlags::GROUPS_SUBTREE`]: a change of that one owes the
-    /// subtree's ink, which the repaint mark that comes with it already damages.
-    pub const UNCOMPARED: Self = Self::FOLDED.union(Self::GROUPS_SUBTREE);
+    /// The subtree's flags, [`FragmentFlags::GROUPS_SUBTREE`] and
+    /// [`FragmentFlags::SCROLLS_CONTENT`]. A change of the first owes the subtree's ink, which the
+    /// repaint mark that comes with it already damages. A change of the second composes every
+    /// child again, and the children damage what they draw.
+    pub const UNCOMPARED: Self = Self::FOLDED
+        .union(Self::GROUPS_SUBTREE)
+        .union(Self::SCROLLS_CONTENT);
     /// The flags that say this fragment or one below it reads what is painted behind it.
     pub const READS_BACKDROP: Self = Self::HAS_BLENDING_DESCENDANT
         .union(Self::FILTERS_BACKDROP)
@@ -269,7 +280,11 @@ pub struct Fragment {
     /// nothing walks a fragment whose matrix changed under it — see
     /// [`hit::HitEntry::envelope`](crate::fragment::hit::HitEntry::envelope).
     pub local_ink: Rect<DevicePx, Device>,
-    /// Union of [`Fragment::ink`] over this fragment and every fragment below it.
+    /// Union of [`Fragment::ink`] over this fragment and every fragment below it, in this
+    /// fragment's [`Fragment::anchor`].
+    ///
+    /// A fragment below that measures its ink in another anchor — the content space of a scroll
+    /// container, see [`scroll_nodes`] — is put into this one before the union is taken.
     ///
     /// This is what lets a paint pass skip a whole clean subtree at once instead of descending it
     /// to find out that nothing in it intersects the damage.
@@ -292,10 +307,13 @@ pub struct Fragment {
     pub transform: Option<SpatialId>,
     /// The coordinate system [`Fragment::ink`] and [`Fragment::subtree_ink`] are measured in.
     ///
-    /// Those two rectangles are device pixels only after this system's matrix is applied. Today it
-    /// is the document's root space, which resolves to the identity unless the poison test mode is
-    /// on — see [`zgui_scene::spatial::poison`]. Use [`Fragment::on_device`] and the accessors
-    /// beside it, never the raw rectangles, wherever device pixels are meant.
+    /// Those two rectangles are device pixels only after this system's matrix is applied. It is
+    /// the document's root space, which resolves to the identity unless the poison test mode is
+    /// on — see [`zgui_scene::spatial::poison`] — or the content space of the nearest scroll
+    /// container above that draws its content in one — see [`scroll_nodes`]. Use
+    /// [`Fragment::on_device`] and the accessors beside it, never the raw rectangles, wherever
+    /// device pixels are meant. Two fragments' raw rectangles compare only when they name the
+    /// same anchor.
     pub anchor: SpatialId,
     /// A fingerprint of the matrix that coordinate system resolved to when this was composed.
     ///

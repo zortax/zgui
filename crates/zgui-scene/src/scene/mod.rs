@@ -215,7 +215,10 @@ pub(crate) struct ClipCull {
     space: u32,
     /// The clip table's version when it was read.
     version: crate::table::TableVersion,
-    /// What [`ClipTable::bounds_in`] gave.
+    /// The spatial tree's write stamp when it was read, because a link from a content system's
+    /// container is carried by the matrices.
+    stamp: u64,
+    /// What [`ClipTable::bounds_in_carried`] gave.
     admitted: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
 }
 

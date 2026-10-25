@@ -1339,6 +1339,19 @@ impl Window {
             &self.scene.spatial,
             watching.then_some(&mut self.moved_spaces),
         );
+        // A content space that moved only because its container scrolled moves nothing the
+        // accessibility tree states: every node inside a container is measured relative to it,
+        // and the container's own node was marked by the scroll.
+        if !self.moved_spaces.is_empty() {
+            let mut moved = self.moved_spaces.clone();
+            moved.sort_unstable();
+            let spatial = &self.scene.spatial;
+            self.moved_spaces.retain(|&id| {
+                spatial
+                    .outside_content(id)
+                    .is_none_or(|outside| moved.binary_search(&outside).is_ok())
+            });
+        }
     }
 
     /// Re-tests what is under a pointer that has not moved.

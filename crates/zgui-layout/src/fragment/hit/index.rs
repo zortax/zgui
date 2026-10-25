@@ -84,6 +84,13 @@ impl HitIndex {
         self.generation
     }
 
+    /// Records that a coordinate system some entries are filed in moved, though no entry did.
+    ///
+    /// What is under a stationary pointer then changed, so the generation moves.
+    pub fn note_space_moved(&mut self) {
+        self.generation += 1;
+    }
+
     /// How many entries have been touched since the last bulk build.
     pub fn churn(&self) -> u32 {
         self.churn

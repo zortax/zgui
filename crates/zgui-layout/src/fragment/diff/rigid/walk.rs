@@ -91,6 +91,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
     ) {
         if T::MOVES {
             counter::bump(Counter::NodesVisited);
+            counter::bump(Counter::FragmentBoxesVisited);
             if !self.scrolls {
                 counter::bump(Counter::BoxesShifted);
             }

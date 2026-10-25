@@ -20,7 +20,7 @@ use zgui_scene::Content;
 use crate::fragment::diff::damage::{absorb, overlaps, pairwise_disjoint};
 use crate::fragment::diff::dirty::FrameDirty;
 use crate::fragment::diff::{Folded, Pass};
-use crate::fragment::transform;
+use crate::fragment::{FragKey, FragmentFlags, transform};
 
 /// Whether `matrix` keeps every rectangle upright and the right way round.
 ///
@@ -58,6 +58,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// Rewrites one box's pieces under `outer`, then everything below it.
     fn rematrix_box(&mut self, key: BoxKey, outer: Option<Matrix4>) -> Folded {
         counter::bump(Counter::NodesVisited);
+        counter::bump(Counter::FragmentBoxesVisited);
         let scale = self.tables.device.scale;
         let first = self.store.fragments_of_box(key).first().copied();
         // The same matrix the composing walk arrives at: the box's own transform, or the one an
@@ -109,11 +110,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             }
         }
 
+        // A scroll container that draws its children in a content space hands them that space,
+        // which already resolves through `matrix`. So they are carried under no matrix, and what
+        // they fold up is put into this box's anchor through the space's matrix and then `matrix`.
+        let into_anchor = self.content_matrix(key, first).map(|local| match matrix {
+            Some(matrix) => local.then(&matrix),
+            None => local,
+        });
+        let below_matrix = if into_anchor.is_some() { None } else { matrix };
+
         let mut folded = self.cached(key);
         let mut disjoint = true;
         let mut position = 0;
         while let Some(&child) = self.store.node(key).children.get(position) {
-            let below = self.rematrix_box(child, matrix);
+            let mut below = self.rematrix_box(child, below_matrix);
+            if let Some(into) = into_anchor {
+                below.subtree_ink = transform::transformed_bounds(&into, below.subtree_ink);
+            }
             disjoint &= below.disjoint;
             inks.push(below.subtree_ink);
             if first.is_none() {
@@ -145,5 +158,17 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         folded.subtree_ink = subtree_ink;
         folded.disjoint = disjoint;
         folded
+    }
+
+    /// The matrix of the content space `key` draws its children in, when its first piece `first`
+    /// says it draws them in one.
+    fn content_matrix(&self, key: BoxKey, first: Option<FragKey>) -> Option<Matrix4> {
+        let fragment = self.store.fragment(first?)?;
+        if !fragment.flags.contains(FragmentFlags::SCROLLS_CONTENT) {
+            return None;
+        }
+        let spatial = &*self.tables.spatial;
+        let id = spatial.of(zgui_scene::PropertyOwner::of(key).content())?;
+        spatial.get(id).map(|node| node.local)
     }
 }

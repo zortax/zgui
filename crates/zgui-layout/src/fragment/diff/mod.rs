@@ -161,6 +161,8 @@ pub fn rebuild_in(
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
         // decided before the frame and must not change part-way through one.
         passes: split::current(),
+        scroll_nodes: crate::fragment::scroll_nodes::enabled(),
+        refused: None,
     };
     for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
@@ -203,7 +205,9 @@ pub fn rebuild_in(
     // and must not have it taken away again; and given back rather than left, because a name that is
     // never returned is a slot in the dense buffer that is never reused.
     for gone in store.drain_retired_boxes() {
-        tables.spatial.release(zgui_scene::PropertyOwner::of(gone));
+        let owner = zgui_scene::PropertyOwner::of(gone);
+        tables.spatial.release(owner);
+        tables.spatial.release(owner.content());
     }
     // Painting order is a property of the whole document, so a fragment that did not exist before
     // has no place in it and no incremental update can invent one. That, and an index that has been
@@ -407,6 +411,46 @@ impl Admitted {
     }
 }
 
+/// What a box held before this walk, read off its first fragment before the walk rewrites it.
+#[derive(Clone, Copy, Debug)]
+struct Held {
+    /// The coordinate system its own content was drawn in.
+    transform: Option<zgui_scene::SpatialId>,
+    /// A fingerprint of what that system resolved to.
+    transform_hash: u64,
+    /// Its flags.
+    flags: FragmentFlags,
+    /// Whether its whole subtree moved rigidly.
+    rigid: bool,
+    /// Its padding box, which is a scroll container's port.
+    padding_box: Rect<DevicePx, Device>,
+    /// The coordinate system its ink was measured in.
+    anchor: zgui_scene::SpatialId,
+}
+
+impl Held {
+    /// What `fragment` holds.
+    fn of(fragment: &crate::fragment::Fragment) -> Self {
+        Self {
+            transform: fragment.transform,
+            transform_hash: fragment.transform_hash,
+            flags: fragment.flags,
+            rigid: fragment.subtree_rigid,
+            padding_box: fragment.padding_box,
+            anchor: fragment.anchor,
+        }
+    }
+}
+
+/// The content space a scroll container draws its children in.
+#[derive(Clone, Copy, Debug)]
+struct ContentSpace {
+    /// Its name.
+    id: zgui_scene::SpatialId,
+    /// How far its matrix moved since the last walk, when it held one then and it moved.
+    moved: Option<(f32, f32)>,
+}
+
 /// What one box's subtree reported to the box above it.
 #[derive(Clone, Copy, Debug)]
 struct Folded {
@@ -470,6 +514,11 @@ struct Pass<'a, 'b, D: FrameDirty> {
     moves: RigidMoves,
     /// Whether a subtree that only moved is offset in one descent or in one descent per duty.
     passes: split::Passes,
+    /// Whether scroll containers may draw their content in a space of their own.
+    scroll_nodes: bool,
+    /// The box being composed again without a content space, because its content stopped moving
+    /// rigidly.
+    refused: Option<BoxKey>,
 }
 
 impl<D: FrameDirty> Pass<'_, '_, D> {
@@ -563,9 +612,45 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         between: (HitOrder, HitOrder),
     ) -> Folded {
         counter::bump(Counter::NodesVisited);
-        let Some(placed) = build::place(self.store, self.tables, key, from) else {
+        counter::bump(Counter::FragmentBoxesVisited);
+        let Some(mut placed) = build::place(self.store, self.tables, key, from) else {
             return Folded::empty();
         };
+        let owed = self.owed_by(key, generator);
+        let own = owed.own;
+        // Read before the write replaces them: whether the matrix this box's children are drawn
+        // through is the one they were composed under, and whether the coordinate system they are
+        // drawn in is still the one they name.
+        let previous = self
+            .store
+            .fragments_of_box(key)
+            .first()
+            .and_then(|frag| self.store.fragment(*frag))
+            .map(Held::of);
+        let content = self.content_space(key, &placed, previous, own);
+        let transform_stable =
+            previous.is_some_and(|held| held.transform_hash == placed.transform_hash);
+        // A box that starts or stops drawing its children in a content space hands them another
+        // coordinate system, exactly as a box that takes or gives back a space of its own does. So
+        // does a box whose anchor changed under a name that stayed: its children measure their
+        // ink in that anchor.
+        let space_stable = previous.is_some_and(|held| {
+            held.transform == placed.transform
+                && held.anchor == placed.anchor
+                && held.flags.contains(FragmentFlags::SCROLLS_CONTENT) == content.is_some()
+        });
+        // The marks that decide whether the children were composed against what this box hands
+        // down. A scroll of a box that draws its children in a content space moves that space
+        // and nothing the children are composed against.
+        let mut leading = own;
+        if let Some(content) = content {
+            placed.flags = placed.flags.union(FragmentFlags::SCROLLS_CONTENT);
+            placed.descent = placed.content_descent(content.id);
+            leading = own.difference(Dirty::SCROLL);
+            if space_stable && let Some(by) = content.moved {
+                self.scroll_content(&placed, previous, by);
+            }
+        }
         let state = self.store.state_mut(key);
         state.snapped = placed.snapped;
         // Read before it is replaced: whether this box's size is what its children were composed
@@ -579,19 +664,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         state.composed_shift = placed.descent.shift;
         let movement = self.movement(&placed, previous_shift);
 
-        let owed = self.owed_by(key, generator);
-        let own = owed.own;
-        // Read before the write replaces them: whether the matrix this box's children are drawn
-        // through is the one they were composed under, and whether the coordinate system they are
-        // drawn in is still the one they name.
-        let previous = self
-            .store
-            .fragments_of_box(key)
-            .first()
-            .and_then(|frag| self.store.fragment(*frag));
-        let transform_stable =
-            previous.is_some_and(|fragment| fragment.transform_hash == placed.transform_hash);
-        let space_stable = previous.is_some_and(|fragment| fragment.transform == placed.transform);
         // A stacking change reorders what this box's children are painted after; the keys the
         // index carries for them are then numbered for an order that no longer holds.
         if own.contains(Dirty::RESTACK) {
@@ -640,6 +712,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let mut below = false;
         let mut disjoint = true;
         let mut rigid = placed.rigid;
+        // Whether every child's subtree moves rigidly, which is what a content space rests on.
+        let mut children_rigid = true;
+        // What puts a child's ink, measured in the content space, into this box's anchor.
+        let into_anchor =
+            content.map(|_| Size::new(DevicePx(-placed.offset.0), DevicePx(-placed.offset.1)));
         let mut subtree_ink = self.scratch.child_inks[inks_mark..]
             .iter()
             .fold(ink, |held, piece| held.union(*piece));
@@ -657,7 +734,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // or is itself a different shape. So the children are left alone when those three stood
         // still, whatever happened to the box's own pieces: a column that grew because one row
         // did has moved none of the rows above it.
-        let settled = !own.intersects(ENTERS)
+        let settled = !leading.intersects(ENTERS)
             && placed.descent.shift == previous_shift
             && movement.is_none()
             && (!moved || (placed.descent.origin_stable && transform_stable));
@@ -666,7 +743,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // because everything it holds but its device ink is measured in a space the write did not
         // move. See [`rematrix`].
         let carried = !transform_stable
-            && !own.intersects(Dirty::RESTACK | Dirty::SCROLL)
+            && !leading.intersects(Dirty::RESTACK | Dirty::SCROLL)
             && placed.descent.shift == previous_shift
             && movement.is_none()
             && (!moved || placed.descent.origin_stable)
@@ -726,11 +803,16 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     ),
                 },
             };
+            let mut folded = folded;
+            if let Some(by) = into_anchor {
+                folded.subtree_ink = folded.subtree_ink.translate(by);
+            }
             self.scratch.child_inks.push(folded.subtree_ink);
             blending |= folded.blending;
             below |= folded.reads;
             disjoint &= folded.disjoint;
             rigid &= folded.rigid;
+            children_rigid &= folded.rigid;
             subtree_ink = subtree_ink.union(folded.subtree_ink);
             if folded.order.1 > 0 {
                 cursor = cursor.max(folded.order.1);
@@ -766,6 +848,18 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         self.scratch.child_inks.truncate(inks_mark);
         self.scratch.children.truncate(children_mark);
         self.scratch.written.truncate(fragments.start);
+        // A content space holds only content that moves rigidly. A box below that turned sticky,
+        // fixed or transformed in this frame was composed in it all the same, and a fixed one is
+        // then drawn where the scroll puts it. So the box is composed again without one, which
+        // composes every child again in the box's own space. The entries the first composition
+        // carried are settled first, because the second one may write the same entries again.
+        if content.is_some() && !children_rigid {
+            self.hit.settle();
+            let outer = self.refused.replace(key);
+            let again = self.visit(key, from, parent, generator, between);
+            self.refused = outer;
+            return again;
+        }
         Folded {
             subtree_ink,
             blending,
@@ -774,6 +868,87 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             rigid,
             order,
         }
+    }
+
+    /// The content space `key` draws its children in this frame, if it draws them in one.
+    ///
+    /// A scroll container takes one when the switch is on (see
+    /// [`scroll_nodes`](crate::fragment::scroll_nodes)), it clips its children, nothing between it
+    /// and its anchor is transformed, its whole subtree moved rigidly when it was last composed,
+    /// and it either held a content space already or scrolls in this frame. The space is taken
+    /// at the first scroll and not before, because taking it composes and paints every child
+    /// again once.
+    ///
+    /// The space is written here: its parent is the box's own space and its matrix is the box's
+    /// scroll offset. A box that no longer qualifies gives its space back.
+    fn content_space(
+        &mut self,
+        key: BoxKey,
+        placed: &Placed,
+        previous: Option<Held>,
+        own: Dirty,
+    ) -> Option<ContentSpace> {
+        let owner = zgui_scene::PropertyOwner::of(key).content();
+        let held = previous.is_some_and(|held| held.flags.contains(FragmentFlags::SCROLLS_CONTENT));
+        let wanted = self.scroll_nodes
+            && self.refused != Some(key)
+            && placed.scrolls
+            && placed.flags.contains(FragmentFlags::CLIPS_CHILDREN)
+            && placed.descent.matrix.is_none()
+            && previous
+                .is_some_and(|previous| previous.rigid && (held || own.contains(Dirty::SCROLL)));
+        if !wanted {
+            if held {
+                self.tables.spatial.release(owner);
+            }
+            return None;
+        }
+        let local = zgui_geom::Matrix4::translation(-placed.offset.0, -placed.offset.1, 0.0);
+        let spatial = &mut *self.tables.spatial;
+        let before = spatial
+            .of(owner)
+            .and_then(|id| spatial.get(id))
+            .map(|node| node.local);
+        let id = spatial.establish(
+            owner,
+            zgui_scene::SpatialNode {
+                parent: Some(placed.descent.spatial),
+                local,
+                anchoring: zgui_scene::Anchoring::Content,
+            },
+        );
+        // How far the content moved since the space was last written, read off the two matrices.
+        // A space established in this frame has no movement: its children are composed again.
+        let moved = before.filter(|_| held).and_then(|before| {
+            let by = (
+                local.columns[3][0] - before.columns[3][0],
+                local.columns[3][1] - before.columns[3][1],
+            );
+            (by != (0.0, 0.0)).then_some(by)
+        });
+        Some(ContentSpace { id, moved })
+    }
+
+    /// Records a scroll that moved only a content space.
+    ///
+    /// The scroll moved every pixel of the port and nothing else, so the port is the move's damage
+    /// and the move is recorded once, for the whole container. Settled children are not visited,
+    /// so nothing else is damaged on their behalf. A child born or changed in the same frame is
+    /// composed and damages what it draws. The hit index is told that what is under a point
+    /// changed, because no entry did.
+    fn scroll_content(&mut self, placed: &Placed, previous: Option<Held>, by: (f32, f32)) {
+        self.moves.moved(by);
+        if let Some(held) = previous {
+            absorb(
+                self.damage,
+                self.device_before(held.padding_box, held.anchor),
+            );
+        }
+        let port = self.device_now(placed.padding_box, placed.anchor);
+        if let Some(port) = self.admitted(placed.descent.clip).cut(port) {
+            absorb(self.damage, port);
+        }
+        self.hit.note_space_moved();
     }
 
     /// The first order key painted after the child at `from` among this box's children, or

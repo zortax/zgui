@@ -249,6 +249,33 @@ fn a_scrolled_fragment_keeps_the_place_it_had_in_the_hierarchy() {
     );
 
     let updated = scrolled.get(Counter::HitEntriesUpdated);
+    // A port that draws its rows in a content space takes the space at its first scroll, which
+    // writes every row's entry again once and can rebuild the index once. After that a scroll
+    // moves the space and no row's entry, so the carry measured below does not run.
+    if zgui_layout::fragment::scroll_nodes::enabled() {
+        let before = row_extents(&harness);
+        let again = recording.measure(|| {
+            wheel(&mut harness, 3.0);
+        });
+        let after = row_extents(&harness);
+        assert!(
+            after[0].0 < before[0].0 - 1.0,
+            "the second scroll moved nothing"
+        );
+        assert_eq!(
+            again.get(Counter::HitEntriesReinserted),
+            0,
+            "a scroll of a content space searched a new home for an entry"
+        );
+        again.assert_zero(Counter::HitIndexRebuilds, &rebuilds);
+        assert!(
+            again.get(Counter::HitEntriesUpdated) <= FRAMES as u64,
+            "a scroll of a content space rewrote {} hit entries; only the thumb may move, once \
+             per frame",
+            again.get(Counter::HitEntriesUpdated)
+        );
+        return;
+    }
     let kept = scrolled.get(Counter::HitEntriesMovedInPlace);
     let reinserted = scrolled.get(Counter::HitEntriesReinserted);
     assert!(

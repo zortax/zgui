@@ -11,7 +11,9 @@ use zgui_dom::NodeKey;
 /// What one container that moved owes.
 ///
 /// `SCROLL` is the bit the fragment pass is entered on, and it is what makes that pass descend
-/// through the container and recompose its descendants against the new offset. `A11Y` is what the
+/// through the container and recompose its descendants against the new offset. A container that
+/// draws its content in a space of its own has that space written instead, and its descendants
+/// stay as they are (see `zgui_layout::fragment::scroll_nodes`). `A11Y` is what the
 /// accessibility projection reads, and one node is the whole of what a scroll changes there,
 /// because every descendant's bounds are published relative to the container.
 ///

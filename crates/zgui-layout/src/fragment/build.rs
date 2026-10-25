@@ -145,8 +145,37 @@ pub(crate) struct Placed {
     /// See [`Fragment::subtree_rigid`](crate::Fragment::subtree_rigid) for the three styles that
     /// answer no and why each of them does.
     pub(crate) rigid: bool,
+    /// Whether this box is a scroll container.
+    pub(crate) scrolls: bool,
+    /// Where this box is scrolled to, which is zero unless it is a scroll container.
+    pub(crate) offset: (f32, f32),
     /// What this box's children are composed against.
     pub(crate) descent: Descent,
+}
+
+impl Placed {
+    /// What this box's children are composed against when they are drawn in `content`, the
+    /// space this box's scroll offset moves.
+    ///
+    /// Everything is measured as if the box were not scrolled: the shift leaves out the box's own
+    /// offset, and the scrollport and the containing block move into the content space with it.
+    /// The matrix to the anchor is the identity, because the content space is the children's
+    /// anchor. The clip chain stays as it is, because the box measured its port in its own space.
+    pub(crate) fn content_descent(&self, content: SpatialId) -> Descent {
+        let by = Size::new(DevicePx(self.offset.0), DevicePx(self.offset.1));
+        Descent {
+            shift: (
+                self.descent.shift.0 + self.offset.0,
+                self.descent.shift.1 + self.offset.1,
+            ),
+            matrix: None,
+            spatial: content,
+            anchor: content,
+            scrollport: self.descent.scrollport.translate(by),
+            containing: self.descent.containing.translate(by),
+            ..self.descent
+        }
+    }
 }
 
 /// Everything composing a fragment needs that is not in the box tree.
@@ -360,6 +389,8 @@ pub(crate) fn place(
         Point::new(DevicePx(0.0), DevicePx(0.0))
     };
 
+    // Read from the box's own space only. The content space a scroll container may give its
+    // children moves with the container, so it leaves this answer as it is.
     let rigid = own_space.is_none();
 
     let mut flags = FragmentFlags::EMPTY;
@@ -406,6 +437,8 @@ pub(crate) fn place(
             != zgui_css::values::effect::MixBlendModeValue::Normal,
         snapped,
         rigid,
+        scrolls,
+        offset: (offset.x.0, offset.y.0),
         descent: Descent {
             layout,
             rounded,

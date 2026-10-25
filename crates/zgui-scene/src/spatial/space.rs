@@ -240,6 +240,82 @@ impl SpatialTree {
         None
     }
 
+    /// The nearest coordinate system at or above `id` that is not the content of a scroll
+    /// container.
+    ///
+    /// A content system moves when its container scrolls and nothing else does. A reader that
+    /// measures geometry relative to the container asks this to find the system whose movement
+    /// does change that geometry. `None` when the walk reaches a name that is no longer live.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let content = tree.establish(
+    ///     owner.content(),
+    ///     SpatialNode {
+    ///         parent: Some(tree.viewport()),
+    ///         local: Matrix4::translation(0.0, -40.0, 0.0),
+    ///         anchoring: Anchoring::Content,
+    ///     },
+    /// );
+    /// assert_eq!(tree.outside_content(content), Some(tree.viewport()));
+    /// assert_eq!(tree.outside_content(tree.viewport()), Some(tree.viewport()));
+    /// ```
+    pub fn outside_content(&self, id: SpatialId) -> Option<SpatialId> {
+        let mut current = id;
+        loop {
+            let node = self.get(current)?;
+            if node.anchoring != Anchoring::Content {
+                return Some(current);
+            }
+            current = node.parent?;
+        }
+    }
+
+    /// How far `outer`'s coordinates sit from `inner`'s, when only content systems lie between.
+    ///
+    /// `Some(by)` when `inner` is `outer`, or is reached from it down through content systems
+    /// only: a rectangle measured in `outer` is at `rect + by` in `inner`. A content system's own
+    /// transform is its container's scroll offset, a translation, so the answer is exact. `None`
+    /// for any other pair, and when the walk reaches a name that is no longer live.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let content = tree.establish(
+    ///     owner.content(),
+    ///     SpatialNode {
+    ///         parent: Some(tree.viewport()),
+    ///         local: Matrix4::translation(0.0, -40.0, 0.0),
+    ///         anchoring: Anchoring::Content,
+    ///     },
+    /// );
+    /// assert_eq!(tree.across_content(content, tree.viewport()), Some((0.0, 40.0)));
+    /// assert_eq!(tree.across_content(tree.viewport(), content), None);
+    /// ```
+    pub fn across_content(&self, inner: SpatialId, outer: SpatialId) -> Option<(f32, f32)> {
+        let mut by = (0.0, 0.0);
+        let mut current = inner;
+        loop {
+            if current == outer {
+                return Some(by);
+            }
+            let node = self.get(current)?;
+            if node.anchoring != Anchoring::Content {
+                return None;
+            }
+            let translation = node.local.columns[3];
+            by = (by.0 - translation[0], by.1 - translation[1]);
+            current = node.parent?;
+        }
+    }
+
     /// Writes where one coordinate system sits within the one above it.
     ///
     /// The single route by which an established coordinate system's own matrix changes, whether an

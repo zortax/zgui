@@ -315,6 +315,20 @@ impl ClipTable {
     /// slot. Two occupants of one slot are one coordinate system as far as this is concerned, and
     /// a name that has gone stale is [a different question](crate::scene::depends).
     pub fn bounds_in(&self, id: ClipId, space: u32) -> Rect<DevicePx, Device> {
+        self.bounds_in_carried(id, space, &|_| None)
+    }
+
+    /// The same, with the links from elsewhere that `carry` can bring into `space`.
+    ///
+    /// `carry` answers how far a link's coordinate system sits from `space`'s, when the two are a
+    /// fixed translation apart: the link's rectangle is moved by that and intersected too. A link
+    /// it has no answer for is left out, as in [`ClipTable::bounds_in`].
+    pub fn bounds_in_carried(
+        &self,
+        id: ClipId,
+        space: u32,
+        carry: &dyn Fn(SpatialId) -> Option<(f32, f32)>,
+    ) -> Rect<DevicePx, Device> {
         let mut aabb = ResolvedClip::unbounded().aabb;
         let mut cursor = id;
         while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
@@ -324,9 +338,15 @@ impl ClipTable {
                 space: measured,
                 ..
             } = link
-                && measured.index() == space
             {
-                intersect(&mut aabb, *rect);
+                if measured.index() == space {
+                    intersect(&mut aabb, *rect);
+                } else if let Some((x, y)) = carry(*measured) {
+                    intersect(
+                        &mut aabb,
+                        rect.translate(Size::new(DevicePx(x), DevicePx(y))),
+                    );
+                }
             }
             cursor = *parent;
         }
@@ -595,6 +615,42 @@ mod tests {
     /// An owner to name chains after.
     fn owner(word: u64) -> PropertyOwner {
         PropertyOwner::new(word).expect("a non-zero word names an owner")
+    }
+
+    #[test]
+    fn a_port_clips_its_content_space_where_the_scroll_puts_it() {
+        use crate::spatial::{Anchoring, SpatialNode, SpatialTree};
+
+        let mut tree = SpatialTree::with_viewport();
+        let content = tree.establish(
+            owner(9).content(),
+            SpatialNode {
+                parent: Some(tree.viewport()),
+                local: zgui_geom::Matrix4::translation(0.0, -30.0, 0.0),
+                anchoring: Anchoring::Content,
+            },
+        );
+        let mut clips = ClipTable::rooted();
+        // The port, measured in the container's own space, and a row's clip in the content.
+        let port = clips.push_named(ClipId::ROOT, ClipLink::rect(at(0.0)), UNMOVED, owner(9));
+        let row = clips.push(port, ClipLink::rect_in(at(10.0), content));
+
+        let slot = content.index();
+        assert_eq!(
+            clips.bounds_in(row, slot),
+            at(10.0),
+            "without a carry the port is left to the shader"
+        );
+        let carried = clips.bounds_in_carried(row, slot, &|measured| {
+            tree.across_content(content, measured)
+        });
+        // Scrolled by 30, the port's top edge is at y = 30 in the content, and the row's clip
+        // ends at y = 50.
+        let expected = Rect::new(
+            Point::new(DevicePx(10.0), DevicePx(30.0)),
+            Size::new(DevicePx(90.0), DevicePx(20.0)),
+        );
+        assert_eq!(carried, expected);
     }
 
     #[test]

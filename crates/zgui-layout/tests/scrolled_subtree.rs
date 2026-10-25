@@ -188,6 +188,18 @@ fn a_scroll_offsets_its_subtree_instead_of_comparing_every_piece_of_it() {
     let mut frame = lay_out(&mut store, &mut content, 300.0, 200.0);
     let element = port(&fixture, &store);
     let fragments_before = store.fragment_count();
+    // A first scroll before the measured one. A port that draws its content in a space of its
+    // own takes the space at its first scroll, and that composes every piece once.
+    let root = store.root().expect("a root box");
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(11.0)));
+    fragments(
+        &mut frame,
+        &mut store,
+        root,
+        &mut Scrolled { node: element },
+    );
     frame
         .scroll
         .place(element, Point::new(DevicePx(0.0), DevicePx(37.0)));
