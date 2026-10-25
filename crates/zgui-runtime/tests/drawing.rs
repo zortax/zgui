@@ -504,10 +504,10 @@ const RAMP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 2
   <path d="M0 0 L24 4 L6 24 Z" fill="url(#a)"/>
 </svg>"##;
 
-/// A scroll moves every drawing's recorded painting rigidly, so each one replays at an offset
-/// and none is encoded again.
+/// A scroll moves the port's content space and leaves every drawing's recorded painting as it is,
+/// so none is encoded again.
 #[test]
-fn a_scrolled_document_replays_and_encodes_nothing() {
+fn a_scrolled_document_encodes_no_drawing_again() {
     use zgui_geom::{Css, CssPx, Point};
     use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
 
@@ -542,7 +542,6 @@ fn a_scrolled_document_replays_and_encodes_nothing() {
     );
     log.borrow_mut().clear();
 
-    let moved = zgui_profile::counter::get(zgui_profile::Counter::VectorReplaysMoved);
     harness.deliver_to_first(zgui_platform::SurfaceEvent::Wheel {
         event: WheelEvent {
             id: zgui_vocab::PointerId::MOUSE,
@@ -568,10 +567,4 @@ fn a_scrolled_document_replays_and_encodes_nothing() {
     );
     let encoded: usize = frames.iter().map(|frame| frame.encoded_drawings).sum();
     assert_eq!(encoded, 0, "a scrolled drawing was encoded again");
-    if zgui_profile::COUNTERS_ENABLED {
-        assert!(
-            zgui_profile::counter::get(zgui_profile::Counter::VectorReplaysMoved) > moved,
-            "no drawing replayed at an offset"
-        );
-    }
 }

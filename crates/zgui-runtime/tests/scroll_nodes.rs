@@ -2,17 +2,15 @@
 //!
 //! The claim: after the first scroll, which gives the port its content space, a scroll frame
 //! visits the path down to the port and moves no hit entry and no accessibility rectangle of any
-//! row. Each count is paired with the same scroll made without content spaces, where it is large.
-//! The rows still have to end up where the scroll put them, for the screen, for the pointer and for
-//! an assistive technology, so the test reads all three back.
+//! row. The rows still have to end up where the scroll put them, for the screen, for the pointer
+//! and for an assistive technology, so the test reads all three back.
 //!
-//! Its own test target, because the switch and the counters are process-wide.
+//! Its own test target, because the counters are process-wide.
 
 mod support;
 
 use zgui_a11y::{NodeId, TreeId};
 use zgui_geom::{Css, CssPx, Point};
-use zgui_layout::fragment::scroll_nodes;
 use zgui_platform::SurfaceEvent;
 use zgui_platform_headless::Harness;
 use zgui_profile::counter;
@@ -117,8 +115,7 @@ struct Scrolled {
 }
 
 /// Scrolls once to warm up, then measures a scroll of three lines.
-fn scroll(nodes: bool, watched: NodeRef) -> Scrolled {
-    scroll_nodes::set_enabled(nodes);
+fn scroll(watched: NodeRef) -> Scrolled {
     let mut harness = listing(watched, 16);
     harness.settle(8);
     // The first scroll gives the port its content space, which composes and paints every row on
@@ -128,7 +125,6 @@ fn scroll(nodes: bool, watched: NodeRef) -> Scrolled {
     let start = counter::snapshot();
     wheel(&mut harness, 3.0);
     let cost = start.delta(&counter::snapshot());
-    scroll_nodes::set_enabled(false);
     Scrolled {
         cost,
         before,
@@ -139,9 +135,8 @@ fn scroll(nodes: bool, watched: NodeRef) -> Scrolled {
 #[test]
 fn a_scroll_of_a_long_list_visits_the_path_down_and_moves_no_row_entry() {
     let _turn = counter::exclusive();
-    let control = scroll(false, NodeRef::new());
     let watched = NodeRef::new();
-    let spaced = scroll(true, watched);
+    let spaced = scroll(watched);
 
     let after = drawn(&spaced.harness, watched).origin.y.0;
     assert!(
@@ -154,16 +149,6 @@ fn a_scroll_of_a_long_list_visits_the_path_down_and_moves_no_row_entry() {
         return;
     }
     let passes = spaced.cost.layout_passes.max(1);
-    assert!(
-        control.cost.fragment_boxes_visited > ROWS as u64,
-        "the control's fragment pass reached {} boxes, so it did not carry the rows",
-        control.cost.fragment_boxes_visited
-    );
-    assert!(
-        control.cost.hit_entries_updated > ROWS as u64,
-        "the control updated {} hit entries, so it did not carry the rows",
-        control.cost.hit_entries_updated
-    );
     assert!(
         spaced.cost.fragment_boxes_visited <= 4 * passes,
         "the fragment pass reached {} boxes over {passes} walks: more than the path down to the \
@@ -186,7 +171,7 @@ fn a_scroll_of_a_long_list_visits_the_path_down_and_moves_no_row_entry() {
 fn a_row_in_a_content_space_is_hit_and_reported_where_it_is_drawn() {
     let _turn = counter::exclusive();
     let watched = NodeRef::new();
-    let spaced = scroll(true, watched);
+    let spaced = scroll(watched);
     let harness = spaced.harness;
     let border = drawn(&harness, watched);
     assert!(
@@ -294,8 +279,7 @@ fn numbers(rect: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>) -> [f3
 /// Turns the wheel over the pinned page by each of `turns`, and reads back where it draws the
 /// port's top edge, the header and the fixed box after each turn, and whether the port draws its
 /// content in a space of its own.
-fn pinned_turns(nodes: bool, turns: &[f32]) -> (Pins, Vec<bool>, Harness<Runtime>, Pinned) {
-    scroll_nodes::set_enabled(nodes);
+fn pinned_turns(turns: &[f32]) -> (Pins, Vec<bool>, Harness<Runtime>, Pinned) {
     let refs = Pinned {
         port: NodeRef::new(),
         head: NodeRef::new(),
@@ -333,7 +317,6 @@ fn pinned_turns(nodes: bool, turns: &[f32]) -> (Pins, Vec<bool>, Harness<Runtime
             numbers(drawn(&harness, refs.fab)),
         ));
     }
-    scroll_nodes::set_enabled(false);
     (pins, held, harness, refs)
 }
 
@@ -342,21 +325,22 @@ fn a_sticky_header_and_a_fixed_box_in_a_content_space_are_drawn_hit_and_reported
 {
     let _turn = counter::exclusive();
     let turns = [1.0, 3.0, 2.0, 6.0, -4.0];
-    let (offset, _, _, _) = pinned_turns(false, &turns);
-    let (spaced, held, harness, refs) = pinned_turns(true, &turns);
+    let (spaced, held, harness, refs) = pinned_turns(&turns);
     assert!(
         held.iter().all(|held| *held),
         "the port gave its content space up over a sticky and a fixed box: {held:?}"
     );
-    assert_eq!(
-        offset, spaced,
-        "the content space draws the header or the fixed box somewhere offsetting does not"
-    );
-    let fab = spaced[0].2;
+    let (port_top, first_head, fab) = spaced[0];
     for (step, (top, head, at)) in spaced.iter().enumerate() {
+        assert_eq!(*top, port_top, "after turn {step}, the port moved");
         assert_eq!(
             head[1], *top,
             "after turn {step}, the header is not at the top edge of its port"
+        );
+        assert_eq!(
+            [head[0], head[2], head[3]],
+            [first_head[0], first_head[2], first_head[3]],
+            "after turn {step}, the header changed its x, width or height"
         );
         assert_eq!(*at, fab, "after turn {step}, the fixed box moved");
     }

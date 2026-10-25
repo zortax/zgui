@@ -41,7 +41,8 @@ pub(crate) enum Refused {
     NoComposedTarget,
     /// Nothing scrolled, or more than one thing did.
     NotOneContainer,
-    /// The frame drew something the movement does not account for.
+    /// The frame drew something the movement does not account for, or the scroll moved no content
+    /// space.
     MoreThanAMove,
     /// The displacement is not a whole number of device pixels, or the container is bouncing.
     NotWholePixels,

@@ -115,14 +115,15 @@ counters! {
     /// Fragments whose geometry was recomputed rather than carried over.
     FragmentsRebuilt => fragments_rebuilt, Group::BackendNeutral;
 
-    /// Boxes layout placed elsewhere that were carried with their subtrees instead of composed.
+    /// Boxes that moved and were carried with their subtrees instead of composed.
     BoxesShifted => boxes_shifted, Group::BackendNeutral;
 
     /// Boxes the fragment pass reached: composed, carried by a move or carried onto a new matrix.
     ///
     /// The fragment pass's own share of [`NodesVisited`](Counter::NodesVisited), which the paint
     /// walk and the invalidation walk also count. A scroll that moves a content space reaches the
-    /// path down to its container; a scroll that offsets the content reaches every box in it.
+    /// path down to its container. A scroll of a container that keeps its children in its own
+    /// space reaches every box in it.
     FragmentBoxesVisited => fragment_boxes_visited, Group::BackendNeutral;
 
     /// Elements that took a moved custom property map into their style without a cascade.

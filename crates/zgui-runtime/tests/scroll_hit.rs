@@ -37,6 +37,8 @@ const CSS: &str = "
 root { display: block; width: 400px; height: 300px }
 .port { display: block; width: 400px; height: 120px; overflow: scroll }
 .row { display: block; width: 400px; height: 20px; background-color: #202020 }
+.hold { display: block; width: 400px; height: 1px; position: relative; transform: translate(1px, 0px) }
+.pin { position: fixed; top: 0px; left: 0px; width: 1px; height: 1px }
 ";
 
 /// How many rows the scroller holds, which is many more than fit in it.
@@ -48,11 +50,36 @@ const FRAMES: usize = 24;
 /// Which row each click reached, in the order the clicks were made.
 type Clicked = Rc<RefCell<Vec<usize>>>;
 
+/// Whether the port draws its rows in a content space or keeps them in its own space.
+#[derive(Clone, Copy, PartialEq)]
+enum Port {
+    /// A plain list, which takes a content space at its first scroll.
+    Spaced,
+    /// A list after a transformed row that holds a fixed box, which a content space would move.
+    /// A scroll of this port carries every row.
+    Kept,
+}
+
 /// A window holding one scroll container whose every row records being clicked.
 fn listing(clicked: &Clicked) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
+    listing_in(clicked, Port::Spaced)
+}
+
+/// [`listing`], with the port of kind `kind`.
+fn listing_in(
+    clicked: &Clicked,
+    kind: Port,
+) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
     let clicked = Rc::clone(clicked);
     support::app_with_text(CSS, move |cx: &mut BuildCx<'_>| {
         let mut port = zgui_elements::column().class("port");
+        if kind == Port::Kept {
+            port = port.child(
+                zgui_elements::column()
+                    .class("hold")
+                    .child(zgui_elements::column().class("pin")),
+            );
+        }
         for index in 0..ROWS {
             let reached = Rc::clone(&clicked);
             port = port.child(zgui_elements::column().class("row").on(
@@ -210,11 +237,17 @@ fn a_click_after_a_scroll_lands_where_the_fragment_tree_says_it_should() {
     );
 }
 
-#[test]
-fn a_scrolled_fragment_keeps_the_place_it_had_in_the_hierarchy() {
-    let clicked: Clicked = Rc::new(RefCell::new(Vec::new()));
-    let mut recording = Recording::begin();
-    let mut harness = listing(&clicked);
+/// Builds the listing of kind `kind` under `recording`, and checks that the build placed every
+/// entry through one bulk rebuild, so the counts after it have a control.
+fn built(
+    recording: &mut Recording,
+    clicked: &Clicked,
+    kind: Port,
+) -> (
+    zgui_platform_headless::Harness<zgui_runtime::Runtime>,
+    zgui_testkit_scene::counters::Control,
+) {
+    let mut harness = listing_in(clicked, kind);
 
     // The control: building the document puts every entry into the hierarchy from nothing, which
     // is what makes "hardly any went back through it" mean something rather than meaning that no
@@ -237,6 +270,77 @@ fn a_scrolled_fragment_keeps_the_place_it_had_in_the_hierarchy() {
         built.get(Counter::HitIndexRebuilds) >= 1,
         "the build's entries never reached the hierarchy: no bulk build ran"
     );
+    (harness, rebuilds)
+}
+
+/// Whether the first port of the window draws its content in a space of its own.
+fn port_has_content_space(
+    harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
+) -> bool {
+    let window = harness.app().windows().first().expect("a window");
+    let layout = window.layout().borrow();
+    layout.keys().into_iter().any(|key| {
+        layout.fragments_of_box(key).iter().any(|frag| {
+            layout.fragment(*frag).is_some_and(|fragment| {
+                fragment
+                    .flags
+                    .contains(zgui_layout::FragmentFlags::SCROLLS_CONTENT)
+            })
+        })
+    })
+}
+
+#[test]
+fn a_scroll_of_a_content_space_moves_no_row_entry() {
+    let clicked: Clicked = Rc::new(RefCell::new(Vec::new()));
+    let mut recording = Recording::begin();
+    let (mut harness, rebuilds) = built(&mut recording, &clicked, Port::Spaced);
+
+    // A port that draws its rows in a content space takes the space at its first scroll, which
+    // writes every row's entry again once and can rebuild the index once. After that a scroll
+    // moves the space and no row's entry.
+    let before = row_extents(&harness);
+    wheel(&mut harness, 3.0);
+    let after = row_extents(&harness);
+    assert!(
+        after[0].0 < before[0].0 - 1.0,
+        "a scroll that moved nothing touches no entry and satisfies every budget here"
+    );
+    assert!(
+        port_has_content_space(&harness),
+        "the port took no content space"
+    );
+
+    let before = row_extents(&harness);
+    let again = recording.measure(|| {
+        wheel(&mut harness, 3.0);
+    });
+    let after = row_extents(&harness);
+    assert!(
+        after[0].0 < before[0].0 - 1.0,
+        "the second scroll moved nothing"
+    );
+    assert_eq!(
+        again.get(Counter::HitEntriesReinserted),
+        0,
+        "a scroll of a content space searched a new home for an entry"
+    );
+    again.assert_zero(Counter::HitIndexRebuilds, &rebuilds);
+    assert!(
+        again.get(Counter::HitEntriesUpdated) <= FRAMES as u64,
+        "a scroll of a content space rewrote {} hit entries; only the thumb may move, once \
+         per frame",
+        again.get(Counter::HitEntriesUpdated)
+    );
+}
+
+/// A port kept out of a content space carries every row's entry on a scroll. The carry rewrites
+/// each entry where it lies, because a scroll moves neighbours together.
+#[test]
+fn a_scrolled_fragment_keeps_the_place_it_had_in_the_hierarchy() {
+    let clicked: Clicked = Rc::new(RefCell::new(Vec::new()));
+    let mut recording = Recording::begin();
+    let (mut harness, rebuilds) = built(&mut recording, &clicked, Port::Kept);
 
     let before = row_extents(&harness);
     let scrolled = recording.measure(|| {
@@ -247,35 +351,12 @@ fn a_scrolled_fragment_keeps_the_place_it_had_in_the_hierarchy() {
         after[0].0 < before[0].0 - 1.0,
         "a scroll that moved nothing touches no entry and satisfies every budget here"
     );
+    assert!(
+        !port_has_content_space(&harness),
+        "the port took a content space, so no row entry is carried"
+    );
 
     let updated = scrolled.get(Counter::HitEntriesUpdated);
-    // A port that draws its rows in a content space takes the space at its first scroll, which
-    // writes every row's entry again once and can rebuild the index once. After that a scroll
-    // moves the space and no row's entry, so the carry measured below does not run.
-    if zgui_layout::fragment::scroll_nodes::enabled() {
-        let before = row_extents(&harness);
-        let again = recording.measure(|| {
-            wheel(&mut harness, 3.0);
-        });
-        let after = row_extents(&harness);
-        assert!(
-            after[0].0 < before[0].0 - 1.0,
-            "the second scroll moved nothing"
-        );
-        assert_eq!(
-            again.get(Counter::HitEntriesReinserted),
-            0,
-            "a scroll of a content space searched a new home for an entry"
-        );
-        again.assert_zero(Counter::HitIndexRebuilds, &rebuilds);
-        assert!(
-            again.get(Counter::HitEntriesUpdated) <= FRAMES as u64,
-            "a scroll of a content space rewrote {} hit entries; only the thumb may move, once \
-             per frame",
-            again.get(Counter::HitEntriesUpdated)
-        );
-        return;
-    }
     let kept = scrolled.get(Counter::HitEntriesMovedInPlace);
     let reinserted = scrolled.get(Counter::HitEntriesReinserted);
     assert!(

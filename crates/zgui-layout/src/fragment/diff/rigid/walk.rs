@@ -35,8 +35,6 @@ pub(super) struct Walk<'a, 'b, D: FrameDirty> {
     scrolled: Size<DevicePx, Device>,
     /// Device pixels per CSS pixel.
     scale: f32,
-    /// Whether the offset is a scroll, as opposed to a layout move.
-    scrolls: bool,
 }
 
 impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
@@ -57,7 +55,6 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             by: moved.size(),
             scrolled: Size::new(DevicePx(moved.scrolled.0), DevicePx(moved.scrolled.1)),
             scale,
-            scrolls: moved.kind == super::MoveKind::Scroll,
         }
     }
 
@@ -92,9 +89,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
         if T::MOVES {
             counter::bump(Counter::NodesVisited);
             counter::bump(Counter::FragmentBoxesVisited);
-            if !self.scrolls {
-                counter::bump(Counter::BoxesShifted);
-            }
+            counter::bump(Counter::BoxesShifted);
             // The shift is what the scrolls above the box add up to. A layout move that came
             // with a scroll carries the scroll as well, so the shift takes that part of it.
             if self.scrolled != Size::new(DevicePx(0.0), DevicePx(0.0)) {

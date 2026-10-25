@@ -161,7 +161,6 @@ pub fn rebuild_in(
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
         // decided before the frame and must not change part-way through one.
         passes: split::current(),
-        scroll_nodes: crate::fragment::scroll_nodes::enabled(),
         refused: None,
         chase: Chase::default(),
     };
@@ -319,7 +318,7 @@ pub struct RigidMoves {
     pub by: Option<(f32, f32)>,
     /// Whether two moves disagreed, which is why `by` may be `None` after something moved.
     pub conflicted: bool,
-    /// How many subtrees were moved.
+    /// How many subtrees were moved: one for each content space a scroll wrote.
     pub count: u32,
     /// Everything this pass damaged for a reason other than a subtree moving rigidly.
     ///
@@ -369,7 +368,7 @@ impl RigidMoves {
         self
     }
 
-    /// Records one subtree moving by `by`.
+    /// Records one content space moving by `by`.
     fn moved(&mut self, by: (f32, f32)) {
         self.count += 1;
         if self.conflicted {
@@ -594,8 +593,6 @@ struct Pass<'a, 'b, D: FrameDirty> {
     moves: RigidMoves,
     /// Whether a subtree that only moved is offset in one descent or in one descent per duty.
     passes: split::Passes,
-    /// Whether scroll containers may draw their content in a space of their own.
-    scroll_nodes: bool,
     /// The box being composed again without a content space, because a fixed box below it hangs
     /// from a transformed or sticky box the space would move.
     refused: Option<BoxKey>,
@@ -750,18 +747,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // have moved since they were last composed, which is the whole input to the offsetting path.
         let previous_shift = state.composed_shift;
         state.composed_shift = placed.descent.shift;
-        // Inside a content space that moved in this frame, the content moved by the space's
-        // vector, so a box that moved by anything else moved by more than the frame's move.
-        let movement = self.movement(&placed, previous_shift).map(|movement| {
-            if here.by.is_some() {
-                rigid::Move {
-                    kind: rigid::MoveKind::Layout,
-                    ..movement
-                }
-            } else {
-                movement
-            }
-        });
+        let movement = self.movement(&placed, previous_shift);
 
         // A stacking change reorders what this box's children are painted after; the keys the
         // index carries for them are then numbered for an order that no longer holds.
@@ -1059,11 +1045,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
 
     /// The content space `key` draws its children in this frame, if it draws them in one.
     ///
-    /// A scroll container takes one when the switch is on (see
-    /// [`scroll_nodes`](crate::fragment::scroll_nodes)), it clips its children, nothing between it
-    /// and its anchor is transformed, no fixed box below hangs from a transformed or sticky box
-    /// below it (see [`FragmentFlags::FIXED_UNDER_SCROLLED`]), and it either held a content space already
-    /// or scrolls in this frame. The space is taken at the first scroll and not before, because
+    /// A scroll container takes one (see [`scroll_nodes`](crate::fragment::scroll_nodes)) when it
+    /// clips its children, nothing between it and its anchor is transformed, no fixed box below
+    /// hangs from a transformed or sticky box below it (see
+    /// [`FragmentFlags::FIXED_UNDER_SCROLLED`]), and it either held a content space already or
+    /// scrolls in this frame. The space is taken at the first scroll and not before, because
     /// taking it composes and paints every child again once.
     ///
     /// The space is written here: its parent is the box's own space and its matrix is the box's
@@ -1077,8 +1063,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     ) -> Option<ContentSpace> {
         let owner = zgui_scene::PropertyOwner::of(key).content();
         let held = previous.is_some_and(|held| held.flags.contains(FragmentFlags::SCROLLS_CONTENT));
-        let wanted = self.scroll_nodes
-            && self.refused != Some(key)
+        let wanted = self.refused != Some(key)
             && placed.scrolls
             && placed.flags.contains(FragmentFlags::CLIPS_CHILDREN)
             && placed.descent.matrix.is_none()
@@ -1161,6 +1146,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
 
     /// How far this box's contents have moved, when that is all that happened to them.
     ///
+    /// The shift the contents are composed against changes with a sticky offset, and with the
+    /// scroll offset of a container that keeps its children in its own space. Each rigid child is
+    /// then carried as a layout move: the frame draws where it was and where it is, and moves no
+    /// pixels for it.
+    ///
     /// `None` unless the offset is the *only* difference, which takes three things. The origin the
     /// contents are snapped against has to be the one they were snapped against before, because
     /// snapping rounds cumulative absolute edges and a different origin rounds some of them the
@@ -1176,7 +1166,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             placed.descent.origin_stable && placed.descent.matrix.is_none() && by != (0.0, 0.0);
         usable.then_some(rigid::Move {
             by,
-            kind: rigid::MoveKind::Scroll,
             scrolled: by,
             clip: placed.descent.clip,
             shift: placed.descent.shift,
@@ -1250,7 +1239,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         Some((
             rigid::Move {
                 by: (dx, dy),
-                kind: rigid::MoveKind::Layout,
                 scrolled: (shift.0 - previous_shift.0, shift.1 - previous_shift.1),
                 clip: placed.descent.clip,
                 shift,
