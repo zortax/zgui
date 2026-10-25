@@ -223,3 +223,172 @@ fn a_row_in_a_content_space_is_hit_and_reported_where_it_is_drawn() {
         "{composed:?} against {border:?}"
     );
 }
+
+/// A positioned port holding a sticky header, rows, and a box fixed inside it.
+const PINNED_CSS: &str = "
+root { display: block; width: 400px; height: 300px; background-color: #ffffff }
+.port { display: block; position: relative; width: 400px; height: 240px; overflow: scroll;
+        background-color: #101010 }
+.head { display: block; width: 400px; height: 30px; position: sticky; top: 0px;
+        background-color: #303030 }
+.row { display: block; width: 360px; height: 20px; background-color: #202020 }
+.fab { display: block; position: fixed; top: 180px; left: 300px; width: 40px; height: 30px;
+       background-color: #ff0000 }
+";
+
+/// The three elements of the pinned page a test reads back.
+#[derive(Clone, Copy)]
+struct Pinned {
+    /// The scrollport.
+    port: NodeRef,
+    /// The sticky header.
+    head: NodeRef,
+    /// The fixed box.
+    fab: NodeRef,
+}
+
+/// A window holding the pinned page.
+fn pinned(refs: Pinned) -> Harness<Runtime> {
+    support::app_with_text(PINNED_CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
+        let mut port = zgui_elements::column()
+            .class("port")
+            .node_ref(refs.port)
+            .child(
+                zgui_elements::control()
+                    .class("head")
+                    .node_ref(refs.head)
+                    .a11y(A11yBinding::new(Role::Button).label("Head")),
+            );
+        for _ in 0..200 {
+            port = port.child(zgui_elements::column().class("row"));
+        }
+        port = port.child(
+            zgui_elements::control()
+                .class("fab")
+                .node_ref(refs.fab)
+                .a11y(A11yBinding::new(Role::Button).label("Add")),
+        );
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(port)
+                .into_view()
+                .build(cx),
+        )
+    })
+}
+
+/// Where the pinned page draws its port's top edge, its header and its fixed box after each turn.
+type Pins = Vec<(f32, [f32; 4], [f32; 4])>;
+
+/// A rectangle as four numbers that compare.
+fn numbers(rect: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>) -> [f32; 4] {
+    [
+        rect.origin.x.0,
+        rect.origin.y.0,
+        rect.size.width.0,
+        rect.size.height.0,
+    ]
+}
+
+/// Turns the wheel over the pinned page by each of `turns`, and reads back where it draws the
+/// port's top edge, the header and the fixed box after each turn, and whether the port draws its
+/// content in a space of its own.
+fn pinned_turns(nodes: bool, turns: &[f32]) -> (Pins, Vec<bool>, Harness<Runtime>, Pinned) {
+    scroll_nodes::set_enabled(nodes);
+    let refs = Pinned {
+        port: NodeRef::new(),
+        head: NodeRef::new(),
+        fab: NodeRef::new(),
+    };
+    let mut harness = pinned(refs);
+    harness.settle(8);
+    let mut pins = Vec::new();
+    let mut held = Vec::new();
+    for &lines in turns {
+        wheel(&mut harness, lines);
+        let window = harness.app().windows().first().expect("a window");
+        let layout = window.layout().borrow();
+        let port = *layout
+            .fragments_of(element_of(refs.port))
+            .first()
+            .expect("the port has a piece");
+        let port = layout.fragment(port).expect("a live piece");
+        held.push(
+            port.flags
+                .contains(zgui_layout::FragmentFlags::SCROLLS_CONTENT),
+        );
+        let top = zgui_layout::fragment::transform::placed::onto_device(
+            port.padding_box,
+            port.transform,
+            &window.placements(),
+        )
+        .origin
+        .y
+        .0;
+        drop(layout);
+        pins.push((
+            top,
+            numbers(drawn(&harness, refs.head)),
+            numbers(drawn(&harness, refs.fab)),
+        ));
+    }
+    scroll_nodes::set_enabled(false);
+    (pins, held, harness, refs)
+}
+
+#[test]
+fn a_sticky_header_and_a_fixed_box_in_a_content_space_are_drawn_hit_and_reported_where_they_stand()
+{
+    let _turn = counter::exclusive();
+    let turns = [1.0, 3.0, 2.0, 6.0, -4.0];
+    let (offset, _, _, _) = pinned_turns(false, &turns);
+    let (spaced, held, harness, refs) = pinned_turns(true, &turns);
+    assert!(
+        held.iter().all(|held| *held),
+        "the port gave its content space up over a sticky and a fixed box: {held:?}"
+    );
+    assert_eq!(
+        offset, spaced,
+        "the content space draws the header or the fixed box somewhere offsetting does not"
+    );
+    let fab = spaced[0].2;
+    for (step, (top, head, at)) in spaced.iter().enumerate() {
+        assert_eq!(
+            head[1], *top,
+            "after turn {step}, the header is not at the top edge of its port"
+        );
+        assert_eq!(*at, fab, "after turn {step}, the fixed box moved");
+    }
+
+    // The pointer finds both where they are drawn, and so does the accessibility tree for the
+    // header. A fixed box inside a scrolled port is reported relative to the scrolled content
+    // with and without content spaces, so its node is not compared here.
+    let window = harness.app().windows().first().expect("a window");
+    let tree = support::a11y_tree(&harness);
+    let state = tree.state();
+    for (watched, rect) in [(refs.head, spaced[4].1), (refs.fab, fab)] {
+        let element = element_of(watched);
+        let middle = Point::new(
+            zgui_geom::DevicePx(rect[0] + rect[2] / 2.0),
+            zgui_geom::DevicePx(rect[1] + rect[3] / 2.0),
+        );
+        assert_eq!(
+            window.chain_at(middle).last(),
+            Some(&element),
+            "the middle of {rect:?} hit something else"
+        );
+        if watched == refs.fab {
+            continue;
+        }
+        let node = state
+            .node_by_tree_local_id(NodeId(element.as_u64()), TreeId::ROOT)
+            .expect("the element is in the tree");
+        let composed = node.bounding_box().expect("the element has a rectangle");
+        assert_eq!(
+            (composed.y0, composed.height()),
+            (f64::from(rect[1]), f64::from(rect[3])),
+            "{composed:?} against {rect:?}"
+        );
+    }
+}
