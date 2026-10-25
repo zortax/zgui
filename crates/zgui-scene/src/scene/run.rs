@@ -79,7 +79,7 @@ impl Scene {
         let span = local.iter().copied().max().unwrap_or(1).saturating_sub(1);
 
         let frame = if self.layer_stack.is_empty() {
-            let admitted = self.clips.bounds_in(clip, space);
+            let admitted = self.admitted(clip, space);
             inks.iter()
                 .filter_map(|ink| ink.intersection(admitted))
                 .map(|clipped| place(matrix.as_ref(), clipped))

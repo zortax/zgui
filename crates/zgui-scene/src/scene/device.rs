@@ -92,5 +92,10 @@ pub(crate) fn place(
     }
 }
 
+/// A rectangle as the bits of its edges, so that a kept NaN compares equal to itself.
+pub(crate) fn rect_bits(rect: Rect<DevicePx, Device>) -> [u32; 4] {
+    [rect.left(), rect.top(), rect.right(), rect.bottom()].map(|edge| edge.0.to_bits())
+}
+
 #[cfg(test)]
 mod tests;

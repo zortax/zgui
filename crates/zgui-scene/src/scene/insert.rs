@@ -502,7 +502,7 @@ impl Scene {
         space: u32,
     ) -> Option<DrawOrder> {
         let from_run = self.run_order(ink);
-        let admitted = self.clips.bounds_in(clip, space);
+        let admitted = self.admitted(clip, space);
         let Some(clipped) = ink.intersection(admitted) else {
             counter::bump(Counter::PrimitivesCulled);
             self.note_unreplayable();
@@ -547,6 +547,43 @@ impl Scene {
     /// next written.
     pub(crate) fn device_matrix(&mut self, slot: u32) -> Option<Matrix4> {
         self.device.at(&self.spatial, slot)
+    }
+
+    /// The rectangle `clip` admits of the coordinate system at `space`, as
+    /// [`ClipTable::bounds_in`](crate::ClipTable::bounds_in) gives it.
+    ///
+    /// The last answer is kept, keyed by the chain, the slot and the clip table's version. The
+    /// version advances on every rewrite of a stored link, so a link rewritten in place is read
+    /// again.
+    pub(crate) fn admitted(&mut self, clip: ClipId, space: u32) -> Rect<DevicePx, Device> {
+        let version = self.clips.version();
+        let admitted = match self.clip_cull {
+            Some(kept) if kept.clip == clip && kept.space == space && kept.version == version => {
+                kept.admitted
+            }
+            _ => {
+                let admitted = self.clips.bounds_in(clip, space);
+                self.clip_cull = Some(crate::scene::ClipCull {
+                    clip,
+                    space,
+                    version,
+                    admitted,
+                });
+                admitted
+            }
+        };
+        // Equal, or equal in bits for a NaN edge. A link rewritten from 0.0 to -0.0 keeps the
+        // version and changes only the sign of a zero.
+        debug_assert!(
+            {
+                let fresh = self.clips.bounds_in(clip, space);
+                admitted == fresh
+                    || crate::scene::device::rect_bits(admitted)
+                        == crate::scene::device::rect_bits(fresh)
+            },
+            "the kept cull of clip {clip:?} in slot {space} is stale",
+        );
+        admitted
     }
 
     /// The name occupying a primitive's slot, for a primitive that carries only the slot.

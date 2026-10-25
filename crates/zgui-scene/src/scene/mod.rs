@@ -148,6 +148,12 @@ pub struct Scene {
     order: BoundsTree,
     /// The device matrix of each slot an order was placed through, kept between tree writes.
     device: crate::scene::device::DeviceMatrices,
+    /// The last clip cull asked of the clip table, and its answer.
+    ///
+    /// Consecutive primitives nearly always share a clip and a coordinate system, and the answer
+    /// is a walk up the whole chain. The key holds the table's version, so a rewrite of any link
+    /// in place asks again.
+    clip_cull: Option<ClipCull>,
     /// Every slot's matrix, resolved by [`Scene::finish`] at the tree's stamp in `kept_stamp`.
     ///
     /// Read through [`Scene::placements`].
@@ -198,6 +204,19 @@ pub struct Scene {
     /// Empty for a frame every one of whose rasters was already where it was going to be, which is
     /// the ordinary case and costs a pointer. See [`mod@resolve`].
     unresolved: Vec<Unresolved>,
+}
+
+/// One clip cull: the chain, the slot it was read for, the table's version, and the answer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClipCull {
+    /// The chain culled against.
+    clip: crate::id::ClipId,
+    /// The slot whose links were read.
+    space: u32,
+    /// The clip table's version when it was read.
+    version: crate::table::TableVersion,
+    /// What [`ClipTable::bounds_in`] gave.
+    admitted: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
 }
 
 /// The draw-order permutation of each sortable array, as indices into it.
@@ -305,6 +324,7 @@ impl Scene {
             chunk_offsets: rustc_hash::FxHashMap::default(),
             order: BoundsTree::new(),
             device: Default::default(),
+            clip_cull: None,
             kept_placements: crate::spatial::Placements::new(),
             kept_stamp: 0,
             travel: Travels::new(),
