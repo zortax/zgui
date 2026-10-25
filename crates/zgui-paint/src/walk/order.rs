@@ -359,6 +359,7 @@ fn content_tracked(
             fragment.border_box,
             scrollbar::resolve(emission.scrollbars, &style.scrollbar),
             emission.box_placement.clip,
+            emission.box_placement.transform,
         ),
     };
     FragmentEmission {

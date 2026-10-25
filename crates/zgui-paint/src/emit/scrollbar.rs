@@ -100,6 +100,7 @@ pub fn emit(
     bounds: Rect<DevicePx, Device>,
     paint: ScrollbarPaint,
     clip: ClipId,
+    transform: SpatialId,
 ) -> usize {
     let color = paint.color(part);
     let bounds = match part {
@@ -112,7 +113,7 @@ pub fn emit(
     let fill = scene.paints.add(Paint::Solid(color));
     let quad = Quad::filled(bounds, fill)
         .clipped(clip)
-        .transformed(SpatialId::VIEWPORT)
+        .transformed(transform)
         .with_radii(paint.radii(part, bounds));
     usize::from(scene.push_quad(quad).is_some())
 }
@@ -186,7 +187,7 @@ pub fn hidden_paint() -> ScrollbarPaint {
 mod tests {
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
     use zgui_layout::fragment::ScrollbarPart;
-    use zgui_scene::{ClipId, Scene};
+    use zgui_scene::{ClipId, Scene, SpatialId};
 
     use super::{dark_paint, default_paint, emit, hidden_paint, resolve, slim};
 
@@ -257,12 +258,26 @@ mod tests {
         scene.begin_frame(Size::new(200, 200));
         let paint = default_paint();
         assert_eq!(
-            emit(&mut scene, ScrollbarPart::Track, bar(), paint, ClipId::ROOT),
+            emit(
+                &mut scene,
+                ScrollbarPart::Track,
+                bar(),
+                paint,
+                ClipId::ROOT,
+                SpatialId::VIEWPORT
+            ),
             0,
             "an unpainted groove still pages, from geometry the hit index keeps"
         );
         assert_eq!(
-            emit(&mut scene, ScrollbarPart::Thumb, bar(), paint, ClipId::ROOT),
+            emit(
+                &mut scene,
+                ScrollbarPart::Thumb,
+                bar(),
+                paint,
+                ClipId::ROOT,
+                SpatialId::VIEWPORT
+            ),
             1
         );
         assert_eq!(scene.primitives.quads.len(), 1);
@@ -280,7 +295,8 @@ mod tests {
                 ScrollbarPart::Track,
                 bar(),
                 hidden,
-                ClipId::ROOT
+                ClipId::ROOT,
+                SpatialId::VIEWPORT
             ),
             0
         );
@@ -290,7 +306,8 @@ mod tests {
                 ScrollbarPart::Thumb,
                 bar(),
                 hidden,
-                ClipId::ROOT
+                ClipId::ROOT,
+                SpatialId::VIEWPORT
             ),
             0
         );

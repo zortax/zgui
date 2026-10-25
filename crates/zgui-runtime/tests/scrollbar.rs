@@ -106,6 +106,23 @@ fn bar(
     first.2
 }
 
+/// Where a quad is drawn on the device, through its own coordinate system.
+fn on_device(scene: &zgui_scene::Scene, quad: &zgui_scene::Quad) -> [f32; 4] {
+    let local = quad.ink();
+    let placed = scene
+        .spatial
+        .resolve_at(quad.transform)
+        .map_or(local, |matrix| {
+            zgui_geom::transformed_bounds(&matrix, local)
+        });
+    [
+        placed.origin.x.0,
+        placed.origin.y.0,
+        placed.size.width.0,
+        placed.size.height.0,
+    ]
+}
+
 /// Whether the scene holds a quad covering exactly `rect`.
 ///
 /// The display list rather than the fragment tree, because a fragment that nothing emits for is the
@@ -114,8 +131,9 @@ fn painted(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     rect: [f32; 4],
 ) -> bool {
-    window(harness).scene().primitives.quads.iter().any(|quad| {
-        quad.bounds
+    let scene = window(harness).scene();
+    scene.primitives.quads.iter().any(|quad| {
+        on_device(scene, quad)
             .iter()
             .zip(rect.iter())
             .all(|(drawn, wanted)| (drawn - wanted).abs() < 0.01)
@@ -130,8 +148,9 @@ fn painted_within(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     rect: [f32; 4],
 ) -> bool {
-    window(harness).scene().primitives.quads.iter().any(|quad| {
-        let [x, y, width, height] = quad.bounds;
+    let scene = window(harness).scene();
+    scene.primitives.quads.iter().any(|quad| {
+        let [x, y, width, height] = on_device(scene, quad);
         width > 0.0
             && height > 0.0
             && x >= rect[0] - 0.01
@@ -301,7 +320,7 @@ fn a_fixed_scrim_and_the_gutter_together_cover_the_whole_window() {
                 if color.components()[0] < 0.01
                     && (color.components()[2] - 128.0 / 255.0).abs() < 0.01)
         })
-        .map(|quad| quad.bounds)
+        .map(|quad| on_device(scene, quad))
         .expect("the fixed scrim was painted");
 
     assert_eq!(
@@ -462,6 +481,25 @@ fn a_thumb_is_dragged_in_its_own_space_however_its_scroller_is_transformed() {
 }
 
 #[test]
+fn a_transformed_scrollers_thumb_is_painted_where_the_transform_puts_it() {
+    // The thumb's rectangle is in the scroller's own space, so its quad has to be drawn through
+    // that space. Drawn through the viewport, the quad stays where the scroller was laid out.
+    let mut harness = warped("translate(100px, 20px) scale(2)");
+    harness.settle(8);
+    let thumb = PANEL * (PANEL / CONTENT);
+    let on_screen = [
+        100.0 + 2.0 * (PANEL - GUTTER),
+        20.0,
+        2.0 * GUTTER,
+        2.0 * thumb,
+    ];
+    assert!(
+        painted_within(&harness, on_screen),
+        "no quad is drawn inside the thumb's place on the screen, {on_screen:?}"
+    );
+}
+
+#[test]
 fn the_bar_follows_a_resize() {
     let mut harness = page(CSS, false);
     harness.settle(8);
@@ -572,7 +610,7 @@ fn painted_color(
         .quads
         .iter()
         .find(|quad| {
-            quad.bounds
+            on_device(scene, quad)
                 .iter()
                 .zip(rect.iter())
                 .all(|(drawn, wanted)| (drawn - wanted).abs() < 0.01)
