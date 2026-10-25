@@ -6,6 +6,9 @@ use zgui_dom::side::BoxKey;
 use crate::fragment::{FragKey, Fragment, FragmentFlags, FragmentKind, ParagraphId};
 use crate::tree::store::LayoutStore;
 
+/// The fewest released keys the store records before it records only that some key went.
+pub(super) const RELEASED_KEEP: usize = 4_096;
+
 impl LayoutStore {
     /// The fragments one element's boxes produced.
     pub fn fragments_of(&self, node: NodeKey) -> &[FragKey] {
@@ -79,14 +82,23 @@ impl LayoutStore {
             .map(|entry| entry.key)
     }
 
-    /// Keys named by at least one current inline resolution.
-    pub fn active_paragraph_keys(&self) -> Vec<zgui_text::ParagraphKey> {
-        self.paragraphs
-            .iter()
-            .flatten()
-            .filter(|entry| entry.users > 0)
-            .map(|entry| entry.key)
-            .collect()
+    /// Hands `visit` the keys whose last current resolution went away since the last drain, and
+    /// the store to ask which of them are active again.
+    ///
+    /// `None` says that more keys went than the store keeps a record of, so any key can be among
+    /// them.
+    pub fn drain_released_paragraphs(
+        &mut self,
+        visit: impl FnOnce(Option<&[zgui_text::ParagraphKey]>, &Self),
+    ) {
+        let mut released = std::mem::take(&mut self.released_paragraphs);
+        if std::mem::take(&mut self.released_overflow) {
+            visit(None, self);
+        } else {
+            visit(Some(&released), self);
+        }
+        released.clear();
+        self.released_paragraphs = released;
     }
 
     /// How many unique shaping keys current inline resolutions name.
@@ -150,16 +162,30 @@ impl LayoutStore {
     }
 
     pub(crate) fn release_paragraph(&mut self, id: ParagraphId) {
-        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
-            debug_assert!(entry.users > 0, "released an unretained paragraph");
-            if entry.users == 0 {
-                return;
-            }
-            entry.users -= 1;
-            if entry.users == 0 {
-                self.active_paragraphs -= 1;
-                self.unused_paragraphs.push(id);
-            }
+        let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) else {
+            return;
+        };
+        debug_assert!(entry.users > 0, "released an unretained paragraph");
+        if entry.users == 0 {
+            return;
+        }
+        entry.users -= 1;
+        if entry.users > 0 {
+            return;
+        }
+        let key = entry.key;
+        self.active_paragraphs -= 1;
+        self.unused_paragraphs.push(id);
+        // Bounded for a store nothing drains: past the bound, the record says only that some key
+        // went.
+        if self.released_overflow {
+            return;
+        }
+        if self.released_paragraphs.len() >= RELEASED_KEEP.max(self.paragraphs.len()) {
+            self.released_paragraphs.clear();
+            self.released_overflow = true;
+        } else {
+            self.released_paragraphs.push(key);
         }
     }
 

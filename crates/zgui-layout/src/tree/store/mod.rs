@@ -122,6 +122,10 @@ pub struct LayoutStore {
     unused_paragraphs: Vec<crate::fragment::ParagraphId>,
     /// Unique paragraph keys named by at least one current inline resolution.
     active_paragraphs: usize,
+    /// Keys whose last current resolution went away since the last drain.
+    released_paragraphs: Vec<zgui_text::ParagraphKey>,
+    /// Whether more keys were released than `released_paragraphs` keeps.
+    released_overflow: bool,
     /// The fragments destroyed since the last pass drained this list.
     ///
     /// A fragment ceases to exist for two quite different reasons — a box produced fewer pieces
@@ -202,6 +206,8 @@ impl LayoutStore {
             free_paragraphs: Vec::new(),
             unused_paragraphs: Vec::new(),
             active_paragraphs: 0,
+            released_paragraphs: Vec::new(),
+            released_overflow: false,
             retired: Vec::new(),
             retired_paint: Vec::new(),
             retired_boxes: Vec::new(),

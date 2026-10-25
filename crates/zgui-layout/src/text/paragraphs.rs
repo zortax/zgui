@@ -283,9 +283,26 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         dropped
     }
 
-    /// Drops the coldest shaped results no current layout resolution names.
-    pub fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
-        let dropped = self.cache.evict_inactive(active, count);
+    /// Records that the last current resolution of each of `keys` went away.
+    ///
+    /// See [`ParagraphCache::note_released`].
+    pub fn note_released(
+        &mut self,
+        keys: Option<&[ParagraphKey]>,
+        is_active: impl Fn(ParagraphKey) -> bool,
+    ) {
+        self.cache.note_released(keys, is_active);
+    }
+
+    /// Drops the coldest shaped results for which `is_active` is false.
+    ///
+    /// See [`ParagraphCache::evict_inactive`].
+    pub fn evict_inactive(
+        &mut self,
+        is_active: impl Fn(ParagraphKey) -> bool,
+        count: usize,
+    ) -> usize {
+        let dropped = self.cache.evict_inactive(is_active, count);
         counter::add(Counter::ParagraphsEvicted, dropped as u64);
         self.publish_bytes();
         dropped

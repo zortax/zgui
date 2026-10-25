@@ -1,8 +1,10 @@
 //! Holding shaped paragraphs across frames, and the protocol that uses them.
 
 use core::cell::Cell;
+use std::collections::BTreeSet;
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use zgui_profile::{Counter, counter};
 
 use crate::paragraph::break_request::BreakRequest;
 use crate::paragraph::broken::BrokenParagraph;
@@ -19,6 +21,17 @@ use crate::paragraph::shaper::ParagraphShaper;
 pub struct ParagraphCache<E> {
     /// The shaped results held.
     entries: FxHashMap<ParagraphKey, Entry<E>>,
+    /// Held keys that can have no current resolution and that were not examined yet.
+    ///
+    /// A key comes here when it is inserted and when its owner reports it released. Only these
+    /// keys are examined, so a frame that changes one paragraph costs a few checks.
+    unchecked: FxHashSet<ParagraphKey>,
+    /// Held keys that had no current resolution when they were examined, under the access stamp
+    /// they had then, coldest first.
+    ///
+    /// A stamp can become old when the entry is read again. Eviction checks the stamp of each
+    /// entry it takes from here and files the entry again under its new stamp when they differ.
+    idle: BTreeSet<(u64, ParagraphKey)>,
     /// How many lookups have found a held result since the cache was built.
     ///
     /// Monotonic and never reset, because the question it is kept for is asked between two moments
@@ -35,6 +48,9 @@ pub struct ParagraphCache<E> {
 struct Entry<E> {
     shaped: ShapedParagraph<E>,
     last_used: Cell<u64>,
+    /// The stamp this entry is filed under in [`ParagraphCache::idle`], or 0 when it is not filed
+    /// there. Access stamps start at 1.
+    idle: u64,
 }
 
 impl<E> ParagraphCache<E> {
@@ -42,6 +58,8 @@ impl<E> ParagraphCache<E> {
     pub fn new() -> Self {
         Self {
             entries: FxHashMap::default(),
+            unchecked: FxHashSet::default(),
+            idle: BTreeSet::new(),
             hits: Cell::new(0),
             clock: Cell::new(0),
             engine_bytes: 0,
@@ -126,17 +144,23 @@ impl<E> ParagraphCache<E> {
     /// under a key that does not describe it and serve it to a different one later.
     pub fn insert(&mut self, shaped: ShapedParagraph<E>) {
         let last_used = self.tick();
+        let key = shaped.key();
         self.engine_bytes += shaped.engine_bytes();
         let replaced = self.entries.insert(
-            shaped.key(),
+            key,
             Entry {
                 shaped,
                 last_used: Cell::new(last_used),
+                idle: 0,
             },
         );
         if let Some(replaced) = replaced {
             self.engine_bytes -= replaced.shaped.engine_bytes();
+            if replaced.idle != 0 {
+                self.idle.remove(&(replaced.idle, key));
+            }
         }
+        self.unchecked.insert(key);
     }
 
     /// Takes every shaped result out, in no particular order.
@@ -145,6 +169,8 @@ impl<E> ParagraphCache<E> {
     /// break state included, so the lines a worker kept are the lines later stages find.
     pub fn drain_shaped(&mut self) -> impl Iterator<Item = ShapedParagraph<E>> + '_ {
         self.engine_bytes = 0;
+        self.unchecked.clear();
+        self.idle.clear();
         self.entries.drain().map(|(_, entry)| entry.shaped)
     }
 
@@ -164,6 +190,8 @@ impl<E> ParagraphCache<E> {
     pub fn clear(&mut self) -> usize {
         let held = self.entries.len();
         self.entries.clear();
+        self.unchecked.clear();
+        self.idle.clear();
         self.engine_bytes = 0;
         held
     }
@@ -173,30 +201,104 @@ impl<E> ParagraphCache<E> {
         self.remove(key);
     }
 
-    /// Drops up to `count` least-recently-used entries not named by an active layout resolution.
-    pub fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
+    /// Records that the last current resolution of each of `keys` went away, and files the
+    /// entries `is_active` rejects as eviction candidates.
+    ///
+    /// `is_active` tells whether a current layout resolution names a key. `None` says that the
+    /// owner lost count of which keys it released, and examines every held key once. A key that
+    /// is not held contributes nothing. Called once per frame, this keeps the candidates current
+    /// at a cost that follows what the frame inserted and released.
+    pub fn note_released(
+        &mut self,
+        keys: Option<&[ParagraphKey]>,
+        is_active: impl Fn(ParagraphKey) -> bool,
+    ) {
+        match keys {
+            Some(keys) => {
+                for key in keys {
+                    if self.entries.contains_key(key) {
+                        self.unchecked.insert(*key);
+                    }
+                }
+            }
+            None => self.unchecked.extend(self.entries.keys().copied()),
+        }
+        let examined = self.file_unchecked(&is_active);
+        counter::add(Counter::ParagraphsExamined, examined);
+    }
+
+    /// Drops up to `count` least-recently-used entries for which `is_active` is false.
+    ///
+    /// `is_active` tells whether a current layout resolution names a key. The cache examines only
+    /// the keys inserted or released since they were last examined and the candidates it drops,
+    /// so the cost follows what changed. This is correct only while every key whose resolution goes
+    /// away is reported through [`ParagraphCache::note_released`].
+    pub fn evict_inactive(
+        &mut self,
+        is_active: impl Fn(ParagraphKey) -> bool,
+        count: usize,
+    ) -> usize {
         if count == 0 || self.entries.is_empty() {
             return 0;
         }
-        let active: FxHashSet<ParagraphKey> = active.iter().copied().collect();
-        let mut candidates: Vec<(u64, ParagraphKey)> = self
-            .entries
-            .iter()
-            .filter(|(key, _)| !active.contains(key))
-            .map(|(&key, entry)| (entry.last_used.get(), key))
-            .collect();
-        candidates.sort_unstable();
-        let take = count.min(candidates.len());
-        for (_, key) in candidates.into_iter().take(take) {
+        let mut examined = self.file_unchecked(&is_active);
+        let mut dropped = 0;
+        while dropped < count {
+            let Some((stamp, key)) = self.idle.pop_first() else {
+                break;
+            };
+            examined += 1;
+            let Some(entry) = self.entries.get_mut(&key) else {
+                continue;
+            };
+            entry.idle = 0;
+            if is_active(key) {
+                continue;
+            }
+            // Read since it was filed: file it again under the stamp it has now, so the order
+            // stays least-recently-used.
+            let now = entry.last_used.get();
+            if now != stamp {
+                entry.idle = now;
+                self.idle.insert((now, key));
+                continue;
+            }
             self.remove(key);
+            dropped += 1;
         }
-        take
+        counter::add(Counter::ParagraphsExamined, examined);
+        dropped
+    }
+
+    /// Files the unchecked entries `is_active` rejects as candidates, and reports how many it
+    /// examined.
+    fn file_unchecked(&mut self, is_active: &impl Fn(ParagraphKey) -> bool) -> u64 {
+        let mut examined = 0;
+        for key in self.unchecked.drain() {
+            examined += 1;
+            let Some(entry) = self.entries.get_mut(&key) else {
+                continue;
+            };
+            // An entry already filed is a candidate already; an active one comes back through
+            // `note_released` when its resolution goes away.
+            if entry.idle != 0 || is_active(key) {
+                continue;
+            }
+            let stamp = entry.last_used.get();
+            entry.idle = stamp;
+            self.idle.insert((stamp, key));
+        }
+        examined
     }
 
     /// Removes one entry, and takes its estimate off the sum.
     fn remove(&mut self, key: ParagraphKey) -> Option<ShapedParagraph<E>> {
         let entry = self.entries.remove(&key)?;
         self.engine_bytes -= entry.shaped.engine_bytes();
+        self.unchecked.remove(&key);
+        if entry.idle != 0 {
+            self.idle.remove(&(entry.idle, key));
+        }
         Some(entry.shaped)
     }
 
@@ -260,12 +362,15 @@ mod tests {
 
         // One is newer than two; three is pinned independently of its age.
         assert!(cache.get(ParagraphKey(1)).is_some());
-        assert_eq!(cache.evict_inactive(&[ParagraphKey(3)], 1), 1);
+        assert_eq!(cache.evict_inactive(|key| key == ParagraphKey(3), 1), 1);
         assert!(cache.holds(ParagraphKey(1)));
         assert!(!cache.holds(ParagraphKey(2)));
         assert!(cache.holds(ParagraphKey(3)));
 
-        assert_eq!(cache.evict_inactive(&[ParagraphKey(3)], usize::MAX), 1);
+        assert_eq!(
+            cache.evict_inactive(|key| key == ParagraphKey(3), usize::MAX),
+            1
+        );
         assert_eq!(cache.len(), 1);
         assert!(cache.holds(ParagraphKey(3)));
     }
@@ -295,10 +400,75 @@ mod tests {
         cache.forget(ParagraphKey(1));
         assert_eq!(cache.engine_bytes(), 340);
         // Three went back in before two, so it is the colder of the two inactive results.
-        assert_eq!(cache.evict_inactive(&[ParagraphKey(4)], 1), 1);
+        assert_eq!(cache.evict_inactive(|key| key == ParagraphKey(4), 1), 1);
         assert!(!cache.holds(ParagraphKey(3)));
         assert_eq!(cache.engine_bytes(), 40);
         cache.clear();
         assert_eq!(cache.engine_bytes(), 0);
+    }
+
+    /// A key found active is examined again only after it is reported released, and then it goes.
+    #[test]
+    fn a_released_key_is_evicted_once_reported() {
+        let mut cache = ParagraphCache::new();
+        for key in 1..=3 {
+            cache.insert(shaped(key));
+        }
+        let active = core::cell::Cell::new([true, true, true]);
+        let is_active = |key: ParagraphKey| active.get()[key.0 as usize - 1];
+        assert_eq!(cache.evict_inactive(is_active, usize::MAX), 0);
+
+        // Two loses its resolution. Unreported, eviction does not see it.
+        active.set([true, false, true]);
+        assert_eq!(cache.evict_inactive(is_active, usize::MAX), 0);
+        assert!(cache.holds(ParagraphKey(2)));
+
+        cache.note_released(Some(&[ParagraphKey(2)]), is_active);
+        assert_eq!(cache.evict_inactive(is_active, usize::MAX), 1);
+        assert!(!cache.holds(ParagraphKey(2)));
+        assert_eq!(cache.len(), 2);
+
+        // A lost count makes every held key a candidate again.
+        active.set([false, false, false]);
+        cache.note_released(None, is_active);
+        assert_eq!(cache.evict_inactive(is_active, usize::MAX), 2);
+        assert!(cache.is_empty());
+    }
+
+    /// An idle entry read again goes behind the idle entries that were not.
+    #[test]
+    fn a_read_moves_an_idle_entry_behind_colder_ones() {
+        let mut cache = ParagraphCache::new();
+        for key in 1..=3 {
+            cache.insert(shaped(key));
+        }
+        // Files one and two as idle and drops the colder.
+        cache.evict_inactive(|key| key == ParagraphKey(3), 1);
+        assert!(!cache.holds(ParagraphKey(1)));
+
+        assert!(cache.get(ParagraphKey(2)).is_some());
+        cache.note_released(Some(&[ParagraphKey(3)]), |_| false);
+        assert_eq!(cache.evict_inactive(|_| false, 1), 1);
+        assert!(cache.holds(ParagraphKey(2)), "two was read after three");
+        assert!(!cache.holds(ParagraphKey(3)));
+    }
+
+    /// An entry taken out and put back is a candidate again, and one taken out is no longer.
+    #[test]
+    fn taking_and_reinserting_keeps_the_candidates_exact() {
+        let mut cache = ParagraphCache::new();
+        cache.insert(shaped(1));
+        cache.insert(shaped(2));
+        assert_eq!(cache.evict_inactive(|_| true, 1), 0);
+        // Both lose their resolutions and are filed as candidates.
+        cache.note_released(Some(&[ParagraphKey(1), ParagraphKey(2)]), |_| false);
+
+        let taken = cache.take(ParagraphKey(1)).expect("held");
+        assert_eq!(cache.evict_inactive(|_| false, usize::MAX), 1);
+        assert!(cache.is_empty());
+
+        cache.insert(taken);
+        assert_eq!(cache.evict_inactive(|_| false, usize::MAX), 1);
+        assert!(cache.is_empty());
     }
 }

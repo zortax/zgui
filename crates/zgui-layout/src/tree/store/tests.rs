@@ -93,6 +93,38 @@ fn paragraph_ids_are_interned_while_active_and_reused_after_reclamation() {
 }
 
 #[test]
+fn released_paragraphs_past_the_record_drain_once_as_unknown() {
+    fn drained(store: &mut LayoutStore) -> Option<Vec<ParagraphKey>> {
+        let mut seen = None;
+        store.drain_released_paragraphs(|keys, _| seen = keys.map(<[ParagraphKey]>::to_vec));
+        seen
+    }
+
+    let mut store = LayoutStore::new(DocumentId::FIRST);
+    let key = ParagraphKey(7);
+    let id = store.intern_paragraph(key);
+    store.retain_paragraph(id);
+    store.release_paragraph(id);
+    assert_eq!(drained(&mut store), Some(vec![key]));
+    assert_eq!(drained(&mut store), Some(Vec::new()));
+
+    // More releases than the store records.
+    for _ in 0..=super::fragments::RELEASED_KEEP {
+        store.retain_paragraph(id);
+        store.release_paragraph(id);
+    }
+    assert_eq!(drained(&mut store), None);
+
+    store.retain_paragraph(id);
+    store.release_paragraph(id);
+    assert_eq!(
+        drained(&mut store),
+        Some(vec![key]),
+        "the drain did not reset the overflow"
+    );
+}
+
+#[test]
 fn the_content_box_is_the_border_box_less_every_inset() {
     let layout = ResolvedLayout {
         origin: Point::new(DevicePx(10.0), DevicePx(20.0)),

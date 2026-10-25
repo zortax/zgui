@@ -609,6 +609,11 @@ counters! {
     /// everything the window has ever shaped.
     ParagraphsEvicted => paragraphs_evicted, Group::BackendNeutral;
 
+    /// Shaped paragraphs the shaping cache examined to keep its eviction candidates.
+    ///
+    /// Follows what changed: a frame that releases or shapes no paragraph adds nothing.
+    ParagraphsExamined => paragraphs_examined, Group::BackendNeutral;
+
     /// Boxes whose layout was thrown away because the text in them has to be shaped again.
     BoxesReshaped => boxes_reshaped, Group::BackendNeutral;
 }
