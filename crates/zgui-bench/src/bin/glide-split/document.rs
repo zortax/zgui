@@ -1,13 +1,22 @@
 //! The document: one rigid scroller whose every row exists.
 //!
-//! The same markup, the same sheet and the same wheel gesture as `unvirtualised-probe`, because the
+//! The same rows, the same sheet and the same wheel gesture as `unvirtualised-probe`, because the
 //! walk this probe splits is the walk that document exists to provoke: nothing in a scrolled
-//! container is restyled or relaid out, every piece of it is the same piece one offset further
-//! along, and the offsetting walk therefore reaches every box in it on every frame of the glide.
+//! container is restyled or relaid out, and every piece of it is the same piece one offset further
+//! along.
 //!
 //! A virtualised list would not answer the question at all. It mounts the rows in front of the
 //! port, so the walk is over tens of boxes whatever the model holds, and a split of a cost that
 //! does not grow is a split of nothing.
+//!
+//! # Why the scroller holds a pinned box
+//!
+//! A scroll container draws its content in a space of its own and a scroll writes only that space
+//! (see `zgui_layout::fragment::scroll_nodes`), so a plain list never reaches the offsetting walk.
+//! The first child of this scroller is a transformed box that holds a fixed box. The content space
+//! would move that fixed box, so the scroller keeps its children in its own space, and the
+//! offsetting walk reaches every box in it on every frame of the glide. The pinned box is two
+//! boxes, which the fragment pass composes again on each frame.
 //!
 //! # Why the rows are in groups
 //!
@@ -62,7 +71,9 @@ const SHEET: &str = zgui::css!(
         border-bottom: 1px solid #232833;
      }
      .bench-group { flex-direction: column }
-     .bench-cell { width: 200px }"
+     .bench-cell { width: 200px }
+     .bench-hold { height: 1px; position: relative; transform: translate(1px, 0px) }
+     .bench-pin { position: fixed; top: 0px; left: 0px; width: 1px; height: 1px }"
 );
 
 /// Whether the rows clip what they contain.
@@ -133,7 +144,11 @@ pub(crate) fn opened(rows: usize, clipping: Clipping) -> Opened {
         }))
         .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
-            let mut list = zgui::elements::column().class("bench-list");
+            let mut list = zgui::elements::column().class("bench-list").child(
+                zgui::elements::column()
+                    .class("bench-hold")
+                    .child(zgui::elements::column().class("bench-pin")),
+            );
             for start in (0..rows).step_by(GROUP) {
                 let mut group = zgui::elements::column().class("bench-group");
                 for index in start..(start + GROUP).min(rows) {
