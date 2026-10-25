@@ -10,9 +10,10 @@ use zgui_profile::{Counter, Counters};
 ///
 /// This list is written out rather than derived so that a *new* renderer-specific counter fails the
 /// test beside it and has to be considered, instead of quietly joining a set nothing enumerates.
-pub const RENDERER_SPECIFIC: [Counter; 16] = [
+pub const RENDERER_SPECIFIC: [Counter; 17] = [
     Counter::ChunkBytesUploaded,
     Counter::DrawCalls,
+    Counter::BatchesCulled,
     Counter::DamagePx,
     Counter::BytesUploaded,
     Counter::AtlasTextureWrites,

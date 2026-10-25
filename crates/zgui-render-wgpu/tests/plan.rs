@@ -299,6 +299,145 @@ fn a_blend_mode_this_phase_cannot_composite_is_counted_rather_than_composited_wr
     );
 }
 
+/// A background, a rectangle in the top left, and a stack of lines and rectangles in the bottom
+/// right.
+///
+/// The stack alternates two kinds, so each of its layers is a batch of its own, and none of those
+/// batches reaches the top left.
+fn corner_batches() -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let paint = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(10, 20, 30)));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        paint,
+    ));
+    scene.push_quad(Quad::filled(rect(8.0, 8.0, 24.0, 24.0), paint));
+    for layer in 0..4 {
+        let at = rect(80.0, 80.0 + 2.0 * layer as f32, 32.0, 8.0);
+        if layer % 2 == 0 {
+            scene.push_decoration(zgui_scene::Decoration::new(
+                at,
+                2.0,
+                opaque(200, 0, 0),
+                zgui_scene::prim::DecorationStyle::Solid,
+            ));
+        } else {
+            scene.push_quad(Quad::filled(at, paint));
+        }
+    }
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+#[test]
+fn a_batch_that_misses_a_damaged_rectangle_is_not_drawn_into_it() {
+    let Some(renderer) = plain_renderer() else {
+        return;
+    };
+    let scene = corner_batches();
+    let batches: Vec<zgui_scene::Batch> = scene.batches().collect();
+    assert_eq!(batches.len(), 5, "{batches:?}");
+
+    let top_left = Rect::new(Point::new(0, 0), Size::new(40, 40));
+    let bottom_right = Rect::new(Point::new(72, 72), Size::new(48, 48));
+    let mut two = DamageSet::new();
+    two.absorb(top_left);
+    two.absorb(bottom_right);
+    let planned = plan(renderer.gpu(), &scene, &two);
+
+    let drawn = |scissor: Rect<i32, Device>| -> Vec<PlannedDraw> {
+        let pass = planned
+            .passes()
+            .find(|pass| pass.scissor == scissor)
+            .expect("each rectangle has a pass");
+        planned.draws_of(pass).to_vec()
+    };
+    // The background reaches every pixel, and the stack only the bottom right.
+    assert_eq!(
+        drawn(top_left),
+        vec![PlannedDraw::Clear, PlannedDraw::Batch(batches[0].clone())]
+    );
+    let everything: Vec<PlannedDraw> = core::iter::once(PlannedDraw::Clear)
+        .chain(batches.iter().cloned().map(PlannedDraw::Batch))
+        .collect();
+    assert_eq!(drawn(bottom_right), everything);
+    assert_eq!(planned.culled, 4, "the four layers of the stack, once");
+}
+
+#[test]
+fn one_damaged_rectangle_draws_every_batch() {
+    // One rectangle replays the stream once, and the display list already left out what misses it.
+    let Some(renderer) = plain_renderer() else {
+        return;
+    };
+    let scene = corner_batches();
+    let mut one = DamageSet::new();
+    let top_left = Rect::new(Point::new(0, 0), Size::new(40, 40));
+    one.absorb(top_left);
+    let planned = plan(renderer.gpu(), &scene, &one);
+
+    let pass = planned.passes().next().expect("the rectangle has a pass");
+    assert_eq!(pass.scissor, top_left);
+    assert_eq!(planned.draws_of(pass).len(), 1 + 5);
+    assert_eq!(planned.culled, 0);
+}
+
+#[test]
+fn inside_a_group_a_batch_is_culled_against_the_group_region() {
+    // A blur reads the whole of its group, so content beside a damaged rectangle still shapes the
+    // pixels inside it. The group's target holds its whole region in every rectangle.
+    let Some(renderer) = plain_renderer() else {
+        return;
+    };
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let paint = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(10, 20, 30)));
+    let boundary = GroupBoundary::start(
+        rect(0.0, 0.0, 64.0, 64.0),
+        1.0,
+        zgui_scene::peniko::BlendMode::default(),
+        [Filter::Blur(3.0)].into_iter().collect(),
+    );
+    scene.push_group(boundary.clone());
+    scene.push_quad(Quad::filled(rect(8.0, 8.0, 16.0, 16.0), paint));
+    scene.push_decoration(zgui_scene::Decoration::new(
+        rect(44.0, 8.0, 8.0, 8.0),
+        2.0,
+        opaque(200, 0, 0),
+        zgui_scene::prim::DecorationStyle::Solid,
+    ));
+    scene.push_group(boundary.end());
+    scene.finish(&DamageSet::full());
+
+    let mut two = DamageSet::new();
+    two.absorb(Rect::new(Point::new(0, 0), Size::new(40, 40)));
+    two.absorb(Rect::new(Point::new(96, 96), Size::new(16, 16)));
+    let planned = plan(renderer.gpu(), &scene, &two);
+
+    let line = scene
+        .batches()
+        .find(|batch| matches!(batch, zgui_scene::Batch::Decorations(_)))
+        .expect("the line is a batch of its own");
+    let into_groups = planned
+        .passes()
+        .filter(|pass| matches!(pass.target, TargetRef::Pool(_)))
+        .filter(|pass| {
+            planned
+                .draws_of(pass)
+                .contains(&PlannedDraw::Batch(line.clone()))
+        })
+        .count();
+    assert_eq!(
+        into_groups, 2,
+        "the line is drawn into the group in both rectangles"
+    );
+}
+
 /// A scene of three squares stacked over one point, each in a vector pass of its own.
 fn three_stacked_passes(damage: &DamageSet) -> Scene {
     use zgui_scene::kurbo::Shape as _;

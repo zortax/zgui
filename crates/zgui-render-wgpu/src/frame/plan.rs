@@ -2,6 +2,7 @@
 
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Rect};
+use zgui_profile::{Counter, counter};
 use zgui_render::ExternalTexture;
 use zgui_scene::{BackdropFilter, Batch, GroupBoundary, MarkPlan, PrimitiveKind, Scene};
 
@@ -9,6 +10,7 @@ use crate::filter::chain::Chain;
 use crate::filter::{self, Filtered};
 use crate::frame::build::{FramePlan, PlanBuilder};
 use crate::frame::damage;
+use crate::frame::reach::{self, Reached};
 use crate::frame::segment::PlannedDraw;
 use crate::frame::target::TargetRef;
 use crate::frame::vector;
@@ -37,9 +39,10 @@ struct OpenGroup {
 /// them a value that can be read and asserted; discovering them while recording would mean
 /// discarding the borrow that states the constraint.
 ///
-/// One rectangle is one full replay of the batch stream under a different scissor, rather than a
-/// re-culled stream. Which primitives survive a damage set is decided where the display list is
-/// built, from the fragments' own ink; here the rectangles are only where the writes land.
+/// One rectangle is one full replay of the batch stream under a different scissor. Which primitives
+/// survive a damage set is decided where the display list is built, from the fragments' own ink.
+/// When there are several rectangles, an instanced batch whose reach misses the scissor is left out
+/// of a rectangle, because it writes no pixel there.
 ///
 /// `marks` holds the union bins, planned against `damage` or more.
 pub fn plan_segments(
@@ -61,10 +64,24 @@ pub fn plan_segments(
         .collect();
 
     plan_mark_pages(&mut builder, scene, marks);
-    for rect in damage::rects_covering_backdrops(damage, used, &backdrops) {
-        plan_rect(&mut builder, scene, marks, rect, used, externals, vectors);
+    let rects = damage::rects_covering_backdrops(damage, used, &backdrops);
+    // One rectangle draws every batch, so only several need to know where each batch lands.
+    let batches = reach::batches(scene, rects.len() > 1);
+    for rect in rects {
+        plan_rect(
+            &mut builder,
+            scene,
+            &batches,
+            marks,
+            rect,
+            used,
+            externals,
+            vectors,
+        );
     }
-    builder.finish()
+    let plan = builder.finish();
+    counter::add(Counter::BatchesCulled, u64::from(plan.culled));
+    plan
 }
 
 /// Plans one pass per bin page, adding the coverage of every bin on it.
@@ -193,6 +210,7 @@ fn plan_marks(
 fn plan_rect(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
+    batches: &[Reached],
     marks: &MarkPlan,
     rect: Rect<i32, Device>,
     used: Rect<i32, Device>,
@@ -209,8 +227,8 @@ fn plan_rect(
     // away every pixel this frame is relying on not having to redraw.
     builder.draw(PlannedDraw::Clear);
 
-    for batch in scene.batches() {
-        match batch {
+    for Reached { batch, reach } in batches {
+        match *batch {
             Batch::Group(index) => {
                 let Some(boundary) = scene.primitives.groups.get(index) else {
                     continue;
@@ -291,8 +309,13 @@ fn plan_rect(
                     None => builder.defer(),
                 }
             }
-            Batch::Marks(range) => plan_marks(builder, scene, marks, range, current, scissor),
-            other => builder.draw(PlannedDraw::Batch(other)),
+            Batch::Marks(ref range) => {
+                plan_marks(builder, scene, marks, range.clone(), current, scissor);
+            }
+            // The scissor is the damage rectangle or, inside a group, the group's region. Both
+            // bound what any draw of this pass can write.
+            _ if reach.is_some_and(|reach| !reach.intersects(scissor)) => builder.note_culled(),
+            _ => builder.draw(PlannedDraw::Batch(batch.clone())),
         }
     }
 

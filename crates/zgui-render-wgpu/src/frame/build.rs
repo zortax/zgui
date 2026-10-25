@@ -27,6 +27,8 @@ pub struct FramePlan {
     pub unsupported_blends: u32,
     /// How many groups could not be isolated because the target pool was exhausted.
     pub unisolated: u32,
+    /// How many instanced batches were left out of a pass whose scissor they miss.
+    pub culled: u32,
 }
 
 impl FramePlan {
@@ -409,6 +411,12 @@ impl<'gpu> PlanBuilder<'gpu> {
     /// Notes a group the pool could not lend a target for.
     pub fn note_unisolated(&mut self) {
         self.plan.unisolated += 1;
+    }
+
+    /// Notes an instanced batch left out of the open pass, because it writes nothing inside the
+    /// pass's scissor.
+    pub fn note_culled(&mut self) {
+        self.plan.culled += 1;
     }
 
     /// Finishes the plan, returning every lent target to the pool.

@@ -488,6 +488,131 @@ fn a_group_inside_a_damage_rectangle_is_composited_from_what_the_rectangle_holds
     );
 }
 
+/// Lines and rectangles stacked in the top left, the same stack turned in the bottom right, and a
+/// blurred group whose content sits on both sides of the top-left rectangle's edge.
+///
+/// Each layer of a stack alternates kind, and the top layer of each is a rectangle `tint` colours.
+fn culled_corners(tint: [u8; 3]) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let white = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+    let grey = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(90, 90, 90)));
+    let tinted = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(tint[0], tint[1], tint[2])));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        white,
+    ));
+    // A turn of 0.3 rad about the centre of the bottom-right stack.
+    let (sin, cos) = 0.3f32.sin_cos();
+    let owner = zgui_scene::PropertyOwner::new(9).expect("a handle is never the empty word");
+    let turn = zgui_geom::Matrix4::from_columns([
+        [cos, sin, 0.0, 0.0],
+        [-sin, cos, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [96.0, 96.0, 0.0, 1.0],
+    ]);
+    let viewport = scene.spatial.viewport();
+    let turned = scene.spatial.space_of(
+        viewport,
+        owner,
+        zgui_scene::OwnSpace::of(Some(turn), None, false),
+    );
+    // The turned stack starts with a line, so no layer of it shares a batch with the other stack.
+    for (origin, space, layers) in [((8.0, 8.0), None, 5), ((-16.0, -16.0), Some(turned), 6)] {
+        for layer in 0..layers {
+            let top = layer + 1 == layers;
+            let at = rect(
+                origin.0,
+                origin.1 + 3.0 * layer as f32,
+                32.0,
+                if top { 12.0 } else { 8.0 },
+            );
+            if (layer + layers) % 2 == 0 {
+                let mut line = zgui_scene::Decoration::new(
+                    at,
+                    2.0,
+                    opaque(200, 30, 30),
+                    zgui_scene::prim::DecorationStyle::Solid,
+                );
+                if let Some(space) = space {
+                    line.transform = space.index();
+                }
+                scene.push_decoration(line);
+            } else {
+                let paint = if top { tinted } else { grey };
+                let mut quad = Quad::filled(at, paint);
+                if let Some(space) = space {
+                    quad = quad.transformed(space);
+                }
+                scene.push_quad(quad);
+            }
+        }
+    }
+    // The group's line lies past the top-left rectangle, and its blur reaches into it.
+    let boundary = GroupBoundary::start(
+        rect(0.0, 48.0, 64.0, 24.0),
+        1.0,
+        zgui_scene::peniko::BlendMode::default(),
+        [Filter::Blur(3.0)].into_iter().collect(),
+    );
+    scene.push_group(boundary.clone());
+    scene.push_quad(Quad::filled(rect(4.0, 52.0, 16.0, 8.0), tinted));
+    scene.push_decoration(zgui_scene::Decoration::new(
+        rect(44.0, 52.0, 12.0, 6.0),
+        2.0,
+        opaque(30, 30, 200),
+        zgui_scene::prim::DecorationStyle::Solid,
+    ));
+    scene.push_group(boundary.end());
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+#[test]
+fn a_frame_with_batches_left_out_of_a_rectangle_is_the_frame_drawn_whole() {
+    // With several rectangles, a batch that writes nothing inside one is not drawn into it. The
+    // picture is the one property that must not notice.
+    let Some((mut split, mut once)) = support::renderer_pair() else {
+        return;
+    };
+    present(&mut split, &culled_corners([40, 160, 40]));
+    let after = culled_corners([160, 40, 160]);
+
+    let mut corners: DamageSet = DamageSet::new();
+    corners.absorb(Rect::new(Point::new(0, 0), Size::new(42, 80)));
+    corners.absorb(Rect::new(Point::new(68, 68), Size::new(56, 56)));
+    assert_eq!(corners.len(), 2, "two disjoint rectangles");
+
+    let culled = {
+        let _turn = zgui_profile::counter::exclusive();
+        let before = zgui_profile::counter::get(zgui_profile::Counter::BatchesCulled);
+        let outcome = split.draw(&after, &corners);
+        assert!(outcome.retires_damage(), "{outcome:?}");
+        zgui_profile::counter::get(zgui_profile::Counter::BatchesCulled) - before
+    };
+    let in_corners = split
+        .read_presented()
+        .expect("a stand-in surface can be read back");
+    let whole_frame = present(&mut once, &after);
+    assert_eq!(
+        in_corners.max_difference(&whole_frame),
+        0,
+        "the corners redrawn with batches left out are the frame drawn whole"
+    );
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(
+            culled > 0,
+            "the fixture must leave batches out of a rectangle"
+        );
+    }
+}
+
 #[test]
 fn a_group_inside_a_filtered_group_is_composited_over_all_of_what_the_filter_reads() {
     // A composite lands in whatever is beneath the group, and what may be written there is that

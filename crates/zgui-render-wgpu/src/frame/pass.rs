@@ -199,6 +199,7 @@ impl Recorder<'_> {
             scissor.size.width.max(0) as u32,
             scissor.size.height.max(0) as u32,
         );
+        let mut pass = BoundPass::new(pass);
         let tables = self
             .buffers
             .frame_bind_group(self.gpu, self.pipelines.layouts());
@@ -215,7 +216,7 @@ impl Recorder<'_> {
     /// Issues one planned draw, and says whether it happened.
     fn issue(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         draw: &PlannedDraw,
@@ -229,7 +230,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::DamageClear), pipeline);
                 pass.draw(0..4, 0..1);
                 true
             }
@@ -283,7 +284,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::VectorComposite), pipeline);
                 pass.set_bind_group(0, tables, &[planned.globals]);
                 pass.set_bind_group(1, &bind, &[]);
                 pass.draw(0..4, *first..*first + *count);
@@ -329,7 +330,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::MarksComposite), pipeline);
                 pass.set_bind_group(0, tables, &[planned.globals]);
                 pass.set_bind_group(1, &instances, &[]);
                 pass.set_bind_group(2, &bins, &[*block]);
@@ -355,7 +356,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::External), pipeline);
                 pass.set_bind_group(0, tables, &[planned.globals]);
                 pass.set_bind_group(1, &bind, &[*params]);
                 pass.draw(0..4, 0..1);
@@ -367,7 +368,7 @@ impl Recorder<'_> {
     /// Issues one instanced batch of the display list.
     fn batch(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         batch: Batch,
@@ -432,7 +433,7 @@ impl Recorder<'_> {
         let Some(pipeline) = self.pipelines.get(self.gpu, kind, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Kind(kind), pipeline);
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         if let Some(bind_group) = atlas {
@@ -446,7 +447,7 @@ impl Recorder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn marks_draw(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         kind: crate::pipeline::marks::MarkKind,
@@ -488,13 +489,11 @@ impl Recorder<'_> {
                 None => return false,
             },
         };
-        let Some(pipeline) =
-            self.pipelines
-                .get(self.gpu, PipelineKind::marks(kind, coverage), format)
-        else {
+        let pipeline_kind = PipelineKind::marks(kind, coverage);
+        let Some(pipeline) = self.pipelines.get(self.gpu, pipeline_kind, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Kind(pipeline_kind), pipeline);
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         pass.set_bind_group(2, &payload, &[block]);
@@ -513,7 +512,7 @@ impl Recorder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn shaded(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         shader: zgui_scene::ShaderId,
@@ -560,7 +559,7 @@ impl Recorder<'_> {
             );
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Effect(shader), pipeline);
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         pass.set_bind_group(2, &block, &[offset]);
@@ -577,7 +576,7 @@ impl Recorder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn effect_filter(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         source: TargetRef,
         shader: zgui_scene::ShaderId,
         params: u32,
@@ -604,7 +603,7 @@ impl Recorder<'_> {
         let Some(pipeline) = self.pipelines.effect(self.gpu, shader, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Effect(shader), pipeline);
         pass.set_bind_group(0, &read, &[params]);
         pass.set_bind_group(1, &own, &[block]);
         pass.draw(0..4, 0..1);
@@ -614,7 +613,7 @@ impl Recorder<'_> {
     /// Issues one draw that reads a target through a block of its own.
     fn textured(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         kind: PipelineKind,
         source: TargetRef,
         params: u32,
@@ -635,7 +634,7 @@ impl Recorder<'_> {
         let Some(pipeline) = self.pipelines.get(self.gpu, kind, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Kind(kind), pipeline);
         let group = match tables {
             Some((bind_group, offset)) => {
                 pass.set_bind_group(0, bind_group, &[offset]);
@@ -682,6 +681,77 @@ impl Recorder<'_> {
             TargetRef::Pool(slot) => slot.scale().extent(self.pool.region()),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
+    }
+}
+
+/// Which pipeline a pass has bound.
+///
+/// The attachment format is the same for every draw of one pass, so a kind or an effect names one
+/// pipeline there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bound {
+    /// One of this crate's own pipelines.
+    Kind(PipelineKind),
+    /// The pipeline of an application effect.
+    Effect(zgui_scene::ShaderId),
+}
+
+/// The bind groups a pass can bind at once.
+const BIND_SLOTS: usize = 4;
+
+/// An open render pass, and what it has bound.
+///
+/// A pipeline, a bind group or a dynamic offset that is bound already is not issued again. Each
+/// call the device records costs a validation and a merge of the bind group's resources into the
+/// pass, and consecutive draws of one frame mostly bind the same tables and the same lane.
+struct BoundPass<'pass> {
+    /// The pass.
+    pass: wgpu::RenderPass<'pass>,
+    /// The pipeline bound last.
+    pipeline: Option<Bound>,
+    /// The bind group and the dynamic offset bound last at each index.
+    groups: [Option<(wgpu::BindGroup, Option<u32>)>; BIND_SLOTS],
+}
+
+impl<'pass> BoundPass<'pass> {
+    /// `pass`, with nothing bound yet.
+    fn new(pass: wgpu::RenderPass<'pass>) -> Self {
+        Self {
+            pass,
+            pipeline: None,
+            groups: Default::default(),
+        }
+    }
+
+    /// Binds `pipeline`, which `key` names, unless it is bound already.
+    fn set_pipeline(&mut self, key: Bound, pipeline: &wgpu::RenderPipeline) {
+        if self.pipeline != Some(key) {
+            self.pass.set_pipeline(pipeline);
+            self.pipeline = Some(key);
+        }
+    }
+
+    /// Binds `group` at `index` with `offsets`, unless the same group and offset are bound there.
+    fn set_bind_group(&mut self, index: u32, group: &wgpu::BindGroup, offsets: &[u32]) {
+        debug_assert!(
+            offsets.len() <= 1,
+            "every bind group here has one dynamic offset at most"
+        );
+        let offset = offsets.first().copied();
+        let held = &mut self.groups[index as usize];
+        if held
+            .as_ref()
+            .is_some_and(|(bound, at)| bound == group && *at == offset)
+        {
+            return;
+        }
+        self.pass.set_bind_group(index, group, offsets);
+        *held = Some((group.clone(), offset));
+    }
+
+    /// Draws `instances` of a strip of `vertices`.
+    fn draw(&mut self, vertices: core::ops::Range<u32>, instances: core::ops::Range<u32>) {
+        self.pass.draw(vertices, instances);
     }
 }
 

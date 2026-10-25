@@ -282,6 +282,13 @@ counters! {
     /// Draw calls submitted to the GPU.
     DrawCalls => draw_calls, Group::RendererSpecific;
 
+    /// Instanced batches a renderer left out of a pass, because they write nothing inside its
+    /// scissor.
+    ///
+    /// A frame of several damage rectangles replays its batches once per rectangle. Each batch
+    /// whose pixels miss a rectangle counts here once for that rectangle, and draws nothing there.
+    BatchesCulled => batches_culled, Group::RendererSpecific;
+
     /// Vector rasterisation passes the scene stage planned.
     ///
     /// The plan is made while the scene is finished, not while it is drawn, so this counts a

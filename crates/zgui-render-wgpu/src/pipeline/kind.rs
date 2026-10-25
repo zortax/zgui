@@ -508,6 +508,48 @@ mod tests {
     }
 
     #[test]
+    fn a_kind_indexes_its_place_in_the_list_of_every_kind() {
+        // The pipeline table is indexed by the discriminant, so the two orders have to agree. The
+        // match names every kind, so a new kind does not compile here until it has a place, and
+        // that place must be in `ALL`.
+        fn place(kind: PipelineKind) -> usize {
+            match kind {
+                PipelineKind::Quad => 0,
+                PipelineKind::Shadow => 1,
+                PipelineKind::Decoration => 2,
+                PipelineKind::MonoSprite => 3,
+                PipelineKind::ColorSprite => 4,
+                PipelineKind::SubpixelSprite => 5,
+                PipelineKind::Blit => 6,
+                PipelineKind::BlitUndoSrgb => 7,
+                PipelineKind::DamageClear => 8,
+                PipelineKind::BlurDownsample => 9,
+                PipelineKind::BlurAxis => 10,
+                PipelineKind::Composite => 11,
+                PipelineKind::External => 12,
+                PipelineKind::VectorComposite => 13,
+                PipelineKind::MarksDisc => 14,
+                PipelineKind::MarksDiscCoverage => 15,
+                PipelineKind::MarksBox => 16,
+                PipelineKind::MarksBoxCoverage => 17,
+                PipelineKind::MarksPolyline => 18,
+                PipelineKind::MarksPolylineCoverage => 19,
+                PipelineKind::MarksGlyph => 20,
+                PipelineKind::MarksGlyphCoverage => 21,
+                PipelineKind::MarksComposite => 22,
+            }
+        }
+        for (index, kind) in PipelineKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind as usize, index, "{kind:?}");
+            assert_eq!(place(kind), index, "{kind:?}");
+        }
+        assert_eq!(
+            place(PipelineKind::MarksComposite) + 1,
+            PipelineKind::ALL.len()
+        );
+    }
+
+    #[test]
     fn every_kind_has_its_own_label_and_entry_points() {
         let mut labels: Vec<&str> = PipelineKind::ALL.iter().map(|k| k.label()).collect();
         labels.sort_unstable();

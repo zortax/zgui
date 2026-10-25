@@ -437,6 +437,8 @@ impl Renderer for WgpuRenderer {
             .shift_scratch
             .take()
             .map_or(0, |held| crate::frame::shift::ShiftScratch::bytes(&held));
+        // A kept bind group holds its view, so a target is freed only once those are dropped too.
+        self.buffers.forget_view_binds();
         self.groups.release_unused() + scratch + self.marks_scratch.release()
     }
 
