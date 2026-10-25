@@ -80,7 +80,8 @@ impl Snapshot {
     }
 }
 
-/// The resident set and its parts, from `/proc/self/statm` and `/proc/self/smaps_rollup`.
+/// The resident set and its parts, from `/proc/self/statm` and `/proc/self/smaps_rollup`, and the
+/// thread count from `/proc/self/status`.
 fn proc_figures() -> Group {
     let mut group = Group::new();
     let page = libc::page_size();
@@ -101,6 +102,17 @@ fn proc_figures() -> Group {
         ("Shared_Dirty:", "shared_dirty_bytes"),
         ("Swap:", "swap_bytes"),
     ];
+    if let Some(threads) = std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("Threads:"))
+                .and_then(|count| count.trim().parse::<u64>().ok())
+        })
+    {
+        group.push(("threads", threads));
+    }
     if let Ok(rollup) = std::fs::read_to_string("/proc/self/smaps_rollup") {
         for line in rollup.lines() {
             let mut fields = line.split_whitespace();
