@@ -249,6 +249,39 @@ pub struct Painter {
     styles: PaintStyleCache,
     /// What each fragment painted last time, held so an unchanged one replays instead of encoding.
     cache: PaintCache,
+    /// The walk's stacks and per-frame maps, kept so a frame reuses the last frame's allocations.
+    scratch: WalkScratch,
+}
+
+/// The containers one emit walk fills, empty between walks.
+#[derive(Debug, Default)]
+struct WalkScratch {
+    open: Vec<(BoxKey, GroupBoundary)>,
+    bands: Vec<BoxKey>,
+    alpha: Vec<f32>,
+    opaque: Vec<bool>,
+    outlines: Vec<Option<(FragKey, PaintStyleRef)>>,
+    decorations: Decorations,
+    text_fills: TextFills,
+    named: Vec<AtlasKey>,
+    shapes: rustc_hash::FxHashMap<zgui_scene::SpatialId, u64>,
+    spaces: rustc_hash::FxHashMap<zgui_scene::SpatialId, Option<zgui_geom::Affine2>>,
+}
+
+impl WalkScratch {
+    /// Empties every container and keeps its allocation.
+    fn clear(&mut self) {
+        self.open.clear();
+        self.bands.clear();
+        self.alpha.clear();
+        self.opaque.clear();
+        self.outlines.clear();
+        self.decorations.clear();
+        self.text_fills.clear();
+        self.named.clear();
+        self.shapes.clear();
+        self.spaces.clear();
+    }
 }
 
 impl Painter {
@@ -294,6 +327,7 @@ impl Painter {
             };
         };
         self.cache.begin_frame();
+        let scratch = std::mem::take(&mut self.scratch);
         let mut pass = Pass {
             painter: self,
             input,
@@ -302,18 +336,46 @@ impl Painter {
                 recorded: input.record_emitted,
                 ..PaintReport::default()
             },
-            open: Vec::new(),
-            bands: Vec::new(),
-            alpha: Vec::new(),
-            opaque: Vec::new(),
-            decorations: Decorations::new(),
-            text_fills: TextFills::new(),
-            named: Vec::new(),
-            shapes: rustc_hash::FxHashMap::default(),
-            spaces: rustc_hash::FxHashMap::default(),
+            root,
+            open: scratch.open,
+            bands: scratch.bands,
+            alpha: scratch.alpha,
+            opaque: scratch.opaque,
+            outlines: scratch.outlines,
+            decorations: scratch.decorations,
+            text_fills: scratch.text_fills,
+            named: scratch.named,
+            shapes: scratch.shapes,
+            spaces: scratch.spaces,
         };
         stacking::walk(input.store, root, &mut pass);
-        let mut report = pass.report;
+        let Pass {
+            mut report,
+            open,
+            bands,
+            alpha,
+            opaque,
+            outlines,
+            decorations,
+            text_fills,
+            named,
+            shapes,
+            spaces,
+            ..
+        } = pass;
+        self.scratch = WalkScratch {
+            open,
+            bands,
+            alpha,
+            opaque,
+            outlines,
+            decorations,
+            text_fills,
+            named,
+            shapes,
+            spaces,
+        };
+        self.scratch.clear();
         // After the walk and its replays, which are what push the tiles of large drawings: the
         // frame's whole need is known only here.
         if let Some(layers) = input.vector_masks.layers() {
@@ -400,6 +462,11 @@ struct Pass<'a, 'b> {
     scene: &'a mut Scene,
     /// What it did.
     report: PaintReport,
+    /// The box the walk starts at, which is the only box entered without a [`Visitor::descends`]
+    /// test.
+    ///
+    /// [`Visitor::descends`]: stacking::Visitor::descends
+    root: BoxKey,
     /// The groups currently open, innermost last, with the box that opened each.
     open: Vec<(BoxKey, GroupBoundary)>,
     /// The boxes whose order band is open, innermost last.
@@ -413,6 +480,9 @@ struct Pass<'a, 'b> {
     alpha: Vec<f32>,
     /// Whether the target in force is opaque, innermost last.
     opaque: Vec<bool>,
+    /// One entry for each entered box, innermost last: its first fragment and lowered style when
+    /// the box has an outline, or `None`.
+    outlines: Vec<Option<(FragKey, PaintStyleRef)>>,
     /// The text decorations contributed by the boxes still on the walk.
     decorations: Decorations,
     /// The ramps contributed by the boxes still on the walk, for the text inside them.
@@ -978,9 +1048,9 @@ fn inline_slices<'s>(
 
 impl stacking::Visitor for Pass<'_, '_> {
     fn descends(&mut self, _store: &LayoutStore, key: BoxKey) -> bool {
-        // The same refusal `enter` makes, asked before the box is ranked among its siblings so a
-        // skipped subtree costs its ink test and nothing else. A box that passes pays the test
-        // again on entry, which is a few rectangle reads on the handful that paint.
+        // The refusal `enter` makes for the root, asked before the box is ranked among its
+        // siblings so a skipped subtree costs its ink test and nothing else. `enter` trusts a
+        // pass and does not test again.
         let Some(ink) = self.subtree_ink(key) else {
             counter::bump(Counter::NodesVisited);
             return false;
@@ -996,15 +1066,23 @@ impl stacking::Visitor for Pass<'_, '_> {
 
     fn enter(&mut self, store: &LayoutStore, key: BoxKey) -> bool {
         counter::bump(Counter::NodesVisited);
-        // A box with no fragments generated no geometry, which is what `display: none` produces;
-        // there is nothing below it either.
-        let Some(ink) = self.subtree_ink(key) else {
-            return false;
-        };
-        if !self.reaches(ink) {
-            self.report.skipped_subtrees += 1;
-            counter::add(Counter::PrimitivesCulled, 1);
-            return false;
+        // Every box below the root passed the same test in `descends` before the walk entered it.
+        if key == self.root {
+            // A box with no fragments generated no geometry, which is what `display: none`
+            // produces; there is nothing below it either.
+            let Some(ink) = self.subtree_ink(key) else {
+                return false;
+            };
+            if !self.reaches(ink) {
+                self.report.skipped_subtrees += 1;
+                counter::add(Counter::PrimitivesCulled, 1);
+                return false;
+            }
+        } else {
+            debug_assert!(
+                self.subtree_ink(key).is_some_and(|ink| self.reaches(ink)),
+                "the walk entered {key:?} without `descends` letting it",
+            );
         }
         let Some(node) = store.get(key) else {
             return false;
@@ -1088,6 +1166,15 @@ impl stacking::Visitor for Pass<'_, '_> {
         // whatever the device can do.
         self.opaque.push(!isolation.needs_target() && self.opaque());
         self.alpha.push(isolation.alpha());
+        // Kept only for a box whose style, with its animation, has an outline. `leave` composes the
+        // animation again.
+        self.outlines.push(
+            fragments
+                .first()
+                .copied()
+                .filter(|_| style.outline.is_some())
+                .map(|frag| (frag, style_ref)),
+        );
         // Contributed on the way in and withdrawn on the way out, for the same reason the alpha is:
         // a decoration is drawn across the box's in-flow descendants, and the line boxes that draw
         // it belong to anonymous boxes generated below the element that declared it.
@@ -1104,24 +1191,22 @@ impl stacking::Visitor for Pass<'_, '_> {
 
     fn leave(&mut self, store: &LayoutStore, key: BoxKey) {
         // The outline is drawn after the box's descendants, which is Appendix E's step ten.
-        if let Some(frag) = store.fragments_of_box(key).first().copied()
+        if let Some((frag, style_ref)) = self.outlines.pop().flatten()
             && let Some(fragment) = store.fragment(frag)
+            && self.reaches(fragment.ink)
+            && let Some(entry) = self.painter.styles.get(style_ref)
         {
-            let style_ref = self
-                .painter
-                .styles
-                .lower(&store.node(key).style, self.input.scale);
-            let mut lowered = self.painter.styles.get(style_ref).cloned();
-            if let (Some(style), Some(over)) = (lowered.as_mut(), self.anim_of(store, key)) {
-                crate::lower::anim::compose(style, over);
-            }
-            if let Some(style) = lowered
-                && style.outline.is_some()
-                && self.reaches(fragment.ink)
-            {
-                let emission = self.emission(fragment, &style, &[], None, &[]);
-                self.report.primitives += order::outline(self.scene, &emission);
-            }
+            // Copied only for an animating box, for the reason `enter` gives.
+            let style = match self.anim_of(store, key) {
+                Some(over) => {
+                    let mut composed = entry.clone();
+                    crate::lower::anim::compose(&mut composed, over);
+                    Cow::Owned(composed)
+                }
+                None => Cow::Borrowed(entry),
+            };
+            let emission = self.emission(fragment, &style, &[], None, &[]);
+            self.report.primitives += order::outline(self.scene, &emission);
         }
         self.alpha.pop();
         self.opaque.pop();
