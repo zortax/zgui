@@ -57,6 +57,8 @@ pub struct StyleEngine {
     deps: StyleDependencies,
     /// Each element's text keys, as of its last restyle.
     texts: TextKeyStore,
+    /// The elements whose computed style read a viewport unit, as of their last restyle.
+    unit_readers: crate::device::viewport::UnitReaders,
     /// The root-relative quantities units resolve against.
     root_metrics: stylist::RootMetrics,
     /// The text colours that changed in the last restyle.
@@ -122,6 +124,7 @@ impl StyleEngine {
             sheets,
             deps: StyleDependencies::unusable(),
             texts: TextKeyStore::new(),
+            unit_readers: crate::device::viewport::UnitReaders::default(),
             root_metrics: stylist::RootMetrics::default(),
             text_paint_updates: Vec::new(),
             animations: Animations::new(),
@@ -152,6 +155,7 @@ impl StyleEngine {
             &mut self.stylist,
             &self.lock,
             document,
+            &mut self.unit_readers,
             &self.metrics,
             self.viewport,
             next,

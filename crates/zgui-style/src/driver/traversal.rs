@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rustc_hash::{FxHashMap, FxHasher};
-use style::data::ElementData;
+use style::data::{ElementData, ViewportUnitUsage};
 use style::dom::TElement;
 use style::rule_tree::StrongRuleNode;
 use style::traversal_flags::TraversalFlags;
@@ -70,6 +70,9 @@ pub struct Restyled {
     pub pseudos: [usize; 2],
     /// The custom properties the element's rule chains read, as the readers column files them.
     pub readers: u64,
+    /// Whether the element's computed style, or one of its pseudo-elements', resolved a viewport
+    /// unit.
+    pub viewport_units: bool,
 }
 
 /// No custom paint sources.
@@ -409,6 +412,8 @@ impl<'doc> DomTraversal<Node<'doc>> for RecalcStyle<'_> {
                 pseudo_identity(&data, &PseudoElement::After),
             ],
             readers: self.readers_of(element, &data),
+            viewport_units: data.has_styles()
+                && data.styles.viewport_unit_usage() != ViewportUnitUsage::None,
         });
 
         // The engine's descent flag is not cleared here, because this document does not store one:

@@ -13,7 +13,8 @@
 //!   fixes a stale one; the elements that read a viewport unit have to cascade again. Whether any
 //!   did is a flag on the device that answered the question, which is why it is read off the
 //!   *outgoing* device: a replacement starts with the flag clear, so reading it afterwards always
-//!   answers "no" and the branch never runs.
+//!   answers "no" and the branch never runs. Which elements did is a registry the cascade fills,
+//!   so the cost of a size change grows with the number of readers.
 //! * **Geometry.** A size change relays the document out from the root; a pixel-ratio change
 //!   relays every box out, because they are all snapped to a different grid.
 //!
@@ -58,6 +59,10 @@ pub struct DeviceEpoch {
     pub origins: OriginMask,
     /// Whether the outgoing device had ever resolved a viewport unit.
     pub viewport_units: bool,
+    /// How many filed viewport-unit readers the probe examined.
+    ///
+    /// Zero when no element reads a viewport unit, however large the document is.
+    pub units_probed: usize,
     /// How many elements were marked as needing to cascade again because they read one.
     pub units_invalidated: usize,
     /// How many elements were marked as needing to be laid out again.
@@ -75,6 +80,7 @@ pub(crate) fn epoch(
     stylist: &mut Stylist,
     lock: &SharedRwLock,
     document: &mut Document,
+    readers: &mut viewport::UnitReaders,
     metrics: &Arc<dyn FontMetricsSource>,
     previous: Viewport,
     next: Viewport,
@@ -101,10 +107,10 @@ pub(crate) fn epoch(
         stylist.force_stylesheet_origins_dirty(origins);
     }
 
-    let units_invalidated = if change.size && viewport_units {
-        viewport::invalidate_units(document)
+    let probe = if change.size && viewport_units && !readers.is_empty() {
+        viewport::invalidate_units(document, readers)
     } else {
-        0
+        viewport::UnitProbe::default()
     };
 
     let relaid_out = if change.scale {
@@ -125,7 +131,8 @@ pub(crate) fn epoch(
         changed: true,
         origins: OriginMask::from_engine(origins),
         viewport_units,
-        units_invalidated,
+        units_probed: probe.probed,
+        units_invalidated: probe.marked,
         relaid_out,
     }
 }

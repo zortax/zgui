@@ -208,6 +208,95 @@ fn a_resize_re_resolves_the_viewport_units_the_previous_device_answered() {
 }
 
 #[test]
+fn a_resize_probes_only_the_elements_that_read_a_viewport_unit() {
+    let mut harness = Harness::new();
+    let column = harness.append(harness.root, "column");
+    let rows: Vec<_> = (0..200).map(|_| harness.append(column, "box")).collect();
+    harness.set_classes(rows[120], &["half"]);
+    harness.add_author(".half { width: 50vw }");
+    harness.frame();
+    assert_eq!(width(&harness, rows[120]), 640.0);
+    harness.retire_all();
+
+    let epoch = harness.resize(800.0, 600.0);
+    assert_eq!(
+        epoch.units_probed, 1,
+        "the cascade filed one reader, so the probe reads one element of the 202"
+    );
+    assert_eq!(epoch.units_invalidated, 1);
+
+    let pass = harness.frame();
+    assert_eq!(pass.styled, 1, "only the reader cascades again");
+    assert_eq!(width(&harness, rows[120]), 400.0);
+}
+
+#[test]
+fn a_viewport_unit_read_by_generated_content_files_its_element() {
+    let mut harness = Harness::new();
+    let tag = harness.append(harness.root, "box");
+    harness.set_classes(tag, &["tag"]);
+    harness.add_author(".tag::before { content: \"x\"; display: block; width: 10vw }");
+    harness.frame();
+    harness.retire_all();
+
+    let epoch = harness.resize(800.0, 600.0);
+    assert_eq!(epoch.units_probed, 1);
+    assert_eq!(
+        epoch.units_invalidated, 1,
+        "the unit is resolved in the pseudo-element's style, which only its element can recascade"
+    );
+}
+
+#[test]
+fn an_element_that_stops_reading_a_viewport_unit_leaves_the_registry() {
+    let mut harness = Harness::new();
+    let reader = harness.append(harness.root, "box");
+    harness.set_classes(reader, &["half"]);
+    harness.add_author(".half { width: 50vw } .fixed { width: 300px }");
+    harness.frame();
+    harness.set_classes(reader, &["fixed"]);
+    harness.frame();
+    assert_eq!(width(&harness, reader), 300.0);
+    harness.retire_all();
+
+    let epoch = harness.resize(800.0, 600.0);
+    assert!(
+        epoch.viewport_units,
+        "the outgoing device answered a viewport-unit question in the first frame"
+    );
+    assert_eq!(epoch.units_probed, 0, "the restyle removed the element");
+    assert_eq!(epoch.units_invalidated, 0);
+
+    let pass = harness.frame();
+    assert_eq!(pass.styled, 0, "no element reads a viewport unit any more");
+    assert!(!pass.traversed);
+}
+
+#[test]
+fn a_removed_reader_is_not_marked_by_a_resize() {
+    let mut harness = Harness::new();
+    let column = harness.append(harness.root, "column");
+    let reader = harness.append(column, "box");
+    harness.set_classes(reader, &["half"]);
+    harness.add_author(".half { width: 50vw }");
+    harness.frame();
+    harness.edit(|edit| edit.remove(reader));
+    harness.frame();
+    harness.retire_all();
+
+    let epoch = harness.resize(800.0, 600.0);
+    assert_eq!(epoch.units_probed, 1, "a detached reader keeps its entry");
+    assert_eq!(
+        epoch.units_invalidated, 0,
+        "the element is out of the document"
+    );
+    assert!(
+        !harness.owed_below(column).contains(Dirty::RECASCADE),
+        "a mark on a detached element would climb to nothing the traversal reaches"
+    );
+}
+
+#[test]
 fn replace_sheet_alone_applies_the_changed_rule() {
     let mut harness = Harness::new();
     harness.add_author("root { color: rgb(1, 2, 3) }");

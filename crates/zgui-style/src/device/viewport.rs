@@ -1,11 +1,12 @@
 //! What the surface looks like this frame, which parts of it changed since the last one, and what
 //! each of those changes invalidates.
 
+use rustc_hash::FxHashSet;
 use style::data::ViewportUnitUsage;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use zgui_bits::Dirty;
 use zgui_dom::dirty::propagate;
-use zgui_dom::{Document, NodeIndex, NodeKind};
+use zgui_dom::{Document, DocumentStore, NodeFlags, NodeIndex, NodeKey, NodeKind};
 use zgui_geom::CssPx;
 
 use crate::device::color_scheme::ColorScheme;
@@ -81,43 +82,108 @@ impl ViewportChange {
     }
 }
 
-/// Marks every element whose computed style resolved a viewport unit, and reports how many.
+/// The elements whose computed style resolved a viewport unit, as the cascade filed them.
+///
+/// A size change recascades exactly these, so its cost grows with the number of readers. Each
+/// restyled element is filed or removed from its own record, so the set never misses a reader. It
+/// can hold an element that has gone; the probe and the sweep drop those.
+#[derive(Default, Debug)]
+pub(crate) struct UnitReaders {
+    /// The readers, by generation-checked name.
+    keys: FxHashSet<NodeKey>,
+    /// How many readers the last sweep left.
+    swept_to: usize,
+}
+
+/// The size below which the registry is never swept.
+const SWEEP_FLOOR: usize = 64;
+
+impl UnitReaders {
+    /// Records whether `node`'s new style reads a viewport unit.
+    pub(crate) fn file(&mut self, node: NodeKey, reads: bool) {
+        if reads {
+            self.keys.insert(node);
+        } else if !self.keys.is_empty() {
+            self.keys.remove(&node);
+        }
+    }
+
+    /// Drops the readers that no longer exist, once the set has doubled since the last sweep.
+    ///
+    /// Each sweep is then paid for by at least as many filings as it examines. An element that is
+    /// alive but out of the document stays: it keeps its style, and it can come back with it.
+    pub(crate) fn retire(&mut self, store: &DocumentStore) {
+        if self.keys.len() <= SWEEP_FLOOR.max(self.swept_to.saturating_mul(2)) {
+            return;
+        }
+        self.keys.retain(|key| store.get(*key).is_some());
+        self.swept_to = self.keys.len();
+    }
+
+    /// Whether no reader is filed.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+}
+
+/// What the viewport-unit probe did.
+#[derive(Copy, Clone, Default, Debug)]
+pub(crate) struct UnitProbe {
+    /// How many filed readers it examined.
+    pub(crate) probed: usize,
+    /// How many of them it marked to cascade again.
+    pub(crate) marked: usize,
+}
+
+/// Marks every filed reader whose computed style still resolves a viewport unit.
 ///
 /// Viewport units resolve at computed-value time, so no amount of relaying out fixes a stale
-/// `width: 50vw` — the elements that read one have to cascade again. Which elements those are is
-/// recorded per element by the cascade itself, so this is precise rather than a blanket subtree
-/// restyle: a document with no viewport units in it marks nothing at all.
+/// `width: 50vw` — the elements that read one have to cascade again. The cascade files those
+/// elements in `readers`, so the probe examines only them: a document with no viewport units in it
+/// examines and marks nothing.
 ///
 /// The two usages are not the same obligation. A unit read from a declaration needs only the
 /// cascade re-run; one read from a container query decides *which rules match*, so that element
 /// has to be matched again.
-pub(crate) fn invalidate_units(document: &mut Document) -> usize {
+pub(crate) fn invalidate_units(document: &mut Document, readers: &mut UnitReaders) -> UnitProbe {
+    let probed = readers.keys.len();
     let mut marked = Vec::new();
-    for_each_element(document, |document, index| {
-        let node = document.node(index);
-        // Asked read-only first, because the answer is no for nearly every element on every step
-        // of a drag: the write borrow is taken only where a unit was actually resolved.
+    readers.keys.retain(|key| {
+        let Some(core) = document.store().get(*key) else {
+            return false;
+        };
+        // An element out of the document is not styled against this device; it keeps its entry
+        // for when it comes back.
+        if !core.has_flags(NodeFlags::IN_DOCUMENT) {
+            return true;
+        }
+        let node = document.node(core.index());
+        // Asked read-only first: the write borrow is taken only where a unit was actually resolved.
         let hint = {
             let Some(data) = node.borrow_style_data() else {
-                return;
+                return false;
             };
             if !data.has_styles() {
-                return;
+                return false;
             }
             match data.styles.viewport_unit_usage() {
-                ViewportUnitUsage::None => return,
+                ViewportUnitUsage::None => return false,
                 ViewportUnitUsage::FromDeclaration => RestyleHint::RECASCADE_SELF,
                 ViewportUnitUsage::FromQuery => RestyleHint::RESTYLE_SELF,
             }
         };
         let Some(mut data) = node.mutate_style_data() else {
-            return;
+            return false;
         };
         data.hint.insert(hint);
-        marked.push((index, hint));
+        marked.push((core.index(), hint));
+        true
     });
 
-    let count = marked.len();
+    let probe = UnitProbe {
+        probed,
+        marked: marked.len(),
+    };
     let store = document.store_mut();
     for (index, hint) in marked {
         let bits = if hint.contains(RestyleHint::RESTYLE_SELF) {
@@ -129,7 +195,7 @@ pub(crate) fn invalidate_units(document: &mut Document) -> usize {
         // work below, so an element nothing leads to keeps its stale value.
         propagate::mark(store, index, bits);
     }
-    count
+    probe
 }
 
 /// Marks every element as needing to be laid out again, and reports how many.

@@ -176,6 +176,7 @@ impl StyleEngine {
 
         // The keys of elements the document no longer holds, which nothing else would ever drop.
         self.texts.retire(document.store());
+        self.unit_readers.retire(document.store());
 
         // Retire what the traversal consumed. Every other phase's walk retires its own bits as a
         // side effect of doing its work; this pair's does not exist, because the engine owns the
@@ -211,6 +212,7 @@ impl StyleEngine {
             // between the traversal and here has no style to translate, and its readers are
             // dropped with its columns.
             zgui_dom::side::readers::set_own(document.store_mut(), record.index, record.readers);
+            self.unit_readers.file(record.node, record.viewport_units);
             let Some(style) = document.node(record.index).primary_style() else {
                 continue;
             };
