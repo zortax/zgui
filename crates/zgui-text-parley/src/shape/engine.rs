@@ -4,6 +4,7 @@ use smallvec::SmallVec;
 use zgui_text::BrokenParagraph;
 
 use crate::shape::brush::SlotBrush;
+use crate::shape::reach::Reach;
 
 /// One paragraph's shaped glyphs, as the engine holds them.
 ///
@@ -34,6 +35,10 @@ pub struct ShapedLayout {
     /// Whether any run of the paragraph may wrap. A paragraph with none breaks only where its
     /// text forces a break.
     pub(crate) wraps: bool,
+    /// Whether a breaking pass that [`reach`](crate::shape::reach) covers ran before.
+    pub(crate) rebroken: bool,
+    /// The widths over which the current break keeps its lines.
+    pub(crate) reach: Reach,
 }
 
 /// The size of the engine's layout record itself, without what it holds on the heap.
@@ -65,12 +70,16 @@ impl ShapedLayout {
     /// reports its styles and inline boxes only, because its runs are reachable through its lines
     /// alone.
     ///
+    /// The step table that lets a pass skip the engine's breaker is counted as well. A paragraph
+    /// holds one from its second breaking pass on, so two equal paragraphs can differ by it.
+    ///
     /// The estimate is approximate. A run that wraps is counted once per line. Glyphs held out of
     /// line (ligatures, complex scripts), vector capacity and fonts are not counted.
     pub fn heap_bytes(&self) -> usize {
         let layout = &self.layout;
-        let mut bytes =
-            core::mem::size_of_val(layout.styles()) + core::mem::size_of_val(layout.inline_boxes());
+        let mut bytes = core::mem::size_of_val(layout.styles())
+            + core::mem::size_of_val(layout.inline_boxes())
+            + self.reach.heap_bytes();
         for line in layout.lines() {
             bytes += record::LINE + core::mem::size_of::<parley::LineMetrics>();
             for item in line.items() {

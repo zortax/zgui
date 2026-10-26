@@ -64,6 +64,8 @@ pub(crate) fn shape(
         layout,
         prefix: prefix.len(),
         wraps,
+        rebroken: false,
+        reach: crate::shape::reach::Reach::default(),
     };
     ShapedParagraph::new(
         key,

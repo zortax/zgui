@@ -10,6 +10,7 @@ pub mod engine;
 pub(crate) mod glyphs;
 pub mod line;
 pub(crate) mod lines;
+pub(crate) mod reach;
 pub mod shaper;
 pub(crate) mod strut;
 pub(crate) mod style;

@@ -110,6 +110,10 @@ counters! {
     /// inline-box placements were kept and not read again.
     TextLinesKept => text_lines_kept, Group::Skip { done: Counter::TextRebroken };
 
+    /// Breaking passes answered without breaking, because the width kept each comparison the
+    /// engine's breaker made in the pass before.
+    TextBreaksSkipped => text_breaks_skipped, Group::Skip { done: Counter::TextRebroken };
+
     /// Shaped paragraphs broken back to their kept lines after a size probe moved them.
     TextFormsRestored => text_forms_restored, Group::BackendNeutral;
 

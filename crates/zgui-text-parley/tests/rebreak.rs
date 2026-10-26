@@ -621,3 +621,291 @@ fn drive(case: &Case, steps: &[Step]) -> (u64, u64) {
         counter::get(Counter::TextLinesKept) - kept,
     )
 }
+
+/// Indices into [`WORDS`], with each Latin word drawn 21 times as often as each Arabic one.
+fn mostly_latin() -> Vec<usize> {
+    let latin = WORDS
+        .iter()
+        .position(|word| word.starts_with('م'))
+        .unwrap_or(WORDS.len());
+    (0..WORDS.len())
+        .chain((0..20).flat_map(|_| 0..latin))
+        .collect()
+}
+
+/// A case whose passes may skip the engine's breaker: left to right and aligned to the start or
+/// the left. Its steps still band, probe, move a box and re-align now and then.
+fn covered_case() -> impl Strategy<Value = Case> {
+    (
+        prop::collection::vec((prop::sample::select(mostly_latin()), 0..GAPS.len()), 1..40),
+        prop::collection::vec(0.0f32..1.0, 0..4),
+        prop::collection::vec(run_spec(), 1..5),
+        prop::collection::vec(box_spec(), 0..4),
+        prop::sample::select(vec![TextAlign::Start, TextAlign::Left]),
+        (
+            prop::sample::select(vec![0.0f32, 0.0, 12.0, -6.0]),
+            prop::sample::select(vec![0.0f32, 0.0, 0.1]),
+            prop::bool::ANY,
+            prop::bool::ANY,
+        ),
+        steps(),
+    )
+        .prop_map(|(words, cuts, runs, boxes, align, indent, steps)| Case {
+            words,
+            cuts,
+            runs,
+            boxes,
+            align,
+            rtl: false,
+            indent,
+            steps,
+        })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        ..ProptestConfig::default()
+    })]
+
+    /// A pass that skips the engine's breaker answers what a fresh break answers, bit for bit,
+    /// and leaves the glyphs and clusters a fresh break gives.
+    #[test]
+    fn a_skipped_break_equals_a_fresh_break_bit_for_bit(case in covered_case()) {
+        let _guard = counting();
+        check(&case)?;
+    }
+}
+
+/// Breaks `case` at widths on the edges of its own lines, and checks every answer.
+///
+/// The span a pass keeps is bounded by line advances, so a width equal to one, or one bit away
+/// from one, is where an off-by-one in a comparison shows. Each next width is the end of a line of
+/// the answer before it: the widest line or a line picked by the step's index, or one bit either
+/// side of that end.
+fn check_edges(case: &Case) -> Result<(), TestCaseError> {
+    let built = Built::new(case);
+    let fonts = fonts();
+    let mut warm = Shaper::with_controls(fonts.clone(), Controls::Mark);
+    let mut cold = Shaper::with_controls(fonts, Controls::Mark);
+    let content = built.content(&built.boxes, &built.paragraph);
+    let has_boxes = !built.boxes.is_empty();
+    let mut shaped = warm.shape(&content);
+    let mut width = case
+        .steps
+        .first()
+        .and_then(|step| step.width)
+        .unwrap_or(200.0);
+    for step in 0..18 {
+        let request = BreakRequest::new(&content, Some(CssPx(width)));
+        let answer = warm.break_lines(&mut shaped, &request);
+        let mut fresh = cold.shape(&content);
+        cold.break_lines(&mut fresh, &request);
+        prop_assert_eq!(
+            print(&answer),
+            print(&read(&fresh.engine, has_boxes)),
+            "the answer at {} differs from a fresh break",
+            width
+        );
+        prop_assert_eq!(form(&warm, &shaped), form(&cold, &fresh));
+
+        let lines = &answer.geometry.lines;
+        let edge = |line: &LineGeometry| line.width.0 + line.offset.0;
+        let line = if step % 2 == 0 {
+            lines.iter().map(edge).fold(f32::NEG_INFINITY, f32::max)
+        } else {
+            edge(&lines[(step / 2) % lines.len()])
+        };
+        let line = line.max(1.0);
+        width = match step % 3 {
+            0 => line,
+            1 => f32::from_bits(line.to_bits() + 1),
+            _ => f32::from_bits(line.to_bits() - 1),
+        };
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 128,
+        ..ProptestConfig::default()
+    })]
+
+    /// A pass at a width on the edge of a line answers what a fresh break answers, bit for bit.
+    #[test]
+    fn a_break_at_a_line_edge_equals_a_fresh_break_bit_for_bit(case in covered_case()) {
+        let _guard = counting();
+        check_edges(&case)?;
+    }
+}
+
+/// One step of a drag at `width`, with nothing else changed.
+fn at(width: f32) -> Step {
+    Step {
+        width: Some(width),
+        probe: false,
+        banded: false,
+        shift: 0.0,
+        realign: None,
+    }
+}
+
+/// Plain prose in one run, aligned to the start, without boxes.
+fn prose(steps: Vec<Step>, align: TextAlign) -> Case {
+    Case {
+        words: (0..24).map(|index| (index % 7, 0)).collect(),
+        cuts: Vec::new(),
+        runs: vec![RunSpec {
+            size: 16.0,
+            bold: false,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            wraps: true,
+            overflow_wrap: OverflowWrap::Normal,
+            break_all: false,
+            brush: 0,
+        }],
+        boxes: Vec::new(),
+        align,
+        rtl: false,
+        indent: (0.0, 0.0, false, false),
+        steps,
+    }
+}
+
+/// Shapes `case` and breaks it at each of its steps. Returns how many breaks those steps took
+/// and skipped.
+fn skips(case: &Case) -> (u64, u64) {
+    let built = Built::new(case);
+    let (_fonts, mut shaper) = support::shaper(Controls::Mark);
+    let mut shaped = shaper.shape(&built.content(&built.boxes, &built.paragraph));
+    let rebroken = counter::get(Counter::TextRebroken);
+    let skipped = counter::get(Counter::TextBreaksSkipped);
+    for step in &case.steps {
+        let content = built.content(&built.boxes, &built.paragraph);
+        shaper.break_lines(
+            &mut shaped,
+            &BreakRequest::new(&content, step.width.map(CssPx)),
+        );
+    }
+    (
+        counter::get(Counter::TextRebroken) - rebroken,
+        counter::get(Counter::TextBreaksSkipped) - skipped,
+    )
+}
+
+/// Narrow steps of a drag skip the engine's breaker once the paragraph has broken twice, and a
+/// step past a line's next word does not.
+#[test]
+fn a_small_width_step_skips_the_engines_breaker() {
+    // The first pass keeps no table, the second builds it, and the two after it skip.
+    let drag = prose(
+        [300.0, 300.25, 300.5, 300.75].map(at).to_vec(),
+        TextAlign::Start,
+    );
+    // The same drag around an inline box.
+    let mut boxed = drag.clone();
+    boxed.boxes = vec![BoxSpec {
+        at: 0.5,
+        width: 30.0,
+        height: 12.0,
+        shift: 0.0,
+    }];
+    // Each width moves a line, so each pass breaks.
+    let jumps = prose([300.0, 150.0, 300.0].map(at).to_vec(), TextAlign::Start);
+    // Centred lines take their offsets from the width, so no pass skips.
+    let centred = prose(
+        [300.0, 300.25, 300.5, 301.0].map(at).to_vec(),
+        TextAlign::Center,
+    );
+    {
+        let _guard = counting();
+        for case in [&drag, &boxed, &jumps, &centred] {
+            check(case).expect("every answer equals a fresh break");
+        }
+    }
+    assert_non_vacuous(
+        Counter::TextBreaksSkipped,
+        Scenario::new("small width steps of a drag", || {
+            assert_eq!(skips(&drag), (4, 2));
+            assert_eq!(skips(&boxed), (4, 2));
+        }),
+        Scenario::new("width steps that move lines, and centred lines", || {
+            assert_eq!(skips(&jumps), (3, 0));
+            assert_eq!(skips(&centred), (4, 0));
+        }),
+    );
+}
+
+/// Runs `check` over `cases` cases drawn from a fixed seed. Returns how many breaks they skipped.
+fn skipped_by(cases: u32, check: fn(&Case) -> Result<(), TestCaseError>) -> u64 {
+    use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+
+    let mut runner = TestRunner::new_with_rng(
+        ProptestConfig {
+            cases,
+            ..ProptestConfig::default()
+        },
+        TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+    );
+    let skipped = counter::get(Counter::TextBreaksSkipped);
+    runner
+        .run(&covered_case(), |case| check(&case))
+        .expect("every answer equals a fresh break");
+    counter::get(Counter::TextBreaksSkipped) - skipped
+}
+
+/// The cases of the two bit-for-bit proptests above skip the engine's breaker, so those tests
+/// compare real skips with a fresh break.
+#[test]
+fn the_covered_cases_skip_the_engines_breaker() {
+    let _guard = counting();
+    assert!(skipped_by(32, check) > 0, "no sequence skipped a break");
+    assert!(
+        skipped_by(32, check_edges) > 0,
+        "no edge walk skipped a break"
+    );
+}
+
+/// A drag over ligatures in each run of a paragraph, the first run and the runs after it,
+/// answers what a fresh break answers at each width, and skips the engine's breaker.
+#[test]
+fn a_drag_over_ligatures_in_later_runs_equals_a_fresh_break() {
+    let run = |size: f32, bold: bool, brush: u32| RunSpec {
+        size,
+        bold,
+        letter_spacing: 0.0,
+        word_spacing: 0.0,
+        wraps: true,
+        overflow_wrap: OverflowWrap::Normal,
+        break_all: false,
+        brush,
+    };
+    // "office", "affluent", "fit" and "flow" ligate in the shipped faces.
+    let mut case = prose(
+        (0..160).map(|step| at(60.0 + step as f32 * 1.25)).collect(),
+        TextAlign::Start,
+    );
+    case.words = [2, 3, 1, 4, 0, 6]
+        .iter()
+        .cycle()
+        .take(24)
+        .map(|&word| (word, 0))
+        .collect();
+    case.cuts = vec![0.3, 0.65];
+    case.runs = vec![run(16.0, false, 0), run(21.0, true, 1), run(13.5, false, 2)];
+    let skipped = {
+        let _guard = counting();
+        check(&case).expect("every answer equals a fresh break");
+        counter::get(Counter::TextBreaksSkipped)
+    };
+    assert!(skipped > 0, "no step skipped a break");
+    let mut overflow = case.clone();
+    for spec in &mut overflow.runs {
+        spec.overflow_wrap = OverflowWrap::Anywhere;
+    }
+    overflow.steps = (0..160).map(|step| at(20.0 + step as f32 * 0.5)).collect();
+    let _guard = counting();
+    check(&overflow).expect("every answer equals a fresh break");
+}

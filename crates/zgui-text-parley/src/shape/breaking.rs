@@ -15,6 +15,10 @@ use crate::shape::{bands, boxes, lines};
 /// reverse. Two of the three answers cost nothing: the glyphs already reflect the request, or a
 /// probe is asking about a width some earlier pass already measured. Which is what makes a layout
 /// engine's repeated width probes cost nothing at all rather than costing a break each.
+///
+/// An owed pass costs little as well when its width is one at which the engine's breaker takes
+/// the decisions of the pass before it: the layout already holds those lines (see
+/// [`reach`](crate::shape::reach)).
 pub(crate) fn break_lines(
     shaped: &mut ShapedParagraph<ShapedLayout>,
     request: &BreakRequest<'_>,
@@ -29,23 +33,43 @@ pub(crate) fn break_lines(
     let indent = request.indent();
     let alignment = alignment(request.paragraph.align);
     let justified = alignment == Alignment::Justify;
+    let options = IndentOptions {
+        each_line: request.paragraph.indent.each_line,
+        hanging: request.paragraph.indent.hanging,
+    };
+    let max_advance = request.max_advance.map(|width| width.0);
     let engine = &mut shaped.engine;
     let prefix = engine.prefix;
     let wraps = engine.wraps;
-    let layout = &mut engine.layout;
 
+    let layout = &mut engine.layout;
     let boxes_moved = boxes::push_geometry(layout, request.boxes);
+
+    // A pass whose width keeps every comparison of the engine's breaker gives the lines the layout
+    // already holds, so the engine is not asked to break again. See `reach`. A paragraph that may
+    // not wrap and holds boxes is broken at a width of its own, below.
+    let covered = !banded
+        && matches!(alignment, Alignment::Start | Alignment::Left)
+        && !layout.is_rtl()
+        && (wraps || !has_boxes);
+    if covered
+        && !boxes_moved
+        && engine
+            .reach
+            .holds(max_advance, indent.0, options, has_boxes)
+    {
+        counter::bump(Counter::TextBreaksSkipped);
+        counter::bump(Counter::TextLinesKept);
+        let broken = engine.last.clone();
+        shaped.remember(request.key(), broken.clone());
+        return broken;
+    }
+
     // Set unconditionally, including back to zero: an indent left over from a previous request
     // would otherwise survive a re-style that removed it.
-    layout.set_text_indent(
-        indent.0,
-        IndentOptions {
-            each_line: request.paragraph.indent.each_line,
-            hanging: request.paragraph.indent.hanging,
-        },
-    );
+    layout.set_text_indent(indent.0, options);
     if !banded {
-        let mut max_advance = request.max_advance.map(|width| width.0);
+        let mut max_advance = max_advance;
         // The engine marks a break after every inline box, whatever the wrap mode. A line that
         // may not wrap and overflows would break back at such a box, so it is broken at a width
         // that holds its longest line. The line keeps its own width, and whatever cuts it off
@@ -70,7 +94,7 @@ pub(crate) fn break_lines(
     );
 
     // A width step in a drag mostly gives the lines of the step before it. The engine has broken
-    // the glyphs again either way, so painting reads the new break. The reported lines and box
+    // the glyphs again here, so painting reads the new break. The reported lines and box
     // placements are kept when they are equal bit for bit, which saves the walk over every glyph
     // that placing the boxes costs.
     let kept = !banded
@@ -90,6 +114,20 @@ pub(crate) fn break_lines(
         engine.items.clear();
     } else if !kept {
         lines::items(layout, &mut engine.items);
+    }
+    if justified {
+        engine.reach.forget();
+    } else {
+        engine.reach.measure(
+            layout,
+            covered,
+            engine.rebroken,
+            max_advance,
+            indent.0,
+            options,
+            has_boxes,
+        );
+        engine.rebroken |= covered;
     }
     // Filed under the key the pass was taken for, which is the one `plan_break` just adopted, so a
     // later probe at the same width is answered from here without moving the laid-out form.

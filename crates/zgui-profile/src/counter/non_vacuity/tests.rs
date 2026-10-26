@@ -113,6 +113,7 @@ fn the_declared_skips_are_exactly_the_ones_this_workspace_has_registered() {
             "layouts_held",
             "sizes_held",
             "text_lines_kept",
+            "text_breaks_skipped",
             "place_writes_without_reemit",
             "chunks_translated",
             "primitives_culled",
