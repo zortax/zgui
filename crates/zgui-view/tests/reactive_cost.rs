@@ -26,6 +26,8 @@ thread_local! {
     static LIVE_BYTES: Cell<i64> = const { Cell::new(0) };
     /// Blocks this thread holds.
     static LIVE_BLOCKS: Cell<i64> = const { Cell::new(0) };
+    /// Allocations this thread made.
+    static ALLOCS: Cell<i64> = const { Cell::new(0) };
 }
 
 /// Counts what the current thread holds.
@@ -37,6 +39,7 @@ unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let _ = LIVE_BYTES.try_with(|b| b.set(b.get() + layout.size() as i64));
         let _ = LIVE_BLOCKS.try_with(|b| b.set(b.get() + 1));
+        let _ = ALLOCS.try_with(|b| b.set(b.get() + 1));
         // SAFETY: the caller's contract.
         unsafe { System.alloc(layout) }
     }
@@ -285,4 +288,69 @@ fn a_text_hole_holds_its_text_node_and_four_blocks() {
     let bytes = hole.bytes - node.bytes;
     assert!(blocks <= 4.0, "{blocks} blocks");
     assert!(bytes <= 512.0, "{bytes} bytes");
+}
+
+/// Allocations this thread made so far.
+fn allocs() -> i64 {
+    ALLOCS.with(Cell::get)
+}
+
+/// Allocations per part over a whole lifecycle: make, flush, drop, flush. Run twice, so the
+/// second round shows the cost once the executor's own storage is at its peak.
+#[test]
+#[ignore = "diagnostic table; run with --ignored --nocapture"]
+fn report_lifecycle_allocations() {
+    let world = World::new();
+    let waker = std::sync::Arc::new(zgui_reactive::TestWaker::default());
+    zgui_reactive::set_frame_waker(waker.clone());
+    let signals: Vec<RwSignal<usize>> = (0..N).map(|i| signal(&world, i)).collect();
+    flush();
+    for round in 0..2 {
+        let before = (allocs(), live().1);
+        let effects: Vec<_> = signals
+            .iter()
+            .map(|&s| {
+                world
+                    .window
+                    .with(|| RenderEffect::new(move |_| _ = s.get()))
+            })
+            .collect();
+        flush();
+        drop(effects);
+        flush();
+        let made = (allocs() - before.0) as f64 / N as f64;
+        let held = (live().1 - before.1) as f64 / N as f64;
+        println!(
+            "render effect lifecycle, round {round}: {made:>6.2} allocs, {held:>5.2} blocks held"
+        );
+    }
+    for round in 0..2 {
+        let before = (allocs(), live().1);
+        let polls = Rc::new(Cell::new(0_usize));
+        let node = Mounted::new();
+        node.with(|| {
+            for _ in 0..N {
+                let polls = polls.clone();
+                zgui_reactive::spawn_local(std::future::poll_fn(move |_| {
+                    polls.set(polls.get() + 1);
+                    std::task::Poll::<()>::Pending
+                }));
+            }
+        });
+        flush();
+        waker.take();
+        node.unmount();
+        let pings = waker.take();
+        let first = polls.get();
+        flush();
+        let made = (allocs() - before.0) as f64 / N as f64;
+        let held = (live().1 - before.1) as f64 / N as f64;
+        println!(
+            "spawn_local lifecycle, round {round}: {made:>6.2} allocs, {held:>5.2} blocks held, \
+             {pings} pings in unmount, {} polls after unmount",
+            polls.get() - first
+        );
+    }
+    drop(signals);
+    world.window.unmount();
 }
