@@ -39,10 +39,10 @@ impl Flattened {
 
     /// The held form, if it was built from exactly these pieces at this scale.
     ///
-    /// A piece names a box, and a box's text and style are fixed when it is built — a restyle or an
-    /// edit replaces the box rather than rewriting it — so an unchanged sequence of pieces is
-    /// unchanged content. A box added to or removed from the context changes the sequence, and a
-    /// scale change changes what the lengths in the paragraph style mean.
+    /// A piece names a box, so an unchanged sequence of pieces is unchanged boxes. A box added to
+    /// or removed from the context changes the sequence, and a scale change changes what the
+    /// lengths in the paragraph style mean. The patches that rewrite a box where it stands (new
+    /// characters, a text style that owes a reshape or a rebreak) drop the held form themselves.
     pub(crate) fn reuse(&self, scale: f32, pieces: &[Piece]) -> Option<Arc<Generated>> {
         (self.scale == scale && self.pieces == pieces).then(|| Arc::clone(&self.content))
     }

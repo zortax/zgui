@@ -58,6 +58,14 @@ use crate::tree::store::LayoutStore;
 ///
 /// Only such an element: a hover that moves a colour rewrites styles too, and invalidating the path
 /// to the root for it would relayout the document for a change that moves nothing.
+///
+/// # Why a rebreak also drops the flattened forms
+///
+/// A flattened form holds the runs with the text styles they had when it was built, and it is
+/// checked only against the sequence of boxes it was built from. A style written in place keeps
+/// that sequence. An element that owes a rebreak changed a property that only moves the lines,
+/// such as `white-space` or `text-align`, so each flattened form that holds its text is dropped
+/// here: the form of each box written, and of each box above the element's own boxes.
 pub fn restyle(
     store: &mut LayoutStore,
     document: &Document,
@@ -73,6 +81,7 @@ pub fn restyle(
             continue;
         }
         let relayout = core.dirty().own().contains(Dirty::RELAYOUT);
+        let rebreak = core.dirty().own().contains(Dirty::REBREAK);
         let source = document.store().key_of(index);
         let node = document.node(index);
         for key in store.boxes_of(source).to_vec() {
@@ -94,7 +103,10 @@ pub fn restyle(
                 continue;
             };
             moved += write(store, key, &owned, relayout);
-            moved += descend(store, key, &owned, relayout, &mut scratch);
+            moved += descend(store, key, &owned, relayout, rebreak, &mut scratch);
+            if rebreak {
+                super::text::forget_flattened(store, key, Some(&mut scratch.climbed));
+            }
         }
     }
     moved
@@ -108,6 +120,8 @@ struct Scratch {
     stack: Vec<BoxKey>,
     /// The boxes already reached.
     seen: rustc_hash::FxHashSet<BoxKey>,
+    /// The boxes whose flattened forms a rebreak already dropped, with every box above them.
+    climbed: rustc_hash::FxHashSet<BoxKey>,
 }
 
 /// Writes `style` onto one box, and reports whether that changed anything.
@@ -147,15 +161,18 @@ fn write(store: &mut LayoutStore, key: BoxKey, style: &ComputedStyle, relayout: 
 /// so it holds the style the painter tints those glyphs with: left at the one it was built with,
 /// a label keeps the colour it had when the button was first drawn, whatever the cascade has done
 /// to it since.
+///
+/// With `rebreak`, each box reached also drops its flattened form.
 fn descend(
     store: &mut LayoutStore,
     key: BoxKey,
     owner: &ComputedStyle,
     relayout: bool,
+    rebreak: bool,
     scratch: &mut Scratch,
 ) -> u32 {
     let mut moved = 0;
-    let Scratch { stack, seen } = scratch;
+    let Scratch { stack, seen, .. } = scratch;
     stack.clear();
     seen.clear();
     stack.push(key);
@@ -188,6 +205,9 @@ fn descend(
             }
             let style = synthesised.get_or_insert_with(|| synthesised_style(owner));
             moved += write(store, child, style, relayout);
+            if rebreak {
+                store.forget_flattened(child);
+            }
             stack.push(child);
         }
     }
@@ -301,7 +321,14 @@ mod tests {
         let owner = StyleDraft::initial().build();
         let before = store.node(nested_run).style.clone();
         assert_eq!(
-            descend(&mut store, element, &owner, false, &mut Scratch::default()),
+            descend(
+                &mut store,
+                element,
+                &owner,
+                false,
+                false,
+                &mut Scratch::default()
+            ),
             2
         );
 
@@ -338,7 +365,14 @@ mod tests {
         let stale = store.node(root).style.clone();
         let owner = StyleDraft::initial().build();
         assert_eq!(
-            descend(&mut store, element, &owner, false, &mut Scratch::default()),
+            descend(
+                &mut store,
+                element,
+                &owner,
+                false,
+                false,
+                &mut Scratch::default()
+            ),
             2
         );
         assert!(
