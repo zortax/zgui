@@ -48,12 +48,16 @@ thread_local! {
     static FLUSH: RefCell<FlushState> = RefCell::new(FlushState::default());
 }
 
-/// Runs every ready reactive task to a stall, and reports what the frame still owes.
+/// Runs every ready reactive task to a stall and every marked [`Sink`](crate::Sink), and reports
+/// what the frame still owes.
 ///
 /// This is the one place reactive work happens. Writing a signal marks its observers and wakes
-/// their tasks; nothing runs until the frame loop calls this. Because the notification behind
-/// each task holds one slot, a signal written a thousand times between two flushes costs one
-/// re-run, not a thousand.
+/// their tasks; nothing runs until the frame loop calls this. Each round polls the task pool to a
+/// stall, then runs the marked sinks in the order they were marked. An effect therefore sees what
+/// a sink wrote in this flush only from the next flush, and each step from a sink to a task uses
+/// one of the flush's rounds. Because the notification
+/// behind each task or sink holds one slot, a signal written a thousand times between two flushes
+/// costs one re-run, not a thousand.
 ///
 /// Bounded by the per-flush iteration budget, so two effects writing each other's sources cost
 /// a logged error and a presented frame rather than a hang. Re-entrant calls — a flush from
@@ -98,7 +102,12 @@ pub fn flush() -> FlushOutcome {
         // apart, and a poll with nothing to do costs a queue check. The rounds are bounded so
         // that a task waking itself from outside the budget cannot hold the frame.
         for round in 0..MAX_ROUNDS {
-            context::enter(pool::poll);
+            // Sinks run after the pool stalls, so an effect that replaces a subtree drops the
+            // sinks it took away before they run.
+            context::enter(|| {
+                pool::poll();
+                crate::sink::drain();
+            });
             let woke = FLUSH.with_borrow_mut(|state| std::mem::take(&mut state.woke));
             if !woke {
                 break;
@@ -113,7 +122,8 @@ pub fn flush() -> FlushOutcome {
         // Waking a task the budget set aside re-queues it in the pool without asking for a
         // redraw; `needs_another_frame` is what gets it polled.
         let deferred = std::mem::take(&mut state.deferred);
-        let needs_another_frame = woke_after_stall || !deferred.is_empty();
+        let sinks_deferred = crate::sink::release_deferred();
+        let needs_another_frame = woke_after_stall || !deferred.is_empty() || sinks_deferred;
         for waker in deferred {
             waker.wake();
         }
@@ -159,6 +169,21 @@ pub(crate) fn note_wake() -> bool {
             state.running
         })
         .unwrap_or(true)
+}
+
+/// Whether a flush is running on this thread.
+///
+/// A sink marked during the flush runs in that flush, so the mark asks for no frame. A thread that
+/// is tearing down answers `true` for the reason [`note_wake`] gives.
+pub(crate) fn is_running() -> bool {
+    FLUSH
+        .try_with(|state| state.borrow().running)
+        .unwrap_or(true)
+}
+
+/// Records that the budget set a sink aside in this flush.
+pub(crate) fn note_exhausted() {
+    FLUSH.with_borrow_mut(|state| state.budget_exhausted = true);
 }
 
 /// Sets a budget-exhausted task aside until the flush has returned.

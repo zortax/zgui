@@ -16,7 +16,7 @@
 //! [`task`](crate::task) for the whole picture.
 
 mod assert;
-mod budget;
+pub(crate) mod budget;
 mod context;
 pub(crate) mod frame;
 pub(crate) mod pool;

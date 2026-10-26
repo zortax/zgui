@@ -6182,6 +6182,7 @@ dependencies = [
  "reactive_graph",
  "reactive_stores",
  "send_wrapper",
+ "smallvec",
  "thiserror 2.0.19",
  "tracing",
  "trybuild",

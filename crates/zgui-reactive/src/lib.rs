@@ -65,6 +65,7 @@
 //! | [`context`] | [`provide_context`] and the `!Send` variants |
 //! | [`store`] | Keyed stores for schema-shaped state |
 //! | [`zone`] | Suppression of the "read outside a tracking context" diagnostic |
+//! | [`sink`] | [`Sink`], the node a binding from a value to one property uses |
 //! | [`reexport`] | Signals, memos, callbacks, async values and the evicting [`Selector`] |
 //! | [`canary`] | [`effects_are_enabled`], the startup check for the silent-failure mode |
 //!
@@ -96,6 +97,7 @@ pub mod executor;
 pub mod own;
 pub mod prelude;
 pub mod reexport;
+pub mod sink;
 pub mod store;
 pub mod task;
 pub mod zone;
@@ -116,6 +118,7 @@ pub use reexport::{
     Memo, ReadSignal, RenderEffect, RwSignal, Selector, Signal, SignalSetter, Storage, SyncStorage,
     Trigger, UnsyncCallback, WriteSignal, arc_signal, create_slice, signal, signal_local,
 };
+pub use sink::Sink;
 pub use store::{ArcField, AtKeyed, Field, KeyedSubfield, Patch, Store, StoreField, Subfield};
 pub use task::{
     Background, BackgroundSpawner, SpawnerError, Task, Ui, background, blocking, provide_task_set,

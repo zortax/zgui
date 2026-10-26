@@ -2,8 +2,8 @@
 //!
 //! The task pool lives in a thread-local. Tasks still in it when the thread ends are dropped by the
 //! thread's destructors, after the reactive runtime and other thread-locals are gone, and a
-//! cleanup that runs there reads disposed values. [`shutdown`] empties the pool while everything is
-//! still alive.
+//! cleanup that runs there reads disposed values. The closures of live sinks have the same problem.
+//! [`shutdown`] empties the pool and drops those closures while everything is still alive.
 
 use crate::executor::ui_thread::is_ui_thread;
 use crate::executor::{context, pool};
@@ -14,10 +14,11 @@ use crate::executor::{context, pool};
 /// spawn on drop stops here.
 const ROUNDS: u32 = 8;
 
-/// Finishes or drops every task on this thread's pool.
+/// Finishes or drops every task on this thread's pool, and drops the closure of every live sink.
 ///
 /// Polls the pool once, so a task whose effect is gone runs to its end and drops what it holds.
-/// Then drops every task that is left. Call it on the UI thread after the last window closed and
+/// Then drops every task and sink closure that is left. A sink whose closure is gone does not run
+/// again. Call it on the UI thread after the last window closed and
 /// before the thread ends. A call off the UI thread, or from inside a flush, does nothing.
 pub fn shutdown() {
     if !is_ui_thread() {
@@ -25,7 +26,8 @@ pub fn shutdown() {
     }
     for _ in 0..ROUNDS {
         context::enter(pool::poll);
-        if pool::clear() {
+        let sinks = crate::sink::clear();
+        if pool::clear() && !sinks {
             return;
         }
     }
@@ -44,6 +46,7 @@ mod tests {
     use super::*;
     use crate::executor::install;
     use crate::own::{Mounted, on_cleanup_local};
+    use crate::sink::Sink;
     use crate::task::spawn_local;
 
     /// Counts its drop.
@@ -69,6 +72,25 @@ mod tests {
 
         shutdown();
         assert_eq!(dropped.get(), 1, "the shutdown dropped it");
+    }
+
+    #[test]
+    fn the_shutdown_drops_the_closure_of_a_live_sink() {
+        install().unwrap();
+        let app = Mounted::new();
+        let source = app.with(|| RwSignal::new(0));
+        let dropped = Rc::new(Cell::new(0));
+        let witness = Witness(Rc::clone(&dropped));
+        let sink = app.with(|| {
+            Sink::new(move || {
+                let _ = (&witness, source.get_untracked());
+            })
+        });
+
+        shutdown();
+        assert_eq!(dropped.get(), 1, "the shutdown dropped the closure");
+        drop(sink);
+        app.unmount();
     }
 
     #[test]
