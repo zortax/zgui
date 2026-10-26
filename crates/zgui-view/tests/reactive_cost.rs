@@ -5,8 +5,11 @@
 //! own nodes are counted too, so the cases that make nodes say how many. One test also checks
 //! what mount and unmount cycles of a list keep.
 //!
-//! `cargo test --release -p zgui-view --test reactive_cost -- --ignored --nocapture` prints the
-//! table.
+//! The tables are measurements, so they print only when `ZGUI_REACTIVE_COST` is set:
+//!
+//! ```text
+//! ZGUI_REACTIVE_COST=1 cargo test --release -p zgui-view --test reactive_cost -- --nocapture
+//! ```
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -151,12 +154,23 @@ fn signal(w: &World, i: usize) -> RwSignal<usize> {
     w.window.with(|| RwSignal::new(i))
 }
 
+/// Whether `ZGUI_REACTIVE_COST` is set. When it is not, says so for `test` and returns false.
+fn measuring(test: &str) -> bool {
+    let set = std::env::var_os("ZGUI_REACTIVE_COST").is_some();
+    if !set {
+        eprintln!("{test}: set ZGUI_REACTIVE_COST to print the table");
+    }
+    set
+}
+
 /// Nothing.
 fn none(_: &World, _: usize) {}
 
 #[test]
-#[ignore = "diagnostic table; run with --ignored --nocapture"]
 fn report_what_each_reactive_part_holds() {
+    if !measuring("report_what_each_reactive_part_holds") {
+        return;
+    }
     per_part("stub text node", none, |w, (), _| {
         w.dom.create_text("12345")
     });
@@ -299,8 +313,10 @@ fn allocs() -> i64 {
 /// Allocations per part over a whole lifecycle: make, flush, drop, flush. Run twice, so the
 /// second round shows the cost once the executor's own storage is at its peak.
 #[test]
-#[ignore = "diagnostic table; run with --ignored --nocapture"]
 fn report_lifecycle_allocations() {
+    if !measuring("report_lifecycle_allocations") {
+        return;
+    }
     let world = World::new();
     let waker = std::sync::Arc::new(zgui_reactive::TestWaker::default());
     zgui_reactive::set_frame_waker(waker.clone());
