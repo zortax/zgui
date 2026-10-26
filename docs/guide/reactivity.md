@@ -94,11 +94,76 @@ assert_eq!(doubled.get(), 42);
 | Cleanup when the owner goes away | `on_cleanup_local` |
 | Schema-shaped state with fine-grained fields | `Store` |
 | "Is *this* the selected one?", for a large list | `Selector` |
+| Many records with fine-grained fields, of which a view shows a few | `KeyedFields` |
 | A value passed down without threading it through | `provide_context` / `use_context` |
 
 `Selector` is worth knowing about: it turns "which of these thousand rows is selected" into one
 subscription per row that fires only for the two rows that changed, instead of a thousand
 subscriptions on the selection signal.
+
+### Large keyed collections
+
+One `RwSignal` per field of each record costs a few hundred bytes per field from the start, and a
+virtualised list reads only the records in its viewport. `KeyedFields<K, T>` holds the records as
+plain values. A field gets a signal when a row first reads it, and loses it after the rows that read
+it unmount. A record that no row shows costs its value and its map entry.
+
+Declare one `Lens` per field, keep the order as a signal of keys, and key the rows by record, so
+that each row reads its own fields by one key for its whole life:
+
+```rust,ignore
+struct Item {
+    name: String,
+    qty: u32,
+}
+
+const NAME: Lens<Item, String> = Lens::new(0, |i| &i.name, |i| &mut i.name);
+const QTY: Lens<Item, u32> = Lens::new(1, |i| &i.qty, |i| &mut i.qty);
+
+#[component]
+fn Inventory(items: Vec<(u64, Item)>) -> impl IntoView {
+    let order = RwSignal::new(items.iter().map(|(key, _)| *key).collect::<Vec<_>>());
+    let table = KeyedFields::from_values(items);
+    let port = NodeRef::new();
+    let seen = Virtualize::new(port, Signal::derive_local(move || order.with(Vec::len)), 22.0, 4);
+    let shown = move || {
+        let window = seen.window();
+        order.with(|order| {
+            let keys = window.indices().into_iter().filter_map(|i| order.get(i).copied());
+            keys.collect::<Vec<_>>()
+        })
+    };
+
+    view! {
+        scroll(node_ref = port) {
+            column(
+                style:padding-top = move || Some(format!("{}px", seen.window().lead)),
+                style:padding-bottom = move || Some(format!("{}px", seen.window().trail))
+            ) {
+                for key in shown, key = |key: &u64| *key {
+                    row {
+                        text {{move || table.get(&key, NAME).unwrap_or_default()}}
+                        text {{move || table.get(&key, QTY).unwrap_or_default().to_string()}}
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+An edit writes one field, and re-runs only the rows that show it:
+
+```rust,ignore
+table.set(&key, QTY, 12);
+```
+
+`set` and `update` notify the readers of that field and the readers of the whole value. `insert`,
+`remove` and `update_value` notify every reader of the key.
+
+A row keeps each field it read until it unmounts. A row of `VirtualList` is keyed by position, so
+after a sort it reads a different key and also keeps the old key's signals. Use a keyed `for`, as
+above, when the order can change.
 
 Reading and writing are **trait** methods, not inherent ones, so a component can accept "anything
 readable as a `T`" without caring whether it was handed a signal, a memo, a store field or a

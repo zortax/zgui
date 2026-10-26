@@ -63,7 +63,7 @@
 //! | [`task`] | [`spawn`], [`background`], [`blocking`], [`ui`] and what cancels each |
 //! | [`own`] | [`Mounted`], [`Scope`] and [`on_cleanup_local`] |
 //! | [`context`] | [`provide_context`] and the `!Send` variants |
-//! | [`store`] | Keyed stores for schema-shaped state |
+//! | [`store`] | Keyed stores for schema-shaped state, and [`KeyedFields`] for large collections |
 //! | [`zone`] | Suppression of the "read outside a tracking context" diagnostic |
 //! | [`sink`] | [`Sink`], the node a binding from a value to one property uses |
 //! | [`reexport`] | Signals, memos, callbacks, async values and the evicting [`Selector`] |
@@ -119,7 +119,9 @@ pub use reexport::{
     Trigger, UnsyncCallback, WriteSignal, arc_signal, create_slice, signal, signal_local,
 };
 pub use sink::Sink;
-pub use store::{ArcField, AtKeyed, Field, KeyedSubfield, Patch, Store, StoreField, Subfield};
+pub use store::{
+    ArcField, AtKeyed, Field, KeyedFields, KeyedSubfield, Lens, Patch, Store, StoreField, Subfield,
+};
 pub use task::{
     Background, BackgroundSpawner, SpawnerError, Task, Ui, background, blocking, provide_task_set,
     set_background_spawner, signal_from_stream, spawn, spawn_detached, spawn_local, spawn_stream,
