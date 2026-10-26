@@ -352,6 +352,13 @@ counters! {
     /// is indistinguishable from one that thrashed throughout.
     RebuiltAfterEviction => rebuilt_after_eviction, Group::BackendNeutral;
 
+    /// Glyphs rasterised on the layout workers before the emit walk asked for them.
+    ///
+    /// The walk still counts each key it asks for in [`Counter::GlyphsRasterised`]. A prefetched
+    /// key that the walk does not ask for is wasted work. When this is larger than
+    /// `GlyphsRasterised` on the same frame, the difference is the least waste of the prediction.
+    GlyphsPrefetched => glyphs_prefetched, Group::BackendNeutral;
+
     /// Cached rasters freed to bring the atlas back under its soft limit.
     ///
     /// Read beside [`Counter::RebuiltAfterEviction`]: this one alone says only that the budget is

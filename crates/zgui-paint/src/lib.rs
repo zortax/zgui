@@ -58,7 +58,7 @@ pub mod parity;
 pub mod shiftable;
 pub mod walk;
 
-pub use crate::content::glyphs::OutlineGlyph;
+pub use crate::content::glyphs::{GlyphPrediction, OutlineGlyph};
 pub use crate::content::{
     ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,

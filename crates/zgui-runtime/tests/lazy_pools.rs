@@ -2,7 +2,8 @@
 //!
 //! An application holds both pools from the start, but a pool starts its workers on first use
 //! only. A small document never uses either pool, so its process holds no pool thread. A large
-//! document starts both on its first frame.
+//! document starts both on its first frame. A first frame with 128 or more distinct glyphs also
+//! starts the layout pool, which rasterises those glyphs ahead of the walk.
 //!
 //! The pools are counted by their workers' thread names in `/proc/self/task`, so this file holds
 //! one test: a second test in the same process could start a pool while the first counts.

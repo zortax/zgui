@@ -32,7 +32,7 @@ use rustc_hash::FxHashMap;
 use zgui_atlas::{Atlas, AtlasKey, AtlasTile};
 use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_profile::{Counter, counter};
-use zgui_text::{AtlasGlyph, GlyphKey, GlyphRaster};
+use zgui_text::{AtlasGlyph, GlyphImage, GlyphKey, GlyphRaster};
 
 use crate::content::vectors::{VectorLayerCache, VectorMaskCache};
 
@@ -98,6 +98,13 @@ pub(crate) struct GlyphCache {
     evicted_order: VecDeque<(GlyphKey, u64)>,
     /// Monotonic identity for distinguishing a stale queue item from a newer tombstone.
     eviction_clock: u64,
+    /// Answers rasterised ahead of the walk, taken when the walk asks for the key.
+    ///
+    /// Only the rasteriser call is replaced. The atlas insert and the entry stay where the walk
+    /// asks for them, so tiles are allocated in the same order as without a prefetch.
+    prefetched: FxHashMap<GlyphKey, Option<GlyphImage>>,
+    /// Whether a prefetch read the fragment tree since the cache was last emptied.
+    prefetch_tried: bool,
 }
 
 /// Metadata with no atlas allocation is useful but must not grow with the life of the process.
@@ -174,6 +181,8 @@ impl GlyphCache {
     /// The atlas is emptied with it, so an entry kept here would name a tile that no longer exists
     /// and the placement it carries would be attached to whatever took that key's place.
     pub(crate) fn clear(&mut self) {
+        self.prefetched.clear();
+        self.prefetch_tried = false;
         self.entries.clear();
         self.by_tile.clear();
         self.blank_order.clear();
@@ -185,6 +194,30 @@ impl GlyphCache {
     /// How many keys have a remembered answer.
     pub(crate) fn held(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Whether a prefetch may read the fragment tree now: the cache holds no glyph, and no prefetch
+    /// read the tree since the cache was last emptied.
+    ///
+    /// Once per emptied cache, so a window whose walk caches nothing does not read every line on
+    /// every frame.
+    pub(crate) fn take_prefetch_turn(&mut self) -> bool {
+        let turn = self.entries.is_empty() && !self.prefetch_tried;
+        self.prefetch_tried |= turn;
+        turn
+    }
+
+    /// Keeps answers rasterised ahead of the walk until the walk asks for them.
+    pub(crate) fn prefetch(
+        &mut self,
+        answers: impl IntoIterator<Item = (GlyphKey, Option<GlyphImage>)>,
+    ) {
+        self.prefetched.extend(answers);
+    }
+
+    /// Drops the answers the walk did not ask for.
+    pub(crate) fn drop_prefetched(&mut self) {
+        self.prefetched = FxHashMap::default();
     }
 
     /// The tile holding one glyph's pixels, rasterising it only if nothing here can answer.
@@ -222,8 +255,12 @@ impl GlyphCache {
     /// Makes one glyph's pixels, uploads them, and remembers what happened.
     fn rasterise(&mut self, atlas: &mut Atlas, raster: &dyn GlyphRaster, key: &GlyphKey) -> Placed {
         crate::content::probe::rastered();
+        let answer = match self.prefetched.remove(key) {
+            Some(answer) => answer,
+            None => raster.raster(key),
+        };
         // A face that has no bytes right now may have them later, so this is not remembered.
-        let Some(image) = raster.raster(key) else {
+        let Some(image) = answer else {
             return Placed::Nothing;
         };
         if image.is_empty() || !image.is_well_formed() {
