@@ -193,6 +193,12 @@ global.
 read back through the same handle if you need the value you just wrote; do not expect the *document*
 to have changed yet.
 
+**Creating reactive state inside an attribute closure.** A closure given to an attribute, class,
+style, prop or accessibility value runs again under the view's owner, with no cleanup between runs.
+A memo, signal, context or cleanup that it creates is kept until the view is unmounted, once for
+each run. Create those in the component body. A reactive hole in child position cleans up before
+each run.
+
 **Holding a `RenderEffect` handle nowhere.** An effect's lifetime is its handle's. Store it in the
 state the view keeps, which is what the view layer does for you when the effect comes from a
 reactive hole.
