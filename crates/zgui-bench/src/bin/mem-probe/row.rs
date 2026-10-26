@@ -4,9 +4,13 @@
 //! nine bindings, two memos and three selector subscriptions, under the same sheet. The chrome
 //! around the table is ported too, so that a run here and a run of the study build the same
 //! document.
+//!
+//! The view holds each record in one of two ways: as a [`RowState`] with one signal per field, as
+//! the study does, or as a key into a [`KeyedFields`] table, whose field signals exist only while a
+//! row reads them.
 
 use zgui::prelude::*;
-use zgui::reactive::Selector;
+use zgui::reactive::{KeyedFields, Lens, Selector};
 #[allow(
     unused_imports,
     reason = "the tag names the component and the macro names its props type"
@@ -145,6 +149,42 @@ pub(crate) struct RowState {
     pub(crate) tint: RwSignal<u8>,
 }
 
+/// One entry of the ordered collection: what the view keys a row by, and how it builds one.
+pub(crate) trait ProbeRow: Copy + Send + Sync + 'static {
+    /// The durable key.
+    fn key(&self) -> u64;
+
+    /// The row's view.
+    fn view(
+        self,
+        hovered: Selector<Option<u64>>,
+        selected: Selector<Option<u64>>,
+        editing: Selector<Option<u64>>,
+    ) -> impl IntoView;
+
+    /// Writes a new quantity, as a one-cell edit does.
+    fn bump_qty(&self, by: u32);
+}
+
+impl ProbeRow for RowState {
+    fn key(&self) -> u64 {
+        self.key
+    }
+
+    fn view(
+        self,
+        hovered: Selector<Option<u64>>,
+        selected: Selector<Option<u64>>,
+        editing: Selector<Option<u64>>,
+    ) -> impl IntoView {
+        view! { TableRow(r = self, hovered = hovered, selected = selected, editing = editing) }
+    }
+
+    fn bump_qty(&self, by: u32) {
+        self.qty.update(|qty| *qty = (*qty + by) % 1_000);
+    }
+}
+
 impl RowState {
     /// Must be called with a reactive owner current, or the signals belong to nobody.
     pub(crate) fn new(r: &Record) -> Self {
@@ -161,6 +201,91 @@ impl RowState {
     }
 }
 
+/// One record as the keyed view holds it: the cells, as plain values.
+pub(crate) struct Cells {
+    /// The name cell.
+    name: String,
+    /// The price, in cents.
+    price_cents: i64,
+    /// The quantity.
+    qty: u32,
+    /// The note.
+    note: String,
+    /// The category label.
+    category: &'static str,
+    /// Whether the row is tall.
+    tall: bool,
+    /// The row's tint.
+    tint: u8,
+}
+
+impl Cells {
+    /// The cells of `r`.
+    pub(crate) fn new(r: &Record) -> Self {
+        Self {
+            name: r.name.clone(),
+            price_cents: r.price_cents,
+            qty: r.qty,
+            note: r.note.clone(),
+            category: CATEGORIES[r.category as usize],
+            tall: r.tall,
+            tint: r.tint,
+        }
+    }
+}
+
+/// The name cell.
+const NAME: Lens<Cells, String> = Lens::new(0, |c| &c.name, |c| &mut c.name);
+/// The price cell.
+const PRICE: Lens<Cells, i64> = Lens::new(1, |c| &c.price_cents, |c| &mut c.price_cents);
+/// The quantity cell.
+const QTY: Lens<Cells, u32> = Lens::new(2, |c| &c.qty, |c| &mut c.qty);
+/// The note cell.
+const NOTE: Lens<Cells, String> = Lens::new(3, |c| &c.note, |c| &mut c.note);
+/// Whether the row is tall.
+const TALL: Lens<Cells, bool> = Lens::new(4, |c| &c.tall, |c| &mut c.tall);
+/// The row's tint.
+const TINT: Lens<Cells, u8> = Lens::new(5, |c| &c.tint, |c| &mut c.tint);
+
+/// One record as the keyed view refers to it: a key into the table.
+#[derive(Clone, Copy)]
+pub(crate) struct KeyedRow {
+    /// The durable key.
+    key: u64,
+    /// The table that holds the cells.
+    table: KeyedFields<u64, Cells>,
+}
+
+impl KeyedRow {
+    /// One entry per record, over one table of their cells.
+    ///
+    /// Must be called with a reactive owner current.
+    pub(crate) fn all(records: &[Record]) -> Vec<Self> {
+        let table = KeyedFields::from_values(records.iter().map(|r| (r.id, Cells::new(r))));
+        records.iter().map(|r| Self { key: r.id, table }).collect()
+    }
+}
+
+impl ProbeRow for KeyedRow {
+    fn key(&self) -> u64 {
+        self.key
+    }
+
+    fn view(
+        self,
+        hovered: Selector<Option<u64>>,
+        selected: Selector<Option<u64>>,
+        editing: Selector<Option<u64>>,
+    ) -> impl IntoView {
+        view! { KeyedTableRow(r = self, hovered = hovered, selected = selected, editing = editing) }
+    }
+
+    fn bump_qty(&self, by: u32) {
+        self.table
+            .update(&self.key, QTY, |qty| *qty = (*qty + by) % 1_000);
+    }
+}
+
 /// The tooltip overlay, when one is open.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TooltipState {
@@ -172,9 +297,9 @@ pub(crate) struct TooltipState {
 
 /// Everything the probe writes and the view reads.
 #[derive(Clone, Copy)]
-pub(crate) struct Ctx {
+pub(crate) struct Ctx<R: ProbeRow> {
     /// The ordered collection. Every entry is a live row.
-    pub(crate) rows: RwSignal<Vec<RowState>>,
+    pub(crate) rows: RwSignal<Vec<R>>,
     /// The hovered record.
     pub(crate) hover: RwSignal<Option<u64>>,
     /// The selected record.
@@ -200,7 +325,7 @@ pub(crate) struct Ctx {
     /// The tooltip, when one is open.
     pub(crate) tooltip: RwSignal<Option<TooltipState>>,
     /// A record shown outside the viewport.
-    pub(crate) a11y_row: RwSignal<Option<RowState>>,
+    pub(crate) a11y_row: RwSignal<Option<R>>,
     /// The scroll container the rows live in.
     pub(crate) port: NodeRef,
     /// The column whose children are the rows.
@@ -211,7 +336,7 @@ pub(crate) struct Ctx {
     pub(crate) editor_panel: NodeRef,
 }
 
-impl Ctx {
+impl<R: ProbeRow> Ctx<R> {
     /// Must be called with a reactive owner current.
     pub(crate) fn new() -> Self {
         Self {
@@ -249,7 +374,7 @@ fn px(v: f32) -> String {
 }
 
 /// The rows a table builds.
-type Rows = Signal<Vec<RowState>, LocalStorage>;
+type Rows<R> = Signal<Vec<R>, LocalStorage>;
 
 /// A length in CSS pixels that a view reads.
 type Length = Signal<f32, LocalStorage>;
@@ -288,15 +413,57 @@ fn TableRow(
     }
 }
 
+/// One row of the keyed view: the same nodes, bindings and memos as [`TableRow`], each reading one
+/// cell from the table.
+#[component]
+fn KeyedTableRow(
+    r: KeyedRow,
+    hovered: Selector<Option<u64>>,
+    selected: Selector<Option<u64>>,
+    editing: Selector<Option<u64>>,
+) -> impl IntoView {
+    let KeyedRow { key, table } = r;
+    let some = Some(key);
+    let (h, s, e) = (hovered, selected, editing);
+    let price = Memo::new(move |_| (table.get(&key, PRICE).unwrap_or_default() / 100).to_string());
+    let qty = Memo::new(move |_| table.get(&key, QTY).unwrap_or_default().to_string());
+    let category = table
+        .with_untracked(&key, |c| c.category)
+        .unwrap_or_default();
+    view! {
+        row(
+            class = "row",
+            class:hov = move || h.is_selected(&some),
+            class:sel = move || s.is_selected(&some),
+            class:edit = move || e.is_selected(&some),
+            class:tall = move || table.get(&key, TALL).unwrap_or_default(),
+            style:background-color = move || table.get(&key, TINT).map(tint_css),
+            attr:data-key = Some(key.to_string()),
+            a11y:role = Role::Row
+        ) {
+            text(class = "c c-key", a11y:role = Role::Cell) {{key.to_string()}}
+            text(class = "c c-name", a11y:role = Role::Cell) {{move || table.get(&key, NAME).unwrap_or_default()}}
+            text(class = "c c-price", a11y:role = Role::Cell) {{move || price.get()}}
+            text(class = "c c-qty", a11y:role = Role::Cell) {{move || qty.get()}}
+            text(class = "c c-note", a11y:role = Role::Cell) {{move || table.get(&key, NOTE).unwrap_or_default()}}
+            text(class = "c c-cat", a11y:role = Role::Cell) {{category}}
+        }
+    }
+}
+
 /// The application, with every row built when `unvirtualized`, and windowed by [`Virtualize`]
 /// otherwise.
 #[component]
-pub(crate) fn Root(ctx: Ctx, unvirtualized: bool) -> impl IntoView {
+#[allow(
+    unused_braces,
+    reason = "the macro passes a row's block child to the keyed list as an argument"
+)]
+pub(crate) fn Root<R: ProbeRow>(ctx: Ctx<R>, unvirtualized: bool) -> impl IntoView {
     let hovered = Selector::new(move || ctx.hover.get());
     let selected = Selector::new(move || ctx.selected.get());
     let editing = Selector::new(move || ctx.editor_key.get());
 
-    let (source, lead, trail): (Rows, Length, Length) = if unvirtualized {
+    let (source, lead, trail): (Rows<R>, Length, Length) = if unvirtualized {
         (
             Signal::derive_local(move || ctx.rows.get()),
             Signal::stored_local(0.0),
@@ -360,8 +527,8 @@ pub(crate) fn Root(ctx: Ctx, unvirtualized: bool) -> impl IntoView {
                     style:padding-top = move || Some(px(lead.get())),
                     style:padding-bottom = move || Some(px(trail.get()))
                 ) {
-                    for r in move || source.get(), key = |r: &RowState| r.key {
-                        TableRow(r = r, hovered = h2.clone(), selected = s2.clone(), editing = e2.clone())
+                    for r in move || source.get(), key = |r: &R| r.key() {
+                        {{r.view(h2.clone(), s2.clone(), e2.clone())}}
                     }
                 }
             }
@@ -393,9 +560,9 @@ pub(crate) fn Root(ctx: Ctx, unvirtualized: bool) -> impl IntoView {
                 box(class = "offscreen", a11y:role = Role::Group, a11y:label = "Requested row") {
                     {{
                         let (h, s, e) = (h3.clone(), s3.clone(), e3.clone());
-                        move || ctx.a11y_row.get().map(|r| view! {
-                            TableRow(r = r, hovered = h.clone(), selected = s.clone(), editing = e.clone())
-                        }.into_view())
+                        move || ctx.a11y_row.get().map(|r| {
+                            r.view(h.clone(), s.clone(), e.clone()).into_view()
+                        })
                     }}
                 }
             }

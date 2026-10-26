@@ -31,6 +31,10 @@
 //! nothing changed are drawn after each unmount and remount, so that what the window frees on a
 //! stride of frames is freed before the snapshot.
 //!
+//! The modes `keyed-virtualized` and `keyed-model-only` hold the records in one
+//! [`KeyedFields`](zgui::reactive::KeyedFields) table, whose field signals exist only while a row
+//! reads them, in place of one signal per field of each record.
+//!
 //! With `--keep`, the process exits with the window and the model still held, so that a heap
 //! profiler reports what the last snapshot held as leaked, by call site.
 //!
@@ -81,7 +85,7 @@ use zgui::view::{Anchor, BuildCx};
 use zgui_platform_headless::Harness;
 use zgui_profile::alloc_tag::{self, Tag};
 
-use crate::row::{Ctx, RootProps, RowState};
+use crate::row::{Ctx, KeyedRow, ProbeRow, Record, RootProps, RowState};
 use crate::snapshot::Snapshot;
 
 #[global_allocator]
@@ -111,6 +115,10 @@ enum Mode {
     Virtualized,
     /// The records and their signals, and no rows.
     ModelOnly,
+    /// As [`Self::Virtualized`], with the records in a `KeyedFields` table.
+    KeyedVirtualized,
+    /// As [`Self::ModelOnly`], with the records in a `KeyedFields` table.
+    KeyedModelOnly,
 }
 
 impl Mode {
@@ -120,7 +128,24 @@ impl Mode {
             Self::Unvirtualized => "unvirtualized",
             Self::Virtualized => "virtualized",
             Self::ModelOnly => "model-only",
+            Self::KeyedVirtualized => "keyed-virtualized",
+            Self::KeyedModelOnly => "keyed-model-only",
         }
+    }
+
+    /// Whether the rows are windowed by `Virtualize`.
+    fn virtualized(self) -> bool {
+        matches!(self, Self::Virtualized | Self::KeyedVirtualized)
+    }
+
+    /// Whether any row is built.
+    fn mounts(self) -> bool {
+        !matches!(self, Self::ModelOnly | Self::KeyedModelOnly)
+    }
+
+    /// Whether the records are in a `KeyedFields` table.
+    fn keyed(self) -> bool {
+        matches!(self, Self::KeyedVirtualized | Self::KeyedModelOnly)
     }
 }
 
@@ -157,7 +182,8 @@ struct Args {
 }
 
 /// The usage line.
-const USAGE: &str = "usage: mem-probe [--rows N] [--mode unvirtualized|virtualized|model-only] \
+const USAGE: &str = "usage: mem-probe [--rows N] \
+                     [--mode unvirtualized|virtualized|model-only|keyed-virtualized|keyed-model-only] \
                      [--no-gpu] [--pause] [--edits N] [--edit-rounds N] [--remount N] [--cycles N] \
                      [--age N] [--keep] [--drain-a11y] [--json PATH] [--tsv PATH]\n       \
                      mem-probe --compare SMALL.tsv LARGE.tsv";
@@ -202,6 +228,8 @@ impl Args {
                         Some("unvirtualized") => Mode::Unvirtualized,
                         Some("virtualized") => Mode::Virtualized,
                         Some("model-only") => Mode::ModelOnly,
+                        Some("keyed-virtualized") => Mode::KeyedVirtualized,
+                        Some("keyed-model-only") => Mode::KeyedModelOnly,
                         _ => return Err(USAGE.to_owned()),
                     }
                 }
@@ -324,7 +352,7 @@ fn renderer(gpu: bool) -> zgui::runtime::RendererFactory {
 }
 
 /// Opens the window over the study's document, and returns the harness and the context.
-fn open(args: &Args) -> Result<(Harness<Runtime>, Ctx), String> {
+fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> {
     let fonts = zgui::app::Fonts::shipped_only();
     fonts
         .register(Arc::new(FONT), Some(FONT_FAMILY))
@@ -332,8 +360,8 @@ fn open(args: &Args) -> Result<(Harness<Runtime>, Ctx), String> {
     let metrics = fonts.clone();
     let shaping = fonts.clone();
     let raster = fonts;
-    let unvirtualized = args.mode != Mode::Virtualized;
-    let ctx_cell: Rc<RefCell<Option<Ctx>>> = Rc::new(RefCell::new(None));
+    let unvirtualized = !args.mode.virtualized();
+    let ctx_cell: Rc<RefCell<Option<Ctx<R>>>> = Rc::new(RefCell::new(None));
     let ctx_for_view = Rc::clone(&ctx_cell);
     let runtime = zgui::runtime::App::new()
         .with_title("mem-probe")
@@ -403,8 +431,22 @@ fn age(harness: &mut Harness<Runtime>, frames: usize) {
     harness.settle(256);
 }
 
-/// The run itself.
+/// The run itself, with the records held as the mode asks.
 fn run(args: &Args) -> Result<(), String> {
+    if args.mode.keyed() {
+        run_with(args, KeyedRow::all)
+    } else {
+        run_with(args, |model: &[Record]| {
+            model.iter().map(RowState::new).collect()
+        })
+    }
+}
+
+/// The run itself, with `states` making the view's entries from the records.
+fn run_with<R: ProbeRow>(
+    args: &Args,
+    states: impl FnOnce(&[Record]) -> Vec<R>,
+) -> Result<(), String> {
     let pid = std::process::id();
     println!(
         "MEMPROBE pid={pid} rows={} mode={} gpu={}",
@@ -413,7 +455,7 @@ fn run(args: &Args) -> Result<(), String> {
         args.gpu
     );
     let sizes = snapshot::sizes();
-    let (mut harness, ctx) = open(args)?;
+    let (mut harness, ctx) = open::<R>(args)?;
     let mut snapshots = Vec::with_capacity(8);
     let mut take = |name: &'static str, harness: &Harness<Runtime>| {
         if args.drain_a11y {
@@ -439,10 +481,7 @@ fn run(args: &Args) -> Result<(), String> {
 
     let (model, states) = alloc_tag::scope(Tag::AppModel, || {
         let model = row::records(args.rows);
-        let states: Vec<RowState> = harness
-            .app()
-            .scope()
-            .with(|| model.iter().map(RowState::new).collect());
+        let states: Vec<R> = harness.app().scope().with(|| states(&model));
         (model, states)
     });
     ctx.summary_count.set(model.len());
@@ -450,7 +489,7 @@ fn run(args: &Args) -> Result<(), String> {
         .set(model.iter().map(|record| record.price_cents).sum());
     take("model", &harness);
 
-    let mounts = args.mode != Mode::ModelOnly;
+    let mounts = args.mode.mounts();
     if mounts {
         alloc_tag::scope(Tag::ReactiveBuild, || {
             ctx.rows.set(states.clone());
@@ -466,11 +505,7 @@ fn run(args: &Args) -> Result<(), String> {
         if !states.is_empty() {
             for edit in round * args.edits..(round + 1) * args.edits {
                 let state = states[edit * 7_919 % states.len()];
-                alloc_tag::scope(Tag::AppModel, || {
-                    state
-                        .qty
-                        .update(|qty| *qty = (*qty + 1 + edit as u32) % 1_000);
-                });
+                alloc_tag::scope(Tag::AppModel, || state.bump_qty(1 + edit as u32));
                 harness.settle(64);
             }
         }
