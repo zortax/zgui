@@ -23,10 +23,10 @@ fn Counter() -> impl IntoView {
 }
 ```
 
-`Counter` runs once. `move || count.get().to_string()` is a **reactive hole**: one effect, which
-writes the text node only when the string actually changes. The same expression without the closure
-— `count.get().to_string()` — is written once and never again. The difference is the type, not a
-keyword, and that is the whole static-versus-dynamic story.
+`Counter` runs once. `move || count.get().to_string()` is a **reactive hole**: it runs again when
+`count` changes, and writes the text node only when the string actually changes. The same
+expression without the closure — `count.get().to_string()` — is written once and never again. The
+difference is the type, not a keyword, and that is the whole static-versus-dynamic story.
 
 ## The three rules
 

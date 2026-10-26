@@ -64,6 +64,8 @@ macro_rules! text_view {
             impl View for $type {
                 type State = TextState;
 
+                const REBUILDS_IN_PLACE: bool = true;
+
                 fn build(self, cx: &mut BuildCx<'_>) -> Self::State {
                     let text = $text(&self);
                     TextState::new(cx.dom(), &text)
