@@ -95,6 +95,8 @@ pub struct Tracked {
     last_used: SceneEpoch,
     /// The cache's running lookup total as of the last frame observed.
     hits: u64,
+    /// The recent peak of the cache's working set, for a cache whose level follows it.
+    peak: u64,
 }
 
 impl Tracked {
@@ -115,6 +117,21 @@ impl Tracked {
             self.last_used = epoch;
         }
         self.hits = hits;
+    }
+
+    /// Records this frame's working set, and returns its recent peak.
+    ///
+    /// The peak falls by a 256th of itself on each frame the working set stays below it. A working
+    /// set that shrank thus stops counting after a few hundred frames, and one that comes back
+    /// before that still counts.
+    pub fn note_working_set(&mut self, now: u64) -> u64 {
+        self.peak = now.max(self.peak - self.peak / 256);
+        self.peak
+    }
+
+    /// The recent peak of the working set, as [`Tracked::note_working_set`] last recorded it.
+    pub const fn working_peak(&self) -> u64 {
+        self.peak
     }
 }
 

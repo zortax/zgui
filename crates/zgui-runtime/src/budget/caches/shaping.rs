@@ -74,8 +74,17 @@ impl Budgeted for ParagraphShapingBudget<'_> {
         CacheId::ParagraphShaping
     }
 
+    /// The configured level, or fewer when the old paragraphs pass their own allowance.
+    ///
+    /// The allowance is the recent peak of the current paragraphs, and at least
+    /// [`IDLE_SHAPED_PARAGRAPHS`](crate::budget::limits::IDLE_SHAPED_PARAGRAPHS). A change that
+    /// replaces every current paragraph, such as a font-size toggle or a switch to another view
+    /// and back, thus finds the earlier ones still shaped.
     fn limit(&self) -> Option<u64> {
-        Some(self.limit as u64)
+        let active = self.layout.borrow().active_paragraph_count();
+        let peak = (self.tracked.working_peak() as usize).max(active);
+        let idle = peak.max(crate::budget::limits::IDLE_SHAPED_PARAGRAPHS);
+        Some(self.limit.min(active.saturating_add(idle)) as u64)
     }
 
     fn report(&self) -> CacheReport {
@@ -105,6 +114,8 @@ impl Budgeted for ParagraphShapingBudget<'_> {
             });
         self.tracked
             .note(epoch, self.text.shaped_held().hits, false);
+        let active = self.layout.borrow().active_paragraph_count();
+        self.tracked.note_working_set(active as u64);
     }
 
     /// Drops only cold entries no current inline resolution names.

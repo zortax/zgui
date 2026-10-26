@@ -209,6 +209,22 @@ impl<E> ParagraphCache<E> {
         self.remove(key);
     }
 
+    /// Drops every entry for which `drop` is true, and reports how many went.
+    ///
+    /// Examines every held entry, so a caller asks this for a batch of changes and not per frame.
+    pub fn forget_where(&mut self, drop: impl Fn(&ShapedParagraph<E>) -> bool) -> usize {
+        let doomed: Vec<ParagraphKey> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| drop(&entry.shaped))
+            .map(|(key, _)| *key)
+            .collect();
+        for &key in &doomed {
+            self.remove(key);
+        }
+        doomed.len()
+    }
+
     /// Records that the last current resolution of each of `keys` went away, and files the
     /// entries `is_active` rejects as eviction candidates.
     ///
@@ -406,6 +422,27 @@ mod tests {
         );
         assert_eq!(cache.len(), 1);
         assert!(cache.holds(ParagraphKey(3)));
+    }
+
+    #[test]
+    fn forgetting_by_brush_drops_only_the_named_results_and_their_bytes() {
+        let mut cache = ParagraphCache::new();
+        for key in 1..=4 {
+            let mut result = shaped(key);
+            result.set_brush(Some(zgui_scene::PaintSlot((key % 2) as u32)));
+            cache.insert(result);
+            cache.restate_engine_bytes(ParagraphKey(key), |_| 10);
+        }
+        let gone = zgui_scene::PaintSlot(1);
+        assert_eq!(cache.forget_where(|result| result.brush() == Some(gone)), 2);
+        assert!(!cache.holds(ParagraphKey(1)));
+        assert!(cache.holds(ParagraphKey(2)));
+        assert!(!cache.holds(ParagraphKey(3)));
+        assert!(cache.holds(ParagraphKey(4)));
+        assert_eq!(cache.engine_bytes(), 20);
+        // A dropped key that was filed as idle is not handed to eviction.
+        assert_eq!(cache.evict_inactive(|_| false, usize::MAX), 2);
+        assert!(cache.is_empty());
     }
 
     #[test]

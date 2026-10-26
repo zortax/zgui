@@ -1163,6 +1163,14 @@ impl Window {
         self.text.shaped_held()
     }
 
+    /// How many brush slots the text engine's table has in use, and how many keys resolve to
+    /// one, for a memory report.
+    #[doc(hidden)]
+    pub fn text_brushes_held(&mut self) -> (usize, usize) {
+        let table = self.text.text_paints();
+        (table.in_use(), table.keys())
+    }
+
     /// The raster paths most recently selected by `node`'s own vector content.
     pub fn vector_routes(&self, node: zgui_dom::NodeKey) -> zgui_paint::VectorRoutes {
         self.vector_routes

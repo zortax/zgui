@@ -510,6 +510,7 @@ impl Window {
         // so the next diff drains the same values, and a `PropertyOwner` carries the slot's
         // occupancy counter — a name given back late can never be confused with one since reissued.
         self.layout.borrow_mut().recycle();
+        self.sweep_text_slots();
         let changed_during = self.document.borrow().end_frame();
         // After every stage that can write the document and before the frame's own park decision:
         // what this records is what another window's sweep compares against to find out whether
@@ -1052,6 +1053,44 @@ impl Window {
         pass.styled
     }
 
+    /// Releases the brush slots nothing is drawn through, and drops the brush records of the
+    /// elements that left the document once enough of them left.
+    ///
+    /// At the frame's end, because the paragraphs of an element that left a slot name it until
+    /// layout shapes them again, and after the arenas are recycled, because a removed node still
+    /// resolves until then. The text engine then drops the paragraphs shaped through the slots
+    /// that went, and lets go of the cascade results no key resolves to.
+    fn sweep_text_slots(&mut self) {
+        let document = self.document.borrow();
+        let store = document.store();
+        let dropped = store.dropped();
+        if !self.text_slots.owes_sweep(dropped) {
+            return;
+        }
+        let records = self.text_slots.records_due(dropped);
+        let released = self
+            .text_slots
+            .sweep(self.text.text_paints(), dropped, |node| {
+                store.index_of(node).is_some()
+            });
+        drop(document);
+        // Dropping the paragraphs of released slots examines every shaped paragraph, so it waits
+        // for a pass over the records or a large batch. Until then such a paragraph is an old
+        // one like any other: the brush is part of its key, so a later claim of the slot that
+        // finds it draws it through that claim's colour.
+        let dropping: &[zgui_scene::PaintSlot] =
+            if records || released.len() as u64 >= super::brushes::SWEEP_AFTER_DROPPED {
+                &released
+            } else {
+                &[]
+            };
+        let layout = self.layout.borrow();
+        self.text
+            .release_brushes(dropping, &|key| layout.paragraph_is_active(key));
+        drop(layout);
+        super::brushes::publish(&self.text_slots, self.text.text_paints());
+    }
+
     /// Writes the text colours the cascade moved through the slots that name them.
     ///
     /// This is the one step of the restyle's tail the style engine cannot own: the table belongs
@@ -1065,6 +1104,7 @@ impl Window {
             return;
         }
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
+        super::brushes::publish(&self.text_slots, self.text.text_paints());
         self.brushes_moved |= applied.recoloured;
         let split = applied.split;
         if split.is_empty() {
@@ -1125,10 +1165,10 @@ impl Window {
     /// with no symptom at all in a document whose text colour is already the inherited one.
     fn publish_text_brushes(&mut self) {
         let table = self.text.text_paints();
-        // A frame that moved no colour and flattened no new paragraph copies nothing: the slot
+        // A frame that moved no colour and flattened no new paragraph copies nothing: the claim
         // count is what every claim moves, and the brushes themselves are only ever rewritten by
         // the step above.
-        if table.len() == self.scene.text_paints.len() && !self.brushes_moved {
+        if table.claims() == self.scene.text_paints.claims() && !self.brushes_moved {
             return;
         }
         self.brushes_moved = false;

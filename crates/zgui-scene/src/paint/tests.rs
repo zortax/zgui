@@ -115,3 +115,53 @@ fn recolouring_rewrites_every_brush_in_place() {
     assert_eq!(brushes.get(second).unwrap().color[0], 0.5);
     assert_eq!(brushes.len(), 2);
 }
+
+#[test]
+fn a_slot_is_released_only_when_no_key_resolves_to_it() {
+    let mut brushes = TextPaintTable::new();
+    let black = TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0));
+    let slot = brushes.slot_for(1, || black);
+    brushes.alias(2, slot);
+
+    brushes.forget(1);
+    assert!(!brushes.release(slot), "the alias still resolves to it");
+    brushes.forget(2);
+    assert!(brushes.release(slot));
+    assert!(!brushes.release(slot), "a released slot is released once");
+    assert_eq!(brushes.in_use(), 0);
+
+    brushes.alias(3, slot);
+    assert_eq!(
+        brushes.keys(),
+        0,
+        "a key cannot be pointed at a released slot"
+    );
+}
+
+#[test]
+fn a_claim_takes_a_released_slot_before_the_table_grows() {
+    let mut brushes = TextPaintTable::new();
+    let black = TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0));
+    let white = TextPaint::new(Color::srgb(1.0, 1.0, 1.0, 1.0));
+    let first = brushes.slot_for(1, || black);
+    let second = brushes.slot_for(2, || black);
+    brushes.forget(1);
+    assert!(brushes.release(first));
+    let claims = brushes.claims();
+
+    let again = brushes.slot_for(3, || white);
+    assert_eq!(again, first);
+    assert_eq!(brushes.len(), 2, "the table did not grow");
+    assert_eq!(brushes.in_use(), 2);
+    assert_eq!(
+        brushes.claims(),
+        claims + 1,
+        "a copy compared by length alone would miss this claim"
+    );
+    assert_eq!(
+        brushes.get(again),
+        Some(&white),
+        "the claim wrote its own brush"
+    );
+    assert_eq!(brushes.get(second), Some(&black));
+}

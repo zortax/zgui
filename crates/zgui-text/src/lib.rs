@@ -53,10 +53,10 @@
 //!
 //! # Why a brush is an index
 //!
-//! [`Brush`] is a slot number in a table that lives as long as the document, never a colour. A
-//! shaped paragraph outlives the frame that produced it, so storing a colour would mean a theme
-//! change invalidated every one of them; storing an index means the same change is a handful of
-//! writes into the table with nothing re-shaped.
+//! [`Brush`] is a slot number in a table the document owns, never a colour. A shaped paragraph
+//! outlives the frame that produced it, so storing a colour would mean a theme change invalidated
+//! every one of them; storing an index means the same change is a handful of writes into the table
+//! with nothing re-shaped.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]

@@ -611,6 +611,18 @@ counters! {
     /// the absolute bytes. Zero for an engine that makes no estimate.
     ParagraphBytesLive => paragraph_bytes_live, Group::Live;
 
+    /// Brush slots in use in the text paint table, released slots excluded.
+    TextBrushSlotsLive => text_brush_slots_live, Group::Live;
+
+    /// Cascade results the text paint table resolves to a brush slot.
+    TextBrushKeysLive => text_brush_keys_live, Group::Live;
+
+    /// Element runs the window records a brush slot for.
+    TextSlotRecordsLive => text_slot_records_live, Group::Live;
+
+    /// Cascade results the text engine holds so that the brush table can file them by address.
+    TextBrushPinsLive => text_brush_pins_live, Group::Live;
+
     /// Shaped paragraphs thrown away.
     ParagraphsForgotten => paragraphs_forgotten, Group::BackendNeutral;
 

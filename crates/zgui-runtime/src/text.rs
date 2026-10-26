@@ -96,6 +96,19 @@ pub trait TextEngine: MeasureContent + ShapedGlyphs + ShapedClusters {
         0
     }
 
+    /// Drops what the brush table no longer needs after the window released the slots in
+    /// `released` and forgot keys, and reports how many shaped paragraphs went.
+    ///
+    /// `is_active` tells whether a current layout resolution names a key. The default drops
+    /// nothing, which keeps a cache that cannot tell which brush a result names correct.
+    fn release_brushes(
+        &mut self,
+        _released: &[zgui_text::Brush],
+        _is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) -> usize {
+        0
+    }
+
     /// Shapes the given paragraphs before layout asks for them, across `pool`'s workers.
     ///
     /// The default shapes nothing: layout then shapes each paragraph itself, exactly as it does
@@ -161,6 +174,14 @@ where
 
     fn evict_inactive(&mut self, is_active: &dyn Fn(ParagraphKey) -> bool, count: usize) -> usize {
         zgui_layout::Paragraphs::evict_inactive(self, is_active, count)
+    }
+
+    fn release_brushes(
+        &mut self,
+        released: &[zgui_text::Brush],
+        is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) -> usize {
+        zgui_layout::Paragraphs::release_brushes(self, released, is_active)
     }
 
     fn pre_shape_paragraphs(
@@ -286,6 +307,14 @@ impl TextEngine for Box<dyn TextEngine> {
 
     fn evict_inactive(&mut self, is_active: &dyn Fn(ParagraphKey) -> bool, count: usize) -> usize {
         (**self).evict_inactive(is_active, count)
+    }
+
+    fn release_brushes(
+        &mut self,
+        released: &[zgui_text::Brush],
+        is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) -> usize {
+        (**self).release_brushes(released, is_active)
     }
 
     fn pre_shape_paragraphs(

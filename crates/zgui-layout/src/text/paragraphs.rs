@@ -40,7 +40,7 @@ pub struct Paragraphs<S: ParagraphShaper, R = NaturalSize> {
     /// The brushes runs are drawn with.
     paints: TextPaintTable,
     /// The cascade results those brushes were claimed against, held so that their addresses
-    /// cannot be handed out to a later style while a shaped paragraph still names the slot.
+    /// cannot be handed out to a later style while a key of the table resolves to them.
     pinned: Vec<zgui_text_style::TextPaintKey>,
     /// Forked shapers for the pre-shape workers, kept warm across frames.
     forks: Vec<S>,
@@ -169,7 +169,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         if !distributed || self.forks.is_empty() {
             for &index in &misses {
                 let (key, content) = &jobs[index];
-                let shaped = self.shaper.shape_keyed(*key, content);
+                let shaped = shape_branded(&mut self.shaper, *key, content);
                 self.cache.insert(shaped);
                 self.restate_bytes(*key);
             }
@@ -189,7 +189,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
                 scope.spawn(move |_| {
                     for &index in chunk {
                         let (key, content) = &jobs[index];
-                        out.push(fork.shape_keyed(*key, content));
+                        out.push(shape_branded(fork, *key, content));
                     }
                 });
             }
@@ -307,6 +307,55 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         self.publish_bytes();
         dropped
     }
+
+    /// Drops what the brush table no longer needs after its owner released `released` and
+    /// forgot keys, and reports how many shaped paragraphs went.
+    ///
+    /// A cascade result is held only while a key of the table resolves to its address. A shaped
+    /// paragraph whose first run names a released slot goes, unless `is_active` tells that a
+    /// current layout resolution names its key. No current context names a released slot, and the
+    /// brush is part of the key, so such a paragraph serves no context until a later claim takes
+    /// the slot again.
+    pub fn release_brushes(
+        &mut self,
+        released: &[Brush],
+        is_active: impl Fn(ParagraphKey) -> bool,
+    ) -> usize {
+        self.sweep_pins();
+        if released.is_empty() {
+            return 0;
+        }
+        let released: rustc_hash::FxHashSet<Brush> = released.iter().copied().collect();
+        let dropped = self.cache.forget_where(|shaped| {
+            shaped
+                .brush()
+                .is_some_and(|brush| released.contains(&brush))
+                && !is_active(shaped.key())
+        });
+        counter::add(Counter::ParagraphsEvicted, dropped as u64);
+        self.publish_bytes();
+        dropped
+    }
+
+    /// Lets go of the cascade results whose addresses no key of the brush table resolves to.
+    fn sweep_pins(&mut self) {
+        let paints = &self.paints;
+        self.pinned
+            .retain(|key| paints.slot_of(key.addr() as u64).is_some());
+        counter::set(Counter::TextBrushPinsLive, self.pinned.len() as u64);
+    }
+}
+
+/// Shapes `content` under `key` with `shaper`, and records the brush its first run is drawn
+/// through.
+fn shape_branded<S: ParagraphShaper>(
+    shaper: &mut S,
+    key: ParagraphKey,
+    content: &ParagraphContent<'_>,
+) -> zgui_text::ShapedParagraph<S::Engine> {
+    let mut shaped = shaper.shape_keyed(key, content);
+    shaped.set_brush(content.runs.first().map(|run| run.brush));
+    shaped
 }
 
 impl<S: ParagraphShaper, R> ShapedGlyphs for Paragraphs<S, R> {
@@ -344,7 +393,7 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
 
     fn shape_keyed(&mut self, key: ParagraphKey, content: &ParagraphContent<'_>) -> ShapedSummary {
         if !self.cache.holds(key) {
-            let shaped = self.shaper.shape_keyed(key, content);
+            let shaped = shape_branded(&mut self.shaper, key, content);
             self.cache.insert(shaped);
             self.restate_bytes(key);
             self.publish_bytes();
@@ -409,9 +458,19 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         );
         let pinned = &mut self.pinned;
         let held = paint.key.clone();
-        self.paints.slot_for(address, || {
+        let mut claimed = false;
+        let slot = self.paints.slot_for(address, || {
             pinned.push(held);
+            claimed = true;
             SceneTextPaint::new(colour)
-        })
+        });
+        // The pins go only in `release_brushes`, which runs after the brush table's owner forgets
+        // keys.
+        if claimed {
+            counter::set(Counter::TextBrushPinsLive, self.pinned.len() as u64);
+            counter::set(Counter::TextBrushSlotsLive, self.paints.in_use() as u64);
+            counter::set(Counter::TextBrushKeysLive, self.paints.keys() as u64);
+        }
+        slot
     }
 }

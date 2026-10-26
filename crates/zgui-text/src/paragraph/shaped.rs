@@ -56,6 +56,8 @@ pub struct ShapedParagraph<E> {
     recalled: Recalled,
     /// The engine's estimate of its heap bytes, as the cache last recorded it.
     engine_bytes: usize,
+    /// The brush slot the first run is drawn through, if the owner recorded it.
+    brush: Option<crate::Brush>,
     /// The shaper's own result.
     pub engine: E,
 }
@@ -86,6 +88,7 @@ impl<E> ShapedParagraph<E> {
             broken: None,
             recalled: Recalled::default(),
             engine_bytes: 0,
+            brush: None,
             engine,
         }
     }
@@ -130,6 +133,20 @@ impl<E> ShapedParagraph<E> {
     /// Records the engine's estimate of its heap bytes.
     pub(crate) fn set_engine_bytes(&mut self, bytes: usize) {
         self.engine_bytes = bytes;
+    }
+
+    /// The brush slot the first run is drawn through, as
+    /// [`set_brush`](ShapedParagraph::set_brush) recorded it.
+    ///
+    /// When the owner of the brush table releases this slot, no current context can name this
+    /// result's key, so the owner can drop the result.
+    pub fn brush(&self) -> Option<crate::Brush> {
+        self.brush
+    }
+
+    /// Records the brush slot the first run is drawn through.
+    pub fn set_brush(&mut self, brush: Option<crate::Brush>) {
+        self.brush = brush;
     }
 
     /// Which break the glyphs currently reflect, or `None` if none has been taken yet.
