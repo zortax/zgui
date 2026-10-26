@@ -13,8 +13,9 @@ static SYSTEM_COLLECTIONS: AtomicU64 = AtomicU64::new(0);
 ///
 /// Building that index means reading every font configuration file on the machine and walking
 /// every face it names, which on a desktop with a few thousand of them is the largest single thing
-/// an application does before it has a window. An application shipping its own faces asks for none
-/// of it, and this is how that is stated as a number rather than as an intention.
+/// an application does before it has a window. On Linux, the patched fontique reads a valid cache
+/// file in place of that work. An application shipping its own faces asks for none of it, and this
+/// is how that is stated as a number rather than as an intention.
 pub fn system_collections_built() -> u64 {
     SYSTEM_COLLECTIONS.load(Ordering::Relaxed)
 }

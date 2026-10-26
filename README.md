@@ -432,9 +432,10 @@ zgui builds on stable Rust 1.90 or later. On Linux, install `pkg-config`, `libxk
 `fontconfig`.
 
 The zgui repository patches fontique, the font collection under the text engine, so that it keeps
-resolved font families from one paragraph to the next. A crates.io build uses the released
-fontique, which shows the same text and resolves fonts more slowly. To use the patched copy, add
-this to your application's `Cargo.toml`:
+resolved font families from one paragraph to the next and, on Linux, keeps the system font
+collection in a cache file between launches (`ZGUI_FONT_CACHE=off` disables it). A crates.io build
+uses the released fontique, which shows the same text and resolves fonts more slowly. To use the
+patched copy, add this to your application's `Cargo.toml`:
 
 ```toml
 [patch.crates-io]
