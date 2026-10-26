@@ -747,7 +747,14 @@ impl Pass<'_, '_> {
         // whatever the line was indented or aligned by. Both were composed into the fragment, so
         // the content box's origin is recovered from the box rather than from the line.
         let content = self.input.store.fragments_of_box(fragment.box_).first()?;
-        let origin = self.input.store.fragment(*content)?.content_box.origin.x.0;
+        let origin = self
+            .input
+            .store
+            .fragment(*content)?
+            .content_box()
+            .origin
+            .x
+            .0;
         Some(crate::emit::text::EllipsisPaint {
             paragraph: mark.paragraph,
             cutoff: origin + cut.cutoff,
@@ -790,7 +797,7 @@ impl Pass<'_, '_> {
             .fragments_of_box(fragment.box_)
             .first()
             .and_then(|frag| store.fragment(*frag))
-            .map(|own| own.content_box)
+            .map(|own| own.content_box())
         else {
             return Vec::new();
         };
@@ -951,7 +958,7 @@ impl Pass<'_, '_> {
                     .map_or(0, |node| self.input.vectors.revision(node)),
                 _ => 0,
             },
-            cut: fragment.content_hash,
+            cut: store.fragment_extra(fragment).content_hash,
             scale: self.input.scale.to_bits(),
             decorations: decorate::signature(&decorations),
             text_fill: fill::signature(text_fill.as_ref()),

@@ -345,7 +345,7 @@ fn a_drawing_is_placed_at_its_own_boxs_content_box() {
         .store()
         .fragment(harness.fragment_of("mark"))
         .expect("the drawing produced a fragment")
-        .content_box;
+        .content_box();
     let item = &harness.scene().primitives.vectors[0];
     let bounds = item.placed_bounds();
     assert_eq!(bounds.x0 as f32, content_box.origin.x.0);
@@ -368,7 +368,7 @@ fn a_general_shape_draws_its_source_path_under_the_fit() {
         &cache.frame(harness.document()),
         node,
         zgui_paint::content::vectors::Placement {
-            content_box: fragment.content_box,
+            content_box: fragment.content_box(),
             scale: 1.0,
         },
     )
@@ -691,7 +691,7 @@ fn a_drawing_with_no_view_box_is_drawn_in_css_pixels_from_its_content_box() {
         .store()
         .fragment(harness.fragment_of("mark"))
         .expect("a fragment")
-        .content_box;
+        .content_box();
     let bounds = harness.scene().primitives.vectors[0].placed_bounds();
     assert_eq!(
         (bounds.width(), bounds.height()),

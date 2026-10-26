@@ -218,7 +218,7 @@ fn a_scroll_writes_the_content_space_and_leaves_the_rectangles_alone() {
         .fragment(store.fragments_of_box(port_box)[0])
         .expect("a port piece");
     let port_on_device = onto_device(
-        port_piece.padding_box,
+        port_piece.padding_box(),
         port_piece.transform,
         &Placements::of(&frame.spatial),
     );
@@ -725,7 +725,7 @@ fn a_sticky_header_in_a_content_space_sticks_at_the_port_edge_where_a_fresh_buil
         let port_piece = store
             .fragment(store.fragments_of_box(port_key)[0])
             .expect("a port piece");
-        let port_top = onto_device(port_piece.padding_box, port_piece.transform, &placements)
+        let port_top = onto_device(port_piece.padding_box(), port_piece.transform, &placements)
             .origin
             .y
             .0;
@@ -894,7 +894,7 @@ fn a_fixed_box_inside_a_content_space_stays_where_a_fresh_build_puts_it() {
                     .fragment(store.fragments_of_box(port_key)[0])
                     .expect("a port piece");
                 let port_rect =
-                    onto_device(port_piece.padding_box, port_piece.transform, &placements);
+                    onto_device(port_piece.padding_box(), port_piece.transform, &placements);
                 for rect in [now, shifted] {
                     let Some(rect) = rect.intersection(port_rect) else {
                         continue;
@@ -1157,7 +1157,7 @@ fn a_row_that_layout_moves_as_its_port_scrolls_damages_where_the_moved_pixels_pu
     let port_piece = store
         .fragment(store.fragments_of_box(port_key)[0])
         .expect("a port piece");
-    let port_rect = onto_device(port_piece.padding_box, port_piece.transform, &placements);
+    let port_rect = onto_device(port_piece.padding_box(), port_piece.transform, &placements);
     for (key, was) in rows[4..9].iter().zip(before) {
         assert_ne!(
             device_of(&store, &frame, *key),
@@ -1235,7 +1235,7 @@ fn a_port_kept_out_of_a_content_space_damages_every_row_it_carries_where_it_was_
     let port_piece = store
         .fragment(store.fragments_of_box(port_key)[0])
         .expect("a port piece");
-    let port_rect = onto_device(port_piece.padding_box, port_piece.transform, &placements);
+    let port_rect = onto_device(port_piece.padding_box(), port_piece.transform, &placements);
     let mut checked = 0;
     // Row 2 holds the sticky box, which does not move with the rows.
     for (index, (key, was)) in rows.iter().zip(before).enumerate() {

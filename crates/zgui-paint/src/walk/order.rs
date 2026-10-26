@@ -268,7 +268,7 @@ fn content_tracked(
                 scene,
                 source,
                 ReplacedPlacement {
-                    content_box: fragment.content_box,
+                    content_box: fragment.content_box(),
                     radii: box_::padding_radii(
                         emission.box_placement.radii,
                         emission.box_placement.border,
@@ -293,7 +293,7 @@ fn content_tracked(
             let Some(drawing) = emission.vectors.drawing(
                 node,
                 DrawingPlacement {
-                    content_box: fragment.content_box,
+                    content_box: fragment.content_box(),
                     scale: emission.scale,
                 },
             ) else {
@@ -335,7 +335,7 @@ fn content_tracked(
             let text_subpixel = emission.text_placement.keeps_subpixel(scene);
             let mut painter = crate::content::custom::ScenePainter {
                 scene,
-                content_box: fragment.content_box,
+                content_box: fragment.content_box(),
                 clip: emission.box_placement.clip,
                 transform: emission.box_placement.transform,
                 alpha: emission.alpha,

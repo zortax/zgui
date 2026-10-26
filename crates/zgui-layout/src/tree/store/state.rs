@@ -112,6 +112,9 @@ pub(crate) struct BoxLayout {
     pub(crate) atomic: Option<Box<crate::inline::atomic::AtomicAnswers>>,
     /// The fragments this box produced.
     pub(crate) fragments: FragList,
+    /// The range of hit-order keys this box's subtree spans, see
+    /// [`LayoutStore::subtree_order`](crate::LayoutStore::subtree_order).
+    pub(crate) subtree_order: SubtreeOrder,
     /// Which axes of an `overflow: auto` box were decided to scroll.
     ///
     /// Kept between frames so that the next layout starts from the previous answer instead of
@@ -120,6 +123,25 @@ pub(crate) struct BoxLayout {
     pub(crate) auto_scroll: (bool, bool),
     /// The gutter this box keeps reserved while it is locked, if it is.
     pub(crate) scroll_lock: Option<(bool, bool)>,
+}
+
+/// The range of hit-order keys one box's subtree spans, as `(first, last)`.
+///
+/// Held per box, beside the box's fragments: every piece of a box spans the same range. Empty,
+/// `(MAX, 0)`, until the fragment pass or the hit index folds it, and again when the box loses
+/// its last fragment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SubtreeOrder(pub(crate) (u64, u64));
+
+impl SubtreeOrder {
+    /// The range of a subtree with no indexed fragment, which folds away.
+    pub(crate) const EMPTY: Self = Self((u64::MAX, 0));
+}
+
+impl Default for SubtreeOrder {
+    fn default() -> Self {
+        Self::EMPTY
+    }
 }
 
 impl BoxLayout {

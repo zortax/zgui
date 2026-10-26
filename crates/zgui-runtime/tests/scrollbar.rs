@@ -541,7 +541,7 @@ fn at_a_fractional_scale_the_track_begins_exactly_where_the_content_ends() {
         let root = layout.root().expect("a root box");
         let frag = layout.fragments_of_box(root)[0];
         let fragment = layout.fragment(frag).expect("a fragment");
-        fragment.on_device(fragment.content_box, &window.placements())
+        fragment.on_device(fragment.content_box(), &window.placements())
     };
     assert_eq!(
         track[0],

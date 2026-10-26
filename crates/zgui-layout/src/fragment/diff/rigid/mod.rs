@@ -141,7 +141,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             reads: fragment.flags.intersects(FragmentFlags::READS_BACKDROP),
             disjoint: fragment.subtree_disjoint,
             rigid: true,
-            order: fragment.subtree_order,
+            order: self.store.subtree_order(key),
             anchor: Some(anchor),
             bound: fragment.flags.intersection(FragmentFlags::BOUND),
         };

@@ -104,7 +104,7 @@ struct OnDevice<'a> {
 fn scrollport_of(store: &LayoutStore, box_key: BoxKey) -> Option<Rect<DevicePx, Device>> {
     let layout = store.layout_of(box_key)?;
     let piece = store.fragment(*store.fragments_of_box(box_key).first()?)?;
-    let padding = piece.padding_box;
+    let padding = piece.padding_box();
     let width = (padding.size.width.0 - layout.scrollbar_size.width.0).max(0.0);
     let height = (padding.size.height.0 - layout.scrollbar_size.height.0).max(0.0);
     Some(Rect::new(

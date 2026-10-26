@@ -432,14 +432,14 @@ struct Held {
 }
 
 impl Held {
-    /// What `fragment` holds.
-    fn of(fragment: &crate::fragment::Fragment) -> Self {
+    /// What `fragment` holds, with what `store` holds beside it.
+    fn of(store: &LayoutStore, fragment: &crate::fragment::Fragment) -> Self {
         Self {
             transform: fragment.transform,
-            transform_hash: fragment.transform_hash,
+            transform_hash: store.fragment_extra(fragment).transform_hash,
             flags: fragment.flags,
             subtree_ink: fragment.subtree_ink,
-            padding_box: fragment.padding_box,
+            padding_box: fragment.padding_box(),
             anchor: fragment.anchor,
         }
     }
@@ -755,7 +755,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             .fragments_of_box(key)
             .first()
             .and_then(|frag| self.store.fragment(*frag))
-            .map(Held::of);
+            .map(|fragment| Held::of(self.store, fragment));
         let content = self.content_space(key, &placed, previous, own);
         let transform_stable =
             previous.is_some_and(|held| held.transform_hash == placed.transform_hash);
@@ -1006,14 +1006,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         if below {
             folded = folded.union(FragmentFlags::READS_BACKDROP_BELOW);
         }
-        self.record_fold(
-            fragments.clone(),
-            subtree_ink,
-            folded,
-            disjoint,
-            rigid,
-            order,
-        );
+        // Every piece belongs to this box, which holds the range for all of them.
+        if !fragments.is_empty() {
+            self.store.set_subtree_order(key, order);
+        }
+        self.record_fold(fragments.clone(), subtree_ink, folded, disjoint, rigid);
         self.scratch.child_inks.truncate(inks_mark);
         self.scratch.children.truncate(children_mark);
         self.scratch.written.truncate(fragments.start);
@@ -1187,10 +1184,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         for index in from..end {
             let sibling = self.scratch.children[index];
             if let Some(&frag) = self.store.fragments_of_box(sibling).first()
-                && let Some(fragment) = self.store.fragment(frag)
-                && fragment.subtree_order.0 != HitOrder::MAX
+                && self.store.fragment(frag).is_some()
             {
-                return fragment.subtree_order.0;
+                let first = self.store.subtree_order(sibling).0;
+                if first != HitOrder::MAX {
+                    return first;
+                }
             }
         }
         after
@@ -1349,7 +1348,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let mut reads = false;
         let mut disjoint = true;
         let mut rigid = true;
-        let mut order = (HitOrder::MAX, 0);
         let mut anchor = None;
         let mut bound = FragmentFlags::EMPTY;
         for (index, frag) in fragments.iter().enumerate() {
@@ -1369,11 +1367,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             reads |= fragment.flags.intersects(FragmentFlags::READS_BACKDROP);
             disjoint &= fragment.subtree_disjoint;
             rigid &= fragment.subtree_rigid;
-            order = (
-                order.0.min(fragment.subtree_order.0),
-                order.1.max(fragment.subtree_order.1),
-            );
         }
+        // Every piece of a box spans the box's range, which counts once a piece resolved.
+        let order = if anchor.is_some() {
+            self.store.subtree_order(child)
+        } else {
+            (HitOrder::MAX, 0)
+        };
         Folded {
             subtree_ink,
             blending,
@@ -1479,7 +1479,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             .iter()
             .filter_map(|&child| {
                 let &frag = self.store.fragments_of_box(child).first()?;
-                let order = self.store.fragment(frag)?.subtree_order.0;
+                self.store.fragment(frag)?;
+                let order = self.store.subtree_order(child).0;
                 (order != HitOrder::MAX).then_some(order)
             })
             .min()
@@ -1565,22 +1566,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         if slot == 0 {
             return Geometry {
                 border_box: placed.border_box,
-                padding_box: placed.padding_box,
-                content_box: placed.content_box,
                 border: placed.border,
                 padding: placed.padding,
+                scrollbar: placed.scrollbar,
                 ink: placed.ink,
                 local_ink: placed.local_ink,
                 flags: placed.flags,
                 clip: placed.clip,
-                clip_transform: placed.clip_transform,
                 transform: placed.transform,
                 anchor: placed.anchor,
-                transform_hash: placed.transform_hash,
+                extra: crate::fragment::FragmentExtra {
+                    clip_transform: placed.clip_transform,
+                    transform_hash: placed.transform_hash,
+                    content_hash: 0,
+                },
                 stacking: placed.stacking,
                 scroll: placed.scroll,
                 reads_outside: placed.reads_outside,
-                content_hash: 0,
             };
         }
         // A bar sits in the gutter, which is inside the box's padding box against its border and
@@ -1591,22 +1593,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             let rect = crate::scroll_region::bar::rect(&self.scrollport(key, placed), axis, part);
             return Geometry {
                 border_box: rect,
-                padding_box: rect,
-                content_box: rect,
                 border: zgui_geom::Edges::ZERO,
                 padding: zgui_geom::Edges::ZERO,
+                scrollbar: Size::new(DevicePx(0.0), DevicePx(0.0)),
                 ink: on_device(placed, rect),
                 local_ink: rect,
                 flags: FragmentFlags::EMPTY,
                 clip: placed.clip,
-                clip_transform: placed.clip_transform,
                 transform: placed.transform,
                 anchor: placed.anchor,
-                transform_hash: placed.transform_hash,
+                extra: crate::fragment::FragmentExtra {
+                    clip_transform: placed.clip_transform,
+                    transform_hash: placed.transform_hash,
+                    content_hash: 0,
+                },
                 stacking: placed.stacking,
                 scroll: placed.scroll,
                 reads_outside: false,
-                content_hash: 0,
             };
         }
         let line = match kind {
@@ -1641,25 +1644,26 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         }
         Geometry {
             border_box: rect,
-            padding_box: rect,
-            content_box: rect,
             border: zgui_geom::Edges::ZERO,
             padding: zgui_geom::Edges::ZERO,
+            scrollbar: Size::new(DevicePx(0.0), DevicePx(0.0)),
             ink: on_device(placed, local_ink),
             local_ink,
             // A line is drawn inside its own box's clip and transform, and establishes neither.
             flags,
             clip: placed.descent.clip,
-            // A line is drawn under the clip its own box imposes, which that box measured in its
-            // own space — the space its own transform maps onto the device.
-            clip_transform: placed.transform,
             transform: placed.transform,
             anchor: placed.anchor,
-            transform_hash: placed.transform_hash,
+            extra: crate::fragment::FragmentExtra {
+                // A line is drawn under the clip its own box imposes, which that box measured in
+                // its own space — the space its own transform maps onto the device.
+                clip_transform: placed.transform,
+                transform_hash: placed.transform_hash,
+                content_hash,
+            },
             stacking: placed.stacking,
             scroll: placed.scroll,
             reads_outside: false,
-            content_hash,
         }
     }
 
@@ -1760,6 +1764,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             None => return Change::Identical,
         };
         let previous = self.store.fragment(frag).cloned();
+        // Read before the write below replaces it.
+        let held = previous
+            .as_ref()
+            .map_or(crate::fragment::FragmentExtra::NONE, |previous| {
+                self.store.fragment_extra(previous)
+            });
         // A name is kept across a change of content — a line that is still line two of its box is
         // still the same line — so the content is compared here rather than at the name. Nothing
         // else would catch it: the geometry of a line whose characters changed for characters of
@@ -1767,31 +1777,30 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // straight back onto the screen.
         let change = match previous.as_ref() {
             Some(previous) if previous.kind != kind => Change::Changed,
-            Some(previous) => compare(previous, next),
+            Some(previous) => compare(previous, &held, next),
             None => Change::Changed,
         };
 
+        // An extra equal to the one held under the same transform packs to the same record.
+        let repack = previous
+            .as_ref()
+            .is_none_or(|previous| held != next.extra || previous.transform != next.transform);
+        let mut spill = None;
         if let Some(fragment) = self.store.fragment_mut(frag) {
             fragment.kind = kind;
             fragment.parent = parent;
             let kept = fragment.flags.intersection(FragmentFlags::FOLDED);
             fragment.border_box = next.border_box;
-            fragment.padding_box = next.padding_box;
-            fragment.content_box = next.content_box;
             fragment.border = next.border;
             fragment.padding = next.padding;
+            fragment.scrollbar = next.scrollbar;
             fragment.ink = next.ink;
             fragment.local_ink = next.local_ink;
             fragment.clip = next.clip;
-            fragment.clip_transform = next.clip_transform;
             fragment.transform = next.transform;
             fragment.anchor = next.anchor;
-            fragment.transform_hash = next.transform_hash;
-            fragment.stacking = next.stacking;
-            fragment.scroll = next.scroll;
-            // Kept on the fragment because the painter keys its recording on it: a line whose cut
-            // moved while its rectangle stood still is re-encoded only if the fragment says so.
-            fragment.content_hash = next.content_hash;
+            fragment.set_stacking(next.stacking);
+            fragment.set_scroll(next.scroll);
             fragment.flags = next.flags.union(kept);
             // The style's half is decided where the box is placed; an animated opacity lives in
             // the document, beside the shared style.
@@ -1801,6 +1810,17 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             if change != Change::Identical {
                 counter::bump(Counter::FragmentsRebuilt);
             }
+            // After the transform, which the record states the clip space against.
+            if repack {
+                let was_spilled = fragment.packed.has(crate::fragment::Packed::SPILLED);
+                spill = Some((was_spilled, fragment.pack_extra(next.extra)));
+            }
+        }
+        // The store holds what the record cannot state. The content fingerprint is kept because
+        // the painter keys its recording on it: a line whose cut moved while its rectangle stood
+        // still is re-encoded only if the fragment says so.
+        if let Some(spill) = spill {
+            self.store.settle_spill(frag, spill, next.extra);
         }
         self.store.set_read_extent(frag, next.reads_outside);
 
@@ -1894,7 +1914,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 let repositioned = kind == FragmentKind::Box
                     && previous
                         .as_ref()
-                        .is_some_and(|previous| repositioned_within(previous, next));
+                        .is_some_and(|previous| repositioned_within(previous, &held, next));
                 // A box born painting nothing owes nothing of its own: whatever is drawn inside it
                 // belongs to pieces born with it, which damage themselves, and what stood there
                 // before is damaged by the pieces that left.
@@ -1903,7 +1923,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 if !repositioned && !born_empty {
                     match previous
                         .as_ref()
-                        .and_then(|previous| self.resized_edges(previous, kind, next))
+                        .and_then(|previous| self.resized_edges(previous, &held, kind, next))
                     {
                         // Only the strips along the edges that moved paint anything different.
                         Some(strips) => {
@@ -1925,8 +1945,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 // that compares equal be trusted to mean nothing moved under the pointer.
                 let stood = previous.as_ref().is_some_and(|previous| {
                     previous.transform == next.transform
-                        && previous.transform_hash == next.transform_hash
-                        && previous.clip_transform == next.clip_transform
+                        && held.transform_hash == next.extra.transform_hash
+                        && held.clip_transform == next.extra.clip_transform
                 });
                 self.touch_hit(frag, change, stood);
             }
@@ -1970,6 +1990,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     fn resized_edges(
         &self,
         previous: &crate::fragment::Fragment,
+        held: &crate::fragment::FragmentExtra,
         kind: FragmentKind,
         next: &Geometry,
     ) -> Option<[Option<Rect<DevicePx, Device>>; 4]> {
@@ -1982,9 +2003,9 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             || previous.border != next.border
             || previous.transform != next.transform
             || previous.anchor != next.anchor
-            || previous.transform_hash != next.transform_hash
-            || previous.clip_transform != next.clip_transform
-            || previous.content_hash != next.content_hash
+            || held.transform_hash != next.extra.transform_hash
+            || held.clip_transform != next.extra.clip_transform
+            || held.content_hash != next.extra.content_hash
             || previous.ink.size != previous.border_box.size
             || next.ink.size != next.border_box.size
         {
@@ -2037,12 +2058,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// [`HitIndex::refresh`](crate::fragment::hit::HitIndex::refresh).
     fn touch_hit(&mut self, frag: FragKey, change: Change, stood: bool) {
         let scale = self.tables.device.scale;
-        let held = self
-            .hit
-            .entry(frag)
-            .map(|entry| entry.order)
-            .or(self.born_order)
-            .unwrap_or(0);
+        let held = self.hit.order_of(frag).or(self.born_order).unwrap_or(0);
         if let Some(entry) = crate::fragment::hit::entry_for(self.store, frag, held, scale) {
             match change {
                 Change::TranslatedOnly => self.hit.translate(frag, entry),
@@ -2052,7 +2068,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         }
     }
 
-    /// Writes the three unwind answers onto this box's fragments.
+    /// Writes the unwind answers onto this box's fragments.
     fn record_fold(
         &mut self,
         fragments: core::ops::Range<usize>,
@@ -2060,7 +2076,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         folded: FragmentFlags,
         disjoint: bool,
         rigid: bool,
-        order: (HitOrder, HitOrder),
     ) {
         for index in fragments {
             let frag = self.scratch.written[index];
@@ -2070,7 +2085,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             fragment.subtree_ink = subtree_ink;
             fragment.subtree_disjoint = disjoint;
             fragment.subtree_rigid = rigid;
-            fragment.subtree_order = order;
             fragment.flags = fragment.flags.without(FragmentFlags::FOLDED).union(folded);
         }
     }

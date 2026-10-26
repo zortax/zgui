@@ -176,8 +176,8 @@ pub(crate) fn sample_element(window: &Window, node: NodeId, restyle: bool) -> Op
     let placements = window.placements();
     let boxes = BoxModel {
         border: first.on_device(first.border_box, &placements),
-        padding: first.on_device(first.padding_box, &placements),
-        content: first.on_device(first.content_box, &placements),
+        padding: first.on_device(first.padding_box(), &placements),
+        content: first.on_device(first.content_box(), &placements),
     };
     drop(placements);
 

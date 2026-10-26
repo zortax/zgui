@@ -213,10 +213,10 @@ fn a_padded_bordered_scroller_puts_its_bar_against_the_border() {
         own.border_box.right().0 - 1.0,
         "the track touches the border"
     );
-    assert_eq!(track.top(), own.padding_box.top());
-    assert_eq!(track.bottom(), own.padding_box.bottom());
+    assert_eq!(track.top(), own.padding_box().top());
+    assert_eq!(track.bottom(), own.padding_box().bottom());
     assert!(
-        (track.left().0 - (own.content_box.right().0 + 16.0)).abs() < 1e-3,
+        (track.left().0 - (own.content_box().right().0 + 16.0)).abs() < 1e-3,
         "the right padding stays between the content and the bar"
     );
     assert_eq!(thumb.left(), track.left());

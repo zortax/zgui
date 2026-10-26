@@ -1,22 +1,20 @@
 //! One fragment's composed geometry, and what a comparison against the previous one reports.
 
-use zgui_geom::{Device, DevicePx, Edges, Rect};
+use zgui_geom::{Device, DevicePx, Edges, Rect, Size};
 
 use crate::fragment::diff::Change;
-use crate::fragment::{Fragment, FragmentFlags};
+use crate::fragment::{Fragment, FragmentExtra, FragmentFlags, build};
 
 /// One fragment's geometry, before it is written.
 pub(super) struct Geometry {
     /// The border box in local space.
     pub(super) border_box: Rect<DevicePx, Device>,
-    /// The padding box in local space.
-    pub(super) padding_box: Rect<DevicePx, Device>,
-    /// The content box in local space.
-    pub(super) content_box: Rect<DevicePx, Device>,
     /// The snapped border widths.
     pub(super) border: Edges<DevicePx>,
     /// The snapped padding widths.
     pub(super) padding: Edges<DevicePx>,
+    /// The room the scrollbars take inside the padding.
+    pub(super) scrollbar: Size<DevicePx, Device>,
     /// Everything it paints, in [`Geometry::anchor`]'s space.
     pub(super) ink: Rect<DevicePx, Device>,
     /// The same, in its own space.
@@ -25,22 +23,30 @@ pub(super) struct Geometry {
     pub(super) flags: FragmentFlags,
     /// The clip chain it is drawn under.
     pub(super) clip: zgui_scene::ClipId,
-    /// The matrix that chain's rectangles were measured in.
-    pub(super) clip_transform: Option<zgui_scene::SpatialId>,
     /// The coordinate system it is drawn in.
     pub(super) transform: Option<zgui_scene::SpatialId>,
     /// The coordinate system its ink is measured in.
     pub(super) anchor: zgui_scene::SpatialId,
-    /// A fingerprint of the matrix that coordinate system resolves to.
-    pub(super) transform_hash: u64,
+    /// The clip space and the two fingerprints, see [`FragmentExtra`].
+    pub(super) extra: FragmentExtra,
     /// The stacking context it belongs to.
     pub(super) stacking: Option<zgui_scene::StackingContextId>,
     /// The scrollable region it moves with.
     pub(super) scroll: Option<zgui_scene::ScrollFrameId>,
     /// Whether it reads pixels outside every rectangle it writes.
     pub(super) reads_outside: bool,
-    /// A fingerprint of what it draws that its rectangles do not describe.
-    pub(super) content_hash: u64,
+}
+
+impl Geometry {
+    /// The padding box in local space, derived as [`Fragment::padding_box`] derives it.
+    pub(super) fn padding_box(&self) -> Rect<DevicePx, Device> {
+        build::padding_box_of(self.border_box, self.border)
+    }
+
+    /// The content box in local space, derived as [`Fragment::content_box`] derives it.
+    pub(super) fn content_box(&self) -> Rect<DevicePx, Device> {
+        build::content_box_of(self.padding_box(), self.padding, self.scrollbar)
+    }
 }
 
 /// Whether a changed fragment is a paintless box that moved rigidly, or stood still, while its
@@ -55,7 +61,13 @@ pub(super) struct Geometry {
 /// Held to fragments whose only flag is [`FragmentFlags::PAINTS_NOTHING`]: a clipping,
 /// transformed, sticky, stacking or read-extent box couples to its surroundings in ways this
 /// comparison does not measure, and each of those is rare enough to pay the two rectangles.
-pub(super) fn repositioned_within(previous: &Fragment, next: &Geometry) -> bool {
+///
+/// `held` is what the store holds beside `previous`, see [`FragmentExtra`].
+pub(super) fn repositioned_within(
+    previous: &Fragment,
+    held: &FragmentExtra,
+    next: &Geometry,
+) -> bool {
     let plain = |flags: FragmentFlags| {
         flags.without(FragmentFlags::UNCOMPARED) == FragmentFlags::PAINTS_NOTHING
     };
@@ -64,13 +76,13 @@ pub(super) fn repositioned_within(previous: &Fragment, next: &Geometry) -> bool 
         && previous.border_box.size == next.border_box.size
         && previous.border == next.border
         && previous.clip == next.clip
-        && previous.clip_transform == next.clip_transform
+        && held.clip_transform == next.extra.clip_transform
         && previous.transform == next.transform
         && previous.anchor == next.anchor
-        && previous.transform_hash == next.transform_hash
-        && previous.stacking == next.stacking
-        && previous.scroll == next.scroll
-        && previous.content_hash == next.content_hash
+        && held.transform_hash == next.extra.transform_hash
+        && previous.stacking() == next.stacking
+        && previous.scroll() == next.scroll
+        && held.content_hash == next.extra.content_hash
         && moved_alike(previous.border_box, next.border_box, previous.ink, next.ink)
         && moved_alike(
             previous.border_box,
@@ -106,14 +118,19 @@ pub(super) fn only_geometry_differs(previous: &Fragment, next: &Geometry) -> boo
 }
 
 /// What changed between a fragment and the geometry that replaces it.
-pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
+///
+/// `held` is what the store holds beside `previous`, see [`FragmentExtra`].
+pub(super) fn compare(previous: &Fragment, held: &FragmentExtra, next: &Geometry) -> Change {
+    // The border box, the border and the padding give the padding box and, but for the
+    // scrollbars, the content box. Scrollbars wider than the room clamp to zero, so the derived
+    // sizes are compared only when they differ.
     let same_shape = previous.border_box.size == next.border_box.size
-        && previous.padding_box.size == next.padding_box.size
-        && previous.content_box.size == next.content_box.size
         && previous.border == next.border
         && previous.padding == next.padding
+        && (previous.scrollbar == next.scrollbar
+            || previous.content_box().size == next.content_box().size)
         && previous.clip == next.clip
-        && previous.clip_transform == next.clip_transform
+        && held.clip_transform == next.extra.clip_transform
         && previous.transform == next.transform
         // Ink in another space is another rectangle, however equal the numbers are.
         && previous.anchor == next.anchor
@@ -121,13 +138,13 @@ pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
         // been moved; without the fingerprint, a movement whose device ink happens to land where
         // the last one did — a square rotated through a right angle, a scale about its own centre —
         // would compare identical and never be redrawn.
-        && previous.transform_hash == next.transform_hash
-        && previous.stacking == next.stacking
-        && previous.scroll == next.scroll
+        && held.transform_hash == next.extra.transform_hash
+        && previous.stacking() == next.stacking
+        && previous.scroll() == next.scroll
         // Where a line was cut short and what marks the cut. Both move without moving the line box:
         // narrowing the box a `white-space: nowrap` label sits in changes neither the line's width
         // nor its position, and changes exactly which of its clusters are painted.
-        && previous.content_hash == next.content_hash
+        && held.content_hash == next.extra.content_hash
         && previous.flags.without(FragmentFlags::UNCOMPARED)
             == next.flags.without(FragmentFlags::UNCOMPARED);
     if !same_shape {
@@ -155,64 +172,80 @@ pub(super) fn compare(previous: &Fragment, next: &Geometry) -> Change {
 #[cfg(test)]
 mod tests {
     use super::{Geometry, compare};
-    use crate::fragment::Fragment;
     use crate::fragment::diff::Change;
+    use crate::fragment::{Fragment, FragmentExtra};
 
     /// The geometry a fragment already holds, so that only what a test changes differs.
-    fn same_as(fragment: &Fragment) -> Geometry {
+    fn same_as(fragment: &Fragment, extra: FragmentExtra) -> Geometry {
         Geometry {
             border_box: fragment.border_box,
-            padding_box: fragment.padding_box,
-            content_box: fragment.content_box,
             border: fragment.border,
             padding: fragment.padding,
+            scrollbar: fragment.scrollbar,
             ink: fragment.ink,
             local_ink: fragment.local_ink,
             flags: fragment.flags,
             clip: fragment.clip,
-            clip_transform: fragment.clip_transform,
             transform: fragment.transform,
             anchor: fragment.anchor,
-            transform_hash: fragment.transform_hash,
-            stacking: fragment.stacking,
-            scroll: fragment.scroll,
+            extra,
+            stacking: fragment.stacking(),
+            scroll: fragment.scroll(),
             reads_outside: false,
-            content_hash: fragment.content_hash,
         }
     }
 
     /// A fragment that has been composed once, at the origin, drawing nothing in particular.
-    fn composed() -> Fragment {
+    fn composed() -> (Fragment, FragmentExtra) {
         let generation = zgui_arena::Generation::FIRST;
         let domain = zgui_arena::DomainId::FIRST;
-        let mut fragment = Fragment::new(
+        let fragment = Fragment::new(
             zgui_arena::Key::new(0, generation, domain),
             zgui_arena::Key::new(1, generation, domain),
             crate::fragment::FragmentKind::Box,
         );
-        fragment.transform_hash = 7;
-        fragment
+        let extra = FragmentExtra {
+            transform_hash: 7,
+            ..FragmentExtra::NONE
+        };
+        (fragment, extra)
     }
 
     #[test]
     fn a_fragment_nothing_moved_is_identical() {
-        let fragment = composed();
-        let next = same_as(&fragment);
-        assert_eq!(compare(&fragment, &next), Change::Identical);
+        let (fragment, extra) = composed();
+        let next = same_as(&fragment, extra);
+        assert_eq!(compare(&fragment, &extra, &next), Change::Identical);
     }
 
     #[test]
     fn a_matrix_that_changed_under_an_unchanged_name_is_a_change() {
-        let fragment = composed();
-        let next = Geometry {
-            transform_hash: 9,
-            ..same_as(&fragment)
-        };
+        let (fragment, extra) = composed();
+        let next = same_as(
+            &fragment,
+            FragmentExtra {
+                transform_hash: 9,
+                ..extra
+            },
+        );
         assert_eq!(
-            compare(&fragment, &next),
+            compare(&fragment, &extra, &next),
             Change::Changed,
             "the name of a coordinate system does not move when the matrix under it does, so \
              nothing else here would have differed",
         );
+    }
+
+    #[test]
+    fn a_scrollbar_that_narrows_the_content_box_is_a_change() {
+        let (mut fragment, extra) = composed();
+        fragment.border_box = zgui_geom::Rect::new(
+            zgui_geom::Point::new(zgui_geom::DevicePx(0.0), zgui_geom::DevicePx(0.0)),
+            zgui_geom::Size::new(zgui_geom::DevicePx(100.0), zgui_geom::DevicePx(50.0)),
+        );
+        let mut next = same_as(&fragment, extra);
+        next.scrollbar = zgui_geom::Size::new(zgui_geom::DevicePx(12.0), zgui_geom::DevicePx(0.0));
+        assert_eq!(next.content_box().size.width.0, 88.0);
+        assert_eq!(compare(&fragment, &extra, &next), Change::Changed);
     }
 }

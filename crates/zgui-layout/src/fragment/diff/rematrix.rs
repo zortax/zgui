@@ -124,7 +124,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             let Some(fragment) = self.store.fragment_mut(frag) else {
                 continue;
             };
-            fragment.transform_hash = hash;
             // Every piece is drawn through the box's matrix: its own, its lines and its bars.
             fragment.ink = match matrix {
                 Some(matrix) => transform::transformed_bounds(&matrix, fragment.local_ink),
@@ -135,6 +134,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             } else {
                 inks.push(fragment.ink);
             }
+            self.store.set_transform_hash(frag, hash);
         }
 
         // A scroll container that draws its children in a content space hands them that space,

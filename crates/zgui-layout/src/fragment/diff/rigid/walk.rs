@@ -171,14 +171,12 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             return clip;
         };
         fragment.border_box = fragment.border_box.translate(by);
-        fragment.padding_box = fragment.padding_box.translate(by);
-        fragment.content_box = fragment.content_box.translate(by);
         fragment.ink = fragment.ink.translate(by);
         fragment.local_ink = fragment.local_ink.translate(by);
         fragment.subtree_ink = fragment.subtree_ink.translate(by);
         fragment.clip = clip;
         let clips = fragment.flags.contains(FragmentFlags::CLIPS_CHILDREN);
-        let padding_box = fragment.padding_box;
+        let padding_box = fragment.padding_box();
         let border = fragment.border;
         // The space this box's fragments draw under, which is the space its padding box —
         // and therefore the clip it imposes below — is measured in.
@@ -231,8 +229,6 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
                 continue;
             };
             fragment.border_box = fragment.border_box.translate(by);
-            fragment.padding_box = fragment.padding_box.translate(by);
-            fragment.content_box = fragment.content_box.translate(by);
             fragment.ink = fragment.ink.translate(by);
             fragment.local_ink = fragment.local_ink.translate(by);
             fragment.subtree_ink = fragment.subtree_ink.translate(by);
@@ -250,20 +246,15 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
     /// same corner radii, the same painting order and the same answer about whether it takes
     /// pointer events at all.
     fn reindex(&mut self, frag: FragKey, clip: ClipId) {
-        let by = self.by;
-        let Some(mut entry) = self.hit.entry(frag).copied() else {
-            // A piece with no entry has never been indexed, and the comparing walk would build one
-            // for it here. Nothing about that is cheaper on this path, and skipping it would leave
-            // a fragment that answers no hit at all.
-            if let Some(built) = crate::fragment::hit::entry_for(self.store, frag, 0, self.scale) {
-                self.hit.carry(frag, built);
-            }
+        if self.hit.carry_by(frag, self.by, clip) {
             return;
-        };
-        entry.bounds = entry.bounds.translate(by);
-        entry.envelope = entry.envelope.translate(by);
-        entry.clip = clip;
-        self.hit.carry(frag, entry);
+        }
+        // A piece with no entry has never been indexed, and the comparing walk would build one
+        // for it here. Nothing about that is cheaper on this path, and skipping it would leave
+        // a fragment that answers no hit at all.
+        if let Some(built) = crate::fragment::hit::entry_for(self.store, frag, 0, self.scale) {
+            self.hit.carry(frag, built);
+        }
     }
 
     /// Records that the element this box came from moved, answering whether there was one.

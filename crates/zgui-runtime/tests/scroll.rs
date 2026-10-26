@@ -433,7 +433,7 @@ fn scrollport(window: &zgui_runtime::Window) -> Rect<DevicePx, Device> {
             let frag = layout.fragments_of_box(key).first().copied();
             if let Some(fragment) = frag.and_then(|frag| layout.fragment(frag)) {
                 let _ = region;
-                return fragment.on_device(fragment.content_box, &window.placements());
+                return fragment.on_device(fragment.content_box(), &window.placements());
             }
         }
     }

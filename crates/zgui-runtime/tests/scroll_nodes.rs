@@ -317,7 +317,7 @@ fn pinned_turns(turns: &[f32]) -> (Pins, Vec<bool>, Harness<Runtime>, Pinned) {
                 .contains(zgui_layout::FragmentFlags::SCROLLS_CONTENT),
         );
         let top = zgui_layout::fragment::transform::placed::onto_device(
-            port.padding_box,
+            port.padding_box(),
             port.transform,
             &window.placements(),
         )

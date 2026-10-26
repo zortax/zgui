@@ -99,7 +99,7 @@ impl Located {
             .iter()
             .filter_map(|frag| layout.fragment(*frag))
             .find(|fragment| fragment.kind == zgui_layout::FragmentKind::Box)
-            .map(|fragment| (fragment.content_box.origin, fragment.transform))?;
+            .map(|fragment| (fragment.content_box().origin, fragment.transform))?;
         let (origin, transform) = placed;
         let geometry: Vec<LineGeometry> = resolution
             .lines

@@ -106,6 +106,11 @@ pub struct LayoutStore {
     boxes_of_node: PagedVec<NodeKey, BoxList>,
     /// The fragment records.
     fragments: ChunkArena<Fragment>,
+    /// The [`FragmentExtra`](crate::fragment::FragmentExtra) of each fragment whose record cannot
+    /// state it, see [`LayoutStore::fragment_extra`].
+    spilled: FxHashMap<FragKey, crate::fragment::FragmentExtra>,
+    /// Fragments destroyed this frame, whose spilled entries go when the frame is recycled.
+    spilled_retired: Vec<FragKey>,
     /// Which fragments each element's boxes produced.
     fragments_of_node: PagedVec<NodeKey, FragList>,
     /// The shaped paragraphs the document's inline formatting contexts resolved to.
@@ -198,6 +203,8 @@ impl LayoutStore {
             root: None,
             boxes_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(document)),
             fragments: ChunkArena::new(fragment_domain),
+            spilled: FxHashMap::default(),
+            spilled_retired: Vec::new(),
             fragments_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(
                 document,
             )),
@@ -639,6 +646,13 @@ impl LayoutStore {
     pub fn recycle(&mut self) {
         self.boxes.recycle();
         self.fragments.recycle();
+        if self.spilled.is_empty() {
+            self.spilled_retired.clear();
+        } else {
+            for key in self.spilled_retired.drain(..) {
+                self.spilled.remove(&key);
+            }
+        }
         self.layout.compact_by(Option::is_none);
         self.replaced.compact_by(Option::is_none);
         self.custom.compact_by(Option::is_none);

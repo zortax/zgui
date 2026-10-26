@@ -3,8 +3,12 @@
 use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 
-use crate::fragment::{FragKey, Fragment, FragmentFlags, FragmentKind, ParagraphId};
+use crate::fragment::hit::HitOrder;
+use crate::fragment::{
+    FragKey, Fragment, FragmentExtra, FragmentFlags, FragmentKind, Packed, ParagraphId,
+};
 use crate::tree::store::LayoutStore;
+use crate::tree::store::state::SubtreeOrder;
 
 /// The fewest released keys the store records before it records only that some key went.
 pub(super) const RELEASED_KEEP: usize = 4_096;
@@ -189,6 +193,109 @@ impl LayoutStore {
         }
     }
 
+    /// The values `fragment` keeps outside its record.
+    ///
+    /// The record states them for nearly every fragment, and the store holds them for the rest.
+    /// Read through here and never assumed: see [`FragmentExtra`].
+    #[inline]
+    pub fn fragment_extra(&self, fragment: &Fragment) -> FragmentExtra {
+        match fragment.inline_extra() {
+            Some(extra) => extra,
+            None => self
+                .spilled
+                .get(&fragment.key)
+                .copied()
+                .unwrap_or(FragmentExtra::NONE),
+        }
+    }
+
+    /// The values one fragment keeps outside its record, by name.
+    pub fn fragment_extra_of(&self, key: FragKey) -> Option<FragmentExtra> {
+        self.fragment(key)
+            .map(|fragment| self.fragment_extra(fragment))
+    }
+
+    /// Writes the values one fragment keeps outside its record.
+    ///
+    /// Reads the fragment's [`Fragment::transform`], so a caller that writes both writes that
+    /// first.
+    pub(crate) fn set_fragment_extra(&mut self, key: FragKey, extra: FragmentExtra) {
+        let Some(fragment) = self.fragments.get_mut(key) else {
+            return;
+        };
+        let was_spilled = fragment.packed.has(Packed::SPILLED);
+        let fits = fragment.pack_extra(extra);
+        self.settle_spill(key, (was_spilled, fits), extra);
+    }
+
+    /// Brings the store's table in line with a record that [`Fragment::pack_extra`] just wrote.
+    ///
+    /// `spill` is whether the record was spilled before the write, and what the write answered.
+    pub(crate) fn settle_spill(&mut self, key: FragKey, spill: (bool, bool), extra: FragmentExtra) {
+        match spill {
+            (true, true) => {
+                self.spilled.remove(&key);
+            }
+            (_, false) => {
+                self.spilled.insert(key, extra);
+            }
+            (false, true) => {}
+        }
+    }
+
+    /// Writes the fingerprint of the matrix one fragment is composed under.
+    pub(crate) fn set_transform_hash(&mut self, key: FragKey, transform_hash: u64) {
+        let Some(fragment) = self.fragments.get(key) else {
+            return;
+        };
+        let mut extra = match fragment.inline_extra() {
+            Some(extra) => extra,
+            None => {
+                // A hash the record cannot state keeps the entry spilled, so it changes in place:
+                // a transform animation writes every fragment below it on every frame.
+                let stays_spilled =
+                    transform_hash != 0 && transform_hash != crate::fragment::identity_hash();
+                match self.spilled.get_mut(&key) {
+                    Some(spilled) if stays_spilled => {
+                        spilled.transform_hash = transform_hash;
+                        return;
+                    }
+                    Some(spilled) => *spilled,
+                    None => FragmentExtra::NONE,
+                }
+            }
+        };
+        if extra.transform_hash != transform_hash {
+            extra.transform_hash = transform_hash;
+            self.set_fragment_extra(key, extra);
+        }
+    }
+
+    /// How many fragments the store holds a [`FragmentExtra`] for.
+    pub fn spilled_fragment_count(&self) -> usize {
+        self.spilled.len()
+    }
+
+    /// The range of hit-order keys one box's subtree spans, as `(first, last)`.
+    ///
+    /// Folded up by the fragment pass beside the ink, and read back where a fragment is born:
+    /// a newborn takes a key between the end of what is painted before it and the start of what
+    /// is painted after, and both ends are the neighbouring subtrees' ranges. A subtree with no
+    /// indexed fragment holds `(MAX, 0)`, which folds away.
+    pub fn subtree_order(&self, key: BoxKey) -> (HitOrder, HitOrder) {
+        self.layout
+            .get(key)
+            .and_then(Option::as_ref)
+            .map_or(SubtreeOrder::EMPTY.0, |state| state.subtree_order.0)
+    }
+
+    /// Writes the range of hit-order keys one box's subtree spans.
+    pub(crate) fn set_subtree_order(&mut self, key: BoxKey, order: (HitOrder, HitOrder)) {
+        if let Some(state) = self.layout.get_mut(key).as_mut() {
+            state.subtree_order = SubtreeOrder(order);
+        }
+    }
+
     /// One fragment, for modification.
     ///
     /// Fragments are updated in place rather than replaced, because their names are what the
@@ -266,9 +373,16 @@ impl LayoutStore {
             return;
         }
         let dropped: Vec<FragKey> = state.fragments.drain(len..).collect();
+        if len == 0 {
+            // A piece born later starts from nothing, as a new box does.
+            state.subtree_order = SubtreeOrder::EMPTY;
+        }
         let node = self.get(box_).and_then(|record| record.source);
         for key in dropped {
             self.forget_read_extent(key);
+            // Every destroyed key, spilled or not: a write later in the frame can still spill
+            // it, and its entry is read until the frame is recycled, like the fragment itself.
+            self.spilled_retired.push(key);
             self.retired.push(key);
             self.retired_paint.push(key);
             self.fragments.remove(key);

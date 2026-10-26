@@ -713,7 +713,7 @@ impl WgpuSurfaces {
                     // keeps today's behaviour and ignores the element's own transform.
                     layout
                         .fragment(fragment)
-                        .map(|fragment| fragment.on_device(fragment.content_box, cx.placements))
+                        .map(|fragment| fragment.on_device(fragment.content_box(), cx.placements))
                 });
             let ink = zgui_layout::fragment::index::device_ink_of(&layout, node, cx.placements);
             (content_box, ink)

@@ -360,7 +360,7 @@ fn a_box_taken_out_of_the_tree_stops_answering_where_it_used_to_be() {
 }
 
 /// A document nothing has marked, which is what a frame that only re-composes looks like.
-struct Clean;
+pub(crate) struct Clean;
 
 impl zgui_layout::fragment::diff::FrameDirty for Clean {
     fn own(&self, _node: Option<zgui_dom::NodeKey>) -> zgui_bits::Dirty {

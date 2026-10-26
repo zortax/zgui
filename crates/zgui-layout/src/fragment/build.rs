@@ -144,6 +144,8 @@ pub(crate) struct Placed {
     pub(crate) border: Edges<DevicePx>,
     /// The snapped padding widths.
     pub(crate) padding: Edges<DevicePx>,
+    /// The room the scrollbars take inside the padding.
+    pub(crate) scrollbar: Size<DevicePx, Device>,
     /// Everything this box paints, in [`Placed::anchor`]'s space.
     pub(crate) ink: Rect<DevicePx, Device>,
     /// The same, in the box's own space.
@@ -323,19 +325,12 @@ pub(crate) fn place(
 
     let border = snap::edges(snapped.border);
     let padding = snap::edges(snapped.padding);
-    let padding_box = border_box.inset(border);
+    let padding_box = padding_box_of(border_box, border);
     let scrollbar: Size<DevicePx, Device> = Size::new(
         DevicePx(snapped.scrollbar_size.width),
         DevicePx(snapped.scrollbar_size.height),
     );
-    let inner = padding_box.inset(padding);
-    let content_box = Rect::new(
-        inner.origin,
-        Size::new(
-            DevicePx((inner.size.width.0 - scrollbar.width.0).max(0.0)),
-            DevicePx((inner.size.height.0 - scrollbar.height.0).max(0.0)),
-        ),
-    );
+    let content_box = content_box_of(padding_box, padding, scrollbar);
 
     // The placement an animation wrote, if one is moving this element, and the box's own style
     // otherwise. Nothing else in this function consults it: whether the box establishes a stacking
@@ -500,6 +495,7 @@ pub(crate) fn place(
         content_box,
         border,
         padding,
+        scrollbar,
         ink: device_ink,
         local_ink,
         flags,
@@ -536,6 +532,35 @@ pub(crate) fn place(
             in_scroll: scrolls || (!fixed && from.in_scroll),
         },
     })
+}
+
+/// The padding box of a box with `border_box` and `border`.
+///
+/// The one place the padding box is derived, so a fragment that reads it back gets the rectangle
+/// the composing walk placed.
+#[inline]
+pub(crate) fn padding_box_of(
+    border_box: Rect<DevicePx, Device>,
+    border: Edges<DevicePx>,
+) -> Rect<DevicePx, Device> {
+    border_box.inset(border)
+}
+
+/// The content box inside `padding_box`: less the padding, and less the room the scrollbars take.
+#[inline]
+pub(crate) fn content_box_of(
+    padding_box: Rect<DevicePx, Device>,
+    padding: Edges<DevicePx>,
+    scrollbar: Size<DevicePx, Device>,
+) -> Rect<DevicePx, Device> {
+    let inner = padding_box.inset(padding);
+    Rect::new(
+        inner.origin,
+        Size::new(
+            DevicePx((inner.size.width.0 - scrollbar.width.0).max(0.0)),
+            DevicePx((inner.size.height.0 - scrollbar.height.0).max(0.0)),
+        ),
+    )
 }
 
 /// The rectangle one line of an inline formatting context occupies, in the same local space as the

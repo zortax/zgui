@@ -139,6 +139,7 @@ fn objects(window: &Window) -> Group {
         ("boxes", u64::from(layout.len())),
         ("box_slots", u64::from(layout.box_capacity())),
         ("fragments", u64::from(layout.fragment_count())),
+        ("fragments_spilled", layout.spilled_fragment_count() as u64),
         ("box_layout_heap_bytes", layout.layout_heap_bytes() as u64),
         ("paragraphs_held", window.shaped_held().paragraphs as u64),
         ("paint_records", paint.len() as u64),

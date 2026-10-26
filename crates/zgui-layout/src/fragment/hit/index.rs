@@ -1,15 +1,18 @@
 //! The index that answers what is under a point.
 
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use zgui_arena::SlotVec;
+use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
-use zgui_geom::{Device, DevicePx, Point};
+use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_profile::{Counter, counter};
 use zgui_scene::{ClipId, ClipLink, ClipNode, ClipTable, SpatialId, SpatialTree};
 
 use crate::fragment::FragKey;
 use crate::fragment::hit::HitOrder;
-use crate::fragment::hit::entry::HitEntry;
+use crate::fragment::hit::entry::{HitEntry, covers_rounded};
+use crate::fragment::hit::pointer_events::PointerEvents;
 use crate::fragment::hit::rtree::{Carried, Forest, Placed};
 use crate::fragment::hit::transform;
 use crate::tree::store::LayoutStore;
@@ -38,8 +41,10 @@ pub const ORDER_STRIDE: HitOrder = 1 << 20;
 /// cost the document per frame.
 #[derive(Debug, Default)]
 pub struct HitIndex {
-    /// One entry per fragment.
-    entries: SlotVec<FragKey, HitEntry>,
+    /// One entry per fragment, less its corner radii.
+    entries: SlotVec<FragKey, Stored>,
+    /// The corner radii of each entry with rounded corners, keyed by the entry's own name.
+    radii: FxHashMap<FragKey, Corners<Vec2<DevicePx>>>,
     /// One spatial hierarchy per coordinate system, over the envelopes of the entries in it.
     forest: Forest,
     /// Entries touched since the last bulk build.
@@ -114,13 +119,66 @@ impl HitIndex {
     }
 
     /// What the index holds for one fragment.
-    pub fn entry(&self, frag: FragKey) -> Option<&HitEntry> {
-        self.entries.get(frag)
+    pub fn entry(&self, frag: FragKey) -> Option<HitEntry> {
+        self.entries.get(frag).map(|stored| self.unpack(stored))
+    }
+
+    /// How many entries keep corner radii beside the entry.
+    #[cfg(test)]
+    fn rounded(&self) -> usize {
+        self.radii.len()
+    }
+
+    /// The whole entry that one stored entry stands for.
+    fn unpack(&self, stored: &Stored) -> HitEntry {
+        HitEntry {
+            frag: stored.frag,
+            node: stored.node,
+            order: stored.order,
+            clip: stored.clip,
+            space: stored.space,
+            pointer_events: stored.pointer_events,
+            radii: self.radii_of(stored),
+            bounds: stored.bounds,
+            envelope: stored.envelope,
+        }
+    }
+
+    /// The corner radii of one stored entry.
+    fn radii_of(&self, stored: &Stored) -> Corners<Vec2<DevicePx>> {
+        if !stored.rounded {
+            return SQUARE;
+        }
+        self.radii.get(&stored.frag).copied().unwrap_or(SQUARE)
+    }
+
+    /// Stores one entry, keeping its corner radii beside it only when they are not zero.
+    fn pack(&mut self, frag: FragKey, entry: HitEntry) {
+        let stored = Stored::of(&entry);
+        if let Some(held) = self.entries.insert(frag, stored)
+            && held.rounded
+            && (!stored.rounded || held.frag != stored.frag)
+        {
+            self.radii.remove(&held.frag);
+        }
+        if stored.rounded {
+            self.radii.insert(stored.frag, entry.radii);
+        }
+    }
+
+    /// Whether `point`, already in the entry's own space, lands on the stored entry.
+    ///
+    /// The same answer as [`HitEntry::covers`].
+    fn covers(&self, stored: &Stored, point: Point<DevicePx, Device>) -> bool {
+        if !stored.rounded {
+            return stored.bounds.contains(point);
+        }
+        covers_rounded(stored.bounds, self.radii_of(stored), point)
     }
 
     /// Every fragment the index holds an entry for, in no particular order.
     pub fn indexed(&self) -> impl Iterator<Item = FragKey> + '_ {
-        self.entries.iter().map(|(_, entry)| entry.frag)
+        self.entries.iter().map(|(_, stored)| stored.frag)
     }
 
     /// Moves one fragment whose shape may have changed as well as its position.
@@ -153,7 +211,10 @@ impl HitIndex {
     /// through [`update`](HitIndex::update) even when its entry compares equal, because the
     /// entry is in that space and says nothing about where the space went.
     pub fn refresh(&mut self, frag: FragKey, entry: HitEntry) {
-        if self.entries.get(frag) == Some(&entry) {
+        if let Some(held) = self.entries.get(frag)
+            && *held == Stored::of(&entry)
+            && self.radii_of(held) == entry.radii
+        {
             return;
         }
         self.update(frag, entry);
@@ -190,8 +251,30 @@ impl HitIndex {
             space: entry.space,
             bounds: entry.envelope,
         });
-        self.entries.insert(frag, entry);
+        self.pack(frag, entry);
         counter::bump(Counter::HitEntriesUpdated);
+    }
+
+    /// Moves the entry held for one fragment by `by` and puts it under `clip`, as part of a run.
+    ///
+    /// The same write as [`HitIndex::carry`] for an entry that keeps everything except its two
+    /// rectangles and its chain. The entry changes in place. Returns `false` when the index holds
+    /// no entry for `frag`.
+    pub fn carry_by(&mut self, frag: FragKey, by: Size<DevicePx, Device>, clip: ClipId) -> bool {
+        let Some(stored) = self.entries.get_mut(frag) else {
+            return false;
+        };
+        stored.bounds = stored.bounds.translate(by);
+        stored.envelope = stored.envelope.translate(by);
+        stored.clip = clip;
+        self.carried.push(Carried {
+            frag,
+            space: stored.space,
+            bounds: stored.envelope,
+        });
+        self.generation += 1;
+        counter::bump(Counter::HitEntriesUpdated);
+        true
     }
 
     /// Ends a run of [`HitIndex::carry`], bringing the hierarchy up to date in one pass.
@@ -221,19 +304,22 @@ impl HitIndex {
     fn write(&mut self, frag: FragKey, entry: HitEntry) -> Placed {
         self.generation += 1;
         if self.owes_rebuild() {
-            self.entries.insert(frag, entry);
+            self.pack(frag, entry);
             counter::bump(Counter::HitEntriesUpdated);
             return Placed::InPlace;
         }
         let placed = self.forest.place(frag, entry.space, entry.envelope);
-        self.entries.insert(frag, entry);
+        self.pack(frag, entry);
         counter::bump(Counter::HitEntriesUpdated);
         placed
     }
 
     /// Takes one fragment out.
     pub fn remove(&mut self, frag: FragKey) {
-        if self.entries.remove(frag).is_some() {
+        if let Some(stored) = self.entries.remove(frag) {
+            if stored.rounded {
+                self.radii.remove(&stored.frag);
+            }
             self.generation += 1;
             self.churn = self.churn.saturating_add(1);
             if !self.owes_rebuild() {
@@ -263,6 +349,7 @@ impl HitIndex {
     pub fn rebuild(&mut self, store: &mut LayoutStore, scale: f32) {
         self.generation += 1;
         self.entries.clear();
+        self.radii.clear();
         self.forest.clear();
         self.churn = 0;
         self.owed_rebuild = false;
@@ -281,7 +368,7 @@ impl HitIndex {
                     continue;
                 };
                 self.forest.insert(frag, entry.space, entry.envelope);
-                self.entries.insert(frag, entry);
+                self.pack(frag, entry);
                 order += ORDER_STRIDE;
             }
         }
@@ -293,7 +380,7 @@ impl HitIndex {
         self.entries.get(frag).map(|entry| entry.order)
     }
 
-    /// Writes onto every box's fragments the range of order keys its subtree spans.
+    /// Writes onto every box with fragments the range of order keys its subtree spans.
     ///
     /// The range is what the fragment pass places a newborn fragment between: a subtree's keys
     /// are contiguous in painting order, so what comes before a box is the end of the range of
@@ -312,11 +399,8 @@ impl HitIndex {
             range = (range.0.min(below.0), range.1.max(below.1));
             position += 1;
         }
-        let pieces: SmallVec<[FragKey; 4]> = store.fragments_of_box(key).iter().copied().collect();
-        for frag in pieces {
-            if let Some(fragment) = store.fragment_mut(frag) {
-                fragment.subtree_order = range;
-            }
+        if !store.fragments_of_box(key).is_empty() {
+            store.set_subtree_order(key, range);
         }
         range
     }
@@ -423,7 +507,7 @@ impl HitIndex {
                 if !entry.pointer_events.is_hittable() {
                     continue;
                 }
-                if !entry.covers(local) {
+                if !self.covers(entry, local) {
                     continue;
                 }
                 // Each link of the chain is tested in the space it was measured in: the clip
@@ -442,6 +526,53 @@ impl HitIndex {
         hits.into_iter().map(|(_, frag)| frag).collect()
     }
 }
+
+/// One entry as the index stores it: a [`HitEntry`] less its corner radii.
+///
+/// Nearly every entry is square, so the corner radii are kept beside the entry only when they are
+/// not zero, and a pointer move reads them only for a candidate that has them. Radii do not change
+/// when an entry moves, so a rigid move never touches them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Stored {
+    /// See [`HitEntry::frag`].
+    frag: FragKey,
+    /// See [`HitEntry::node`].
+    node: Option<NodeKey>,
+    /// See [`HitEntry::order`].
+    order: HitOrder,
+    /// See [`HitEntry::space`].
+    space: Option<SpatialId>,
+    /// See [`HitEntry::clip`].
+    clip: ClipId,
+    /// See [`HitEntry::pointer_events`].
+    pointer_events: PointerEvents,
+    /// Whether [`HitIndex::radii`] holds the entry's corner radii. Clear, the radii are zero.
+    rounded: bool,
+    /// See [`HitEntry::bounds`].
+    bounds: Rect<DevicePx, Device>,
+    /// See [`HitEntry::envelope`].
+    envelope: Rect<DevicePx, Device>,
+}
+
+impl Stored {
+    /// The stored form of one entry.
+    fn of(entry: &HitEntry) -> Self {
+        Self {
+            frag: entry.frag,
+            node: entry.node,
+            order: entry.order,
+            space: entry.space,
+            clip: entry.clip,
+            pointer_events: entry.pointer_events,
+            rounded: entry.radii != SQUARE,
+            bounds: entry.bounds,
+            envelope: entry.envelope,
+        }
+    }
+}
+
+/// The radii of a square entry.
+const SQUARE: Corners<Vec2<DevicePx>> = Corners::uniform(Vec2::splat(DevicePx(0.0)));
 
 /// A point on the device, or in one coordinate system.
 type Spot = Point<DevicePx, Device>;
@@ -529,4 +660,108 @@ fn clipped_in(
         cursor = *parent;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_arena::{ArenaKind, DocumentId, DomainId, Generation, Key};
+    use zgui_geom::{Corners, DevicePx, Point, Rect, Size, Vec2};
+    use zgui_scene::{ClipTable, SpatialTree};
+
+    use super::{HitIndex, Stored};
+    use crate::fragment::FragKey;
+    use crate::fragment::hit::HitEntry;
+
+    /// A fragment name.
+    fn frag(index: u32) -> FragKey {
+        Key::new(
+            index,
+            Generation::FIRST,
+            DomainId::new(DocumentId::FIRST, ArenaKind::new(2).expect("a valid arena")),
+        )
+    }
+
+    /// A square from the origin.
+    fn square(side: f32) -> Rect<DevicePx, zgui_geom::Device> {
+        Rect::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(side), DevicePx(side)),
+        )
+    }
+
+    #[test]
+    fn a_stored_entry_stays_well_under_a_whole_entry() {
+        let size = size_of::<Option<Stored>>();
+        assert!(size <= 72, "a stored hit entry grew to {size} bytes");
+    }
+
+    #[test]
+    fn an_entry_reads_back_as_it_was_written_whatever_its_shape() {
+        let mut index = HitIndex::new();
+        let plain = HitEntry::new(frag(1), square(20.0));
+        let mut rounded = HitEntry::new(frag(2), square(20.0));
+        rounded.radii = Corners::uniform(Vec2::splat(DevicePx(8.0)));
+        let mut shadowed = HitEntry::new(frag(3), square(20.0));
+        shadowed.envelope = square(30.0);
+        for entry in [plain, rounded, shadowed] {
+            index.update(entry.frag, entry);
+        }
+        assert_eq!(index.entry(frag(1)), Some(plain));
+        assert_eq!(index.entry(frag(2)), Some(rounded));
+        assert_eq!(index.entry(frag(3)), Some(shadowed));
+        assert_eq!(index.rounded(), 1, "only the rounded entry keeps radii");
+
+        index.update(frag(2), HitEntry::new(frag(2), square(20.0)));
+        assert_eq!(
+            index.rounded(),
+            0,
+            "a corner that went square drops its radii"
+        );
+        index.update(rounded.frag, rounded);
+        index.remove(frag(2));
+        assert_eq!(index.rounded(), 0, "a removed entry drops its radii");
+    }
+
+    #[test]
+    fn a_carried_entry_moves_and_keeps_its_radii() {
+        let mut index = HitIndex::new();
+        let mut rounded = HitEntry::new(frag(1), square(20.0));
+        rounded.radii = Corners::uniform(Vec2::splat(DevicePx(8.0)));
+        rounded.envelope = square(30.0);
+        index.update(rounded.frag, rounded);
+        let by = Size::new(DevicePx(5.0), DevicePx(-3.0));
+        assert!(index.carry_by(frag(1), by, rounded.clip));
+        index.settle();
+        let mut moved = rounded;
+        moved.bounds = rounded.bounds.translate(by);
+        moved.envelope = rounded.envelope.translate(by);
+        assert_eq!(index.entry(frag(1)), Some(moved));
+        assert_eq!(index.rounded(), 1);
+        assert!(index.is_consistent());
+        assert!(
+            !index.carry_by(frag(2), by, rounded.clip),
+            "an entry the index does not hold is not carried"
+        );
+    }
+
+    #[test]
+    fn a_rounded_corner_is_missed_through_the_index() {
+        let clips = ClipTable::rooted();
+        let spatial = SpatialTree::with_viewport();
+        let mut index = HitIndex::new();
+        let mut rounded = HitEntry::new(frag(1), square(20.0));
+        rounded.radii = Corners::uniform(Vec2::splat(DevicePx(8.0)));
+        index.update(rounded.frag, rounded);
+        let corner = Point::new(DevicePx(0.5), DevicePx(0.5));
+        let edge = Point::new(DevicePx(10.0), DevicePx(0.5));
+        assert!(index.hit(corner, &clips, &spatial).is_empty());
+        assert_eq!(index.hit(edge, &clips, &spatial).as_slice(), &[frag(1)]);
+
+        index.update(frag(1), HitEntry::new(frag(1), square(20.0)));
+        assert_eq!(
+            index.hit(corner, &clips, &spatial).as_slice(),
+            &[frag(1)],
+            "the same corner of a square entry is on it"
+        );
+    }
 }
