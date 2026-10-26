@@ -123,12 +123,6 @@ impl HitIndex {
         self.entries.get(frag).map(|stored| self.unpack(stored))
     }
 
-    /// How many entries keep corner radii beside the entry.
-    #[cfg(test)]
-    fn rounded(&self) -> usize {
-        self.radii.len()
-    }
-
     /// The whole entry that one stored entry stands for.
     fn unpack(&self, stored: &Stored) -> HitEntry {
         HitEntry {
@@ -671,6 +665,13 @@ mod tests {
     use super::{HitIndex, Stored};
     use crate::fragment::FragKey;
     use crate::fragment::hit::HitEntry;
+
+    impl HitIndex {
+        /// How many entries keep corner radii beside the entry.
+        fn rounded(&self) -> usize {
+            self.radii.len()
+        }
+    }
 
     /// A fragment name.
     fn frag(index: u32) -> FragKey {
