@@ -19,8 +19,24 @@
 //! | `view`    | the rows were built, before any frame                          |
 //! | `frame`   | the first frames settled                                       |
 //! | `edits`   | 200 one-cell edits, one frame each                             |
-//! | `remount` | 900 rows were unmounted and mounted again                      |
+//! | `unmount` | 900 rows were unmounted                                        |
+//! | `remount` | the 900 rows were mounted again                                |
 //! | `trim`    | `malloc_trim(0)`                                               |
+//!
+//! With `--edit-rounds N`, the edits run N times, and the snapshots after the later rounds are
+//! `edits2` to `editsN`. With `--cycles N`, the rows are unmounted and mounted again N times, and
+//! the snapshots after the later cycles are `remount2` to `remountN`. The `GROWTH` table then gives
+//! the bytes each tag keeps per edit over the last round and per cycle over the last cycle, and
+//! what a cycle keeps over the level before the first unmount. With `--age N`, N frames with
+//! nothing changed are drawn after each unmount and remount, so that what the window frees on a
+//! stride of frames is freed before the snapshot.
+//!
+//! With `--keep`, the process exits with the window and the model still held, so that a heap
+//! profiler reports what the last snapshot held as leaked, by call site.
+//!
+//! With `--drain-a11y`, each snapshot first drains the headless surface's accessibility log, as a
+//! platform's listener would, so that the `a11y` tag counts what the window holds. Without it, the
+//! tag also counts the log, which holds every update up to its bound.
 //!
 //! Each snapshot holds the live, peak and block counts per tag, the resident set from `/proc`, the
 //! C allocator's statistics, the frame's live counters, the window's object counts and what the
@@ -120,8 +136,18 @@ struct Args {
     pause: bool,
     /// How many one-cell edits.
     edits: usize,
+    /// How many rounds of edits.
+    edit_rounds: usize,
     /// How many rows are unmounted and mounted again.
     remount: usize,
+    /// How many times the rows are unmounted and mounted again.
+    cycles: usize,
+    /// How many frames are drawn after each unmount and remount, with nothing changed.
+    age: usize,
+    /// Whether the process exits with the window still open.
+    keep: bool,
+    /// Whether each snapshot drains the surface's accessibility log first.
+    drain_a11y: bool,
     /// Where the JSON goes.
     json: Option<PathBuf>,
     /// Where the figures go, one per line, for `--compare`.
@@ -132,7 +158,8 @@ struct Args {
 
 /// The usage line.
 const USAGE: &str = "usage: mem-probe [--rows N] [--mode unvirtualized|virtualized|model-only] \
-                     [--no-gpu] [--pause] [--edits N] [--remount N] [--json PATH] [--tsv PATH]\n       \
+                     [--no-gpu] [--pause] [--edits N] [--edit-rounds N] [--remount N] [--cycles N] \
+                     [--age N] [--keep] [--drain-a11y] [--json PATH] [--tsv PATH]\n       \
                      mem-probe --compare SMALL.tsv LARGE.tsv";
 
 impl Args {
@@ -144,7 +171,12 @@ impl Args {
             gpu: std::env::var_os("ZGUI_BENCH_GPU").is_some(),
             pause: false,
             edits: 200,
+            edit_rounds: 1,
             remount: 900,
+            cycles: 1,
+            age: 0,
+            keep: false,
+            drain_a11y: false,
             json: None,
             tsv: None,
             compare: None,
@@ -159,7 +191,12 @@ impl Args {
             match word.as_str() {
                 "--rows" => args.rows = number(words.next())?,
                 "--edits" => args.edits = number(words.next())?,
+                "--edit-rounds" => args.edit_rounds = number(words.next())?.max(1),
                 "--remount" => args.remount = number(words.next())?,
+                "--cycles" => args.cycles = number(words.next())?.max(1),
+                "--age" => args.age = number(words.next())?,
+                "--keep" => args.keep = true,
+                "--drain-a11y" => args.drain_a11y = true,
                 "--mode" => {
                     args.mode = match words.next().as_deref() {
                         Some("unvirtualized") => Mode::Unvirtualized,
@@ -356,6 +393,16 @@ fn settle(harness: &mut Harness<Runtime>) {
     harness.settle(256);
 }
 
+/// Draws `frames` frames with nothing changed.
+fn age(harness: &mut Harness<Runtime>, frames: usize) {
+    for _ in 0..frames {
+        harness.app().windows()[0].request_frame();
+        harness.advance(TICK);
+        harness.pump();
+    }
+    harness.settle(256);
+}
+
 /// The run itself.
 fn run(args: &Args) -> Result<(), String> {
     let pid = std::process::id();
@@ -369,6 +416,11 @@ fn run(args: &Args) -> Result<(), String> {
     let (mut harness, ctx) = open(args)?;
     let mut snapshots = Vec::with_capacity(8);
     let mut take = |name: &'static str, harness: &Harness<Runtime>| {
+        if args.drain_a11y {
+            for surface in harness.platform().offscreens() {
+                drop(surface.take_a11y_log());
+            }
+        }
         let vram = if args.pause { pause(name) } else { None };
         let snapshot = Snapshot::take(name, &harness.app().windows()[0], vram);
         println!(
@@ -410,27 +462,38 @@ fn run(args: &Args) -> Result<(), String> {
     settle(&mut harness);
     take("frame", &harness);
 
-    if !states.is_empty() {
-        for edit in 0..args.edits {
-            let state = states[edit * 7_919 % states.len()];
-            alloc_tag::scope(Tag::AppModel, || {
-                state
-                    .qty
-                    .update(|qty| *qty = (*qty + 1 + edit as u32) % 1_000);
-            });
-            harness.settle(64);
+    for round in 0..args.edit_rounds {
+        if !states.is_empty() {
+            for edit in round * args.edits..(round + 1) * args.edits {
+                let state = states[edit * 7_919 % states.len()];
+                alloc_tag::scope(Tag::AppModel, || {
+                    state
+                        .qty
+                        .update(|qty| *qty = (*qty + 1 + edit as u32) % 1_000);
+                });
+                harness.settle(64);
+            }
         }
+        take(numbered("edits", round), &harness);
     }
-    take("edits", &harness);
 
     let unmounted = args.remount.min(states.len());
-    if mounts && unmounted > 0 {
-        ctx.rows.set(states[unmounted..].to_vec());
-        harness.settle(256);
-        ctx.rows.set(states.clone());
-        settle(&mut harness);
+    for cycle in 0..args.cycles {
+        if mounts && unmounted > 0 {
+            ctx.rows.set(states[unmounted..].to_vec());
+            harness.settle(256);
+            age(&mut harness, args.age);
+        }
+        if cycle == 0 {
+            take("unmount", &harness);
+        }
+        if mounts && unmounted > 0 {
+            ctx.rows.set(states.clone());
+            settle(&mut harness);
+            age(&mut harness, args.age);
+        }
+        take(numbered("remount", cycle), &harness);
     }
-    take("remount", &harness);
 
     let trimmed = libc::trim();
     println!("TRIM gave memory back: {trimmed}");
@@ -446,12 +509,14 @@ fn run(args: &Args) -> Result<(), String> {
         gpu: args.gpu,
         sizes: &sizes,
         snapshots: &snapshots,
+        edits: args.edits,
     };
     println!("SIZES");
     for (name, size) in &sizes {
         println!("  {name:<32} {size:>6} B");
     }
     print!("{}", report.table());
+    print!("{}", report.growth());
     if let Some(path) = &args.json {
         std::fs::write(path, report.json())
             .map_err(|error| format!("{}: {error}", path.display()))?;
@@ -460,8 +525,20 @@ fn run(args: &Args) -> Result<(), String> {
         std::fs::write(path, report.tsv())
             .map_err(|error| format!("{}: {error}", path.display()))?;
     }
+    if args.keep {
+        std::process::exit(0);
+    }
     drop(model);
     Ok(())
+}
+
+/// The name of the snapshot after round `round` of a step: `name` for the first, then `name2` on.
+fn numbered(name: &'static str, round: usize) -> &'static str {
+    if round == 0 {
+        return name;
+    }
+    // A probe takes a handful of snapshots, so the names it leaks are a few bytes per run.
+    Box::leak(format!("{name}{}", round + 1).into_boxed_str())
 }
 
 /// One object count of a snapshot, or zero.

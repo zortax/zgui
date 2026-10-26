@@ -226,6 +226,8 @@ pub(crate) struct Run<'a> {
     pub(crate) sizes: &'a Group,
     /// The snapshots, in the order they were taken.
     pub(crate) snapshots: &'a [Snapshot],
+    /// How many edits one round of edits made.
+    pub(crate) edits: usize,
 }
 
 impl Run<'_> {
@@ -336,6 +338,102 @@ impl Run<'_> {
                 let _ = write!(out, "{:>11}", snapshot.process(key) / 1024);
             }
             out.push('\n');
+        }
+        out
+    }
+}
+
+impl Run<'_> {
+    /// The snapshot named `name`, if the run took it.
+    fn snapshot(&self, name: &str) -> Option<&Snapshot> {
+        self.snapshots.iter().find(|snapshot| snapshot.name == name)
+    }
+
+    /// The last snapshot whose name is `stem` or `stem` with a round number, and the one before it.
+    fn last_two(&self, stem: &str) -> Option<(&Snapshot, &Snapshot)> {
+        let rounds: Vec<usize> = self
+            .snapshots
+            .iter()
+            .enumerate()
+            .filter(|(_, snapshot)| {
+                snapshot
+                    .name
+                    .strip_prefix(stem)
+                    .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let &last = rounds.last()?;
+        let before = last.checked_sub(1)?;
+        Some((&self.snapshots[before], &self.snapshots[last]))
+    }
+
+    /// What each tag and each count kept: per edit over the last round of edits, at the unmount
+    /// and the first remount against the level after the edits, and per cycle over the last
+    /// cycle.
+    ///
+    /// The last round of edits is compared with the snapshot before it, which is the round before
+    /// or the first frame. A run with one round therefore shows the warm-up too.
+    pub(crate) fn growth(&self) -> String {
+        let mut out = String::new();
+        let Some((before_edits, edits)) = self.last_two("edits") else {
+            return out;
+        };
+        let unmount = self.snapshot("unmount");
+        let remount = self.snapshot("remount");
+        let cycle = self
+            .last_two("remount")
+            .filter(|(before, _)| before.name.starts_with("remount"));
+        let per_edit = self.edits.max(1) as f64;
+        let _ = writeln!(
+            out,
+            "GROWTH {:<28}{:>12}{:>12}{:>12}{:>12}",
+            "figure", "per edit", "unmount", "remount", "per cycle"
+        );
+        let mut line = |key: &str, figure: &dyn Fn(&Snapshot) -> u64| {
+            let delta = |from: &Snapshot, to: &Snapshot| figure(to) as f64 - figure(from) as f64;
+            let edit = delta(before_edits, edits) / per_edit;
+            let unmount = unmount.map(|unmount| delta(edits, unmount));
+            let remount = remount.map(|remount| delta(edits, remount));
+            let cycle = cycle.map(|(before, after)| delta(before, after));
+            if edit == 0.0
+                && [unmount, remount, cycle]
+                    .iter()
+                    .all(|value| value.is_none_or(|value| value == 0.0))
+            {
+                return;
+            }
+            let shown = |value: Option<f64>| value.map_or("-".to_owned(), |v| format!("{v:.0}"));
+            let _ = writeln!(
+                out,
+                "GROWTH {key:<28}{edit:>12.1}{:>12}{:>12}{:>12}",
+                shown(unmount),
+                shown(remount),
+                shown(cycle)
+            );
+        };
+        for tag in Tag::ALL {
+            line(&format!("tag.{}", tag.label()), &|snapshot| {
+                snapshot.live_bytes(tag)
+            });
+        }
+        for key in ["tagged_live_bytes", "rss_bytes"] {
+            line(key, &|snapshot| snapshot.process(key));
+        }
+        for (group, figures) in [("objects", &edits.objects), ("live", &edits.live)] {
+            for &(key, _) in figures {
+                line(&format!("{group}.{key}"), &|snapshot| {
+                    let figures = if group == "objects" {
+                        &snapshot.objects
+                    } else {
+                        &snapshot.live
+                    };
+                    figures
+                        .iter()
+                        .find(|(name, _)| *name == key)
+                        .map_or(0, |&(_, value)| value)
+                });
+            }
         }
         out
     }
