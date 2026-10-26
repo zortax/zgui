@@ -103,9 +103,9 @@ impl ShapedLayout {
     /// An estimate of the heap bytes the engine's layout holds.
     ///
     /// Computed from what the layout holds, so equal paragraphs broken at equal widths report
-    /// equal bytes. The cost grows with the glyphs, because the engine's line items walk them. A
-    /// layout that has no lines yet reports its styles and inline boxes only, because its runs are
-    /// reachable through its lines alone.
+    /// equal bytes. The cost is one step per line and per run. A layout that has no lines yet
+    /// reports its styles and inline boxes only, because its runs are reachable through its lines
+    /// alone.
     ///
     /// The step table that lets a pass skip the engine's breaker is counted as well. A paragraph
     /// holds one from its second breaking pass on, so two equal paragraphs can differ by it.
@@ -131,13 +131,10 @@ impl Live {
             + core::mem::size_of_val(layout.inline_boxes())
             + self.reach.heap_bytes();
         for line in layout.lines() {
-            bytes += record::LINE + core::mem::size_of::<parley::LineMetrics>();
-            for item in line.items() {
-                bytes += record::LINE_ITEM + record::ITEM;
-                let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item else {
-                    continue;
-                };
-                let run = glyph_run.run();
+            bytes += record::LINE
+                + core::mem::size_of::<parley::LineMetrics>()
+                + line.len() * (record::LINE_ITEM + record::ITEM);
+            for run in line.runs() {
                 // A cluster with one plain glyph holds it inline, so the clusters alone are
                 // counted.
                 bytes += record::RUN
