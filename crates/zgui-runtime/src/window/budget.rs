@@ -139,6 +139,7 @@ impl Window {
         manager::enforce(self, &report, epoch);
         self.budgets.record(report);
         self.sweep_clip_chains(epoch);
+        self.sweep_paints(epoch);
     }
 
     /// Frees the clip chains nothing can reach any more, on a stride of frames.
@@ -174,6 +175,32 @@ impl Window {
         });
         drop(layout);
         scene.clips.evict_unreachable_chains(KEEP_GENERATIONS, CAP);
+    }
+
+    /// Frees the paint entries nothing holds and no recent frame drew, on a stride of frames.
+    ///
+    /// A box with an animated colour owns slots named after it, and an animation that folds an
+    /// opacity into its colours interns a new colour every frame. Content that goes leaves both
+    /// behind with no holds, and each costs the renderer a slot of its paint table for ever.
+    ///
+    /// Nothing keeps a paint id across frames without a hold: a record holds what its primitives
+    /// name, and everything else interns its paint again from the style each frame it is drawn,
+    /// which touches the entry. An owned slot an animation rewrites is found by its name, so an
+    /// evicted one is a box encoded again.
+    fn sweep_paints(&mut self, epoch: crate::budget::SceneEpoch) {
+        /// How many frames pass between sweeps.
+        const STRIDE: u64 = 64;
+        /// The id-space extent below which sweeping buys nothing.
+        const FLOOR: usize = 1_024;
+        /// How many frames of not being drawn make an entry old enough to go.
+        const KEEP_GENERATIONS: u64 = 128;
+        /// The most entries one sweep frees, so the change journal stays a delta for its readers.
+        const CAP: usize = 2_048;
+
+        if !epoch.get().is_multiple_of(STRIDE) || self.scene.paints.slots() < FLOOR {
+            return;
+        }
+        self.scene.paints.evict_unreachable(KEEP_GENERATIONS, CAP);
     }
 
     /// Drops everything every budgeted cache holds.

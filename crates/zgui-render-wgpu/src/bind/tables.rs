@@ -1289,6 +1289,45 @@ mod tests {
     }
 
     #[test]
+    fn a_paint_sweep_that_frees_and_reuses_slots_is_absorbed() {
+        use zgui_scene::{Paint, PaintOwner, PaintRole};
+        let mut scene = zgui_scene::Scene::new();
+        let red = zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0);
+        let grey = zgui_color::Color::srgb(0.5, 0.5, 0.5, 1.0);
+        let kept = scene.paints.solid(red);
+        let gone = PaintOwner::new(
+            PropertyOwner::new(7).expect("a handle is never empty"),
+            PaintRole::BorderSides,
+        );
+        let middle = scene
+            .paints
+            .owned(gone, Paint::Sides([red, grey, red, grey]));
+        let tail = scene.paints.solid(grey);
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+
+        // The kept paint stays in use while the other two age out; the sweep frees both and
+        // retracts the id space over the tail.
+        for _ in 0..12 {
+            scene.paints.begin_frame();
+            scene.paints.solid(red);
+        }
+        assert_eq!(scene.paints.evict_unreachable(8, usize::MAX), 2);
+        assert!(scene.paints.slots() <= tail.0 as usize);
+        prepared.update(&scene);
+        assert_eq!(prepared.tables().paints, paints(&scene.paints).paints);
+        assert_eq!(prepared.tables().stops, paints(&scene.paints).stops);
+
+        // A freed slot is taken by a paint of another family.
+        let reused = scene.paints.solid(grey);
+        assert_eq!(reused.0, middle.index, "the freed slot is reused");
+        prepared.update(&scene);
+        assert_eq!(prepared.tables().paints, paints(&scene.paints).paints);
+        assert_eq!(prepared.tables().stops, paints(&scene.paints).stops);
+        assert_eq!(prepared.tables().paints[kept.0 as usize].kind, kind::SOLID);
+    }
+
+    #[test]
     fn moving_a_space_dirties_its_matrix_and_dependent_clip() {
         let mut scene = zgui_scene::Scene::new();
         let owner = PropertyOwner::new(2).expect("a handle is never empty");

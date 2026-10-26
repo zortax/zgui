@@ -245,8 +245,7 @@ impl PaintTable {
 
     /// See [`Table::evict_least_recently_used`].
     ///
-    /// An owned entry goes only when nothing holds it, as every other entry does. No runtime sweep
-    /// calls this yet: the unit tests pin what a future paint sweep keeps.
+    /// An owned entry goes only when nothing holds it, as every other entry does.
     pub fn evict_least_recently_used(&mut self) -> usize {
         self.table.evict_least_recently_used()
     }
@@ -254,7 +253,7 @@ impl PaintTable {
     /// See [`Table::evict_unreachable`]. No paint resolves through another.
     ///
     /// A held entry is reachable, so an owned entry a record draws through stays while the record
-    /// stands. No runtime sweep calls this yet: the unit tests pin what a future paint sweep keeps.
+    /// stands. The runtime sweeps the table with this on a stride of frames.
     pub fn evict_unreachable(&mut self, keep_generations: u64, cap: usize) -> usize {
         self.table
             .evict_unreachable(keep_generations, cap, |_| None)
