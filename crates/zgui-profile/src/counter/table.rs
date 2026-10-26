@@ -114,6 +114,14 @@ counters! {
     /// engine's breaker made in the pass before.
     TextBreaksSkipped => text_breaks_skipped, Group::Skip { done: Counter::TextRebroken };
 
+    /// Shaped paragraphs held in the frozen form: the glyphs and clusters of their one break,
+    /// without the engine's layout.
+    TextFrozen => text_frozen, Group::BackendNeutral;
+
+    /// Frozen paragraphs shaped again into the engine's layout, because a breaking request asked
+    /// for more than the frozen form holds.
+    TextThawed => text_thawed, Group::BackendNeutral;
+
     /// Shaped paragraphs broken back to their kept lines after a size probe moved them.
     TextFormsRestored => text_forms_restored, Group::BackendNeutral;
 

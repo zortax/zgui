@@ -24,7 +24,12 @@ fn first_glyph(text: &str) -> (Arc<FontSystem>, FaceId, u16) {
     let (fonts, mut shaper) = support::shaper(Controls::Verbatim);
     let fixture = support::Fixture::new(text, Direction::LeftToRight);
     let shaped = shaper.shape(&fixture.content());
-    let line = shaped.engine.layout.get(0).expect("one line");
+    let line = shaped
+        .engine
+        .layout()
+        .expect("a live form")
+        .get(0)
+        .expect("one line");
     let run = line.runs().next().expect("one run");
     let face = fonts.face_for(run.font());
     let glyph = run

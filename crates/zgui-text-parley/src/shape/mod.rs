@@ -7,6 +7,7 @@ pub mod brush;
 pub(crate) mod build;
 pub(crate) mod clusters;
 pub mod engine;
+pub(crate) mod frozen;
 pub(crate) mod glyphs;
 pub mod line;
 pub(crate) mod lines;

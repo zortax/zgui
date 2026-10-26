@@ -5,6 +5,9 @@
 //! answer equals, bit for bit, a reading of the engine's laid-out form made in this file. It also
 //! equals the reading of a paragraph shaped fresh and broken once at the same request, and so do
 //! the glyphs and clusters of the form.
+//!
+//! Every shaper here keeps the engine's layout, so the frozen form is never used. `frozen.rs`
+//! compares that form with this one.
 
 mod support;
 
@@ -380,7 +383,7 @@ fn bands(width: f32) -> [LineBand; 2] {
 /// Written here against the engine's public reading interface, so it shares nothing with the
 /// reading the shaper does and may keep.
 fn read(engine: &ShapedLayout, has_boxes: bool) -> BrokenParagraph {
-    let layout = &engine.layout;
+    let layout = engine.layout().expect("a live form");
     let prefix = engine.prefix;
     let mut lines = Vec::new();
     let mut boxes: SmallVec<[InlineBoxPlacement; 2]> = SmallVec::new();
@@ -426,7 +429,7 @@ fn read(engine: &ShapedLayout, has_boxes: bool) -> BrokenParagraph {
 /// text means equal bits.
 fn form(shaper: &Shaper, shaped: &ShapedParagraph<ShapedLayout>) -> Vec<String> {
     let mut out = Vec::new();
-    for line in 0..=shaped.engine.layout.len() {
+    for line in 0..=shaped.engine.layout().expect("a live form").len() {
         let line = line as u16;
         shaper.visit_line(shaped, line, &mut |run| out.push(format!("{run:?}")));
         shaper.visit_clusters(shaped, line, &mut |run| out.push(format!("{run:?}")));
@@ -443,8 +446,8 @@ fn print(broken: &BrokenParagraph) -> String {
 fn check(case: &Case) -> Result<(), TestCaseError> {
     let built = Built::new(case);
     let fonts = fonts();
-    let mut warm = Shaper::with_controls(fonts.clone(), Controls::Mark);
-    let mut cold = Shaper::with_controls(fonts, Controls::Mark);
+    let mut warm = Shaper::with_controls(fonts.clone(), Controls::Mark).freezing(false);
+    let mut cold = Shaper::with_controls(fonts, Controls::Mark).freezing(false);
     let mut shaped = warm.shape(&built.content(&built.boxes, &built.paragraph));
     let has_boxes = !built.boxes.is_empty();
     let mut paragraph = built.paragraph;
@@ -603,7 +606,8 @@ fn a_small_width_step_keeps_the_lines_of_the_step_before() {
 /// Shapes `case` and breaks it at `steps`. Returns how many breaks those steps took and kept.
 fn drive(case: &Case, steps: &[Step]) -> (u64, u64) {
     let built = Built::new(case);
-    let (_fonts, mut shaper) = support::shaper(Controls::Mark);
+    let (_fonts, shaper) = support::shaper(Controls::Mark);
+    let mut shaper = shaper.freezing(false);
     let mut shaped = shaper.shape(&built.content(&built.boxes, &built.paragraph));
     let rebroken = counter::get(Counter::TextRebroken);
     let kept = counter::get(Counter::TextLinesKept);
@@ -686,8 +690,8 @@ proptest! {
 fn check_edges(case: &Case) -> Result<(), TestCaseError> {
     let built = Built::new(case);
     let fonts = fonts();
-    let mut warm = Shaper::with_controls(fonts.clone(), Controls::Mark);
-    let mut cold = Shaper::with_controls(fonts, Controls::Mark);
+    let mut warm = Shaper::with_controls(fonts.clone(), Controls::Mark).freezing(false);
+    let mut cold = Shaper::with_controls(fonts, Controls::Mark).freezing(false);
     let content = built.content(&built.boxes, &built.paragraph);
     let has_boxes = !built.boxes.is_empty();
     let mut shaped = warm.shape(&content);
@@ -778,7 +782,8 @@ fn prose(steps: Vec<Step>, align: TextAlign) -> Case {
 /// and skipped.
 fn skips(case: &Case) -> (u64, u64) {
     let built = Built::new(case);
-    let (_fonts, mut shaper) = support::shaper(Controls::Mark);
+    let (_fonts, shaper) = support::shaper(Controls::Mark);
+    let mut shaper = shaper.freezing(false);
     let mut shaped = shaper.shape(&built.content(&built.boxes, &built.paragraph));
     let rebroken = counter::get(Counter::TextRebroken);
     let skipped = counter::get(Counter::TextBreaksSkipped);

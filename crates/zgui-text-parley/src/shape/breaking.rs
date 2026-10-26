@@ -5,7 +5,8 @@ use zgui_profile::{Counter, counter};
 use zgui_text::{BreakRequest, BrokenParagraph, Plan, ShapedParagraph};
 use zgui_text_style::TextAlign;
 
-use crate::shape::engine::ShapedLayout;
+use crate::shape::engine::{Form, ShapedLayout};
+use crate::shape::frozen::Frozen;
 use crate::shape::{bands, boxes, lines};
 
 /// Breaks a shaped paragraph at the requested width, or reports a pass it has already taken.
@@ -19,10 +20,16 @@ use crate::shape::{bands, boxes, lines};
 /// An owed pass costs little as well when its width is one at which the engine's breaker takes
 /// the decisions of the pass before it: the layout already holds those lines (see
 /// [`reach`](crate::shape::reach)).
+///
+/// A frozen paragraph is answered from its frozen form. The caller makes sure the form
+/// [`answers`](Frozen::answers) the request.
 pub(crate) fn break_lines(
     shaped: &mut ShapedParagraph<ShapedLayout>,
     request: &BreakRequest<'_>,
 ) -> BrokenParagraph {
+    if shaped.engine.is_frozen() {
+        return break_frozen(shaped, request);
+    }
     match shaped.plan_break(request) {
         Plan::Reflected => return shaped.engine.last.clone(),
         Plan::Recalled(broken) => return broken.clone(),
@@ -40,9 +47,13 @@ pub(crate) fn break_lines(
     let max_advance = request.max_advance.map(|width| width.0);
     let engine = &mut shaped.engine;
     let prefix = engine.prefix;
-    let wraps = engine.wraps;
+    let Form::Live(live) = &mut engine.form else {
+        unreachable!("a frozen paragraph is answered above");
+    };
+    let live = &mut **live;
+    let wraps = live.wraps;
 
-    let layout = &mut engine.layout;
+    let layout = &mut live.layout;
     let boxes_moved = boxes::push_geometry(layout, request.boxes);
 
     // A pass whose width keeps every comparison of the engine's breaker gives the lines the layout
@@ -52,12 +63,7 @@ pub(crate) fn break_lines(
         && matches!(alignment, Alignment::Start | Alignment::Left)
         && !layout.is_rtl()
         && (wraps || !has_boxes);
-    if covered
-        && !boxes_moved
-        && engine
-            .reach
-            .holds(max_advance, indent.0, options, has_boxes)
-    {
+    if covered && !boxes_moved && live.reach.holds(max_advance, indent.0, options, has_boxes) {
         counter::bump(Counter::TextBreaksSkipped);
         counter::bump(Counter::TextLinesKept);
         let broken = engine.last.clone();
@@ -100,8 +106,8 @@ pub(crate) fn break_lines(
     let kept = !banded
         && !justified
         && !boxes_moved
-        && !engine.items.is_empty()
-        && lines::unchanged(layout, &engine.last, &engine.items, has_boxes, prefix);
+        && !live.items.is_empty()
+        && lines::unchanged(layout, &engine.last, &live.items, has_boxes, prefix);
     let broken = if kept {
         counter::bump(Counter::TextLinesKept);
         engine.last.clone()
@@ -111,28 +117,67 @@ pub(crate) fn break_lines(
         broken
     };
     if banded || justified {
-        engine.items.clear();
+        live.items.clear();
     } else if !kept {
-        lines::items(layout, &mut engine.items);
+        lines::items(layout, &mut live.items);
     }
     if justified {
-        engine.reach.forget();
+        live.reach.forget();
     } else {
-        engine.reach.measure(
+        live.reach.measure(
             layout,
             covered,
-            engine.rebroken,
+            live.rebroken,
             max_advance,
             indent.0,
             options,
             has_boxes,
         );
-        engine.rebroken |= covered;
+        live.rebroken |= covered;
     }
     // Filed under the key the pass was taken for, which is the one `plan_break` just adopted, so a
     // later probe at the same width is answered from here without moving the laid-out form.
     shaped.remember(request.key(), broken.clone());
     broken
+}
+
+/// Answers a request from a frozen paragraph's one break.
+///
+/// A probe at a width the form does not reflect is answered without moving the form, as a
+/// remembered pass is: the frozen form answers every width, so it remembers none. The kept pass
+/// goes through [`plan_break`](ShapedParagraph::plan_break) like any other and moves the alignment
+/// offsets glyphs and clusters are read at.
+fn break_frozen(
+    shaped: &mut ShapedParagraph<ShapedLayout>,
+    request: &BreakRequest<'_>,
+) -> BrokenParagraph {
+    debug_assert!(
+        Frozen::answers(request),
+        "a request the frozen form cannot answer"
+    );
+    if request.probe
+        && shaped.broken_as() != Some(request.key())
+        && let Form::Frozen(frozen) = &shaped.engine.form
+    {
+        return frozen.lay_out(request, &shaped.engine.last).broken;
+    }
+    match shaped.plan_break(request) {
+        Plan::Reflected => return shaped.engine.last.clone(),
+        Plan::Recalled(broken) => return broken.clone(),
+        Plan::Owed => {}
+    }
+    let engine = &mut shaped.engine;
+    let Form::Frozen(frozen) = &mut engine.form else {
+        unreachable!("the caller checked the form");
+    };
+    let laid = frozen.lay_out(request, &engine.last);
+    frozen.adopt(&laid);
+    if laid.kept {
+        counter::bump(Counter::TextLinesKept);
+    } else {
+        engine.last = laid.broken.clone();
+    }
+    laid.broken
 }
 
 /// The engine's spelling of an alignment.

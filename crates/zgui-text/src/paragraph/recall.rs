@@ -19,10 +19,14 @@ const REMEMBERED: usize = 4;
 /// Bounded on purpose. The alternative is a map that grows with the number of distinct widths a
 /// document has ever proposed, which for a window being dragged is a new entry every frame for as
 /// long as the drag lasts, for every paragraph on the page.
+///
+/// One result is held inline. A paragraph whose engine answers every width from one form keeps
+/// none, so it costs no heap. A second result moves all of them to the heap, with room for
+/// [`REMEMBERED`].
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Recalled {
     /// The results, in the order they were taken.
-    entries: SmallVec<[(BreakingKey, BrokenParagraph); REMEMBERED]>,
+    entries: SmallVec<[(BreakingKey, BrokenParagraph); 1]>,
 }
 
 impl Recalled {
@@ -42,6 +46,9 @@ impl Recalled {
         }
         if self.entries.len() == REMEMBERED {
             self.entries.remove(0);
+        } else if self.entries.len() == self.entries.inline_size() {
+            // Spill once, to the bound, instead of growing by doubling.
+            self.entries.reserve_exact(REMEMBERED - self.entries.len());
         }
         self.entries.push((key, broken));
     }

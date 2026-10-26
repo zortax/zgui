@@ -13,6 +13,7 @@ use zgui_text_style::TextStyle;
 use crate::direction::Controls;
 use crate::shape::brush::SlotBrush;
 use crate::shape::engine::ShapedLayout;
+use crate::shape::frozen::Frozen;
 use crate::shape::line::{LineRequest, ResolvedLineMetrics};
 use crate::shape::strut::StrutCache;
 use crate::shape::{breaking, build};
@@ -48,6 +49,8 @@ pub struct Shaper {
     struts: StrutCache,
     /// How the base direction is forced.
     controls: Controls,
+    /// Whether a paragraph that breaks one way only is held in the frozen form.
+    freeze: bool,
 }
 
 impl Shaper {
@@ -71,7 +74,21 @@ impl Shaper {
             scratch: parley::LayoutContext::new(),
             struts: StrutCache::default(),
             controls,
+            freeze: true,
         }
+    }
+
+    /// The same shaper, holding a paragraph that breaks one way only in the frozen form or not.
+    ///
+    /// On by default. A paragraph that can break one way only keeps its glyphs and clusters in a
+    /// compact form and drops the engine's layout; it paints, places a caret and hit-tests the
+    /// same either way. Such a paragraph has runs that may not wrap and all go left to right, no
+    /// inline box, at most `u16::MAX` bytes of text and a first cluster that is not a space. Off
+    /// keeps every paragraph in the engine's layout, which [`ShapedLayout::layout`] reads.
+    #[must_use]
+    pub fn freezing(mut self, freeze: bool) -> Self {
+        self.freeze = freeze;
+        self
     }
 
     /// The system this shaper draws faces from.
@@ -160,7 +177,7 @@ impl ParagraphShaper for Shaper {
         // The font system is shared and synchronised; the context clones the collection under
         // its lock; the scratch and the strut cache start empty and warm up on the fork's
         // thread. Nothing shaped depends on which shaper shaped it.
-        Some(Self::with_controls(Arc::clone(&self.fonts), self.controls))
+        Some(Self::with_controls(Arc::clone(&self.fonts), self.controls).freezing(self.freeze))
     }
 
     fn shape_keyed(
@@ -178,6 +195,7 @@ impl ParagraphShaper for Shaper {
                 content,
                 strut,
                 self.controls,
+                self.freeze,
                 &mut self.context,
                 &mut self.scratch,
             )
@@ -189,6 +207,17 @@ impl ParagraphShaper for Shaper {
         shaped: &mut ShapedParagraph<Self::Engine>,
         request: &BreakRequest<'_>,
     ) -> BrokenParagraph {
+        if shaped.engine.is_frozen() && !Frozen::answers(request) {
+            alloc_tag::scope(Tag::Shaping, || {
+                build::thaw(
+                    shaped,
+                    request,
+                    self.controls,
+                    &mut self.context,
+                    &mut self.scratch,
+                );
+            });
+        }
         alloc_tag::scope(Tag::Break, || breaking::break_lines(shaped, request))
     }
 
@@ -225,6 +254,7 @@ impl core::fmt::Debug for Shaper {
         formatter
             .debug_struct("Shaper")
             .field("controls", &self.controls)
+            .field("freeze", &self.freeze)
             .finish_non_exhaustive()
     }
 }
