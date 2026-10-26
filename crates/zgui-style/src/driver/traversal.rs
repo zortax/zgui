@@ -37,7 +37,7 @@ use style::context::{
 };
 use style::data::RestyleKind;
 use style::dom::TNode;
-use style::properties::{ComputedValues, PropertyDeclarationBlock};
+use style::properties::{ComputedValues, PropertyDeclaration, PropertyDeclarationBlock};
 use style::selector_parser::{PseudoElement, RestyleDamage};
 use style::shared_lock::Locked;
 use style::stylesheets::keyframes_rule::KeyframesStepValue;
@@ -152,6 +152,8 @@ pub(crate) struct RecalcStyle<'a> {
 /// filed under their addresses, and no other block can take an address a key names. A chain is
 /// shared by every element that matched the same rules, and the declarations it names never
 /// change, so an answer stays true for as long as it is held. The engine bounds how many it holds.
+/// An animation or transition block that declares no custom property is hashed as one fixed value,
+/// so its position in the chain is all the key holds of it.
 #[derive(Default)]
 pub(crate) struct RefsCache {
     /// The answers.
@@ -332,9 +334,23 @@ impl<'a> RecalcStyle<'a> {
     pub(super) fn refs_of(&self, rules: &StrongRuleNode) -> Arc<RuleRefs> {
         let mut hasher = FxHasher::default();
         for node in rules.self_and_ancestors() {
-            let address = node
-                .style_source()
-                .map_or(0, |source| source.get().heap_ptr() as usize);
+            let address = node.style_source().map_or(0, |source| {
+                // An animation or transition block holds computed values, which read no custom
+                // property. One that declares none adds nothing to the answer, and every tick
+                // brings a new one, so it is hashed as one fixed value and the chain keeps its
+                // answer.
+                let level = node.cascade_level();
+                if level.is_animation()
+                    && !source
+                        .read(self.context.guards.for_origin(level.origin().origin()))
+                        .declarations()
+                        .iter()
+                        .any(|declaration| matches!(declaration, PropertyDeclaration::Custom(_)))
+                {
+                    return 1;
+                }
+                source.get().heap_ptr() as usize
+            });
             address.hash(&mut hasher);
         }
         let key = hasher.finish();
