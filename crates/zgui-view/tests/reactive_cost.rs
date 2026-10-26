@@ -2,7 +2,8 @@
 //!
 //! A counting allocator charges each allocation on the test's own thread. Each case builds
 //! [`N`] parts of one kind, keeps them, and divides what is live by [`N`]. The stub document's
-//! own nodes are counted too, so the cases that make nodes say how many.
+//! own nodes are counted too, so the cases that make nodes say how many. One test also checks
+//! what mount and unmount cycles of a list keep.
 //!
 //! `cargo test --release -p zgui-view --test reactive_cost -- --ignored --nocapture` prints the
 //! table.
@@ -353,4 +354,59 @@ fn report_lifecycle_allocations() {
     }
     drop(signals);
     world.window.unmount();
+}
+
+/// The bytes per row that one more unmount and mount of a list of [`N`] rows keeps, with each row
+/// a text hole over a signal the list outlives when `hole`, and the same text as static text
+/// otherwise.
+fn kept_per_row_and_cycle(hole: bool) -> f64 {
+    let w = World::new();
+    let signals: Rc<Vec<RwSignal<usize>>> = Rc::new((0..N).map(|i| signal(&w, i)).collect());
+    let rows = w.window.with(|| RwSignal::new(Vec::<usize>::new()));
+    let mut list = w.window.with(|| {
+        let signals = Rc::clone(&signals);
+        For::new(
+            move || rows.get(),
+            |r: &usize| *r,
+            move |r| {
+                let s = signals[r];
+                if hole {
+                    AnyView::new(move || s.get().to_string())
+                } else {
+                    AnyView::new(s.get_untracked().to_string())
+                }
+            },
+        )
+        .build(&mut w.cx.cx())
+    });
+    list.mount(&w.dom, w.root, None);
+    let cycle = || {
+        rows.set((0..N).collect());
+        flush();
+        rows.set(Vec::new());
+        flush();
+    };
+    // The first cycles bring the slot lists to their peak.
+    cycle();
+    cycle();
+    let before = live();
+    for _ in 0..4 {
+        cycle();
+    }
+    let after = live();
+    list.unmount(&w.dom);
+    w.window.unmount();
+    (after.0 - before.0) as f64 / (4 * N) as f64
+}
+
+/// Rows that read signals the list outlives leave no entry in those signals when they go. The stub
+/// document keeps its removed nodes, so the test compares with rows of static text.
+#[test]
+fn rows_remounted_over_long_lived_signals_keep_what_static_rows_keep() {
+    let hole = kept_per_row_and_cycle(true);
+    let fixed = kept_per_row_and_cycle(false);
+    assert!(
+        hole - fixed < 1.0,
+        "{hole} bytes per row and cycle with text holes, {fixed} with static text"
+    );
 }
