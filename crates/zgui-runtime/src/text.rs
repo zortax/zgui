@@ -259,6 +259,15 @@ impl MeasureContent for Box<dyn TextEngine> {
         (**self).shape_keyed(key, content)
     }
 
+    fn shape_variant(
+        &mut self,
+        base: zgui_text::ParagraphKey,
+        variant: zgui_text::ParagraphKey,
+        content: &zgui_text::ParagraphContent<'_>,
+    ) -> Option<zgui_layout::measure::ShapedSummary> {
+        (**self).shape_variant(base, variant, content)
+    }
+
     fn break_lines(
         &mut self,
         key: zgui_text::ParagraphKey,

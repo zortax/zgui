@@ -406,6 +406,29 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         ShapedSummary { key, widths }
     }
 
+    fn shape_variant(
+        &mut self,
+        base: ParagraphKey,
+        variant: ParagraphKey,
+        content: &ParagraphContent<'_>,
+    ) -> Option<ShapedSummary> {
+        if !self.cache.holds(variant) {
+            let shaped = shape_branded(&mut self.shaper, base, content).rekeyed(variant);
+            self.cache.insert(shaped);
+            self.restate_bytes(variant);
+            self.publish_bytes();
+        }
+        let widths = self
+            .cache
+            .get(variant)
+            .map(|shaped| shaped.content_widths())
+            .unwrap_or_default();
+        Some(ShapedSummary {
+            key: variant,
+            widths,
+        })
+    }
+
     fn break_lines(&mut self, key: ParagraphKey, request: &BreakRequest<'_>) -> BrokenParagraph {
         let Some(shaped) = self.cache.get_mut(key) else {
             return BrokenParagraph::default();

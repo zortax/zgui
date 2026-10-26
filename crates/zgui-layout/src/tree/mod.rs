@@ -70,9 +70,9 @@ pub struct LayoutTree<'a, C> {
     ///
     /// A worker's list is merged into the store's when its batch finishes.
     touched: Vec<(BoxKey, cephal::Layout)>,
-    /// Boxes a batch worker's probes noted, merged into [`LayoutStore`]'s list when the batch
+    /// Boxes whose lines a batch worker broke, merged into [`LayoutStore`]'s list when the batch
     /// finishes. An exclusive pass notes them on the store directly.
-    probed: Vec<BoxKey>,
+    noted: Vec<(BoxKey, zgui_text::ParagraphKey)>,
     /// The axes on which the answers computed since the engine last asked told min-content from
     /// max-content available space; see [`cephal::tree::LayoutTree::take_observed`].
     observed: u8,
@@ -96,7 +96,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             generation: 0,
             speculation: 0,
             touched: Vec::new(),
-            probed: Vec::new(),
+            noted: Vec::new(),
             observed: 0,
         }
     }
@@ -143,7 +143,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             }
         }
         // After every pass that may probe, so the forms paint reads are on the kept lines.
-        crate::inline::kept::restore(self.store.get_mut(), self.content);
+        crate::inline::kept::restore(self.store.get_mut(), self.content, self.device.scale);
         if crate::invariants::enabled() {
             let mismatched = crate::inline::kept::mismatched(self.store.get(), self.content);
             assert!(
@@ -235,16 +235,17 @@ impl<'a, C> LayoutTree<'a, C> {
         self.store.state_mut(key)
     }
 
-    /// Notes that a size probe broke `key`'s lines, once per box until the pass restores it.
-    pub(crate) fn note_probed(&mut self, key: BoxKey) {
+    /// Notes that a pass broke `key`'s lines from the shared paragraph `base`, once per box until
+    /// the end of the layout pass.
+    pub(crate) fn note_lines(&mut self, key: BoxKey, base: zgui_text::ParagraphKey) {
         let state = self.store.state_mut(key);
-        if state.probed {
+        if state.noted {
             return;
         }
-        state.probed = true;
+        state.noted = true;
         match &mut self.store {
-            view::StoreView::Exclusive(store) => store.probed.push(key),
-            view::StoreView::Worker(_) => self.probed.push(key),
+            view::StoreView::Exclusive(store) => store.noted.push((key, base)),
+            view::StoreView::Worker(_) => self.noted.push((key, base)),
         }
     }
 
@@ -263,6 +264,14 @@ impl<'a, C> LayoutTree<'a, C> {
         flattened: crate::inline::content::memo::Flattened,
     ) {
         self.store.hold_flattened(key, flattened);
+    }
+
+    /// The key of the paragraph that `key` is a copy of, if it is a copy.
+    pub(crate) fn variant_base(
+        &self,
+        key: zgui_text::ParagraphKey,
+    ) -> Option<zgui_text::ParagraphKey> {
+        self.store.structure().variant_base(key)
     }
 
     /// The lines one box resolved to.

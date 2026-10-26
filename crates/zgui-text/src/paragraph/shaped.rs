@@ -98,6 +98,15 @@ impl<E> ShapedParagraph<E> {
         self.key
     }
 
+    /// The same result, held under `key`.
+    ///
+    /// For a copy of a paragraph held under a [variant](ParagraphKey::variant) of its own key.
+    #[must_use]
+    pub fn rekeyed(mut self, key: ParagraphKey) -> Self {
+        self.key = key;
+        self
+    }
+
     /// The generated string every reported offset indexes into.
     pub fn text(&self) -> &str {
         &self.text

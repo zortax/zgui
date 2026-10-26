@@ -65,7 +65,12 @@ impl LayoutStore {
             (self.paragraphs.len() - 1) as u32
         });
         let id = ParagraphId(slot);
-        self.paragraphs[slot as usize] = Some(super::ParagraphRecord { key, users: 0 });
+        self.paragraphs[slot as usize] = Some(super::ParagraphRecord {
+            key,
+            users: 0,
+            claimed: false,
+            lines: crate::inline::kept::LinesKey::NONE,
+        });
         self.paragraph_index.insert(key, id);
         // Normally retained immediately by `set_inline_resolution`. Filing it here as well makes
         // an abandoned interning reclaimable without turning reclamation into a full-table scan.
@@ -139,6 +144,9 @@ impl LayoutStore {
             let key = entry.key;
             *held = None;
             self.paragraph_index.remove(&key);
+            if !self.variant_bases.is_empty() {
+                self.variant_bases.remove(&key);
+            }
             self.free_paragraphs.push(slot as u32);
             reclaimed += 1;
         }
@@ -151,6 +159,50 @@ impl LayoutStore {
             .get(id.index() as usize)
             .and_then(Option::as_ref)
             .map_or(0, |entry| entry.users)
+    }
+
+    /// The identifier of the paragraph held under `key`, if one was issued.
+    pub(crate) fn paragraph_id(&self, key: zgui_text::ParagraphKey) -> Option<ParagraphId> {
+        self.paragraph_index.get(&key).copied()
+    }
+
+    /// The key of the paragraph that `key` is a copy of, if it is a copy.
+    ///
+    /// See [`kept`](crate::inline::kept).
+    pub(crate) fn variant_base(
+        &self,
+        key: zgui_text::ParagraphKey,
+    ) -> Option<zgui_text::ParagraphKey> {
+        self.variant_bases.get(&key).copied()
+    }
+
+    /// Records that `variant` is a copy of the paragraph held under `base`.
+    pub(crate) fn note_variant(
+        &mut self,
+        variant: zgui_text::ParagraphKey,
+        base: zgui_text::ParagraphKey,
+    ) {
+        self.variant_bases.insert(variant, base);
+    }
+
+    /// The lines every current user of one paragraph keeps, if a pass recorded them.
+    pub(crate) fn paragraph_lines(&self, id: ParagraphId) -> Option<crate::inline::kept::LinesKey> {
+        self.paragraphs
+            .get(id.index() as usize)
+            .and_then(Option::as_ref)
+            .and_then(|entry| entry.claimed.then_some(entry.lines))
+    }
+
+    /// Records the lines every current user of one paragraph keeps.
+    pub(crate) fn claim_paragraph(
+        &mut self,
+        id: ParagraphId,
+        lines: crate::inline::kept::LinesKey,
+    ) {
+        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
+            entry.claimed = true;
+            entry.lines = lines;
+        }
     }
 
     pub(crate) fn retain_paragraph(&mut self, id: ParagraphId) {
@@ -177,6 +229,7 @@ impl LayoutStore {
         if entry.users > 0 {
             return;
         }
+        entry.claimed = false;
         let key = entry.key;
         self.active_paragraphs -= 1;
         self.unused_paragraphs.push(id);

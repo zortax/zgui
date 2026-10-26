@@ -92,10 +92,14 @@ pub struct LayoutStore {
     pub(crate) generation: u32,
     /// Boxes whose unrounded result was written this pass, with the result they held before.
     pub(crate) touched: Vec<(BoxKey, cephal::Layout)>,
-    /// Boxes whose shaped form a size probe may have moved off the kept lines.
+    /// Boxes whose lines a pass broke, with the key of their shared paragraph.
     ///
-    /// See [`kept`](crate::inline::kept). Drained at the end of each layout pass.
-    pub(crate) probed: Vec<BoxKey>,
+    /// A probe may have moved the shaped form off the kept lines, and a kept pass may have broken
+    /// a form other contexts share. See [`kept`](crate::inline::kept). Drained at the end of each
+    /// layout pass.
+    pub(crate) noted: Vec<(BoxKey, zgui_text::ParagraphKey)>,
+    /// The buffers the restore at the end of a layout pass uses, kept between passes.
+    pub(crate) kept_scratch: crate::inline::kept::Scratch,
     /// Boxes whose unrounded result moved in the last pass.
     changed: Vec<BoxKey>,
     /// Boxes carrying the chain bit, see [`crate::tree::dirty`].
@@ -169,13 +173,26 @@ pub struct LayoutStore {
     /// See [`laid_out`](crate::tree::store::laid_out) for what it is compared against and why it is
     /// held here rather than beside the pass.
     laid_out: Option<(u32, u32)>,
+    /// The key of each copy of a shared paragraph, with the key of the paragraph it copies.
+    ///
+    /// See [`kept`](crate::inline::kept). An entry goes when the record of its copy is reclaimed.
+    variant_bases: FxHashMap<zgui_text::ParagraphKey, zgui_text::ParagraphKey>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ParagraphRecord {
     key: zgui_text::ParagraphKey,
     users: u32,
+    /// Whether a layout pass recorded [`ParagraphRecord::lines`]. Cleared when the last user goes.
+    claimed: bool,
+    /// The lines every current user keeps, once a layout pass recorded them.
+    ///
+    /// See [`kept`](crate::inline::kept). Held apart from [`ParagraphRecord::claimed`], whose
+    /// niche keeps a slot of the table at 24 bytes.
+    lines: crate::inline::kept::LinesKey,
 }
+
+const _: () = assert!(core::mem::size_of::<Option<ParagraphRecord>>() == 24);
 
 impl LayoutStore {
     /// An empty store for one document.
@@ -197,7 +214,8 @@ impl LayoutStore {
             scheduler: cephal::schedule::Scheduler::new(),
             generation: 1,
             touched: Vec::new(),
-            probed: Vec::new(),
+            noted: Vec::new(),
+            kept_scratch: Default::default(),
             changed: Vec::new(),
             chain: Vec::new(),
             root: None,
@@ -221,6 +239,7 @@ impl LayoutStore {
             read_extents: Vec::new(),
             flattenings: 0,
             laid_out: None,
+            variant_bases: FxHashMap::default(),
         }
     }
 
@@ -456,6 +475,7 @@ impl LayoutStore {
                 engine_style: &self.engine_style,
                 replaced: &self.replaced,
                 root: self.root,
+                variant_bases: &self.variant_bases,
             },
         )
     }
@@ -469,6 +489,7 @@ impl LayoutStore {
             engine_style: &self.engine_style,
             replaced: &self.replaced,
             root: self.root,
+            variant_bases: &self.variant_bases,
         }
     }
 
@@ -690,9 +711,19 @@ pub(crate) struct Structure<'a> {
     replaced: &'a PagedVec<BoxKey, Option<ReplacedBox>, 64>,
     /// The box the document is laid out from.
     root: Option<BoxKey>,
+    /// The key each copy of a shared paragraph copies.
+    variant_bases: &'a FxHashMap<zgui_text::ParagraphKey, zgui_text::ParagraphKey>,
 }
 
 impl<'a> Structure<'a> {
+    /// The key of the paragraph that `key` is a copy of, if it is a copy.
+    pub(crate) fn variant_base(
+        &self,
+        key: zgui_text::ParagraphKey,
+    ) -> Option<zgui_text::ParagraphKey> {
+        self.variant_bases.get(&key).copied()
+    }
+
     /// The record for one box.
     pub(crate) fn get(&self, key: BoxKey) -> Option<&'a BoxNode> {
         self.boxes.get(slot(key))

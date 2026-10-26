@@ -178,7 +178,7 @@ pub(crate) fn compute<C: MeasureContent>(
     } else {
         None
     };
-    let (generated, root_strut, mut boxes, run_extents, summary, adopted_lines) = match adopted {
+    let (generated, root_strut, mut boxes, run_extents, base, summary, memo_lines) = match adopted {
         Some(memo) => {
             let ProbeMemo {
                 generated,
@@ -200,12 +200,14 @@ pub(crate) fn compute<C: MeasureContent>(
                 paragraph: &generated.paragraph,
                 scale,
             };
-            tree.content().shape_keyed(summary.key, &content);
+            let base = generated.key(&content);
+            shape_own(tree, key, base, &content);
             (
                 generated,
                 root_strut,
                 boxes,
                 run_extents,
+                base,
                 summary,
                 Some(computed),
             )
@@ -232,9 +234,17 @@ pub(crate) fn compute<C: MeasureContent>(
                 paragraph: &generated.paragraph,
                 scale,
             };
-            let paragraph_key = generated.key(&content);
-            let summary = tree.content().shape_keyed(paragraph_key, &content);
-            (generated, root_strut, boxes, run_extents, summary, None)
+            let base = generated.key(&content);
+            let summary = shape_own(tree, key, base, &content);
+            (
+                generated,
+                root_strut,
+                boxes,
+                run_extents,
+                base,
+                summary,
+                None,
+            )
         }
     };
 
@@ -258,11 +268,10 @@ pub(crate) fn compute<C: MeasureContent>(
         Constraint::MaxContent => None,
     };
 
-    // A probe that breaks may move the shaper's laid-out form, which the glyphs are drawn from.
-    // The end of the layout pass moves it back to the kept break; see `kept`.
-    if !ask.final_pass {
-        tree.note_probed(key);
-    }
+    // A probe that breaks may move the shaper's laid-out form, which the glyphs are drawn from,
+    // and a kept pass may break a form other contexts share. The end of the layout pass moves
+    // each form back to the break its contexts keep; see `kept`.
+    tree.note_lines(key, base);
 
     // A pass whose answer is not the one that will be kept, on a context with nothing on its lines
     // that has to be placed twice and no float to band around, is one break and one line-box
@@ -330,7 +339,7 @@ pub(crate) fn compute<C: MeasureContent>(
         broken = tree.content().break_lines(summary.key, &request);
         // The kept pass over an adopted probe: the lines are the probe's, and the break above
         // only moved the shaper's form to them.
-        if let Some(adopted) = adopted_lines
+        if let Some(adopted) = memo_lines
             .as_ref()
             .filter(|_| passes == 0 && bands.is_empty())
         {
@@ -456,6 +465,29 @@ pub(crate) fn compute<C: MeasureContent>(
         tree.set_inline_resolution(key, resolution);
     }
     measured
+}
+
+/// Shapes the paragraph of the context `key`, or finds it shaped.
+///
+/// A context that holds a copy of its paragraph, because another context with equal content keeps
+/// other lines, breaks that copy. See [`kept`](crate::inline::kept).
+fn shape_own<C: MeasureContent>(
+    tree: &mut LayoutTree<'_, C>,
+    key: BoxKey,
+    base: zgui_text::ParagraphKey,
+    content: &ParagraphContent<'_>,
+) -> crate::measure::ShapedSummary {
+    let held = tree
+        .inline_resolution_of(key)
+        .map(|resolution| resolution.key)
+        .filter(|held| *held != base);
+    if let Some(held) = held
+        && tree.variant_base(held) == Some(base)
+        && let Some(summary) = tree.content().shape_variant(base, held, content)
+    {
+        return summary;
+    }
+    tree.content().shape_keyed(base, content)
 }
 
 /// Marks every line of a context that reaches past its box, and shapes what marks them.

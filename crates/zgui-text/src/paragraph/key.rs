@@ -40,7 +40,24 @@ impl ParagraphKey {
     pub fn of(content: &ParagraphContent<'_>) -> Self {
         ContentKey::of(content).with_boxes(content.boxes)
     }
+
+    /// The key of a copy of this paragraph.
+    ///
+    /// A shaped paragraph holds the lines of one break. Two contexts with equal content that keep
+    /// different lines thus need a shaped paragraph each, and the second one is held under this
+    /// key. `salt` tells the copies of one paragraph apart.
+    #[must_use]
+    pub fn variant(self, salt: impl core::hash::Hash) -> Self {
+        let mut digest = Digest::new();
+        digest.push_tag(VARIANT_TAG);
+        digest.push(self.0);
+        digest.push(salt);
+        Self(digest.finish())
+    }
 }
+
+/// The tag that keeps a variant key apart from each key hashed from content.
+const VARIANT_TAG: u8 = 0x56;
 
 /// The part of a [`ParagraphKey`] that no measurement can move.
 ///
