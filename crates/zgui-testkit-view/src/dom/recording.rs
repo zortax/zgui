@@ -178,6 +178,10 @@ impl Dom for RecordingDom {
         });
     }
 
+    fn text_is(&self, node: NodeId, data: &str) -> bool {
+        self.tree.text_is(node, data)
+    }
+
     fn insert(&self, parent: NodeId, child: NodeId, before: Option<NodeId>) {
         self.tree.insert(parent, child, before);
         self.transcript.push(Op::Insert {
