@@ -83,6 +83,9 @@ pub struct StyleEngine {
     refreshed_animations: Vec<zgui_dom::NodeIndex>,
     /// What each rule chain reads and declares, kept from one restyle to the next.
     refs: crate::driver::traversal::RefsCache,
+    /// The computed styles earlier cascades produced, by rule chain, kept from one restyle to the
+    /// next.
+    shared: crate::driver::share::SharedStyles,
     /// The user-agent sheet, held so that it stays installed.
     _user_agent: SheetHandle,
 }
@@ -132,6 +135,7 @@ impl StyleEngine {
             animation_waiting: Vec::new(),
             refreshed_animations: Vec::new(),
             refs: crate::driver::traversal::RefsCache::default(),
+            shared: crate::driver::share::SharedStyles::default(),
             _user_agent: user_agent,
         }
     }

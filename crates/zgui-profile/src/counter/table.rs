@@ -632,6 +632,9 @@ counters! {
 
     /// Boxes whose layout was thrown away because the text in them has to be shaped again.
     BoxesReshaped => boxes_reshaped, Group::BackendNeutral;
+
+    /// Styles replaced by the groups of an equal style an earlier element was given.
+    StylesShared => styles_shared, Group::BackendNeutral;
 }
 
 impl Counter {

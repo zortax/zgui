@@ -429,7 +429,10 @@ fn compute_style<'doc>(
     }
 
     let mut important_rules_changed = false;
-    let new_styles = match kind {
+    // Styles the engine's sharing cache gave: the element they came from went through the shared
+    // styles already.
+    let mut settled = false;
+    let mut new_styles = match kind {
         RestyleKind::MatchAndCascade => {
             debug_assert!(
                 !context.shared.traversal_flags.for_animation_only() || !data.has_styles(),
@@ -451,6 +454,7 @@ fn compute_style<'doc>(
             match target.share_style_if_possible(context) {
                 Some(shared_styles) => {
                     context.thread_local.statistics.styles_shared += 1;
+                    settled = true;
                     shared_styles
                 }
                 None => {
@@ -509,6 +513,18 @@ fn compute_style<'doc>(
             new_styles
         }
     };
+
+    // An element styled for the first time whose result equals a style an earlier element was
+    // given takes that style's groups, so the two hold one allocation of each group in place of
+    // two.
+    if !settled && !data.has_styles() && !context.shared.traversal_flags.for_animation_only() {
+        let shared = traversal
+            .shared
+            .share(element, context.shared, &mut new_styles);
+        if shared != 0 {
+            counter::add(Counter::StylesShared, shared as u64);
+        }
+    }
 
     // Kept across the call that replaces it: the children's hint is decided by what they can
     // observe of the change, which is the difference between the style they inherited from and

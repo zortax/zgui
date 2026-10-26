@@ -9,7 +9,7 @@
 
 use style::custom_properties_map::CustomPropertiesMap;
 use zgui_css::ComputedStyle;
-use zgui_dom::side::paint_key::PaintStyleKey;
+use zgui_dom::side::paint_key::{PaintStyleHeld, PaintStyleKey};
 
 /// The paint key of `style`, with the identities of the element's generated-content styles.
 ///
@@ -37,6 +37,11 @@ pub fn paint_key(style: &ComputedStyle, pseudos: [usize; 2]) -> PaintStyleKey {
             map_identity(&custom.non_inherited),
         ),
     }
+}
+
+/// The paint key of the styles a node's column holds.
+pub fn held_key(held: &PaintStyleHeld) -> PaintStyleKey {
+    paint_key(&held.style, held.pseudo_identities())
 }
 
 /// The identity of the group every text colour and text shadow lives in.

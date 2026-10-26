@@ -142,6 +142,8 @@ pub(crate) struct RecalcStyle<'a> {
     /// A shader or filter takes its parameters from custom properties named after itself, so an
     /// element that declares one reads names no declaration of its own mentions.
     pub(super) wildcard_names: [style::custom_properties::Name; 4],
+    /// The computed styles earlier cascades produced, by rule chain.
+    pub(super) shared: &'a super::share::SharedStyles,
 }
 
 /// What each rule chain reads and declares, by a hash of the declaration blocks it names.
@@ -197,7 +199,11 @@ impl RefsCache {
 
 impl<'a> RecalcStyle<'a> {
     /// A traversal over `context`.
-    pub(crate) fn new(context: SharedStyleContext<'a>, refs: &'a RefsCache) -> Self {
+    pub(crate) fn new(
+        context: SharedStyleContext<'a>,
+        refs: &'a RefsCache,
+        shared: &'a super::share::SharedStyles,
+    ) -> Self {
         Self {
             context,
             restyled: PerWorker::new(),
@@ -207,6 +213,7 @@ impl<'a> RecalcStyle<'a> {
             refs,
             wildcard_names: zgui_css::values::custom::WILDCARD_DECLARERS
                 .map(style::custom_properties::Name::from),
+            shared,
         }
     }
 
