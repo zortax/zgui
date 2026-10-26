@@ -1,7 +1,6 @@
 //! The once-per-frame flush, and the state that makes it re-entrant-safe.
 
 use std::cell::RefCell;
-use std::task::Waker;
 
 use crate::executor::assert::assert_ui_thread;
 use crate::executor::{context, pool};
@@ -40,8 +39,6 @@ struct FlushState {
     woke: bool,
     /// Whether any task was set aside by the budget in this flush.
     budget_exhausted: bool,
-    /// Wakers of the tasks the budget set aside, woken once the flush has returned.
-    deferred: Vec<Waker>,
 }
 
 thread_local! {
@@ -118,19 +115,13 @@ pub fn flush() -> FlushOutcome {
         }
     }
 
-    FLUSH.with_borrow_mut(|state| {
-        // Waking a task the budget set aside re-queues it in the pool without asking for a
-        // redraw; `needs_another_frame` is what gets it polled.
-        let deferred = std::mem::take(&mut state.deferred);
-        let sinks_deferred = crate::sink::release_deferred();
-        let needs_another_frame = woke_after_stall || !deferred.is_empty() || sinks_deferred;
-        for waker in deferred {
-            waker.wake();
-        }
-        FlushOutcome {
-            needs_another_frame,
-            budget_exhausted: state.budget_exhausted,
-        }
+    // A task or sink the budget set aside goes back in its queue without asking for a redraw;
+    // `needs_another_frame` is what gets it run.
+    let tasks_deferred = pool::release_deferred();
+    let sinks_deferred = crate::sink::release_deferred();
+    FLUSH.with_borrow(|state| FlushOutcome {
+        needs_another_frame: woke_after_stall || tasks_deferred || sinks_deferred,
+        budget_exhausted: state.budget_exhausted,
     })
 }
 
@@ -181,15 +172,7 @@ pub(crate) fn is_running() -> bool {
         .unwrap_or(true)
 }
 
-/// Records that the budget set a sink aside in this flush.
+/// Records that the budget set a task or a sink aside in this flush.
 pub(crate) fn note_exhausted() {
     FLUSH.with_borrow_mut(|state| state.budget_exhausted = true);
-}
-
-/// Sets a budget-exhausted task aside until the flush has returned.
-pub(crate) fn defer(waker: Waker) {
-    FLUSH.with_borrow_mut(|state| {
-        state.budget_exhausted = true;
-        state.deferred.push(waker);
-    });
 }
