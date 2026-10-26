@@ -59,3 +59,43 @@ pub(crate) fn check(tree: &Tree) -> Report {
     }
     report
 }
+
+#[cfg(test)]
+mod tests {
+    use super::check;
+    use crate::ledger::report::Report;
+    use crate::ledger::tree::Tree;
+    use crate::ledger::tree::features::FeatureSource;
+
+    /// Runs the check against the fixture named by `expectation`.
+    fn fixture(expectation: &str) -> Report {
+        let root = crate::root::workspace_root().expect("workspace root");
+        let tree = Tree::gather(
+            &root.join("xtask/fixtures/counters").join(expectation),
+            FeatureSource::Recorded,
+        )
+        .expect("the fixture workspace is readable");
+        check(&tree)
+    }
+
+    #[test]
+    fn the_planted_fixture_fails_on_the_counter_only_tests_move() {
+        // One violation exactly: a test-only increment that counts would clear `Beta`, and a cut
+        // that hides the code below a test-only method would add `Alpha`.
+        let report = fixture("planted");
+        let messages: Vec<String> = report.violations.iter().map(ToString::to_string).collect();
+        assert_eq!(messages.len(), 1, "{messages:#?}");
+        assert!(messages[0].contains("`Counter::Beta`"), "{messages:#?}");
+    }
+
+    #[test]
+    fn the_clean_fixture_counts_an_increment_below_a_test_only_method() {
+        let report = fixture("clean");
+        assert!(report.skipped.is_empty(), "{:#?}", report.skipped);
+        assert!(
+            report.is_clean(),
+            "the clean fixture was rejected: {}",
+            report.violations[0]
+        );
+    }
+}
