@@ -1763,6 +1763,21 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             Some(fragment) => fragment.node,
             None => return Change::Identical,
         };
+        // A box drawn in an animated background colour paints, also when its own style paints
+        // nothing: the colour is beside the shared style, as an animated opacity is.
+        let painting;
+        let next = if kind == FragmentKind::Box
+            && next.flags.contains(FragmentFlags::PAINTS_NOTHING)
+            && self.dirty.animates_background(node)
+        {
+            painting = Geometry {
+                flags: next.flags.without(FragmentFlags::PAINTS_NOTHING),
+                ..*next
+            };
+            &painting
+        } else {
+            next
+        };
         let previous = self.store.fragment(frag).cloned();
         // Read before the write below replaces it.
         let held = previous

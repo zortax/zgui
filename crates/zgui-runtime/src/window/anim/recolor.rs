@@ -12,7 +12,8 @@
 //! opacity for example, gets no damage here: the fragment pass damages it.
 
 use zgui_dom::NodeKey;
-use zgui_dom::side::AnimOverride;
+use zgui_dom::side::{AnimOverride, BoxKey};
+use zgui_geom::{DevicePx, Edges};
 use zgui_layout::fragment::diff::pixels;
 use zgui_paint::OwnedPaints;
 use zgui_scene::{PaintRewrite, PropertyOwner};
@@ -27,18 +28,21 @@ impl Writing<'_> {
     /// `values` drives, and each of those slots took its colour. A box with no record, or a nested
     /// inline box that the lines it is on paint, takes the fragment pass.
     pub(super) fn write_colors(&mut self, node: NodeKey, values: &AnimOverride) -> bool {
-        let Some(owned) = OwnedPaints::of(values) else {
+        if !OwnedPaints::any(values) {
             return false;
-        };
+        }
         self.damage_own_ink(node);
         let boxes = self.layout.boxes_of(node);
         if boxes.is_empty() {
             return false;
         }
-        let signature = owned.signature();
         let cache = self.painter.cache();
         let recorded_owned = boxes.iter().all(|key| {
             let fragments = self.layout.fragments_of_box(*key);
+            let Some(owned) = OwnedPaints::of(values, self.border_of(*key)) else {
+                return false;
+            };
+            let signature = owned.signature();
             self.layout
                 .get(*key)
                 .is_some_and(|box_| !box_.is_nested_inline())
@@ -52,16 +56,29 @@ impl Writing<'_> {
         }
         let mut written = true;
         for key in boxes {
-            for (name, paint) in owned.paints(PropertyOwner::of(*key), values) {
+            let border = self.border_of(*key);
+            let Some(owned) = OwnedPaints::of(values, border) else {
+                return false;
+            };
+            for (name, paint) in owned.paints(PropertyOwner::of(*key), values, border) {
                 written &= self.scene.paints.rewrite(name, paint) == PaintRewrite::Written;
             }
         }
         written
     }
 
+    /// The border widths of the box `key`, read off its first fragment as the emission reads them.
+    fn border_of(&self, key: BoxKey) -> Edges<DevicePx> {
+        self.layout
+            .fragments_of_box(key)
+            .first()
+            .and_then(|frag| self.layout.fragment(*frag))
+            .map_or(Edges::ZERO, |fragment| fragment.border)
+    }
+
     /// Damages `node`'s ink when the override it dropped held colours [`OwnedPaints`] accepts.
     pub(super) fn damage_uncolored(&mut self, node: NodeKey, was: &AnimOverride) {
-        if OwnedPaints::of(was).is_some() {
+        if OwnedPaints::any(was) {
             self.damage_own_ink(node);
         }
     }

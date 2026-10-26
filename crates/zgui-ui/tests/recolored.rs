@@ -9,7 +9,7 @@ mod desktop;
 mod device;
 mod painted;
 
-use zgui::geom::{DevicePx, Edges};
+use zgui::geom::{Device, DevicePx, Edges, Point, Rect, Size};
 use zgui::prelude::*;
 use zgui::view;
 use zgui::view::{AnyView, NodeRef};
@@ -20,7 +20,7 @@ use crate::painted::stage::Stage;
 /// steps, each beside a still box at every step. A slide moves its background with its box.
 const SHEET: &str = ":root { background-color: #ffffff }
      .stage { display: flex; flex-direction: row; gap: 10px; padding: 24px }
-     .swatch, .edge, .slide { width: 48px; height: 20px; border-radius: 6px }
+     .swatch, .edge, .slide, .under { width: 48px; height: 20px; border-radius: 6px }
      .swatch { background-color: transparent;
                transition: background-color 400ms steps(4, jump-end) }
      .swatch.on { background-color: #ff0000 }
@@ -41,7 +41,32 @@ const SHEET: &str = ":root { background-color: #ffffff }
      .e1 { border-color: rgba(0, 0, 255, 0.25) }
      .e2 { border-color: rgba(0, 0, 255, 0.5) }
      .e3 { border-color: rgba(0, 0, 255, 0.75) }
-     .e4 { border-color: #0000ff }";
+     .e4 { border-color: #0000ff }
+     .under { border-style: solid; border-width: 0 0 4px 0;
+              border-color: #00ff00 #00ff00 transparent #00ff00;
+              transition: border-color 400ms steps(4, jump-end) }
+     .under.on { border-bottom-color: #0000ff }
+     .u1 { border-bottom-color: rgba(0, 0, 255, 0.25) }
+     .u2 { border-bottom-color: rgba(0, 0, 255, 0.5) }
+     .u3 { border-bottom-color: rgba(0, 0, 255, 0.75) }
+     .u4 { border-bottom-color: #0000ff }
+     .centred { display: flex; flex-direction: row; justify-content: center; gap: 10px;
+                padding: 24px }
+     .column { display: flex; flex-direction: column; gap: 10px }
+     .slot { display: flex; flex-direction: row; justify-content: center; width: 300px;
+             height: 20px }
+     .slot.left { justify-content: flex-start }
+     .holder { display: flex; flex-direction: row; justify-content: center; height: 20px }
+     .held, .wide, .padded { height: 20px; background-color: transparent;
+                             animation: held 100s linear }
+     @keyframes held {
+         from { background-color: transparent }
+         1% { background-color: #ff0000 }
+         to { background-color: #ff0000 }
+     }
+     .held { width: 48px }
+     .wide { width: 12% }
+     .padded { box-sizing: border-box; width: 64px; padding-left: 10% }";
 
 /// How many output frames each direction is read for, with room past its 400ms.
 const FRAMES: usize = 36;
@@ -51,6 +76,9 @@ const SWATCHES: [&str; 5] = ["swatch", "swatch s1", "swatch s2", "swatch s3", "s
 
 /// The same, for the border.
 const EDGES: [&str; 5] = ["edge", "edge e1", "edge e2", "edge e3", "edge e4"];
+
+/// The same, for a border drawn on one side under three sides of another colour.
+const UNDERS: [&str; 5] = ["under", "under u1", "under u2", "under u3", "under u4"];
 
 /// What switches the animated box's classes.
 #[derive(Clone, Copy)]
@@ -222,6 +250,13 @@ fn a_border_fading_in_and_out_matches_a_still_box_every_frame() {
 }
 
 #[test]
+fn a_border_on_one_side_matches_a_still_box_every_frame() {
+    // Only the bottom side has a width, and the other three hold another colour. The still box
+    // strokes the bottom colour alone, so the owned slot has to hold the same.
+    there_and_back("under", UNDERS);
+}
+
+#[test]
 fn a_background_moving_with_its_box_matches_a_still_box_every_frame() {
     // The transform moves the box by writing its coordinate system, so its chunk replays at the
     // new place. The colour reaches the screen only through the slot the box owns.
@@ -288,5 +323,118 @@ fn a_background_whose_animation_ends_goes_back_to_its_own_style() {
         shown.last(),
         Some(&0),
         "the box kept the colour its ended animation last drew: {shown:?}"
+    );
+}
+
+/// The whole window as the composed target holds it.
+fn picture(stage: &Stage, width: f32, height: f32) -> Vec<(u8, u8, u8)> {
+    stage.composed_colours_in(Rect::<DevicePx, Device>::new(
+        Point::new(DevicePx(0.0), DevicePx(0.0)),
+        Size::new(DevicePx(width), DevicePx(height)),
+    ))
+}
+
+/// How many pixels of the partial picture differ from a complete redraw, named by `step`.
+fn against_a_redraw(stage: &mut Stage, width: f32, height: f32, step: &str) -> Option<String> {
+    let partial = picture(stage, width, height);
+    stage.repaint();
+    let full = picture(stage, width, height);
+    let wrong = partial
+        .iter()
+        .zip(&full)
+        .filter(|(a, b)| {
+            a.0.abs_diff(b.0)
+                .max(a.1.abs_diff(b.1))
+                .max(a.2.abs_diff(b.2))
+                > 8
+        })
+        .count();
+    (wrong > 0).then(|| format!("{step}: {wrong} pixels"))
+}
+
+#[test]
+fn a_held_colour_on_a_transparent_box_moves_with_the_box() {
+    // The animation starts transparent, so the boxes' own style paints nothing, and then holds
+    // one colour, so no frame of it damages anything: what draws the boxes is the override alone.
+    // Switches unmount two, a resize moves them, and a narrower holder moves one and changes its
+    // padding. Each partial frame has to be what a complete redraw shows.
+    crate::device::use_real_damage();
+    let holder = RwSignal::new(200.0f32);
+    let early = RwSignal::new(true);
+    let late = RwSignal::new(true);
+    let held = NodeRef::new();
+    let Some(mut stage) = Stage::open(SHEET, move || {
+        AnyView::new(view! {
+            column(class = "column") {
+                row(class = "centred") {
+                    box(class = "held", node_ref = held)
+                    box(class = "wide")
+                }
+                row(class = "slot left") {
+                    row(class = "holder", style:width = move || Some(format!("{}px", holder.get()))) {
+                        box(class = "padded")
+                    }
+                }
+                row(class = "slot") {
+                    if move || early.get() {
+                        box(class = "held")
+                    } else {}
+                }
+                row(class = "slot") {
+                    if move || late.get() {
+                        box(class = "held")
+                    } else {}
+                }
+            }
+        })
+    }) else {
+        eprintln!("skipped: no usable graphics device");
+        return;
+    };
+    stage.wait_quietly(std::time::Duration::from_millis(1_500));
+    let rect = stage.rect_of(held.get_untracked().expect("the box was built"));
+    assert!(
+        stage.composed_colours_in(rect).contains(&(255, 0, 0)),
+        "the held colour draws the box"
+    );
+
+    let mut failures = Vec::new();
+    // First, while no box has been composed again since its colour began.
+    early.set(false);
+    stage.tick();
+    failures.extend(against_a_redraw(
+        &mut stage,
+        900.0,
+        600.0,
+        "unmounted-early",
+    ));
+    let sizes = [(860.0, 590.0), (700.0, 560.0), (900.0, 600.0)];
+    for (index, (width, height)) in sizes.into_iter().enumerate() {
+        stage.resize(width, height);
+        stage.tick();
+        failures.extend(against_a_redraw(
+            &mut stage,
+            width,
+            height,
+            &format!("size-{index}-{width}x{height}"),
+        ));
+    }
+    for (index, width) in [120.0f32, 260.0, 160.0].into_iter().enumerate() {
+        holder.set(width);
+        stage.tick();
+        failures.extend(against_a_redraw(
+            &mut stage,
+            900.0,
+            600.0,
+            &format!("holder-{index}-{width}"),
+        ));
+    }
+    // Last, after the resizes composed every box again under its colour.
+    late.set(false);
+    stage.tick();
+    failures.extend(against_a_redraw(&mut stage, 900.0, 600.0, "unmounted-late"));
+    assert!(
+        failures.is_empty(),
+        "a box with a held colour left pixels behind: {failures:#?}"
     );
 }

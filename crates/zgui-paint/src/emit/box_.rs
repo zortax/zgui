@@ -131,7 +131,9 @@ pub fn background_and_border(
     let (fills, draws_border) = fills_of(scene, style, placement);
     let borders = border_widths(placement.border);
     let stroke = match placement.owner_of(PaintRole::BorderSides) {
-        Some(name) if draws_border => scene.paints.owned(name, border_paint(style.border.colors)),
+        Some(name) if draws_border => scene
+            .paints
+            .owned(name, border_paint(style.border.colors, placement.border)),
         _ => border_stroke(scene, style, borders, true),
     };
     let last = fills.len().saturating_sub(1);

@@ -28,7 +28,7 @@ use std::borrow::Cow;
 use zgui_atlas::AtlasKey;
 use zgui_bits::DamageSet;
 use zgui_dom::side::BoxKey;
-use zgui_geom::{Device, DevicePx, Rect};
+use zgui_geom::{Device, DevicePx, Edges, Rect};
 use zgui_layout::fragment::FragmentFlags;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
@@ -1167,10 +1167,12 @@ impl stacking::Visitor for Pass<'_, '_> {
             None => Cow::Borrowed(entry),
         };
         let values = over.map_or(0, AnimOverride::signature);
-        let owned = over.and_then(OwnedPaints::of);
 
         let fragments = store.fragments_of_box(key);
         let own = fragments.first().and_then(|frag| store.fragment(*frag));
+        let owned = over.and_then(|over| {
+            OwnedPaints::of(over, own.map_or(Edges::ZERO, |fragment| fragment.border))
+        });
 
         let isolation = own.map_or(Isolation::None, |fragment| {
             group::isolation(&style, fragment)

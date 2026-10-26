@@ -43,6 +43,14 @@ pub trait FrameDirty {
         false
     }
 
+    /// Whether a running animation drives `node`'s background colour.
+    ///
+    /// A pass that has no document has no animations and answers `false`.
+    fn animates_background(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        let _ = node;
+        false
+    }
+
     /// Records that `node`'s boxes moved or changed size and nothing else about it changed.
     ///
     /// Stated apart from [`FrameDirty::mark`] because it is a strictly smaller claim, and the
@@ -246,6 +254,17 @@ impl FrameDirty for DocumentMarks<'_> {
                 .get(node)
                 .and_then(|slot| slot.as_deref())
                 .is_some_and(|over| over.opacity.is_some())
+        })
+    }
+
+    fn animates_background(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        node.is_some_and(|node| {
+            self.store
+                .columns()
+                .anim
+                .get(node)
+                .and_then(|slot| slot.as_deref())
+                .is_some_and(|over| over.background_color.is_some())
         })
     }
 
