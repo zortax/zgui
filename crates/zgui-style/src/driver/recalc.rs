@@ -428,6 +428,22 @@ fn compute_style<'doc>(
         data.set_restyled();
     }
 
+    // A frame that only advances the clock writes the animated values into the held style.
+    if let RestyleKind::CascadeWithReplacements(replacements) = kind
+        && let Some(settling) = traversal.settling
+    {
+        let old_primary = data.styles.primary.clone();
+        if let Some(hint) = crate::driver::animations::direct::restyle(
+            context,
+            element,
+            data,
+            replacements,
+            settling,
+        ) {
+            return children_hint(old_primary, data, hint, candidates);
+        }
+    }
+
     let mut important_rules_changed = false;
     // Styles the engine's sharing cache gave: the element they came from went through the shared
     // styles already.
@@ -555,6 +571,17 @@ fn compute_style<'doc>(
     {
         hint |= RestyleHint::RECASCADE_SELF;
     }
+    children_hint(old_primary, data, hint, candidates)
+}
+
+/// The hint the children take from an element restyled from `old_primary`, narrowed to what they
+/// can observe, and the custom properties its inherited map changed by.
+fn children_hint(
+    old_primary: Option<ServoArc<ComputedValues>>,
+    data: &ElementData,
+    hint: RestyleHint,
+    candidates: Option<&[String]>,
+) -> (RestyleHint, Option<Arc<ChangedNames>>) {
     match (old_primary, data.styles.get_primary()) {
         (Some(old), Some(new)) if !engine_hints() => {
             let narrowed = narrowed_children_hint(&old, new, hint);

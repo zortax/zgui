@@ -145,6 +145,12 @@ impl StyleEngine {
         &self.animations
     }
 
+    /// The animations this document is running, to change how they are applied.
+    #[cfg(test)]
+    pub(crate) fn animations_mut(&mut self) -> &mut Animations {
+        &mut self.animations
+    }
+
     /// The surface the current device was built for.
     pub fn viewport(&self) -> Viewport {
         self.viewport

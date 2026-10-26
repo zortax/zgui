@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use style::data::{ElementData, ViewportUnitUsage};
 use style::dom::TElement;
 use style::rule_tree::StrongRuleNode;
@@ -144,6 +144,9 @@ pub(crate) struct RecalcStyle<'a> {
     pub(super) wildcard_names: [style::custom_properties::Name; 4],
     /// The computed styles earlier cascades produced, by rule chain.
     pub(super) shared: &'a super::share::SharedStyles,
+    /// The elements whose animations crossed a lifecycle edge since their last cascade, or `None`
+    /// when every animation tick cascades.
+    pub(super) settling: Option<&'a FxHashSet<NodeIndex>>,
 }
 
 /// What each rule chain reads and declares, by a hash of the declaration blocks it names.
@@ -205,6 +208,7 @@ impl<'a> RecalcStyle<'a> {
         context: SharedStyleContext<'a>,
         refs: &'a RefsCache,
         shared: &'a super::share::SharedStyles,
+        settling: Option<&'a FxHashSet<NodeIndex>>,
     ) -> Self {
         Self {
             context,
@@ -216,6 +220,7 @@ impl<'a> RecalcStyle<'a> {
             wildcard_names: zgui_css::values::custom::WILDCARD_DECLARERS
                 .map(style::custom_properties::Name::from),
             shared,
+            settling,
         }
     }
 

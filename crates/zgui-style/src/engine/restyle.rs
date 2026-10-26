@@ -119,6 +119,7 @@ impl StyleEngine {
                         now: self.animations.now(),
                         refs: &self.refs,
                         shared: &self.shared,
+                        settling: self.animations.settling(),
                     },
                     TraversalFlags::AnimationOnly,
                 );
@@ -144,6 +145,7 @@ impl StyleEngine {
                         now: self.animations.now(),
                         refs: &self.refs,
                         shared: &self.shared,
+                        settling: None,
                     },
                     TraversalFlags::empty(),
                 );
@@ -184,6 +186,14 @@ impl StyleEngine {
         self.unit_readers.retire(document.store());
         // The styles no element holds any more.
         self.shared.sweep();
+        // A crossing is serviced by the cascade this restyle ran. An element still out of the
+        // document keeps its entry until a restyle reaches it.
+        let waiting: Vec<_> = self
+            .animation_waiting
+            .iter()
+            .filter_map(|key| document.store().index_of(*key))
+            .collect();
+        self.animations.keep_settling(&waiting);
 
         // Retire what the traversal consumed. Every other phase's walk retires its own bits as a
         // side effect of doing its work; this pair's does not exist, because the engine owns the
