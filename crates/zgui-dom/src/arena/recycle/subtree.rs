@@ -27,6 +27,15 @@ pub(super) fn drop_detached(document: &mut Document) {
     }
 }
 
+/// Forgets the removed roots that no stage took during the frame.
+///
+/// They name nodes the frame's end has just dropped, so a later reader would read names of nodes
+/// that are gone, and a document whose removals nobody takes would keep every root it ever lost.
+pub(super) fn forget_removed(document: &mut Document) {
+    // SAFETY: an exclusive borrow of the document rules out any other reference into the cell.
+    unsafe { document.edit_state().batch() }.removed.clear();
+}
+
 /// Every node of every subtree the frame removed and did not put back, roots included.
 fn collect(document: &mut Document) -> Vec<NodeIndex> {
     // SAFETY: an exclusive borrow of the document rules out any other reference into the cell.
@@ -162,6 +171,21 @@ mod tests {
         end_frame(&mut document);
         assert!(!holds(&document, row));
         assert_eq!(document.len(), 2, "the document node and the root");
+    }
+
+    #[test]
+    fn removed_roots_nobody_took_do_not_outlive_the_frame() {
+        // A window whose damage stage does not read the list would otherwise keep every root it
+        // ever removed, and a later reader would get names of nodes that are gone.
+        let (mut document, root) = document();
+        let (row, _) = branch(&mut document, root);
+
+        document
+            .edit(&EverythingMatters, |batch| batch.remove(row))
+            .expect("the document is not poisoned");
+        end_frame(&mut document);
+        assert!(document.take_removed().is_empty());
+        assert_eq!(document.store().dropped(), 2, "the row and its text");
     }
 
     #[test]

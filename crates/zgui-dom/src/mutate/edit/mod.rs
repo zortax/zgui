@@ -294,7 +294,8 @@ impl Document {
         core::mem::take(&mut unsafe { self.edit_state().batch() }.snapshots)
     }
 
-    /// Takes the roots of the subtrees removed since this was last called.
+    /// Takes the roots of the subtrees removed since this was last called, or since the frame
+    /// ended if that was later.
     ///
     /// The area a removed subtree occupied has to be repainted, and nothing downstream can work out
     /// where it was: what compares output between frames only sees output that still exists. These

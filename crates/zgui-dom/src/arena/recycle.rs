@@ -36,6 +36,7 @@ use crate::arena::document::Document;
 /// lives.
 pub fn end_frame(document: &mut Document) {
     subtree::drop_detached(document);
+    subtree::forget_removed(document);
     let store = document.store_mut();
     store.arena_mut().recycle();
     store.columns_mut().compact();
