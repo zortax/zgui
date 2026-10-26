@@ -142,8 +142,13 @@ pub(crate) fn fragment_tracked(
     let mut pushed = 0;
     // A box whose decorations draw nothing at all is the overwhelming majority of containers, and
     // asking once is cheaper than three calls that each resolve a paint and push no primitive. A
-    // nested inline box draws its decorations on the lines it is on.
-    if !style.paints_nothing() && !emission.nested_inline {
+    // nested inline box draws its decorations on the lines it is on. A box whose animated colours
+    // are in owned slots is drawn at any alpha, so the slots have primitives to rewrite.
+    let draws = match emission.box_placement.owned {
+        Some((_, owned)) if owned.forces_box() => style.visible,
+        _ => !style.paints_nothing(),
+    };
+    if draws && !emission.nested_inline {
         pushed += box_::outer_shadows(scene, &style, emission.box_placement);
         pushed += box_::background_and_border(
             scene,

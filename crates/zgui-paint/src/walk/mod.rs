@@ -34,7 +34,7 @@ use zgui_layout::fragment::diff::pixels;
 use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
 use zgui_profile::{Counter, counter};
 use zgui_render::RenderCapabilities;
-use zgui_scene::{GroupBoundary, Scene};
+use zgui_scene::{GroupBoundary, PropertyOwner, Scene};
 
 use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
 use crate::emit::group::{self, Isolation};
@@ -45,7 +45,7 @@ use crate::emit::{BoxPlacement, NoGlyphs};
 use zgui_dom::NodeKey;
 use zgui_dom::side::AnimOverride;
 
-use crate::lower::anim::{AnimOverrides, NoAnim};
+use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 use crate::walk::decorate::Decorations;
 use crate::walk::fill::TextFills;
@@ -267,7 +267,7 @@ struct WalkScratch {
     bands: Vec<BoxKey>,
     alpha: Vec<f32>,
     opaque: Vec<bool>,
-    outlines: Vec<Option<(FragKey, PaintStyleRef)>>,
+    outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
     decorations: Decorations,
     text_fills: TextFills,
     named: Vec<AtlasKey>,
@@ -487,9 +487,9 @@ struct Pass<'a, 'b> {
     alpha: Vec<f32>,
     /// Whether the target in force is opaque, innermost last.
     opaque: Vec<bool>,
-    /// One entry for each entered box, innermost last: its first fragment and lowered style when
-    /// the box has an outline, or `None`.
-    outlines: Vec<Option<(FragKey, PaintStyleRef)>>,
+    /// One entry for each entered box, innermost last: its first fragment, its lowered style and
+    /// its owned paints when the box has an outline, or `None`.
+    outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
     /// The text decorations contributed by the boxes still on the walk.
     decorations: Decorations,
     /// The ramps contributed by the boxes still on the walk, for the text inside them.
@@ -702,6 +702,7 @@ impl Pass<'_, '_> {
                 clip: fragment.clip,
                 transform: crate::lower::transform::of(fragment),
                 scale: self.input.scale,
+                owned: None,
             },
             text_placement: TextPlacement {
                 line: fragment.border_box,
@@ -899,7 +900,13 @@ impl Pass<'_, '_> {
     }
 
     /// Emits one fragment, replaying its recorded range when nothing about it changed.
-    fn paint(&mut self, frag: FragKey, style_ref: PaintStyleRef, anim: u64) {
+    fn paint(
+        &mut self,
+        frag: FragKey,
+        style_ref: PaintStyleRef,
+        anim: u64,
+        owned: Option<OwnedPaints>,
+    ) {
         // The store outlives the walk, so the fragment is *borrowed* for as long as this needs it
         // rather than copied out of the way of the mutable borrow below. Copying it was two hundred
         // bytes per piece of every box the damage reached, most of them for pieces the next line
@@ -1016,8 +1023,10 @@ impl Pass<'_, '_> {
                     crate::lower::anim::compose(&mut style, over);
                 }
                 let inline = self.inline_paints(fragment, slices);
-                let emission =
+                let mut emission =
                     self.emission(fragment, &style, &decorations, text_fill.as_ref(), &inline);
+                emission.box_placement.owned =
+                    owned.map(|owned| (PropertyOwner::of(fragment.box_), owned));
                 // Emptied immediately before the encoding rather than after it, so that whatever a
                 // source placed for somebody else — a run visited and then declined, a fragment
                 // that returned early above — cannot be attributed to this fragment and held for
@@ -1148,8 +1157,8 @@ impl stacking::Visitor for Pass<'_, '_> {
         // looks like when one of them is hovered. That is a reason to copy the one box that is
         // animating, and every other box borrows: a `PaintStyle` is several hundred bytes with two
         // inline vectors and a path in it, and at most one box on a screen is being hovered.
-        let anim = self.anim_of(store, key);
-        let style = match anim {
+        let over = self.anim_of(store, key);
+        let style = match over {
             Some(over) => {
                 let mut composed = entry.clone();
                 crate::lower::anim::compose(&mut composed, over);
@@ -1157,7 +1166,8 @@ impl stacking::Visitor for Pass<'_, '_> {
             }
             None => Cow::Borrowed(entry),
         };
-        let anim = anim.map_or(0, AnimOverride::signature);
+        let values = over.map_or(0, AnimOverride::signature);
+        let owned = over.and_then(OwnedPaints::of);
 
         let fragments = store.fragments_of_box(key);
         let own = fragments.first().and_then(|frag| store.fragment(*frag));
@@ -1215,6 +1225,13 @@ impl stacking::Visitor for Pass<'_, '_> {
         // whatever the device can do.
         self.opaque.push(!isolation.needs_target() && self.opaque());
         self.alpha.push(isolation.alpha());
+        // Animated colours go into slots the box owns where the slot can hold exactly what is
+        // drawn: no alpha folded into it, no effect drawing the box, and no line drawing it for
+        // the box. The signature then holds which slots, and a frame that moves only the colours
+        // replays.
+        let owned = owned
+            .filter(|_| self.alpha() >= 1.0 && style.shader.is_none() && !node.is_nested_inline());
+        let anim = owned.map_or(values, OwnedPaints::signature);
         // Kept only for a box whose style, with its animation, has an outline. `leave` composes the
         // animation again.
         self.outlines.push(
@@ -1222,7 +1239,7 @@ impl stacking::Visitor for Pass<'_, '_> {
                 .first()
                 .copied()
                 .filter(|_| style.outline.is_some())
-                .map(|frag| (frag, style_ref)),
+                .map(|frag| (frag, style_ref, owned)),
         );
         // Contributed on the way in and withdrawn on the way out, for the same reason the alpha is:
         // a decoration is drawn across the box's in-flow descendants, and the line boxes that draw
@@ -1233,14 +1250,14 @@ impl stacking::Visitor for Pass<'_, '_> {
         self.text_fills.enter(&node.style, style.text_fill.as_ref());
 
         for &frag in store.fragments_of_box(key) {
-            self.paint(frag, style_ref, anim);
+            self.paint(frag, style_ref, anim, owned);
         }
         true
     }
 
     fn leave(&mut self, store: &LayoutStore, key: BoxKey) {
         // The outline is drawn after the box's descendants, which is Appendix E's step ten.
-        if let Some((frag, style_ref)) = self.outlines.pop().flatten()
+        if let Some((frag, style_ref, owned)) = self.outlines.pop().flatten()
             && let Some(fragment) = store.fragment(frag)
             && self.reaches(self.anchored(fragment, fragment.ink))
             && let Some(entry) = self.painter.styles.get(style_ref)
@@ -1254,7 +1271,8 @@ impl stacking::Visitor for Pass<'_, '_> {
                 }
                 None => Cow::Borrowed(entry),
             };
-            let emission = self.emission(fragment, &style, &[], None, &[]);
+            let mut emission = self.emission(fragment, &style, &[], None, &[]);
+            emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
             self.report.primitives += order::outline(self.scene, &emission);
         }
         self.alpha.pop();
