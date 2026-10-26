@@ -16,8 +16,8 @@ use zgui_geom::CssPx;
 use zgui_profile::{Counter, counter};
 use zgui_scene::PaintSlot;
 use zgui_text::{
-    BreakRequest, BrokenParagraph, InlineBoxGeometry, LineBand, LineBands, ParagraphContent,
-    ParagraphShaper, ShapedParagraph, StyledRun, TextMap,
+    BreakRequest, BrokenParagraph, InlineBoxGeometry, LineBand, LineBands, ParagraphCache,
+    ParagraphContent, ParagraphShaper, ShapedParagraph, StyledRun, TextMap, lay_out,
 };
 use zgui_text_parley::{Controls, FontSystem, ShapedLayout, Shaper};
 use zgui_text_style::{
@@ -560,6 +560,68 @@ fn a_banded_request_thaws_the_paragraph() {
         print(&live.break_lines(&mut warm, &request))
     );
     assert_eq!(form(&frozen, &cold, 2), form(&live, &warm, 2));
+}
+
+/// A paragraph restyled from `nowrap` to `wrap` breaks as a paragraph shaped cold under `wrap`,
+/// whether the cache held it frozen or live.
+#[test]
+fn a_wrap_restyle_breaks_as_a_cold_shape() {
+    let _guard = counting();
+    let text = "Open recent file";
+    let mut map = TextMap::new();
+    map.push(0..text.len(), 0, 0);
+    let runs_in = |wrap_mode| {
+        [StyledRun {
+            text: 0..text.len(),
+            style: Arc::new(TextStyle {
+                wrap_mode,
+                ..support::style()
+            }),
+            brush: PaintSlot(0),
+        }]
+    };
+    let (nowrap, wrap) = (runs_in(WrapMode::NoWrap), runs_in(WrapMode::Wrap));
+    let paragraph = ParagraphStyle::initial();
+    let content = |runs| ParagraphContent {
+        text,
+        map: &map,
+        runs,
+        boxes: &[],
+        paragraph: &paragraph,
+        scale: 1.0,
+    };
+    let width = Some(CssPx(40.0));
+    let mut cold = Shaper::with_controls(fonts(), Controls::Mark);
+    let mut fresh = ParagraphCache::new();
+    let wrapped = content(&wrap);
+    let (_, expected) = lay_out(
+        &mut cold,
+        &mut fresh,
+        &wrapped,
+        &BreakRequest::new(&wrapped, width),
+    );
+    assert!(expected.geometry.lines.len() > 1, "the label wraps at 40");
+
+    for freezing in [true, false] {
+        let mut shaper = Shaper::with_controls(fonts(), Controls::Mark).freezing(freezing);
+        let mut cache = ParagraphCache::new();
+        let unwrapped = content(&nowrap);
+        let (shaped, before) = lay_out(
+            &mut shaper,
+            &mut cache,
+            &unwrapped,
+            &BreakRequest::new(&unwrapped, width),
+        );
+        assert_eq!(shaped.engine.is_frozen(), freezing);
+        assert_eq!(before.geometry.lines.len(), 1);
+        let (_, after) = lay_out(
+            &mut shaper,
+            &mut cache,
+            &wrapped,
+            &BreakRequest::new(&wrapped, width),
+        );
+        assert_eq!(print(&after), print(&expected), "freezing {freezing}");
+    }
 }
 
 /// Fixed seeds of the property, so that each run checks frozen paragraphs at all.

@@ -9,9 +9,10 @@ use crate::paragraph::inline_box::InlineBoxGeometry;
 
 /// Identifies a shaped paragraph.
 ///
-/// It is the content, the *ordered* list of runs with their shaping keys, the atomic inlines'
-/// positions and widths, the paragraph's base direction and the device scale — everything a shaped
-/// result is a function of. Two contexts with equal keys shape to the same glyphs and measure the
+/// It is the content, the *ordered* list of runs with their shaping keys and wrap properties, the
+/// atomic inlines' positions and widths, the paragraph's base direction and the device scale —
+/// everything a shaped result is a function of. The wrap properties are in the key because an
+/// engine can fix them when it shapes. Two contexts with equal keys shape to the same glyphs and measure the
 /// same, so one shaped result serves both.
 ///
 /// The run list is ordered and carries each run's extent, not only its style: moving a boundary
@@ -76,6 +77,11 @@ impl ContentKey {
             // others still hold — and that path already drops the shaping, precisely because what
             // the glyphs name was baked in when they were shaped.
             digest.push(run.brush.0);
+            // An engine can fix the wrap properties when it shapes. Parley does: a result shaped
+            // under `nowrap` breaks as `nowrap` at each later request. Thus each wrap setting gets
+            // its own entry.
+            digest.push(run.style.overflow_wrap);
+            digest.push(run.style.wrap_mode);
         }
         digest.push(content.boxes.len());
         for inline_box in content.boxes {

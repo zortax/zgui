@@ -78,9 +78,9 @@ pub(crate) fn shape(
 /// answer.
 ///
 /// The content is the paragraph's own text and map with the request's runs, boxes and paragraph
-/// style. These match the ones it was shaped with in every property the shaping key covers. A
-/// property of breaking, such as the wrap mode, comes from the request, and the new layout bakes
-/// it in. The lines it last reported stay current, so the next pass may keep them.
+/// style. These match the ones it was shaped with in every property the paragraph key covers,
+/// the wrap properties included. The lines it last reported stay current, so the next pass may
+/// keep them.
 pub(crate) fn thaw(
     shaped: &mut ShapedParagraph<ShapedLayout>,
     request: &BreakRequest<'_>,
