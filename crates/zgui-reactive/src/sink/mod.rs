@@ -3,7 +3,7 @@
 mod node;
 mod slots;
 
-pub(crate) use slots::{clear, drain, release_deferred};
+pub(crate) use slots::{clear, drain, release_deferred, unsubscribe_released};
 
 use core::marker::PhantomData;
 
@@ -32,8 +32,9 @@ use core::marker::PhantomData;
 ///   chain uses one of the flush's rounds.
 /// * [`Owner::pause`](crate::Owner::pause) does not stop a sink.
 ///
-/// Dropping the handle stops the sink and frees its slot. A run that panics stops the sink for
-/// good, and the panic reaches the caller of [`flush`]; the next flush runs the other sinks.
+/// Dropping the handle stops the sink and frees its slot. The next [`flush`] removes it from the
+/// subscriber lists of its sources. A run that panics stops the sink for good, and the panic
+/// reaches the caller of [`flush`]; the next flush runs the other sinks.
 ///
 /// ```
 /// use std::cell::Cell;

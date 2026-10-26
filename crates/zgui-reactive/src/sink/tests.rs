@@ -447,6 +447,68 @@ fn a_rerun_keeps_the_source_list() {
 }
 
 #[test]
+fn a_dropped_sink_leaves_no_entry_in_its_sources() {
+    let (root, _waker) = runtime();
+    let (signal, memo) = root.with(|| {
+        let signal = RwSignal::new(1);
+        (signal, Memo::new(move |_| signal.get() * 2))
+    });
+    let sink = root.with(|| Sink::new(move || _ = signal.get() + memo.get()));
+    let node = super::slots::node(sink.key).expect("the sink is live");
+    assert_eq!(
+        Arc::weak_count(&node),
+        2,
+        "the signal and the memo list the sink"
+    );
+
+    drop(sink);
+    signal.set(2);
+    flush();
+    assert_eq!(Arc::weak_count(&node), 0, "no source lists the sink");
+    root.unmount();
+}
+
+#[test]
+fn a_write_after_a_drop_asks_for_no_frame() {
+    let (root, waker) = runtime();
+    let source = root.with(|| RwSignal::new(0));
+    let sink = root.with(|| Sink::new(move || _ = source.get()));
+    // The source keeps its entry for the sink until the next flush.
+    drop(sink);
+    waker.take();
+
+    source.set(1);
+    assert_eq!(waker.take(), 0, "the freed sink queues nothing");
+    assert!(!flush().needs_another_frame);
+    root.unmount();
+}
+
+#[test]
+fn a_sink_dropped_by_its_own_run_leaves_no_entry_in_its_sources() {
+    let (root, _waker) = runtime();
+    let (source, late) = root.with(|| (RwSignal::new(0), RwSignal::new(0)));
+    let slot: Rc<RefCell<Option<Sink>>> = Rc::new(RefCell::new(None));
+    let sink = root.with(|| {
+        let slot = Rc::clone(&slot);
+        Sink::new(move || {
+            if source.get() == 1 {
+                drop(slot.borrow_mut().take());
+                // A read after the drop subscribes the sink again.
+                late.get();
+            }
+        })
+    });
+    let node = super::slots::node(sink.key).expect("the sink is live");
+    *slot.borrow_mut() = Some(sink);
+
+    source.set(1);
+    flush();
+    assert!(slot.borrow().is_none());
+    assert_eq!(Arc::weak_count(&node), 0, "no source lists the sink");
+    root.unmount();
+}
+
+#[test]
 fn a_cleanup_a_run_registers_stays_until_the_owner_is_disposed_of() {
     let (root, _waker) = runtime();
     let source = root.with(|| RwSignal::new(0));
@@ -521,5 +583,29 @@ fn a_sink_whose_owner_is_gone_runs_with_no_owner() {
         "the run had no owner to resolve the context"
     );
     drop(sink);
+    root.unmount();
+}
+
+#[test]
+fn freed_sinks_leave_their_sources_last_run_first() {
+    let (root, _waker) = runtime();
+    let source = root.with(|| RwSignal::new(0));
+    let sinks: Vec<Sink> = (0..64)
+        .map(|_| root.with(|| Sink::new(move || _ = source.get())))
+        .collect();
+    let numbers: Vec<u32> = sinks
+        .iter()
+        .map(|sink| super::slots::run_number(sink.key))
+        .collect();
+    // The source lists the sinks in the order they ran. Removing the first entry first would move
+    // every entry after it, once for each sink.
+    super::slots::UNSUBSCRIBED.with_borrow_mut(Vec::clear);
+    drop(sinks);
+    flush();
+
+    let order = super::slots::UNSUBSCRIBED.with_borrow_mut(std::mem::take);
+    let mut expected = numbers;
+    expected.reverse();
+    assert_eq!(order, expected, "the last sink to run leaves first");
     root.unmount();
 }

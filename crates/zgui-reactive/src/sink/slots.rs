@@ -72,6 +72,9 @@ struct Entry {
 struct Slot {
     /// Incremented when the slot is freed.
     generation: NonZeroU32,
+    /// The number of the last run of the sink in the slot. A sink is added to the end of the
+    /// subscriber list of each source it reads when it runs.
+    ran: u32,
     /// The sink in the slot, if one is.
     entry: Option<Entry>,
 }
@@ -88,6 +91,11 @@ struct Slots {
     free: Vec<u32>,
     /// The number of live sinks.
     live: usize,
+    /// The number of the last run, of any sink. It wraps.
+    runs: u32,
+    /// The nodes of the sinks freed since the last [`unsubscribe_released`], with the number of
+    /// their last runs.
+    released: Vec<(u32, Arc<Node>)>,
 }
 
 impl Slots {
@@ -97,11 +105,14 @@ impl Slots {
             let index = u32::try_from(self.slots.len()).expect("fewer than 2^32 sinks");
             self.slots.push(Slot {
                 generation: NonZeroU32::MIN,
+                ran: 0,
                 entry: None,
             });
             index
         });
+        let ran = self.next_run();
         let slot = &mut self.slots[index as usize];
+        slot.ran = ran;
         let key = Key {
             index,
             generation: slot.generation,
@@ -127,6 +138,8 @@ impl Slots {
     }
 
     /// Frees the slot `key` names, and returns what it held for the caller to drop.
+    ///
+    /// The node stops queueing its key, and waits for [`unsubscribe_released`].
     fn remove(&mut self, key: Key) -> Option<Entry> {
         let slot = self.slots.get_mut(key.index as usize)?;
         if slot.generation != key.generation {
@@ -134,9 +147,17 @@ impl Slots {
         }
         let entry = slot.entry.take()?;
         slot.generation = slot.generation.checked_add(1).unwrap_or(NonZeroU32::MIN);
+        entry.node.retire();
+        self.released.push((slot.ran, Arc::clone(&entry.node)));
         self.free.push(key.index);
         self.live -= 1;
         Some(entry)
+    }
+
+    /// The number of a new run.
+    fn next_run(&mut self) -> u32 {
+        self.runs = self.runs.wrapping_add(1);
+        self.runs
     }
 }
 
@@ -181,7 +202,8 @@ impl Drop for Release {
 }
 
 /// Frees the slot `key` names. Its closure is dropped after the slots are released, because
-/// dropping it can drop other sinks.
+/// dropping it can drop other sinks. The sink stays in the subscriber lists of its sources until
+/// the next [`unsubscribe_released`].
 pub(crate) fn release(key: Key) {
     let entry = SLOTS
         .try_with(|slots| slots.borrow_mut().remove(key))
@@ -190,10 +212,47 @@ pub(crate) fn release(key: Key) {
     drop(entry);
 }
 
+/// Removes each sink freed since the last call from the subscriber lists of its sources.
+///
+/// The graph removes a subscriber only when the subscriber clears its sources, and a signal keeps
+/// its list across writes. Without this, a source keeps a dead entry, and the allocation of the
+/// node, for each sink that read it, for as long as the source lives.
+///
+/// A source removes an entry in time linear in the entries after it. The sinks are removed in the
+/// reverse order of their last runs, so the rows of a list that all read one source leave it in
+/// linear time, whatever order the rows were dropped in.
+pub(crate) fn unsubscribe_released() {
+    let (runs, mut released) = SLOTS
+        .try_with(|slots| {
+            let mut slots = slots.borrow_mut();
+            (slots.runs, std::mem::take(&mut slots.released))
+        })
+        .unwrap_or_default();
+    // The age of a run, which stays correct when the run numbers wrap. The youngest goes first.
+    released.sort_unstable_by_key(|&(ran, _)| runs.wrapping_sub(ran));
+    #[cfg(test)]
+    UNSUBSCRIBED.with_borrow_mut(|order| order.extend(released.iter().map(|&(ran, _)| ran)));
+    for (_, node) in &released {
+        node.clear_sources(&subscriber(node));
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The run numbers of the sinks [`unsubscribe_released`] removed, in its order.
+    pub(crate) static UNSUBSCRIBED: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+}
+
 /// The node of the live sink `key` names.
 #[cfg(test)]
 pub(crate) fn node(key: Key) -> Option<Arc<Node>> {
     SLOTS.with_borrow_mut(|slots| slots.get_mut(key).map(|entry| Arc::clone(&entry.node)))
+}
+
+/// The number of the last run of the live sink `key` names.
+#[cfg(test)]
+pub(crate) fn run_number(key: Key) -> u32 {
+    SLOTS.with_borrow(|slots| slots.slots[key.index as usize].ran)
 }
 
 /// The number of live sinks on this thread.
@@ -230,9 +289,10 @@ fn run(key: Key) {
             Admission::AlreadyDeferred => return None,
         }
         let run = entry.run.take()?;
-        Some((Arc::clone(&entry.node), run, entry.owner.clone()))
+        let taken = (Arc::clone(&entry.node), run, entry.owner.clone());
+        Some((taken, slots.next_run()))
     });
-    let Some((node, mut run, owner)) = taken else {
+    let Some(((node, mut run, owner), number)) = taken else {
         return;
     };
 
@@ -240,7 +300,8 @@ fn run(key: Key) {
     let subscriber = subscriber(&node);
     // As a render effect does: memos the sink read are brought up to date with the sink as the
     // observer, so a memo that changes does not mark the sink a second time.
-    if subscriber.with_observer(|| node.update_if_necessary()) {
+    let runs = subscriber.with_observer(|| node.update_if_necessary());
+    if runs {
         node.clear_sources(&subscriber);
         match owner.as_ref().and_then(WeakOwner::upgrade) {
             Some(owner) => owner.with(|| subscriber.with_observer(&mut run)),
@@ -248,13 +309,18 @@ fn run(key: Key) {
         }
     }
 
-    // The sink can be dropped during its own run; its closure is then dropped here.
-    let orphan = SLOTS.with_borrow_mut(|slots| match slots.get_mut(key) {
-        Some(entry) => {
-            entry.run = Some(run);
-            None
+    // The sink can be dropped during its own run; its closure is then dropped here. The sources
+    // it read after the drop are removed with the others in `unsubscribe_released`.
+    let orphan = SLOTS.with_borrow_mut(|slots| {
+        if slots.get_mut(key).is_none() {
+            return Some(run);
         }
-        None => Some(run),
+        let slot = &mut slots.slots[key.index as usize];
+        if runs {
+            slot.ran = number;
+        }
+        slot.entry.as_mut().expect("the slot is live").run = Some(run);
+        None
     });
     drop(orphan);
 }
@@ -290,5 +356,6 @@ pub(crate) fn clear() -> bool {
         .unwrap_or_default();
     let cleared = !runs.is_empty();
     drop(runs);
+    unsubscribe_released();
     cleared
 }

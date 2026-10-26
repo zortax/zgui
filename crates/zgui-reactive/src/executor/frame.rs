@@ -115,6 +115,8 @@ pub fn flush() -> FlushOutcome {
         }
     }
 
+    crate::sink::unsubscribe_released();
+
     // A task or sink the budget set aside goes back in its queue without asking for a redraw;
     // `needs_another_frame` is what gets it run.
     let tasks_deferred = pool::release_deferred();

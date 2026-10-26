@@ -10,7 +10,7 @@ use crate::sink::slots::{Key, Queue};
 
 /// A source has definitely changed: run without asking the sources.
 const DIRTY: u8 = 1;
-/// The key is in the queue, or set aside by the budget.
+/// The key is in the queue or set aside by the budget, or the sink is freed.
 const QUEUED: u8 = 2;
 
 /// The state of one sink that the graph and other threads can reach.
@@ -45,6 +45,11 @@ impl Node {
         if self.state.fetch_or(bits | QUEUED, Ordering::AcqRel) & QUEUED == 0 {
             self.queue.push(self.key);
         }
+    }
+
+    /// Sets the queued mark for good, so a mark of a freed sink queues nothing.
+    pub(crate) fn retire(&self) {
+        self.state.fetch_or(QUEUED, Ordering::AcqRel);
     }
 
     /// Clears the queued mark before a run, so a write during the run queues the sink again.
