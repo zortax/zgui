@@ -573,12 +573,12 @@ impl PreparedTables {
         }
 
         let old_paints = self.tables.paints.len();
-        let append_only = table.slots() >= old_paints
+        let in_place = table.slots() >= old_paints
             && self
                 .changed_paints
                 .iter()
-                .all(|id| id.0 as usize >= old_paints);
-        if !append_only {
+                .all(|id| id.0 as usize >= old_paints || self.rewrites_in_place(table, *id));
+        if !in_place {
             let rebuilt = paints(table);
             self.tables.paints = rebuilt.paints;
             self.tables.stops = rebuilt.stops;
@@ -587,6 +587,12 @@ impl PreparedTables {
             return;
         }
 
+        for index in 0..self.changed_paints.len() {
+            let id = self.changed_paints[index];
+            if (id.0 as usize) < old_paints {
+                self.rewrite_paint(table, id);
+            }
+        }
         let old_stops = self.tables.stops.len();
         for index in old_paints..table.slots() {
             push_paint(&mut self.tables, table.get(PaintId(index as u32)));
@@ -596,6 +602,43 @@ impl PreparedTables {
             .stops
             .slots
             .extend((old_stops..self.tables.stops.len()).map(|index| index as u32));
+    }
+
+    /// Whether the slot `id` can take its new paint where it stands.
+    ///
+    /// True for a flat colour that replaced a flat colour, and for four side colours that replaced
+    /// four: neither moves another slot's stops. An owned paint an animation rewrites is one of
+    /// the two, so a frame of a colour animation copies the slots it changed and nothing else.
+    fn rewrites_in_place(&self, table: &PaintTable, id: PaintId) -> bool {
+        let held = &self.tables.paints[id.0 as usize];
+        match table.get(id) {
+            Some(Paint::Solid(_)) => held.kind == kind::SOLID,
+            Some(Paint::Sides(_)) => {
+                held.kind == kind::SIDES
+                    && held.stop_count == 4
+                    && (held.stop_start as usize) + 4 <= self.tables.stops.len()
+            }
+            _ => false,
+        }
+    }
+
+    /// Writes the new paint of a slot [`PreparedTables::rewrites_in_place`] admitted.
+    fn rewrite_paint(&mut self, table: &PaintTable, id: PaintId) {
+        let slot = id.0 as usize;
+        match table.get(id) {
+            Some(Paint::Solid(color)) => {
+                self.tables.paints[slot].color = color.to_premultiplied_srgb();
+                self.dirty.paints.slots.push(id.0);
+            }
+            Some(Paint::Sides(colors)) => {
+                let start = self.tables.paints[slot].stop_start as usize;
+                for (side, color) in colors.iter().enumerate() {
+                    self.tables.stops[start + side].color = color.to_premultiplied_srgb();
+                    self.dirty.stops.slots.push((start + side) as u32);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn update_clips(&mut self, table: &ClipTable, coverage: ChangeCoverage) {
@@ -1202,6 +1245,47 @@ mod tests {
         assert_eq!(prepared.dirty().paints.slots, vec![id.0]);
         assert!(!prepared.dirty().paints.all);
         assert_eq!(prepared.tables().paints[id.0 as usize].kind, kind::SOLID);
+    }
+
+    #[test]
+    fn a_rewritten_owned_paint_dirties_only_its_own_slot() {
+        use zgui_scene::{Paint, PaintOwner, PaintRole};
+        let mut scene = zgui_scene::Scene::new();
+        let owner = PropertyOwner::new(7).expect("a handle is never empty");
+        let fill = PaintOwner::new(owner, PaintRole::Background);
+        let stroke = PaintOwner::new(owner, PaintRole::BorderSides);
+        let red = zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0);
+        let grey = zgui_color::Color::srgb(0.5, 0.5, 0.5, 1.0);
+        scene.paints.solid(red);
+        let solid = scene.paints.owned(fill, Paint::Solid(red));
+        let sides = scene.paints.owned(stroke, Paint::Sides([red; 4]));
+        scene.paints.solid(grey);
+        let mut prepared = PreparedTables::default();
+        prepared.update(&scene);
+        prepared.update(&scene);
+
+        scene.paints.owned(fill, Paint::Solid(grey));
+        scene
+            .paints
+            .owned(stroke, Paint::Sides([red, grey, red, grey]));
+        prepared.update(&scene);
+        let dirty = prepared.dirty();
+        assert!(
+            !dirty.paints.all && !dirty.stops.all,
+            "the table was rebuilt"
+        );
+        assert_eq!(dirty.paints.slots, vec![solid.index]);
+        assert_eq!(dirty.stops.slots.len(), 4);
+        assert_eq!(
+            prepared.tables().paints,
+            paints(&scene.paints).paints,
+            "the slots written in place hold what a rebuild holds"
+        );
+        assert_eq!(prepared.tables().stops, paints(&scene.paints).stops);
+        assert_eq!(
+            prepared.tables().paints[sides.index as usize].kind,
+            kind::SIDES
+        );
     }
 
     #[test]

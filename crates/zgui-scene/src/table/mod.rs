@@ -267,6 +267,11 @@ impl<K: TableId, V: Content> Table<K, V> {
         K::from_index(slot)
     }
 
+    /// The id of the entry equal to `value`, without interning it or marking it as used.
+    pub fn find(&self, value: &V) -> Option<K> {
+        self.lookup(value.content_hash(), value).map(K::from_index)
+    }
+
     /// The value `id` resolves to, without marking it as used.
     ///
     /// Reading without marking is what a transcript or an assertion wants; a frame that is going to

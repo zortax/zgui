@@ -112,7 +112,8 @@ pub use crate::id::{
 pub use crate::ops::PaintOp;
 pub use crate::order::BoundsTree;
 pub use crate::paint::{
-    GradientKind, Paint, PaintKind, PaintRef, PaintTable, TextPaint, TextPaintTable,
+    GradientKind, Paint, PaintEntry, PaintKind, PaintOwner, PaintRef, PaintRewrite, PaintRole,
+    PaintTable, TextPaint, TextPaintTable,
 };
 pub use crate::pass::{
     MarkBin, MarkPlan, Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassPlan,
