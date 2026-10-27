@@ -12,7 +12,7 @@ publish = false
 #
 # The shipped component gallery, driven in process against the headless platform with the real
 # cascade, the real layout, the real font engine and the real glyph rasteriser. Two things run on
-# top of that: the *scenarios*, five end-to-end interactions each with a band around every number
+# top of that: the *scenarios*, seven end-to-end interactions each with a band around every number
 # it reports, which is what a gate compares one run against the recorded ones; and the *phases*,
 # the exploratory measurements and differentials a person reaches for once a band has gone red.
 [dependencies]

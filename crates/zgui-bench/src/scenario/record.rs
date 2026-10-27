@@ -1,4 +1,4 @@
-//! The ratchet: run all five, store what they said, regenerate the document, fail on a regression.
+//! The ratchet: run all seven, store what they said, regenerate the document, fail on a regression.
 //!
 //! Three obligations, and they are separable on purpose.
 //!

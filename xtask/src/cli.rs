@@ -13,7 +13,7 @@ usage:
                                       which is also a step of `ci`
   cargo xtask wall-clock              run the wall-clock budget targets in release,
                                       which is also a step of `ci`
-  cargo xtask perf                    run the five end-to-end scenarios against their
+  cargo xtask perf                    run the seven end-to-end scenarios against their
                                       bands, store the run and regenerate
                                       docs/performance.md, which is also a step of `ci`
   cargo xtask perf pacing [size] [s]  measure a scripted scroll's frame intervals as a
