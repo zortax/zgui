@@ -549,6 +549,7 @@ fn composite(
         bounds.to_unit(),
         builder.extent_of(filtered.target),
         filtered.target.scale(),
+        filtered.target.origin(),
         clip,
     )
     .with_opacity(opacity)

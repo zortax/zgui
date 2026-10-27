@@ -28,10 +28,12 @@ pub fn plan(
     let destination = TargetRef::Pool(slot);
     let params = builder.stage_effect_filter(&EffectFilterParams::new(
         region,
-        builder.extent_of(source),
-        source.scale(),
-        builder.extent_of(destination),
-        destination.scale(),
+        (builder.extent_of(source), source.scale(), source.origin()),
+        (
+            builder.extent_of(destination),
+            destination.scale(),
+            destination.origin(),
+        ),
         builder.frame_clock(),
     ));
     builder.begin_pass(destination, region);

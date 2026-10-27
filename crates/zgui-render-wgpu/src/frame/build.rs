@@ -1,6 +1,6 @@
 //! Assembling a frame's segments, before any pass is opened.
 
-use zgui_geom::{Device, Rect, Size};
+use zgui_geom::{Device, Point, Rect, Size};
 
 use crate::bind::globals::{Globals, SubpixelOrder};
 use crate::buffer::slots::SlotBuffer;
@@ -51,6 +51,9 @@ impl FramePlan {
     }
 }
 
+/// What decides a per-target block: the kind of target, its origin and the region it covers.
+type GlobalsKey = (usize, Point<i32, Device>, Size<i32, Device>);
+
 /// Builds a [`FramePlan`], lending targets and staging blocks as it goes.
 ///
 /// Everything the recorder will need is resolved here: which target each pass writes, what its
@@ -87,9 +90,12 @@ pub struct PlanBuilder<'gpu> {
     composed_format: wgpu::TextureFormat,
     /// The texel extent the composed target is allocated at.
     composed_extent: Size<i32, Device>,
-    /// The offsets of the per-target blocks already staged: full resolution, half resolution, and
-    /// a bin page.
-    staged_globals: [Option<u32>; 3],
+    /// The first per-target block staged for each kind of target at the surface origin: full
+    /// resolution, half resolution, and a bin page. Each holds the region it covers and its
+    /// offset.
+    staged_globals: [Option<(Size<i32, Device>, u32)>; 3],
+    /// Every other staged block, by kind, origin and covered region.
+    staged_other: Vec<(GlobalsKey, u32)>,
     /// The plan so far.
     plan: FramePlan,
     /// The pass currently being filled.
@@ -138,6 +144,7 @@ impl<'gpu> PlanBuilder<'gpu> {
             composed_format,
             composed_extent,
             staged_globals: [None; 3],
+            staged_other: Vec::new(),
             plan: FramePlan::default(),
             open: None,
             lent: Vec::new(),
@@ -177,7 +184,8 @@ impl<'gpu> PlanBuilder<'gpu> {
     /// needs.
     ///
     /// Never reduces the resolution: a copy into a target of another resolution puts every texel
-    /// at the wrong place. Returns `None` when the budget will not take the target.
+    /// at the wrong place. The copy measures each side from its own origin, so the two origins
+    /// can differ. Returns `None` when the budget will not take the target.
     pub fn acquire_like(&mut self, like: TargetRef) -> Option<GroupSlot> {
         let slot = self
             .pool
@@ -317,24 +325,35 @@ impl<'gpu> PlanBuilder<'gpu> {
 
     /// The offset of the block describing `target`, staging it the first time.
     fn globals_for(&mut self, target: TargetRef) -> u32 {
-        let (index, region) = match target {
+        let (kind, region) = match target {
             TargetRef::MarksPage(_) => (2, self.mark_extent),
-            _ => (
-                usize::from(target.scale() == TargetScale::Half),
-                self.region,
+            TargetRef::Composed => (0, self.region),
+            TargetRef::Pool(slot) => (
+                usize::from(slot.scale() == TargetScale::Half),
+                self.pool.covered(),
             ),
         };
-        let scale = target.scale();
-        match self.staged_globals[index] {
-            Some(offset) => offset,
-            None => {
-                let block = Globals::for_target(region, scale, self.subpixel_order)
-                    .with_frame(self.frame_clock);
-                let offset = self.globals.stage(&block);
-                self.staged_globals[index] = Some(offset);
-                offset
-            }
+        let origin = target.origin();
+        if origin == Point::ORIGIN
+            && let Some((held, offset)) = self.staged_globals[kind]
+            && held == region
+        {
+            return offset;
         }
+        let key = (kind, origin, region);
+        if let Some(&(_, offset)) = self.staged_other.iter().find(|(held, _)| *held == key) {
+            return offset;
+        }
+        let block = Globals::for_target(region, target.scale(), self.subpixel_order)
+            .with_frame(self.frame_clock)
+            .with_origin(origin);
+        let offset = self.globals.stage(&block);
+        if origin == Point::ORIGIN && self.staged_globals[kind].is_none() {
+            self.staged_globals[kind] = Some((region, offset));
+        } else {
+            self.staged_other.push((key, offset));
+        }
+        offset
     }
 
     /// Opens a pass into `target`, scissored to `scissor`, ending whatever preceded it.

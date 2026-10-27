@@ -497,6 +497,13 @@ impl WgpuRenderer {
         &self.groups
     }
 
+    /// Starts every isolated target `margin` device pixels above and to the left of the surface
+    /// origin, as the test mode [`GroupPool::POISON_ORIGIN`] does.
+    #[doc(hidden)]
+    pub fn set_target_margin(&mut self, margin: i32) {
+        self.groups.set_poison_margin(margin);
+    }
+
     /// How many bytes of isolated targets may be resident before the pool reduces resolution.
     ///
     /// Setting it discards every target the pool holds, because a budget that is now too small has

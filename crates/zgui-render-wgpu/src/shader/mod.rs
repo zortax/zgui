@@ -121,13 +121,17 @@ pub fn structures(module: Module) -> Vec<Reflected> {
             Module::Blur => vec![reflected!(
                 crate::pipeline::blur::BlurParams,
                 "BlurParams",
-                [extents, kernel, sampling, valid]
+                [extents, kernel, sampling, valid, origins]
             )],
             _ => Vec::new(),
         };
     }
     let mut structures = vec![
-        reflected!(Globals, "Globals", [viewport, gamma_ratios, text, frame]),
+        reflected!(
+            Globals,
+            "Globals",
+            [viewport, gamma_ratios, text, frame, origin]
+        ),
         reflected!(
             GpuClip,
             "Clip",
@@ -258,7 +262,8 @@ pub fn structures(module: Module) -> Vec<Reflected> {
                 matrix1,
                 matrix2,
                 matrix3,
-                matrix_offset
+                matrix_offset,
+                origin
             ]
         ),
         Module::External => reflected!(

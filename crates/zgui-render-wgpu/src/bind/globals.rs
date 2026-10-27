@@ -1,7 +1,7 @@
 //! The block every pipeline reads once per frame.
 
 use bytemuck::{Pod, Zeroable};
-use zgui_geom::{Device, Size};
+use zgui_geom::{Device, Point, Size};
 use zgui_scene::FrameClock;
 
 use crate::target::scale::TargetScale;
@@ -47,6 +47,11 @@ pub struct Globals {
     /// the same pass as everything around it and a second uniform would be a second dynamic offset
     /// on every draw that never reads it.
     pub frame: [f32; 4],
+    /// The device pixel the target's first texel holds, then two unused lanes.
+    ///
+    /// A texel is `(device - origin) * scale`. It is zero for a target that covers the whole
+    /// surface.
+    pub origin: [f32; 4],
 }
 
 impl Globals {
@@ -76,7 +81,14 @@ impl Globals {
                 0.0,
             ],
             frame: [0.0; 4],
+            origin: [0.0; 4],
         }
+    }
+
+    /// The same block, for a target whose first texel holds the device pixel `origin`.
+    pub fn with_origin(mut self, origin: Point<i32, Device>) -> Self {
+        self.origin = [origin.x as f32, origin.y as f32, 0.0, 0.0];
+        self
     }
 
     /// The same block, telling application effects what frame they are drawing in.
@@ -144,6 +156,20 @@ mod tests {
         assert_eq!(
             half.viewport[0] * (1.0 / half.viewport[2]),
             full.viewport[0]
+        );
+    }
+
+    #[test]
+    fn a_target_origin_reaches_the_shader_and_defaults_to_the_surface_origin() {
+        use zgui_geom::Point;
+
+        let globals = Globals::new(Size::new(64, 32), SubpixelOrder::default());
+        assert_eq!(globals.origin, [0.0; 4]);
+        let moved = globals.with_origin(Point::new(-6, 40));
+        assert_eq!(moved.origin, [-6.0, 40.0, 0.0, 0.0]);
+        assert_eq!(
+            moved.viewport, globals.viewport,
+            "the origin moves no extent"
         );
     }
 

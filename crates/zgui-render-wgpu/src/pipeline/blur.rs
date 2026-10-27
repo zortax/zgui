@@ -1,7 +1,7 @@
 //! What one pass of the separable blur is told.
 
 use bytemuck::{Pod, Zeroable};
-use zgui_geom::{Device, Rect, Size};
+use zgui_geom::{Device, Point, Rect, Size};
 
 use crate::target::scale::TargetScale;
 
@@ -42,6 +42,8 @@ pub struct BlurParams {
     pub sampling: [f32; 4],
     /// The corners of the part of the source that was written, in source texels.
     pub valid: [f32; 4],
+    /// The device pixel the source's first texel holds, then the same for the destination.
+    pub origins: [f32; 4],
 }
 
 impl BlurParams {
@@ -54,17 +56,21 @@ impl BlurParams {
     pub const MAX_TAPS: f32 = 16.0;
 
     /// The parameters for the 2:1 downsample that begins the chain.
+    ///
+    /// `source` and `destination` are the two targets' extents in texels and the device pixels
+    /// their first texels hold.
     pub fn downsample(
-        source: Size<i32, Device>,
+        source: (Size<i32, Device>, Point<i32, Device>),
         source_scale: TargetScale,
-        destination: Size<i32, Device>,
+        destination: (Size<i32, Device>, Point<i32, Device>),
         written: Rect<i32, Device>,
     ) -> Self {
         Self {
-            extents: extents(source, destination),
+            extents: extents(source.0, destination.0),
             kernel: [0.0, 0.0, 0.0, 0.0],
             sampling: [source_scale.factor(), TargetScale::Half.factor(), 1.0, 1.0],
-            valid: valid(written, source_scale),
+            valid: valid(written, source_scale, source.1),
+            origins: origins(source.1, destination.1),
         }
     }
 
@@ -73,9 +79,13 @@ impl BlurParams {
     /// The deviation is converted into the source's own texels here, because the pair of axis
     /// passes runs at half resolution and a deviation left in device pixels would blur twice as
     /// far as the content asked for.
+    ///
+    /// Both targets have `extent` texels at `scale`. `origins` are the device pixels the source's
+    /// and the destination's first texels hold.
     pub fn axis(
         extent: Size<i32, Device>,
         scale: TargetScale,
+        origins: [Point<i32, Device>; 2],
         axis: BlurAxis,
         deviation: f32,
         written: Rect<i32, Device>,
@@ -89,7 +99,8 @@ impl BlurParams {
             extents: extents(extent, extent),
             kernel: [direction[0], direction[1], texels, taps],
             sampling: [scale.factor(), scale.factor(), spacing, 0.0],
-            valid: valid(written, scale),
+            valid: valid(written, scale, origins[0]),
+            origins: self::origins(origins[0], origins[1]),
         }
     }
 
@@ -100,13 +111,23 @@ impl BlurParams {
 }
 
 /// A device-pixel region in a target's own texels, as the block holds it.
-fn valid(written: Rect<i32, Device>, scale: TargetScale) -> [f32; 4] {
-    let texels = scale.texels(written);
+fn valid(written: Rect<i32, Device>, scale: TargetScale, origin: Point<i32, Device>) -> [f32; 4] {
+    let texels = scale.texels_at(written, origin);
     [
         texels.left() as f32,
         texels.top() as f32,
         texels.right() as f32,
         texels.bottom() as f32,
+    ]
+}
+
+/// The source and destination origins, as the block holds them.
+fn origins(source: Point<i32, Device>, destination: Point<i32, Device>) -> [f32; 4] {
+    [
+        source.x as f32,
+        source.y as f32,
+        destination.x as f32,
+        destination.y as f32,
     ]
 }
 
@@ -136,6 +157,7 @@ mod tests {
         let params = BlurParams::axis(
             Size::new(64, 64),
             TargetScale::Half,
+            [Point::ORIGIN; 2],
             BlurAxis::Horizontal,
             8.0,
             everywhere(),
@@ -151,6 +173,7 @@ mod tests {
         let narrow = BlurParams::axis(
             Size::new(64, 64),
             TargetScale::Full,
+            [Point::ORIGIN; 2],
             BlurAxis::Vertical,
             2.0,
             everywhere(),
@@ -161,6 +184,7 @@ mod tests {
         let wide = BlurParams::axis(
             Size::new(64, 64),
             TargetScale::Full,
+            [Point::ORIGIN; 2],
             BlurAxis::Vertical,
             40.0,
             everywhere(),
@@ -178,13 +202,38 @@ mod tests {
     #[test]
     fn the_downsample_halves_the_destination_and_says_which_grid_it_wrote() {
         let params = BlurParams::downsample(
-            Size::new(64, 64),
+            (Size::new(64, 64), Point::ORIGIN),
             TargetScale::Full,
-            Size::new(32, 32),
+            (Size::new(32, 32), Point::ORIGIN),
             everywhere(),
         );
         assert_eq!(params.extents, [64.0, 64.0, 32.0, 32.0]);
         assert_eq!(params.sampling[0], 1.0);
         assert_eq!(params.sampling[1], 0.5);
+        assert_eq!(params.origins, [0.0; 4]);
+    }
+
+    #[test]
+    fn what_was_written_is_measured_from_the_source_origin() {
+        let written = Rect::new(Point::new(10, 20), Size::new(30, 40));
+        let downsample = BlurParams::downsample(
+            (Size::new(64, 64), Point::new(4, 8)),
+            TargetScale::Full,
+            (Size::new(32, 32), Point::new(2, 6)),
+            written,
+        );
+        assert_eq!(downsample.valid, [6.0, 12.0, 36.0, 52.0]);
+        assert_eq!(downsample.origins, [4.0, 8.0, 2.0, 6.0]);
+
+        let axis = BlurParams::axis(
+            Size::new(32, 32),
+            TargetScale::Half,
+            [Point::new(2, 6), Point::new(0, 0)],
+            BlurAxis::Vertical,
+            4.0,
+            written,
+        );
+        assert_eq!(axis.valid, [4.0, 7.0, 19.0, 27.0]);
+        assert_eq!(axis.origins, [2.0, 6.0, 0.0, 0.0]);
     }
 }

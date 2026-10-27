@@ -49,9 +49,9 @@ pub fn plan(
     let half_extent = builder.extent(TargetScale::Half);
 
     let downsample = builder.stage_blur(&BlurParams::downsample(
-        source_extent,
+        (source_extent, source.origin()),
         source.scale(),
-        half_extent,
+        (half_extent, ping.origin()),
         region,
     ));
     // Every region a pass carries is in device pixels; a pass into a half-resolution target has
@@ -70,6 +70,7 @@ pub fn plan(
         let params = builder.stage_blur(&BlurParams::axis(
             half_extent,
             TargetScale::Half,
+            [from.origin(), to.origin()],
             axis,
             deviation,
             region,

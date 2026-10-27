@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use zgui_geom::{Device, Rect};
+use zgui_geom::{Device, Rect, Size};
 use zgui_profile::{Counter, counter};
 use zgui_scene::{Batch, ExternalTextureId};
 
@@ -65,7 +65,7 @@ pub struct Recorder<'frame> {
     /// The bin pages union marks write their coverage into.
     pub marks: &'frame crate::target::marks::MarksScratch,
     /// The device extent of one bin page, which a page pass's block describes.
-    pub mark_extent: zgui_geom::Size<i32, Device>,
+    pub mark_extent: Size<i32, Device>,
     /// The frame's pass timing, when timing is on.
     pub(crate) timer: Option<&'frame mut GpuTimer>,
 }
@@ -119,19 +119,22 @@ impl Recorder<'_> {
                 let Some(to) = self.texture(destination) else {
                     return;
                 };
-                // Both targets are at one resolution, so the device region names the same texels
-                // in each.
+                // Both targets are at one resolution, so the device region is the same number of
+                // texels in each. Each side measures it from its own origin.
                 debug_assert_eq!(source.scale(), destination.scale());
-                let region = clamp(source.scale().texels(region), from, to);
-                if region.is_empty() {
+                let scale = source.scale();
+                let read = scale.texels_at(region, source.origin());
+                let write = scale.texels_at(region, destination.origin());
+                let (read, write) = clamp_copy(read, write, size_of(from), size_of(to));
+                if read.is_empty() {
                     return;
                 }
                 encoder.copy_texture_to_texture(
-                    texel_copy(from, region),
-                    texel_copy(to, region),
+                    texel_copy(from, read),
+                    texel_copy(to, write),
                     wgpu::Extent3d {
-                        width: region.size.width as u32,
-                        height: region.size.height as u32,
+                        width: read.size.width as u32,
+                        height: read.size.height as u32,
                         depth_or_array_layers: 1,
                     },
                 );
@@ -183,8 +186,8 @@ impl Recorder<'_> {
             multiview_mask: None,
         });
         // A target is allocated at a size *class*, so it is usually larger than the region it
-        // holds. The viewport maps device coordinates onto the region rather than onto the whole
-        // allocation; without it everything would be drawn at the wrong scale.
+        // holds. The viewport maps the target's texels, measured from its origin, onto the region
+        // it covers; without it everything would be drawn at the wrong scale.
         pass.set_viewport(
             0.0,
             0.0,
@@ -675,10 +678,10 @@ impl Recorder<'_> {
     }
 
     /// A target's extent in texels.
-    fn extent(&self, target: TargetRef) -> zgui_geom::Size<i32, Device> {
+    fn extent(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
             TargetRef::Composed => self.composed.used().size,
-            TargetRef::Pool(slot) => slot.scale().extent(self.pool.region()),
+            TargetRef::Pool(slot) => slot.scale().extent(self.pool.covered()),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
     }
@@ -767,27 +770,42 @@ fn timed_work(target: TargetRef) -> TimedWork {
 fn scaled(
     rect: Rect<i32, Device>,
     target: TargetRef,
-    extent: zgui_geom::Size<i32, Device>,
+    extent: Size<i32, Device>,
 ) -> Rect<i32, Device> {
     target
         .scale()
-        .texels(rect)
+        .texels_at(rect, target.origin())
         .intersection(Rect::new(zgui_geom::Point::new(0, 0), extent))
         .unwrap_or(Rect::ZERO)
 }
 
-/// `region` cut to what both textures actually hold.
-fn clamp(region: Rect<i32, Device>, from: &wgpu::Texture, to: &wgpu::Texture) -> Rect<i32, Device> {
-    let bound = |texture: &wgpu::Texture| {
-        Rect::new(
-            zgui_geom::Point::new(0, 0),
-            zgui_geom::Size::new(texture.width() as i32, texture.height() as i32),
-        )
-    };
-    region
+/// The two sides of a copy, cut to what a source of size `from` and a destination of size `to`
+/// actually hold.
+///
+/// `read` and `write` are the same size, at different texels when the two targets start at
+/// different device pixels. Each cut applies to both sides, so they stay the same size.
+fn clamp_copy(
+    read: Rect<i32, Device>,
+    write: Rect<i32, Device>,
+    from: Size<i32, Device>,
+    to: Size<i32, Device>,
+) -> (Rect<i32, Device>, Rect<i32, Device>) {
+    let bound = |size| Rect::new(zgui_geom::Point::new(0, 0), size);
+    // The destination's bounds in the source's texels, and back.
+    let forward = read.origin.offset_from(write.origin);
+    let back = write.origin.offset_from(read.origin);
+    match read
         .intersection(bound(from))
-        .and_then(|clipped| clipped.intersection(bound(to)))
-        .unwrap_or(Rect::ZERO)
+        .and_then(|clipped| clipped.intersection(bound(to).translate(forward)))
+    {
+        Some(read) => (read, read.translate(back)),
+        None => (Rect::ZERO, Rect::ZERO),
+    }
+}
+
+/// The texel size of `texture`.
+fn size_of(texture: &wgpu::Texture) -> Size<i32, Device> {
+    Size::new(texture.width() as i32, texture.height() as i32)
 }
 
 /// One corner of a copy between two textures.
@@ -820,7 +838,7 @@ fn decode_texture(packed: u32) -> zgui_atlas::TextureId {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_texture;
+    use super::{clamp_copy, decode_texture};
     use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
     use zgui_geom::{Point, Rect, Size};
     use zgui_scene::SpriteTile;
@@ -841,5 +859,44 @@ mod tests {
                 assert_eq!(decode_texture(packed), TextureId::new(kind, index));
             }
         }
+    }
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect<i32, zgui_geom::Device> {
+        Rect::new(Point::new(x, y), Size::new(width, height))
+    }
+
+    #[test]
+    fn a_smaller_destination_at_another_origin_cuts_both_sides_of_a_copy() {
+        // Device pixels (10,10)-(70,70), from a 100x100 source at the device origin into a 40x40
+        // destination that starts at device (20,20).
+        let (read, write) = clamp_copy(
+            rect(10, 10, 60, 60),
+            rect(-10, -10, 60, 60),
+            Size::new(100, 100),
+            Size::new(40, 40),
+        );
+        assert_eq!(write, rect(0, 0, 40, 40));
+        assert_eq!(read, rect(20, 20, 40, 40));
+
+        // A 50x50 source cuts the far edge first, and the destination cuts the near edge.
+        let (read, write) = clamp_copy(
+            rect(10, 10, 60, 60),
+            rect(-10, -10, 60, 60),
+            Size::new(50, 50),
+            Size::new(40, 40),
+        );
+        assert_eq!(read, rect(20, 20, 30, 30));
+        assert_eq!(write, rect(0, 0, 30, 30));
+    }
+
+    #[test]
+    fn a_copy_outside_the_destination_copies_nothing() {
+        let (read, write) = clamp_copy(
+            rect(0, 0, 10, 10),
+            rect(50, 50, 10, 10),
+            Size::new(100, 100),
+            Size::new(40, 40),
+        );
+        assert_eq!((read, write), (Rect::ZERO, Rect::ZERO));
     }
 }

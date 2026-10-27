@@ -26,6 +26,10 @@ struct Globals {
     // Read by application effects and by nothing the framework draws, which is why it is one lane
     // of the block every pipeline already binds rather than a block of its own.
     frame: vec4<f32>,
+    // xy: the device pixel the target's first texel holds. A texel is `(device - xy) * zw` of
+    //     `viewport`.
+    // zw: unused.
+    origin: vec4<f32>,
 }
 
 // A box on the device pixel grid: origin then extent.
@@ -220,7 +224,7 @@ fn unit_corner(vertex: u32) -> vec2<f32> {
 // A device-space point, transformed and projected into the current target's clip space.
 fn to_clip_position(point: vec2<f32>, spatial_id: u32) -> vec4<f32> {
     let world = spatial[spatial_id].matrix * vec4<f32>(point, 0.0, 1.0);
-    let texel = world.xy * globals.viewport.zw;
+    let texel = (world.xy - globals.origin.xy * world.w) * globals.viewport.zw;
     let ndc = vec2<f32>(
         texel.x / globals.viewport.x * 2.0 - world.w,
         world.w - texel.y / globals.viewport.y * 2.0,
@@ -234,7 +238,7 @@ fn to_clip_position(point: vec2<f32>, spatial_id: u32) -> vec4<f32> {
 // exactly the same geometry as the composed one — at half the sample rate, which is the entire
 // difference between the two and the only one there should be.
 fn device_position(position: vec2<f32>) -> vec2<f32> {
-    return position / globals.viewport.zw;
+    return position / globals.viewport.zw + globals.origin.xy;
 }
 
 // The device-space point a unit-square corner maps to, with one pixel of slack on every side so an

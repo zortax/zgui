@@ -1,6 +1,6 @@
 //! The pool of targets isolated content is composed in.
 
-use zgui_geom::{Device, Size};
+use zgui_geom::{Device, Point, Size};
 use zgui_profile::{Counter, counter};
 
 use crate::gpu::device::Gpu;
@@ -19,9 +19,21 @@ pub struct GroupSlot {
     scale: TargetScale,
     /// What it holds, which decides what may be copied into it.
     format: wgpu::TextureFormat,
+    /// The device pixel its first texel holds.
+    origin: Point<i32, Device>,
 }
 
 impl GroupSlot {
+    /// The device pixel this target's first texel holds.
+    ///
+    /// A texel of the target is `(device - origin) * scale`. Every lease starts at the surface
+    /// origin, because every target covers the whole region, unless the test mode
+    /// [`GroupPool::POISON_ORIGIN`] moves it. The origin is even on both axes, so the texel grid
+    /// of a half-resolution target stays anchored to the device origin.
+    pub fn origin(self) -> Point<i32, Device> {
+        self.origin
+    }
+
     /// The resolution this target is held at.
     pub fn scale(self) -> TargetScale {
         self.scale
@@ -55,8 +67,10 @@ struct Entry {
 ///
 /// Every target covers the whole of the composed target's region, at one of two resolutions, so
 /// that content drawn into one lands at exactly the device coordinates it would have landed at
-/// without the isolation — no second coordinate system, and therefore no chance of a clip
-/// evaluated in one and a shape in another.
+/// without the isolation. All targets share device-pixel addressing, so a clip and a shape are
+/// always evaluated in the same coordinates. Each lease carries the device pixel its first texel
+/// holds ([`GroupSlot::origin`]), and every pass that writes or reads a target maps device pixels
+/// to texels through it.
 ///
 /// **There is no depth limit.** A fixed one is a correctness cliff: CSS nests filters and
 /// stacking contexts as deep as an author writes them, and a document that exceeds the limit does
@@ -77,6 +91,10 @@ struct Entry {
 pub struct GroupPool {
     /// The device-pixel region every target covers.
     region: Size<i32, Device>,
+    /// How many device pixels every target starts above and to the left of the surface origin.
+    ///
+    /// Zero, unless the test mode [`GroupPool::POISON_ORIGIN`] sets it.
+    margin: i32,
     /// The targets. A freed target leaves a hole, so that every other slot keeps its index.
     entries: Vec<Option<Entry>>,
     /// How many bytes of targets may be resident.
@@ -112,6 +130,16 @@ impl GroupPool {
     /// it. On a large surface [`GroupPool::BUDGET`] holds fewer, and the pool degrades.
     pub const SURFACE_TARGETS: u64 = 6;
 
+    /// The variable that sets a test mode, which moves every target's origin away from the
+    /// surface origin.
+    ///
+    /// Set `ZGUI_POISON_TARGET_ORIGIN=<int>` to start every target `P` device pixels above and to
+    /// the left of the surface origin, with `P` rounded up to an even number. Each target grows by
+    /// `P` on each axis, so it still covers the whole region, and the pixels stay the same. A
+    /// reader that uses a device rectangle as a texel rectangle of a pool target is then wrong by
+    /// `P` texels, and a pixel test finds it.
+    pub const POISON_ORIGIN: &str = "ZGUI_POISON_TARGET_ORIGIN";
+
     /// The usage an isolated target needs: drawn into, sampled by the composite, copied into by a
     /// backdrop capture, and copied out by a test.
     const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -123,6 +151,7 @@ impl GroupPool {
     pub fn new(region: Size<i32, Device>, budget: u64) -> Self {
         Self {
             region: region.non_negative(),
+            margin: poison_margin(),
             entries: Vec::new(),
             budget,
             scaled: false,
@@ -158,7 +187,9 @@ impl GroupPool {
     /// a resize redraws the whole frame anyway.
     pub fn resize(&mut self, region: Size<i32, Device>) {
         let region = region.non_negative();
-        if self.allocated(TargetScale::Full) != allocated_for(region, TargetScale::Full) {
+        if self.allocated(TargetScale::Full)
+            != allocated_for(grown(region, self.margin), TargetScale::Full)
+        {
             self.entries.clear();
         }
         self.region = region;
@@ -269,12 +300,29 @@ impl GroupPool {
         self.region
     }
 
+    /// Sets the margin of the test mode [`GroupPool::POISON_ORIGIN`] for this pool, discarding
+    /// every target it holds.
+    ///
+    /// For tests that compare a pool with a margin against one without in one process.
+    #[doc(hidden)]
+    pub fn set_poison_margin(&mut self, margin: i32) {
+        self.margin = even_margin(margin);
+        self.entries.clear();
+    }
+
+    /// The device-pixel size every target covers from its origin.
+    ///
+    /// The region, grown by the margin of the test mode [`GroupPool::POISON_ORIGIN`].
+    pub fn covered(&self) -> Size<i32, Device> {
+        grown(self.region, self.margin)
+    }
+
     /// The texel extent a target at `scale` is actually allocated at.
     ///
     /// Larger than the region it holds, because targets are rounded to a size class. A read of one
     /// has to divide by *this* rather than by the region, or it samples the wrong texels.
     pub fn allocated_extent(&self, scale: TargetScale) -> Size<i32, Device> {
-        allocated_for(self.region, scale)
+        self.allocated(scale)
     }
 
     /// How many bytes of isolated targets may be resident.
@@ -350,6 +398,7 @@ impl GroupPool {
                 .as_ref()
                 .is_some_and(|entry| !entry.lent && entry.scale == scale && entry.format == format)
         })?;
+        let origin = self.origin();
         let entry = self.entries[index].as_mut()?;
         entry.lent = true;
         entry.touched = true;
@@ -357,6 +406,7 @@ impl GroupPool {
             index,
             scale,
             format,
+            origin,
         })
     }
 
@@ -415,6 +465,7 @@ impl GroupPool {
             index,
             scale,
             format,
+            origin: self.origin(),
         })
     }
 
@@ -450,8 +501,34 @@ impl GroupPool {
 
     /// The texel extent a target at `scale` is allocated at.
     fn allocated(&self, scale: TargetScale) -> Size<i32, Device> {
-        allocated_for(self.region, scale)
+        allocated_for(self.covered(), scale)
     }
+
+    /// The device pixel every lease's first texel holds.
+    fn origin(&self) -> Point<i32, Device> {
+        Point::new(-self.margin, -self.margin)
+    }
+}
+
+/// `region` grown by `margin` device pixels on each axis.
+fn grown(region: Size<i32, Device>, margin: i32) -> Size<i32, Device> {
+    Size::new(region.width + margin, region.height + margin)
+}
+
+/// The margin the test mode [`GroupPool::POISON_ORIGIN`] gives, or zero when it is unset or is
+/// not an integer.
+///
+/// Read when a pool is built, so a test can compare a pool with the margin against one without.
+fn poison_margin() -> i32 {
+    std::env::var(GroupPool::POISON_ORIGIN)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<i32>().ok())
+        .map_or(0, even_margin)
+}
+
+/// `margin` as the test mode uses it: positive, at most 4096, and rounded up to even.
+fn even_margin(margin: i32) -> i32 {
+    margin.unsigned_abs().min(1 << 12).next_multiple_of(2) as i32
 }
 
 /// The texel extent a target covering `region` at `scale` is allocated at.
