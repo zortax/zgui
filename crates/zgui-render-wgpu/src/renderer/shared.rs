@@ -35,8 +35,10 @@ use zgui_render::{GpuUnavailable, RenderTarget};
 
 use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
+use crate::gpu::formats::Formats;
 use crate::gpu::surface::{ConfiguredSurface, PresentPacing, SurfaceSetup};
 use crate::pipeline::Pipelines;
+use crate::pipeline::kind::PipelineKind;
 use crate::renderer::builder::{Proof, WindowSurface, open_device};
 use crate::renderer::{Origin, PrePresent, WgpuRenderer};
 use crate::target::swapchain::{Offscreen, Presentation, Supplied};
@@ -54,6 +56,21 @@ impl DeviceState {
     pub(crate) fn new(gpu: Arc<Gpu>) -> Rc<Self> {
         let pipelines = Rc::new(RefCell::new(Pipelines::new(&gpu)));
         Rc::new(Self { gpu, pipelines })
+    }
+
+    /// Builds every pipeline a renderer drawing in `formats` starts with, and saves the cache.
+    ///
+    /// Pipelines that exist already are kept, so a second call for the same formats builds nothing.
+    pub(crate) fn prepare(&self, formats: Formats) {
+        let mut built = self.pipelines.borrow_mut();
+        for kind in PipelineKind::ALL {
+            let format = match kind {
+                PipelineKind::Blit | PipelineKind::BlitUndoSrgb => formats.present_attachment(),
+                _ => formats.scene,
+            };
+            let _ = built.get(&self.gpu, kind, format);
+        }
+        built.persist();
     }
 }
 
@@ -312,8 +329,7 @@ impl SharedGraphics {
         }
 
         // The first surface: no device has been opened yet, so this is what chooses one.
-        let (gpu, presentation) = self.open_one(WindowSurface::new(window, setup))?;
-        let state = DeviceState::new(gpu);
+        let (state, presentation) = self.open_one(WindowSurface::new(window, setup))?;
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
         Ok(self.assemble(state, presentation, target, pre_present, Origin::Surface))
     }
@@ -342,7 +358,7 @@ impl SharedGraphics {
             ));
             return Ok(self.assemble(state, presentation, target, None, origin));
         }
-        let (gpu, presentation) = self.open_one(|gpu: &Arc<Gpu>| {
+        let (state, presentation) = self.open_one(|gpu: &Arc<Gpu>| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
                 extent,
@@ -350,7 +366,6 @@ impl SharedGraphics {
                 mutable_texture_formats,
             )))
         })?;
-        let state = DeviceState::new(gpu);
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
         Ok(self.assemble(state, presentation, target, None, origin))
     }
@@ -456,7 +471,7 @@ impl SharedGraphics {
     /// Recovery has nothing else to use, the window's own surface having died with the device, and
     /// neither has a caller that has yet to create anything.
     fn open_primary(&self) -> Result<Rc<DeviceState>, GpuUnavailable> {
-        let (gpu, _) = self.open_one(|gpu: &Arc<Gpu>| {
+        let (state, _) = self.open_one(|gpu: &Arc<Gpu>| {
             Ok(Presentation::Offscreen(Offscreen::new(
                 gpu,
                 Size::new(1, 1),
@@ -464,7 +479,6 @@ impl SharedGraphics {
                 false,
             )))
         })?;
-        let state = DeviceState::new(gpu);
         // Assigning drops the strong reference to any dead device, so its memory is released as
         // soon as the last renderer has swapped over.
         *self.0.primary.borrow_mut() = Some(Rc::clone(&state));
@@ -477,7 +491,10 @@ impl SharedGraphics {
     /// Vulkan device extensions matter most: a replacement device that read a different list would
     /// leave a program running on a device its buffers cannot be imported into, and there is no
     /// later point at which that could be noticed.
-    fn open_one(&self, present: impl Proof) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
+    fn open_one(
+        &self,
+        present: impl Proof,
+    ) -> Result<(Rc<DeviceState>, Presentation), GpuUnavailable> {
         if self.0.adopted {
             // The host owns the device. A device opened here would be one the host's resources
             // cannot be used with, and one the host does not know it has to keep alive.
@@ -540,8 +557,7 @@ impl SharedGraphics {
             }
         }
 
-        let (gpu, presentation) = self.open_one(WindowSurface::new(window.clone(), setup))?;
-        let state = DeviceState::new(gpu);
+        let (state, presentation) = self.open_one(WindowSurface::new(window.clone(), setup))?;
         self.0.fallbacks.borrow_mut().push(Rc::downgrade(&state));
         Ok(self.assemble(state, presentation, target, pre_present, Origin::Surface))
     }

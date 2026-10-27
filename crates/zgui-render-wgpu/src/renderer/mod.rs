@@ -33,7 +33,6 @@ pub type VectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSourc
 use crate::gpu::device::Gpu;
 use crate::gpu::timing::{GpuTimer, GpuTiming};
 use crate::pipeline::Pipelines;
-use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
 use crate::renderer::readback::Pixels;
 use crate::renderer::shared::{DeviceState, SharedGraphics};
@@ -215,20 +214,11 @@ impl WgpuRenderer {
             ..Default::default()
         });
         // Building the pipelines now rather than at the first frame is what keeps a driver's first
-        // compilation out of a frame the user is waiting for. A second window on the same device
-        // finds them already built unless its format differs, in which case only the entries that
-        // format needs are compiled.
-        {
-            let mut built = pipelines.borrow_mut();
-            for kind in PipelineKind::ALL {
-                let format = match kind {
-                    PipelineKind::Blit | PipelineKind::BlitUndoSrgb => formats.present_attachment(),
-                    _ => formats.scene,
-                };
-                let _ = built.get(&gpu, kind, format);
-            }
-            built.persist();
-        }
+        // compilation out of a frame the user is waiting for. A device opened for a window has
+        // built them before its surface was configured, and a second window on the same device
+        // finds them built unless its format differs, in which case only the entries that format
+        // needs are compiled.
+        device.prepare(formats);
         Self {
             gpu,
             presentation,

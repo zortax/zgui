@@ -212,6 +212,15 @@ impl Pipelines {
         self.built[column].1[index].as_ref()
     }
 
+    /// Whether the pipeline for `kind` drawing into `format` exists, without building it.
+    #[cfg(test)]
+    pub(crate) fn is_built(&self, kind: PipelineKind, format: wgpu::TextureFormat) -> bool {
+        self.built
+            .iter()
+            .find(|(held, _)| *held == format)
+            .is_some_and(|(_, table)| table[kind as usize].is_some())
+    }
+
     /// Writes the compilation cache back when a pipeline built since the last write added data.
     pub fn persist(&self) {
         self.cache.store();
