@@ -558,6 +558,27 @@ fn style_pool_width(env: Option<&str>, requested: Option<usize>, machine: usize)
         .unwrap_or(machine)
 }
 
+/// The extent a new window's renderer starts at, in device pixels.
+///
+/// A surface that the compositor has not configured yet has no extent. The extent the window
+/// asked for, at the surface's current scale, is then the likeliest first extent, and a swap chain
+/// configured at it is not configured again by the first frame. With no extent asked for, the
+/// surface's own answer stays, and the first frame configures the swap chain again.
+fn first_extent(
+    surface: Size<zgui_geom::DevicePx, zgui_geom::Device>,
+    asked: Option<Size<CssPx, Css>>,
+    scale: f64,
+) -> Size<i32, zgui_geom::Device> {
+    let known = Size::new(surface.width.0 as i32, surface.height.0 as i32);
+    match asked {
+        Some(asked) if known.width < 1 || known.height < 1 => Size::new(
+            (f64::from(asked.width.0) * scale).round() as i32,
+            (f64::from(asked.height.0) * scale).round() as i32,
+        ),
+        _ => known,
+    }
+}
+
 /// The layout pool an application runs with, resolved the same way as the cascade's.
 fn layout_pool_for(
     requested: Option<usize>,
@@ -742,12 +763,10 @@ impl Runtime {
                 .clone_from(&self.application_id);
         }
         let surface = cx.create_surface(&self.live[index].spec.attributes)?;
-        let size = surface.size();
+        let scale = surface.scale_factor();
+        let size = first_extent(surface.size(), self.live[index].spec.attributes.size, scale);
         let translucent = self.live[index].spec.attributes.transparent;
-        let target = RenderTarget::new(
-            zgui_geom::Size::new(size.width.0 as i32, size.height.0 as i32),
-            zgui_geom::Scale::new(surface.scale_factor() as f32),
-        );
+        let target = RenderTarget::new(size, zgui_geom::Scale::new(scale as f32));
         // A window asked to be transparent is composed translucent from its first frame: the
         // renderer picks a premultiplied presentation for it, and the paint gives its text ordinary
         // coverage.
@@ -1376,7 +1395,22 @@ impl AppHandler for Runtime {
 
 #[cfg(test)]
 mod tests {
-    use super::style_pool_width;
+    use zgui_geom::{CssPx, DevicePx, Size};
+
+    use super::{first_extent, style_pool_width};
+
+    #[test]
+    fn an_unconfigured_surface_starts_at_the_extent_the_window_asked_for() {
+        let unknown = Size::new(DevicePx(0.0), DevicePx(0.0));
+        let asked = Some(Size::new(CssPx(1080.0), CssPx(720.0)));
+        assert_eq!(first_extent(unknown, asked, 1.0), Size::new(1080, 720));
+        assert_eq!(first_extent(unknown, asked, 1.5), Size::new(1620, 1080));
+        // Nothing asked for: the surface's answer stays.
+        assert_eq!(first_extent(unknown, None, 1.0), Size::new(0, 0));
+        // A surface that knows its extent keeps it.
+        let known = Size::new(DevicePx(1916.0), DevicePx(1051.0));
+        assert_eq!(first_extent(known, asked, 1.0), Size::new(1916, 1051));
+    }
 
     #[test]
     fn the_environment_overrides_the_builder_and_the_builder_the_machine() {
