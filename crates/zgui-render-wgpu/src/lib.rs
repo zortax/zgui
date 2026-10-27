@@ -77,5 +77,5 @@ pub use crate::renderer::builder::Builder;
 pub use crate::renderer::readback::Pixels;
 pub use crate::renderer::shared::SharedGraphics;
 pub use crate::target::acquire::{Acquisition, SurfaceAction};
-pub use crate::target::group_pool::GroupPool;
+pub use crate::target::group_pool::{GroupPool, GroupPrecision};
 pub use crate::target::scale::TargetScale;

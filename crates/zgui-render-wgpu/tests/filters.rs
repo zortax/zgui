@@ -4,7 +4,7 @@ mod support;
 
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, Point, Rect, Size};
-use zgui_render_wgpu::{GroupPool, Pixels, TargetScale};
+use zgui_render_wgpu::{GroupPool, GroupPrecision, Pixels, TargetScale};
 use zgui_scene::{BackdropFilter, Filter, GroupBoundary, Quad, Scene};
 
 use support::{SIDE, opaque, plain_renderer, present, rect};
@@ -434,7 +434,7 @@ fn a_backdrop_in_a_half_resolution_group_frosts_what_is_beneath_it_in_place() {
     // Room for the half-resolution group and a half-resolution copy, and none for a full group.
     // The budget counts sixteen-bit targets, so the plain group keeps that format.
     renderer.set_group_budget(3 * target_bytes(GroupPool::FORMAT, TargetScale::Half));
-    renderer.set_narrow_groups(false);
+    renderer.set_group_precision(GroupPrecision::High);
     let gray = vec![Filter::Grayscale(1.0)];
     let frosted = present(&mut renderer, &edge_scene(Some(gray), true));
     assert!(

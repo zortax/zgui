@@ -139,6 +139,8 @@ pub struct App {
     fonts: std::cell::OnceCell<Fonts>,
     /// What draws its windows, when it is not this machine's own graphics device.
     renderer: Option<zgui_runtime::RendererFactory>,
+    /// How precisely the default renderer holds a plain group, when the application set it.
+    group_precision: Option<crate::GroupPrecision>,
     /// The application's own context setup, held until the faces are known.
     ///
     /// Held here rather than passed straight down because the faces are provided in the same scope
@@ -167,6 +169,7 @@ impl App {
             inner: zgui_runtime::App::new(),
             fonts: std::cell::OnceCell::new(),
             renderer: None,
+            group_precision: None,
             context: None,
         }
     }
@@ -441,6 +444,29 @@ impl App {
         self
     }
 
+    /// Sets how precisely the default renderer holds a plain group of content.
+    ///
+    /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
+    /// plain group in the surface format when that format is `Bgra8Unorm` or `Rgba8Unorm`. That
+    /// target has half the bytes of a sixteen-bit one.
+    /// [`GroupPrecision::High`](crate::GroupPrecision::High) holds every group in sixteen-bit
+    /// float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
+    /// value. A renderer set with [`App::with_renderer`] ignores it.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_group_precision(zgui::GroupPrecision::High)
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_group_precision(mut self, precision: crate::GroupPrecision) -> Self {
+        self.group_precision = Some(precision);
+        self
+    }
+
     /// The faces this application draws with, for registering one of its own.
     ///
     /// Asking settles the question [`App::with_fonts`] would otherwise answer: an application that
@@ -500,7 +526,10 @@ impl App {
         // opening the window and the graphics device rather than in front of them.
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
-        let renderer = self.renderer.unwrap_or_else(graphics::factory);
+        let group_precision = self.group_precision;
+        let renderer = self
+            .renderer
+            .unwrap_or_else(|| graphics::factory(group_precision));
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
         // therefore resolves them like any other context.

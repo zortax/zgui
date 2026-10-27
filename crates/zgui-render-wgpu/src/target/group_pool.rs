@@ -104,6 +104,70 @@ struct Entry {
     idle: u32,
 }
 
+/// How precisely a plain group holds its content.
+///
+/// A plain group has no filter, composites by source-over and is in no other group
+/// ([`GroupPool::format_for`]). Every other group is held in [`GroupPool::FORMAT`] at each
+/// precision.
+///
+/// A renderer starts with the precision that [`GroupPrecision::VARIABLE`] names, or with
+/// [`GroupPrecision::Compact`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GroupPrecision {
+    /// A plain group over a `Bgra8Unorm` or `Rgba8Unorm` surface is held in the surface format.
+    ///
+    /// Its target takes half the memory of a [`GroupPrecision::High`] one. Each blend into the
+    /// target rounds to eight bits, so a channel can differ from [`GroupPrecision::High`] by up to
+    /// two steps in 255.
+    #[default]
+    Compact,
+    /// Every group is held in [`GroupPool::FORMAT`].
+    ///
+    /// Use it when stacked translucent content inside a group must not show banding.
+    High,
+}
+
+impl GroupPrecision {
+    /// The variable that names the precision a new renderer starts with.
+    ///
+    /// Set `ZGUI_GROUP_PRECISION=high` for [`GroupPrecision::High`] or `compact` for
+    /// [`GroupPrecision::Compact`]. Case and surrounding spaces are ignored. Other values are
+    /// ignored with a warning.
+    pub const VARIABLE: &str = "ZGUI_GROUP_PRECISION";
+
+    /// The precision that [`GroupPrecision::VARIABLE`] names, if it names one.
+    ///
+    /// Read once in a process.
+    pub fn from_environment() -> Option<Self> {
+        static NAMED: std::sync::OnceLock<Option<GroupPrecision>> = std::sync::OnceLock::new();
+        *NAMED.get_or_init(|| {
+            let value = std::env::var(Self::VARIABLE).ok()?;
+            let named = Self::parse(&value);
+            if named.is_none() {
+                tracing::warn!(
+                    variable = Self::VARIABLE,
+                    value = %value,
+                    "unknown group precision, expected `high` or `compact`"
+                );
+            }
+            named
+        })
+    }
+
+    /// The precision `value` names: `high` or `compact`, in any case.
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("high") {
+            Some(Self::High)
+        } else if value.eq_ignore_ascii_case("compact") {
+            Some(Self::Compact)
+        } else {
+            None
+        }
+    }
+}
+
 /// Targets for isolated content, grown on demand and reused within a frame.
 ///
 /// A lease covers the device region it was taken for, grown by [`GroupPool::GUARD`], at one of two
@@ -129,11 +193,12 @@ struct Entry {
 /// blends and for no other reason: every value in it is still premultiplied and gamma-encoded,
 /// exactly as in every other target, and the composite reading it is a plain textured quad that
 /// performs no colour conversion at all. A plain group is held in the composed format when that
-/// has eight bits in each channel ([`GroupPool::format_for`]), which halves its bytes. A target
-/// lent to capture what is *beneath* something takes the format and resolution of whatever it is
-/// capturing from instead, because a copy between two textures requires them to agree — and
-/// copying is both cheaper and more faithful than a pass that would convert on the way. That lease
-/// never degrades ([`GroupPool::acquire_exact`]).
+/// has eight bits in each channel ([`GroupPool::format_for`]), which halves its bytes.
+/// [`GroupPrecision::High`] keeps every group in `Rgba16Float`. A target lent to capture what is
+/// *beneath* something takes the format and resolution of whatever it is capturing from instead,
+/// because a copy between two textures requires them to agree — and copying is both cheaper and
+/// more faithful than a pass that would convert on the way. That lease never degrades
+/// ([`GroupPool::acquire_exact`]).
 #[derive(Debug)]
 pub struct GroupPool {
     /// The device-pixel region of the surface, which every lease is cut to.
@@ -159,8 +224,8 @@ pub struct GroupPool {
     leases: u64,
     /// How many textures the pool has created since it was built.
     allocations: u64,
-    /// Whether a plain group may be held in the composed format, see [`GroupPool::format_for`].
-    narrow: bool,
+    /// How precisely a plain group holds its content, see [`GroupPool::format_for`].
+    precision: GroupPrecision,
 }
 
 impl GroupPool {
@@ -221,7 +286,7 @@ impl GroupPool {
             peak: 0,
             leases: 0,
             allocations: 0,
-            narrow: true,
+            precision: GroupPrecision::Compact,
         }
     }
 
@@ -442,7 +507,8 @@ impl GroupPool {
     /// facts come from the group's own marker and its depth, which do not depend on the damage, so
     /// a steady group gets the same format in every frame. A plain group over `Bgra8Unorm` or
     /// `Rgba8Unorm` is held in that format. Every other group keeps [`GroupPool::FORMAT`], as does
-    /// a plain group over any other format (sRGB, fewer bits, or more).
+    /// a plain group over any other format (sRGB, fewer bits, or more). With
+    /// [`GroupPrecision::High`], every group keeps [`GroupPool::FORMAT`].
     ///
     /// An eight-bit group target rounds each blend into it, as the composed target does when there
     /// is no group, and its composite rounds once more. A group inside a plain group keeps
@@ -453,18 +519,24 @@ impl GroupPool {
     pub fn format_for(&self, plain: bool, composed: wgpu::TextureFormat) -> wgpu::TextureFormat {
         use wgpu::TextureFormat::{Bgra8Unorm, Rgba8Unorm};
         match composed {
-            Bgra8Unorm | Rgba8Unorm if plain && self.narrow => composed,
+            Bgra8Unorm | Rgba8Unorm if plain && self.precision == GroupPrecision::Compact => {
+                composed
+            }
             _ => Self::FORMAT,
         }
     }
 
-    /// Sets whether a plain group may be held in the composed format, see
-    /// [`GroupPool::format_for`].
+    /// How precisely a plain group holds its content.
+    pub fn precision(&self) -> GroupPrecision {
+        self.precision
+    }
+
+    /// Sets how precisely a plain group holds its content, see [`GroupPool::format_for`].
     ///
-    /// For tests that compare the two formats in one process. A new pool starts with it set.
-    #[doc(hidden)]
-    pub fn set_narrow_groups(&mut self, narrow: bool) {
-        self.narrow = narrow;
+    /// A new pool starts with [`GroupPrecision::Compact`]. A target the pool holds in the other
+    /// format stays resident until it is idle for [`GroupPool::IDLE_FRAMES`] frames.
+    pub fn set_precision(&mut self, precision: GroupPrecision) {
+        self.precision = precision;
     }
 
     /// Sets the margin of the test mode [`GroupPool::POISON_ORIGIN`] for this pool, discarding
@@ -809,7 +881,7 @@ fn texture_bytes(texture: &wgpu::Texture) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{GroupPool, allocated_for, cover_for};
+    use super::{GroupPool, GroupPrecision, allocated_for, cover_for};
     use crate::target::scale::TargetScale;
     use zgui_geom::{Device, Point, Rect, Size};
 
@@ -928,8 +1000,22 @@ mod tests {
         );
         assert_eq!(pool.format_for(true, Rgba16Float), GroupPool::FORMAT);
         assert_eq!(pool.format_for(true, Bgra8UnormSrgb), GroupPool::FORMAT);
-        pool.set_narrow_groups(false);
+        pool.set_precision(GroupPrecision::High);
         assert_eq!(pool.format_for(true, Bgra8Unorm), GroupPool::FORMAT);
+        assert_eq!(pool.format_for(true, Rgba8Unorm), GroupPool::FORMAT);
+    }
+
+    #[test]
+    fn a_group_precision_is_named_by_high_or_compact_in_any_case() {
+        assert_eq!(GroupPrecision::parse("high"), Some(GroupPrecision::High));
+        assert_eq!(GroupPrecision::parse(" HIGH\n"), Some(GroupPrecision::High));
+        assert_eq!(
+            GroupPrecision::parse("Compact"),
+            Some(GroupPrecision::Compact)
+        );
+        assert_eq!(GroupPrecision::parse("16f"), None);
+        assert_eq!(GroupPrecision::parse(""), None);
+        assert_eq!(GroupPrecision::default(), GroupPrecision::Compact);
     }
 
     #[test]

@@ -17,7 +17,7 @@ use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{Device, Point, Rect, Size};
 use zgui_render::Renderer;
-use zgui_render_wgpu::Pixels;
+use zgui_render_wgpu::{GroupPool, GroupPrecision, Pixels};
 use zgui_scene::peniko::{BlendMode, Compose, Mix};
 use zgui_scene::{BackdropFilter, Filter, GroupBoundary, Quad, Scene};
 
@@ -252,12 +252,21 @@ fn compare(narrow: &Pixels, wide: &Pixels) -> (u8, usize) {
     (largest, differing)
 }
 
+/// Two renderers on one device: the first at [`GroupPrecision::Compact`], the second at
+/// [`GroupPrecision::High`]. Both are set explicitly, so [`GroupPrecision::VARIABLE`] has no
+/// effect.
+fn compact_and_high() -> Option<(support::TestRenderer, zgui_render_wgpu::WgpuRenderer)> {
+    let (mut compact, mut high) = renderer_pair()?;
+    compact.set_group_precision(GroupPrecision::Compact);
+    high.set_group_precision(GroupPrecision::High);
+    Some((compact, high))
+}
+
 #[test]
 fn a_plain_group_of_one_translucent_layer_differs_by_at_most_one_step() {
-    let Some((mut narrow, mut wide)) = renderer_pair() else {
+    let Some((mut narrow, mut wide)) = compact_and_high() else {
         return;
     };
-    wide.set_narrow_groups(false);
     for (name, scene) in single_layer_scenes() {
         let (held, reference) = (present(&mut narrow, &scene), present(&mut wide, &scene));
         let (largest, differing) = compare(&held, &reference);
@@ -273,10 +282,9 @@ fn a_plain_group_of_one_translucent_layer_differs_by_at_most_one_step() {
 /// a plain group is never further from the picture with no group than a sixteen-bit one is.
 #[test]
 fn stacked_layers_in_a_plain_group_differ_by_at_most_two_steps() {
-    let Some((mut narrow, mut wide)) = renderer_pair() else {
+    let Some((mut narrow, mut wide)) = compact_and_high() else {
         return;
     };
-    wide.set_narrow_groups(false);
     for (layers, alpha, opacity) in [(2, 150, 1.0), (3, 150, 0.33), (8, 77, 1.0), (8, 201, 0.77)] {
         let scene = stacked_scene(layers, alpha, opacity);
         let (held, reference) = (present(&mut narrow, &scene), present(&mut wide, &scene));
@@ -308,10 +316,9 @@ fn stacked_layers_in_a_plain_group_differ_by_at_most_two_steps() {
 
 #[test]
 fn a_group_that_needs_headroom_draws_exactly_as_before() {
-    let Some((mut narrow, mut wide)) = renderer_pair() else {
+    let Some((mut narrow, mut wide)) = compact_and_high() else {
         return;
     };
-    wide.set_narrow_groups(false);
     for (name, scene) in wide_scenes() {
         let (held, reference) = (present(&mut narrow, &scene), present(&mut wide, &scene));
         assert_eq!(
@@ -330,10 +337,9 @@ fn a_group_that_needs_headroom_draws_exactly_as_before() {
 /// What a plain group holds keeps its own target and composites into the plain group's target.
 #[test]
 fn a_plain_group_holding_groups_and_backdrops_differs_by_at_most_two_steps() {
-    let Some((mut narrow, mut wide)) = renderer_pair() else {
+    let Some((mut narrow, mut wide)) = compact_and_high() else {
         return;
     };
-    wide.set_narrow_groups(false);
     for (name, scene) in holding_scenes() {
         let (held, reference) = (present(&mut narrow, &scene), present(&mut wide, &scene));
         let (largest, differing) = compare(&held, &reference);
@@ -349,10 +355,9 @@ fn a_plain_group_holding_groups_and_backdrops_differs_by_at_most_two_steps() {
 /// in another group, keeps eight.
 #[test]
 fn a_group_in_a_plain_group_keeps_its_wide_target() {
-    let Some((mut narrow, mut wide)) = renderer_pair() else {
+    let Some((mut narrow, mut wide)) = compact_and_high() else {
         return;
     };
-    wide.set_narrow_groups(false);
     let (_, nested) = holding_scenes().swap_remove(0);
     present(&mut narrow, &nested);
     present(&mut wide, &nested);
@@ -361,10 +366,9 @@ fn a_group_in_a_plain_group_keeps_its_wide_target() {
 
 #[test]
 fn a_plain_group_costs_half_the_bytes_of_a_wide_one() {
-    let Some((mut narrow, mut wide)) = renderer_pair() else {
+    let Some((mut narrow, mut wide)) = compact_and_high() else {
         return;
     };
-    wide.set_narrow_groups(false);
     let (_, scene) = single_layer_scenes().swap_remove(0);
     present(&mut narrow, &scene);
     present(&mut wide, &scene);
@@ -376,6 +380,31 @@ fn a_plain_group_costs_half_the_bytes_of_a_wide_one() {
     );
 }
 
+/// A renderer holds a plain group in the composed format by default. [`GroupPrecision::High`]
+/// holds it in `Rgba16Float`, and a new group budget keeps that setting.
+#[test]
+fn high_group_precision_holds_a_plain_group_in_sixteen_bit_float() {
+    let Some((mut compact, mut high)) = renderer_pair() else {
+        return;
+    };
+    if GroupPrecision::from_environment().is_none() {
+        assert_eq!(compact.group_precision(), GroupPrecision::Compact);
+    }
+    compact.set_group_precision(GroupPrecision::Compact);
+    high.set_group_precision(GroupPrecision::High);
+    high.set_group_budget(GroupPool::BUDGET);
+    assert_eq!(high.group_precision(), GroupPrecision::High);
+    let (_, scene) = single_layer_scenes().swap_remove(0);
+    present(&mut compact, &scene);
+    present(&mut high, &scene);
+    assert!(compact.groups().bytes() > 0, "the group was isolated");
+    assert_eq!(
+        compact.groups().bytes() * 2,
+        high.groups().bytes(),
+        "Bgra8Unorm against Rgba16Float, four bytes a texel against eight"
+    );
+}
+
 /// An animated plain group, drawn over the damage each step produces, takes one texture and
 /// keeps it: the format does not change from frame to frame.
 #[test]
@@ -383,6 +412,7 @@ fn an_animated_plain_group_keeps_one_texture_under_partial_damage() {
     let Some(mut animated) = plain_renderer() else {
         return;
     };
+    animated.set_group_precision(GroupPrecision::Compact);
     let bounds = |phase: f32| (40.0 - 20.0 * phase, 30.0, 41.0, 18.0);
     let frame = |scene: &mut Scene, phase: f32, damage: &DamageSet| {
         scene.begin_frame(Size::new(SIDE, SIDE));
@@ -499,6 +529,8 @@ fn a_group_keeps_its_format_when_the_damage_leaves_out_what_it_holds() {
     let Some((mut whole, mut partial)) = renderer_pair() else {
         return;
     };
+    whole.set_group_precision(GroupPrecision::Compact);
+    partial.set_group_precision(GroupPrecision::Compact);
     let reference = present(&mut whole, &panel(true, &DamageSet::full()));
     present(&mut partial, &panel(true, &DamageSet::full()));
     let (allocations, bytes) = (partial.groups().allocations(), partial.groups().bytes());

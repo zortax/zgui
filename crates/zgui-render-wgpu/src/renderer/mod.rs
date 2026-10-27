@@ -38,7 +38,7 @@ use crate::renderer::frame::FrameBuffers;
 use crate::renderer::readback::Pixels;
 use crate::renderer::shared::{DeviceState, SharedGraphics};
 use crate::target::acquire::Acquisition;
-use crate::target::group_pool::GroupPool;
+use crate::target::group_pool::{GroupPool, GroupPrecision};
 use crate::target::scene_texture::SceneTexture;
 use crate::target::swapchain::Presentation;
 
@@ -198,7 +198,8 @@ impl WgpuRenderer {
         );
         let buffers = FrameBuffers::new(&gpu);
         let timer = GpuTimer::new(&gpu);
-        let groups = GroupPool::scaled(target.size);
+        let mut groups = GroupPool::scaled(target.size);
+        groups.set_precision(GroupPrecision::from_environment().unwrap_or_default());
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zgui.sampler.filtering"),
             // Clamping is what a magnifying read wants at the edge of a target; everything a
@@ -312,6 +313,7 @@ impl WgpuRenderer {
         // twice across the changeover.
         let target = self.target;
         let subpixel_order = self.subpixel_order;
+        let precision = self.groups.precision();
         let vector_factory = self.vector_factory;
         let vector_backend = self.vector_backend;
         let rebuilt = match self.shared.clone() {
@@ -351,6 +353,7 @@ impl WgpuRenderer {
         let had_raster = self.vectors.is_some();
         *self = rebuilt;
         self.subpixel_order = subpixel_order;
+        self.groups.set_precision(precision);
         self.vector_factory = vector_factory;
         self.vector_backend = vector_backend;
         if had_raster {
@@ -504,14 +507,22 @@ impl WgpuRenderer {
         self.groups.set_poison_margin(margin);
     }
 
-    /// Sets whether a plain group may be held in the composed format, as
-    /// [`GroupPool::format_for`] describes.
+    /// How precisely a plain group holds its content.
+    pub fn group_precision(&self) -> GroupPrecision {
+        self.groups.precision()
+    }
+
+    /// Sets how precisely a plain group holds its content, see [`GroupPrecision`].
     ///
-    /// [`WgpuRenderer::set_group_budget`] builds a new pool, which sets it again. Call this after
-    /// setting a budget.
-    #[doc(hidden)]
-    pub fn set_narrow_groups(&mut self, narrow: bool) {
-        self.groups.set_narrow_groups(narrow);
+    /// A renderer starts with the precision that [`GroupPrecision::VARIABLE`] names, or with
+    /// [`GroupPrecision::Compact`]. This value replaces it. The value stays across a new group
+    /// budget, a resize and a device recovery. A change redraws the whole surface in the next
+    /// frame.
+    pub fn set_group_precision(&mut self, precision: GroupPrecision) {
+        if precision != self.groups.precision() {
+            self.groups.set_precision(precision);
+            self.full_damage_next = true;
+        }
     }
 
     /// How many bytes of isolated targets may be resident before the pool reduces resolution.
@@ -521,7 +532,9 @@ impl WgpuRenderer {
     /// set here stays when the surface is resized; the default follows the surface
     /// ([`GroupPool::scaled`]).
     pub fn set_group_budget(&mut self, bytes: u64) {
+        let precision = self.groups.precision();
         self.groups = GroupPool::new(self.composed.used().size, bytes);
+        self.groups.set_precision(precision);
     }
 
     /// Chooses which supplied texture the next frame is copied into.
