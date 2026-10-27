@@ -808,4 +808,56 @@ mod tests {
             "and none is kept once forgotten"
         );
     }
+
+    #[test]
+    fn a_pipeline_a_frame_builds_is_written_to_the_cache_after_the_frame() {
+        let target = RenderTarget::new(Size::new(64, 64), Scale::new(1.0));
+        let mut renderer =
+            match Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false) {
+                Ok(renderer) => renderer,
+                Err(failure) => {
+                    eprintln!("skipped: no usable graphics device ({failure})");
+                    return;
+                }
+            };
+        if !renderer.pipelines.borrow().cache().persists() {
+            eprintln!("skipped: the device keeps no pipeline cache, or there is no path for it");
+            return;
+        }
+        let unsaved =
+            |renderer: &crate::WgpuRenderer| renderer.pipelines.borrow().cache().unsaved();
+        assert!(
+            !unsaved(&renderer),
+            "the pipelines built at start are written"
+        );
+
+        // The blurred group is drawn into a target of the group format, whose pipelines no
+        // renderer builds before a frame asks for them.
+        let _ = renderer.draw(&blurred_group(), &DamageSet::full());
+        assert!(
+            !unsaved(&renderer),
+            "the pipelines the frame built are written after it"
+        );
+
+        let gpu = std::sync::Arc::clone(&renderer.gpu);
+        let format = crate::target::group_pool::GroupPool::FORMAT;
+        let _ = renderer.pipelines.borrow_mut().get(
+            &gpu,
+            crate::pipeline::kind::PipelineKind::Quad,
+            format,
+        );
+        assert!(
+            !unsaved(&renderer),
+            "the frame built the group format's quad pipeline, so asking again builds nothing"
+        );
+        let _ = renderer.pipelines.borrow_mut().get(
+            &gpu,
+            crate::pipeline::kind::PipelineKind::Quad,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        assert!(
+            unsaved(&renderer),
+            "a pipeline built for a new format is unsaved until the next write"
+        );
+    }
 }

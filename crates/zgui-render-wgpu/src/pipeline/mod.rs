@@ -161,6 +161,12 @@ impl Pipelines {
         &self.layouts
     }
 
+    /// The persisted compilation cache.
+    #[cfg(test)]
+    pub(crate) fn cache(&self) -> &PipelineCache {
+        &self.cache
+    }
+
     /// The pipeline for `kind` drawing into an attachment of `format`, building it if needed.
     ///
     /// Returns `None` for a pipeline the device cannot support, which is the per-channel coverage
@@ -206,7 +212,7 @@ impl Pipelines {
         self.built[column].1[index].as_ref()
     }
 
-    /// Writes the compilation cache back, if there is one to write.
+    /// Writes the compilation cache back when a pipeline built since the last write added data.
     pub fn persist(&self) {
         self.cache.store();
     }

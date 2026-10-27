@@ -344,6 +344,9 @@ impl Renderer for WgpuRenderer {
             texture.present();
         }
         zgui_profile::latency::mark("pres.out");
+        // After the present, so the frame reaches the screen first. It does nothing unless this
+        // frame built a pipeline, such as the first one for a group target format.
+        self.pipelines.borrow().persist();
 
         let redrawn: u64 = damage::rects(damage, self.composed.used())
             .iter()
