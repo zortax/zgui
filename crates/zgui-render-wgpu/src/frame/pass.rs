@@ -681,7 +681,7 @@ impl Recorder<'_> {
     fn extent(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
             TargetRef::Composed => self.composed.used().size,
-            TargetRef::Pool(slot) => slot.scale().extent(self.pool.covered()),
+            TargetRef::Pool(slot) => slot.extent(),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
     }

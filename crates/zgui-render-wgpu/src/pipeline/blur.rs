@@ -80,10 +80,10 @@ impl BlurParams {
     /// passes runs at half resolution and a deviation left in device pixels would blur twice as
     /// far as the content asked for.
     ///
-    /// Both targets have `extent` texels at `scale`. `origins` are the device pixels the source's
-    /// and the destination's first texels hold.
+    /// Both targets are held at `scale`. `extents` are the source's and the destination's extents
+    /// in texels, and `origins` are the device pixels their first texels hold.
     pub fn axis(
-        extent: Size<i32, Device>,
+        extents: [Size<i32, Device>; 2],
         scale: TargetScale,
         origins: [Point<i32, Device>; 2],
         axis: BlurAxis,
@@ -96,7 +96,7 @@ impl BlurParams {
         let taps = (reach / spacing).ceil().clamp(1.0, Self::MAX_TAPS);
         let direction = axis.direction();
         Self {
-            extents: extents(extent, extent),
+            extents: self::extents(extents[0], extents[1]),
             kernel: [direction[0], direction[1], texels, taps],
             sampling: [scale.factor(), scale.factor(), spacing, 0.0],
             valid: valid(written, scale, origins[0]),
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn a_deviation_in_device_pixels_becomes_one_in_the_texels_the_pass_runs_at() {
         let params = BlurParams::axis(
-            Size::new(64, 64),
+            [Size::new(64, 64); 2],
             TargetScale::Half,
             [Point::ORIGIN; 2],
             BlurAxis::Horizontal,
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn a_wide_radius_spreads_its_taps_rather_than_cutting_the_kernel_short() {
         let narrow = BlurParams::axis(
-            Size::new(64, 64),
+            [Size::new(64, 64); 2],
             TargetScale::Full,
             [Point::ORIGIN; 2],
             BlurAxis::Vertical,
@@ -182,7 +182,7 @@ mod tests {
         assert!(narrow.reach() >= 3.0 * 2.0, "three deviations are covered");
 
         let wide = BlurParams::axis(
-            Size::new(64, 64),
+            [Size::new(64, 64); 2],
             TargetScale::Full,
             [Point::ORIGIN; 2],
             BlurAxis::Vertical,
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(downsample.origins, [4.0, 8.0, 2.0, 6.0]);
 
         let axis = BlurParams::axis(
-            Size::new(32, 32),
+            [Size::new(32, 32), Size::new(48, 40)],
             TargetScale::Half,
             [Point::new(2, 6), Point::new(0, 0)],
             BlurAxis::Vertical,
@@ -234,6 +234,11 @@ mod tests {
             written,
         );
         assert_eq!(axis.valid, [4.0, 7.0, 19.0, 27.0]);
+        assert_eq!(
+            axis.extents,
+            [32.0, 32.0, 48.0, 40.0],
+            "the two targets of a pass can be of different size classes"
+        );
         assert_eq!(axis.origins, [2.0, 6.0, 0.0, 0.0]);
     }
 }

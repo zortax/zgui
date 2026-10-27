@@ -84,7 +84,7 @@ pub struct PlanBuilder<'gpu> {
     frame_clock: zgui_scene::FrameClock,
     /// Where each interned parameter block was staged, by the slot the scene interned it under.
     effect_offsets: &'gpu [u32],
-    /// The region every target covers.
+    /// The device-pixel region of the surface.
     region: Size<i32, Device>,
     /// What the composed target holds, which a copy out of it has to match.
     composed_format: wgpu::TextureFormat,
@@ -153,43 +153,46 @@ impl<'gpu> PlanBuilder<'gpu> {
         }
     }
 
-    /// The region every target covers.
+    /// The device-pixel region of the surface.
     pub fn region(&self) -> Size<i32, Device> {
         self.region
     }
 
-    /// The texel extent a target at `scale` is allocated at.
+    /// The texel extent of whatever `target` is.
     ///
     /// This is the *allocation*, not the region drawn into: targets are rounded to a size class,
     /// and anything sampling one divides by what it holds rather than by what is used of it.
-    pub fn extent(&self, scale: TargetScale) -> Size<i32, Device> {
-        self.pool.allocated_extent(scale)
-    }
-
-    /// The texel extent of whatever `target` is.
     pub fn extent_of(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
             TargetRef::Composed => self.composed_extent,
-            TargetRef::Pool(slot) => self.pool.allocated_extent(slot.scale()),
+            TargetRef::Pool(slot) => slot.allocated(),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
     }
 
-    /// Lends a target for isolated content at `scale`, or reports that the pool could not.
-    pub fn acquire(&mut self, scale: TargetScale) -> Option<GroupSlot> {
-        self.acquire_in(scale, GroupPool::FORMAT)
+    /// Lends a target for isolated content at `scale` covering `region`, or reports that the pool
+    /// could not.
+    pub fn acquire(&mut self, scale: TargetScale, region: Rect<i32, Device>) -> Option<GroupSlot> {
+        self.acquire_in(scale, GroupPool::FORMAT, region)
     }
 
-    /// Lends a target holding the same thing `like` does, at its resolution, which is what a copy
-    /// needs.
+    /// Lends a target covering `region` that holds the same thing `like` does, at its resolution,
+    /// which is what a copy needs.
     ///
     /// Never reduces the resolution: a copy into a target of another resolution puts every texel
     /// at the wrong place. The copy measures each side from its own origin, so the two origins
     /// can differ. Returns `None` when the budget will not take the target.
-    pub fn acquire_like(&mut self, like: TargetRef) -> Option<GroupSlot> {
-        let slot = self
-            .pool
-            .acquire_exact(self.gpu, like.scale(), self.format_of(like))?;
+    pub fn acquire_like(
+        &mut self,
+        like: TargetRef,
+        region: Rect<i32, Device>,
+    ) -> Option<GroupSlot> {
+        let slot = self.pool.acquire_exact_covering(
+            self.gpu,
+            like.scale(),
+            self.format_of(like),
+            region,
+        )?;
         Some(self.lend(slot))
     }
 
@@ -201,9 +204,17 @@ impl<'gpu> PlanBuilder<'gpu> {
         }
     }
 
-    /// Lends a target at `scale` in `format`, or reports that the pool could not.
-    fn acquire_in(&mut self, scale: TargetScale, format: wgpu::TextureFormat) -> Option<GroupSlot> {
-        let slot = self.pool.acquire(self.gpu, scale, format)?;
+    /// Lends a target at `scale` in `format` covering `region`, or reports that the pool could
+    /// not.
+    fn acquire_in(
+        &mut self,
+        scale: TargetScale,
+        format: wgpu::TextureFormat,
+        region: Rect<i32, Device>,
+    ) -> Option<GroupSlot> {
+        let slot = self
+            .pool
+            .acquire_covering(self.gpu, scale, format, region)?;
         Some(self.lend(slot))
     }
 
@@ -330,7 +341,7 @@ impl<'gpu> PlanBuilder<'gpu> {
             TargetRef::Composed => (0, self.region),
             TargetRef::Pool(slot) => (
                 usize::from(slot.scale() == TargetScale::Half),
-                self.pool.covered(),
+                slot.covered(),
             ),
         };
         let origin = target.origin();
@@ -393,14 +404,14 @@ impl<'gpu> PlanBuilder<'gpu> {
         open.draws.end = self.plan.draws.len();
     }
 
-    /// Closes the open pass, dropping it if it drew nothing.
+    /// Closes the open pass, dropping it if it drew nothing or may write nothing.
     pub fn end_pass(&mut self) {
         let Some(pass) = self.open.take() else {
             return;
         };
-        if pass.draws.is_empty() {
-            // A pass that drew nothing is not recorded, so it did not discard anything either and
-            // the lease still owes its first clear to whichever pass writes it next.
+        if pass.draws.is_empty() || pass.scissor.is_empty() {
+            // A pass that is not recorded did not discard anything either, and the lease still
+            // owes its first clear to whichever pass writes it next.
             if pass.load == PassLoad::Discard
                 && let Some(slot) = pass.target.slot()
             {

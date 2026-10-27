@@ -4,6 +4,7 @@ mod support;
 
 use zgui_bits::DamageSet;
 use zgui_geom::Size;
+use zgui_render_wgpu::GroupPool;
 use zgui_scene::{BackdropFilter, Filter, GroupBoundary, Quad, Scene};
 
 use support::{SIDE, opaque, present, rect, renderer_pair};
@@ -93,10 +94,11 @@ fn a_target_away_from_the_surface_origin_draws_the_same_pixels() {
     // Set both margins, so that a suite run in the test mode compares the same two renderings.
     renderer.set_target_margin(0);
     moved.set_target_margin(MARGIN);
-    assert_eq!(renderer.groups().covered(), Size::new(SIDE, SIDE));
+    let guarded = SIDE + GroupPool::GUARD;
+    assert_eq!(renderer.groups().covered(), Size::new(guarded, guarded));
     assert_eq!(
         moved.groups().covered(),
-        Size::new(SIDE + MARGIN, SIDE + MARGIN),
+        Size::new(guarded + MARGIN, guarded + MARGIN),
         "every target starts {MARGIN} pixels above and to the left of the surface"
     );
     let reference = present(&mut renderer, &scene());
