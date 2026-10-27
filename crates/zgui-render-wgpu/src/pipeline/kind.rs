@@ -260,11 +260,13 @@ impl PipelineKind {
 
     /// Whether this pipeline may be built for an attachment of `format`.
     ///
-    /// The per-channel coverage pipeline may not be built for an isolated target, and the reason
-    /// is not a device limitation: it writes no alpha, because dual-source blending consumes the
+    /// The per-channel coverage pipeline may not be built for the pool format, and the reason is
+    /// not a device limitation: it writes no alpha, because dual-source blending consumes the
     /// per-channel coverage as its blend factor, and that is meaningless against a destination
     /// that is not opaque. An isolated target never is. Text landing in one is emitted as
     /// single-channel coverage instead, so the variant would be unreachable as well as wrong.
+    /// A plain group's target has the composed format, which has the pipeline. Paint keeps such
+    /// text out of it, and the planner leaves out any such batch that lands in a pool target.
     ///
     /// A coverage draw writes only the bin pages. A surface can have their format, so every other
     /// draw may be built for it.
@@ -418,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn the_per_channel_pipeline_is_the_one_kind_an_isolated_target_may_not_have() {
+    fn the_per_channel_pipeline_is_the_one_kind_the_pool_format_may_not_have() {
         use crate::target::group_pool::GroupPool;
 
         let refused: Vec<PipelineKind> = PipelineKind::ALL

@@ -432,7 +432,9 @@ fn a_backdrop_in_a_half_resolution_group_frosts_what_is_beneath_it_in_place() {
         return;
     };
     // Room for the half-resolution group and a half-resolution copy, and none for a full group.
+    // The budget counts sixteen-bit targets, so the plain group keeps that format.
     renderer.set_group_budget(3 * target_bytes(GroupPool::FORMAT, TargetScale::Half));
+    renderer.set_narrow_groups(false);
     let gray = vec![Filter::Grayscale(1.0)];
     let frosted = present(&mut renderer, &edge_scene(Some(gray), true));
     assert!(

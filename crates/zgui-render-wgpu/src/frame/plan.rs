@@ -246,6 +246,8 @@ fn plan_rect(
     let mut stack: Vec<OpenGroup> = Vec::new();
     let mut current = TargetRef::Composed;
     let mut scissor = rect;
+    // How many groups are open, whether the pool lent them a target or not.
+    let mut depth = 0usize;
 
     builder.begin_pass(current, scissor);
     // The rectangle is about to be redrawn, so what is in it goes first. It is a draw because a
@@ -261,7 +263,11 @@ fn plan_rect(
                 };
                 if boundary.is_start {
                     let reach = nested.get(index).copied().unwrap_or(0);
-                    match begin_group(builder, scene, boundary, current, scissor, used, reach) {
+                    let plain = depth == 0 && is_plain(boundary);
+                    depth += 1;
+                    match begin_group(
+                        builder, scene, boundary, current, scissor, used, reach, plain,
+                    ) {
                         Some(group) => {
                             scissor = group.region;
                             current = group.target.unwrap_or(current);
@@ -275,7 +281,11 @@ fn plan_rect(
                             builder.note_unisolated();
                         }
                     }
-                } else if let Some(group) = stack.pop() {
+                } else {
+                    depth = depth.saturating_sub(1);
+                    let Some(group) = stack.pop() else {
+                        continue;
+                    };
                     // The composite lands in whatever is beneath the group, and what may be
                     // written there is that target's own region — the damage rectangle only when
                     // it *is* the composed target. Cutting a composite into an enclosing group's
@@ -344,6 +354,17 @@ fn plan_rect(
             // The scissor is the damage rectangle or, inside a group, the group's region. Both
             // bound what any draw of this pass can write.
             _ if reach.is_some_and(|reach| !reach.intersects(scissor)) => builder.note_culled(),
+            // Per-channel coverage blends correctly only against an opaque destination, and an
+            // isolated target never is one. Paint emits single-channel coverage for text in a
+            // group. A plain group's target has the composed format, which has the per-channel
+            // pipeline, so the planner also keeps such a batch out.
+            Batch::SubpixelSprites { .. } if current.slot().is_some() => {
+                debug_assert!(
+                    false,
+                    "per-channel coverage is drawn into an isolated target"
+                );
+                builder.defer();
+            }
             _ => builder.draw(PlannedDraw::Batch(batch.clone())),
         }
     }
@@ -368,8 +389,14 @@ fn plan_rect(
 /// (`nested`). Every pixel inside `scissor` then reads the same texels it would read from a target
 /// over the whole group: the region depends on the damage set, and no pixel inside `scissor` does.
 ///
+/// A `plain` group ([`is_plain`]) can be held in the composed format.
+///
 /// Returns `None` when the group is off the surface or the pool could not lend a target, and a
 /// group with no target when nothing it draws reaches `scissor`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a fact about the group that decides its target"
+)]
 fn begin_group(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
@@ -378,6 +405,7 @@ fn begin_group(
     scissor: Rect<i32, Device>,
     used: Rect<i32, Device>,
     nested: i32,
+    plain: bool,
 ) -> Option<OpenGroup> {
     // The content is drawn over everything the group *reads*, not only over what it writes. A blur
     // samples outside the element's box, and a target populated only where the composite lands
@@ -403,7 +431,7 @@ fn begin_group(
     let region = whole
         .intersection(scissor.outset(Edges::uniform(reach.min(MAX_REACH))))
         .unwrap_or(whole);
-    let target = TargetRef::Pool(builder.acquire(TargetScale::Full, region)?);
+    let target = TargetRef::Pool(builder.acquire_group(TargetScale::Full, region, plain)?);
     Some(OpenGroup {
         target: Some(target),
         parent,
@@ -475,6 +503,18 @@ fn backdrop_reach(scene: &Scene, batches: &[Reached]) -> Vec<i32> {
         }
     }
     reach
+}
+
+/// Whether a group in no other group may be held in the composed format
+/// ([`GroupPool::format_for`]): it has no filter and composites by source-over.
+///
+/// The answer comes from the group's own marker and its depth, which do not depend on the damage.
+/// A frame that emits only part of the group's content gives the same answer as a frame that emits
+/// all of it, so a steady group keeps one format.
+///
+/// [`GroupPool::format_for`]: crate::target::group_pool::GroupPool::format_for
+fn is_plain(boundary: &GroupBoundary) -> bool {
+    boundary.filters.is_empty() && is_source_over(boundary)
 }
 
 /// Filters a finished group, whose content is in `target`, and composites it back into the target

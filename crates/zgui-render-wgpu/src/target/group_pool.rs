@@ -128,11 +128,12 @@ struct Entry {
 /// Isolated content is held in `Rgba16Float`, for headroom under stacked opacity and repeated
 /// blends and for no other reason: every value in it is still premultiplied and gamma-encoded,
 /// exactly as in every other target, and the composite reading it is a plain textured quad that
-/// performs no colour conversion at all. A target lent to capture what is *beneath* something
-/// takes the format and resolution of whatever it is capturing from instead, because a copy
-/// between two textures requires them to agree — and copying is both cheaper and more faithful
-/// than a pass that would convert on the way. That lease never degrades
-/// ([`GroupPool::acquire_exact`]).
+/// performs no colour conversion at all. A plain group is held in the composed format when that
+/// has eight bits in each channel ([`GroupPool::format_for`]), which halves its bytes. A target
+/// lent to capture what is *beneath* something takes the format and resolution of whatever it is
+/// capturing from instead, because a copy between two textures requires them to agree — and
+/// copying is both cheaper and more faithful than a pass that would convert on the way. That lease
+/// never degrades ([`GroupPool::acquire_exact`]).
 #[derive(Debug)]
 pub struct GroupPool {
     /// The device-pixel region of the surface, which every lease is cut to.
@@ -158,6 +159,8 @@ pub struct GroupPool {
     leases: u64,
     /// How many textures the pool has created since it was built.
     allocations: u64,
+    /// Whether a plain group may be held in the composed format, see [`GroupPool::format_for`].
+    narrow: bool,
 }
 
 impl GroupPool {
@@ -218,6 +221,7 @@ impl GroupPool {
             peak: 0,
             leases: 0,
             allocations: 0,
+            narrow: true,
         }
     }
 
@@ -430,6 +434,37 @@ impl GroupPool {
     /// The device-pixel region of the surface, which every lease is cut to.
     pub fn region(&self) -> Size<i32, Device> {
         self.region
+    }
+
+    /// The format a group's content is held in, for a composed target of `composed`.
+    ///
+    /// A `plain` group has no filter, composites by source-over and is in no other group. These
+    /// facts come from the group's own marker and its depth, which do not depend on the damage, so
+    /// a steady group gets the same format in every frame. A plain group over `Bgra8Unorm` or
+    /// `Rgba8Unorm` is held in that format. Every other group keeps [`GroupPool::FORMAT`], as does
+    /// a plain group over any other format (sRGB, fewer bits, or more).
+    ///
+    /// An eight-bit group target rounds each blend into it, as the composed target does when there
+    /// is no group, and its composite rounds once more. A group inside a plain group keeps
+    /// [`GroupPool::FORMAT`] and composites into it, and a backdrop capture inside it takes its
+    /// format. Values above one, from an application effect or a float texture, are clamped
+    /// before the group's opacity applies. The pool reuses a texture only for a lease of the same
+    /// format.
+    pub fn format_for(&self, plain: bool, composed: wgpu::TextureFormat) -> wgpu::TextureFormat {
+        use wgpu::TextureFormat::{Bgra8Unorm, Rgba8Unorm};
+        match composed {
+            Bgra8Unorm | Rgba8Unorm if plain && self.narrow => composed,
+            _ => Self::FORMAT,
+        }
+    }
+
+    /// Sets whether a plain group may be held in the composed format, see
+    /// [`GroupPool::format_for`].
+    ///
+    /// For tests that compare the two formats in one process. A new pool starts with it set.
+    #[doc(hidden)]
+    pub fn set_narrow_groups(&mut self, narrow: bool) {
+        self.narrow = narrow;
     }
 
     /// Sets the margin of the test mode [`GroupPool::POISON_ORIGIN`] for this pool, discarding
@@ -875,6 +910,26 @@ mod tests {
         assert_eq!(moved.far_corner(), plain.far_corner());
         let edge = cover_for(rect(0, 0, 40, 30), Size::new(1000, 600), 6);
         assert_eq!(edge.origin, Point::new(-6, -6));
+    }
+
+    #[test]
+    fn only_a_plain_group_over_an_eight_bit_surface_is_held_in_the_composed_format() {
+        use wgpu::TextureFormat::{
+            Bgra8Unorm, Bgra8UnormSrgb, Rgb10a2Unorm, Rgba8Unorm, Rgba16Float,
+        };
+        let mut pool = GroupPool::new(Size::new(256, 256), GroupPool::BUDGET);
+        assert_eq!(pool.format_for(true, Bgra8Unorm), Bgra8Unorm);
+        assert_eq!(pool.format_for(true, Rgba8Unorm), Rgba8Unorm);
+        assert_eq!(pool.format_for(false, Bgra8Unorm), GroupPool::FORMAT);
+        assert_eq!(
+            pool.format_for(true, Rgb10a2Unorm),
+            GroupPool::FORMAT,
+            "two bits of alpha"
+        );
+        assert_eq!(pool.format_for(true, Rgba16Float), GroupPool::FORMAT);
+        assert_eq!(pool.format_for(true, Bgra8UnormSrgb), GroupPool::FORMAT);
+        pool.set_narrow_groups(false);
+        assert_eq!(pool.format_for(true, Bgra8Unorm), GroupPool::FORMAT);
     }
 
     #[test]

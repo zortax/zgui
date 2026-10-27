@@ -176,6 +176,20 @@ impl<'gpu> PlanBuilder<'gpu> {
         self.acquire_in(scale, GroupPool::FORMAT, region)
     }
 
+    /// Lends a target for a group's content at `scale` covering `region`, or reports that the pool
+    /// could not.
+    ///
+    /// A `plain` group can be held in the composed format, see [`GroupPool::format_for`].
+    pub fn acquire_group(
+        &mut self,
+        scale: TargetScale,
+        region: Rect<i32, Device>,
+        plain: bool,
+    ) -> Option<GroupSlot> {
+        let format = self.pool.format_for(plain, self.composed_format);
+        self.acquire_in(scale, format, region)
+    }
+
     /// Lends a target covering `region` that holds the same thing `like` does, at its resolution,
     /// which is what a copy needs.
     ///
@@ -428,7 +442,8 @@ impl<'gpu> PlanBuilder<'gpu> {
         self.plan.segments.push(Segment::Encoder(op));
     }
 
-    /// Notes a composite whose content this phase does not rasterise.
+    /// Notes a draw this phase leaves out: a composite whose content it does not rasterise, or a
+    /// batch the target cannot hold.
     pub fn defer(&mut self) {
         self.plan.deferred += 1;
     }

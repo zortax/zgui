@@ -504,6 +504,16 @@ impl WgpuRenderer {
         self.groups.set_poison_margin(margin);
     }
 
+    /// Sets whether a plain group may be held in the composed format, as
+    /// [`GroupPool::format_for`] describes.
+    ///
+    /// [`WgpuRenderer::set_group_budget`] builds a new pool, which sets it again. Call this after
+    /// setting a budget.
+    #[doc(hidden)]
+    pub fn set_narrow_groups(&mut self, narrow: bool) {
+        self.groups.set_narrow_groups(narrow);
+    }
+
     /// How many bytes of isolated targets may be resident before the pool reduces resolution.
     ///
     /// Setting it discards every target the pool holds, because a budget that is now too small has

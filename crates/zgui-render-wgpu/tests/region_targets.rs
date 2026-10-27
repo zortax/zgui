@@ -72,12 +72,17 @@ fn area(x: i32, y: i32, width: i32, height: i32) -> Rect<i32, Device> {
     Rect::new(Point::new(x, y), Size::new(width, height))
 }
 
-/// How many bytes one isolated target of `side` device pixels square takes, after rounding.
+/// How many bytes one target of a plain group `side` device pixels square takes, after rounding.
+///
+/// A plain group is held in the composed format, four bytes a texel ([`GroupPool::format_for`]).
 fn target_bytes(side: i32) -> u64 {
     let allocated = GroupPool::new(Size::new(side, side), 0)
         .allocated_extent(zgui_render_wgpu::TargetScale::Full);
-    u64::from(GroupPool::FORMAT.block_copy_size(None).unwrap_or(8))
-        * allocated.width as u64
+    u64::from(
+        wgpu::TextureFormat::Bgra8Unorm
+            .block_copy_size(None)
+            .unwrap_or(4),
+    ) * allocated.width as u64
         * allocated.height as u64
 }
 
