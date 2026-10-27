@@ -72,16 +72,49 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
+/// The font cache directory the sweep gives each scenario, unless the caller set one.
+///
+/// The cold start reads the on-disk font cache, so its time depends on the state of that file. The
+/// sweep uses a private directory next to the binary and fills it with one start before it
+/// measures. Thus the cold start always measures a warm font cache, and the user's own cache
+/// directory has no effect. Set `ZGUI_FONT_CACHE` (for example to `off`) to measure another state.
+fn font_cache(binary: &Path) -> Option<PathBuf> {
+    if std::env::var_os("ZGUI_FONT_CACHE").is_some() {
+        return None;
+    }
+    let dir = binary.parent()?.join("zgui-bench-cache");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 /// Runs every scenario in a process of its own and returns what they printed.
 fn sweep() -> String {
     let binary = std::env::current_exe().expect("the running binary can be named");
+    let cache = font_cache(&binary);
+    let run = |name: &str| {
+        let mut command = std::process::Command::new(&binary);
+        command.args(["scenario", name]);
+        if let Some(dir) = &cache {
+            command.env("ZGUI_FONT_CACHE", dir);
+        }
+        command
+            .output()
+            .expect("the sweep can run this binary again")
+    };
+    if let Some(dir) = &cache {
+        println!("== warm-up cold-start, font cache {}", dir.display());
+        let output = run("cold-start");
+        assert!(
+            output.status.success(),
+            "the warm-up start did not finish: {}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
     let mut collected = String::new();
     for scenario in crate::scenario::ALL {
         println!("== scenario {scenario}");
-        let output = std::process::Command::new(&binary)
-            .args(["scenario", scenario])
-            .output()
-            .expect("the sweep can run this binary again");
+        let output = run(scenario);
         let text = String::from_utf8_lossy(&output.stdout);
         print!("{text}");
         assert!(

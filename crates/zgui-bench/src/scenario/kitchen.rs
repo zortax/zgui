@@ -190,10 +190,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: resize.p50,
                 band: Band::Time {
-                    baseline: 8.2,
+                    baseline: 1.84,
                     tolerance: STARTUP_TOLERANCE,
                 },
-                rationale: "the measured on-screen p50, which every box in the window pays into",
+                rationale: "measured at 1.77-1.95 ms across five runs at 2 695 boxes, which every \
+                            box in the window pays into",
                 budget: None,
                 spread: Some(resize),
             },
@@ -202,10 +203,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: click.p50,
                 band: Band::Time {
-                    baseline: 10.8,
+                    baseline: 29.6,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "the measured p50 at 1 851 boxes: one class on one element",
+                rationale: "measured at 29.2-29.7 us across five runs at 2 695 boxes: one class on \
+                            one element",
                 budget: None,
                 spread: Some(click),
             },
@@ -226,10 +228,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: quiet_turn.p50,
                 band: Band::Time {
-                    baseline: 22.0,
+                    baseline: 56.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "the measured p50 of one turn over an untouched but animating gallery",
+                rationale: "measured at 53-76 us across five runs: one turn over an untouched \
+                            gallery of 2 695 boxes whose progress bar animates",
                 budget: None,
                 spread: Some(quiet_turn),
             },
@@ -238,10 +241,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: glide.p50,
                 band: Band::Time {
-                    baseline: 610.0,
+                    baseline: 293.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "the measured p50 of one frame of the framework's own scroll animation",
+                rationale: "measured at 287-301 us across five runs: one frame of the framework's \
+                            own scroll animation, which moves the page's content space and draws \
+                            the band it uncovered",
                 budget: None,
                 spread: Some(glide),
             },

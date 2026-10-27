@@ -80,10 +80,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: crossing.p50,
                 band: Band::Time {
-                    baseline: 190.0,
+                    baseline: 136.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 187 us, well under the half-millisecond budget",
+                rationale: "measured at 133-138 us across five runs, well under the \
+                            half-millisecond budget",
                 budget: Some(500.0),
                 spread: Some(crossing),
             },

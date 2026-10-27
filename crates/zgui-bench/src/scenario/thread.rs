@@ -26,7 +26,9 @@ use zgui::view::{Anchor, IntoView, View};
 use zgui::{component, view};
 use zgui_profile::{Counter, counter};
 
-use crate::scenario::band::{Band, Measurement, Pace, STARTUP_TOLERANCE, Spread};
+use crate::scenario::band::{
+    Band, Measurement, Pace, SCHEDULER_TOLERANCE, STARTUP_TOLERANCE, Spread,
+};
 use crate::scenario::{Outcome, counters, fixture, quiet};
 
 /// How many messages the thread holds.
@@ -404,12 +406,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: cost.p50,
                 band: Band::Time {
-                    baseline: 13.2,
+                    baseline: 4.8,
                     tolerance: STARTUP_TOLERANCE,
                 },
-                rationale: "measured at 51ms before the resize retention work: the clip identity \
-                            fix alone took it to 13, and the counts beside this say where the \
-                            rest goes",
+                rationale: "measured at 4.2-5.2 ms across thirteen runs. A paragraph whose lines \
+                            hold at the new width keeps them and skips the line breaker, and the \
+                            counts beside this say where the rest goes",
                 budget: Some(8.0),
                 spread: Some(cost),
             },
@@ -418,11 +420,13 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: cost.p95,
                 band: Band::Time {
-                    baseline: 15.0,
-                    tolerance: STARTUP_TOLERANCE,
+                    baseline: 6.0,
+                    tolerance: SCHEDULER_TOLERANCE,
                 },
                 rationale: "the shoulder of the same distribution: a drag is judged by its worst \
-                            steps, which is what a person calls stutter",
+                            steps, which is what a person calls stutter. Measured at 4.5-9.5 ms \
+                            across thirteen runs, because the p95 of 32 steps is the second-worst \
+                            step and the cores it ran on set it",
                 budget: None,
                 spread: Some(cost),
             },

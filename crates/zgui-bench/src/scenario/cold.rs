@@ -14,18 +14,27 @@
 //! # What is not in it
 //!
 //! The graphics device. This runs against the headless platform, so no adapter is enumerated, no
-//! pipeline is compiled and no surface is configured — which is why the number here is about a
-//! hundred milliseconds while the same gallery opening on a real desktop takes 216–247 ms. The
-//! difference is the device, and it is left out deliberately: what a driver takes to compile a
-//! pipeline is a property of the machine and its graphics stack, it varies by more than everything
-//! measured here put together, and a band around it would fire on a driver update rather than on a
-//! change to this framework. The budget the schedule wrote — under 250 ms warm — is checked against
-//! this number, which means it is checked with room to spare rather than exactly.
+//! pipeline is compiled, no surface is configured and no driver shader cache is read — which is why
+//! the number here is smaller than the same gallery opening on a real desktop. The difference is
+//! the device, and it is left out deliberately: what a driver takes to compile a pipeline is a
+//! property of the machine and its graphics stack, it varies by more than everything measured here
+//! put together, and a band around it would fire on a driver update rather than on a change to this
+//! framework. The budget the schedule wrote — under 250 ms warm — is checked against this number,
+//! which means it is checked with room to spare rather than exactly.
+//!
+//! # Which font cache state it measures
+//!
+//! A warm one. Font discovery reads an on-disk cache (`ZGUI_FONT_CACHE`), and a start that finds no
+//! valid file takes two to three times as long. The sweep gives every scenario a private cache
+//! directory next to its binary and runs this scenario once before it measures, so the measured
+//! start always finds a valid file, and the user's own cache has no effect. Set `ZGUI_FONT_CACHE`
+//! before the sweep (for example to `off`) to measure another state. Glyphs for the first frame are
+//! rasterised on the layout pool, so the number also depends on how many cores the process gets.
 
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 
-use crate::scenario::band::{Band, Measurement, Pace, STARTUP_TOLERANCE, Spread};
+use crate::scenario::band::{Band, Measurement, Pace, SCHEDULER_TOLERANCE, Spread};
 use crate::scenario::{Outcome, counters};
 
 /// Runs the scenario.
@@ -62,10 +71,13 @@ pub(crate) fn run() -> Outcome {
             unit: "ms",
             value: first.p50,
             band: Band::Time {
-                baseline: 112.0,
-                tolerance: STARTUP_TOLERANCE,
+                baseline: 53.0,
+                tolerance: SCHEDULER_TOLERANCE,
             },
-            rationale: "measured at 102-111 ms headless; on screen with a device it is 216-247 ms",
+            rationale: "measured at 49-66 ms headless across twelve starts with a warm font \
+                        cache, and 112-163 ms with the cache off; the first frame's glyphs are \
+                        rasterised on the layout pool, so the cores the process gets set the \
+                        spread",
             budget: Some(250.0),
             spread: Some(first),
         }]

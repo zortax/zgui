@@ -253,11 +253,21 @@ pub(crate) const INTERACTION_TOLERANCE: f64 = 0.40;
 /// The tolerance a millisecond-scale measurement gets.
 ///
 /// A number in milliseconds carries hundreds of times as much work as one in microseconds, so the
-/// per-run noise is proportionally smaller: the cold-start figure this band was written against
-/// spread over 216–247 ms across runs, which is seven per cent either side of its middle. Twenty-
-/// five per cent sits above that spread with room to spare and still catches the kind of change
-/// that matters here — a font enumeration that stopped being cached, a sheet parsed twice.
+/// per-run noise is proportionally smaller: `kitchen.resize` spread over 1.77–1.95 ms across five
+/// runs and `thread.resize` over 4.2–5.2 ms across thirteen, which is about ten per cent either
+/// side of the middle. Twenty-five per cent sits above that spread and still catches the kind of
+/// change that matters here — a layout cache that stopped holding, a sheet parsed twice.
 pub(crate) const STARTUP_TOLERANCE: f64 = 0.25;
+
+/// The tolerance a measurement gets when the cores it runs on set its spread.
+///
+/// Some measurements put work on the layout pool, or are short enough that the core a process
+/// starts on sets the median. On a CPU with performance and efficiency cores, such a measurement
+/// moves by up to 1.6 times its median from process to process: `shell.resize_step` spread over
+/// 0.81–1.41 ms across thirteen runs, and `thread.resize_p95` over 4.5–9.5 ms. Seventy-five per
+/// cent admits that spread. A lost fast path still fails the band, because it costs several times
+/// the measurement.
+pub(crate) const SCHEDULER_TOLERANCE: f64 = 0.75;
 
 /// The two counts that say a change to one element was answered by invalidating the document.
 ///
