@@ -23,11 +23,25 @@ zgui-ui-icons = { path = "../zgui-ui-icons", version = "0.1.0" }
 zgui-ui-primitives = { path = "../zgui-ui-primitives", version = "0.1.0" }
 zgui-ui-tokens = { path = "../zgui-ui-tokens", version = "0.1.0" }
 
+[features]
+# What the console examples need. The component library itself asks the framework for nothing
+# platform-specific, and the console is a crate of its own here rather than a feature of the
+# framework — so this feature names no dependency. It exists to keep two examples that need a
+# kernel display out of an ordinary `cargo build --examples`.
+drm = []
+
 [dev-dependencies]
+# Only for the console examples: the console takes the display over, so a message written to
+# standard error lands on pixels the frame loop is about to overwrite, and a log has to reach a
+# file before anything can be read at all.
+tracing.workspace = true
+tracing-subscriber.workspace = true
 # Encoding the fixture pictures the scrolled-images fixture feeds through the real loader; the
 # framework decodes them back through `zgui-image`, which is the path under test.
 image.workspace = true
 zgui-testkit-view = { path = "../zgui-testkit-view", version = "0.1.0" }
+# `run_drm`, for the two console examples. Linux-gated because a bare console is: the crate's own
+# dependencies are gated the same way.
 # Reading the computed tree back out of a live window, for fixtures that ask where a page's
 # scrollable size actually came from rather than only what it is.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
@@ -50,3 +64,18 @@ accesskit_consumer.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+zgui-console = { path = "../zgui-console", version = "0.1.0" }
+
+# The two scenes that run on the kernel's display rather than on a desktop. Declared rather than
+# discovered, so that `required-features` can keep them out of a build that has no console.
+[[example]]
+name = "gallery_tty"
+path = "examples/gallery_tty.rs"
+required-features = ["drm"]
+
+[[example]]
+name = "tty_scrim"
+path = "examples/tty_scrim.rs"
+required-features = ["drm"]
