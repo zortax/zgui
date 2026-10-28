@@ -27,7 +27,7 @@ use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
 use zgui_scene::{ChunkNote, ChunkPrims, PrimitiveKind, Scene};
 
-use crate::buffer::tables::{TEXELS_WIDE, write_texels};
+use crate::buffer::tables::{TEXEL, TEXELS_WIDE, allocate_rows, write_texels};
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
@@ -42,9 +42,6 @@ pub(crate) const LANES: [PrimitiveKind; 8] = [
     PrimitiveKind::Shaded,
     PrimitiveKind::Marks,
 ];
-
-/// How many bytes one texel holds. `buffer::tables` names the same number for the side tables.
-const TEXEL: u32 = 16;
 
 /// The lane mark items live in.
 pub(crate) const MARKS_LANE: usize = 7;
@@ -180,7 +177,7 @@ impl Arena {
 
     /// An empty arena for elements of `element` bytes.
     fn new(gpu: &Gpu, label: &'static str, element: u32) -> Self {
-        let stride = element.div_ceil(TEXEL).saturating_mul(TEXEL);
+        let stride = element.div_ceil(TEXEL as u32).saturating_mul(TEXEL as u32);
         let capacity = (Self::MINIMUM_BYTES as u32 / stride).max(1);
         let (texture, view) = allocate(gpu, label, capacity, stride);
         Self {
@@ -282,7 +279,7 @@ impl Arena {
             run[index * stride..index * stride + element].copy_from_slice(record);
         }
 
-        let texels = self.stride / TEXEL;
+        let texels = self.stride / TEXEL as u32;
         write_texels(gpu, belt, encoder, &self.texture, start * texels, &run);
         run.len() as u64
     }
@@ -312,23 +309,8 @@ fn allocate(
     capacity: u32,
     stride: u32,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    let texels = capacity.saturating_mul(stride / TEXEL);
-    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: TEXELS_WIDE,
-            height: texels.div_ceil(TEXELS_WIDE).max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Uint,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
+    let texels = capacity.saturating_mul(stride / TEXEL as u32);
+    allocate_rows(gpu, label, texels.div_ceil(TEXELS_WIDE).max(1))
 }
 
 /// Ranges awaiting reclamation, bucketed by the submission that could still read them.

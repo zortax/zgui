@@ -2,41 +2,56 @@
 
 use bytemuck::Pod;
 
+use crate::buffer::tables::{ROW, TEXEL, allocate_rows, write_texels};
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
-/// A storage buffer that grows to the largest thing it has been asked to hold.
+/// A table of records the shaders read with `textureLoad`, grown to the largest thing it has been
+/// asked to hold.
 ///
-/// It is sized from a high-water mark rather than from each frame's need, so a scene that shrinks
-/// and grows again does not reallocate; and it is never sized to zero, because a bind group has to
-/// name a buffer whether or not this frame put anything in it.
+/// A texture rather than a storage buffer, for the reason `buffer::tables` states: a GL 3.3
+/// context and WebGL 2 have none at all. It is sized from a high-water mark rather than from each
+/// frame's need, so a scene that shrinks and grows again does not reallocate; and it is never
+/// sized to nothing, because a bind group has to name a texture whether or not this frame put
+/// anything in it.
 #[derive(Debug)]
-pub struct StorageBuffer {
-    /// The buffer.
-    buffer: wgpu::Buffer,
+pub struct InstanceTable {
+    /// The texture.
+    texture: wgpu::Texture,
+    /// The view a bind group names, kept because the binding borrows it.
+    view: wgpu::TextureView,
     /// What it is called, so a driver message names it.
     label: &'static str,
-    /// How many bytes it holds.
-    capacity: u64,
-    /// Changes whenever `buffer` changes identity, for bind-group cache invalidation.
+    /// How many rows it holds.
+    rows: u32,
+    /// Changes whenever `texture` changes identity, for bind-group cache invalidation.
     generation: u64,
 }
 
-impl StorageBuffer {
+impl InstanceTable {
     /// The smallest allocation, which is also what an empty frame gets.
-    const MINIMUM: u64 = 256;
+    const MINIMUM_ROWS: u32 = 1;
 
-    /// An empty buffer named `label`.
+    /// An empty table named `label`.
     pub fn new(gpu: &Gpu, label: &'static str) -> Self {
+        let (texture, view) = allocate_rows(gpu, label, Self::MINIMUM_ROWS);
         Self {
-            buffer: allocate(gpu, label, Self::MINIMUM),
+            texture,
+            view,
             label,
-            capacity: Self::MINIMUM,
+            rows: Self::MINIMUM_ROWS,
             generation: 1,
         }
     }
 
     /// Copies all `values` through the renderer's reusable staging belt.
+    ///
+    /// Every record is written at a texel boundary, so its fields sit where a loader can name
+    /// them. A record that is already a whole number of texels goes in as it is; a shorter one is
+    /// re-spaced on the way, which is what the arenas do for the same reason.
+    ///
+    /// The whole frame's records go in together, so growing the table throws away what it held
+    /// and needs no copy.
     pub fn upload<T: Pod>(
         &mut self,
         gpu: &Gpu,
@@ -44,53 +59,41 @@ impl StorageBuffer {
         encoder: &mut wgpu::CommandEncoder,
         values: &[T],
     ) -> u64 {
-        self.upload_range(gpu, belt, encoder, values, 0, values.len())
-    }
-
-    /// Copies one element range, or the whole slice when growing replaced the target buffer.
-    pub fn upload_range<T: Pod>(
-        &mut self,
-        gpu: &Gpu,
-        belt: &mut UploadBelt,
-        encoder: &mut wgpu::CommandEncoder,
-        values: &[T],
-        start: usize,
-        end: usize,
-    ) -> u64 {
-        let all = bytemuck::cast_slice(values);
-        let needed = all.len() as u64;
-        let grew = needed > self.capacity;
-        if grew {
-            self.capacity = needed.next_power_of_two().max(Self::MINIMUM);
-            self.buffer = allocate(gpu, self.label, self.capacity);
+        let element = size_of::<T>();
+        let stride = element.div_ceil(TEXEL) * TEXEL;
+        let bytes = values.len() * stride;
+        let rows = (bytes.div_ceil(ROW) as u32).max(Self::MINIMUM_ROWS);
+        if rows > self.rows {
+            self.rows = rows.next_power_of_two();
+            let (texture, view) = allocate_rows(gpu, self.label, self.rows);
+            self.texture = texture;
+            self.view = view;
             self.generation = self.generation.wrapping_add(1);
         }
-        if all.is_empty() || start == end && !grew {
+        if values.is_empty() {
             return 0;
         }
-        let element = size_of::<T>();
-        let (start, end) = if grew {
-            (0, values.len())
-        } else {
-            (start, end)
-        };
-        belt.write(
-            gpu,
-            encoder,
-            &self.buffer,
-            (start * element) as u64,
-            &all[start * element..end * element],
-        )
+        let packed: &[u8] = bytemuck::cast_slice(values);
+        if stride == element {
+            write_texels(gpu, belt, encoder, &self.texture, 0, packed);
+            return packed.len() as u64;
+        }
+        let mut run = vec![0_u8; bytes];
+        for (index, record) in packed.chunks_exact(element).enumerate() {
+            run[index * stride..index * stride + element].copy_from_slice(record);
+        }
+        write_texels(gpu, belt, encoder, &self.texture, 0, &run);
+        run.len() as u64
     }
 
     /// The binding a bind group names.
     pub fn binding(&self) -> wgpu::BindingResource<'_> {
-        self.buffer.as_entire_binding()
+        wgpu::BindingResource::TextureView(&self.view)
     }
 
     /// How many bytes it currently holds.
     pub fn capacity(&self) -> u64 {
-        self.capacity
+        u64::from(self.rows) * ROW as u64
     }
 
     /// The identity epoch of the allocation a bind group names.
@@ -100,25 +103,17 @@ impl StorageBuffer {
 
     /// Returns an oversized high-water allocation to the minimum bindable size.
     pub fn shrink(&mut self, gpu: &Gpu) -> u64 {
-        if self.capacity <= Self::MINIMUM {
+        if self.rows <= Self::MINIMUM_ROWS {
             return 0;
         }
-        let freed = self.capacity - Self::MINIMUM;
-        self.buffer = allocate(gpu, self.label, Self::MINIMUM);
-        self.capacity = Self::MINIMUM;
+        let freed = (u64::from(self.rows) - u64::from(Self::MINIMUM_ROWS)) * ROW as u64;
+        let (texture, view) = allocate_rows(gpu, self.label, Self::MINIMUM_ROWS);
+        self.texture = texture;
+        self.view = view;
+        self.rows = Self::MINIMUM_ROWS;
         self.generation = self.generation.wrapping_add(1);
         freed
     }
-}
-
-/// Allocates a storage buffer of `size` bytes.
-fn allocate(gpu: &Gpu, label: &'static str, size: u64) -> wgpu::Buffer {
-    gpu.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
 }
 
 /// The buffer a lane's draw order is fetched from, as vertex input.

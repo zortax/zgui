@@ -36,10 +36,10 @@ pub const TEXELS_WIDE: u32 = 256;
 /// `rgba32uint`: four thirty-two-bit channels. Every structure a table holds is a multiple of four
 /// bytes, so a texel is a whole number of fields and an index into the table is a whole number of
 /// texels.
-const TEXEL: usize = 16;
+pub(crate) const TEXEL: usize = 16;
 
 /// How many bytes one row holds.
-const ROW: usize = TEXELS_WIDE as usize * TEXEL;
+pub(crate) const ROW: usize = TEXELS_WIDE as usize * TEXEL;
 
 /// A table the shaders read with `textureLoad`, which grows to the largest thing it has held.
 ///
@@ -66,7 +66,7 @@ impl TableTexture {
 
     /// An empty table named `label`.
     pub fn new(gpu: &Gpu, label: &'static str) -> Self {
-        let (texture, view) = allocate(gpu, label, Self::MINIMUM_ROWS);
+        let (texture, view) = allocate_rows(gpu, label, Self::MINIMUM_ROWS);
         Self {
             texture,
             view,
@@ -98,7 +98,7 @@ impl TableTexture {
         let grew = needed > self.rows;
         if grew {
             self.rows = needed.next_power_of_two().max(Self::MINIMUM_ROWS);
-            let (texture, view) = allocate(gpu, self.label, self.rows);
+            let (texture, view) = allocate_rows(gpu, self.label, self.rows);
             self.texture = texture;
             self.view = view;
             self.generation = self.generation.wrapping_add(1);
@@ -183,7 +183,7 @@ impl TableTexture {
             return 0;
         }
         let freed = self.capacity() - u64::from(Self::MINIMUM_ROWS) * ROW as u64;
-        let (texture, view) = allocate(gpu, self.label, Self::MINIMUM_ROWS);
+        let (texture, view) = allocate_rows(gpu, self.label, Self::MINIMUM_ROWS);
         self.texture = texture;
         self.view = view;
         self.rows = Self::MINIMUM_ROWS;
@@ -249,7 +249,14 @@ fn run_extent(texel: u32, held: u32) -> (u32, u32) {
 }
 
 /// Allocates a table of `rows` rows, and the view a bind group names it by.
-fn allocate(gpu: &Gpu, label: &'static str, rows: u32) -> (wgpu::Texture, wgpu::TextureView) {
+///
+/// Every table of this format is allocated here — the side tables, the instance arenas and the
+/// frame's vector composites — so that one place states the format, the width and the usage.
+pub(crate) fn allocate_rows(
+    gpu: &Gpu,
+    label: &'static str,
+    rows: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {
