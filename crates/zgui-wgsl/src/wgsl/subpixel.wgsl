@@ -29,21 +29,20 @@ fn vs_subpixel_sprite(
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: SpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
-    out.local = corner * bounds_size(sprite.bounds);
-    out.texel = tile_texel(corner, sprite.tile);
-    out.instance = slot;
-    out.origin = bounds_origin(sprite.bounds);
+    out.v_tile = tile_bounds(sprite.tile);
+    out.texel = tile_texel(corner, out.v_tile);
+    out.v_color = rgba_of(sprite.color);
+    out.v_clip = sprite.clip;
     return out;
 }
 
 @fragment
 fn fs_subpixel_sprite(in: SpriteVarying) -> SubpixelOutput {
-    let sprite = sprites[in.instance];
-    let clip = clip_coverage(device_position(in.position.xy), sprite.clip);
-    let color = rgba_of(sprite.color);
+    let clip = clip_coverage(device_position(in.position.xy), in.v_clip);
+    let color = in.v_color;
     let straight = straight_rgb(color);
 
-    var sample = sample_atlas(in.texel, sprite.tile, 0.0).rgb;
+    var sample = sample_atlas(in.texel, in.v_tile, 0.0).rgb;
     if globals.text.z != 0.0 {
         // The display's subpixels run the other way round, so the coverage does too.
         sample = sample.bgr;

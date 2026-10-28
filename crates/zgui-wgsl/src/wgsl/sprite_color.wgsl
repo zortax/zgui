@@ -17,39 +17,43 @@
 fn vs_color_sprite(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
-) -> SpriteVarying {
+) -> ColorSpriteVarying {
     let packed = remap[instance];
     let slot = packed & REMAP_SLOT_MASK;
     let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let sprite = sprites[slot];
     let corner = unit_corner(vertex);
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
-    var out: SpriteVarying;
+    var out: ColorSpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
     out.local = corner * bounds_size(sprite.bounds);
-    out.texel = tile_texel(corner, sprite.tile);
-    out.instance = slot;
     out.origin = bounds_origin(sprite.bounds);
+    out.v_tile = tile_bounds(sprite.tile);
+    out.texel = tile_texel(corner, out.v_tile);
+    out.v_frame = bounds_of(sprite.frame);
+    out.v_radii_lo = radii_lo(sprite.radii);
+    out.v_radii_hi = radii_hi(sprite.radii);
+    out.v_ids = vec2<u32>(sprite.clip, sprite.flags);
+    out.v_opacity = sprite.opacity;
     return out;
 }
 
 @fragment
-fn fs_color_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
-    let sprite = sprites[in.instance];
+fn fs_color_sprite(in: ColorSpriteVarying) -> @location(0) vec4<f32> {
     // The level of detail comes from the texel-position derivatives, taken here because control
     // flow is still uniform: after the clip branch below they would be undefined. Never negative,
     // because magnification is the sampler's business rather than a level.
     let texel_dx = dpdx(in.texel);
     let texel_dy = dpdy(in.texel);
     let lod = 0.5 * log2(max(max(dot(texel_dx, texel_dx), dot(texel_dy, texel_dy)), 1.0));
-    let clip = clip_coverage(device_position(in.position.xy), sprite.clip);
+    let clip = clip_coverage(device_position(in.position.xy), in.v_ids.x);
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
     // The texels are premultiplied, which is what keeps a soft edge over a light background soft
     // instead of blooming: a half-covered edge texel contributes half its colour, not all of it.
-    var texel = sample_atlas(in.texel, sprite.tile, lod);
-    if (sprite.flags & GRAYSCALE) != 0u {
+    var texel = sample_atlas(in.texel, in.v_tile, lod);
+    if (in.v_ids.y & GRAYSCALE) != 0u {
         let gray = color_brightness(straight_rgb(texel));
         texel = vec4<f32>(vec3<f32>(gray) * texel.a, texel.a);
     }
@@ -58,9 +62,9 @@ fn fs_color_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
     // both cases.
     let rounded = rect_coverage(
         in.local,
-        bounds_from(sprite.frame, in.origin),
-        sprite.radii,
+        bounds_from(bounds_from_vec4(in.v_frame), in.origin),
+        radii_from_vec4(in.v_radii_lo, in.v_radii_hi),
         CORNER_ROUND,
     );
-    return texel * sprite.opacity * rounded * clip;
+    return texel * in.v_opacity * rounded * clip;
 }
