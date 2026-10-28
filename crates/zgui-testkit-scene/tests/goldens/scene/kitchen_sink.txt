@@ -3,7 +3,7 @@ damage full
 passes 1 clip_layers=0 culled=0
   pass 0 region=rect(32, 32, 64, 48) clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]] instanced=true composite_order=5 items=1
 primitives 12 batches=12
-  shadow order=1 bounds=rect(-5, -3, 266, 122) blur=4 color=premul_srgb[0, 0, 0, 0.25] element=rect(8, 8, 240, 96)
+  shadow order=1 bounds=rect(-2.846, -0.846, 261.692, 117.692) blur=4 color=premul_srgb[0, 0, 0, 0.25] element=rect(8, 8, 240, 96)
   quad order=2 bounds=rect(8, 8, 240, 96) fill=linear from=(0, 0) to=(256, 0) in oklab shorter stops=[srgb(1, 0, 0, 1)@0, oklch(0.7, 0.1, 320, 1)@1] border=[2, 2, 2, 2] stroke=solid srgb(0.2, 0.4, 0.6, 1) style=dashed radii=[6, 6, 6, 6, 6, 6, 6, 6]
   decoration order=3 bounds=rect(16, 40, 64, 2) color=premul_srgb[0.9, 0.1, 0.1, 1] thickness=1 style=wavy clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]]
   mono_sprite order=3 bounds=rect(16, 16, 8, 16) color=premul_srgb[0, 0, 0, 1] tile=mono:0#0 texels=rect(0, 0, 8, 16) clip=[rect(8, 8, 240, 96) radii=[6, 6, 6, 6, 6, 6, 6, 6]]
