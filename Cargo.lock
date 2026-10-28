@@ -5950,6 +5950,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-gbm"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "zgui-geom"
 version = "0.1.0"
 dependencies = [

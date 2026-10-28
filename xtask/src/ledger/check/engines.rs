@@ -139,7 +139,13 @@ const LEDGER: &[(&str, &[&str])] = &[
     // has to start where neither the library nor its data files exist. `zgui-seat` opens libseat,
     // because it has to start where no session daemon answers. `zgui-libinput` opens libinput,
     // because it has to start where that library is absent and read the devices itself.
-    ("libloading", &["zgui-xkb", "zgui-seat", "zgui-libinput"]),
+    // `libgbm` is opened here and nowhere else, so a machine without the library has to start
+    // and say so. The crates that allocate through it do not open it, which is the whole point of
+    // the rule.
+    (
+        "libloading",
+        &["zgui-xkb", "zgui-seat", "zgui-libinput", "zgui-gbm"],
+    ),
     (
         "accesskit",
         &[
