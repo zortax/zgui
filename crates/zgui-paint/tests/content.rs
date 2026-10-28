@@ -59,7 +59,7 @@ fn an_attached_image_becomes_a_colour_sprite_over_the_content_box() {
         .store()
         .fragment(harness.fragment_of("picture"))
         .expect("the replaced box produced a fragment")
-        .content_box;
+        .content_box();
     assert_eq!(
         sprite.bounds,
         [

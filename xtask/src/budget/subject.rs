@@ -31,6 +31,13 @@ pub(crate) const SUBJECTS: &[Subject] = &[
     },
     Subject {
         member: "zgui-runtime",
+        target: "evict_shaping",
+        about: "the shaping budget examines what a frame changed and no other paragraph",
+        required: &["eviction_work_follows_what_changed"],
+        listed_in: HERE,
+    },
+    Subject {
+        member: "zgui-runtime",
         target: "budget_registry",
         about: "every registered cache reports itself, comes back under a level it is over, and \
                 can be emptied",

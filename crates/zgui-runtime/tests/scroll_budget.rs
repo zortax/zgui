@@ -115,12 +115,19 @@ fn topmost_row(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>)
             if matches!(fragment.kind, zgui_layout::FragmentKind::Scrollbar { .. }) {
                 continue;
             }
-            if (fragment.border_box.size.height.0 - 20.0).abs() > 0.5 {
+            // Where it is drawn: a scrolled row keeps its rectangle when its container draws it
+            // in a content space of its own.
+            let border = zgui_layout::fragment::transform::placed::onto_device(
+                fragment.border_box,
+                fragment.transform,
+                &window.placements(),
+            );
+            if (border.size.height.0 - 20.0).abs() > 0.5 {
                 continue;
             }
             top = Some(match top {
-                Some(held) => held.min(fragment.border_box.origin.y.0),
-                None => fragment.border_box.origin.y.0,
+                Some(held) => held.min(border.origin.y.0),
+                None => border.origin.y.0,
             });
         }
     }
@@ -142,6 +149,8 @@ fn scroll_does_not_restyle_relayout_or_reencode() {
     let encode = built.control(Counter::ChunksReencoded);
     let rebuild = built.control(Counter::HitIndexRebuilds);
 
+    // One scroll before the measured one, so the measured one starts from a scrolled port.
+    wheel(&mut harness, 1.0);
     let before = topmost_row(&harness);
     let scrolled = recording.measure(|| {
         wheel(&mut harness, 3.0);

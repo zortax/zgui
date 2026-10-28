@@ -409,3 +409,55 @@ fn a_link_in_another_space_narrows_nothing() {
         "and the window's is the only one measured where the page's ink is",
     );
 }
+
+/// A chain resolved with one space kept leaves that space's links in its coordinates, apart from
+/// the others, and marks which rounded tests they gave.
+#[test]
+fn a_kept_space_stays_in_its_own_coordinates() {
+    use zgui_geom::{Corners, Matrix4};
+
+    use crate::prim::CornerShape;
+    use crate::spatial::{OwnSpace, PropertyOwner, SpatialTree};
+
+    let mut spaces = SpatialTree::with_viewport();
+    let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    let content = spaces.space_of(
+        spaces.viewport(),
+        owner,
+        OwnSpace::of(Some(Matrix4::translation(0.0, -40.0, 0.0)), None, false),
+    );
+    let viewport = spaces.viewport();
+    let round = |r: f32| Corners::uniform(Vec2::splat(DevicePx(r)));
+    let shaped = |area, r, space| ClipLink::shaped(area, round(r), CornerShape::ROUND, space);
+    let matrix_of = |id| spaces.resolve(id);
+
+    // The outer test on the device, the inner one kept.
+    let mut clips = ClipTable::rooted();
+    let port = clips.only(shaped(rect(0.0, 0.0, 100.0, 100.0), 8.0, viewport));
+    let row = clips.push(port, shaped(rect(0.0, 50.0, 80.0, 20.0), 4.0, content));
+    let kept = clips
+        .resolve_kept(row, &matrix_of, content)
+        .expect("two rounded links");
+    assert_eq!(kept.kept_aabb, [0.0, 50.0, 80.0, 20.0]);
+    assert_eq!(kept.clip.aabb, [0.0, 0.0, 100.0, 100.0]);
+    assert_eq!(kept.clip.rounded_count, 2);
+    assert_eq!(kept.clip.rounded[0].rect, [0.0, 0.0, 100.0, 100.0]);
+    assert_eq!(kept.clip.rounded[1].rect, [0.0, 50.0, 80.0, 20.0]);
+    assert_eq!(kept.kept_tests, 0b10, "bit 0 is the outer test");
+
+    // The outer test kept, the inner one on the device.
+    let mut clips = ClipTable::rooted();
+    let port = clips.only(shaped(rect(0.0, 60.0, 100.0, 100.0), 8.0, content));
+    let row = clips.push(port, shaped(rect(5.0, 30.0, 80.0, 20.0), 4.0, viewport));
+    let kept = clips
+        .resolve_kept(row, &matrix_of, content)
+        .expect("two rounded links");
+    assert_eq!(kept.kept_aabb, [0.0, 60.0, 100.0, 100.0]);
+    assert_eq!(kept.clip.aabb, [5.0, 30.0, 80.0, 20.0]);
+    assert_eq!(kept.clip.rounded[0].rect, [0.0, 60.0, 100.0, 100.0]);
+    assert_eq!(kept.kept_tests, 0b01);
+
+    // A third rounded link has no room in the kept form.
+    let deep = clips.push(row, shaped(rect(6.0, 31.0, 20.0, 10.0), 2.0, content));
+    assert_eq!(clips.resolve_kept(deep, &matrix_of, content), None);
+}

@@ -26,6 +26,8 @@ struct BlurParams {
     // different answer depending on how much of the frame was being redrawn — which is exactly
     // the property that has to hold whatever the damage set says.
     valid: vec4<f32>,
+    // xy: the device pixel the source's first texel holds; zw: the same for the destination.
+    origins: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> blur: BlurParams;
@@ -50,12 +52,12 @@ fn vs_blur(@builtin(vertex_index) vertex: u32) -> BlurVarying {
 
 // The device pixel a destination texel's centre sits at.
 fn blur_device_position(position: vec2<f32>) -> vec2<f32> {
-    return (floor(position) + vec2<f32>(0.5)) / blur.sampling.y;
+    return (floor(position) + vec2<f32>(0.5)) / blur.sampling.y + blur.origins.zw;
 }
 
 // Where a device position lands in the source, in source texels.
 fn blur_source_texel(device: vec2<f32>) -> vec2<f32> {
-    return device * blur.sampling.x;
+    return (device - blur.origins.xy) * blur.sampling.x;
 }
 
 // The source at a position in source texels, clamped to what was written.

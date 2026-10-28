@@ -6,7 +6,9 @@
 //! benchmark that means to measure it has to clear the driver's cache first, or it measures
 //! nothing and passes.
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::gpu::device::Gpu;
 
@@ -20,6 +22,13 @@ pub struct PipelineCache {
     cache: Option<wgpu::PipelineCache>,
     /// Where its contents are kept.
     path: Option<PathBuf>,
+    /// Whether a pipeline was built with the cache since it was last written.
+    unsaved: Cell<bool>,
+    /// The length of the blob last loaded or written.
+    ///
+    /// The driver's data grows only when it compiles a pipeline, so data of this length holds
+    /// nothing new.
+    written: Cell<usize>,
 }
 
 impl PipelineCache {
@@ -39,6 +48,7 @@ impl PipelineCache {
             return Self::default();
         };
         let data = std::fs::read(&path).ok();
+        let written = data.as_ref().map_or(0, Vec::len);
         // SAFETY: the data is either absent or the bytes this program previously wrote for an
         // adapter with this exact identity, and wgpu validates the blob's own header before the
         // driver sees it. `fallback` is set, so a blob the driver rejects costs a recompilation
@@ -54,33 +64,73 @@ impl PipelineCache {
         Self {
             cache: Some(cache),
             path: Some(path),
+            unsaved: Cell::new(false),
+            written: Cell::new(written),
         }
     }
 
     /// The handle a pipeline is built with.
+    ///
+    /// Only a pipeline build asks for it, so a call marks the cache as holding unsaved data.
     pub fn handle(&self) -> Option<&wgpu::PipelineCache> {
+        if self.cache.is_some() {
+            self.unsaved.set(true);
+        }
         self.cache.as_ref()
     }
 
-    /// Writes the cache back, if there is one.
+    /// Whether a pipeline was built with the cache since it was last written.
+    #[cfg(test)]
+    pub(crate) fn unsaved(&self) -> bool {
+        self.unsaved.get()
+    }
+
+    /// Whether the cache has a device cache and a path to keep it at.
+    #[cfg(test)]
+    pub(crate) fn persists(&self) -> bool {
+        self.cache.is_some() && self.path.is_some()
+    }
+
+    /// Writes the cache back when a pipeline was built since the last write and the driver's data
+    /// changed length.
     ///
-    /// Failure is logged and otherwise ignored: a cache that could not be written costs the next
-    /// launch some compilation, and refusing to start over it would be absurd.
+    /// A pipeline that a frame builds on demand, such as one for a group target format, is in the
+    /// next launch's cache only through this write. Without it, that launch compiles the pipeline
+    /// again in its first frame whenever the driver's own cache misses.
+    ///
+    /// The blob goes to a temporary file first and then replaces the old one, so a launch that
+    /// reads it meanwhile sees a whole blob. Failure is logged and otherwise ignored: a cache that
+    /// could not be written costs the next launch some compilation.
     pub fn store(&self) {
         let (Some(cache), Some(path)) = (&self.cache, &self.path) else {
             return;
         };
+        if !self.unsaved.replace(false) {
+            return;
+        }
         let Some(data) = cache.get_data() else {
             return;
         };
+        if data.len() == self.written.get() {
+            return;
+        }
         if let Some(directory) = path.parent()
             && let Err(error) = std::fs::create_dir_all(directory)
         {
             tracing::debug!(?error, "the pipeline cache directory could not be created");
             return;
         }
-        if let Err(error) = std::fs::write(path, data) {
-            tracing::debug!(?error, "the pipeline cache could not be written");
+        // Unique to this write, because renderers in several threads and processes share the path.
+        static WRITES: AtomicU64 = AtomicU64::new(0);
+        let write = WRITES.fetch_add(1, Ordering::Relaxed);
+        let staged = path.with_extension(format!("{}.{write}.tmp", std::process::id()));
+        let length = data.len();
+        match std::fs::write(&staged, data).and_then(|()| std::fs::rename(&staged, path)) {
+            Ok(()) => self.written.set(length),
+            Err(error) => {
+                let _ = std::fs::remove_file(&staged);
+                tracing::debug!(?error, "the pipeline cache could not be written");
+            }
         }
     }
 }

@@ -57,6 +57,8 @@ pub struct StyleEngine {
     deps: StyleDependencies,
     /// Each element's text keys, as of its last restyle.
     texts: TextKeyStore,
+    /// The elements whose computed style read a viewport unit, as of their last restyle.
+    unit_readers: crate::device::viewport::UnitReaders,
     /// The root-relative quantities units resolve against.
     root_metrics: stylist::RootMetrics,
     /// The text colours that changed in the last restyle.
@@ -81,6 +83,9 @@ pub struct StyleEngine {
     refreshed_animations: Vec<zgui_dom::NodeIndex>,
     /// What each rule chain reads and declares, kept from one restyle to the next.
     refs: crate::driver::traversal::RefsCache,
+    /// The computed styles earlier cascades produced, by rule chain, kept from one restyle to the
+    /// next.
+    shared: crate::driver::share::SharedStyles,
     /// The user-agent sheet, held so that it stays installed.
     _user_agent: SheetHandle,
 }
@@ -122,6 +127,7 @@ impl StyleEngine {
             sheets,
             deps: StyleDependencies::unusable(),
             texts: TextKeyStore::new(),
+            unit_readers: crate::device::viewport::UnitReaders::default(),
             root_metrics: stylist::RootMetrics::default(),
             text_paint_updates: Vec::new(),
             animations: Animations::new(),
@@ -129,6 +135,7 @@ impl StyleEngine {
             animation_waiting: Vec::new(),
             refreshed_animations: Vec::new(),
             refs: crate::driver::traversal::RefsCache::default(),
+            shared: crate::driver::share::SharedStyles::default(),
             _user_agent: user_agent,
         }
     }
@@ -136,6 +143,12 @@ impl StyleEngine {
     /// The animations and transitions this document is running.
     pub fn animations(&self) -> &Animations {
         &self.animations
+    }
+
+    /// The animations this document is running, to change how they are applied.
+    #[cfg(test)]
+    pub(crate) fn animations_mut(&mut self) -> &mut Animations {
+        &mut self.animations
     }
 
     /// The surface the current device was built for.
@@ -152,6 +165,7 @@ impl StyleEngine {
             &mut self.stylist,
             &self.lock,
             document,
+            &mut self.unit_readers,
             &self.metrics,
             self.viewport,
             next,

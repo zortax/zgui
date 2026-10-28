@@ -20,6 +20,11 @@ fn path(name: &str) -> PathBuf {
 
 /// Renders `harness`'s finished scene and compares it against the golden called `name`.
 fn assert_scene(name: &str, harness: &Harness) {
+    // A transcript prints each primitive in its own space, which the poison test mode moves by
+    // design. The assertions beside each transcript still run.
+    if support::poison() != 0.0 {
+        return;
+    }
     let transcript = zgui_testkit_scene::transcript::of(&harness.scene, &harness.damage);
     golden::assert_matches(&path(name), transcript.as_str());
 }

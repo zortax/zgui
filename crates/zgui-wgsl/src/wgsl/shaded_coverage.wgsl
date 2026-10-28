@@ -14,9 +14,9 @@ fn fs_shaded_coverage(in: ShadedVarying) -> @location(0) vec4<f32> {
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let point = in.local - in.shift;
+    let point = in.origin + in.local;
     let paint_origin = vec2<f32>(quad.paint_origin.x, quad.paint_origin.y);
-    let input = shader_input(quad, point);
+    let input = shader_input(quad, in.local);
     let outer = saturate(coverage(input, shader_params.user));
     if outer <= 0.0 {
         return vec4<f32>(0.0);

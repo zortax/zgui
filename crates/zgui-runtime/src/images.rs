@@ -933,7 +933,7 @@ fn demand_of(
             let Some(fragment) = layout.fragment(*fragment) else {
                 continue;
             };
-            let size = fragment.content_box.size;
+            let size = fragment.content_box().size;
             let (width, height) = (size.width.0, size.height.0);
             if width <= 0.0 || height <= 0.0 {
                 continue;

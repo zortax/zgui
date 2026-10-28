@@ -40,6 +40,7 @@ smallvec.workspace = true
 # The counters have to hold in an optimised build as well as a debug one, and they are compiled
 # out unless this feature asks for them.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+proptest.workspace = true
 
 [lints]
 workspace = true

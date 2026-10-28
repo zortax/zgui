@@ -35,7 +35,7 @@ fn glyph_phase(device: vec2<f32>) -> vec4<f32> {
 
 // A device point in the clip space of the target, or of the bin page with `shift` added.
 fn device_to_clip(device: vec2<f32>, shift: vec2<f32>) -> vec4<f32> {
-    let texel = (device + shift) * globals.viewport.zw;
+    let texel = (device + shift - globals.origin.xy) * globals.viewport.zw;
     return vec4<f32>(
         texel.x / globals.viewport.x * 2.0 - 1.0,
         1.0 - texel.y / globals.viewport.y * 2.0,
@@ -63,8 +63,9 @@ fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
         // Out to whole texels of the target: a half-resolution texel holds two device pixels, and
         // a cell that ends on an odd one still has to reach the texel of its last pixel.
         let scale = globals.viewport.zw;
-        let low = floor(corner * scale) / scale;
-        let high = ceil((corner + vec2<f32>(size)) * scale) / scale;
+        let origin = globals.origin.xy;
+        let low = floor((corner - origin) * scale) / scale + origin;
+        let high = ceil((corner + vec2<f32>(size) - origin) * scale) / scale + origin;
         device = low + unit_corner(vertex) * (high - low);
     }
     // Back into the item's space, for the paint: the transform is affine on this route.

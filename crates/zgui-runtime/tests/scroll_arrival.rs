@@ -231,12 +231,13 @@ fn first_row_top(harness: &zgui_platform_headless::Harness<Runtime>) -> f32 {
             if matches!(fragment.kind, zgui_layout::FragmentKind::Scrollbar { .. }) {
                 continue;
             }
-            if (fragment.border_box.size.height.0 - ROW).abs() > 0.5 {
+            let border = fragment.on_device(fragment.border_box, &window.placements());
+            if (border.size.height.0 - ROW).abs() > 0.5 {
                 continue;
             }
             top = Some(match top {
-                Some(held) => held.min(fragment.border_box.origin.y.0),
-                None => fragment.border_box.origin.y.0,
+                Some(held) => held.min(border.origin.y.0),
+                None => border.origin.y.0,
             });
         }
     }

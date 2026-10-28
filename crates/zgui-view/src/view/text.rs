@@ -8,16 +8,14 @@ use crate::id::NodeId;
 use crate::view::anchor::Anchor;
 use crate::view::view::View;
 
-/// One text node, and what was last written to it.
+/// One text node.
 ///
-/// The remembered text is what turns "a signal was written" into "the text actually changed":
-/// signals have no equality gate of their own, so without this comparison every write would reach
-/// the backend and mark the node for reshaping.
+/// A write first asks the backend whether the node already holds the text. Signals have no
+/// equality gate of their own, so without this comparison every write would reach the backend and
+/// mark the node for reshaping.
 pub struct TextState {
     /// The node.
     node: NodeId,
-    /// What was last written to it.
-    last: String,
 }
 
 impl TextState {
@@ -25,7 +23,6 @@ impl TextState {
     pub fn new(dom: &DomHandle, text: &str) -> Self {
         Self {
             node: dom.create_text(text),
-            last: text.to_owned(),
         }
     }
 
@@ -38,11 +35,9 @@ impl TextState {
     ///
     /// Returns whether the backend was touched.
     pub fn set(&mut self, dom: &DomHandle, text: &str) -> bool {
-        if self.last == text {
+        if dom.text_is(self.node, text) {
             return false;
         }
-        self.last.clear();
-        self.last.push_str(text);
         dom.set_text(self.node, text);
         true
     }
@@ -68,6 +63,8 @@ macro_rules! text_view {
         $(
             impl View for $type {
                 type State = TextState;
+
+                const REBUILDS_IN_PLACE: bool = true;
 
                 fn build(self, cx: &mut BuildCx<'_>) -> Self::State {
                     let text = $text(&self);

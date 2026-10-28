@@ -61,6 +61,13 @@ impl Decorations {
         }
     }
 
+    /// Forgets every box entered, and keeps the allocations.
+    pub fn clear(&mut self) {
+        self.contributed.clear();
+        self.floor = 0;
+        self.frames.clear();
+    }
+
     /// Leaves the box most recently entered.
     ///
     /// # Panics

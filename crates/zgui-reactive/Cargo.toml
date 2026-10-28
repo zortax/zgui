@@ -23,6 +23,7 @@ futures.workspace = true
 reactive_graph.workspace = true
 reactive_stores.workspace = true
 send_wrapper.workspace = true
+smallvec.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

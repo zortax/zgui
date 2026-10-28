@@ -138,9 +138,17 @@ fn top_of(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>, clas
             let Some(fragment) = layout.fragment(*frag) else {
                 continue;
             };
-            found = Some(found.map_or(fragment.border_box.origin.y.0, |held: f32| {
-                held.min(fragment.border_box.origin.y.0)
-            }));
+            // Where it is drawn: a scrolled box keeps its rectangle when its container draws it
+            // in a content space of its own.
+            let top = zgui_layout::fragment::transform::placed::onto_device(
+                fragment.border_box,
+                fragment.transform,
+                &window.placements(),
+            )
+            .origin
+            .y
+            .0;
+            found = Some(found.map_or(top, |held: f32| held.min(top)));
         }
     }
     found.unwrap_or_else(|| panic!("nothing in the document carries `{class}`"))

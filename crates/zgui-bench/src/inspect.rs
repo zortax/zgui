@@ -99,13 +99,16 @@ pub(crate) fn scroll_signature(window: &zgui::runtime::Window) -> String {
 /// The centre of every 34x34 box in the window, which is what the probe swatches are.
 pub(crate) fn swatch_centres(window: &zgui::runtime::Window) -> Vec<Point<CssPx, Css>> {
     let layout = window.layout().borrow();
+    let placements = window.placements();
     let mut found = Vec::new();
     for key in layout.keys() {
         for fragment in layout.fragments_of_box(key) {
             let Some(fragment) = layout.fragment(*fragment) else {
                 continue;
             };
-            let border: zgui::geom::Rect<DevicePx, Device> = fragment.border_box;
+            // Through the anchor alone, which ignores the swatch's own transform.
+            let border: zgui::geom::Rect<DevicePx, Device> =
+                fragment.on_device(fragment.border_box, &placements);
             let width = border.size.width.0;
             let height = border.size.height.0;
             if (width - 34.0).abs() < 0.5 && (height - 34.0).abs() < 0.5 {

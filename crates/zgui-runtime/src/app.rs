@@ -501,26 +501,50 @@ pub struct Runtime {
     failure: Failure,
     /// The cascade's worker pool, shared by every window.
     ///
-    /// Built eagerly so the first restyle — the largest cascade the application will ever run —
-    /// is the first to use it. `None` when the application asked for a serial cascade.
-    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
-    /// The layout engine's worker pool, shared the same way and for the same reason.
+    /// Its workers start on the first broad restyle of a document large enough to use them.
+    /// `None` when the application asked for a serial cascade.
+    style_pool: Option<Rc<StylePoolCell>>,
+    /// The layout engine's worker pool, shared the same way.
+    ///
+    /// Its workers start on the first batch or pre-shape that layout distributes.
     layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
+}
+
+/// The cascade's worker pool, started on first use.
+pub(crate) struct StylePoolCell {
+    /// How many workers the pool starts.
+    width: usize,
+    /// The pool, once a restyle asks for it.
+    pool: std::cell::OnceCell<zgui_style::engine::thread_pool::StylePool>,
+}
+
+impl StylePoolCell {
+    /// A cell for a pool of `width` workers, with no worker started.
+    fn new(width: usize) -> Self {
+        Self {
+            width,
+            pool: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The pool, started on the first call.
+    pub(crate) fn get(&self) -> &zgui_style::engine::thread_pool::StylePool {
+        self.pool
+            .get_or_init(|| zgui_style::engine::thread_pool::StylePool::new(self.width))
+    }
 }
 
 /// The cascade pool an application runs with, from the environment or its builder.
 ///
 /// `ZGUI_STYLE_THREADS` overrides the builder so a run can be forced serial, or to an exact
 /// width, without a rebuild.
-fn style_pool_for(
-    requested: Option<usize>,
-) -> Option<Rc<zgui_style::engine::thread_pool::StylePool>> {
+fn style_pool_for(requested: Option<usize>) -> Option<Rc<StylePoolCell>> {
     let width = style_pool_width(
         std::env::var("ZGUI_STYLE_THREADS").ok().as_deref(),
         requested,
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
     );
-    (width > 1).then(|| Rc::new(zgui_style::engine::thread_pool::StylePool::new(width)))
+    (width > 1).then(|| Rc::new(StylePoolCell::new(width)))
 }
 
 /// How wide the cascade pool should be, with the environment over the builder over the machine.
@@ -532,6 +556,27 @@ fn style_pool_width(env: Option<&str>, requested: Option<usize>, machine: usize)
     env.and_then(|value| value.trim().parse::<usize>().ok())
         .or(requested)
         .unwrap_or(machine)
+}
+
+/// The extent a new window's renderer starts at, in device pixels.
+///
+/// A surface that the compositor has not configured yet has no extent. The extent the window
+/// asked for, at the surface's current scale, is then the likeliest first extent, and a swap chain
+/// configured at it is not configured again by the first frame. With no extent asked for, the
+/// surface's own answer stays, and the first frame configures the swap chain again.
+fn first_extent(
+    surface: Size<zgui_geom::DevicePx, zgui_geom::Device>,
+    asked: Option<Size<CssPx, Css>>,
+    scale: f64,
+) -> Size<i32, zgui_geom::Device> {
+    let known = Size::new(surface.width.0 as i32, surface.height.0 as i32);
+    match asked {
+        Some(asked) if known.width < 1 || known.height < 1 => Size::new(
+            (f64::from(asked.width.0) * scale).round() as i32,
+            (f64::from(asked.height.0) * scale).round() as i32,
+        ),
+        _ => known,
+    }
 }
 
 /// The layout pool an application runs with, resolved the same way as the cascade's.
@@ -718,12 +763,10 @@ impl Runtime {
                 .clone_from(&self.application_id);
         }
         let surface = cx.create_surface(&self.live[index].spec.attributes)?;
-        let size = surface.size();
+        let scale = surface.scale_factor();
+        let size = first_extent(surface.size(), self.live[index].spec.attributes.size, scale);
         let translucent = self.live[index].spec.attributes.transparent;
-        let target = RenderTarget::new(
-            zgui_geom::Size::new(size.width.0 as i32, size.height.0 as i32),
-            zgui_geom::Scale::new(surface.scale_factor() as f32),
-        );
+        let target = RenderTarget::new(size, zgui_geom::Scale::new(scale as f32));
         // A window asked to be transparent is composed translucent from its first frame: the
         // renderer picks a premultiplied presentation for it, and the paint gives its text ordinary
         // coverage.
@@ -1352,7 +1395,22 @@ impl AppHandler for Runtime {
 
 #[cfg(test)]
 mod tests {
-    use super::style_pool_width;
+    use zgui_geom::{CssPx, DevicePx, Size};
+
+    use super::{first_extent, style_pool_width};
+
+    #[test]
+    fn an_unconfigured_surface_starts_at_the_extent_the_window_asked_for() {
+        let unknown = Size::new(DevicePx(0.0), DevicePx(0.0));
+        let asked = Some(Size::new(CssPx(1080.0), CssPx(720.0)));
+        assert_eq!(first_extent(unknown, asked, 1.0), Size::new(1080, 720));
+        assert_eq!(first_extent(unknown, asked, 1.5), Size::new(1620, 1080));
+        // Nothing asked for: the surface's answer stays.
+        assert_eq!(first_extent(unknown, None, 1.0), Size::new(0, 0));
+        // A surface that knows its extent keeps it.
+        let known = Size::new(DevicePx(1916.0), DevicePx(1051.0));
+        assert_eq!(first_extent(known, asked, 1.0), Size::new(1916, 1051));
+    }
 
     #[test]
     fn the_environment_overrides_the_builder_and_the_builder_the_machine() {

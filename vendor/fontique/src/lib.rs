@@ -53,6 +53,9 @@ mod script;
 mod source;
 
 mod source_cache;
+// ZGUI-PATCH: counters for the on-disk system font cache.
+#[cfg(feature = "std")]
+mod system_cache;
 
 pub use linebender_resource_handle::Blob;
 pub use script::ScriptExt;
@@ -70,6 +73,9 @@ pub use source::{SourceId, SourceInfo, SourceKind};
 #[cfg(all(feature = "system", target_vendor = "apple"))]
 use objc2 as _;
 pub use source_cache::{SourceCache, SourceCacheOptions};
+// ZGUI-PATCH: counters for the on-disk system font cache.
+#[cfg(feature = "std")]
+pub use system_cache::{SystemCacheCounts, system_cache_counts};
 
 #[cfg(not(target_has_atomic = "64"))]
 use core::sync::atomic::AtomicU32 as AtomicCounter;

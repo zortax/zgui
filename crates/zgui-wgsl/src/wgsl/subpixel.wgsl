@@ -29,10 +29,10 @@ fn vs_subpixel_sprite(
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: SpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
-    out.local = local;
+    out.local = corner * bounds_size(sprite.bounds);
     out.texel = tile_texel(corner, sprite.tile);
     out.instance = slot;
-    out.shift = shift;
+    out.origin = bounds_origin(sprite.bounds);
     return out;
 }
 

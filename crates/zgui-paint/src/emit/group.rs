@@ -103,23 +103,27 @@ pub fn isolation(style: &PaintStyle, fragment: &Fragment) -> Isolation {
 
 /// What a group writes, in the coordinate system `space` it composites under.
 ///
-/// The fragment's subtree ink is on the device, through the matrix `space` had when the fragment
-/// was composed. A place write moves `space` and composes nothing, so a device rectangle goes stale
-/// while the content drawn under `space` moves on. In the coordinates of `space` the rectangle moves
-/// with the content, as the rectangle of every primitive does.
+/// The fragment's subtree ink is in its anchor's space, through the matrix `space` had when the
+/// fragment was composed, and the anchor's matrix puts it on the device. A place write moves
+/// `space` and composes nothing, so a device rectangle goes stale while the content drawn under
+/// `space` moves on. In the coordinates of `space` the rectangle moves with the content, as the
+/// rectangle of every primitive does.
 ///
 /// The fragment's own ink and local ink are one rectangle on the two sides of the composition
 /// matrix, which gives the way back for a translation and a scale. A matrix that turns, skews or
 /// flips, or a fragment with no ink of its own, maps back through the current matrix instead, as
 /// the box around the result.
 fn local_bounds(scene: &Scene, fragment: &Fragment, space: SpatialId) -> Rect<DevicePx, Device> {
-    let device = fragment.subtree_ink;
+    let device = fragment.on_device_in(fragment.subtree_ink, &scene.spatial);
     let Some(matrix) = scene.spatial.resolve(space) else {
         return device;
     };
     let [x_axis, y_axis, ..] = matrix.columns;
     let axis_aligned = x_axis[1] == 0.0 && y_axis[0] == 0.0 && x_axis[0] > 0.0 && y_axis[1] > 0.0;
-    let (ink, local) = (fragment.ink, fragment.local_ink);
+    let (ink, local) = (
+        fragment.on_device_in(fragment.ink, &scene.spatial),
+        fragment.local_ink,
+    );
     let fits = |device: f32, local: f32| device > 0.0 && local > 0.0;
     if !axis_aligned
         || !fits(ink.size.width.0, local.size.width.0)

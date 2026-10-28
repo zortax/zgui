@@ -135,12 +135,13 @@ fn materialise(
     region: Rect<i32, Device>,
     matrix: ColorMatrix,
 ) -> Option<TargetRef> {
-    let slot = builder.acquire(TargetScale::Full)?;
+    let slot = builder.acquire(TargetScale::Full, region)?;
     let destination = TargetRef::Pool(slot);
     let params = CompositeParams::new(
         region.to_unit(),
         builder.extent_of(source),
         source.scale(),
+        source.origin(),
         zgui_scene::ClipId::ROOT.0,
     )
     .with_matrix(matrix);

@@ -68,7 +68,7 @@ pub(crate) const CHECKS: &[Check] = &[
     },
     Check {
         name: "counters",
-        description: "every frame counter is incremented by something, or listed as awaiting its stage",
+        description: "every frame counter is incremented by something, or listed as awaiting its stage, and no normal dependency turns the counters on",
         run: counters::check,
     },
     Check {

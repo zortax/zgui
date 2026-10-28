@@ -9,9 +9,10 @@ use crate::paragraph::inline_box::InlineBoxGeometry;
 
 /// Identifies a shaped paragraph.
 ///
-/// It is the content, the *ordered* list of runs with their shaping keys, the atomic inlines'
-/// positions and widths, the paragraph's base direction and the device scale — everything a shaped
-/// result is a function of. Two contexts with equal keys shape to the same glyphs and measure the
+/// It is the content, the *ordered* list of runs with their shaping keys and wrap properties, the
+/// atomic inlines' positions and widths, the paragraph's base direction and the device scale —
+/// everything a shaped result is a function of. The wrap properties are in the key because an
+/// engine can fix them when it shapes. Two contexts with equal keys shape to the same glyphs and measure the
 /// same, so one shaped result serves both.
 ///
 /// The run list is ordered and carries each run's extent, not only its style: moving a boundary
@@ -39,7 +40,24 @@ impl ParagraphKey {
     pub fn of(content: &ParagraphContent<'_>) -> Self {
         ContentKey::of(content).with_boxes(content.boxes)
     }
+
+    /// The key of a copy of this paragraph.
+    ///
+    /// A shaped paragraph holds the lines of one break. Two contexts with equal content that keep
+    /// different lines thus need a shaped paragraph each, and the second one is held under this
+    /// key. `salt` tells the copies of one paragraph apart.
+    #[must_use]
+    pub fn variant(self, salt: impl core::hash::Hash) -> Self {
+        let mut digest = Digest::new();
+        digest.push_tag(VARIANT_TAG);
+        digest.push(self.0);
+        digest.push(salt);
+        Self(digest.finish())
+    }
 }
+
+/// The tag that keeps a variant key apart from each key hashed from content.
+const VARIANT_TAG: u8 = 0x56;
 
 /// The part of a [`ParagraphKey`] that no measurement can move.
 ///
@@ -76,6 +94,11 @@ impl ContentKey {
             // others still hold — and that path already drops the shaping, precisely because what
             // the glyphs name was baked in when they were shaped.
             digest.push(run.brush.0);
+            // An engine can fix the wrap properties when it shapes. Parley does: a result shaped
+            // under `nowrap` breaks as `nowrap` at each later request. Thus each wrap setting gets
+            // its own entry.
+            digest.push(run.style.overflow_wrap);
+            digest.push(run.style.wrap_mode);
         }
         digest.push(content.boxes.len());
         for inline_box in content.boxes {

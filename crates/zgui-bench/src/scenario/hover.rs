@@ -36,10 +36,12 @@ pub(crate) fn run() -> Outcome {
         let index = step % rows;
         let at = fixture::table_row_centre(index);
         let mark = zgui_profile::counter::snapshot();
+        let gpu = crate::gpu_time::phase("hover.crossing");
         let started = std::time::Instant::now();
         harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
         let ran = harness.settle(64);
         samples.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
         let moved = mark.delta(&zgui_profile::counter::snapshot());
         frames += ran;
         emitted += moved.primitives_emitted;
@@ -78,10 +80,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: crossing.p50,
                 band: Band::Time {
-                    baseline: 190.0,
+                    baseline: 136.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 187 us, well under the half-millisecond budget",
+                rationale: "measured at 133-138 us across five runs, well under the \
+                            half-millisecond budget",
                 budget: Some(500.0),
                 spread: Some(crossing),
             },

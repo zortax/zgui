@@ -136,6 +136,8 @@ pub mod prelude;
 
 pub use crate::app::{App, app};
 pub use crate::error::Error;
+/// How precisely the default renderer holds a plain group, see [`App::with_group_precision`].
+pub use zgui_render_wgpu::GroupPrecision;
 
 /// A view written as nested calls, a component written as a function, and the styling macros.
 pub use zgui_view_macro::{component, css, slot, style, variants, view};

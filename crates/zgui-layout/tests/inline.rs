@@ -398,7 +398,7 @@ fn every_line_becomes_one_fragment() {
     let content_top = store
         .fragment(fragments[0])
         .expect("live")
-        .content_box
+        .content_box()
         .origin
         .y
         .0;

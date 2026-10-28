@@ -71,10 +71,11 @@ pub use crate::effect::{
 pub use crate::gpu::device::Gpu;
 pub use crate::gpu::formats::{Formats, SrgbTier};
 pub use crate::gpu::surface::PresentPacing;
+pub use crate::gpu::timing::{GpuTiming, TimedWork};
 pub use crate::renderer::WgpuRenderer;
 pub use crate::renderer::builder::Builder;
 pub use crate::renderer::readback::Pixels;
 pub use crate::renderer::shared::SharedGraphics;
 pub use crate::target::acquire::{Acquisition, SurfaceAction};
-pub use crate::target::group_pool::GroupPool;
+pub use crate::target::group_pool::{GroupPool, GroupPrecision};
 pub use crate::target::scale::TargetScale;

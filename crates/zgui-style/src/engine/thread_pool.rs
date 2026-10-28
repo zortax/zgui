@@ -36,9 +36,9 @@ impl StylePool {
 
     /// A pool of exactly `threads` workers, clamped by nothing.
     ///
-    /// Above the supported width the engine's per-worker storage is indexed out of bounds and the
-    /// traversal panics, so this exists to *demonstrate* the ceiling rather than to be used above
-    /// it. Everything that styles a document builds its pool with [`StylePool::new`].
+    /// [`StyleEngine::restyle`](crate::StyleEngine::restyle) refuses a pool above the supported
+    /// width, so this exists to *demonstrate* the ceiling rather than to be used above it.
+    /// Everything that styles a document builds its pool with [`StylePool::new`].
     ///
     /// # Panics
     ///

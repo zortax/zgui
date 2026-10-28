@@ -56,6 +56,15 @@ impl DocumentDom {
         Some(id::to_view(document.store().key_of(parent)))
     }
 
+    /// Whether the live text node `node` holds exactly `data`. An absent text reads as empty.
+    pub(crate) fn holds_text(&self, node: NodeId, data: &str) -> bool {
+        let Some(index) = self.live_index_of(node) else {
+            return false;
+        };
+        let document = self.document();
+        zgui_dom::text::node::text_of(document.store(), index).unwrap_or_default() == data
+    }
+
     /// Replaces the text `node` holds.
     ///
     /// A text binding is a writer like any attribute's and goes stale the same way — its effect

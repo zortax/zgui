@@ -17,22 +17,18 @@ use zgui_dom::side::a11y_key::A11yKey;
 use zgui_dom::{DocumentStore, NodeIndex};
 
 /// The accessibility key of the element at `index`.
+///
+/// The key holds the semantics record alone. A style group's address moves on every cascade of an
+/// element that declares anything in it, and a hash of the text is a walk over the document's text
+/// on every restyle; the projection needs neither, because it reads no computed value and a text
+/// edit marks the element itself.
 pub fn a11y_key(store: &DocumentStore, index: NodeIndex, _style: &ComputedStyle) -> A11yKey {
     A11yKey {
-        // The projection reads no computed value: whether an element is exposed is answered
-        // from its fragments, and its text order from the document. The group's address was
-        // filed here once, and it moved on every cascade of an element that declares anything
-        // in it — every text element, on every font change — projecting the whole tree again.
-        style: 0,
         semantics: store
             .columns()
             .semantics
             .get(store.key_of(index))
             .as_ref()
             .map_or(0, |semantics| core::ptr::from_ref(&**semantics) as usize),
-        // Text is edited in place and the edit marks the element itself, so the key carries
-        // no hash of it: hashing every text child of every restyled element was a walk over the
-        // document's text on every restyle, answering "unchanged" every time.
-        content: 0,
     }
 }

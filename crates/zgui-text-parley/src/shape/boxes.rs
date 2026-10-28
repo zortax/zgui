@@ -15,15 +15,27 @@ use crate::shape::brush::SlotBrush;
 /// whose shaping is a cache hit would leave its boxes exactly where they were, and a `vertical-align`
 /// re-style would be a silent no-op rather than a visible error. Pushing the current heights in
 /// before every break is what makes it move.
-pub(crate) fn push_geometry(layout: &mut parley::Layout<SlotBrush>, boxes: &[InlineBoxGeometry]) {
+///
+/// Returns whether any width or height changed, compared bit for bit. A pass whose boxes did not
+/// change may keep the placements of the pass before it.
+pub(crate) fn push_geometry(
+    layout: &mut parley::Layout<SlotBrush>,
+    boxes: &[InlineBoxGeometry],
+) -> bool {
+    let mut moved = false;
     if boxes.is_empty() {
-        return;
+        return moved;
     }
     for inline_box in layout.inline_boxes_mut() {
         let Some(geometry) = boxes.iter().find(|geometry| geometry.id == inline_box.id) else {
             continue;
         };
-        inline_box.width = geometry.width.0;
-        inline_box.height = geometry.shaper_height().0;
+        let width = geometry.width.0;
+        let height = geometry.shaper_height().0;
+        moved |= inline_box.width.to_bits() != width.to_bits()
+            || inline_box.height.to_bits() != height.to_bits();
+        inline_box.width = width;
+        inline_box.height = height;
     }
+    moved
 }

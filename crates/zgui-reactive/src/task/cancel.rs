@@ -1,11 +1,9 @@
 //! Cancellation, and dropping what a cancelled task captured.
 //!
-//! The pool a task lives in hands out no handle: `futures::executor::LocalPool` can be told to
-//! run, and nothing else. Cancellation is therefore a wrapper rather than a pool operation — the
-//! future is boxed into a slot the wrapper and the canceller both hold, and cancelling empties
-//! that slot.
+//! The future is boxed into a slot that the wrapper and the canceller both hold, and cancelling
+//! empties that slot and frees the task's place in the pool.
 //!
-//! Emptying it *synchronously* is the point. An owner is disposed of before the frame that
+//! Doing both *synchronously* is the point. An owner is disposed of before the frame that
 //! follows it — see [`Mounted`](crate::Mounted) — so a task cancelled by an unmount must release
 //! the node handles, element references and view state it captured inside `unmount`, not at the
 //! next flush. A task whose captures outlive its owner by a frame is the same defect the owner
@@ -15,7 +13,9 @@ use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
+
+use crate::executor::pool::{self, Key};
 
 /// A task's future, once boxed, as the slot holds it.
 type Boxed = Pin<Box<dyn Future<Output = ()>>>;
@@ -23,7 +23,7 @@ type Boxed = Pin<Box<dyn Future<Output = ()>>>;
 /// The state a task shares with its handle and with the set its owner holds.
 ///
 /// One of these exists per spawned task. It is what a [`Task`](crate::Task) points at, what a
-/// [`TaskSet`](crate::task::set::TaskSet) collects, and what the pool's wrapper polls through.
+/// [`TaskSet`](crate::task::set::TaskSet) collects, and what the pool polls through.
 pub(crate) struct Cancel {
     /// Whether the task has been cancelled or has run to completion.
     ///
@@ -35,9 +35,8 @@ pub(crate) struct Cancel {
     /// Borrowed for the duration of a poll, which is what makes a cancel raised from inside the
     /// task's own body fall back to the flag rather than panic.
     slot: RefCell<Option<Boxed>>,
-    /// The waker of the last poll, so a cancelled task is reaped by the pool rather than left in
-    /// it holding a shell.
-    waker: RefCell<Option<Waker>>,
+    /// The task's place in the pool, while the pool holds it.
+    key: Cell<Option<Key>>,
     /// What to run once the task is over, to take it out of the set its owner holds.
     ///
     /// A hook rather than a back-pointer, so this file knows nothing about how tasks are
@@ -51,7 +50,7 @@ impl Cancel {
         Rc::new(Self {
             over: Cell::new(false),
             slot: RefCell::new(Some(Box::pin(future))),
-            waker: RefCell::new(None),
+            key: Cell::new(None),
             release: RefCell::new(None),
         })
     }
@@ -59,6 +58,11 @@ impl Cancel {
     /// Whether the task has been cancelled or has finished.
     pub(crate) fn is_over(&self) -> bool {
         self.over.get()
+    }
+
+    /// Records the task's place in the pool, so a cancel can free it.
+    pub(crate) fn set_key(&self, key: Option<Key>) {
+        self.key.set(key);
     }
 
     /// Arranges for `release` to run when the task is over.
@@ -102,23 +106,17 @@ impl Cancel {
         if let Ok(mut slot) = self.slot.try_borrow_mut() {
             *slot = None;
         }
-        // The pool still holds the wrapper. Waking it is what makes the next flush poll it once,
-        // see the flag and drop it, rather than leaving an empty task in the pool for ever.
-        let waker = self
-            .waker
-            .try_borrow_mut()
-            .ok()
-            .and_then(|mut waker| waker.take());
-        if let Some(waker) = waker {
-            waker.wake();
+        // The pool frees the task's place now, with no wake and no poll. A task that cancels
+        // itself keeps its place until its poll returns, and that poll frees it.
+        if let Some(key) = self.key.take() {
+            pool::remove(key);
         }
     }
 }
 
 /// The future the pool actually holds: a task, plus the state that can call it off.
 ///
-/// `Unpin` by construction — it owns nothing but an `Rc` — which is what the pool's own wrapper
-/// requires.
+/// `Unpin` by construction — it owns nothing but an `Rc` — so the pool holds it without a box.
 pub(crate) struct Cancellable {
     /// The task's shared state.
     cancel: Rc<Cancel>,
@@ -138,11 +136,6 @@ impl Future for Cancellable {
         let cancel = &self.cancel;
         if cancel.is_over() {
             return Poll::Ready(());
-        }
-
-        // Kept so a later cancel can have the pool reap this task rather than hold an empty one.
-        if let Ok(mut waker) = cancel.waker.try_borrow_mut() {
-            *waker = Some(cx.waker().clone());
         }
 
         let Ok(mut slot) = cancel.slot.try_borrow_mut() else {
@@ -170,6 +163,15 @@ impl Future for Cancellable {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+impl Drop for Cancellable {
+    /// The pool dropped the task: it finished, was cancelled, panicked, or the pool was cleared.
+    /// It cannot run again, so it is over, and its key names nothing.
+    fn drop(&mut self) {
+        self.cancel.key.set(None);
+        self.cancel.cancel();
     }
 }
 

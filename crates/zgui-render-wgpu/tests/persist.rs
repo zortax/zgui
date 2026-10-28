@@ -597,26 +597,38 @@ fn push_shared_marks(
     scene.push_marks(direct, Arc::clone(&payloads[1]));
 }
 
+/// Encodes the shared marks at `(across, down)` as chunk `revision` and retires `retired`, in the
+/// order the paint cache notes a re-encoding: the replaced revision first, then the new one.
+fn stage_shared(
+    scene: &mut Scene,
+    payloads: &[Arc<zgui_scene::MarkPayload>; 2],
+    (across, down): (f32, f32),
+    revision: u64,
+    retired: &[u64],
+) {
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.begin_chunk_capture(ChunkPrims::default());
+    push_shared_marks(scene, payloads, across, down);
+    let chunk = Arc::new(scene.take_chunk_capture());
+    for &old in retired {
+        scene.note_chunk_retired(old);
+    }
+    scene.note_chunk_inserted(revision, chunk);
+    scene.bind_capture(revision);
+    scene.finish(&DamageSet::full());
+}
+
 /// Encodes the shared marks at `(across, down)` as chunk `revision`, retiring `retired`, and
 /// draws it. Returns the payload bytes the frame uploaded and its pixels.
 fn encode_shared(
     renderer: &mut support::TestRenderer,
     scene: &mut Scene,
     payloads: &[Arc<zgui_scene::MarkPayload>; 2],
-    (across, down): (f32, f32),
+    at: (f32, f32),
     revision: u64,
     retired: &[u64],
 ) -> (u64, Pixels) {
-    scene.begin_frame(Size::new(SIDE, SIDE));
-    scene.begin_chunk_capture(ChunkPrims::default());
-    push_shared_marks(scene, payloads, across, down);
-    let chunk = Arc::new(scene.take_chunk_capture());
-    scene.note_chunk_inserted(revision, chunk);
-    for &old in retired {
-        scene.note_chunk_retired(old);
-    }
-    scene.bind_capture(revision);
-    scene.finish(&DamageSet::full());
+    stage_shared(scene, payloads, at, revision, retired);
     zgui_profile::counter::reset();
     let (_, pixels) = draw_bytes(renderer, scene);
     scene.clear_chunk_notes();
@@ -624,6 +636,59 @@ fn encode_shared(
         zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes),
         pixels,
     )
+}
+
+#[test]
+fn a_revision_retired_before_its_first_draw_leaves_nothing_resident() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let payloads = shared_payloads();
+    let mut scene = Scene::new();
+    // Frame one encodes revision 1 and never reaches the renderer (an unconfigured surface, say),
+    // so its notes stand. Frame two re-encodes the fragment: revision 1 retires and revision 2
+    // takes its place. One draw consumes both frames' notes.
+    stage_shared(&mut scene, &payloads, (0.0, 0.0), 1, &[]);
+    stage_shared(&mut scene, &payloads, (5.0, 7.0), 2, &[1]);
+    zgui_profile::counter::reset();
+    let (_, drawn) = draw_bytes(&mut renderer, &scene);
+    scene.clear_chunk_notes();
+    let payload_bytes = zgui_profile::counter::get(zgui_profile::Counter::MarksPayloadBytes);
+    let resident = zgui_profile::counter::get(zgui_profile::Counter::ChunksResident);
+
+    // Revision 2 retires too. Nothing is live, so nothing may stay resident.
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.note_chunk_retired(2);
+    scene.finish(&DamageSet::full());
+    draw_bytes(&mut renderer, &scene);
+    scene.clear_chunk_notes();
+    let left = zgui_profile::counter::get(zgui_profile::Counter::ChunksResident);
+
+    drop(renderer);
+    let Some(mut control_renderer) = plain_renderer() else {
+        return;
+    };
+    let mut control = Scene::new();
+    let (single, expected) = encode_shared(
+        &mut control_renderer,
+        &mut control,
+        &payloads,
+        (5.0, 7.0),
+        1,
+        &[],
+    );
+    assert_eq!(drawn.max_difference(&expected), 0);
+    if zgui_profile::COUNTERS_ENABLED {
+        assert_eq!(
+            resident, 1,
+            "only the live revision is resident after the draw"
+        );
+        assert_eq!(left, 0, "no retired revision stays resident");
+        assert_eq!(
+            payload_bytes, single,
+            "the payload passes from revision 1 to revision 2 without a second upload"
+        );
+    }
 }
 
 #[test]

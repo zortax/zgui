@@ -70,5 +70,5 @@ pub use crate::rect::Rect;
 pub use crate::size::Size;
 pub use crate::snap::{cover_bounds, snap_bounds, snap_edges, snap_stroke};
 pub use crate::space::{Css, Device, Layout, Space};
-pub use crate::transform::{Affine2, Decomposed, Matrix4, transformed_bounds};
+pub use crate::transform::{Affine2, Decomposed, Matrix4, transformed_bounds, translated_bounds};
 pub use crate::unit::{Au, CssPx, DevicePx, Scale, Unit};

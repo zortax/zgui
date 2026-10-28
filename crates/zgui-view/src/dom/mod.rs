@@ -72,6 +72,16 @@ pub trait Dom {
     /// Replaces a text node's content.
     fn set_text(&self, node: NodeId, data: &str);
 
+    /// Whether the text node `node` holds exactly `data`.
+    ///
+    /// A view asks this before it writes text, so that an unchanged value causes no write. The
+    /// default answers `false`, so each write reaches [`Dom::set_text`]. Override it to keep
+    /// unchanged writes from reaching the backend.
+    fn text_is(&self, node: NodeId, data: &str) -> bool {
+        let _ = (node, data);
+        false
+    }
+
     /// Puts `child` under `parent`, immediately before `before`, or last when `before` is `None`.
     fn insert(&self, parent: NodeId, child: NodeId, before: Option<NodeId>);
 

@@ -152,6 +152,28 @@ impl Phase {
     pub fn span(self) -> tracing::Span {
         span::of(self)
     }
+
+    /// Enters this stage's span, and charges what the stage allocates to its
+    /// [allocation tag](crate::alloc_tag).
+    ///
+    /// Both end when the returned guard drops. Without the `alloc-tags` feature the guard holds the
+    /// entered span and nothing else.
+    #[inline]
+    pub fn enter(self) -> Staged {
+        Staged {
+            _span: self.span().entered(),
+            _tag: crate::alloc_tag::enter(self.alloc_tag()),
+        }
+    }
+}
+
+/// A stage that is running: its entered span and its allocation tag.
+#[must_use = "the stage ends when this drops"]
+pub struct Staged {
+    /// The stage's span, entered.
+    _span: tracing::span::EnteredSpan,
+    /// The allocation tag the stage set.
+    _tag: crate::alloc_tag::Scope,
 }
 
 impl core::fmt::Display for Phase {

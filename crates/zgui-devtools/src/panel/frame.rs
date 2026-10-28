@@ -65,7 +65,7 @@ pub(crate) fn FramePanel(
                 when = move || !frame.get().counters.is_empty(),
                 fallback = || view! {
                     text(class = "zgui-devtools__value-quiet") {
-                        "no counter moved: this frame repeated the last one"
+                        {no_counters_moved()}
                     }
                 }
             ) {
@@ -79,6 +79,18 @@ pub(crate) fn FramePanel(
                 }
             }
         }
+    }
+}
+
+/// What the counter list says when it is empty.
+///
+/// In a release build without the `counters` feature, the list says that the counters are compiled
+/// out.
+fn no_counters_moved() -> &'static str {
+    if zgui_profile::COUNTERS_ENABLED {
+        "no counter moved: this frame repeated the last one"
+    } else {
+        "the counters are compiled out of this build"
     }
 }
 

@@ -1,6 +1,6 @@
 //! Assembling a frame's segments, before any pass is opened.
 
-use zgui_geom::{Device, Rect, Size};
+use zgui_geom::{Device, Point, Rect, Size};
 
 use crate::bind::globals::{Globals, SubpixelOrder};
 use crate::buffer::slots::SlotBuffer;
@@ -27,6 +27,8 @@ pub struct FramePlan {
     pub unsupported_blends: u32,
     /// How many groups could not be isolated because the target pool was exhausted.
     pub unisolated: u32,
+    /// How many instanced batches were left out of a pass whose scissor they miss.
+    pub culled: u32,
 }
 
 impl FramePlan {
@@ -48,6 +50,9 @@ impl FramePlan {
         rounds.zip(self.segments.split(|segment| segment.round().is_some()))
     }
 }
+
+/// What decides a per-target block: the kind of target, its origin and the region it covers.
+type GlobalsKey = (usize, Point<i32, Device>, Size<i32, Device>);
 
 /// Builds a [`FramePlan`], lending targets and staging blocks as it goes.
 ///
@@ -79,15 +84,18 @@ pub struct PlanBuilder<'gpu> {
     frame_clock: zgui_scene::FrameClock,
     /// Where each interned parameter block was staged, by the slot the scene interned it under.
     effect_offsets: &'gpu [u32],
-    /// The region every target covers.
+    /// The device-pixel region of the surface.
     region: Size<i32, Device>,
     /// What the composed target holds, which a copy out of it has to match.
     composed_format: wgpu::TextureFormat,
     /// The texel extent the composed target is allocated at.
     composed_extent: Size<i32, Device>,
-    /// The offsets of the per-target blocks already staged: full resolution, half resolution, and
-    /// a bin page.
-    staged_globals: [Option<u32>; 3],
+    /// The first per-target block staged for each kind of target at the surface origin: full
+    /// resolution, half resolution, and a bin page. Each holds the region it covers and its
+    /// offset.
+    staged_globals: [Option<(Size<i32, Device>, u32)>; 3],
+    /// Every other staged block, by kind, origin and covered region.
+    staged_other: Vec<(GlobalsKey, u32)>,
     /// The plan so far.
     plan: FramePlan,
     /// The pass currently being filled.
@@ -136,6 +144,7 @@ impl<'gpu> PlanBuilder<'gpu> {
             composed_format,
             composed_extent,
             staged_globals: [None; 3],
+            staged_other: Vec::new(),
             plan: FramePlan::default(),
             open: None,
             lent: Vec::new(),
@@ -144,42 +153,60 @@ impl<'gpu> PlanBuilder<'gpu> {
         }
     }
 
-    /// The region every target covers.
+    /// The device-pixel region of the surface.
     pub fn region(&self) -> Size<i32, Device> {
         self.region
     }
 
-    /// The texel extent a target at `scale` is allocated at.
+    /// The texel extent of whatever `target` is.
     ///
     /// This is the *allocation*, not the region drawn into: targets are rounded to a size class,
     /// and anything sampling one divides by what it holds rather than by what is used of it.
-    pub fn extent(&self, scale: TargetScale) -> Size<i32, Device> {
-        self.pool.allocated_extent(scale)
-    }
-
-    /// The texel extent of whatever `target` is.
     pub fn extent_of(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
             TargetRef::Composed => self.composed_extent,
-            TargetRef::Pool(slot) => self.pool.allocated_extent(slot.scale()),
+            TargetRef::Pool(slot) => slot.allocated(),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
     }
 
-    /// Lends a target for isolated content at `scale`, or reports that the pool could not.
-    pub fn acquire(&mut self, scale: TargetScale) -> Option<GroupSlot> {
-        self.acquire_in(scale, GroupPool::FORMAT)
+    /// Lends a target for isolated content at `scale` covering `region`, or reports that the pool
+    /// could not.
+    pub fn acquire(&mut self, scale: TargetScale, region: Rect<i32, Device>) -> Option<GroupSlot> {
+        self.acquire_in(scale, GroupPool::FORMAT, region)
     }
 
-    /// Lends a target holding the same thing `like` does, at its resolution, which is what a copy
-    /// needs.
+    /// Lends a target for a group's content at `scale` covering `region`, or reports that the pool
+    /// could not.
+    ///
+    /// A `plain` group can be held in the composed format, see [`GroupPool::format_for`].
+    pub fn acquire_group(
+        &mut self,
+        scale: TargetScale,
+        region: Rect<i32, Device>,
+        plain: bool,
+    ) -> Option<GroupSlot> {
+        let format = self.pool.format_for(plain, self.composed_format);
+        self.acquire_in(scale, format, region)
+    }
+
+    /// Lends a target covering `region` that holds the same thing `like` does, at its resolution,
+    /// which is what a copy needs.
     ///
     /// Never reduces the resolution: a copy into a target of another resolution puts every texel
-    /// at the wrong place. Returns `None` when the budget will not take the target.
-    pub fn acquire_like(&mut self, like: TargetRef) -> Option<GroupSlot> {
-        let slot = self
-            .pool
-            .acquire_exact(self.gpu, like.scale(), self.format_of(like))?;
+    /// at the wrong place. The copy measures each side from its own origin, so the two origins
+    /// can differ. Returns `None` when the budget will not take the target.
+    pub fn acquire_like(
+        &mut self,
+        like: TargetRef,
+        region: Rect<i32, Device>,
+    ) -> Option<GroupSlot> {
+        let slot = self.pool.acquire_exact_covering(
+            self.gpu,
+            like.scale(),
+            self.format_of(like),
+            region,
+        )?;
         Some(self.lend(slot))
     }
 
@@ -191,9 +218,17 @@ impl<'gpu> PlanBuilder<'gpu> {
         }
     }
 
-    /// Lends a target at `scale` in `format`, or reports that the pool could not.
-    fn acquire_in(&mut self, scale: TargetScale, format: wgpu::TextureFormat) -> Option<GroupSlot> {
-        let slot = self.pool.acquire(self.gpu, scale, format)?;
+    /// Lends a target at `scale` in `format` covering `region`, or reports that the pool could
+    /// not.
+    fn acquire_in(
+        &mut self,
+        scale: TargetScale,
+        format: wgpu::TextureFormat,
+        region: Rect<i32, Device>,
+    ) -> Option<GroupSlot> {
+        let slot = self
+            .pool
+            .acquire_covering(self.gpu, scale, format, region)?;
         Some(self.lend(slot))
     }
 
@@ -315,24 +350,35 @@ impl<'gpu> PlanBuilder<'gpu> {
 
     /// The offset of the block describing `target`, staging it the first time.
     fn globals_for(&mut self, target: TargetRef) -> u32 {
-        let (index, region) = match target {
+        let (kind, region) = match target {
             TargetRef::MarksPage(_) => (2, self.mark_extent),
-            _ => (
-                usize::from(target.scale() == TargetScale::Half),
-                self.region,
+            TargetRef::Composed => (0, self.region),
+            TargetRef::Pool(slot) => (
+                usize::from(slot.scale() == TargetScale::Half),
+                slot.covered(),
             ),
         };
-        let scale = target.scale();
-        match self.staged_globals[index] {
-            Some(offset) => offset,
-            None => {
-                let block = Globals::for_target(region, scale, self.subpixel_order)
-                    .with_frame(self.frame_clock);
-                let offset = self.globals.stage(&block);
-                self.staged_globals[index] = Some(offset);
-                offset
-            }
+        let origin = target.origin();
+        if origin == Point::ORIGIN
+            && let Some((held, offset)) = self.staged_globals[kind]
+            && held == region
+        {
+            return offset;
         }
+        let key = (kind, origin, region);
+        if let Some(&(_, offset)) = self.staged_other.iter().find(|(held, _)| *held == key) {
+            return offset;
+        }
+        let block = Globals::for_target(region, target.scale(), self.subpixel_order)
+            .with_frame(self.frame_clock)
+            .with_origin(origin);
+        let offset = self.globals.stage(&block);
+        if origin == Point::ORIGIN && self.staged_globals[kind].is_none() {
+            self.staged_globals[kind] = Some((region, offset));
+        } else {
+            self.staged_other.push((key, offset));
+        }
+        offset
     }
 
     /// Opens a pass into `target`, scissored to `scissor`, ending whatever preceded it.
@@ -372,14 +418,14 @@ impl<'gpu> PlanBuilder<'gpu> {
         open.draws.end = self.plan.draws.len();
     }
 
-    /// Closes the open pass, dropping it if it drew nothing.
+    /// Closes the open pass, dropping it if it drew nothing or may write nothing.
     pub fn end_pass(&mut self) {
         let Some(pass) = self.open.take() else {
             return;
         };
-        if pass.draws.is_empty() {
-            // A pass that drew nothing is not recorded, so it did not discard anything either and
-            // the lease still owes its first clear to whichever pass writes it next.
+        if pass.draws.is_empty() || pass.scissor.is_empty() {
+            // A pass that is not recorded did not discard anything either, and the lease still
+            // owes its first clear to whichever pass writes it next.
             if pass.load == PassLoad::Discard
                 && let Some(slot) = pass.target.slot()
             {
@@ -396,7 +442,8 @@ impl<'gpu> PlanBuilder<'gpu> {
         self.plan.segments.push(Segment::Encoder(op));
     }
 
-    /// Notes a composite whose content this phase does not rasterise.
+    /// Notes a draw this phase leaves out: a composite whose content it does not rasterise, or a
+    /// batch the target cannot hold.
     pub fn defer(&mut self) {
         self.plan.deferred += 1;
     }
@@ -409,6 +456,12 @@ impl<'gpu> PlanBuilder<'gpu> {
     /// Notes a group the pool could not lend a target for.
     pub fn note_unisolated(&mut self) {
         self.plan.unisolated += 1;
+    }
+
+    /// Notes an instanced batch left out of the open pass, because it writes nothing inside the
+    /// pass's scissor.
+    pub fn note_culled(&mut self) {
+        self.plan.culled += 1;
     }
 
     /// Finishes the plan, returning every lent target to the pool.

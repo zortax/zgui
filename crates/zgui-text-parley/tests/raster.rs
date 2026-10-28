@@ -24,7 +24,12 @@ fn first_glyph(text: &str) -> (Arc<FontSystem>, FaceId, u16) {
     let (fonts, mut shaper) = support::shaper(Controls::Verbatim);
     let fixture = support::Fixture::new(text, Direction::LeftToRight);
     let shaped = shaper.shape(&fixture.content());
-    let line = shaped.engine.layout.get(0).expect("one line");
+    let line = shaped
+        .engine
+        .layout()
+        .expect("a live form")
+        .get(0)
+        .expect("one line");
     let run = line.runs().next().expect("one run");
     let face = fonts.face_for(run.font());
     let glyph = run
@@ -487,4 +492,81 @@ fn a_static_face_is_drawn_at_the_default_instance() {
     shaper.visit_line(&shaped, 0, &mut |run| instances.push(run.instance));
     let _ = fonts;
     assert_eq!(instances, vec![zgui_text::VariationInstance::DEFAULT]);
+}
+
+/// A batch gives each key the bytes a single call gives it, on any thread and in any order.
+///
+/// The prefetch of a cold frame rasterises batches on the layout workers, each through a scaler
+/// context of its own, and the atlas then holds those bytes for keys the frame thread asks for.
+#[test]
+fn a_batch_answers_what_one_call_answers() {
+    let (fonts, mut shaper) = support::shaper(Controls::Verbatim);
+    let fixture = support::Fixture::new("the quick brown fox 0123", Direction::LeftToRight);
+    let shaped = shaper.shape(&fixture.content());
+    let line = shaped
+        .engine
+        .layout()
+        .expect("a live form")
+        .get(0)
+        .expect("one line");
+    let run = line.runs().next().expect("one run");
+    let face = fonts.face_for(run.font());
+    let ids: Vec<u16> = run
+        .clusters()
+        .flat_map(|cluster| {
+            cluster
+                .glyphs()
+                .map(|glyph| glyph.id as u16)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut keys = Vec::new();
+    for size in [11.0, 13.5, 24.0] {
+        for phase in 0..SubpixelOffset::STEPS {
+            for style in [RasterStyle::Grayscale, RasterStyle::Subpixel] {
+                for glyph in &ids {
+                    keys.push(GlyphKey::new(
+                        face,
+                        *glyph,
+                        size,
+                        SubpixelOffset(phase),
+                        style,
+                    ));
+                }
+            }
+        }
+    }
+
+    let raster = Rasteriser::new(fonts);
+    let single: Vec<Option<GlyphImage>> = keys.iter().map(|key| raster.raster(key)).collect();
+    assert!(
+        single.iter().flatten().any(|image| !image.is_empty()),
+        "nothing drew, so the comparison is empty"
+    );
+    assert_eq!(raster.raster_many(&keys), single);
+
+    // Four batches at once, each in the reverse order, the way the workers take them.
+    let batches: Vec<Vec<GlyphKey>> = keys
+        .chunks(keys.len().div_ceil(4))
+        .map(|chunk| chunk.iter().rev().copied().collect())
+        .collect();
+    let answered: Vec<Vec<Option<GlyphImage>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = batches
+            .iter()
+            .map(|batch| scope.spawn(|| raster.raster_many(batch)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("a batch rasterises"))
+            .collect()
+    });
+    for (batch, images) in batches.iter().zip(answered) {
+        for (key, image) in batch.iter().zip(images) {
+            let at = keys
+                .iter()
+                .position(|k| k == key)
+                .expect("a key of the batch");
+            assert_eq!(image, single[at], "{key:?} drew differently in a batch");
+        }
+    }
 }

@@ -37,10 +37,28 @@ const ROUNDS: usize = 15;
 /// How many widths one round asks the paragraph about.
 const WIDTHS: usize = 20;
 
-/// What the fastest round of [`twenty_widths`] is allowed to cost.
+/// What the fastest round of [`twenty_widths`] is allowed to cost on the reference machine.
 ///
 /// Stated once, so the number in the message a failure prints is the number that was asserted.
 const BUDGET: Duration = Duration::from_micros(1_800);
+
+/// What the fastest round of [`twenty_widths`] is allowed to cost on a hosted build machine.
+///
+/// A hosted runner measured 1.83 ms for the loop that measures 0.78 ms on the reference machine,
+/// so [`BUDGET`] has no headroom there. This keeps the same factor of about two over the hosted
+/// figure. The counters the case asserts catch the regression the budget was written for on any
+/// machine.
+const HOSTED_BUDGET: Duration = Duration::from_micros(4_000);
+
+/// The budget for the machine this runs on: [`HOSTED_BUDGET`] when the gate sets
+/// `ZGUI_WALL_CLOCK_HOSTED`, else [`BUDGET`].
+fn budget() -> Duration {
+    if std::env::var_os("ZGUI_WALL_CLOCK_HOSTED").is_some() {
+        HOSTED_BUDGET
+    } else {
+        BUDGET
+    }
+}
 
 /// Runs `round` [`ROUNDS`] times and returns how long the fastest of them took.
 fn fastest(mut round: impl FnMut()) -> Duration {
@@ -132,9 +150,10 @@ fn resizing_a_two_hundred_line_paragraph_costs_under_one_and_eight_tenths_millis
         ROUNDS * WIDTHS + 1
     );
 
+    let budget = budget();
     assert!(
-        elapsed < BUDGET,
+        elapsed < budget,
         "the fastest of {ROUNDS} rounds of {WIDTHS} widths took {elapsed:?}, over a budget of \
-         {BUDGET:?}"
+         {budget:?}"
     );
 }

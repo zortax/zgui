@@ -64,6 +64,8 @@ pub struct DocumentStore {
     /// the store; the lock is taken for one insertion or one read and never held across a call
     /// out of this module. See [`DirtyChildren`](crate::dirty::children::DirtyChildren).
     dirty_overflow: std::sync::Mutex<FxHashMap<NodeIndex, FxHashSet<NodeIndex>>>,
+    /// How many nodes were dropped since the store was made.
+    dropped: u64,
 }
 
 const _: () = crate::assert_sync::<DocumentStore>();
@@ -84,6 +86,7 @@ impl DocumentStore {
             interned_runs: FxHashMap::default(),
             host: HostSeams::new(),
             dirty_overflow: std::sync::Mutex::new(FxHashMap::default()),
+            dropped: 0,
         }
     }
 
@@ -472,7 +475,26 @@ impl DocumentStore {
             return;
         };
         self.columns.clear(key);
-        self.arena.remove(key);
+        if self.arena.remove(key) {
+            self.dropped += 1;
+        }
+        // A record of marked children that moved to the overflow set leaves it behind when the
+        // record is cleared, so the node's set goes with the node.
+        let overflow = self
+            .dirty_overflow
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !overflow.is_empty() {
+            overflow.remove(&node);
+        }
+    }
+
+    /// How many nodes were dropped since the store was made.
+    ///
+    /// A consumer that keeps a record per node compares two readings to find out whether any of its
+    /// records can name a node that is gone, and so whether a sweep of them can free anything.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
     }
 
     /// The node arena, for the recycling pass.

@@ -29,6 +29,7 @@ use zgui_dom::side::{BoxKey, BoxList};
 use zgui_profile::{Counter, counter};
 
 use crate::boxtree::absolute::Declared;
+use crate::fragment::custom_properties::CustomProperties;
 use crate::fragment::{FragKey, FragList, Fragment};
 use crate::key::{named, slot};
 use crate::node::box_node::BoxNode;
@@ -91,10 +92,14 @@ pub struct LayoutStore {
     pub(crate) generation: u32,
     /// Boxes whose unrounded result was written this pass, with the result they held before.
     pub(crate) touched: Vec<(BoxKey, cephal::Layout)>,
-    /// Boxes whose shaped form a size probe may have moved off the kept lines.
+    /// Boxes whose lines a pass broke, with the key of their shared paragraph.
     ///
-    /// See [`kept`](crate::inline::kept). Drained at the end of each layout pass.
-    pub(crate) probed: Vec<BoxKey>,
+    /// A probe may have moved the shaped form off the kept lines, and a kept pass may have broken
+    /// a form other contexts share. See [`kept`](crate::inline::kept). Drained at the end of each
+    /// layout pass.
+    pub(crate) noted: Vec<(BoxKey, zgui_text::ParagraphKey)>,
+    /// The buffers the restore at the end of a layout pass uses, kept between passes.
+    pub(crate) kept_scratch: crate::inline::kept::Scratch,
     /// Boxes whose unrounded result moved in the last pass.
     changed: Vec<BoxKey>,
     /// Boxes carrying the chain bit, see [`crate::tree::dirty`].
@@ -105,6 +110,11 @@ pub struct LayoutStore {
     boxes_of_node: PagedVec<NodeKey, BoxList>,
     /// The fragment records.
     fragments: ChunkArena<Fragment>,
+    /// The [`FragmentExtra`](crate::fragment::FragmentExtra) of each fragment whose record cannot
+    /// state it, see [`LayoutStore::fragment_extra`].
+    spilled: FxHashMap<FragKey, crate::fragment::FragmentExtra>,
+    /// Fragments destroyed this frame, whose spilled entries go when the frame is recycled.
+    spilled_retired: Vec<FragKey>,
     /// Which fragments each element's boxes produced.
     fragments_of_node: PagedVec<NodeKey, FragList>,
     /// The shaped paragraphs the document's inline formatting contexts resolved to.
@@ -121,6 +131,10 @@ pub struct LayoutStore {
     unused_paragraphs: Vec<crate::fragment::ParagraphId>,
     /// Unique paragraph keys named by at least one current inline resolution.
     active_paragraphs: usize,
+    /// Keys whose last current resolution went away since the last drain.
+    released_paragraphs: Vec<zgui_text::ParagraphKey>,
+    /// Whether more keys were released than `released_paragraphs` keeps.
+    released_overflow: bool,
     /// The fragments destroyed since the last pass drained this list.
     ///
     /// A fragment ceases to exist for two quite different reasons — a box produced fewer pieces
@@ -159,13 +173,41 @@ pub struct LayoutStore {
     /// See [`laid_out`](crate::tree::store::laid_out) for what it is compared against and why it is
     /// held here rather than beside the pass.
     laid_out: Option<(u32, u32)>,
+    /// The key of each copy of a shared paragraph, with the key of the paragraph it copies.
+    ///
+    /// See [`kept`](crate::inline::kept). An entry goes when the record of its copy is reclaimed.
+    variant_bases: FxHashMap<zgui_text::ParagraphKey, zgui_text::ParagraphKey>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ParagraphRecord {
     key: zgui_text::ParagraphKey,
     users: u32,
+    /// What a layout pass recorded about the lines of the users. Cleared when the last user goes.
+    claim: Claim,
+    /// The bits [`ParagraphRecord::claim`] names: a [`LinesKey`](crate::inline::kept::LinesKey)
+    /// for [`Claim::Lines`], the [`BoxKey`] of the one user for [`Claim::Sole`].
+    ///
+    /// See [`kept`](crate::inline::kept). Held apart from [`ParagraphRecord::claim`], whose niche
+    /// keeps a slot of the table at 24 bytes.
+    claimed: u64,
 }
+
+/// What a paragraph record holds about the lines its users keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Claim {
+    /// No layout pass recorded the lines.
+    None,
+    /// The paragraph has one user, and its lines are the lines that user keeps now.
+    ///
+    /// The key of those lines is computed only when a caller asks for it. A paragraph with one
+    /// user is the common case, and every pass that breaks it again would hash all of its lines.
+    Sole,
+    /// The key of the lines every current user keeps.
+    Lines,
+}
+
+const _: () = assert!(core::mem::size_of::<Option<ParagraphRecord>>() == 24);
 
 impl LayoutStore {
     /// An empty store for one document.
@@ -187,12 +229,15 @@ impl LayoutStore {
             scheduler: cephal::schedule::Scheduler::new(),
             generation: 1,
             touched: Vec::new(),
-            probed: Vec::new(),
+            noted: Vec::new(),
+            kept_scratch: Default::default(),
             changed: Vec::new(),
             chain: Vec::new(),
             root: None,
             boxes_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(document)),
             fragments: ChunkArena::new(fragment_domain),
+            spilled: FxHashMap::default(),
+            spilled_retired: Vec::new(),
             fragments_of_node: PagedVec::for_domain(zgui_dom::id::document_id::node_domain(
                 document,
             )),
@@ -201,12 +246,15 @@ impl LayoutStore {
             free_paragraphs: Vec::new(),
             unused_paragraphs: Vec::new(),
             active_paragraphs: 0,
+            released_paragraphs: Vec::new(),
+            released_overflow: false,
             retired: Vec::new(),
             retired_paint: Vec::new(),
             retired_boxes: Vec::new(),
             read_extents: Vec::new(),
             flattenings: 0,
             laid_out: None,
+            variant_bases: FxHashMap::default(),
         }
     }
 
@@ -299,7 +347,13 @@ impl LayoutStore {
         if crate::style::same_cascade(&node.style, style) {
             return false;
         }
+        let sorted = crate::fragment::stacking::sort_inputs(node);
         node.style = style.clone();
+        if crate::fragment::stacking::sort_inputs(node) != sorted
+            && let Some(parent) = node.parent
+        {
+            self.forget_layout_order(parent);
+        }
         let slot = self.styles.intern(style);
         if let Some(held) = self.style_slots.replace(key, Some(slot)) {
             self.styles.release(held);
@@ -307,6 +361,22 @@ impl LayoutStore {
         self.classify(key, style);
         self.engine_pending.push(key);
         true
+    }
+
+    /// The framework custom properties `style` declares, where `style` is the style of box `key`.
+    ///
+    /// Recorded once per distinct style, so that a reader on a per-frame path skips the reads of
+    /// properties the style does not declare.
+    ///
+    /// [`CustomProperties::ALL`] for a box that holds no slot, or whose slot names a style other
+    /// than `style`.
+    pub fn custom_properties(&self, key: BoxKey, style: &ComputedStyle) -> CustomProperties {
+        self.style_slots
+            .get(key)
+            .copied()
+            .flatten()
+            .and_then(|slot| self.styles.declared(slot, style))
+            .unwrap_or(CustomProperties::ALL)
     }
 
     /// The style a box's interned slot names, if the box holds a slot.
@@ -420,6 +490,7 @@ impl LayoutStore {
                 engine_style: &self.engine_style,
                 replaced: &self.replaced,
                 root: self.root,
+                variant_bases: &self.variant_bases,
             },
         )
     }
@@ -433,6 +504,7 @@ impl LayoutStore {
             engine_style: &self.engine_style,
             replaced: &self.replaced,
             root: self.root,
+            variant_bases: &self.variant_bases,
         }
     }
 
@@ -520,8 +592,23 @@ impl LayoutStore {
     }
 
     /// The record for one box, for modification.
+    ///
+    /// The write can change the box's child list and where the box sorts among its siblings, so
+    /// the box and its parent forget whether their children paint in layout order.
     pub fn get_mut(&mut self, key: BoxKey) -> Option<&mut BoxNode> {
-        self.boxes.get_mut(slot(key))
+        if let Some(parent) = self.boxes.get(slot(key))?.parent {
+            self.forget_layout_order(parent);
+        }
+        let node = self.boxes.get_mut(slot(key))?;
+        node.layout_order.clear();
+        Some(node)
+    }
+
+    /// Clears the memo of whether `key`'s children paint in layout order.
+    fn forget_layout_order(&mut self, key: BoxKey) {
+        if let Some(node) = self.boxes.get_mut(slot(key)) {
+            node.layout_order.clear();
+        }
     }
 
     /// The record for one box, which must exist.
@@ -541,6 +628,9 @@ impl LayoutStore {
     /// Removes one box. Its record stays readable until the frame is recycled.
     pub fn remove(&mut self, key: BoxKey) -> bool {
         self.retired_boxes.push(key);
+        if let Some(parent) = self.get(key).and_then(|node| node.parent) {
+            self.forget_layout_order(parent);
+        }
         // The pieces this box was painted as cease to exist with it, and everything that named
         // them — the read-extent registry, the element's own list — has to be told.
         self.clear_fragments(key);
@@ -582,6 +672,9 @@ impl LayoutStore {
 
     /// Records where an out-of-flow box was written.
     pub(crate) fn set_declared(&mut self, key: BoxKey, declared: Option<Declared>) {
+        if let Some(parent) = self.get(key).and_then(|node| node.parent) {
+            self.forget_layout_order(parent);
+        }
         self.declared.replace(key, declared);
     }
 
@@ -589,6 +682,13 @@ impl LayoutStore {
     pub fn recycle(&mut self) {
         self.boxes.recycle();
         self.fragments.recycle();
+        if self.spilled.is_empty() {
+            self.spilled_retired.clear();
+        } else {
+            for key in self.spilled_retired.drain(..) {
+                self.spilled.remove(&key);
+            }
+        }
         self.layout.compact_by(Option::is_none);
         self.replaced.compact_by(Option::is_none);
         self.custom.compact_by(Option::is_none);
@@ -626,9 +726,19 @@ pub(crate) struct Structure<'a> {
     replaced: &'a PagedVec<BoxKey, Option<ReplacedBox>, 64>,
     /// The box the document is laid out from.
     root: Option<BoxKey>,
+    /// The key each copy of a shared paragraph copies.
+    variant_bases: &'a FxHashMap<zgui_text::ParagraphKey, zgui_text::ParagraphKey>,
 }
 
 impl<'a> Structure<'a> {
+    /// The key of the paragraph that `key` is a copy of, if it is a copy.
+    pub(crate) fn variant_base(
+        &self,
+        key: zgui_text::ParagraphKey,
+    ) -> Option<zgui_text::ParagraphKey> {
+        self.variant_bases.get(&key).copied()
+    }
+
     /// The record for one box.
     pub(crate) fn get(&self, key: BoxKey) -> Option<&'a BoxNode> {
         self.boxes.get(slot(key))

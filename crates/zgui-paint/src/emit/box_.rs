@@ -8,10 +8,13 @@
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipId, PaintRef, Quad, Scene, Shadow, SpatialId};
+use zgui_scene::{
+    ClipId, Paint, PaintOwner, PaintRef, PaintRole, PropertyOwner, Quad, Scene, Shadow, SpatialId,
+};
 
 use crate::emit::paint::gradient_paint;
 use crate::lower::PaintStyle;
+use crate::lower::anim::{OwnedPaints, border_paint};
 use crate::lower::border::inner_radii;
 
 /// Where a box's decorations are drawn.
@@ -29,6 +32,23 @@ pub struct BoxPlacement {
     pub transform: SpatialId,
     /// How many device pixels one CSS pixel is, for resolving a gradient's stop positions.
     pub scale: f32,
+    /// The box that owns the slots its animated colours are drawn through, and which colours.
+    ///
+    /// `None` for a box with no animated colour, which draws through interned paints.
+    pub owned: Option<(PropertyOwner, OwnedPaints)>,
+}
+
+impl BoxPlacement {
+    /// The owned slots this placement draws `role` through, if it does.
+    fn owner_of(&self, role: PaintRole) -> Option<PaintOwner> {
+        let (owner, paints) = self.owned?;
+        let drawn = match role {
+            PaintRole::Background => paints.background(),
+            PaintRole::BorderSides => paints.border(),
+            PaintRole::Outline => paints.outline(),
+        };
+        drawn.then_some(PaintOwner::new(owner, role))
+    }
 }
 
 /// Emits the shadows a box casts outwards, behind everything else it draws.
@@ -108,9 +128,14 @@ pub fn background_and_border(
     if let Some(pushed) = shaded(scene, style, placement, shaders, pointer) {
         return pushed;
     }
-    let (fills, _) = fills_of(scene, style, placement);
+    let (fills, draws_border) = fills_of(scene, style, placement);
     let borders = border_widths(placement.border);
-    let stroke = border_stroke(scene, style, borders, true);
+    let stroke = match placement.owner_of(PaintRole::BorderSides) {
+        Some(name) if draws_border => scene
+            .paints
+            .owned(name, border_paint(style.border.colors, placement.border)),
+        _ => border_stroke(scene, style, borders, true),
+    };
     let last = fills.len().saturating_sub(1);
     let mut pushed = 0;
     for (index, fill) in fills.into_iter().enumerate() {
@@ -141,7 +166,15 @@ fn fills_of(
     placement: BoxPlacement,
 ) -> (SmallVec<[PaintRef; 2]>, bool) {
     let mut fills: SmallVec<[PaintRef; 2]> = SmallVec::new();
-    if style.background.color.alpha() != 0.0 {
+    // An owned colour is drawn at any alpha, so the slot is there when an animation brings the
+    // colour in from transparent.
+    if let Some(name) = placement.owner_of(PaintRole::Background) {
+        fills.push(
+            scene
+                .paints
+                .owned(name, Paint::Solid(style.background.color)),
+        );
+    } else if style.background.color.alpha() != 0.0 {
         fills.push(
             scene
                 .paints
@@ -163,7 +196,8 @@ fn fills_of(
             fills.push(fill);
         }
     }
-    let draws_border = !style.border.invisible
+    let draws_border = (!style.border.invisible
+        || placement.owner_of(PaintRole::BorderSides).is_some())
         && border_widths(placement.border)
             .iter()
             .any(|width| *width > 0.0);
@@ -284,7 +318,10 @@ pub fn outline(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement) -
     if rect.is_empty() {
         return 0;
     }
-    let stroke = scene.paints.add(zgui_scene::Paint::Solid(outline.color));
+    let stroke = match placement.owner_of(PaintRole::Outline) {
+        Some(name) => scene.paints.owned(name, Paint::Solid(outline.color)),
+        None => scene.paints.add(Paint::Solid(outline.color)),
+    };
     let quad = Quad::filled(rect, PaintRef::NONE)
         .clipped(placement.clip)
         .transformed(placement.transform)
@@ -394,6 +431,7 @@ mod tests {
             clip: zgui_scene::ClipId::ROOT,
             transform: zgui_scene::SpatialId::VIEWPORT,
             scale: 1.0,
+            owned: None,
         }
     }
 

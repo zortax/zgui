@@ -27,6 +27,24 @@ use zgui_text::{BreakRequest, BrokenParagraph, ParagraphContent, ParagraphKey, S
 use zgui_text_style::TextPaint;
 use zgui_text_style::TextStyle;
 
+/// The poison test mode's offset. See [`zgui_scene::spatial::poison`].
+///
+/// Primitives are recorded in their own space, and the poison mode lays the document out at
+/// `(P, P)`. A test that reads primitive coordinates subtracts this to read them as at the origin.
+pub(crate) fn poison() -> f32 {
+    zgui_scene::spatial::poison::origin()
+}
+
+/// `bounds` with the poison offset taken off its origin.
+pub(crate) fn unpoisoned(bounds: [f32; 4]) -> [f32; 4] {
+    [
+        bounds[0] - poison(),
+        bounds[1] - poison(),
+        bounds[2],
+        bounds[3],
+    ]
+}
+
 /// One element of a fixture tree.
 pub(crate) struct Element {
     /// The element's name, which selectors match on.
@@ -190,6 +208,7 @@ impl Harness {
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.scene.clips,
             spatial: &mut self.scene.spatial,
+            drawn: &zgui_scene::Placements::EMPTY,
             device: DeviceStyle::default(),
             scroll: &self.scroll,
             placements: &[],
@@ -222,6 +241,7 @@ impl Harness {
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.scene.clips,
             spatial: &mut self.scene.spatial,
+            drawn: &zgui_scene::Placements::EMPTY,
             device: DeviceStyle::default(),
             scroll: &self.scroll,
             placements: &[],
@@ -262,7 +282,14 @@ impl Harness {
 
     /// Grows the damage over the read-extent registry, exactly as a frame does before emitting.
     pub(crate) fn expand(&mut self) -> zgui_paint::Expansion {
-        zgui_paint::expand(&self.store, &mut self.damage, self.viewport, self.scale)
+        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        zgui_paint::expand(
+            &self.store,
+            &mut self.damage,
+            self.viewport,
+            self.scale,
+            &placements,
+        )
     }
 
     /// Emits a frame against the damage the fragment pass accumulated.
@@ -271,8 +298,10 @@ impl Harness {
         // Recorded in every profile. The tests below compare what was emitted against what the
         // damage reaches, so a recording that only happened in one profile would leave the other
         // asserting nothing at all.
+        let placements = zgui_scene::Placements::of(&self.scene.spatial);
         let mut input = PaintInput::new(&self.store, &self.damage);
         input.record_emitted = true;
+        input.placements = Some(&placements);
         let report = self.painter.emit(&input, &mut self.scene);
         self.scene.finish(&self.damage);
         report

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use zgui_geom::{Device, DevicePx, Rect};
+use zgui_geom::{Device, DevicePx, Matrix4, Rect};
 use zgui_profile::{Counter, counter};
 
 use crate::group::{BackdropFilter, GroupBoundary};
@@ -491,10 +491,11 @@ impl Scene {
     /// system draws it, so content under two different transforms is compared where it lands.
     ///
     /// `space` is the slot of the coordinate system the primitive draws under, and the cull reads
-    /// only the links of the chain that were measured in it. A link from anywhere else states its
-    /// rectangle in another system's coordinates — the window's clip against a panel the panel's
-    /// own transform moved — and is left to the shader, which resolves every link against the
-    /// frame's matrices. See [`ClipTable::bounds_in`](crate::ClipTable::bounds_in).
+    /// only the links of the chain that were measured in it, or in a scroll container that `space`
+    /// is the content system of. A link from anywhere else states its rectangle in another
+    /// system's coordinates — the window's clip against a panel the panel's own transform moved —
+    /// and is left to the shader, which resolves every link against the frame's matrices. See
+    /// [`ClipTable::bounds_in_carried`](crate::ClipTable::bounds_in_carried).
     fn assign_order(
         &mut self,
         ink: Rect<DevicePx, Device>,
@@ -502,7 +503,7 @@ impl Scene {
         space: u32,
     ) -> Option<DrawOrder> {
         let from_run = self.run_order(ink);
-        let admitted = self.clips.bounds_in(clip, space);
+        let admitted = self.admitted(clip, space);
         let Some(clipped) = ink.intersection(admitted) else {
             counter::bump(Counter::PrimitivesCulled);
             self.note_unreplayable();
@@ -533,17 +534,79 @@ impl Scene {
     ///
     /// The rectangle itself for the viewport and for a slot nothing occupies.
     pub(crate) fn on_device(
-        &self,
+        &mut self,
         slot: u32,
         rect: Rect<DevicePx, Device>,
     ) -> Rect<DevicePx, Device> {
-        if slot == SpatialId::VIEWPORT.index() {
-            return rect;
-        }
-        match self.spatial.resolve_at(slot) {
-            Some(matrix) => zgui_geom::transformed_bounds(&matrix, rect),
-            None => rect,
-        }
+        let matrix = self.device_matrix(slot);
+        crate::scene::device::place(matrix.as_ref(), rect)
+    }
+
+    /// The matrix the coordinate system occupying `slot` maps onto the device.
+    ///
+    /// `None` for the viewport and for a slot nothing occupies. Kept per slot until the tree is
+    /// next written.
+    pub(crate) fn device_matrix(&mut self, slot: u32) -> Option<Matrix4> {
+        self.device.at(&self.spatial, slot)
+    }
+
+    /// The rectangle `clip` admits of the coordinate system at `space`, as
+    /// [`ClipTable::bounds_in`](crate::ClipTable::bounds_in) gives it.
+    ///
+    /// The last answer is kept, keyed by the chain, the slot and the clip table's version. The
+    /// version advances on every rewrite of a stored link, so a link rewritten in place is read
+    /// again.
+    pub(crate) fn admitted(&mut self, clip: ClipId, space: u32) -> Rect<DevicePx, Device> {
+        let version = self.clips.version();
+        let stamp = self.spatial.writes();
+        let admitted = match self.clip_cull {
+            Some(kept)
+                if kept.clip == clip
+                    && kept.space == space
+                    && kept.version == version
+                    && kept.stamp == stamp =>
+            {
+                kept.admitted
+            }
+            _ => {
+                let admitted = self.admitted_now(clip, space);
+                self.clip_cull = Some(crate::scene::ClipCull {
+                    clip,
+                    space,
+                    version,
+                    stamp,
+                    admitted,
+                });
+                admitted
+            }
+        };
+        // Equal, or equal in bits for a NaN edge. A link rewritten from 0.0 to -0.0 keeps the
+        // version and changes only the sign of a zero.
+        debug_assert!(
+            {
+                let fresh = self.admitted_now(clip, space);
+                admitted == fresh
+                    || crate::scene::device::rect_bits(admitted)
+                        == crate::scene::device::rect_bits(fresh)
+            },
+            "the kept cull of clip {clip:?} in slot {space} is stale",
+        );
+        admitted
+    }
+
+    /// The rectangle `clip` admits of the coordinate system at `space`, read from the tables.
+    ///
+    /// A link measured in a system that `space` is a content system of is brought into `space`
+    /// too: the scroll container's port clips its content, and the two systems are only the
+    /// container's scroll offset apart. See [`SpatialTree::across_content`].
+    ///
+    /// [`SpatialTree::across_content`]: crate::SpatialTree::across_content
+    fn admitted_now(&self, clip: ClipId, space: u32) -> Rect<DevicePx, Device> {
+        let spatial = &self.spatial;
+        let inner = spatial.at(space);
+        self.clips.bounds_in_carried(clip, space, &|measured| {
+            spatial.across_content(inner?, measured)
+        })
     }
 
     /// The name occupying a primitive's slot, for a primitive that carries only the slot.

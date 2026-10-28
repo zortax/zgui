@@ -321,7 +321,7 @@ pub(crate) fn anything_focused(harness: &Harness<Runtime>) -> bool {
         .is_some()
 }
 
-/// The border box of the first fragment of the element carrying `class`.
+/// The border box of the first fragment of the element carrying `class`, in device pixels.
 ///
 /// # Panics
 ///
@@ -354,7 +354,7 @@ pub(crate) fn find_box(harness: &Harness<Runtime>, class: &str) -> Option<Rect<D
         if let Some(&fragment) = layout.fragments_of_box(key).first()
             && let Some(fragment) = layout.fragment(fragment)
         {
-            return Some(fragment.border_box);
+            return Some(fragment.on_device(fragment.border_box, &window.placements()));
         }
     }
     None

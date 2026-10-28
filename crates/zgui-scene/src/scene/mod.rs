@@ -3,6 +3,7 @@
 pub mod batching;
 pub mod chunk;
 pub mod depends;
+pub(crate) mod device;
 pub mod finish;
 pub mod insert;
 pub(crate) mod live;
@@ -29,7 +30,7 @@ use crate::scene::resolve::Unresolved;
 use crate::shader::{FrameClock, ShaderParamsTable};
 use crate::spatial::{SpatialId, SpatialTree};
 
-pub use crate::scene::chunk::{ChunkPrims, ChunkSlot, ChunkUpload, TableHolds};
+pub use crate::scene::chunk::{ChunkNote, ChunkPrims, ChunkSlot, TableHolds};
 pub use crate::scene::depends::SpatialFault;
 pub use crate::scene::ordering::OrderOverlap;
 pub use crate::scene::primitives::Primitives;
@@ -134,10 +135,9 @@ pub struct Scene {
     /// Positions pushed under the open capture, awaiting the revision the encoding is stamped
     /// with: (kind, index in the frame array, index in the capture's lane).
     capture_stamped: Vec<(PrimitiveKind, u32, u32)>,
-    /// Chunks encoded since the notes were last cleared — see [`Scene::chunk_inserted`].
-    chunk_inserted: Vec<crate::scene::chunk::ChunkUpload>,
-    /// Chunk revisions dropped since the notes were last cleared.
-    chunk_retired: Vec<u64>,
+    /// Chunks encoded and dropped since the notes were last cleared, in note order — see
+    /// [`Scene::chunk_notes`].
+    chunk_notes: Vec<crate::scene::chunk::ChunkNote>,
     /// How far each chunk replayed away from where it was encoded, this frame, by revision.
     ///
     /// What lets a moved replay keep its resident bytes: the renderer serves the encode-position
@@ -146,6 +146,21 @@ pub struct Scene {
     chunk_offsets: rustc_hash::FxHashMap<u64, [f32; 2]>,
     /// The draw-order assigner.
     order: BoundsTree,
+    /// The device matrix of each slot an order was placed through, kept between tree writes.
+    device: crate::scene::device::DeviceMatrices,
+    /// The last clip cull asked of the clip table, and its answer.
+    ///
+    /// Consecutive primitives nearly always share a clip and a coordinate system, and the answer
+    /// is a walk up the whole chain. The key holds the table's version, so a rewrite of any link
+    /// in place asks again.
+    clip_cull: Option<ClipCull>,
+    /// Every slot's matrix, resolved by [`Scene::finish`] at the tree's stamp in `kept_stamp`.
+    ///
+    /// Read through [`Scene::placements`].
+    kept_placements: crate::spatial::Placements,
+    /// The tree's [write stamp](crate::PropertyTree::writes) when `kept_placements` was resolved;
+    /// zero before that.
+    kept_stamp: u64,
     /// The region each moving coordinate system declared it would visit.
     ///
     /// Read when a matrix is written after the ordering is done, which is the one moment the
@@ -189,6 +204,22 @@ pub struct Scene {
     /// Empty for a frame every one of whose rasters was already where it was going to be, which is
     /// the ordinary case and costs a pointer. See [`mod@resolve`].
     unresolved: Vec<Unresolved>,
+}
+
+/// One clip cull: the chain, the slot it was read for, the table's version, and the answer.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ClipCull {
+    /// The chain culled against.
+    clip: crate::id::ClipId,
+    /// The slot whose links were read.
+    space: u32,
+    /// The clip table's version when it was read.
+    version: crate::table::TableVersion,
+    /// The spatial tree's write stamp when it was read, because a link from a content system's
+    /// container is carried by the matrices.
+    stamp: u64,
+    /// What [`ClipTable::bounds_in_carried`] gave.
+    admitted: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
 }
 
 /// The draw-order permutation of each sortable array, as indices into it.
@@ -292,10 +323,13 @@ impl Scene {
             remap: Remap::default(),
             provenance: Default::default(),
             capture_stamped: Vec::new(),
-            chunk_inserted: Vec::new(),
-            chunk_retired: Vec::new(),
+            chunk_notes: Vec::new(),
             chunk_offsets: rustc_hash::FxHashMap::default(),
             order: BoundsTree::new(),
+            device: Default::default(),
+            clip_cull: None,
+            kept_placements: crate::spatial::Placements::new(),
+            kept_stamp: 0,
             travel: Travels::new(),
             layer_stack: Vec::new(),
             forced_orders: Vec::new(),

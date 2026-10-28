@@ -115,3 +115,152 @@ fn recolouring_rewrites_every_brush_in_place() {
     assert_eq!(brushes.get(second).unwrap().color[0], 0.5);
     assert_eq!(brushes.len(), 2);
 }
+
+#[test]
+fn a_slot_is_released_only_when_no_key_resolves_to_it() {
+    let mut brushes = TextPaintTable::new();
+    let black = TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0));
+    let slot = brushes.slot_for(1, || black);
+    brushes.alias(2, slot);
+
+    brushes.forget(1);
+    assert!(!brushes.release(slot), "the alias still resolves to it");
+    brushes.forget(2);
+    assert!(brushes.release(slot));
+    assert!(!brushes.release(slot), "a released slot is released once");
+    assert_eq!(brushes.in_use(), 0);
+
+    brushes.alias(3, slot);
+    assert_eq!(
+        brushes.keys(),
+        0,
+        "a key cannot be pointed at a released slot"
+    );
+}
+
+#[test]
+fn a_claim_takes_a_released_slot_before_the_table_grows() {
+    let mut brushes = TextPaintTable::new();
+    let black = TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0));
+    let white = TextPaint::new(Color::srgb(1.0, 1.0, 1.0, 1.0));
+    let first = brushes.slot_for(1, || black);
+    let second = brushes.slot_for(2, || black);
+    brushes.forget(1);
+    assert!(brushes.release(first));
+    let claims = brushes.claims();
+
+    let again = brushes.slot_for(3, || white);
+    assert_eq!(again, first);
+    assert_eq!(brushes.len(), 2, "the table did not grow");
+    assert_eq!(brushes.in_use(), 2);
+    assert_eq!(
+        brushes.claims(),
+        claims + 1,
+        "a copy compared by length alone would miss this claim"
+    );
+    assert_eq!(
+        brushes.get(again),
+        Some(&white),
+        "the claim wrote its own brush"
+    );
+    assert_eq!(brushes.get(second), Some(&black));
+}
+
+/// The background of the box `packed` names.
+fn background_of(packed: u64) -> crate::PaintOwner {
+    crate::PaintOwner::new(
+        crate::PropertyOwner::new(packed).expect("not the empty word"),
+        crate::PaintRole::Background,
+    )
+}
+
+#[test]
+fn an_owned_entry_keeps_its_slot_and_its_hash_while_its_colour_moves() {
+    let mut paints = PaintTable::new();
+    let red = Color::srgb(1.0, 0.0, 0.0, 1.0);
+    let grey = Color::srgb(0.5, 0.5, 0.5, 1.0);
+    let first = paints.owned(background_of(7), Paint::Solid(red));
+    let hash = paints.content_hash(first.id().expect("a slot"));
+    let version = paints.version();
+
+    let again = paints.owned(background_of(7), Paint::Solid(grey));
+    assert_eq!(again, first, "the same box paint is the same slot");
+    assert_eq!(
+        paints.get(first.id().expect("a slot")),
+        Some(&Paint::Solid(grey))
+    );
+    assert_eq!(paints.content_hash(first.id().expect("a slot")), hash);
+    let mut changed = Vec::new();
+    assert_eq!(
+        paints.changes_since(version, &mut changed),
+        crate::ChangeCoverage::Delta
+    );
+    assert_eq!(
+        changed,
+        vec![first.id().expect("a slot")],
+        "the rewrite is journaled"
+    );
+}
+
+#[test]
+fn owned_and_interned_entries_never_share_a_slot() {
+    let mut paints = PaintTable::new();
+    let red = Color::srgb(1.0, 0.0, 0.0, 1.0);
+    let shared = paints.add(Paint::Solid(red));
+    let owned = paints.owned(background_of(7), Paint::Solid(red));
+    let other = paints.owned(background_of(8), Paint::Solid(red));
+    assert_ne!(shared, owned);
+    assert_ne!(owned, other, "two boxes own two slots");
+    assert_eq!(paints.add(Paint::Solid(red)), shared);
+}
+
+#[test]
+fn a_rewrite_keeps_the_family_a_primitive_names() {
+    let mut paints = PaintTable::new();
+    let red = Color::srgb(1.0, 0.0, 0.0, 1.0);
+    assert_eq!(
+        paints.rewrite(background_of(7), Paint::Solid(red)),
+        crate::PaintRewrite::Absent
+    );
+    let slot = paints.owned(background_of(7), Paint::Solid(red));
+    assert_eq!(
+        paints.rewrite(background_of(7), Paint::Sides([red; 4])),
+        crate::PaintRewrite::OtherKind
+    );
+    assert_eq!(
+        paints.get(slot.id().expect("a slot")),
+        Some(&Paint::Solid(red))
+    );
+    let grey = Color::srgb(0.5, 0.5, 0.5, 1.0);
+    assert_eq!(
+        paints.rewrite(background_of(7), Paint::Solid(grey)),
+        crate::PaintRewrite::Written
+    );
+    assert_eq!(
+        paints.get(slot.id().expect("a slot")),
+        Some(&Paint::Solid(grey))
+    );
+}
+
+#[test]
+fn a_held_owned_entry_survives_both_sweeps_and_goes_once_released() {
+    let mut paints = PaintTable::new();
+    let slot = paints
+        .owned(
+            background_of(7),
+            Paint::Solid(Color::srgb(1.0, 0.0, 0.0, 1.0)),
+        )
+        .id()
+        .expect("a slot");
+    assert!(paints.retain(slot));
+    for _ in 0..300 {
+        paints.begin_frame();
+    }
+    assert_eq!(paints.evict_unreachable(128, usize::MAX), 0);
+    assert_eq!(paints.evict_least_recently_used(), 0);
+    assert!(paints.contains(slot));
+
+    assert!(paints.release(slot));
+    assert_eq!(paints.evict_unreachable(128, usize::MAX), 1);
+    assert_eq!(paints.owned_slot(background_of(7)), None);
+}

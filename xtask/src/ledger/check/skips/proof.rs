@@ -8,7 +8,7 @@ use crate::ledger::tree::sources::SourceFile;
 /// The call a skip counter's proof is written as.
 const CALL: &str = "assert_non_vacuous(Counter::";
 
-/// The path fragment that marks a member's shipped code, whose test module is the tail of a file.
+/// The path fragment that marks a member's shipped code.
 const SHIPPED: &str = "/src/";
 
 /// The attribute that begins a module compiled only for tests.
@@ -41,9 +41,9 @@ pub(crate) fn find(tree: &Tree, skips: &[String]) -> Proofs {
 
 /// The part of `file` that is compiled only for tests, or `None` when it has none.
 ///
-/// A test target is test code whole. A shipped file's test code is whatever follows its
-/// `#[cfg(test)]`, which is the same cut the counters ledger makes in the other direction: the
-/// proof of a skip is an assertion, and an assertion that ships is not one.
+/// A test target is test code whole. A shipped file's test code is everything after its first
+/// `#[cfg(test)]`, so shipped code below a test-only item also counts. The proof of a skip is an
+/// assertion, and an assertion that ships is not one.
 fn test_code_of(file: &SourceFile) -> Option<&str> {
     if !file.rel_path.contains(SHIPPED) {
         return Some(&file.text);

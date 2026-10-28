@@ -30,7 +30,7 @@ pub(crate) fn find(tree: &Tree) -> Option<Declaration> {
             if !code.contains(INVOCATION) {
                 continue;
             }
-            let counters = names(code);
+            let counters = names(&code);
             if !counters.is_empty() {
                 return Some(Declaration {
                     member: member.name.clone(),

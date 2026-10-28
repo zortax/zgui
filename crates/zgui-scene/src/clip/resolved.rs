@@ -93,3 +93,20 @@ impl ResolvedClip {
         self.aabb[2] <= 0.0 || self.aabb[3] <= 0.0
     }
 }
+
+/// A whole clip chain, flattened with the links of one coordinate system kept in its coordinates.
+///
+/// What [`ClipTable::resolve_kept`](crate::ClipTable::resolve_kept) gives. The links measured in
+/// the kept system are moved by its translation when the clip is applied, so the system can move
+/// and the flattened chain stays valid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeptClip {
+    /// The chain, with [`ResolvedClip::aabb`] the intersection of the links measured elsewhere.
+    ///
+    /// The rounded tests are of both parts.
+    pub clip: ResolvedClip,
+    /// The intersection of the links measured in the kept system, in its coordinates.
+    pub kept_aabb: [f32; 4],
+    /// Bit `i` is set when `clip.rounded[i]` is measured in the kept system.
+    pub kept_tests: u32,
+}

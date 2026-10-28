@@ -22,8 +22,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rustc_hash::{FxHashMap, FxHasher};
-use style::data::ElementData;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use style::data::{ElementData, ViewportUnitUsage};
 use style::dom::TElement;
 use style::rule_tree::StrongRuleNode;
 use style::traversal_flags::TraversalFlags;
@@ -37,7 +37,7 @@ use style::context::{
 };
 use style::data::RestyleKind;
 use style::dom::TNode;
-use style::properties::{ComputedValues, PropertyDeclarationBlock};
+use style::properties::{ComputedValues, PropertyDeclaration, PropertyDeclarationBlock};
 use style::selector_parser::{PseudoElement, RestyleDamage};
 use style::shared_lock::Locked;
 use style::stylesheets::keyframes_rule::KeyframesStepValue;
@@ -70,6 +70,9 @@ pub struct Restyled {
     pub pseudos: [usize; 2],
     /// The custom properties the element's rule chains read, as the readers column files them.
     pub readers: u64,
+    /// Whether the element's computed style, or one of its pseudo-elements', resolved a viewport
+    /// unit.
+    pub viewport_units: bool,
 }
 
 /// No custom paint sources.
@@ -139,6 +142,11 @@ pub(crate) struct RecalcStyle<'a> {
     /// A shader or filter takes its parameters from custom properties named after itself, so an
     /// element that declares one reads names no declaration of its own mentions.
     pub(super) wildcard_names: [style::custom_properties::Name; 4],
+    /// The computed styles earlier cascades produced, by rule chain.
+    pub(super) shared: &'a super::share::SharedStyles,
+    /// The elements whose animations crossed a lifecycle edge since their last cascade, or `None`
+    /// when every animation tick cascades.
+    pub(super) settling: Option<&'a FxHashSet<NodeIndex>>,
 }
 
 /// What each rule chain reads and declares, by a hash of the declaration blocks it names.
@@ -147,6 +155,8 @@ pub(crate) struct RecalcStyle<'a> {
 /// filed under their addresses, and no other block can take an address a key names. A chain is
 /// shared by every element that matched the same rules, and the declarations it names never
 /// change, so an answer stays true for as long as it is held. The engine bounds how many it holds.
+/// An animation or transition block that declares no custom property is hashed as one fixed value,
+/// so its position in the chain is all the key holds of it.
 #[derive(Default)]
 pub(crate) struct RefsCache {
     /// The answers.
@@ -194,7 +204,12 @@ impl RefsCache {
 
 impl<'a> RecalcStyle<'a> {
     /// A traversal over `context`.
-    pub(crate) fn new(context: SharedStyleContext<'a>, refs: &'a RefsCache) -> Self {
+    pub(crate) fn new(
+        context: SharedStyleContext<'a>,
+        refs: &'a RefsCache,
+        shared: &'a super::share::SharedStyles,
+        settling: Option<&'a FxHashSet<NodeIndex>>,
+    ) -> Self {
         Self {
             context,
             restyled: PerWorker::new(),
@@ -204,6 +219,8 @@ impl<'a> RecalcStyle<'a> {
             refs,
             wildcard_names: zgui_css::values::custom::WILDCARD_DECLARERS
                 .map(style::custom_properties::Name::from),
+            shared,
+            settling,
         }
     }
 
@@ -322,9 +339,23 @@ impl<'a> RecalcStyle<'a> {
     pub(super) fn refs_of(&self, rules: &StrongRuleNode) -> Arc<RuleRefs> {
         let mut hasher = FxHasher::default();
         for node in rules.self_and_ancestors() {
-            let address = node
-                .style_source()
-                .map_or(0, |source| source.get().heap_ptr() as usize);
+            let address = node.style_source().map_or(0, |source| {
+                // An animation or transition block holds computed values, which read no custom
+                // property. One that declares none adds nothing to the answer, and every tick
+                // brings a new one, so it is hashed as one fixed value and the chain keeps its
+                // answer.
+                let level = node.cascade_level();
+                if level.is_animation()
+                    && !source
+                        .read(self.context.guards.for_origin(level.origin().origin()))
+                        .declarations()
+                        .iter()
+                        .any(|declaration| matches!(declaration, PropertyDeclaration::Custom(_)))
+                {
+                    return 1;
+                }
+                source.get().heap_ptr() as usize
+            });
             address.hash(&mut hasher);
         }
         let key = hasher.finish();
@@ -409,6 +440,8 @@ impl<'doc> DomTraversal<Node<'doc>> for RecalcStyle<'_> {
                 pseudo_identity(&data, &PseudoElement::After),
             ],
             readers: self.readers_of(element, &data),
+            viewport_units: data.has_styles()
+                && data.styles.viewport_unit_usage() != ViewportUnitUsage::None,
         });
 
         // The engine's descent flag is not cleared here, because this document does not store one:

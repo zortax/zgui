@@ -26,6 +26,10 @@ struct Globals {
     // Read by application effects and by nothing the framework draws, which is why it is one lane
     // of the block every pipeline already binds rather than a block of its own.
     frame: vec4<f32>,
+    // xy: the device pixel the target's first texel holds. A texel is `(device - xy) * zw` of
+    //     `viewport`.
+    // zw: unused.
+    origin: vec4<f32>,
 }
 
 // A box on the device pixel grid: origin then extent.
@@ -116,14 +120,26 @@ struct Rounded {
 }
 
 // A whole clip chain, flattened into what one draw call applies.
+//
+// The links measured in one coordinate system that only translates can stay in its coordinates:
+// `space` names its slot, and `kept_aabb` and the tests `kept_tests` marks are tested at the
+// device point moved back by its translation. Then a move of that system changes no clip.
 struct Clip {
     aabb: Bounds,
     first: Rounded,
     second: Rounded,
     count: u32,
-    has_mask: u32,
-    mask: Tile,
+    // The slot of the kept coordinate system, or NO_SPACE when every link is on the device.
+    space: u32,
+    // The intersection of the kept links, in the kept system's coordinates.
+    kept_aabb: Bounds,
+    // Bit 0 for `first`, bit 1 for `second`: set when the test is in the kept system.
+    kept_tests: u32,
+    pad: u32,
 }
+
+// What `Clip.space` holds when no link is kept in a coordinate system of its own.
+const NO_SPACE: u32 = 0xffffffffu;
 
 // One paint source.
 struct Paint {
@@ -183,6 +199,11 @@ fn bounds_size(b: Bounds) -> vec2<f32> {
     return vec2<f32>(b.w, b.h);
 }
 
+// The same bounds, measured from `origin`.
+fn bounds_from(b: Bounds, origin: vec2<f32>) -> Bounds {
+    return Bounds(b.x - origin.x, b.y - origin.y, b.w, b.h);
+}
+
 fn rgba_of(c: Rgba) -> vec4<f32> {
     return vec4<f32>(c.r, c.g, c.b, c.a);
 }
@@ -203,7 +224,7 @@ fn unit_corner(vertex: u32) -> vec2<f32> {
 // A device-space point, transformed and projected into the current target's clip space.
 fn to_clip_position(point: vec2<f32>, spatial_id: u32) -> vec4<f32> {
     let world = spatial[spatial_id].matrix * vec4<f32>(point, 0.0, 1.0);
-    let texel = world.xy * globals.viewport.zw;
+    let texel = (world.xy - globals.origin.xy * world.w) * globals.viewport.zw;
     let ndc = vec2<f32>(
         texel.x / globals.viewport.x * 2.0 - world.w,
         world.w - texel.y / globals.viewport.y * 2.0,
@@ -217,7 +238,7 @@ fn to_clip_position(point: vec2<f32>, spatial_id: u32) -> vec4<f32> {
 // exactly the same geometry as the composed one — at half the sample rate, which is the entire
 // difference between the two and the only one there should be.
 fn device_position(position: vec2<f32>) -> vec2<f32> {
-    return position / globals.viewport.zw;
+    return position / globals.viewport.zw + globals.origin.xy;
 }
 
 // The device-space point a unit-square corner maps to, with one pixel of slack on every side so an
@@ -228,10 +249,19 @@ fn inflated_corner(vertex: u32, b: Bounds) -> vec2<f32> {
     return origin + unit_corner(vertex) * size;
 }
 
+// The same corner as `inflated_corner`, measured from the bounds' origin.
+//
+// A fragment stage reads its point as this offset, interpolated, plus the origin, flat. The
+// interpolated part is then as small as the primitive, so a primitive far from the origin of its
+// space keeps the precision it has near it.
+fn inflated_offset(vertex: u32, b: Bounds) -> vec2<f32> {
+    return unit_corner(vertex) * (bounds_size(b) + vec2<f32>(2.0)) - vec2<f32>(1.0);
+}
+
 // A resolved remap entry: the arena slot in the low bits, and above them the index of the frame
 // chunk offset the instance is drawn shifted by. The offsets are what let a chunk that merely
 // moved keep its resident bytes — the geometry shifts here, in the vertex stage, and a fragment
-// stage comparing against encode-space fields subtracts the same shift from its sample point.
+// stage comparing against encode-space fields takes its sample point without the shift.
 // The widths mirror SLOT_BITS in buffer/persist.rs.
 const REMAP_SLOT_MASK: u32 = 0xFFFFFFu;
 const REMAP_OFFSET_SHIFT: u32 = 24u;

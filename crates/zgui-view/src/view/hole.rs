@@ -6,10 +6,10 @@ use crate::view::anchor::Anchor;
 
 /// A marker node plus whatever content currently sits before it.
 ///
-/// Every view whose content can be replaced — a conditional, a reactive hole, a type-erased view,
-/// a list — is built on one of these. The marker is what makes replacement possible at all: a view
-/// that has just become empty still has to remember *where* it was, or the content that replaces
-/// it later has nowhere to go.
+/// Every view whose content can be replaced — a conditional, a reactive hole whose content can
+/// change shape, a type-erased view, a list — is built on one of these. The marker is what makes replacement
+/// possible at all: a view that has just become empty still has to remember *where* it was, or the
+/// content that replaces it later has nowhere to go.
 ///
 /// The marker takes part in sibling order and in nothing else. It is emphatically not an
 /// invisible element: an element would shift what every positional selector in the document

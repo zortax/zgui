@@ -31,13 +31,13 @@ use crate::frame::vector::VectorSource;
 /// A backend companion's lazy vector-rasteriser constructor.
 pub type VectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSource>;
 use crate::gpu::device::Gpu;
+use crate::gpu::timing::{GpuTimer, GpuTiming};
 use crate::pipeline::Pipelines;
-use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
 use crate::renderer::readback::Pixels;
 use crate::renderer::shared::{DeviceState, SharedGraphics};
 use crate::target::acquire::Acquisition;
-use crate::target::group_pool::GroupPool;
+use crate::target::group_pool::{GroupPool, GroupPrecision};
 use crate::target::scene_texture::SceneTexture;
 use crate::target::swapchain::Presentation;
 
@@ -158,6 +158,8 @@ pub struct WgpuRenderer {
     backends: wgpu::Backends,
     /// Whether a frame with more vector passes than the scratch can hold stops the program.
     vector_shortfall_is_fatal: bool,
+    /// The pass timing, when timing was asked for and the device has timestamp queries.
+    timer: Option<GpuTimer>,
 }
 
 impl std::fmt::Debug for WgpuRenderer {
@@ -194,7 +196,9 @@ impl WgpuRenderer {
             pipelines.borrow().layouts().sampled.clone(),
         );
         let buffers = FrameBuffers::new(&gpu);
-        let groups = GroupPool::scaled(target.size);
+        let timer = GpuTimer::new(&gpu);
+        let mut groups = GroupPool::scaled(target.size);
+        groups.set_precision(GroupPrecision::from_environment().unwrap_or_default());
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zgui.sampler.filtering"),
             // Clamping is what a magnifying read wants at the edge of a target; everything a
@@ -210,20 +214,11 @@ impl WgpuRenderer {
             ..Default::default()
         });
         // Building the pipelines now rather than at the first frame is what keeps a driver's first
-        // compilation out of a frame the user is waiting for. A second window on the same device
-        // finds them already built unless its format differs, in which case only the entries that
-        // format needs are compiled.
-        {
-            let mut built = pipelines.borrow_mut();
-            for kind in PipelineKind::ALL {
-                let format = match kind {
-                    PipelineKind::Blit | PipelineKind::BlitUndoSrgb => formats.present_attachment(),
-                    _ => formats.scene,
-                };
-                let _ = built.get(&gpu, kind, format);
-            }
-            built.persist();
-        }
+        // compilation out of a frame the user is waiting for. A device opened for a window has
+        // built them before its surface was configured, and a second window on the same device
+        // finds them built unless its format differs, in which case only the entries that format
+        // needs are compiled.
+        device.prepare(formats);
         Self {
             gpu,
             presentation,
@@ -260,6 +255,7 @@ impl WgpuRenderer {
             // that runs out of capacity has reached a ceiling rather than a condition anyone chose,
             // and it costs real content either way.
             vector_shortfall_is_fatal: cfg!(debug_assertions),
+            timer,
         }
     }
 
@@ -307,6 +303,7 @@ impl WgpuRenderer {
         // twice across the changeover.
         let target = self.target;
         let subpixel_order = self.subpixel_order;
+        let precision = self.groups.precision();
         let vector_factory = self.vector_factory;
         let vector_backend = self.vector_backend;
         let rebuilt = match self.shared.clone() {
@@ -346,6 +343,7 @@ impl WgpuRenderer {
         let had_raster = self.vectors.is_some();
         *self = rebuilt;
         self.subpixel_order = subpixel_order;
+        self.groups.set_precision(precision);
         self.vector_factory = vector_factory;
         self.vector_backend = vector_backend;
         if had_raster {
@@ -356,6 +354,41 @@ impl WgpuRenderer {
         // Nothing the old device held survives, least of all the target frames were composed into.
         self.full_damage_next = true;
         Ok(())
+    }
+
+    /// Whether this renderer times its passes on the GPU.
+    ///
+    /// See [`gpu::timing`](crate::gpu::timing) for when it does.
+    pub fn gpu_timing_enabled(&self) -> bool {
+        self.timer.is_some()
+    }
+
+    /// The most recent GPU timing result.
+    ///
+    /// A result arrives one or two frames after the frame it describes. `None` when timing is off
+    /// or no result has arrived yet.
+    pub fn gpu_timing(&self) -> Option<GpuTiming> {
+        self.timer.as_ref().and_then(GpuTimer::latest)
+    }
+
+    /// Reads completed GPU timing results without waiting, and hands over each one held, oldest
+    /// first.
+    ///
+    /// Empty when timing is off. After [`Gpu::wait`], it holds every frame drawn before the wait
+    /// that got a query set. It keeps only the latest 1024 results since the last call.
+    pub fn take_gpu_timings(&mut self) -> Vec<GpuTiming> {
+        match &mut self.timer {
+            Some(timer) => timer.take(&self.gpu),
+            None => Vec::new(),
+        }
+    }
+
+    /// How many frames began recording since the renderer was built, when timing is on.
+    ///
+    /// The frame a [`GpuTiming`] names is this count as it was before that frame began, so a
+    /// caller that reads the count around a draw can find the result of that draw later.
+    pub fn gpu_timed_frames(&self) -> Option<u64> {
+        self.timer.as_ref().map(GpuTimer::frames)
     }
 
     /// The device everything is drawn on.
@@ -457,6 +490,31 @@ impl WgpuRenderer {
         &self.groups
     }
 
+    /// Starts every isolated target `margin` device pixels above and to the left of the surface
+    /// origin, as the test mode [`GroupPool::POISON_ORIGIN`] does.
+    #[doc(hidden)]
+    pub fn set_target_margin(&mut self, margin: i32) {
+        self.groups.set_poison_margin(margin);
+    }
+
+    /// How precisely a plain group holds its content.
+    pub fn group_precision(&self) -> GroupPrecision {
+        self.groups.precision()
+    }
+
+    /// Sets how precisely a plain group holds its content, see [`GroupPrecision`].
+    ///
+    /// A renderer starts with the precision that [`GroupPrecision::VARIABLE`] names, or with
+    /// [`GroupPrecision::Compact`]. This value replaces it. The value stays across a new group
+    /// budget, a resize and a device recovery. A change redraws the whole surface in the next
+    /// frame.
+    pub fn set_group_precision(&mut self, precision: GroupPrecision) {
+        if precision != self.groups.precision() {
+            self.groups.set_precision(precision);
+            self.full_damage_next = true;
+        }
+    }
+
     /// How many bytes of isolated targets may be resident before the pool reduces resolution.
     ///
     /// Setting it discards every target the pool holds, because a budget that is now too small has
@@ -464,7 +522,9 @@ impl WgpuRenderer {
     /// set here stays when the surface is resized; the default follows the surface
     /// ([`GroupPool::scaled`]).
     pub fn set_group_budget(&mut self, bytes: u64) {
+        let precision = self.groups.precision();
         self.groups = GroupPool::new(self.composed.used().size, bytes);
+        self.groups.set_precision(precision);
     }
 
     /// Chooses which supplied texture the next frame is copied into.

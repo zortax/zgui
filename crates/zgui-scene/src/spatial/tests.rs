@@ -315,3 +315,101 @@ fn re_establishing_the_same_coordinate_system_with_the_same_matrix_is_not_a_writ
         "a coordinate system given back stops resolving, which every name below it depends on"
     );
 }
+
+#[test]
+fn the_write_stamp_changes_exactly_when_an_answer_can_change() {
+    // A reader keeps each slot's matrix under this stamp, so a change it misses draws through a
+    // stale matrix, and a change it reports for nothing costs a walk per slot.
+    let mut boxes = Boxes::new();
+    let mut tree = SpatialTree::new(DomainId::FIRST);
+    let root = tree.root(boxes.one());
+    let card = boxes.one();
+    let space = tree.space_of(root, card, moved(10.0));
+    tree.recycle();
+
+    let held = tree.writes();
+    tree.space_of(root, card, moved(10.0));
+    tree.recycle();
+    assert_eq!(
+        tree.writes(),
+        held,
+        "the same matrix again, and a frame that gave nothing back"
+    );
+
+    tree.space_of(root, card, moved(11.0));
+    let rewritten = tree.writes();
+    assert_ne!(rewritten, held, "a rewrite through `space_of`");
+
+    assert!(tree.place(space, Matrix4::translation(12.0, 0.0, 0.0)));
+    let placed = tree.writes();
+    assert_ne!(placed, rewritten, "a rewrite through `place`");
+    assert!(!tree.place(space, Matrix4::translation(12.0, 0.0, 0.0)));
+    assert_eq!(tree.writes(), placed, "placing the matrix already held");
+
+    tree.release(card);
+    let released = tree.writes();
+    assert_ne!(released, placed, "a release");
+    tree.recycle();
+    assert_ne!(
+        tree.writes(),
+        released,
+        "the slot stops resolving when the frame ends"
+    );
+
+    let other = SpatialTree::new(DomainId::FIRST);
+    let fresh = SpatialTree::new(DomainId::FIRST);
+    assert_ne!(
+        other.writes(),
+        fresh.writes(),
+        "two trees never share a stamp"
+    );
+}
+
+#[test]
+fn a_relative_matrix_is_the_chain_below_the_ancestor_composed_upwards() {
+    // The matrices do not commute, so a product in another order gives other bits.
+    let mut boxes = Boxes::new();
+    let mut tree = SpatialTree::new(DomainId::FIRST);
+    let root = tree.root(boxes.one());
+    let local = |matrix: Matrix4| {
+        Some(OwnSpace {
+            local: matrix,
+            anchoring: Anchoring::Scrolling,
+        })
+    };
+    let (sin, cos) = 0.3_f32.sin_cos();
+    let rotation = Matrix4::from_columns([
+        [cos, sin, 0.0, 0.0],
+        [-sin, cos, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
+    let outer = tree.space_of(root, boxes.one(), local(Matrix4::scale(1.5, 0.75, 1.0)));
+    let middle = tree.space_of(outer, boxes.one(), local(rotation));
+    let inner_owner = boxes.one();
+    let inner = tree.space_of(
+        middle,
+        inner_owner,
+        local(Matrix4::translation(3.25, -7.5, 0.0)),
+    );
+    let sibling = tree.space_of(outer, boxes.one(), moved(4.0));
+
+    let bits = |matrix: Option<Matrix4>| {
+        matrix.map(|matrix| matrix.columns.map(|column| column.map(f32::to_bits)))
+    };
+    let expected = Matrix4::IDENTITY
+        .then(&Matrix4::translation(3.25, -7.5, 0.0))
+        .then(&rotation);
+    assert_eq!(bits(tree.relative(inner, outer)), bits(Some(expected)));
+    assert_eq!(tree.relative(inner, inner), Some(Matrix4::IDENTITY));
+    assert_eq!(tree.relative(outer, inner), None, "the ancestor is below");
+    assert_eq!(tree.relative(inner, sibling), None, "the other is beside");
+
+    tree.release(inner_owner);
+    tree.recycle();
+    assert_eq!(
+        tree.relative(inner, outer),
+        None,
+        "a name given back has no answer"
+    );
+}

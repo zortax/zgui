@@ -138,7 +138,7 @@ pub struct Window {
     /// The rule set and the device.
     engine: StyleEngine,
     /// The application's cascade pool, when it runs one.
-    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
+    style_pool: Option<Rc<crate::app::StylePoolCell>>,
     /// Whether the next restyle is a broad one, which is what the pool is for.
     ///
     /// True for the first cascade — the largest this window will ever run — and again whenever
@@ -1151,6 +1151,26 @@ impl Window {
         self.renderer.as_ref()
     }
 
+    /// The painter and the paint records it holds, for a memory report.
+    #[doc(hidden)]
+    pub fn painter(&self) -> &Painter {
+        &self.painter
+    }
+
+    /// How many paragraphs the text engine holds shaped, for a memory report.
+    #[doc(hidden)]
+    pub fn shaped_held(&self) -> crate::text::ShapedHeld {
+        self.text.shaped_held()
+    }
+
+    /// How many brush slots the text engine's table has in use, and how many keys resolve to
+    /// one, for a memory report.
+    #[doc(hidden)]
+    pub fn text_brushes_held(&mut self) -> (usize, usize) {
+        let table = self.text.text_paints();
+        (table.in_use(), table.keys())
+    }
+
     /// The raster paths most recently selected by `node`'s own vector content.
     pub fn vector_routes(&self, node: zgui_dom::NodeKey) -> zgui_paint::VectorRoutes {
         self.vector_routes
@@ -1303,7 +1323,7 @@ impl Window {
     }
 
     /// Hands this window the application's cascade pool.
-    pub(crate) fn set_style_pool(&mut self, pool: Rc<zgui_style::engine::thread_pool::StylePool>) {
+    pub(crate) fn set_style_pool(&mut self, pool: Rc<crate::app::StylePoolCell>) {
         self.style_pool = Some(pool);
     }
 

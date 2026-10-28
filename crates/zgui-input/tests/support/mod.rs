@@ -203,6 +203,7 @@ impl Fixture {
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.clips,
             spatial: &mut self.spatial,
+            drawn: &zgui_scene::Placements::EMPTY,
             device: DeviceStyle::default(),
             scroll: &scroll,
             placements: &[],

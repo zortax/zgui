@@ -3,8 +3,8 @@
 use rustc_hash::FxHashMap;
 use style::selector_parser::RestyleDamage;
 use zgui_bits::Dirty;
-use zgui_css::ComputedStyle;
 use zgui_dom::dirty::propagate;
+use zgui_dom::side::paint_key::PaintStyleHeld;
 use zgui_dom::{DocumentStore, NodeIndex};
 
 use crate::damage::bits;
@@ -138,9 +138,10 @@ pub fn translate(
     store: &mut DocumentStore,
     texts: &mut TextKeyStore,
     record: &Restyled,
-    style: &ComputedStyle,
+    held: PaintStyleHeld,
     out: &mut DamageSink,
 ) {
+    let style = &held.style;
     let node = record.index;
 
     // Every mark below is written once per restyled element, which is a different order of
@@ -237,8 +238,10 @@ pub fn translate(
     let previous = store
         .columns_mut()
         .paint_key
-        .insert(key, paint)
-        .unwrap_or(zgui_dom::side::paint_key::PaintStyleKey::UNSTYLED);
+        .insert(key, held)
+        .map_or(zgui_dom::side::paint_key::PaintStyleKey::UNSTYLED, |held| {
+            paint_key::held_key(&held)
+        });
     if previous != paint {
         out.mark(node, Dirty::REPAINT);
         // The inherited interaction group holds `pointer-events`, which the hit entry copies

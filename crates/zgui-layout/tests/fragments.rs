@@ -7,6 +7,7 @@
 //! | `hits` | what answers at a point |
 //! | `inline_effects` | a line that paints the nested inline boxes on it |
 //! | `bounds` | where an element is, across every piece it was painted as |
+//! | `extra` | the values a fragment keeps outside its record |
 //! | `probe` | finding the box and the fragment a fixture element produced |
 //! | `spaces` | which coordinate system a fragment names |
 //! | `snapped` | which device pixel a translated box is drawn at |
@@ -15,6 +16,8 @@ mod support;
 
 #[path = "fragments/bounds.rs"]
 mod bounds;
+#[path = "fragments/extra.rs"]
+mod extra;
 #[path = "fragments/folds.rs"]
 mod folds;
 #[path = "fragments/hits.rs"]

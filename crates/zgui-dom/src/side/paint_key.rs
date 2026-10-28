@@ -13,11 +13,15 @@
 //! this key does not name is a change that produces no repaint — silently, and only for some
 //! properties. So a field is added here in the same change that starts reading the group.
 
+use servo_arc::Arc as ServoArc;
+use style::properties::ComputedValues;
+
 /// Identity of the computed-value groups a node's painted appearance depends on.
 ///
-/// Written once per node per restyle by the stage that computes styles, and compared against the
-/// previous frame's value to decide whether the node has to be painted again. Over-firing is a cost
-/// and under-firing is a wrong pixel, so every field is chosen to over-fire.
+/// Computed once per node per restyle by the stage that computes styles, and compared against the
+/// key of the styles the node's [`PaintStyleHeld`] holds from the previous restyle, to decide
+/// whether the node has to be painted again. Over-firing is a cost and under-firing is a wrong
+/// pixel, so every field is chosen to over-fire.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Default, Debug)]
 pub struct PaintStyleKey {
     /// Background colour, images, position, repeat and size.
@@ -87,9 +91,54 @@ impl PaintStyleKey {
     };
 }
 
+/// The styles a node's paint key was last computed from.
+///
+/// The column holds these in place of the key itself. The key is a set of addresses, and an
+/// address names a group only while the group is alive. Held here, the groups stay alive until the
+/// next restyle compares against them, so no new group can take an address the previous key named.
+/// The key is computed again from these when it is compared.
+#[derive(Clone, Debug)]
+pub struct PaintStyleHeld {
+    /// The node's computed style.
+    pub style: ServoArc<ComputedValues>,
+    /// The styles of the node's generated content before and after its own, when it has either.
+    pub pseudos: Option<Box<[Option<ServoArc<ComputedValues>>; 2]>>,
+}
+
+impl PaintStyleHeld {
+    /// Holds `style`, and the generated-content styles when either exists.
+    pub fn new(
+        style: ServoArc<ComputedValues>,
+        pseudos: [Option<ServoArc<ComputedValues>>; 2],
+    ) -> Self {
+        Self {
+            style,
+            pseudos: (pseudos[0].is_some() || pseudos[1].is_some()).then(|| Box::new(pseudos)),
+        }
+    }
+
+    /// The identities of the generated-content styles, or zero for one that does not exist.
+    pub fn pseudo_identities(&self) -> [usize; 2] {
+        self.pseudos.as_deref().map_or([0, 0], |pseudos| {
+            pseudos
+                .each_ref()
+                .map(|style| style.as_ref().map_or(0, |style| style.heap_ptr() as usize))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::PaintStyleKey;
+
+    /// The column is dense over every node slot, so its slot is pinned at two pointers.
+    #[test]
+    fn a_column_slot_is_two_pointers_wide() {
+        assert_eq!(
+            core::mem::size_of::<Option<super::PaintStyleHeld>>(),
+            2 * core::mem::size_of::<usize>()
+        );
+    }
 
     #[test]
     fn the_unstyled_key_is_the_default_and_differs_from_any_styled_one() {

@@ -27,7 +27,7 @@ use rustc_hash::FxHashSet;
 use zgui_dom::side::BoxKey;
 use zgui_dom::{Document, NodeIndex};
 
-use crate::boxtree::absolute::{Reparented, attach_all};
+use crate::boxtree::absolute::{Declared, Reparented, attach_all, attach_in_tree_order};
 use crate::boxtree::build::{blockify_item, build_subtree};
 use crate::boxtree::patch::structure;
 use crate::boxtree::patch::subtree::children::plan::{Plan, Step};
@@ -68,19 +68,60 @@ pub(super) fn splice(
     let made = build(store, document, &plan)?;
 
     let mut removed = 0;
-    for key in plan.departing {
+    for &key in &plan.departing {
         removed += structure::detach(store, key);
     }
+    // The layout order: the in-flow children in document order, then the out-of-flow boxes the
+    // container positions. Each out-of-flow child records the in-flow sibling it was written after,
+    // as the build records it.
+    let mut layout = Vec::with_capacity(made.order.len() + plan.tail.len());
+    let mut after = None;
     for &key in &made.order {
+        if made.arrived.iter().any(|item| item.key == key) || plan::out_of_flow(store, key) {
+            store.set_declared(
+                key,
+                Some(Declared {
+                    parent: plan.container,
+                    after,
+                }),
+            );
+            continue;
+        }
         if let Some(node) = store.get_mut(key) {
             node.parent = Some(plan.container);
             node.parent_fc = plan.fc;
         }
+        layout.push(key);
+        after = Some(key);
     }
+    layout.extend(
+        plan.tail
+            .iter()
+            .copied()
+            .filter(|key| !plan.departing.contains(key)),
+    );
     let node = store.get_mut(plan.container)?;
-    node.children = made.order.clone();
+    node.children = layout;
     node.paint_children = made.order;
-    attach_all(store, &made.reparented);
+    // A containing block that this call did not build already holds the out-of-flow boxes of other
+    // subtrees, so a box goes in among them in tree order. One that it built is filled in build order.
+    let above = above(store, plan.container);
+    let mut fresh = Vec::new();
+    let mut grown: Vec<BoxKey> = Vec::new();
+    for item in made.arrived.into_iter().chain(made.reparented) {
+        if above.contains(&item.containing_block) {
+            attach_in_tree_order(store, document, item);
+            if !grown.contains(&item.containing_block) {
+                grown.push(item.containing_block);
+            }
+        } else {
+            fresh.push(item);
+        }
+    }
+    attach_all(store, &fresh);
+    for key in grown {
+        mark_dirty(store, key);
+    }
     // A container whose child list moved is a container whose own size was computed from the children
     // it used to have, and so was every ancestor's.
     mark_dirty(store, plan.container);
@@ -90,10 +131,23 @@ pub(super) fn splice(
     })
 }
 
+/// The container and every box above it in layout order.
+fn above(store: &LayoutStore, container: BoxKey) -> Vec<BoxKey> {
+    let mut chain = vec![container];
+    let mut next = store.get(container).and_then(|node| node.parent);
+    while let Some(key) = next {
+        chain.push(key);
+        next = store.get(key).and_then(|node| node.parent);
+    }
+    chain
+}
+
 /// The boxes a plan's [`Step::Build`] steps produced, and the child list they belong in.
 struct Made {
-    /// The container's new child list, in document order, for both of its orders.
+    /// The container's new child list, in document order, which is its paint order.
     order: Vec<BoxKey>,
+    /// The children that were built out of flow, each with the box that positions it.
+    arrived: Vec<Reparented>,
     /// The out-of-flow boxes below the children that were built, each with the box that positions it.
     reparented: Vec<Reparented>,
     /// How many children had their boxes made.
@@ -110,6 +164,7 @@ struct Made {
 fn build(store: &mut LayoutStore, document: &Document, plan: &Plan) -> Option<Made> {
     let mut made = Made {
         order: Vec::with_capacity(plan.steps.len()),
+        arrived: Vec::new(),
         reparented: Vec::new(),
         built: 0,
     };
@@ -135,21 +190,24 @@ fn build(store: &mut LayoutStore, document: &Document, plan: &Plan) -> Option<Ma
         };
         made.built += 1;
         // The container's own treatment of an item it holds. The builder applies it from the
-        // container's side, which is not being rebuilt, so it is applied here instead.
-        if matches!(plan.fc, FormattingContext::Flex | FormattingContext::Grid) {
+        // container's side, which is not being rebuilt, so it is applied here instead. An
+        // out-of-flow box is no item of the container.
+        if !built.root.out_of_flow
+            && matches!(plan.fc, FormattingContext::Flex | FormattingContext::Grid)
+        {
             blockify_item(store, built.root.key);
         }
         if !takes_its_place(store, built.root.key, built.root.out_of_flow, plan.fc) {
             discard(store, &made, built.root.key);
             return None;
         }
-        made.reparented.extend(
-            built
-                .reparented
-                .iter()
-                .copied()
-                .filter(|item| item.key != built.root.key),
-        );
+        for &item in &built.reparented {
+            if item.key == built.root.key {
+                made.arrived.push(item);
+            } else {
+                made.reparented.push(item);
+            }
+        }
         made.order.push(built.root.key);
     }
     Some(made)
@@ -157,11 +215,11 @@ fn build(store: &mut LayoutStore, document: &Document, plan: &Plan) -> Option<Ma
 
 /// Whether a freshly built child takes part in its container the way every other child does.
 ///
-/// The plan proved that the container holds nothing but block-level in-flow children with a box
-/// each, which is what makes keeping the others safe. A child that arrives inline-level breaks that:
-/// its siblings would be swept into an anonymous inline box, and they carry no mark. A child that
-/// arrives out of flow breaks it too — it is laid out by an ancestor and painted where it was
-/// written, so it belongs in one of the container's lists and not the other.
+/// The plan proved that the container's in-flow children are block-level with a box each, which is
+/// what makes keeping the others safe. A child that arrives inline-level breaks that: its siblings
+/// would be swept into an anonymous inline box, and they carry no mark. A child that arrives out of
+/// flow takes no part in that arrangement: its containing block lays it out, and the container
+/// paints it where it was written.
 fn takes_its_place(
     store: &LayoutStore,
     key: BoxKey,
@@ -169,7 +227,7 @@ fn takes_its_place(
     fc: FormattingContext,
 ) -> bool {
     if out_of_flow {
-        return false;
+        return store.contains(key);
     }
     let Some(node) = store.get(key) else {
         return false;

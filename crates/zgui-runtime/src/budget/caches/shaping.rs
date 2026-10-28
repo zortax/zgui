@@ -74,8 +74,17 @@ impl Budgeted for ParagraphShapingBudget<'_> {
         CacheId::ParagraphShaping
     }
 
+    /// The configured level, or fewer when the old paragraphs pass their own allowance.
+    ///
+    /// The allowance is the recent peak of the current paragraphs, and at least
+    /// [`IDLE_SHAPED_PARAGRAPHS`](crate::budget::limits::IDLE_SHAPED_PARAGRAPHS). A change that
+    /// replaces every current paragraph, such as a font-size toggle or a switch to another view
+    /// and back, thus finds the earlier ones still shaped.
     fn limit(&self) -> Option<u64> {
-        Some(self.limit as u64)
+        let active = self.layout.borrow().active_paragraph_count();
+        let peak = (self.tracked.working_peak() as usize).max(active);
+        let idle = peak.max(crate::budget::limits::IDLE_SHAPED_PARAGRAPHS);
+        Some(self.limit.min(active.saturating_add(idle)) as u64)
     }
 
     fn report(&self) -> CacheReport {
@@ -94,15 +103,26 @@ impl Budgeted for ParagraphShapingBudget<'_> {
         }
     }
 
+    /// Also hands the text engine the keys layout released this frame, so that eviction examines
+    /// only the paragraphs that changed.
     fn observe(&mut self, epoch: SceneEpoch) {
+        let text = &mut *self.text;
+        self.layout
+            .borrow_mut()
+            .drain_released_paragraphs(|keys, layout| {
+                text.note_released(keys, &|key| layout.paragraph_is_active(key));
+            });
         self.tracked
             .note(epoch, self.text.shaped_held().hits, false);
+        let active = self.layout.borrow().active_paragraph_count();
+        self.tracked.note_working_set(active as u64);
     }
 
     /// Drops only cold entries no current inline resolution names.
     fn evict(&mut self, units: u64, _epoch: SceneEpoch) -> u64 {
-        let active = self.layout.borrow().active_paragraph_keys();
-        self.text.evict_inactive(&active, units as usize) as u64
+        let layout = self.layout.borrow();
+        let is_active = |key| layout.paragraph_is_active(key);
+        self.text.evict_inactive(&is_active, units as usize) as u64
     }
 
     fn forget(&mut self) {

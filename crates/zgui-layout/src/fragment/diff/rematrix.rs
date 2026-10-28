@@ -20,7 +20,7 @@ use zgui_scene::Content;
 use crate::fragment::diff::damage::{absorb, overlaps, pairwise_disjoint};
 use crate::fragment::diff::dirty::FrameDirty;
 use crate::fragment::diff::{Folded, Pass};
-use crate::fragment::transform;
+use crate::fragment::{FragKey, FragmentFlags, transform};
 
 /// Whether `matrix` keeps every rectangle upright and the right way round.
 ///
@@ -37,29 +37,53 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// Carries one clean subtree onto the matrix `outer`, and reports what it folds up exactly as
     /// visiting it would have.
     ///
+    /// `fixed` is the matrix a `position: fixed` box below is carried onto instead, which differs
+    /// from `outer` below a content space (see [`FixedParent`](crate::fragment::build::FixedParent)).
     /// The damage is raised once for the whole subtree, where it was and where it is now.
-    pub(super) fn rematrix(&mut self, key: BoxKey, outer: Option<Matrix4>) -> Folded {
+    pub(super) fn rematrix(
+        &mut self,
+        key: BoxKey,
+        outer: Option<Matrix4>,
+        fixed: Option<Matrix4>,
+    ) -> Folded {
         let before = self
             .store
             .fragments_of_box(key)
             .first()
             .and_then(|frag| self.store.fragment(*frag))
-            .map(|fragment| fragment.subtree_ink);
-        let folded = self.rematrix_box(key, outer);
-        if let Some(before) = before {
-            absorb(self.damage, before);
+            .map(|fragment| (fragment.subtree_ink, fragment.anchor));
+        let folded = self.rematrix_box(key, outer, fixed);
+        // A box with no piece of its own still raises where its subtree is now, in the root space.
+        let anchor = before.map_or(self.anchors.root, |(_, anchor)| anchor);
+        if let Some((before, _)) = before {
+            absorb(self.damage, self.device_before(before, anchor));
         }
-        absorb(self.damage, folded.subtree_ink);
+        absorb(self.damage, self.device_now(folded.subtree_ink, anchor));
         folded
     }
 
     /// Rewrites one box's pieces under `outer`, then everything below it.
-    fn rematrix_box(&mut self, key: BoxKey, outer: Option<Matrix4>) -> Folded {
+    fn rematrix_box(
+        &mut self,
+        key: BoxKey,
+        outer: Option<Matrix4>,
+        fixed: Option<Matrix4>,
+    ) -> Folded {
         counter::bump(Counter::NodesVisited);
+        counter::bump(Counter::FragmentBoxesVisited);
         let scale = self.tables.device.scale;
         let first = self.store.fragments_of_box(key).first().copied();
+        let flags = first
+            .and_then(|frag| self.store.fragment(frag))
+            .map(|fragment| fragment.flags);
+        // A fixed box folds FIXED_BELOW onto its own piece, so the style is read only on the path
+        // down to one.
+        let is_fixed = flags.is_none_or(|flags| flags.contains(FragmentFlags::FIXED_BELOW))
+            && crate::fragment::anchored::ignores_scroll(&self.store.node(key).style);
+        let outer = if is_fixed { fixed } else { outer };
         // The same matrix the composing walk arrives at: the box's own transform, or the one an
         // animation is drawing it under, composed onto the matrix above it.
+        let mut own_matrix = None;
         let matrix = match first.and_then(|frag| self.store.fragment(frag)) {
             Some(fragment) => {
                 let node = self.store.node(key);
@@ -68,10 +92,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     || node.style.get_box(),
                     zgui_dom::side::AnimPlacement::group,
                 );
-                match (
-                    outer,
-                    transform::matrix_of(box_, fragment.border_box, scale),
-                ) {
+                own_matrix = transform::matrix_of(box_, fragment.border_box, scale);
+                match (outer, own_matrix) {
                     (None, None) => None,
                     (Some(outer), None) => Some(outer),
                     (None, Some(own)) => Some(own),
@@ -79,6 +101,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 }
             }
             None => outer,
+        };
+        // A fixed box below hangs from this box when it has a space of its own, and from what
+        // this box's own fixed descendants hang from otherwise.
+        let sticky = flags.is_some_and(|flags| flags.contains(FragmentFlags::IS_STICKY));
+        let below_fixed = if is_fixed || sticky || own_matrix.is_some() {
+            matrix
+        } else {
+            fixed
         };
         let hash = matrix.unwrap_or(Matrix4::IDENTITY).content_hash();
 
@@ -94,7 +124,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             let Some(fragment) = self.store.fragment_mut(frag) else {
                 continue;
             };
-            fragment.transform_hash = hash;
             // Every piece is drawn through the box's matrix: its own, its lines and its bars.
             fragment.ink = match matrix {
                 Some(matrix) => transform::transformed_bounds(&matrix, fragment.local_ink),
@@ -105,13 +134,45 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             } else {
                 inks.push(fragment.ink);
             }
+            self.store.set_transform_hash(frag, hash);
         }
 
+        // A scroll container that draws its children in a content space hands them that space,
+        // which already resolves through `matrix`. So they are carried under no matrix, and what
+        // they fold up is put into this box's anchor through the space's matrix and then `matrix`.
+        let into_anchor = self.content_matrix(key, first).map(|local| match matrix {
+            Some(matrix) => local.then(&matrix),
+            None => local,
+        });
+        let below_matrix = if into_anchor.is_some() { None } else { matrix };
+
         let mut folded = self.cached(key);
+        // The anchor this box's children measure their ink in, and the one it measures its own in.
+        let own_anchor = first
+            .and_then(|frag| self.store.fragment(frag))
+            .map(|fragment| fragment.anchor);
+        let children_anchor = match into_anchor {
+            Some(_) => self
+                .tables
+                .spatial
+                .of(zgui_scene::PropertyOwner::of(key).content()),
+            None => own_anchor,
+        };
         let mut disjoint = true;
         let mut position = 0;
         while let Some(&child) = self.store.node(key).children.get(position) {
-            let below = self.rematrix_box(child, matrix);
+            let mut below = self.rematrix_box(child, below_matrix, below_fixed);
+            match (below.anchor, own_anchor) {
+                // A fixed box inside a content space measures its ink where it hangs from.
+                (Some(anchor), Some(own)) if Some(anchor) != children_anchor => {
+                    below.subtree_ink = self.reanchor(below.subtree_ink, anchor, own);
+                }
+                _ => {
+                    if let Some(into) = into_anchor {
+                        below.subtree_ink = transform::transformed_bounds(&into, below.subtree_ink);
+                    }
+                }
+            }
             disjoint &= below.disjoint;
             inks.push(below.subtree_ink);
             if first.is_none() {
@@ -143,5 +204,17 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         folded.subtree_ink = subtree_ink;
         folded.disjoint = disjoint;
         folded
+    }
+
+    /// The matrix of the content space `key` draws its children in, when its first piece `first`
+    /// says it draws them in one.
+    fn content_matrix(&self, key: BoxKey, first: Option<FragKey>) -> Option<Matrix4> {
+        let fragment = self.store.fragment(first?)?;
+        if !fragment.flags.contains(FragmentFlags::SCROLLS_CONTENT) {
+            return None;
+        }
+        let spatial = &*self.tables.spatial;
+        let id = spatial.of(zgui_scene::PropertyOwner::of(key).content())?;
+        spatial.get(id).map(|node| node.local)
     }
 }

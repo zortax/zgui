@@ -3,18 +3,22 @@
 use std::sync::Arc;
 
 use zgui_geom::CssPx;
+use zgui_profile::{Counter, counter};
 use zgui_text::{
-    Brush, ContentWidths, InlineBoxGeometry, ParagraphContent, ParagraphKey, ShapedParagraph,
-    StrutMetrics, StyledRun,
+    BreakRequest, Brush, ContentWidths, InlineBoxGeometry, ParagraphContent, ParagraphKey,
+    ShapedParagraph, StrutMetrics, StyledRun,
 };
 use zgui_text_style::TextStyle;
 
 use crate::direction::Controls;
 use crate::shape::brush::SlotBrush;
-use crate::shape::engine::ShapedLayout;
+use crate::shape::engine::{Form, Live, ShapedLayout};
 use crate::shape::style::{Lists, LoweredStyle};
 
 /// Shapes one paragraph, prefixing the control that forces its base direction.
+///
+/// With `freeze`, a paragraph that breaks one way only is held in the frozen form (see
+/// [`frozen`](crate::shape::frozen)).
 ///
 /// The prefix goes in here rather than into the string a caller generated, because it is a
 /// property of how this engine is driven and not of the document. It is therefore taken back off
@@ -31,36 +35,31 @@ pub(crate) fn shape(
     content: &ParagraphContent<'_>,
     strut: StrutMetrics,
     controls: Controls,
+    freeze: bool,
     fonts: &mut parley::FontContext,
     scratch: &mut parley::LayoutContext<SlotBrush>,
 ) -> ShapedParagraph<ShapedLayout> {
-    let prefix = controls.prefix(content.paragraph.direction);
-    let mut text = String::with_capacity(prefix.len() + content.text.len());
-    text.push_str(prefix);
-    text.push_str(content.text);
-
-    let mut layout = match uniform(content) {
-        Some((style, brush)) => {
-            uniform_layout(content, style, brush, &text, prefix, fonts, scratch)
-        }
-        None => ranged_layout(content, &text, prefix, fonts, scratch),
-    };
+    let (mut layout, prefix) = build(content, controls, fonts, scratch);
     let widths = layout.calculate_content_widths();
     // A first break with no width constraint is what produces line metrics at all; every later
     // request re-breaks the same glyphs.
     layout.break_all_lines(None);
     let has_boxes = !content.boxes.is_empty();
-    let wraps = content.runs.is_empty()
-        || content
-            .runs
-            .iter()
-            .any(|run| run.style.wrap_mode == zgui_text_style::WrapMode::Wrap);
-    let engine = ShapedLayout {
-        last: crate::shape::lines::read(&layout, has_boxes, prefix.len()),
-        layout,
-        prefix: prefix.len(),
-        wraps,
+    let wraps = wraps(content.runs);
+    let last = crate::shape::lines::read(&layout, has_boxes, prefix);
+    let frozen = if freeze && !wraps && !has_boxes {
+        crate::shape::frozen::freeze(&layout, prefix, content.scale)
+    } else {
+        None
     };
+    let form = match frozen {
+        Some(frozen) => {
+            counter::bump(Counter::TextFrozen);
+            Form::Frozen(frozen)
+        }
+        None => Form::Live(Box::new(live(layout, wraps))),
+    };
+    let engine = ShapedLayout { prefix, last, form };
     ShapedParagraph::new(
         key,
         content.text.to_owned(),
@@ -73,6 +72,83 @@ pub(crate) fn shape(
         content.boxes.iter().copied(),
         engine,
     )
+}
+
+/// Shapes a frozen paragraph again into the live form, for a request the frozen form cannot
+/// answer.
+///
+/// The content is the paragraph's own text and map with the request's runs, boxes and paragraph
+/// style. These match the ones it was shaped with in every property the paragraph key covers,
+/// the wrap properties included. The lines it last reported stay current, so the next pass may
+/// keep them.
+pub(crate) fn thaw(
+    shaped: &mut ShapedParagraph<ShapedLayout>,
+    request: &BreakRequest<'_>,
+    controls: Controls,
+    fonts: &mut parley::FontContext,
+    scratch: &mut parley::LayoutContext<SlotBrush>,
+) {
+    let Form::Frozen(frozen) = &shaped.engine.form else {
+        return;
+    };
+    let content = ParagraphContent {
+        text: shaped.text(),
+        map: shaped.map(),
+        runs: request.runs,
+        boxes: request.boxes,
+        paragraph: request.paragraph,
+        scale: frozen.scale(),
+    };
+    let (mut layout, prefix) = build(&content, controls, fonts, scratch);
+    debug_assert_eq!(prefix, shaped.engine.prefix, "a thaw under other controls");
+    layout.break_all_lines(None);
+    let live = live(layout, wraps(content.runs));
+    shaped.engine.form = Form::Live(Box::new(live));
+    counter::bump(Counter::TextThawed);
+}
+
+/// Builds the engine's layout of one paragraph, with the directional prefix in front, and the
+/// prefix's length in bytes.
+fn build(
+    content: &ParagraphContent<'_>,
+    controls: Controls,
+    fonts: &mut parley::FontContext,
+    scratch: &mut parley::LayoutContext<SlotBrush>,
+) -> (parley::Layout<SlotBrush>, usize) {
+    let prefix = controls.prefix(content.paragraph.direction);
+    let mut text = String::with_capacity(prefix.len() + content.text.len());
+    text.push_str(prefix);
+    text.push_str(content.text);
+    let layout = match uniform(content) {
+        Some((style, brush)) => {
+            uniform_layout(content, style, brush, &text, prefix, fonts, scratch)
+        }
+        None => ranged_layout(content, &text, prefix, fonts, scratch),
+    };
+    (layout, prefix.len())
+}
+
+/// Whether any of `runs` may wrap. A paragraph with no runs is measured in the initial style,
+/// which wraps.
+fn wraps(runs: &[StyledRun]) -> bool {
+    runs.is_empty()
+        || runs
+            .iter()
+            .any(|run| run.style.wrap_mode == zgui_text_style::WrapMode::Wrap)
+}
+
+/// The live form of a layout broken once without a width.
+fn live(layout: parley::Layout<SlotBrush>, wraps: bool) -> Live {
+    let mut items = smallvec::SmallVec::new();
+    crate::shape::lines::items(&layout, &mut items);
+    Live {
+        // The first break is neither banded nor justified, so the next one may keep its lines.
+        items,
+        layout,
+        wraps,
+        rebroken: false,
+        reach: crate::shape::reach::Reach::default(),
+    }
 }
 
 /// Builds a paragraph whose runs all carry one style and one brush.

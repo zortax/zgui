@@ -5,7 +5,7 @@ use zgui_geom::{Device, Rect};
 use crate::filter::chain::Chain;
 use crate::filter::{self, Filtered};
 use crate::frame::build::PlanBuilder;
-use crate::frame::segment::EncoderOp;
+use crate::frame::segment::{EncoderOp, PlannedDraw};
 use crate::frame::target::TargetRef;
 
 /// Captures what lies beneath `region` in `beneath` and plans `chain` over the copy.
@@ -29,7 +29,18 @@ pub fn plan(
     chain: &Chain,
     region: Rect<i32, Device>,
 ) -> Option<(Filtered, TargetRef)> {
-    let captured = TargetRef::Pool(builder.acquire_like(beneath)?);
+    let slot = builder.acquire_like(beneath, region)?;
+    let captured = TargetRef::Pool(slot);
+    if let Some(under) = beneath.slot()
+        && !under.holds(region)
+    {
+        // The target beneath holds only part of the region, so the copy writes only part of the
+        // capture. The rest has to read transparent, as a texel of the target beneath outside its
+        // own region does. The clear removes what the previous lease left there.
+        builder.begin_pass(captured, region);
+        builder.draw(PlannedDraw::Clear);
+        builder.end_pass();
+    }
     builder.encoder(EncoderOp::Capture {
         source: beneath,
         destination: captured,

@@ -117,6 +117,16 @@ impl PropertyOwner {
         None => unreachable!(),
     };
 
+    /// The owner of the document's coordinate system, which only the poison test mode
+    /// establishes.
+    ///
+    /// See [`poison`](crate::spatial::poison). Named after the word below
+    /// [`PropertyOwner::VIEWPORT`], for the same reason.
+    pub const DOCUMENT: Self = match NonZeroU64::new(u64::MAX - 1) {
+        Some(packed) => Self(packed),
+        None => unreachable!(),
+    };
+
     /// The owner a handle names.
     ///
     /// ```
@@ -146,4 +156,31 @@ impl PropertyOwner {
     pub const fn get(self) -> u64 {
         self.0.get()
     }
+
+    /// The owner of the space a scroll container's content is drawn in, named after the box that
+    /// owns `self`.
+    ///
+    /// One box can own two spaces: its own, and the one its scroll offset moves. This name flips
+    /// the top bit of the handle's domain. Every box of one document comes from one arena with
+    /// one domain, so the flipped word names no box that can share a tree with this one.
+    ///
+    /// ```
+    /// use zgui_scene::PropertyOwner;
+    ///
+    /// let owner = PropertyOwner::new(0x0001_0001_0000_0004).expect("not the empty word");
+    /// assert_ne!(owner.content(), owner);
+    /// assert_eq!(owner.content().content(), owner);
+    /// ```
+    #[must_use]
+    pub const fn content(self) -> Self {
+        match NonZeroU64::new(self.0.get() ^ CONTENT_TAG) {
+            Some(packed) => Self(packed),
+            // Only the tag itself flips to the empty word, and no handle packs to it: its
+            // generation is zero.
+            None => Self::VIEWPORT,
+        }
+    }
 }
+
+/// The bit [`PropertyOwner::content`] flips: the top bit of a packed handle's domain.
+const CONTENT_TAG: u64 = 1 << 63;

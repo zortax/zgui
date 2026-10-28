@@ -34,8 +34,8 @@ pub fn plan(
     region: Rect<i32, Device>,
     deviation: f32,
 ) -> Option<Blurred> {
-    let ping = builder.acquire(TargetScale::Half)?;
-    let pong = match builder.acquire(TargetScale::Half) {
+    let ping = builder.acquire(TargetScale::Half, region)?;
+    let pong = match builder.acquire(TargetScale::Half, region) {
         Some(pong) => pong,
         None => {
             builder.release(ping);
@@ -45,13 +45,10 @@ pub fn plan(
     let ping = TargetRef::Pool(ping);
     let pong = TargetRef::Pool(pong);
 
-    let source_extent = builder.extent_of(source);
-    let half_extent = builder.extent(TargetScale::Half);
-
     let downsample = builder.stage_blur(&BlurParams::downsample(
-        source_extent,
+        (builder.extent_of(source), source.origin()),
         source.scale(),
-        half_extent,
+        (builder.extent_of(ping), ping.origin()),
         region,
     ));
     // Every region a pass carries is in device pixels; a pass into a half-resolution target has
@@ -68,8 +65,9 @@ pub fn plan(
         (BlurAxis::Vertical, pong, ping),
     ] {
         let params = builder.stage_blur(&BlurParams::axis(
-            half_extent,
+            [builder.extent_of(from), builder.extent_of(to)],
             TargetScale::Half,
+            [from.origin(), to.origin()],
             axis,
             deviation,
             region,

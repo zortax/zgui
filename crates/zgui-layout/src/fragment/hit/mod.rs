@@ -61,7 +61,6 @@ pub fn entry_for(
         node: fragment.node,
         order,
         clip: fragment.clip,
-        clip_space: fragment.clip_transform,
         space: fragment.transform,
         pointer_events: pointer_events::of(&node.style),
         radii,

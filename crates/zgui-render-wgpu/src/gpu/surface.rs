@@ -110,6 +110,25 @@ impl ConfiguredSurface {
     /// the assertion is worth making: it is the guard on everything that might later be added
     /// beside it.
     pub fn new(gpu: &Gpu, surface: wgpu::Surface<'static>, setup: SurfaceSetup) -> Self {
+        let mut configured = Self::unconfigured(gpu, surface, setup);
+        configured.apply(gpu);
+        configured
+    }
+
+    /// Picks the format and alpha mode of `surface` for `size`, and keeps the swap chain for the
+    /// first [`ConfiguredSurface::apply`].
+    ///
+    /// A device opener uses the time between the two calls to build the pipelines for
+    /// [`ConfiguredSurface::formats`].
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build for the same reason as [`ConfiguredSurface::new`].
+    pub(crate) fn unconfigured(
+        gpu: &Gpu,
+        surface: wgpu::Surface<'static>,
+        setup: SurfaceSetup,
+    ) -> Self {
         let capabilities = surface.get_capabilities(gpu.adapter());
         let mode = present_mode(setup.pacing, &capabilities);
         tracing::info!(
@@ -149,8 +168,13 @@ impl ConfiguredSurface {
             reconfigure_pending: false,
             pending: None,
         };
-        configured.resize(setup.size);
-        configured.apply(gpu);
+        // A swap chain larger than the largest texture fails validation, and the device opener
+        // then refuses the adapter. The first frame configures again at the window's real extent.
+        let largest = gpu.capabilities().max_texture_size;
+        configured.resize(Size::new(
+            setup.size.width.min(largest),
+            setup.size.height.min(largest),
+        ));
         configured
     }
 

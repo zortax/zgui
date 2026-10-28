@@ -8,7 +8,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use support::{Element, Fixture, lay_out, measurer};
+use support::{Element, Fixture, Frame, lay_out, measurer};
 use zgui_testkit_scene::dump::{TreeDump, golden};
 use zgui_testkit_scene::text::Writer;
 
@@ -236,7 +236,8 @@ impl TreeDump for InlineLines {
 }
 
 /// Renders every inline formatting context in `store`, line by line.
-fn inline_text(store: &zgui_layout::tree::store::LayoutStore) -> String {
+fn inline_text(store: &zgui_layout::tree::store::LayoutStore, frame: &Frame) -> String {
+    let placements = zgui_scene::Placements::of(&frame.spatial);
     let mut out = String::new();
     let mut stack = vec![store.root().expect("a root")];
     let mut contexts = Vec::new();
@@ -272,13 +273,13 @@ fn inline_text(store: &zgui_layout::tree::store::LayoutStore) -> String {
         }
         for fragment in store.fragments_of_box(key) {
             let fragment = store.fragment(*fragment).expect("live");
+            // The origin goes through the anchor. The size is read as laid out: put through a
+            // translation far from the origin, it loses f32 precision.
+            let origin = fragment.on_device(fragment.border_box, &placements).origin;
+            let size = fragment.border_box.size;
             out.push_str(&format!(
                 "  fragment {:?} at=({}, {}) size=({} x {})\n",
-                fragment.kind,
-                fragment.border_box.origin.x.0,
-                fragment.border_box.origin.y.0,
-                fragment.border_box.size.width.0,
-                fragment.border_box.size.height.0,
+                fragment.kind, origin.x.0, origin.y.0, size.width.0, size.height.0,
             ));
         }
     }
@@ -307,11 +308,11 @@ fn inline_flow() {
     );
     let mut store = fixture.box_tree();
     let mut content = support::measurer_with_images(natural.0, natural.1);
-    lay_out(&mut store, &mut content, 240.0, 600.0);
-    let rendering = inline_text(&store);
+    let frame = lay_out(&mut store, &mut content, 240.0, 600.0);
+    let rendering = inline_text(&store, &frame);
     assert_eq!(
         rendering,
-        inline_text(&store),
+        inline_text(&store, &frame),
         "the same tree renders the same bytes"
     );
     golden::assert_tree(&golden_path("inline-flow"), &InlineLines(rendering));
@@ -334,10 +335,10 @@ fn floated_flow() {
     );
     let mut store = fixture.box_tree();
     let mut content = measurer();
-    lay_out(&mut store, &mut content, 200.0, 600.0);
+    let frame = lay_out(&mut store, &mut content, 200.0, 600.0);
     golden::assert_tree(
         &golden_path("floated-flow"),
-        &InlineLines(inline_text(&store)),
+        &InlineLines(inline_text(&store, &frame)),
     );
 }
 
@@ -375,9 +376,9 @@ fn vertical_align_keywords() {
         );
         let mut store = fixture.box_tree();
         let mut content = support::measurer_with_images(natural.0, natural.1);
-        lay_out(&mut store, &mut content, 400.0, 600.0);
+        let frame = lay_out(&mut store, &mut content, 400.0, 600.0);
         out.push_str(&format!("vertical-align: {value}\n"));
-        for line in inline_text(&store).lines() {
+        for line in inline_text(&store, &frame).lines() {
             out.push_str(&format!("  {line}\n"));
         }
     }

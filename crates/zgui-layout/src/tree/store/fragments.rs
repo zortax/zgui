@@ -3,8 +3,15 @@
 use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 
-use crate::fragment::{FragKey, Fragment, FragmentFlags, FragmentKind, ParagraphId};
+use crate::fragment::hit::HitOrder;
+use crate::fragment::{
+    FragKey, Fragment, FragmentExtra, FragmentFlags, FragmentKind, Packed, ParagraphId,
+};
 use crate::tree::store::LayoutStore;
+use crate::tree::store::state::SubtreeOrder;
+
+/// The fewest released keys the store records before it records only that some key went.
+pub(super) const RELEASED_KEEP: usize = 4_096;
 
 impl LayoutStore {
     /// The fragments one element's boxes produced.
@@ -58,7 +65,12 @@ impl LayoutStore {
             (self.paragraphs.len() - 1) as u32
         });
         let id = ParagraphId(slot);
-        self.paragraphs[slot as usize] = Some(super::ParagraphRecord { key, users: 0 });
+        self.paragraphs[slot as usize] = Some(super::ParagraphRecord {
+            key,
+            users: 0,
+            claim: super::Claim::None,
+            claimed: 0,
+        });
         self.paragraph_index.insert(key, id);
         // Normally retained immediately by `set_inline_resolution`. Filing it here as well makes
         // an abandoned interning reclaimable without turning reclamation into a full-table scan.
@@ -79,14 +91,23 @@ impl LayoutStore {
             .map(|entry| entry.key)
     }
 
-    /// Keys named by at least one current inline resolution.
-    pub fn active_paragraph_keys(&self) -> Vec<zgui_text::ParagraphKey> {
-        self.paragraphs
-            .iter()
-            .flatten()
-            .filter(|entry| entry.users > 0)
-            .map(|entry| entry.key)
-            .collect()
+    /// Hands `visit` the keys whose last current resolution went away since the last drain, and
+    /// the store to ask which of them are active again.
+    ///
+    /// `None` says that more keys went than the store keeps a record of, so any key can be among
+    /// them.
+    pub fn drain_released_paragraphs(
+        &mut self,
+        visit: impl FnOnce(Option<&[zgui_text::ParagraphKey]>, &Self),
+    ) {
+        let mut released = std::mem::take(&mut self.released_paragraphs);
+        if std::mem::take(&mut self.released_overflow) {
+            visit(None, self);
+        } else {
+            visit(Some(&released), self);
+        }
+        released.clear();
+        self.released_paragraphs = released;
     }
 
     /// How many unique shaping keys current inline resolutions name.
@@ -123,6 +144,9 @@ impl LayoutStore {
             let key = entry.key;
             *held = None;
             self.paragraph_index.remove(&key);
+            if !self.variant_bases.is_empty() {
+                self.variant_bases.remove(&key);
+            }
             self.free_paragraphs.push(slot as u32);
             reclaimed += 1;
         }
@@ -135,6 +159,64 @@ impl LayoutStore {
             .get(id.index() as usize)
             .and_then(Option::as_ref)
             .map_or(0, |entry| entry.users)
+    }
+
+    /// The identifier of the paragraph held under `key`, if one was issued.
+    pub(crate) fn paragraph_id(&self, key: zgui_text::ParagraphKey) -> Option<ParagraphId> {
+        self.paragraph_index.get(&key).copied()
+    }
+
+    /// The key of the paragraph that `key` is a copy of, if it is a copy.
+    ///
+    /// See [`kept`](crate::inline::kept).
+    pub(crate) fn variant_base(
+        &self,
+        key: zgui_text::ParagraphKey,
+    ) -> Option<zgui_text::ParagraphKey> {
+        self.variant_bases.get(&key).copied()
+    }
+
+    /// Records that `variant` is a copy of the paragraph held under `base`.
+    pub(crate) fn note_variant(
+        &mut self,
+        variant: zgui_text::ParagraphKey,
+        base: zgui_text::ParagraphKey,
+    ) {
+        self.variant_bases.insert(variant, base);
+    }
+
+    /// The lines every current user of one paragraph keeps, if a pass recorded them.
+    pub(crate) fn paragraph_lines(&self, id: ParagraphId) -> Option<crate::inline::kept::LinesKey> {
+        let entry = self.paragraphs.get(id.index() as usize)?.as_ref()?;
+        match entry.claim {
+            super::Claim::None => None,
+            super::Claim::Lines => Some(crate::inline::kept::LinesKey::from_bits(entry.claimed)),
+            super::Claim::Sole => {
+                let user = BoxKey::from_u64(entry.claimed)?;
+                let resolution = self.inline_resolution(user)?;
+                (resolution.paragraph == id).then(|| crate::inline::kept::LinesKey::of(resolution))
+            }
+        }
+    }
+
+    /// Records the lines every current user of one paragraph keeps.
+    pub(crate) fn claim_paragraph(
+        &mut self,
+        id: ParagraphId,
+        lines: crate::inline::kept::LinesKey,
+    ) {
+        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
+            entry.claim = super::Claim::Lines;
+            entry.claimed = lines.bits();
+        }
+    }
+
+    /// Records that the lines of one paragraph are the lines its one user `user` keeps.
+    pub(crate) fn claim_paragraph_for(&mut self, id: ParagraphId, user: BoxKey) {
+        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
+            entry.claim = super::Claim::Sole;
+            entry.claimed = user.as_u64();
+        }
     }
 
     pub(crate) fn retain_paragraph(&mut self, id: ParagraphId) {
@@ -150,16 +232,134 @@ impl LayoutStore {
     }
 
     pub(crate) fn release_paragraph(&mut self, id: ParagraphId) {
-        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
-            debug_assert!(entry.users > 0, "released an unretained paragraph");
-            if entry.users == 0 {
-                return;
+        let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) else {
+            return;
+        };
+        debug_assert!(entry.users > 0, "released an unretained paragraph");
+        if entry.users == 0 {
+            return;
+        }
+        entry.users -= 1;
+        if entry.users > 0 {
+            return;
+        }
+        entry.claim = super::Claim::None;
+        let key = entry.key;
+        self.active_paragraphs -= 1;
+        self.unused_paragraphs.push(id);
+        // Bounded for a store nothing drains: past the bound, the record says only that some key
+        // went.
+        if self.released_overflow {
+            return;
+        }
+        if self.released_paragraphs.len() >= RELEASED_KEEP.max(self.paragraphs.len()) {
+            self.released_paragraphs.clear();
+            self.released_overflow = true;
+        } else {
+            self.released_paragraphs.push(key);
+        }
+    }
+
+    /// The values `fragment` keeps outside its record.
+    ///
+    /// The record states them for nearly every fragment, and the store holds them for the rest.
+    /// Read through here and never assumed: see [`FragmentExtra`].
+    #[inline]
+    pub fn fragment_extra(&self, fragment: &Fragment) -> FragmentExtra {
+        match fragment.inline_extra() {
+            Some(extra) => extra,
+            None => self
+                .spilled
+                .get(&fragment.key)
+                .copied()
+                .unwrap_or(FragmentExtra::NONE),
+        }
+    }
+
+    /// The values one fragment keeps outside its record, by name.
+    pub fn fragment_extra_of(&self, key: FragKey) -> Option<FragmentExtra> {
+        self.fragment(key)
+            .map(|fragment| self.fragment_extra(fragment))
+    }
+
+    /// Writes the values one fragment keeps outside its record.
+    ///
+    /// Reads the fragment's [`Fragment::transform`], so a caller that writes both writes that
+    /// first.
+    pub(crate) fn set_fragment_extra(&mut self, key: FragKey, extra: FragmentExtra) {
+        let Some(fragment) = self.fragments.get_mut(key) else {
+            return;
+        };
+        let was_spilled = fragment.packed.has(Packed::SPILLED);
+        let fits = fragment.pack_extra(extra);
+        self.settle_spill(key, (was_spilled, fits), extra);
+    }
+
+    /// Brings the store's table in line with a record that [`Fragment::pack_extra`] just wrote.
+    ///
+    /// `spill` is whether the record was spilled before the write, and what the write answered.
+    pub(crate) fn settle_spill(&mut self, key: FragKey, spill: (bool, bool), extra: FragmentExtra) {
+        match spill {
+            (true, true) => {
+                self.spilled.remove(&key);
             }
-            entry.users -= 1;
-            if entry.users == 0 {
-                self.active_paragraphs -= 1;
-                self.unused_paragraphs.push(id);
+            (_, false) => {
+                self.spilled.insert(key, extra);
             }
+            (false, true) => {}
+        }
+    }
+
+    /// Writes the fingerprint of the matrix one fragment is composed under.
+    pub(crate) fn set_transform_hash(&mut self, key: FragKey, transform_hash: u64) {
+        let Some(fragment) = self.fragments.get(key) else {
+            return;
+        };
+        let mut extra = match fragment.inline_extra() {
+            Some(extra) => extra,
+            None => {
+                // A hash the record cannot state keeps the entry spilled, so it changes in place:
+                // a transform animation writes every fragment below it on every frame.
+                let stays_spilled =
+                    transform_hash != 0 && transform_hash != crate::fragment::identity_hash();
+                match self.spilled.get_mut(&key) {
+                    Some(spilled) if stays_spilled => {
+                        spilled.transform_hash = transform_hash;
+                        return;
+                    }
+                    Some(spilled) => *spilled,
+                    None => FragmentExtra::NONE,
+                }
+            }
+        };
+        if extra.transform_hash != transform_hash {
+            extra.transform_hash = transform_hash;
+            self.set_fragment_extra(key, extra);
+        }
+    }
+
+    /// How many fragments the store holds a [`FragmentExtra`] for.
+    pub fn spilled_fragment_count(&self) -> usize {
+        self.spilled.len()
+    }
+
+    /// The range of hit-order keys one box's subtree spans, as `(first, last)`.
+    ///
+    /// Folded up by the fragment pass beside the ink, and read back where a fragment is born:
+    /// a newborn takes a key between the end of what is painted before it and the start of what
+    /// is painted after, and both ends are the neighbouring subtrees' ranges. A subtree with no
+    /// indexed fragment holds `(MAX, 0)`, which folds away.
+    pub fn subtree_order(&self, key: BoxKey) -> (HitOrder, HitOrder) {
+        self.layout
+            .get(key)
+            .and_then(Option::as_ref)
+            .map_or(SubtreeOrder::EMPTY.0, |state| state.subtree_order.0)
+    }
+
+    /// Writes the range of hit-order keys one box's subtree spans.
+    pub(crate) fn set_subtree_order(&mut self, key: BoxKey, order: (HitOrder, HitOrder)) {
+        if let Some(state) = self.layout.get_mut(key).as_mut() {
+            state.subtree_order = SubtreeOrder(order);
         }
     }
 
@@ -240,9 +440,16 @@ impl LayoutStore {
             return;
         }
         let dropped: Vec<FragKey> = state.fragments.drain(len..).collect();
+        if len == 0 {
+            // A piece born later starts from nothing, as a new box does.
+            state.subtree_order = SubtreeOrder::EMPTY;
+        }
         let node = self.get(box_).and_then(|record| record.source);
         for key in dropped {
             self.forget_read_extent(key);
+            // Every destroyed key, spilled or not: a write later in the frame can still spill
+            // it, and its entry is read until the frame is recycled, like the fragment itself.
+            self.spilled_retired.push(key);
             self.retired.push(key);
             self.retired_paint.push(key);
             self.fragments.remove(key);

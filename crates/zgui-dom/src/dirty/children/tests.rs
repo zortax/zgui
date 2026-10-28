@@ -232,3 +232,29 @@ fn replacing_rebuilds_the_record_from_scratch_and_releases_the_set() {
         vec![children[7], children[9]]
     );
 }
+
+#[test]
+fn a_dropped_owner_takes_its_overflow_set_with_it() {
+    // Clearing a wide record leaves its set to the next mark, and an owner that leaves the
+    // document is never marked again: without this, every removed row that was ever wide keeps
+    // its set for the life of the document.
+    let (mut document, root, children) = row(EXACT + 2);
+    let record = DirtyChildren::empty();
+    for child in &children {
+        record.widen(root, *child, document.store());
+    }
+    assert!(record.is_wide());
+    record.clear();
+    assert!(document.store().dirty_overflow().get(&root).is_some());
+
+    document
+        .edit(&crate::mutate::filter::EverythingMatters, |batch| {
+            batch.remove(root);
+        })
+        .expect("the document is not poisoned");
+    crate::arena::recycle::end_frame(&mut document);
+    assert!(
+        document.store().dirty_overflow().get(&root).is_none(),
+        "the set went with its owner"
+    );
+}

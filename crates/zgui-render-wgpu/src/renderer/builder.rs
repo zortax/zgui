@@ -1,6 +1,7 @@
 //! Opening a device, and refusing to guess when none of them works.
 
 use std::ffi::CStr;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use zgui_geom::{Device, Size};
@@ -161,9 +162,9 @@ impl Builder {
         origin: Origin,
         present: impl Proof,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let (gpu, presentation) = open_device(&self.instances, &[], present)?;
+        let (state, presentation) = open_device(&self.instances, &[], present)?;
         Ok(WgpuRenderer::assemble(
-            DeviceState::new(gpu),
+            state,
             None,
             presentation,
             target,
@@ -200,7 +201,7 @@ pub(crate) fn open_device(
     instances: &adapter::Instances,
     extensions: &[&'static CStr],
     mut present: impl Proof,
-) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
+) -> Result<(Rc<DeviceState>, Presentation), GpuUnavailable> {
     let mut rejections: Vec<(String, String)> = Vec::new();
     let mut enumerated = 0usize;
     // Adapters passed over for having the names and then being refused a device carrying them.
@@ -253,9 +254,9 @@ pub(crate) fn open_device(
                 continue;
             }
             match offer(&gpu, &mut present) {
-                Ok(presentation) => {
+                Ok(opened) => {
                     tracing::info!(adapter = %gpu.describe(), "graphics device opened");
-                    return Ok((gpu, presentation));
+                    return Ok(opened);
                 }
                 Err(reason) => rejections.push((name, reason)),
             }
@@ -276,13 +277,13 @@ pub(crate) fn open_device(
             }
         };
         match offer(&gpu, &mut present) {
-            Ok(presentation) => {
+            Ok(opened) => {
                 tracing::warn!(
                     adapter = %gpu.describe(),
                     "graphics device opened without the Vulkan device extensions that were asked \
                      for"
                 );
-                return Ok((gpu, presentation));
+                return Ok(opened);
             }
             Err(reason) => rejections.push((name, reason)),
         }
@@ -357,29 +358,132 @@ impl<W: Into<wgpu::SurfaceTarget<'static>> + Clone> Proof for WindowSurface<W> {
         if surface.get_capabilities(gpu.adapter()).formats.is_empty() {
             return Err("the surface is not compatible with this adapter".to_owned());
         }
-        Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-            gpu, surface, self.setup,
-        ))))
+        Ok(Presentation::Surface(Box::new(
+            ConfiguredSurface::unconfigured(gpu, surface, self.setup),
+        )))
     }
 }
 
-/// Offers `gpu` to `present`, and answers what came back or why nothing did.
+/// Offers `gpu` to `present`, and answers the device state and what came back, or why nothing did.
 ///
 /// Configuring a surface is the only way to find out whether an adapter can present to it, and a
 /// failure there raises a validation error instead of returning one. So the attempt runs inside an
 /// error scope, and both halves of the answer are read.
-fn offer(gpu: &Arc<Gpu>, present: &mut impl Proof) -> Result<Presentation, String> {
+///
+/// A surface comes back unconfigured, and the pipelines for its formats are built before its swap
+/// chain is configured. On Vulkan on Linux the configure runs on a scoped thread while this thread
+/// builds the pipelines: on a new device each takes 8 to 20 ms, and the configure mostly waits for
+/// the driver and the compositor. Error scopes belong to one thread, so the configure's scope is
+/// pushed and popped on the scoped thread. Other targets configure on this thread, after the
+/// pipelines: a GL context or a Metal layer is bound to the thread that uses it, and a Windows
+/// swap chain can send messages to the window's thread while this thread waits. A candidate that
+/// is refused at the configure discards the pipelines built for it.
+fn offer(
+    gpu: &Arc<Gpu>,
+    present: &mut impl Proof,
+) -> Result<(Rc<DeviceState>, Presentation), String> {
     let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
     let presentation = present.present(gpu);
     let validation = futures::executor::block_on(scope.pop());
-    match (presentation, validation) {
-        (Ok(presentation), None) => Ok(presentation),
-        (Ok(_), Some(error)) => Err(error.to_string()),
-        (Err(reason), _) => Err(reason),
+    let mut presentation = match (presentation, validation) {
+        (Ok(presentation), None) => presentation,
+        (Ok(_), Some(error)) => return Err(error.to_string()),
+        (Err(reason), _) => return Err(reason),
+    };
+    let state = DeviceState::new(Arc::clone(gpu));
+    if presentation.is_configured() {
+        return Ok((state, presentation));
+    }
+    let formats = presentation.formats();
+    let configure = |presentation: &mut Presentation| {
+        let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
+        presentation.apply_pending(gpu);
+        futures::executor::block_on(scope.pop())
+    };
+    let threaded =
+        cfg!(target_os = "linux") && gpu.adapter().get_info().backend == wgpu::Backend::Vulkan;
+    let validation = if threaded {
+        let configured = std::thread::scope(|threads| {
+            let configuring = threads.spawn(|| configure(&mut presentation));
+            state.prepare(formats);
+            configuring.join()
+        });
+        configured.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    } else {
+        state.prepare(formats);
+        configure(&mut presentation)
+    };
+    match validation {
+        None => Ok((state, presentation)),
+        Some(error) => Err(error.to_string()),
     }
 }
 
 /// The extent a target asks for, never smaller than one pixel.
 fn extent(target: RenderTarget) -> Size<i32, Device> {
     Size::new(target.size.width.max(1), target.size.height.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use zgui_geom::Size;
+
+    use super::open_device;
+    use crate::gpu::adapter;
+    use crate::gpu::device::Gpu;
+    use crate::pipeline::kind::PipelineKind;
+    use crate::target::swapchain::{Presentation, Supplied};
+
+    /// A presentation that is not configured: a supplied set out of step with its target.
+    ///
+    /// Its `apply_pending` does nothing, so the open takes the path of a new surface without a
+    /// window.
+    fn unconfigured(gpu: &Arc<Gpu>) -> Result<Presentation, String> {
+        let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("zgui.test.unconfigured"),
+            size: wgpu::Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let supplied = Supplied::new(vec![texture]).ok_or("the texture was refused")?;
+        let mut presentation = Presentation::Supplied(supplied);
+        presentation.resize(gpu, Size::new(16, 16));
+        Ok(presentation)
+    }
+
+    #[test]
+    fn a_device_opened_for_an_unconfigured_presentation_has_its_pipelines_built() {
+        let instances = adapter::Instances::new(adapter::requested_backends());
+        let (state, presentation) = match open_device(&instances, &[], unconfigured) {
+            Ok(opened) => opened,
+            Err(failure) => {
+                eprintln!("skipped: no usable graphics device ({failure})");
+                return;
+            }
+        };
+        assert!(
+            !presentation.is_configured(),
+            "the supplied set is still out of step with its target"
+        );
+        let formats = presentation.formats();
+        let pipelines = state.pipelines.borrow();
+        assert!(
+            pipelines.is_built(PipelineKind::Quad, formats.scene),
+            "the open builds the scene pipelines before it configures the surface"
+        );
+        assert!(
+            pipelines.is_built(PipelineKind::Blit, formats.present_attachment()),
+            "the open builds the final copy for the attachment it presents to"
+        );
+    }
 }
