@@ -23,6 +23,12 @@ use crate::sys;
 /// The character every DRM request number is grouped under.
 const GROUP: u8 = b'd';
 
+/// The character a dma-buf request number is grouped under.
+///
+/// A dma-buf is not a DRM object and its requests are the kernel's own, on the descriptor rather
+/// than on a device. They are issued here because this is where the machinery is.
+pub(crate) const DMA_BUF_GROUP: u8 = b'b';
+
 /// One request: what to ask the kernel, the payload the number was computed for, and the name to
 /// report when the kernel refuses.
 ///
@@ -54,10 +60,15 @@ impl<T> Request<T> {
 }
 
 /// Names a request that reads and writes its payload.
+///
+/// The group defaults to DRM's, because all but one of the requests below are DRM's.
 macro_rules! read_write {
     ($name:ident, $number:expr, $payload:ty) => {
+        read_write!($name, GROUP, $number, $payload);
+    };
+    ($name:ident, $group:expr, $number:expr, $payload:ty) => {
         pub(crate) const $name: Request<$payload> = Request {
-            opcode: opcode::read_write::<$payload>(GROUP, $number),
+            opcode: opcode::read_write::<$payload>($group, $number),
             name: stringify!($name),
             payload: PhantomData,
         };
@@ -118,6 +129,15 @@ read_write!(MODE_CURSOR2, 0xbb, sys::drm_mode_cursor2);
 read_write!(MODE_ATOMIC, 0xbc, sys::drm_mode_atomic);
 read_write!(MODE_CREATEPROPBLOB, 0xbd, sys::drm_mode_create_blob);
 read_write!(MODE_DESTROYPROPBLOB, 0xbe, sys::drm_mode_destroy_blob);
+
+// The one request that is not DRM's. Its payload is hand-written rather than generated — `sync`
+// says why — so the size the request number is computed from is asserted there as well as here.
+read_write!(
+    DMA_BUF_EXPORT_SYNC_FILE,
+    DMA_BUF_GROUP,
+    0x02,
+    crate::sync::ExportSyncFile
+);
 
 /// One ioctl, with its payload borrowed for the duration of the call.
 struct Call<'a, T> {
@@ -232,6 +252,9 @@ mod tests {
         assert_eq!(MODE_ATOMIC.opcode(), 0xc038_64bc);
         assert_eq!(MODE_CREATEPROPBLOB.opcode(), 0xc010_64bd);
         assert_eq!(MODE_DESTROYPROPBLOB.opcode(), 0xc004_64be);
+        // `_IOWR('b', 2, struct dma_buf_export_sync_file)` from `linux/dma-buf.h`, which is the
+        // one number here whose struct this crate wrote rather than generated.
+        assert_eq!(DMA_BUF_EXPORT_SYNC_FILE.opcode(), 0xc008_6202);
     }
 
     /// Compiles only if `request` may be issued with a payload of type `T`.
