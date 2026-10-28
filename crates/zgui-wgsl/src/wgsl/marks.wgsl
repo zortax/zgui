@@ -96,8 +96,8 @@ fn load_mark(slot: u32) -> MarkItem {
 }
 // The draw order, indexed rather than fetched. A mark's instances are its payload's items and
 // its draw names its position in the order, so this is the one lane that cannot take the order as
-// vertex input and needs random access into the same stream the others are fed from.
-@group(1) @binding(1) var<storage, read> order: array<MarkRef>;
+// vertex input and needs random access into it.
+@group(1) @binding(1) var order: texture_2d<u32>;
 @group(2) @binding(0) var<uniform> mark_draw: MarkDraw;
 
 const MARK_UNION: u32 = 1u;
@@ -135,8 +135,10 @@ struct MarkRef {
     shift: Vector2,
 }
 
+/// One `MarkRef`, which the table pads to a whole texel.
 fn item_of(position: u32) -> MarkRef {
-    return order[position];
+    let t0 = textureLoad(order, table_texel(position), 0);
+    return MarkRef(t0.x, Vector2(bitcast<f32>(t0.y), bitcast<f32>(t0.z)));
 }
 
 // The shift one entry carries, as a vector.

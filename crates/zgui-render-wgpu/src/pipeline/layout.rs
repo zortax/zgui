@@ -88,7 +88,7 @@ impl Layouts {
                 // mark lane alone: a mark's draw names its position in the order rather than its
                 // instance index, and indexing needs the stream bound. The chunk offsets that
                 // used to be a third binding are resolved into the order on the host.
-                entries: &[table(0), storage(1)],
+                entries: &[table(0), table(1)],
             }),
             sampled: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.sampled"),
@@ -181,7 +181,6 @@ fn dynamic_uniform(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// A read-only storage buffer, visible to both stages.
 /// One side table, as a `rgba32uint` texture rather than a storage buffer.
 ///
 /// Storage buffers arrive in OpenGL 4.3 and OpenGL ES 3.1, so a GL 3.3 context has none; a
@@ -194,19 +193,6 @@ fn table(binding: u32) -> wgpu::BindGroupLayoutEntry {
             sample_type: wgpu::TextureSampleType::Uint,
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: true },
-            has_dynamic_offset: false,
-            min_binding_size: None,
         },
         count: None,
     }
