@@ -152,6 +152,24 @@ fn clip_coverage(point: vec2<f32>, clip_id: u32) -> f32 {
     return coverage;
 }
 
+// Coverage by a clip's rounded tests alone, for a caller that has already tested the box.
+//
+// `count` is the clip's own, carried from wherever it was read. Zero means the clip is a box and
+// nothing else, which is nearly every clip in a document, and then this reads no table at all.
+// A clip measured in a system of its own is not for this function: the kept part needs the table.
+fn clip_rounded_coverage(point: vec2<f32>, clip_id: u32, count: u32) -> f32 {
+    if count == 0u {
+        return 1.0;
+    }
+    let first = clip_rounded(clip_id, 0u);
+    var coverage = rect_coverage(point, first.rect, first.radii, first.shape);
+    if count > 1u {
+        let second = clip_rounded(clip_id, 1u);
+        coverage *= rect_coverage(point, second.rect, second.radii, second.shape);
+    }
+    return coverage;
+}
+
 // Modulus that has the same sign as `a`.
 fn sdf_fmod(a: f32, b: f32) -> f32 {
     return a - b * trunc(a / b);
