@@ -41,9 +41,16 @@ struct QuadVarying {
     @builtin(position) position: vec4<f32>,
     // The point, from the quad's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
-    @location(1) @interpolate(flat) instance: u32,
     // The quad's origin in that space.
-    @location(2) @interpolate(flat) origin: vec2<f32>,
+    @location(1) @interpolate(flat) origin: vec2<f32>,
+    // The record the fragment stage used to read again, carried across instead.
+    @location(2) @interpolate(flat) v_bounds: vec4<f32>,
+    @location(3) @interpolate(flat) v_radii_lo: vec4<f32>,
+    @location(4) @interpolate(flat) v_radii_hi: vec4<f32>,
+    @location(5) @interpolate(flat) v_border: vec4<f32>,
+    @location(6) @interpolate(flat) v_origin_shape: vec4<f32>,
+    @location(7) @interpolate(flat) v_refs: vec4<u32>,
+    @location(8) @interpolate(flat) v_ids: vec2<u32>,
 }
 
 @vertex
@@ -59,8 +66,14 @@ fn vs_quad(
     var out: QuadVarying;
     out.position = to_clip_position(local, quad.transform);
     out.local = inflated_offset(vertex, quad.bounds);
-    out.instance = slot;
     out.origin = bounds_origin(quad.bounds);
+    out.v_bounds = bounds_of(quad.bounds);
+    out.v_radii_lo = radii_lo(quad.radii);
+    out.v_radii_hi = radii_hi(quad.radii);
+    out.v_border = vec4<f32>(quad.border.top, quad.border.right, quad.border.bottom, quad.border.left);
+    out.v_origin_shape = vec4<f32>(quad.paint_origin.x, quad.paint_origin.y, quad.shape, 0.0);
+    out.v_refs = vec4<u32>(quad.fill.kind, quad.fill.index, quad.stroke.kind, quad.stroke.index);
+    out.v_ids = vec2<u32>(quad.style, quad.clip);
     return out;
 }
 
@@ -69,7 +82,19 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
     // How long one device pixel is in the primitive's own space. Read before any branch, because
     // a derivative is only defined where every fragment of the quad takes it.
     let unit = max(max(fwidth(in.local).x, fwidth(in.local).y), 1e-6);
-    let quad = quads[in.instance];
+    let quad = Quad(
+        0u,
+        in.v_ids.x,
+        bounds_from_vec4(in.v_bounds),
+        radii_from_vec4(in.v_radii_lo, in.v_radii_hi),
+        Edges(in.v_border.x, in.v_border.y, in.v_border.z, in.v_border.w),
+        PaintRef(in.v_refs.x, in.v_refs.y),
+        PaintRef(in.v_refs.z, in.v_refs.w),
+        in.v_ids.y,
+        0u,
+        in.v_origin_shape.z,
+        Vector2(in.v_origin_shape.x, in.v_origin_shape.y),
+    );
     // The clip is in device space, so it is evaluated at the real pixel; the shape is in the
     // primitive's own space, so it is evaluated at the point that maps to this pixel.
     let clip = clip_coverage(device_position(in.position.xy), quad.clip);
