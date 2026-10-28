@@ -56,6 +56,11 @@ pub struct Recorder<'frame> {
     pub pool: &'frame GroupPool,
     /// The persistent target the frame composes into.
     pub composed: &'frame SceneTexture,
+    /// The persistent copy a backdrop filter reads what lies beneath from.
+    ///
+    /// Absent until a frame holds a backdrop that keeps its capture, which is most frames of most
+    /// documents: nothing allocates it and no pass names it.
+    pub kept: Option<&'frame SceneTexture>,
     /// The sampler every magnifying read goes through.
     pub sampler: &'frame wgpu::Sampler,
     /// Textures the renderer did not draw.
@@ -704,6 +709,7 @@ impl Recorder<'_> {
     fn view(&self, target: TargetRef) -> Option<&wgpu::TextureView> {
         match target {
             TargetRef::Composed => Some(self.composed.view()),
+            TargetRef::Kept => Some(self.kept?.view()),
             TargetRef::Pool(slot) => Some(self.pool.view(slot)),
             TargetRef::MarksPage(page) => self.marks.page(page),
         }
@@ -713,6 +719,7 @@ impl Recorder<'_> {
     fn texture(&self, target: TargetRef) -> Option<&wgpu::Texture> {
         match target {
             TargetRef::Composed => Some(self.composed.texture()),
+            TargetRef::Kept => Some(self.kept?.texture()),
             TargetRef::Pool(slot) => Some(self.pool.texture(slot)),
             TargetRef::MarksPage(_) => None,
         }
@@ -722,6 +729,7 @@ impl Recorder<'_> {
     fn format(&self, target: TargetRef) -> Option<wgpu::TextureFormat> {
         match target {
             TargetRef::Composed => Some(self.composed.format()),
+            TargetRef::Kept => Some(self.kept?.format()),
             TargetRef::Pool(slot) => Some(slot.format()),
             TargetRef::MarksPage(_) => Some(PipelineKind::COVERAGE_FORMAT),
         }
@@ -730,7 +738,7 @@ impl Recorder<'_> {
     /// A target's extent in texels.
     fn extent(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
-            TargetRef::Composed => self.composed.used().size,
+            TargetRef::Composed | TargetRef::Kept => self.composed.used().size,
             TargetRef::Pool(slot) => slot.extent(),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
@@ -819,7 +827,9 @@ impl<'pass> BoundPass<'pass> {
 /// The kind of work a pass into `target` is timed as.
 fn timed_work(target: TargetRef) -> TimedWork {
     match target {
-        TargetRef::Pool(_) => TimedWork::Groups,
+        // A pass into the kept copy is a filter's own work, as a pass into a lease is, and not
+        // the document's. One only opens there to clear what a partial copy does not write.
+        TargetRef::Pool(_) | TargetRef::Kept => TimedWork::Groups,
         TargetRef::Composed | TargetRef::MarksPage(_) => TimedWork::Draws,
     }
 }
