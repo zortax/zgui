@@ -9,7 +9,12 @@
 // moved replay draws the cell of the new phase from the same payload. The cell is drawn on whole
 // device pixels and read one texel at a time, with no contrast correction.
 
-@group(2) @binding(1) var<storage, read> mark_glyphs: array<vec4<u32>>;
+@group(2) @binding(1) var mark_glyphs: texture_2d<u32>;
+
+/// One glyph word of a payload. One texel, and already the texel's own type.
+fn load_mark_glyph(index: u32) -> vec4<u32> {
+    return textureLoad(mark_glyphs, table_texel(index), 0);
+}
 @group(3) @binding(0) var atlas: texture_2d<f32>;
 
 struct GlyphVarying {
@@ -46,8 +51,8 @@ fn device_to_clip(device: vec2<f32>, shift: vec2<f32>) -> vec4<f32> {
 
 fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
     let found = item_of(mark_draw.position);
-    let item = marks[found.slot];
-    let record = mark_glyphs[instance];
+    let item = load_mark(found.slot);
+    let record = load_mark_glyph(instance);
     let base = instance - record.w;
     let anchor = mark_axes(item) * bitcast<vec2<f32>>(record.xy)
         + vec2<f32>(item.origin.x, item.origin.y) + shift_of(found);
@@ -55,7 +60,7 @@ fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
     let world = matrix * vec4<f32>(anchor, 0.0, 1.0);
     let split = glyph_phase(world.xy / world.w);
     let phase = u32(split.z) + 4u * u32(split.w);
-    let entry = mark_glyphs[base + 16u * record.z + phase];
+    let entry = load_mark_glyph(base + 16u * record.z + phase);
     let size = vec2<u32>(entry.y & 0xffffu, entry.y >> 16u);
     let corner = split.xy + vec2<f32>(bitcast<vec2<i32>>(entry.zw));
     var device = corner + unit_corner(vertex) * vec2<f32>(size);
@@ -121,7 +126,7 @@ fn vs_glyph_coverage(
 
 @fragment
 fn fs_glyph_paint(in: GlyphVarying) -> @location(0) vec4<f32> {
-    let item = marks[in.slot];
+    let item = load_mark(in.slot);
     let device = device_position(in.position.xy);
     var coverage = 0.0;
     if globals.viewport.z >= 1.0 {

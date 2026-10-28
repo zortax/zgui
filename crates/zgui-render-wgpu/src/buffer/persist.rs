@@ -27,6 +27,7 @@ use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
 use zgui_scene::{ChunkNote, ChunkPrims, PrimitiveKind, Scene};
 
+use crate::buffer::tables::{TEXELS_WIDE, write_texels};
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
@@ -41,6 +42,9 @@ pub(crate) const LANES: [PrimitiveKind; 8] = [
     PrimitiveKind::Shaded,
     PrimitiveKind::Marks,
 ];
+
+/// How many bytes one texel holds. `buffer::tables` names the same number for the side tables.
+const TEXEL: u32 = 16;
 
 /// The lane mark items live in.
 pub(crate) const MARKS_LANE: usize = 7;
@@ -138,18 +142,31 @@ fn payload_slice(payload: &zgui_scene::MarkPayload, kind: usize) -> &[u8] {
     }
 }
 
-/// One persistent element arena: a buffer, a bump tail, and ranges given back by the ledger.
+/// One persistent element arena: a texture, a bump tail, and ranges given back by the ledger.
+///
+/// A texture rather than a storage buffer, for the reason `buffer::tables` states: a GL 3.3
+/// context and WebGL 2 have no storage buffers at all. An element is written at a texel boundary,
+/// so its fields sit at fixed positions a loader can name, which is what `stride` is for.
 #[derive(Debug)]
 struct Arena {
-    /// The buffer, bound as the pipeline's instance storage.
-    buffer: wgpu::Buffer,
+    /// The texture, bound as the pipeline's instance storage.
+    texture: wgpu::Texture,
+    /// The view a bind group names, kept because the binding borrows it.
+    view: wgpu::TextureView,
     /// What it is called, so a driver message names it.
     label: &'static str,
-    /// One element's size in bytes.
+    /// One element's size in bytes, as the scene encodes it.
     element: u32,
-    /// How many elements the buffer holds.
+    /// What one element occupies in the texture: `element` rounded up to a whole texel.
+    ///
+    /// A record is 56 to 152 bytes and a texel is sixteen. Rounding up costs at most eight bytes
+    /// an element and puts every record on a texel, so a shader reads its fields at offsets it
+    /// knows rather than at ones that rotate with the index. Reading a record word by word
+    /// instead needs no padding and measured fifteen per cent slower.
+    stride: u32,
+    /// How many elements the texture holds.
     capacity: u32,
-    /// Changes whenever `buffer` changes identity, for bind-group cache invalidation.
+    /// Changes whenever `texture` changes identity, for bind-group cache invalidation.
     generation: u64,
     /// The first element never allocated.
     tail: u32,
@@ -158,16 +175,20 @@ struct Arena {
 }
 
 impl Arena {
-    /// The smallest allocation, in bytes — a bind group has to name a buffer either way.
+    /// The smallest allocation, in bytes — a bind group has to name a texture either way.
     const MINIMUM_BYTES: u64 = 256;
 
     /// An empty arena for elements of `element` bytes.
     fn new(gpu: &Gpu, label: &'static str, element: u32) -> Self {
-        let capacity = (Self::MINIMUM_BYTES as u32 / element).max(1);
+        let stride = element.div_ceil(TEXEL).saturating_mul(TEXEL);
+        let capacity = (Self::MINIMUM_BYTES as u32 / stride).max(1);
+        let (texture, view) = allocate(gpu, label, capacity, stride);
         Self {
-            buffer: allocate(gpu, label, u64::from(capacity) * u64::from(element)),
+            texture,
+            view,
             label,
             element,
+            stride,
             capacity,
             generation: 1,
             tail: 0,
@@ -237,6 +258,10 @@ impl Arena {
     }
 
     /// Copies `bytes` over the elements starting at `start`.
+    ///
+    /// The caller holds packed records and the texture holds padded ones, so the run is re-spaced
+    /// on the way in. A chunk is uploaded once and read for as long as it stays resident, so this
+    /// is paid on the rare side of that trade.
     fn upload(
         &mut self,
         gpu: &Gpu,
@@ -248,39 +273,62 @@ impl Arena {
         if bytes.is_empty() {
             return 0;
         }
-        belt.write(
-            gpu,
-            encoder,
-            &self.buffer,
-            u64::from(start) * u64::from(self.element),
-            bytes,
-        )
+        let element = self.element as usize;
+        let stride = self.stride as usize;
+        let count = bytes.len() / element;
+
+        let mut run = vec![0_u8; count * stride];
+        for (index, record) in bytes.chunks_exact(element).enumerate() {
+            run[index * stride..index * stride + element].copy_from_slice(record);
+        }
+
+        let texels = self.stride / TEXEL;
+        write_texels(gpu, belt, encoder, &self.texture, start * texels, &run);
+        run.len() as u64
     }
 
-    /// Replaces the buffer with one holding at least `needed` elements, forgetting every range.
+    /// Replaces the texture with one holding at least `needed` elements, forgetting every range.
     ///
     /// The caller re-uploads every resident chunk afterwards: this is the growth path, the
     /// idle-release path and the device-loss path, and they are deliberately one code path.
     fn reset_with_capacity(&mut self, gpu: &Gpu, needed: u32) {
-        let bytes = (u64::from(needed) * u64::from(self.element))
+        let bytes = (u64::from(needed) * u64::from(self.stride))
             .next_power_of_two()
             .max(Self::MINIMUM_BYTES);
-        self.capacity = (bytes / u64::from(self.element)) as u32;
-        self.buffer = allocate(gpu, self.label, bytes);
+        self.capacity = (bytes / u64::from(self.stride)) as u32;
+        let (texture, view) = allocate(gpu, self.label, self.capacity, self.stride);
+        self.texture = texture;
+        self.view = view;
         self.generation = self.generation.wrapping_add(1);
         self.tail = 0;
         self.free.clear();
     }
 }
 
-/// Allocates a storage buffer of `size` bytes.
-fn allocate(gpu: &Gpu, label: &'static str, size: u64) -> wgpu::Buffer {
-    gpu.device().create_buffer(&wgpu::BufferDescriptor {
+/// Allocates a texture holding `capacity` elements of `stride` bytes, and the view naming it.
+fn allocate(
+    gpu: &Gpu,
+    label: &'static str,
+    capacity: u32,
+    stride: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texels = capacity.saturating_mul(stride / TEXEL);
+    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+        size: wgpu::Extent3d {
+            width: TEXELS_WIDE,
+            height: texels.div_ceil(TEXELS_WIDE).max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba32Uint,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 /// Ranges awaiting reclamation, bucketed by the submission that could still read them.
@@ -454,22 +502,22 @@ impl ChunkStore {
         }
     }
 
-    /// The buffer a pipeline binds as its instance storage for `lane`.
+    /// The texture a pipeline binds as its instance storage for `lane`.
     pub fn binding(&self, lane: usize) -> wgpu::BindingResource<'_> {
-        self.arenas[lane].buffer.as_entire_binding()
+        wgpu::BindingResource::TextureView(&self.arenas[lane].view)
     }
 
-    /// The allocation epoch of `lane`'s buffer, for bind-group cache keys.
+    /// The allocation epoch of `lane`'s texture, for bind-group cache keys.
     pub fn generation(&self, lane: usize) -> u64 {
         self.arenas[lane].generation
     }
 
-    /// The buffer a mark draw binds as the payload of `kind`.
+    /// The texture a mark draw binds as the payload of `kind`.
     pub fn payload_binding(&self, kind: usize) -> wgpu::BindingResource<'_> {
-        self.arenas[payload_arena(kind)].buffer.as_entire_binding()
+        wgpu::BindingResource::TextureView(&self.arenas[payload_arena(kind)].view)
     }
 
-    /// The allocation epoch of the payload buffer of `kind`.
+    /// The allocation epoch of the payload texture of `kind`.
     pub fn payload_generation(&self, kind: usize) -> u64 {
         self.arenas[payload_arena(kind)].generation
     }
@@ -488,7 +536,7 @@ impl ChunkStore {
     pub fn bytes(&self) -> u64 {
         self.arenas
             .iter()
-            .map(|arena| u64::from(arena.capacity) * u64::from(arena.element))
+            .map(|arena| u64::from(arena.capacity) * u64::from(arena.stride))
             .sum()
     }
 
@@ -650,7 +698,7 @@ impl ChunkStore {
         if let Some(range) = self.arenas[arena].alloc(count) {
             return range;
         }
-        // Grow the arena and settle everything resident into the new buffer, then take the range
+        // Grow the arena and settle everything resident into the new texture, then take the range
         // that now must fit.
         *uploaded += self.grow(gpu, belt, encoder, arena, count);
         self.arenas[arena]
@@ -675,11 +723,11 @@ impl ChunkStore {
         }
     }
 
-    /// Replaces `lane`'s buffer with one that fits everything resident plus `incoming`, and
+    /// Replaces `lane`'s texture with one that fits everything resident plus `incoming`, and
     /// re-uploads every resident chunk's lane, or every resident payload of a payload arena.
     ///
-    /// Nothing in flight can be corrupted: the old buffer is dropped, and the device keeps it
-    /// alive until the submissions reading it complete. The ledger's claims on the old buffer
+    /// Nothing in flight can be corrupted: the old texture is dropped, and the device keeps it
+    /// alive until the submissions reading it complete. The ledger's claims on the old texture
     /// are meaningless afterwards, so they are forgotten with it.
     fn grow(
         &mut self,
@@ -709,7 +757,7 @@ impl ChunkStore {
             .saturating_mul(2)
             .max(self.arenas[lane].capacity.saturating_mul(2));
         self.arenas[lane].reset_with_capacity(gpu, needed);
-        // Every ledger bucket may name ranges in the replaced buffer of this lane; forgetting
+        // Every ledger bucket may name ranges in the replaced texture of this lane; forgetting
         // them all over-forgets other lanes' pending ranges, which costs those elements until
         // their own lanes grow. Rare enough to prefer over per-lane bookkeeping.
         self.ledger.forget();

@@ -26,7 +26,33 @@ struct ShadedQuad {
     opacity: f32,
 }
 
-@group(1) @binding(0) var<storage, read> shaded: array<ShadedQuad>;
+@group(1) @binding(0) var shaded: texture_2d<u32>;
+
+/// One `ShadedQuad`, which the arena pads to 7 texels.
+fn load_shaded(slot: u32) -> ShadedQuad {
+    let base = slot * 7u;
+    let t0 = textureLoad(shaded, table_texel(base + 0u), 0);
+    let t1 = textureLoad(shaded, table_texel(base + 1u), 0);
+    let t2 = textureLoad(shaded, table_texel(base + 2u), 0);
+    let t3 = textureLoad(shaded, table_texel(base + 3u), 0);
+    let t4 = textureLoad(shaded, table_texel(base + 4u), 0);
+    let t5 = textureLoad(shaded, table_texel(base + 5u), 0);
+    let t6 = textureLoad(shaded, table_texel(base + 6u), 0);
+    return ShadedQuad(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        Radii(bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y), bitcast<f32>(t2.z), bitcast<f32>(t2.w), bitcast<f32>(t3.x), bitcast<f32>(t3.y)),
+        Edges(bitcast<f32>(t3.z), bitcast<f32>(t3.w), bitcast<f32>(t4.x), bitcast<f32>(t4.y)),
+        PaintRef(t4.z, t4.w),
+        PaintRef(t5.x, t5.y),
+        t5.z,
+        t5.w,
+        Vector2(bitcast<f32>(t6.x), bitcast<f32>(t6.y)),
+        t6.z,
+        bitcast<f32>(t6.w),
+    );
+}
 
 // One effect's parameters: the framework's half, then the application's own structure.
 //
@@ -59,7 +85,7 @@ fn vs_shaded(
     @location(0) slot: u32,
     @location(1) shift: vec2<f32>,
 ) -> ShadedVarying {
-    let quad = shaded[slot];
+    let quad = load_shaded(slot);
     let local = inflated_corner(vertex, quad.bounds) + shift;
     var out: ShadedVarying;
     out.position = to_clip_position(local, quad.transform);

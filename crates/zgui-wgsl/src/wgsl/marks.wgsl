@@ -62,7 +62,38 @@ struct MarkDraw {
     region: vec4<f32>,
 }
 
-@group(1) @binding(0) var<storage, read> marks: array<MarkItem>;
+@group(1) @binding(0) var marks: texture_2d<u32>;
+
+/// One `MarkItem`, which the arena pads to 7 texels.
+fn load_mark(slot: u32) -> MarkItem {
+    let base = slot * 7u;
+    let t0 = textureLoad(marks, table_texel(base + 0u), 0);
+    let t1 = textureLoad(marks, table_texel(base + 1u), 0);
+    let t2 = textureLoad(marks, table_texel(base + 2u), 0);
+    let t3 = textureLoad(marks, table_texel(base + 3u), 0);
+    let t4 = textureLoad(marks, table_texel(base + 4u), 0);
+    let t5 = textureLoad(marks, table_texel(base + 5u), 0);
+    let t6 = textureLoad(marks, table_texel(base + 6u), 0);
+    return MarkItem(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        PaintRef(t1.z, t1.w),
+        t2.x,
+        t2.y,
+        Vector2(bitcast<f32>(t2.z), bitcast<f32>(t2.w)),
+        Vector2(bitcast<f32>(t3.x), bitcast<f32>(t3.y)),
+        t3.z,
+        t3.w,
+        t4.x,
+        bitcast<f32>(t4.y),
+        Vector4(bitcast<f32>(t4.z), bitcast<f32>(t4.w), bitcast<f32>(t5.x), bitcast<f32>(t5.y)),
+        t5.z,
+        t5.w,
+        t6.x,
+        t6.y,
+    );
+}
 // The draw order, indexed rather than fetched. A mark's instances are its payload's items and
 // its draw names its position in the order, so this is the one lane that cannot take the order as
 // vertex input and needs random access into the same stream the others are fed from.

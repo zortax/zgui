@@ -1,11 +1,16 @@
 // Discs and rings of a mark payload.
 
-@group(2) @binding(1) var<storage, read> mark_discs: array<vec4<f32>>;
+@group(2) @binding(1) var mark_discs: texture_2d<u32>;
+
+/// One disc of a payload: its centre, then its radii. One texel.
+fn load_mark_disc(index: u32) -> vec4<f32> {
+    return texel_f32(textureLoad(mark_discs, table_texel(index), 0));
+}
 
 fn disc_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     let found = item_of(mark_draw.position);
-    let item = marks[found.slot];
-    let disc = mark_discs[instance];
+    let item = load_mark(found.slot);
+    let disc = load_mark_disc(instance);
     let centre = to_space(item, disc.xy);
     // The quad holds a square of half side `outer` as well as a disc.
     let reach = disc.z + margin_space(item);
@@ -20,8 +25,8 @@ fn disc_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
 //
 // A ring is a band z − w wide, so a pixel that holds both edges of a thin ring covers its width.
 fn disc_distance(in: MarkVarying) -> Distance {
-    let item = marks[in.slot];
-    let disc = mark_discs[in.prim];
+    let item = load_mark(in.slot);
+    let disc = load_mark_disc(in.prim);
     var outer = radial(payload_point(in), to_space(item, disc.xy), disc.z);
     if disc.w <= 0.0 {
         return outer;
@@ -53,11 +58,11 @@ fn square_cover(point: vec2<f32>, centre: vec2<f32>, half: f32, across: vec2<f32
 
 // The coverage of the disc or square of `in`.
 fn disc_coverage(in: MarkVarying, across: vec2<f32>, down: vec2<f32>) -> f32 {
-    let item = marks[in.slot];
+    let item = load_mark(in.slot);
     if (item.flags & MARK_SQUARE_DISCS) == 0u {
         return sdf_coverage(disc_distance(in), across, down);
     }
-    let disc = mark_discs[in.prim];
+    let disc = load_mark_disc(in.prim);
     let centre = to_space(item, disc.xy);
     let point = payload_point(in);
     let outer = square_cover(point, centre, disc.z, across, down);
@@ -88,7 +93,7 @@ fn fs_disc_paint(in: MarkVarying) -> @location(0) vec4<f32> {
     let across = dpdx(in.point);
     let down = dpdy(in.point);
     let coverage = disc_coverage(in, across, down);
-    return mark_paint(in, marks[in.slot], coverage);
+    return mark_paint(in, load_mark(in.slot), coverage);
 }
 
 @fragment

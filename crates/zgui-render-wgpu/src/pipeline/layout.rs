@@ -41,7 +41,7 @@ pub struct Layouts {
     pub effect: wgpu::BindGroupLayout,
     /// One mark draw's block, and the payload of the kind it draws.
     ///
-    /// The block names the item and its bin. The payload is a storage array walked by the draw's
+    /// The block names the item and its bin. The payload is a table walked by the draw's
     /// instances, one prim each.
     pub marks: wgpu::BindGroupLayout,
     /// One mark draw's block, and the bin pages a union item's composite reads.
@@ -63,7 +63,7 @@ impl Layouts {
             }),
             marks: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.marks"),
-                entries: &[dynamic_uniform(0), storage(1)],
+                entries: &[dynamic_uniform(0), table(1)],
             }),
             mark_composite: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.mark_composite"),
@@ -88,7 +88,7 @@ impl Layouts {
                 // mark lane alone: a mark's draw names its position in the order rather than its
                 // instance index, and indexing needs the stream bound. The chunk offsets that
                 // used to be a third binding are resolved into the order on the host.
-                entries: &[storage(0), storage(1)],
+                entries: &[table(0), storage(1)],
             }),
             sampled: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.sampled"),
