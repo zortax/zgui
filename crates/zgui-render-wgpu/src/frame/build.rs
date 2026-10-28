@@ -29,6 +29,12 @@ pub struct FramePlan {
     pub unisolated: u32,
     /// How many instanced batches were left out of a pass whose scissor they miss.
     pub culled: u32,
+    /// How many backdrops were told to read a kept copy and could not.
+    ///
+    /// Non-zero means this frame's damage was grown for one arrangement and drawn under another,
+    /// so the frame after it has to redraw everything. See
+    /// [`keepable`](crate::filter::backdrop::keepable).
+    pub capture_refused: u32,
 }
 
 impl FramePlan {
@@ -164,7 +170,9 @@ impl<'gpu> PlanBuilder<'gpu> {
     /// and anything sampling one divides by what it holds rather than by what is used of it.
     pub fn extent_of(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
-            TargetRef::Composed => self.composed_extent,
+            // The kept copy is allocated exactly as the composed target is, because it holds a
+            // copy of it and a copy between two textures needs them to agree.
+            TargetRef::Composed | TargetRef::Kept => self.composed_extent,
             TargetRef::Pool(slot) => slot.allocated(),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
@@ -352,7 +360,8 @@ impl<'gpu> PlanBuilder<'gpu> {
     fn globals_for(&mut self, target: TargetRef) -> u32 {
         let (kind, region) = match target {
             TargetRef::MarksPage(_) => (2, self.mark_extent),
-            TargetRef::Composed => (0, self.region),
+            // The kept copy is the composed target's own size and format, over its region.
+            TargetRef::Composed | TargetRef::Kept => (0, self.region),
             TargetRef::Pool(slot) => (
                 usize::from(slot.scale() == TargetScale::Half),
                 slot.covered(),
@@ -462,6 +471,11 @@ impl<'gpu> PlanBuilder<'gpu> {
     /// pass's scissor.
     pub fn note_culled(&mut self) {
         self.plan.culled += 1;
+    }
+
+    /// Notes a backdrop that was told to keep its copy and could not.
+    pub fn note_capture_refused(&mut self) {
+        self.plan.capture_refused += 1;
     }
 
     /// Finishes the plan, returning every lent target to the pool.

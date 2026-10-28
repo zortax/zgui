@@ -91,6 +91,13 @@ pub struct WgpuRenderer {
     composed: SceneTexture,
     /// The bind group the copy reads the composed target through.
     composed_binding: wgpu::BindGroup,
+    /// The kept copy of what lies beneath a backdrop filter.
+    ///
+    /// Allocated the first frame a scene holds a backdrop and never freed while one does, because
+    /// what makes it worth having is precisely that it outlives the frame: a copy written only
+    /// where this frame drew holds an earlier frame's composite everywhere else, and at a pixel no
+    /// frame since has redrawn that is the picture the filter should read.
+    kept: Option<SceneTexture>,
     /// The pipelines, shared with every other renderer on this device.
     ///
     /// Shared because compiling one costs the same whichever window asked for it, and because the
@@ -238,6 +245,7 @@ impl WgpuRenderer {
             presentation,
             composed,
             composed_binding,
+            kept: None,
             pipelines,
             shared,
             buffers,
@@ -633,6 +641,11 @@ impl WgpuRenderer {
             // damage the caller gives for the newly exposed bands stays enough.
             self.composed_binding =
                 bind_composed(&self.gpu, &self.pipelines.borrow(), &self.composed);
+            // The kept copy is of the replaced target, and nothing carries it into a new one. A
+            // frame that redraws everything fills the next one whole.
+            if self.kept.take().is_some() {
+                self.full_damage_next = true;
+            }
         }
     }
 }

@@ -105,7 +105,7 @@ pub use crate::clip::{
     ClipLink, ClipNode, ClipTable, KeptClip, MaskSource, ResolvedClip, RoundedTest,
 };
 pub use crate::content::{Content, ContentHash};
-pub use crate::group::{BackdropFilter, Filter, GroupBoundary, read_extent};
+pub use crate::group::{BackdropCapture, BackdropFilter, Filter, GroupBoundary, read_extent};
 pub use crate::id::{
     ClipId, DrawOrder, PaintId, PaintSlot, ScrollFrameId, StackingContextId, VectorId,
 };

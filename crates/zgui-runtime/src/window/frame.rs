@@ -1610,24 +1610,40 @@ impl Window {
                 )
             });
             mark("p.expand");
-            zgui_paint::expand(
+            let mut expansion = zgui_paint::expand(
                 &layout,
                 &mut self.damage,
                 viewport,
                 self.scale,
                 &self.host.placements(),
+                &mut self.backdrops,
             );
             // Close rectangles merge before the emit walk, because the walk culls against the
             // damage: a merge at the renderer would clear the pixels between them and draw nothing
             // there. The merged region can reach a new read extent, so it is expanded again.
             if self.damage.coalesce_dense() {
-                zgui_paint::expand(
+                // The second expansion keeps the copy only where the first one did. The first one
+                // already recorded this frame's backdrop, so the same memory would admit a copy
+                // that the first one refused.
+                let mut refusing = zgui_paint::BackdropMemory::default();
+                let memory = match expansion.keeping {
+                    Some(_) => &mut self.backdrops,
+                    None => &mut refusing,
+                };
+                expansion.keeping = zgui_paint::expand(
                     &layout,
                     &mut self.damage,
                     viewport,
                     self.scale,
                     &self.host.placements(),
-                );
+                    memory,
+                )
+                .keeping;
+                if expansion.keeping.is_none() && self.damage.is_full() {
+                    // A frame that redraws everything keeps nothing for the next one, as the first
+                    // expansion decides for a set that is already full.
+                    self.backdrops = zgui_paint::BackdropMemory::default();
+                }
             }
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
@@ -1726,6 +1742,7 @@ impl Window {
                 // A full set means the surface and nothing more. Without the bound, the walk visits
                 // every fragment of the document, also the rows of a long scroll container.
                 surface: Some(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport)),
+                keeping: expansion.keeping,
                 ..PaintInput::new(&layout, &self.damage)
             };
             zgui_profile::latency::note_with("d.postexpand", || {
@@ -1740,6 +1757,10 @@ impl Window {
             mark("p.emit");
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.scene);
+            // What this frame drew is what decides whether the next one may keep the copy it left,
+            // and the walk is the only thing that knows either number.
+            self.backdrops
+                .emitted(report.backdrops, report.backdrop_nested);
             vector_report = report.vector_routes;
             self.layers_owed = report.layers_owed;
             let after = glyph_counts();
