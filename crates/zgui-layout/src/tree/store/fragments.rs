@@ -68,8 +68,8 @@ impl LayoutStore {
         self.paragraphs[slot as usize] = Some(super::ParagraphRecord {
             key,
             users: 0,
-            claimed: false,
-            lines: crate::inline::kept::LinesKey::NONE,
+            claim: super::Claim::None,
+            claimed: 0,
         });
         self.paragraph_index.insert(key, id);
         // Normally retained immediately by `set_inline_resolution`. Filing it here as well makes
@@ -187,10 +187,16 @@ impl LayoutStore {
 
     /// The lines every current user of one paragraph keeps, if a pass recorded them.
     pub(crate) fn paragraph_lines(&self, id: ParagraphId) -> Option<crate::inline::kept::LinesKey> {
-        self.paragraphs
-            .get(id.index() as usize)
-            .and_then(Option::as_ref)
-            .and_then(|entry| entry.claimed.then_some(entry.lines))
+        let entry = self.paragraphs.get(id.index() as usize)?.as_ref()?;
+        match entry.claim {
+            super::Claim::None => None,
+            super::Claim::Lines => Some(crate::inline::kept::LinesKey::from_bits(entry.claimed)),
+            super::Claim::Sole => {
+                let user = BoxKey::from_u64(entry.claimed)?;
+                let resolution = self.inline_resolution(user)?;
+                (resolution.paragraph == id).then(|| crate::inline::kept::LinesKey::of(resolution))
+            }
+        }
     }
 
     /// Records the lines every current user of one paragraph keeps.
@@ -200,8 +206,16 @@ impl LayoutStore {
         lines: crate::inline::kept::LinesKey,
     ) {
         if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
-            entry.claimed = true;
-            entry.lines = lines;
+            entry.claim = super::Claim::Lines;
+            entry.claimed = lines.bits();
+        }
+    }
+
+    /// Records that the lines of one paragraph are the lines its one user `user` keeps.
+    pub(crate) fn claim_paragraph_for(&mut self, id: ParagraphId, user: BoxKey) {
+        if let Some(Some(entry)) = self.paragraphs.get_mut(id.index() as usize) {
+            entry.claim = super::Claim::Sole;
+            entry.claimed = user.as_u64();
         }
     }
 
@@ -229,7 +243,7 @@ impl LayoutStore {
         if entry.users > 0 {
             return;
         }
-        entry.claimed = false;
+        entry.claim = super::Claim::None;
         let key = entry.key;
         self.active_paragraphs -= 1;
         self.unused_paragraphs.push(id);

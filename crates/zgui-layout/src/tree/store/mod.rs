@@ -183,13 +183,28 @@ pub struct LayoutStore {
 struct ParagraphRecord {
     key: zgui_text::ParagraphKey,
     users: u32,
-    /// Whether a layout pass recorded [`ParagraphRecord::lines`]. Cleared when the last user goes.
-    claimed: bool,
-    /// The lines every current user keeps, once a layout pass recorded them.
+    /// What a layout pass recorded about the lines of the users. Cleared when the last user goes.
+    claim: Claim,
+    /// The bits [`ParagraphRecord::claim`] names: a [`LinesKey`](crate::inline::kept::LinesKey)
+    /// for [`Claim::Lines`], the [`BoxKey`] of the one user for [`Claim::Sole`].
     ///
-    /// See [`kept`](crate::inline::kept). Held apart from [`ParagraphRecord::claimed`], whose
-    /// niche keeps a slot of the table at 24 bytes.
-    lines: crate::inline::kept::LinesKey,
+    /// See [`kept`](crate::inline::kept). Held apart from [`ParagraphRecord::claim`], whose niche
+    /// keeps a slot of the table at 24 bytes.
+    claimed: u64,
+}
+
+/// What a paragraph record holds about the lines its users keep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Claim {
+    /// No layout pass recorded the lines.
+    None,
+    /// The paragraph has one user, and its lines are the lines that user keeps now.
+    ///
+    /// The key of those lines is computed only when a caller asks for it. A paragraph with one
+    /// user is the common case, and every pass that breaks it again would hash all of its lines.
+    Sole,
+    /// The key of the lines every current user keeps.
+    Lines,
 }
 
 const _: () = assert!(core::mem::size_of::<Option<ParagraphRecord>>() == 24);

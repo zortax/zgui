@@ -83,6 +83,16 @@ impl LinesKey {
     /// The value a paragraph record holds before a pass records its lines.
     pub(crate) const NONE: Self = Self(0);
 
+    /// The key held as `bits`, as [`LinesKey::bits`] gave it.
+    pub(crate) const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
+    /// The bits of the key, for a record that holds them as a plain number.
+    pub(crate) const fn bits(self) -> u64 {
+        self.0
+    }
+
     /// The key of the lines `resolution` keeps.
     pub(crate) fn of(resolution: &InlineResolution) -> Self {
         let kept = &resolution.kept;
@@ -136,9 +146,10 @@ struct Tally {
 /// Separates each shared paragraph whose contexts keep different lines, and breaks each noted
 /// context's form at its kept request again where a pass moved it.
 ///
-/// Called once at the end of a layout pass, with the device scale of the pass. A noted box
-/// costs one hash of its line ranges and one lookup of its form's break. A noted box on a shared
-/// paragraph also costs a tally entry.
+/// Called once at the end of a layout pass, with the device scale of the pass. A noted box costs
+/// one lookup of its form's break. A noted box on a shared paragraph also costs one hash of its
+/// line ranges and a tally entry. A paragraph with one user records that user, and the hash of its
+/// lines is computed only when a second user asks for it.
 ///
 /// # Separation
 ///
@@ -177,9 +188,10 @@ pub(crate) fn restore<C: MeasureContent>(store: &mut LayoutStore, content: &mut 
         };
         let id = resolution.paragraph;
         if store.paragraph_users(id) <= 1 {
-            store.claim_paragraph(id, kept);
+            store.claim_paragraph_for(id, key);
             continue;
         }
+        let kept = known(kept, resolution);
         if !shapes(store, resolution, base) {
             continue;
         }
@@ -214,7 +226,7 @@ pub(crate) fn restore<C: MeasureContent>(store: &mut LayoutStore, content: &mut 
         let id = resolution.paragraph;
         if let Some(tally) = tallies.get_mut(&id)
             && !tally.settled
-            && store.paragraph_lines(id) == Some(kept)
+            && store.paragraph_lines(id) == Some(known(kept, resolution))
             && content.breaks_reflect(resolution.key) == Some(resolution.kept.key())
         {
             tally.settled = true;
@@ -227,7 +239,8 @@ pub(crate) fn restore<C: MeasureContent>(store: &mut LayoutStore, content: &mut 
         };
         let id = resolution.paragraph;
         let tally = tallies.get_mut(&id);
-        let shared = store.paragraph_users(id) > 1 && store.paragraph_lines(id) == Some(kept);
+        let shared = store.paragraph_users(id) > 1
+            && store.paragraph_lines(id) == Some(known(kept, resolution));
         match tally {
             Some(tally) if shared && tally.settled => continue,
             Some(tally) => tally.settled |= shared || store.paragraph_users(id) <= 1,
@@ -275,11 +288,16 @@ fn tally(store: &LayoutStore, noted: &[(BoxKey, ParagraphKey)], scratch: &mut Sc
             scratch.lines.push(LinesKey::NONE);
             continue;
         };
-        let kept = LinesKey::of(resolution);
-        scratch.lines.push(kept);
         let id = resolution.paragraph;
         let users = store.paragraph_users(id);
-        if users <= 1 || !shapes(store, resolution, base) {
+        if users <= 1 {
+            // A paragraph with one user records the user, not the key of its lines.
+            scratch.lines.push(LinesKey::NONE);
+            continue;
+        }
+        let kept = LinesKey::of(resolution);
+        scratch.lines.push(kept);
+        if !shapes(store, resolution, base) {
             continue;
         }
         let tally = scratch.tallies.entry(id).or_insert_with(|| Tally {
@@ -290,6 +308,16 @@ fn tally(store: &LayoutStore, noted: &[(BoxKey, ParagraphKey)], scratch: &mut Sc
         if store.paragraph_lines(id) == Some(kept) {
             tally.matching += 1;
         }
+    }
+}
+
+/// The key of the lines `resolution` keeps: `kept` as [`tally`] filled it, computed when
+/// [`tally`] left it out because the paragraph had one user then.
+fn known(kept: LinesKey, resolution: &InlineResolution) -> LinesKey {
+    if kept == LinesKey::NONE {
+        LinesKey::of(resolution)
+    } else {
+        kept
     }
 }
 
