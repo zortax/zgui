@@ -51,7 +51,7 @@ fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
     let base = instance - record.w;
     let anchor = mark_axes(item) * bitcast<vec2<f32>>(record.xy)
         + vec2<f32>(item.origin.x, item.origin.y) + found.shift;
-    let matrix = spatial[item.transform].matrix;
+    let matrix = load_spatial(item.transform);
     let world = matrix * vec4<f32>(anchor, 0.0, 1.0);
     let split = glyph_phase(world.xy / world.w);
     let phase = u32(split.z) + 4u * u32(split.w);
