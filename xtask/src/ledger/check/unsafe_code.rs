@@ -69,6 +69,11 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "loading libgbm at run time, and every call made into it",
     ),
     (
+        "zgui-scanout",
+        "loading EGL at run time, every call made into it, and the mapping its hardware test \
+         reads a copied buffer back through",
+    ),
+    (
         "zgui-platform-drm",
         "the two `borrow_raw` calls that report a surface's DRM handles, and the Vulkan calls that \
          make the images a display scans out of — every one of those is reached through wgpu's hal",
