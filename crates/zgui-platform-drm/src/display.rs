@@ -32,13 +32,14 @@
 //! second commit would read the properties again and would leave the first one's blob behind.
 
 use std::cell::RefCell;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use zgui_drm::Device;
 use zgui_drm::commit::Commit;
 use zgui_platform::{PlatformError, SurfaceId};
-use zgui_render_wgpu::{Pixels, wgpu};
+use zgui_render_wgpu::{Gpu, Pixels, wgpu};
 
 use crate::cursor::Cursor;
 use crate::scanout::Scanout;
@@ -140,7 +141,13 @@ impl DrmDisplay {
         !self.cursor.borrow().on_a_plane()
     }
 
-    /// Copies `pixels` into the back buffer, draws the pointer over it, and flips to it.
+    /// Copies the rows of `pixels` that are owed into the back buffer, draws the pointer over it,
+    /// and flips to it.
+    ///
+    /// `changed` names the rows this frame drew. What is copied is those *and* whatever the rows
+    /// earlier frames drew owe this buffer, because the display rotates between several and a
+    /// frame lands in one of them. A display drawing its own pointer is copied whole: the pointer
+    /// moves without any row changing.
     ///
     /// Answers `false` while a flip is still on its way, which is [`Scanout::present`]'s own
     /// answer: the back buffer is the one still on the screen until the completion arrives, so the
@@ -153,12 +160,13 @@ impl DrmDisplay {
     ///
     /// Returns [`PlatformError::Backend`] when `pixels` is not the extent of the display, when the
     /// buffer cannot be mapped, and when the driver refuses the flip.
-    pub fn present(&self, pixels: &Pixels) -> Result<bool, PlatformError> {
+    pub fn present(&self, pixels: &Pixels, changed: &[Range<u32>]) -> Result<bool, PlatformError> {
         let mut commit = self.commit.borrow_mut();
         self.scanout.borrow_mut().present(
             &self.device,
             &mut **commit,
             pixels,
+            changed,
             &self.cursor.borrow(),
         )
     }
@@ -177,12 +185,15 @@ impl DrmDisplay {
     /// Cloning a texture handle costs one reference count, and the buffer lives until every clone
     /// has gone.
     pub fn textures(&self) -> Vec<wgpu::Texture> {
-        self.scanout
-            .borrow()
-            .buffers()
-            .iter()
-            .map(|buffer| buffer.texture().clone())
-            .collect()
+        self.scanout.borrow().textures()
+    }
+
+    /// Whether this display builds its own frames out of what the renderer hands it.
+    ///
+    /// See [`Scanout::composites_its_own_frames`]: on the drawn shape what [`DrmDisplay::textures`]
+    /// answers is staging, and the display's own device puts a frame on the buffer it reads.
+    pub fn composites_its_own_frames(&self) -> bool {
+        self.scanout.borrow().composites_its_own_frames()
     }
 
     /// Takes the buffer the next frame is drawn into back from the display engine, and names it.
@@ -202,10 +213,33 @@ impl DrmDisplay {
     ///
     /// # Errors
     ///
+    /// The frame before this one is settled here, so `gpu` is the device that drew it — see
+    /// [`Scanout::settle`].
+    ///
+    /// # Errors
+    ///
     /// Returns [`PlatformError::Backend`] when the graphics device refuses or does not finish the
-    /// barrier that takes the buffer back.
-    pub fn acquire(&self) -> Result<Option<usize>, PlatformError> {
-        self.scanout.borrow_mut().acquire()
+    /// barrier that takes the buffer back, and when the driver refuses the settled frame's flip.
+    pub fn acquire(&self, gpu: &Gpu) -> Result<Option<usize>, PlatformError> {
+        let mut commit = self.commit.borrow_mut();
+        self.scanout
+            .borrow_mut()
+            .acquire(&self.device, &mut **commit, gpu)
+    }
+
+    /// Waits for the frame that was submitted last, and puts it on the screen.
+    ///
+    /// [`Scanout::settle`]'s own answer. A loop about to block calls it, so that the last frame
+    /// before an application goes idle is not left waiting for a frame that never comes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Backend`] when the driver refuses the mode or the flip.
+    pub fn settle(&self, gpu: &Gpu) -> Result<(), PlatformError> {
+        let mut commit = self.commit.borrow_mut();
+        self.scanout
+            .borrow_mut()
+            .settle(&self.device, &mut **commit, gpu)
     }
 
     /// Gives the buffer the frame was drawn into to the display engine, and shows it.
@@ -222,18 +256,29 @@ impl DrmDisplay {
     /// [`DrmDisplay::acquire`] answered nothing.
     ///
     /// The pointer is not drawn: a display on this shape has one on a plane, which is the condition
-    /// [`Scanout::imported`] chose it under.
+    /// both drawn shapes were chosen under.
+    ///
+    /// `gpu` is the device the frame was composed on. The OpenGL shape has no pair of barriers to
+    /// pass an image between queue families, so what stands in for them is a fence taken here — and
+    /// a fence belongs to the device that drew, which nothing below this holds.
     ///
     /// # Errors
     ///
     /// Returns [`PlatformError::Backend`] when this display is on the copied shape, when the buffer
     /// was never taken back, when the graphics device refuses or does not finish the barrier, and
     /// when the driver refuses the mode or the flip.
-    pub fn present_drawn(&self) -> Result<bool, PlatformError> {
+    /// `wrote` is the rectangles the frame put in the staging buffer, which is what the display's
+    /// own device copies onto the scanout buffer. Nothing else knows them: the renderer chose them
+    /// from its damage, and a copy of what it did not write would move whatever the buffer held.
+    pub fn present_drawn(
+        &self,
+        gpu: &Gpu,
+        wrote: &[zgui_geom::Rect<i32, zgui_geom::Device>],
+    ) -> Result<bool, PlatformError> {
         let mut commit = self.commit.borrow_mut();
         self.scanout
             .borrow_mut()
-            .present_drawn(&self.device, &mut **commit)
+            .present_drawn(&self.device, &mut **commit, gpu, wrote)
     }
 }
 

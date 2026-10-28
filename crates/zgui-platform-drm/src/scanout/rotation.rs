@@ -16,6 +16,14 @@
 //! [`Rotation::drawing`] answers a buffer while a flip is still on its way, and acquiring one never
 //! waits for the buffer the display is scanning out.
 //!
+//! # A fourth buffer lets the processor and the card work at the same time
+//!
+//! A frame that has been submitted is still being drawn, and its buffer is not free until the card
+//! says so. With three buffers that is the only free one, so the next frame waits for the card and
+//! the two never overlap: the loop composes, waits, submits, waits. [`Slot::Submitted`] names that
+//! state, and a fourth buffer is what the next frame is composed into while the card draws the
+//! last — which on the slowest machine this runs on is 21 ms the processor gets back.
+//!
 //! # The kernel takes one flip at a time
 //!
 //! A CRTC holds one page flip, so a frame that finishes while one is outstanding cannot be
@@ -25,10 +33,10 @@
 //! reports. The frame reaches the screen one vertical blank later, with its own fence and in its
 //! own buffer.
 //!
-//! # A second frame while one is held
+//! # A held frame is never drawn over
 //!
-//! While a frame is held, [`Rotation::drawing`] answers nothing, so no second frame is ever drawn.
-//! The alternative is to hand the held buffer back, draw over it and give it to the display engine
+//! A held frame keeps its buffer: [`Rotation::drawing`] hands out free buffers only. The
+//! alternative is to hand the held buffer back, draw over it and give it to the display engine
 //! again, which puts a newer picture on the screen at the same vertical blank.
 //!
 //! This refuses, for three reasons. A refused frame stops **in front of** the composition, so it
@@ -37,6 +45,10 @@
 //! picture that is under one refresh interval old, as often as the application asks inside that
 //! interval. And it would take a buffer back from the display engine that the display never read,
 //! which is a pair of ownership transfers over an image nothing looked at.
+//!
+//! On three buffers this needs no rule of its own: a held frame means the buffer on the screen, the
+//! buffer in the flip and the held one are every buffer there is, so there is no free one to answer
+//! with.
 //!
 //! # Two buffers never hold a frame
 //!
@@ -54,12 +66,18 @@ use std::mem;
 enum Slot<F> {
     /// Nothing needs it, so the next frame is drawn into it.
     Free,
-    /// A frame has it and has not reached the driver.
+    /// A frame is being composed into it.
     ///
-    /// Covers a buffer a renderer is composing into and one holding a finished frame the caller is
-    /// committing. Both mean the same thing to the rotation: the buffer is spoken for, and the
-    /// frame that has it is the one that finishes next.
+    /// The buffer is spoken for, and the frame that has it is the one that is submitted next. One
+    /// buffer at a time is in this state: a caller composes one frame.
     Drawing,
+    /// A frame in it has gone to the graphics device and has not finished drawing.
+    ///
+    /// Also covers a finished frame the caller is committing. Both mean the same thing to the
+    /// rotation: the buffer is the caller's rather than the display's, and no frame may be composed
+    /// into it. **Several buffers may be here at once**, which is what lets the next frame be
+    /// composed while the card is still drawing the last one.
+    Submitted,
     /// A finished frame is in it, waiting for the flip on its way to report.
     ///
     /// It carries the fence that frame is committed with, so the two travel together and the frame
@@ -120,11 +138,6 @@ impl<F> Rotation<F> {
         if let Some(slot) = self.drawn() {
             return Some(slot);
         }
-        // A frame that is already waiting for the flip is left where it is. See the head of this
-        // module for why it is refused here rather than drawn over.
-        if self.held().is_some() {
-            return None;
-        }
         let free = self
             .slots
             .iter()
@@ -141,6 +154,49 @@ impl<F> Rotation<F> {
         self.slots
             .iter()
             .position(|slot| matches!(slot, Slot::Drawing))
+    }
+
+    /// Records that the frame in `slot` has gone to the graphics device.
+    ///
+    /// The buffer stays the caller's until [`Rotation::finished`], so nothing composes into it
+    /// while the card draws it — and the buffer the *next* frame is composed into is a free one,
+    /// which is what lets the two overlap.
+    pub(crate) fn submitted(&mut self, slot: usize) {
+        self.slots[slot] = Slot::Submitted;
+    }
+
+    /// Whether a finished frame is already waiting for a completion.
+    ///
+    /// One frame waits for one flip, so a caller with a second finished frame leaves it where it is
+    /// and offers it again after the completion.
+    pub(crate) fn holding(&self) -> bool {
+        self.held().is_some()
+    }
+
+    /// Puts the frame in `slot` in the place of the one already waiting for a completion, and
+    /// answers the buffer that one was in.
+    ///
+    /// The held frame has not reached the driver and the display has never read it, so nothing is
+    /// taken back from anybody: it is dropped, and its fence closes with it. What it buys is a
+    /// refresh interval — committing the older frame would put up a picture the very next flip
+    /// replaces, and the newer one would then wait another completion for its turn.
+    ///
+    /// Answers nothing where no frame is held, which is where [`Rotation::finished`] belongs
+    /// instead.
+    pub(crate) fn replaces_held(&mut self, slot: usize, fence: Option<F>) -> Option<usize> {
+        let held = self.held()?;
+        self.slots[held] = Slot::Free;
+        self.slots[slot] = Slot::Held(fence);
+        Some(held)
+    }
+
+    /// Gives `slot` back after a commit the driver refused.
+    ///
+    /// The frame in it reached no screen and the display never took the buffer, so the next frame
+    /// may have it. Without this a refused flip would strand its buffer in [`Slot::Submitted`],
+    /// where nothing frees it, and a rotation would lose one buffer per refusal.
+    pub(crate) fn refused(&mut self, slot: usize) {
+        self.slots[slot] = Slot::Free;
     }
 
     /// Finishes the frame in `slot`, which waits on `fence`.
@@ -247,13 +303,13 @@ impl<F> Rotation<F> {
 
     /// Takes the held frame out, leaving its buffer spoken for until the caller commits it.
     ///
-    /// [`Slot::Drawing`] rather than [`Slot::Free`], because the frame is in the caller's hands: a
-    /// commit the driver refuses leaves that buffer to the next frame, and nothing else may take it
-    /// in between. Nothing else is being drawn at the same time — a held frame means the buffer on
-    /// the screen, the buffer in the flip and the held one are every buffer there is.
+    /// [`Slot::Submitted`] rather than [`Slot::Free`], because the frame is in the caller's hands:
+    /// a commit the driver refuses leaves that buffer to the next frame, and nothing else may take
+    /// it in between. Not [`Slot::Drawing`] either — another frame may be being composed at the
+    /// same time, and that is the one buffer this must not name.
     fn take_held(&mut self) -> Option<Ready<F>> {
         let slot = self.held()?;
-        match mem::replace(&mut self.slots[slot], Slot::Drawing) {
+        match mem::replace(&mut self.slots[slot], Slot::Submitted) {
             Slot::Held(fence) => Some(Ready { slot, fence }),
             // The line above found a held frame at this place and nothing between the two moves
             // one. Written out rather than unwrapped, because a frame loop is the wrong place to
@@ -294,6 +350,9 @@ mod tests {
     use super::{Rotation, Slot};
 
     /// How many buffers the imported shape drives a display from.
+    const FOUR: usize = 4;
+
+    /// How many it drove one from before a frame could be composed while the card drew the last.
     const THREE: usize = 3;
 
     /// How many the copied shape does.
@@ -776,6 +835,117 @@ mod tests {
         }
 
         assert_eq!(drawn, [0, 1, 0, 1, 0]);
+    }
+
+    #[test]
+    fn a_submitted_frame_keeps_its_buffer_and_the_next_one_is_composed_into_another() {
+        // The whole point of the fourth buffer. While the card draws the frame in slot 1, slot 2 is
+        // what the next frame is composed into — the two run at the same time.
+        let mut rotation = rotation(FOUR);
+        assert_eq!(frame(&mut rotation, false), Some((0, true)));
+        let drawing = rotation.drawing().expect("a buffer is free");
+        rotation.submitted(drawing);
+
+        assert_eq!(
+            rotation.drawing(),
+            Some(2),
+            "a buffer the card is still drawing is never handed to the next frame"
+        );
+        assert_eq!(rotation.slots[drawing], Slot::Submitted);
+        holds(&rotation);
+    }
+
+    #[test]
+    fn a_frame_the_card_has_finished_flips_and_frees_the_buffer_before_it() {
+        // A submitted frame becomes committable where its fence signals, and from there it is the
+        // ordinary path: the flip names it and the completion frees what the display had.
+        let mut rotation = rotation(FOUR);
+        assert_eq!(frame(&mut rotation, false), Some((0, true)));
+        let first = rotation.drawing().expect("a buffer is free");
+        rotation.submitted(first);
+        let second = rotation.drawing().expect("a second buffer is free");
+        rotation.submitted(second);
+
+        let ready = rotation
+            .finished(first, carried(first))
+            .expect("nothing is flipping, so the first frame goes to the driver now");
+        rotation.flipped(ready.slot);
+        holds(&rotation);
+        assert!(
+            rotation.finished(second, carried(second)).is_none(),
+            "the flip the first frame left outstanding has not reported, so the second waits"
+        );
+
+        assert!(rotation.holding(), "the second frame is the one waiting");
+        assert_eq!(
+            rotation.completed().map(|ready| ready.slot),
+            Some(second),
+            "the completion hands the held frame over"
+        );
+        assert_eq!(rotation.slots[0], Slot::Free, "the display gave it back");
+        holds(&rotation);
+    }
+
+    #[test]
+    fn a_newer_finished_frame_takes_the_place_of_the_one_waiting_for_a_completion() {
+        // Both are drawn and neither has reached the driver, so showing the older one would spend a
+        // refresh interval putting up a picture the next flip replaces.
+        let mut rotation = rotation(FOUR);
+        assert_eq!(frame(&mut rotation, false), Some((0, true)));
+        assert_eq!(frame(&mut rotation, true), Some((1, true)));
+        assert_eq!(
+            frame(&mut rotation, true),
+            Some((2, false)),
+            "a flip is outstanding, so this frame is held"
+        );
+        let newer = rotation.drawing().expect("the fourth buffer is free");
+        rotation.submitted(newer);
+
+        assert_eq!(
+            rotation.replaces_held(newer, carried(newer)),
+            Some(2),
+            "the held frame's buffer comes back"
+        );
+
+        assert_eq!(rotation.slots[2], Slot::Free);
+        assert_eq!(rotation.slots[newer], Slot::Held(carried(newer)));
+        assert_eq!(
+            rotation.completed().map(|ready| ready.slot),
+            Some(newer),
+            "the completion commits the newer picture, and the older one never reaches a screen"
+        );
+        holds(&rotation);
+    }
+
+    #[test]
+    fn nothing_is_replaced_where_no_frame_is_waiting_for_a_completion() {
+        // The caller commits it the ordinary way instead. Answering a buffer here would free one
+        // the display is reading.
+        let mut rotation = rotation(FOUR);
+        assert_eq!(frame(&mut rotation, false), Some((0, true)));
+        let drawing = rotation.drawing().expect("a buffer is free");
+        rotation.submitted(drawing);
+
+        assert_eq!(rotation.replaces_held(drawing, carried(drawing)), None);
+        assert_eq!(rotation.slots[0], Slot::OnScreen);
+    }
+
+    #[test]
+    fn three_buffers_still_refuse_a_frame_while_one_is_held() {
+        // The refusal used to be a rule of its own and is now arithmetic: a held frame on three
+        // buffers means the screen, the flip and the held one are all of them, so no buffer is
+        // free. This is the same behaviour stated the other way, and it is what would break first
+        // if `drawing` ever handed out a buffer it should not.
+        let mut rotation = lit();
+        assert_eq!(frame(&mut rotation, true), Some((1, true)));
+        assert_eq!(frame(&mut rotation, true), Some((2, false)));
+
+        assert!(rotation.holding());
+        assert_eq!(
+            rotation.drawing(),
+            None,
+            "every buffer is the display's or the held frame's"
+        );
     }
 
     #[test]

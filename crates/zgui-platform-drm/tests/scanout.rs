@@ -14,6 +14,7 @@
 //! ledger ignored` prescribes for a test that cannot be switched off. Run it on a free virtual
 //! terminal to make it assert anything.
 
+use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,15 @@ use zgui_platform_drm::cursor::Cursor;
 use zgui_platform_drm::{Output, Scanout};
 use zgui_render::{RenderTarget, Renderer};
 use zgui_render_wgpu::{Builder, Pixels, wgpu};
+
+/// Every row of any display these tests drive, which is what a frame drawn from nothing owes.
+#[expect(
+    clippy::single_range_in_vec_init,
+    reason = "one band covering every row, which is what this is named for"
+)]
+fn whole() -> Vec<Range<u32>> {
+    vec![0..u32::MAX]
+}
 use zgui_scene::{Paint, Quad, Scene};
 
 /// How long a flip is waited for before the wait is called a failure.
@@ -223,19 +233,19 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     // up, so nothing is outstanding afterwards and the second frame is taken at once.
     assert!(
         scanout
-            .present(&device, &mut *commit, &pixels, &cursor)
+            .present(&device, &mut *commit, &pixels, &whole(), &cursor)
             .expect("the driver sets the mode on this display"),
         "nothing is outstanding in front of the first frame"
     );
     assert!(
         scanout
-            .present(&device, &mut *commit, &pixels, &cursor)
+            .present(&device, &mut *commit, &pixels, &whole(), &cursor)
             .expect("the driver accepts the first flip"),
         "a modeset leaves no flip on its way, so the frame after it is flipped rather than declined"
     );
     assert!(
         !scanout
-            .present(&device, &mut *commit, &pixels, &cursor)
+            .present(&device, &mut *commit, &pixels, &whole(), &cursor)
             .expect("a refused frame is not an error"),
         "a third frame before the completion is declined rather than written over the buffer \
          that is still on screen"
@@ -251,7 +261,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     // once.
     assert!(
         scanout
-            .present(&device, &mut *commit, &pixels, &cursor)
+            .present(&device, &mut *commit, &pixels, &whole(), &cursor)
             .expect("the driver accepts the second flip"),
         "the completion freed the other buffer"
     );
@@ -279,7 +289,7 @@ fn a_rendered_frame_reaches_a_display_and_the_flip_reports_back() {
     // another session's. A display that kept waiting would decline every frame from here on.
     assert!(
         scanout
-            .present(&device, &mut *commit, &pixels, &cursor)
+            .present(&device, &mut *commit, &pixels, &whole(), &cursor)
             .expect("the driver accepts the flip after the mode was set again"),
         "the display is taking frames again"
     );
