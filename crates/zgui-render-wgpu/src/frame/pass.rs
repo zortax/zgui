@@ -86,11 +86,41 @@ impl Recorder<'_> {
         segments: &[Segment],
     ) -> Recorded {
         let mut recorded = Recorded::default();
-        for segment in segments {
-            match segment {
-                Segment::Encoder(op) => self.run(encoder, *op),
-                Segment::Pass(pass) => {
-                    self.record_pass(encoder, plan, pass, &mut recorded);
+        let mut index = 0;
+        while index < segments.len() {
+            match &segments[index] {
+                Segment::Encoder(op) => {
+                    self.run(encoder, *op);
+                    index += 1;
+                }
+                Segment::Pass(first) => {
+                    // A damage rectangle is planned as a pass of its own, and on a frame that
+                    // changed many places that is many passes over one attachment differing in
+                    // nothing but their scissor. Opening a render pass is not free — on the driver
+                    // this was measured against it costs about 140 microseconds, so a frame with
+                    // forty-eight of them spends most of its time opening them — and none of that
+                    // buys anything here, because what separates the rectangles is the scissor and
+                    // a scissor can be set inside one pass as often as one likes.
+                    //
+                    // So a run of passes that agree on everything else is opened once. A pass that
+                    // *discards* its attachment breaks the run: that clear covers the whole
+                    // attachment however the scissor is set, so folding it into the pass before it
+                    // would throw away what that one had just drawn.
+                    let mut end = index + 1;
+                    while let Some(Segment::Pass(next)) = segments.get(end) {
+                        if !shares_a_pass(first, next) {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    let run = segments[index..end]
+                        .iter()
+                        .filter_map(|segment| match segment {
+                            Segment::Pass(pass) => Some(pass),
+                            Segment::Encoder(_) | Segment::Round(_) => None,
+                        });
+                    self.record_pass(encoder, plan, run, &mut recorded);
+                    index = end;
                 }
                 Segment::Round(_) => {}
             }
@@ -142,20 +172,34 @@ impl Recorder<'_> {
         }
     }
 
-    /// Opens one pass and issues its draws.
-    fn record_pass(
+    /// Opens one pass for a run of planned passes that share it, and issues all their draws.
+    ///
+    /// Every planned pass in `run` writes the same attachment under the same globals, so what
+    /// distinguishes them is the scissor — set again before each one's draws.
+    fn record_pass<'a>(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         plan: &FramePlan,
-        planned: &PlannedPass,
+        run: impl Iterator<Item = &'a PlannedPass> + Clone,
         recorded: &mut Recorded,
     ) {
+        let Some(planned) = run.clone().next() else {
+            return;
+        };
+        // Nothing to draw into, which the attachment below would find for itself — asked here
+        // because the run's own emptiness check comes first and would otherwise open nothing.
+        if self.view(planned.target).is_none() {
+            return;
+        }
         let Some(format) = self.format(planned.target) else {
             return;
         };
         let extent = self.extent(planned.target);
-        let scissor = scaled(planned.scissor, planned.target, extent);
-        if scissor.is_empty() || self.view(planned.target).is_none() {
+        // Every scissor of the run is empty, so the whole run draws nothing anywhere.
+        if run
+            .clone()
+            .all(|held| scaled(held.scissor, held.target, extent).is_empty())
+        {
             return;
         }
         // Taken only for a pass that opens, because a query nothing writes would resolve to noise.
@@ -196,22 +240,28 @@ impl Recorder<'_> {
             0.0,
             1.0,
         );
-        pass.set_scissor_rect(
-            scissor.origin.x.max(0) as u32,
-            scissor.origin.y.max(0) as u32,
-            scissor.size.width.max(0) as u32,
-            scissor.size.height.max(0) as u32,
-        );
         let mut pass = BoundPass::new(pass);
         let tables = self
             .buffers
             .frame_bind_group(self.gpu, self.pipelines.layouts());
-        for draw in plan.draws_of(planned) {
-            let issued = self.issue(&mut pass, planned, tables.as_ref(), draw, format);
-            if issued {
-                recorded.draw_calls += 1;
-            } else {
-                recorded.dropped += 1;
+        for planned in run {
+            let scissor = scaled(planned.scissor, planned.target, extent);
+            if scissor.is_empty() {
+                continue;
+            }
+            pass.set_scissor_rect(
+                scissor.origin.x.max(0) as u32,
+                scissor.origin.y.max(0) as u32,
+                scissor.size.width.max(0) as u32,
+                scissor.size.height.max(0) as u32,
+            );
+            for draw in plan.draws_of(planned) {
+                let issued = self.issue(&mut pass, planned, tables.as_ref(), draw, format);
+                if issued {
+                    recorded.draw_calls += 1;
+                } else {
+                    recorded.dropped += 1;
+                }
             }
         }
     }
@@ -734,6 +784,14 @@ impl<'pass> BoundPass<'pass> {
         }
     }
 
+    /// Sets the scissor the draws that follow are cut to.
+    ///
+    /// Not cached: it is the one thing that differs between the planned passes of a run, so a set
+    /// of it is the reason the run could be folded into one pass at all.
+    fn set_scissor_rect(&mut self, x: u32, y: u32, width: u32, height: u32) {
+        self.pass.set_scissor_rect(x, y, width, height);
+    }
+
     /// Binds `group` at `index` with `offsets`, unless the same group and offset are bound there.
     fn set_bind_group(&mut self, index: u32, group: &wgpu::BindGroup, offsets: &[u32]) {
         debug_assert!(
@@ -836,9 +894,22 @@ fn decode_texture(packed: u32) -> zgui_atlas::TextureId {
     zgui_atlas::TextureId::new(kind, packed & 0xffff)
 }
 
+/// Whether `next` can be issued inside the pass `first` opens.
+///
+/// It can when the two write the same attachment under the same globals and `next` keeps what is
+/// there. A pass that discards cannot join one: its clear covers the whole attachment whatever the
+/// scissor says, so it would throw away everything drawn before it in that pass.
+fn shares_a_pass(first: &PlannedPass, next: &PlannedPass) -> bool {
+    first.target == next.target
+        && first.globals == next.globals
+        && matches!(next.load, PassLoad::Keep)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{clamp_copy, decode_texture};
+    use super::{clamp_copy, decode_texture, shares_a_pass};
+    use crate::frame::segment::{PassLoad, PlannedPass};
+    use crate::frame::target::TargetRef;
     use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
     use zgui_geom::{Point, Rect, Size};
     use zgui_scene::SpriteTile;
@@ -898,5 +969,80 @@ mod tests {
             Size::new(40, 40),
         );
         assert_eq!((read, write), (Rect::ZERO, Rect::ZERO));
+    }
+
+    /// A planned pass over the composed target, as a damage rectangle is planned.
+    fn planned(scissor: Rect<i32, zgui_geom::Device>, load: PassLoad, globals: u32) -> PlannedPass {
+        PlannedPass {
+            target: TargetRef::Composed,
+            load,
+            scissor,
+            globals,
+            draws: 0..1,
+        }
+    }
+
+    #[test]
+    fn the_passes_of_scattered_damage_rectangles_are_one_run() {
+        // The case the coalescing exists for: a frame that changed several places plans a pass per
+        // place, and they differ in nothing but their scissor. Opening one costs about 140
+        // microseconds, and a scissor can be set inside one pass as often as one likes.
+        let first = planned(
+            Rect::new(Point::new(0, 0), Size::new(16, 16)),
+            PassLoad::Keep,
+            0,
+        );
+        for away in [Point::new(64, 0), Point::new(0, 64), Point::new(900, 700)] {
+            let next = planned(Rect::new(away, Size::new(16, 16)), PassLoad::Keep, 0);
+            assert!(
+                shares_a_pass(&first, &next),
+                "a rectangle at {away:?} differs from the first only in its scissor"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pass_that_discards_its_attachment_breaks_the_run() {
+        // The one rule that keeps this exact. A discard clears the whole attachment however the
+        // scissor is set, so folding it into the pass before it would throw away what that pass
+        // had just drawn.
+        let first = planned(
+            Rect::new(Point::new(0, 0), Size::new(16, 16)),
+            PassLoad::Keep,
+            0,
+        );
+        let discarding = planned(
+            Rect::new(Point::new(64, 0), Size::new(16, 16)),
+            PassLoad::Discard,
+            0,
+        );
+        assert!(!shares_a_pass(&first, &discarding));
+    }
+
+    #[test]
+    fn a_run_does_not_cross_an_attachment_or_a_change_of_globals() {
+        // Both are properties of the pass rather than of the rectangle, and neither can be set
+        // again inside one: the attachment is what the pass was opened on, and the globals are
+        // bound with it.
+        let first = planned(
+            Rect::new(Point::new(0, 0), Size::new(16, 16)),
+            PassLoad::Keep,
+            0,
+        );
+        let elsewhere = PlannedPass {
+            target: TargetRef::MarksPage(0),
+            ..planned(
+                Rect::new(Point::new(64, 0), Size::new(16, 16)),
+                PassLoad::Keep,
+                0,
+            )
+        };
+        assert!(!shares_a_pass(&first, &elsewhere), "another attachment");
+        let rescaled = planned(
+            Rect::new(Point::new(64, 0), Size::new(16, 16)),
+            PassLoad::Keep,
+            1,
+        );
+        assert!(!shares_a_pass(&first, &rescaled), "other globals");
     }
 }
