@@ -4,7 +4,9 @@ use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
 use zgui_profile::{Counter, counter};
 use zgui_render::ExternalTexture;
-use zgui_scene::{BackdropFilter, Batch, Filter, GroupBoundary, MarkPlan, PrimitiveKind, Scene};
+use zgui_scene::{
+    BackdropFilter, Batch, Filter, GroupBoundary, MarkPlan, OpaqueCover, PrimitiveKind, Scene,
+};
 
 use crate::filter::chain::Chain;
 use crate::filter::{self, Filtered};
@@ -91,6 +93,9 @@ pub fn plan_segments(
     } else {
         backdrop_reach(scene, &batches)
     };
+    // What this frame replaces outright, which is what decides whether a rectangle needs erasing.
+    let mut opaque = Vec::new();
+    scene.opaque_covers(&mut opaque);
     for rect in rects {
         plan_rect(
             &mut builder,
@@ -98,6 +103,7 @@ pub fn plan_segments(
             &batches,
             &nested,
             marks,
+            &opaque,
             rect,
             used,
             externals,
@@ -238,6 +244,7 @@ fn plan_rect(
     batches: &[Reached],
     nested: &[i32],
     marks: &MarkPlan,
+    opaque: &[OpaqueCover],
     rect: Rect<i32, Device>,
     used: Rect<i32, Device>,
     externals: &dyn Fn(zgui_scene::ExternalTextureId) -> Option<ExternalTexture>,
@@ -250,12 +257,32 @@ fn plan_rect(
     let mut depth = 0usize;
 
     builder.begin_pass(current, scissor);
-    // The rectangle is about to be redrawn, so what is in it goes first. It is a draw because a
-    // render pass clears its whole attachment or none of it, and clearing all of it would throw
-    // away every pixel this frame is relying on not having to redraw.
-    builder.draw(PlannedDraw::Clear);
+    // Where something the frame draws replaces every pixel of the rectangle by itself — a page
+    // background under a moving box is the ordinary case — that fill is where the replay starts.
+    // Everything before it is hidden by it: the erasure, and every primitive under it.
+    //
+    // The latest such fill, because a later one hides more.
+    let hidden = opaque
+        .iter()
+        .filter(|cover| cover.rect.contains_rect(rect))
+        .max_by_key(|cover| cover.at);
+    // Nothing covers it, so what is in it goes first. It is a draw because a render pass clears
+    // its whole attachment or none of it, and clearing all of it would throw away every pixel this
+    // frame is relying on not having to redraw.
+    if hidden.is_none() {
+        builder.draw(PlannedDraw::Clear);
+    }
 
     for Reached { batch, reach } in batches {
+        // What the covering fill hides of this batch is not drawn. Quads are cut exactly, because
+        // the fill is one of them; a batch of another kind goes whole or not at all.
+        let cut = hidden.map_or_else(
+            || Some(batch.clone()),
+            |cover| scene.behind(batch.clone(), cover),
+        );
+        let Some(batch) = cut.as_ref() else {
+            continue;
+        };
         match *batch {
             Batch::Group(index) => {
                 let Some(boundary) = scene.primitives.groups.get(index) else {

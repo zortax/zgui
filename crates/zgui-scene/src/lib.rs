@@ -127,7 +127,9 @@ pub use crate::prim::{
 };
 pub use crate::resource::{ResourceGeneration, ResourceKey, ResourceKind, ResourceRegistry};
 pub use crate::scene::resolve::Settle;
-pub use crate::scene::{ChunkNote, ChunkPrims, ChunkSlot, Scene, SpatialFault, TableHolds};
+pub use crate::scene::{
+    ChunkNote, ChunkPrims, ChunkSlot, OpaqueCover, Scene, SpatialFault, TableHolds,
+};
 pub use crate::shader::{
     FrameClock, MAX_PARAMS_BYTES, ShaderDeclaration, ShaderField, ShaderId, ShaderMode,
     ShaderParams, ShaderParamsSlot, ShaderParamsTable, ShaderReads, declare_shader, property,
