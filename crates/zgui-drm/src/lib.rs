@@ -51,6 +51,8 @@ pub mod property;
 #[cfg(target_os = "linux")]
 pub mod resources;
 #[cfg(target_os = "linux")]
+pub mod sync;
+#[cfg(target_os = "linux")]
 mod sys;
 
 #[cfg(target_os = "linux")]
