@@ -77,7 +77,7 @@ fn main() -> ExitCode {
     let outcome = match command {
         Command::Ci { hosted } => ci::run(&root, hosted),
         Command::Lint => lint::run(&root),
-        Command::WallClock => wall_clock::run(&root),
+        Command::WallClock => wall_clock::run(&root, false),
         Command::Perf => perf::run(&root),
         Command::PerfPacing { size, seconds } => perf::pacing(&root, &size, seconds),
         Command::Growth => growth::run(&root),
