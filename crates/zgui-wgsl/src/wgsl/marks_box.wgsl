@@ -19,7 +19,7 @@ fn box_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
         to_space(item, vec2<f32>(prim.rect.x, prim.rect.y)) - margin,
         to_space(item, vec2<f32>(prim.rect.z, prim.rect.w)) + margin,
     );
-    var out = mark_corner(vertex, bounds, item, found.shift, coverage);
+    var out = mark_corner(vertex, bounds, item, shift_of(found), coverage);
     out.slot = found.slot;
     out.prim = instance;
     return out;

@@ -8,19 +8,13 @@
 // Full-colour sprites: emoji, and decoded images.
 
 @group(1) @binding(0) var<storage, read> sprites: array<ColorSprite>;
-// The draw-order permutation: the instance array keeps push order, and a draw's instance
-// range walks this list.
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 @vertex
 fn vs_color_sprite(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) instance: u32,
+    @location(0) slot: u32,
+    @location(1) shift: vec2<f32>,
 ) -> ColorSpriteVarying {
-    let packed = remap[instance];
-    let slot = packed & REMAP_SLOT_MASK;
-    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let sprite = sprites[slot];
     let corner = unit_corner(vertex);
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;

@@ -10,7 +10,7 @@ fn disc_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     // The quad holds a square of half side `outer` as well as a disc.
     let reach = disc.z + margin_space(item);
     let bounds = vec4<f32>(centre - vec2<f32>(reach), centre + vec2<f32>(reach));
-    var out = mark_corner(vertex, bounds, item, found.shift, coverage);
+    var out = mark_corner(vertex, bounds, item, shift_of(found), coverage);
     out.slot = found.slot;
     out.prim = instance;
     return out;

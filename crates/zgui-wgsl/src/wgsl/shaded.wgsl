@@ -27,8 +27,6 @@ struct ShadedQuad {
 }
 
 @group(1) @binding(0) var<storage, read> shaded: array<ShadedQuad>;
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 // One effect's parameters: the framework's half, then the application's own structure.
 //
@@ -58,11 +56,9 @@ struct ShadedVarying {
 @vertex
 fn vs_shaded(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) instance: u32,
+    @location(0) slot: u32,
+    @location(1) shift: vec2<f32>,
 ) -> ShadedVarying {
-    let packed = remap[instance];
-    let slot = packed & REMAP_SLOT_MASK;
-    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let quad = shaded[slot];
     let local = inflated_corner(vertex, quad.bounds) + shift;
     var out: ShadedVarying;

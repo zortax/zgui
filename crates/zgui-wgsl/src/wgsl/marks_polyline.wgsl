@@ -29,7 +29,7 @@ fn segment_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     let corner = unit_corner(vertex);
     let lengthwise = select(a - direction * reach, b + direction * reach, corner.x > 0.5);
     let q = lengthwise + normal * select(-reach, reach, corner.y > 0.5);
-    out = mark_point(q, item, found.shift, coverage);
+    out = mark_point(q, item, shift_of(found), coverage);
     out.slot = found.slot;
     out.prim = instance;
     out.caps = segment_caps(instance, item.flags);

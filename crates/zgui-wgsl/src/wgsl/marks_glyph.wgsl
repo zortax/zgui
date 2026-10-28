@@ -50,7 +50,7 @@ fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
     let record = mark_glyphs[instance];
     let base = instance - record.w;
     let anchor = mark_axes(item) * bitcast<vec2<f32>>(record.xy)
-        + vec2<f32>(item.origin.x, item.origin.y) + found.shift;
+        + vec2<f32>(item.origin.x, item.origin.y) + shift_of(found);
     let matrix = load_spatial(item.transform);
     let world = matrix * vec4<f32>(anchor, 0.0, 1.0);
     let split = glyph_phase(world.xy / world.w);
@@ -83,7 +83,7 @@ fn glyph_corner(vertex: u32, instance: u32, coverage: bool) -> GlyphVarying {
     }
     out.local = inverse * (device - matrix[3].xy);
     out.slot = found.slot;
-    out.shift = found.shift;
+    out.shift = shift_of(found);
     out.corner = corner;
     out.cell = vec4<i32>(
         i32(entry.x & 0xffffu),

@@ -8,7 +8,8 @@ use crate::bind::globals::Globals;
 use bytemuck::Pod;
 
 use crate::bind::tables::{DirtySlots, PreparedTables};
-use crate::buffer::instances::StorageBuffer;
+use crate::buffer::instances::OrderBuffer;
+use crate::buffer::persist::OrderEntry;
 use crate::buffer::persist::{LANES, PAYLOAD_LANES};
 use crate::buffer::slots::SlotBuffer;
 use crate::buffer::tables::TableTexture;
@@ -56,18 +57,17 @@ pub struct FrameBuffers {
     /// The persistent chunk arenas the six instanced pipelines draw out of, and the residence
     /// over them.
     pub chunks: crate::buffer::persist::ChunkStore,
-    /// The resolved remap of each instanced kind — packed offset-and-slot entries in draw order.
-    pub remaps: [StorageBuffer; LANES.len()],
-    /// What each remap buffer holds, so an unchanged frame skips the upload entirely.
-    last_remaps: [Vec<u32>; LANES.len()],
-    /// The frame's chunk offsets, named by the high bits of a remap entry.
-    offsets: StorageBuffer,
-    /// What the offsets buffer holds, so a frame that moved nothing skips the upload.
-    last_offsets: Vec<[f32; 2]>,
+    /// The resolved draw order of each instanced kind, as the vertex stream carries it.
+    pub orders: [OrderBuffer; LANES.len()],
+    /// What each order buffer holds, so an unchanged frame skips the upload entirely.
+    last_orders: [Vec<OrderEntry>; LANES.len()],
     /// Bind groups whose resources are the stable frame side-table buffers.
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
-    /// One bind group per lane, keyed by its instance, remap and offset allocation epochs.
-    instance_binds: RefCell<[Keyed<3>; LANES.len()]>,
+    /// One bind group per lane, keyed by its arena's and its order's allocation epochs.
+    ///
+    /// Two epochs, where there were three: the chunk offsets are resolved into the order stream
+    /// on the host, so nothing binds them any more.
+    instance_binds: RefCell<[Keyed<2>; LANES.len()]>,
     /// One bind group per mark payload kind, keyed by its block and payload allocation epochs.
     mark_binds: RefCell<[Keyed<2>; PAYLOAD_LANES]>,
     /// The bind groups draws read a block, a texture and a sampler through.
@@ -108,19 +108,17 @@ impl FrameBuffers {
             stops: TableTexture::new(gpu, "zgui.stops"),
             spatial: TableTexture::new(gpu, "zgui.spatial"),
             chunks: crate::buffer::persist::ChunkStore::new(gpu),
-            remaps: [
-                StorageBuffer::new(gpu, "zgui.remap.quads"),
-                StorageBuffer::new(gpu, "zgui.remap.shadows"),
-                StorageBuffer::new(gpu, "zgui.remap.decorations"),
-                StorageBuffer::new(gpu, "zgui.remap.mono_sprites"),
-                StorageBuffer::new(gpu, "zgui.remap.subpixel_sprites"),
-                StorageBuffer::new(gpu, "zgui.remap.color_sprites"),
-                StorageBuffer::new(gpu, "zgui.remap.shaded"),
-                StorageBuffer::new(gpu, "zgui.remap.marks"),
+            orders: [
+                OrderBuffer::new(gpu, "zgui.order.quads"),
+                OrderBuffer::new(gpu, "zgui.order.shadows"),
+                OrderBuffer::new(gpu, "zgui.order.decorations"),
+                OrderBuffer::new(gpu, "zgui.order.mono_sprites"),
+                OrderBuffer::new(gpu, "zgui.order.subpixel_sprites"),
+                OrderBuffer::new(gpu, "zgui.order.color_sprites"),
+                OrderBuffer::new(gpu, "zgui.order.shaded"),
+                OrderBuffer::new(gpu, "zgui.order.marks"),
             ],
-            last_remaps: Default::default(),
-            offsets: StorageBuffer::new(gpu, "zgui.remap.offsets"),
-            last_offsets: Vec::new(),
+            last_orders: Default::default(),
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::default(),
             mark_binds: RefCell::default(),
@@ -180,24 +178,16 @@ impl FrameBuffers {
         uploaded += self
             .chunks
             .upload_frame(gpu, &mut self.uploader, encoder, scene);
-        for (lane, buffer) in self.remaps.iter_mut().enumerate() {
-            let resolved = self.chunks.resolved_remap(lane);
+        for (lane, buffer) in self.orders.iter_mut().enumerate() {
+            let resolved = self.chunks.resolved_order(lane);
             // A frame whose visible set and residence held still resolves to the same list — a
             // blink, an animation elsewhere — and owes the buffer nothing.
-            if resolved == self.last_remaps[lane].as_slice() {
+            if resolved == self.last_orders[lane].as_slice() {
                 continue;
             }
             uploaded += buffer.upload(gpu, &mut self.uploader, encoder, resolved);
-            self.last_remaps[lane].clear();
-            self.last_remaps[lane].extend_from_slice(resolved);
-        }
-        let offsets = self.chunks.frame_offsets();
-        if offsets != self.last_offsets.as_slice() {
-            uploaded += self
-                .offsets
-                .upload(gpu, &mut self.uploader, encoder, offsets);
-            self.last_offsets.clear();
-            self.last_offsets.extend_from_slice(offsets);
+            self.last_orders[lane].clear();
+            self.last_orders[lane].extend_from_slice(resolved);
         }
         uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
@@ -443,7 +433,7 @@ impl FrameBuffers {
             + self.stops.capacity()
             + self.spatial.capacity()
             + self.chunks.bytes()
-            + self.remaps.iter().map(StorageBuffer::capacity).sum::<u64>()
+            + self.orders.iter().map(OrderBuffer::capacity).sum::<u64>()
             + self.uploader.bytes()
     }
 
@@ -457,9 +447,9 @@ impl FrameBuffers {
         freed += self.spatial.shrink(gpu);
         self.tables_released = true;
         freed += self.chunks.release(gpu);
-        for (lane, remap) in self.remaps.iter_mut().enumerate() {
-            freed += remap.shrink(gpu);
-            self.last_remaps[lane].clear();
+        for (lane, order) in self.orders.iter_mut().enumerate() {
+            freed += order.shrink(gpu);
+            self.last_orders[lane].clear();
         }
         freed += self.uploader.release_idle();
         *self.frame_bind.borrow_mut() = None;
@@ -535,12 +525,8 @@ impl FrameBuffers {
         layouts: &Layouts,
         lane: usize,
     ) -> Option<wgpu::BindGroup> {
-        let remap = self.remaps.get(lane)?;
-        let signature = [
-            self.chunks.generation(lane),
-            remap.generation(),
-            self.offsets.generation(),
-        ];
+        let order = self.orders.get(lane)?;
+        let signature = [self.chunks.generation(lane), order.generation()];
         if let Some((held, bind)) = self.instance_binds.borrow().get(lane)?
             && *held == signature
         {
@@ -556,11 +542,7 @@ impl FrameBuffers {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: remap.binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.offsets.binding(),
+                    resource: order.binding(),
                 },
             ],
         });

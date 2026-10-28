@@ -83,10 +83,12 @@ impl Layouts {
             }),
             instances: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.instances"),
-                // The instances, the remap list the shader reads them through — the array keeps
-                // push order, and the sorted list beside it is the draw order — and the frame's
-                // chunk offsets, named by the remap entries' high bits.
-                entries: &[storage(0), storage(1), storage(2)],
+                // The instance arena, which keeps push order, and the draw order beside it. The
+                // order is vertex input for every lane but one, so this binding of it is for the
+                // mark lane alone: a mark's draw names its position in the order rather than its
+                // instance index, and indexing needs the stream bound. The chunk offsets that
+                // used to be a third binding are resolved into the order on the host.
+                entries: &[storage(0), storage(1)],
             }),
             sampled: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.sampled"),
