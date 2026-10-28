@@ -73,7 +73,21 @@ impl StyleEngine {
     /// Returns what the pass did: how many elements it styled, how many of those it matched
     /// against the rule set rather than merely cascading again, and how many were given an
     /// obligation as a result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pool` is wider than [`zgui_css::MAX_STYLE_THREADS`]. The engine keeps a fixed
+    /// number of per-worker slots, and a wider pool would index past them only when a worker past
+    /// the last slot takes a job. The check makes that failure the same on every machine.
     pub fn restyle(&mut self, document: &mut Document, pool: Option<&StylePool>) -> Restyle {
+        if let Some(pool) = pool {
+            assert!(
+                pool.width() <= zgui_css::MAX_STYLE_THREADS,
+                "a style pool of {} workers is wider than the {} the engine supports",
+                pool.width(),
+                zgui_css::MAX_STYLE_THREADS
+            );
+        }
         self.text_paint_updates.clear();
         self.refreshed_animations.clear();
         if !self.needs_restyle(document) {
