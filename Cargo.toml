@@ -245,6 +245,12 @@ bindgen = "0.72"
 # no feature set to state — the crate has none.
 libloading = "0.8"
 
+# EGL, named where a buffer has to cross between the graphics device and the display controller on
+# a machine with no Vulkan. EGL appears in the manifest and the lock file, unlike a library reached
+# with `dlopen`, so naming it here is the whole record of what a run needs. The version is the one
+# wgpu-hal links, because the display a copier makes is the one wgpu's GL backend already holds.
+khronos-egl = { version = "6.0", features = ["dynamic"] }
+
 # --- test and benchmark tooling ----------------------------------------------------------------
 proptest = "1.11"
 criterion = "0.8"

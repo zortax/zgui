@@ -6320,6 +6320,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-scanout"
+version = "0.1.0"
+dependencies = [
+ "khronos-egl",
+ "rustix 1.1.4",
+ "zgui-gbm",
+]
+
+[[package]]
 name = "zgui-scene"
 version = "0.1.0"
 dependencies = [

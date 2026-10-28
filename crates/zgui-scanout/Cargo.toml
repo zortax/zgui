@@ -1,0 +1,39 @@
+[package]
+name = "zgui-scanout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+#
+# Copying between the buffers a display scans out of, and nothing about this framework. It names no
+# zgui crate, so it is a library that happens to live here rather than a layer of the product: what
+# depends on it is `zgui-platform-drm`, one step along the same layer, and a Wayland platform would
+# be the second.
+#
+# EGL and libgbm are opened at run time, so no build here reaches a library or a header. The code
+# still names file descriptors, which `std::os::fd` only has on a Unix host, so the crate is empty
+# anywhere else and its dependencies are not fetched there either.
+[target.'cfg(target_os = "linux")'.dependencies]
+# The EGL display this crate's context is made over, and every call into it. EGL appears in the
+# manifest and the lock file, unlike a library reached with `dlopen`, so naming it here is the whole
+# record of what a run needs.
+khronos-egl.workspace = true
+# libgbm, for the allocator an EGL display over `EGL_PLATFORM_GBM_KHR` is made from. Opened by that
+# crate and by no other, which is why this one does not name `libloading`.
+zgui-gbm = { path = "../zgui-gbm", version = "0.1.0" }
+# The `poll` a copier's own thread waits on a fence descriptor with, where the driver exports one.
+rustix.workspace = true
+
+# The hardware test allocates its own buffers to copy between, and reads them back. Neither is
+# anything the crate itself does.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# The buffers the hardware test copies between are allocated with the same crate the copier makes
+# its display over.
+zgui-gbm = { path = "../zgui-gbm", version = "0.1.0" }
+# The test maps a buffer to fill it and to count what a copy moved, through the dma-buf rather than
+# through `gbm_bo_map`, which faults inside the driver on the hardware this was written for.
+rustix.workspace = true
+
+[lints]
+workspace = true
