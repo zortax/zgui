@@ -108,7 +108,7 @@ fn item_of(position: u32) -> MarkRef {
 // the transform's linear part. A quad grown by this much in every direction holds the whole
 // antialiased edge under any scale or turn.
 fn margin_local(transform: u32) -> f32 {
-    let matrix = spatial[transform].matrix;
+    let matrix = load_spatial(transform);
     return margin_of(matrix[0].xy, matrix[1].xy);
 }
 
@@ -152,14 +152,14 @@ fn margin_space(item: MarkItem) -> f32 {
     if is_screen(item) {
         return margin_local(item.transform);
     }
-    let matrix = spatial[item.transform].matrix;
+    let matrix = load_spatial(item.transform);
     let linear = mat2x2<f32>(matrix[0].xy, matrix[1].xy) * mark_axes(item);
     return margin_of(linear[0], linear[1]);
 }
 
 // A point in the item's space, on the device and moved by `shift`, in the target's clip space.
 fn to_target(local: vec2<f32>, transform: u32, shift: vec2<f32>) -> vec4<f32> {
-    let world = spatial[transform].matrix * vec4<f32>(local, 0.0, 1.0);
+    let world = load_spatial(transform) * vec4<f32>(local, 0.0, 1.0);
     let device = world.xy / world.w + shift;
     let texel = (device - globals.origin.xy) * globals.viewport.zw;
     return vec4<f32>(

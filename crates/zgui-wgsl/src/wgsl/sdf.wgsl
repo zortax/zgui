@@ -122,31 +122,31 @@ fn outside_bounds(point: vec2<f32>, b: Bounds) -> bool {
 fn clip_coverage(point: vec2<f32>, clip_id: u32) -> f32 {
     // The intersection rectangle is a hard edge: it is an axis-aligned box in device space, and
     // antialiasing it would bleed content one pixel outside a scrollport.
-    if outside_bounds(point, clips[clip_id].aabb) {
+    if outside_bounds(point, clip_aabb(clip_id)) {
         return 0.0;
     }
     // The kept links are tested in their own system, which only translates: the point moves
     // back by that translation.
     var first = point;
     var second = point;
-    let space = clips[clip_id].space;
+    let space = clip_space(clip_id);
     if space != NO_SPACE {
-        let kept = point - spatial[space].matrix[3].xy;
-        if outside_bounds(kept, clips[clip_id].kept_aabb) {
+        let kept = point - load_spatial(space)[3].xy;
+        if outside_bounds(kept, clip_kept_aabb(clip_id)) {
             return 0.0;
         }
-        let tests = clips[clip_id].kept_tests;
+        let tests = clip_kept_tests(clip_id);
         first = select(point, kept, (tests & 1u) != 0u);
         second = select(point, kept, (tests & 2u) != 0u);
     }
-    let count = clips[clip_id].count;
+    let count = clip_count(clip_id);
     var coverage = 1.0;
     if count > 0u {
-        let test = clips[clip_id].first;
+        let test = clip_rounded(clip_id, 0u);
         coverage *= rect_coverage(first, test.rect, test.radii, test.shape);
     }
     if count > 1u {
-        let test = clips[clip_id].second;
+        let test = clip_rounded(clip_id, 1u);
         coverage *= rect_coverage(second, test.rect, test.radii, test.shape);
     }
     return coverage;

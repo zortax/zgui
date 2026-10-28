@@ -136,7 +136,7 @@ pub fn structures(module: Module) -> Vec<Reflected> {
             GpuClip,
             "Clip",
             [
-                aabb, first, second, count, space, kept_aabb, kept_tests, pad
+                aabb, first, second, kept_aabb, count, space, kept_tests, pad
             ]
         ),
         reflected!(

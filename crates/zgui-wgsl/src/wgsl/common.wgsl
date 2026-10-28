@@ -117,6 +117,8 @@ struct Rounded {
     radii: Radii,
     // The superellipse exponent the corners are cut with; two is the ellipse.
     shape: f32,
+    // Written zero. Carries the structure to four whole texels; see `buffer::tables`.
+    pad: Vector3,
 }
 
 // A whole clip chain, flattened into what one draw call applies.
@@ -128,11 +130,12 @@ struct Clip {
     aabb: Bounds,
     first: Rounded,
     second: Rounded,
+    // The intersection of the kept links, in the kept system's coordinates. Ahead of the scalars
+    // so that it, like every other composite field, begins on a texel boundary.
+    kept_aabb: Bounds,
     count: u32,
     // The slot of the kept coordinate system, or NO_SPACE when every link is on the device.
     space: u32,
-    // The intersection of the kept links, in the kept system's coordinates.
-    kept_aabb: Bounds,
     // Bit 0 for `first`, bit 1 for `second`: set when the test is in the kept system.
     kept_tests: u32,
     pad: u32,
@@ -174,10 +177,102 @@ struct Spatial {
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var<storage, read> clips: array<Clip>;
-@group(0) @binding(2) var<storage, read> paints: array<Paint>;
-@group(0) @binding(3) var<storage, read> stops: array<Stop>;
-@group(0) @binding(4) var<storage, read> spatial: array<Spatial>;
+@group(0) @binding(1) var clips: texture_2d<u32>;
+// Three side tables, as `rgba32uint` textures rather than storage buffers. Storage buffers arrive
+// in OpenGL 4.3 and OpenGL ES 3.1, so a GL 3.3 context has none; a texture read one texel at a
+// time gives the same random access on every device. Each of these three records is a whole number
+// of texels — Paint and Spatial four, Stop two — so a record never straddles a texel.
+@group(0) @binding(2) var paints: texture_2d<u32>;
+@group(0) @binding(3) var stops: texture_2d<u32>;
+@group(0) @binding(4) var spatial: texture_2d<u32>;
+
+/// How many texels wide every table is. `buffer::tables::TEXELS_WIDE` is the same number.
+const TABLE_TEXELS_WIDE: u32 = 256u;
+
+/// Where texel `index` of a table is.
+fn table_texel(index: u32) -> vec2<i32> {
+    return vec2<i32>(i32(index % TABLE_TEXELS_WIDE), i32(index / TABLE_TEXELS_WIDE));
+}
+
+fn texel_f32(t: vec4<u32>) -> vec4<f32> {
+    return vec4<f32>(bitcast<f32>(t.x), bitcast<f32>(t.y), bitcast<f32>(t.z), bitcast<f32>(t.w));
+}
+
+/// One coordinate system, which spans four texels.
+fn load_spatial(id: u32) -> mat4x4<f32> {
+    let base = id * 4u;
+    return mat4x4<f32>(
+        texel_f32(textureLoad(spatial, table_texel(base + 0u), 0)),
+        texel_f32(textureLoad(spatial, table_texel(base + 1u), 0)),
+        texel_f32(textureLoad(spatial, table_texel(base + 2u), 0)),
+        texel_f32(textureLoad(spatial, table_texel(base + 3u), 0)),
+    );
+}
+
+/// One paint, which spans four texels.
+fn load_paint(id: u32) -> Paint {
+    let base = id * 4u;
+    let t0 = textureLoad(paints, table_texel(base + 0u), 0);
+    let g = texel_f32(textureLoad(paints, table_texel(base + 1u), 0));
+    let c = texel_f32(textureLoad(paints, table_texel(base + 2u), 0));
+    let t3 = textureLoad(paints, table_texel(base + 3u), 0);
+    return Paint(
+        t0.x, t0.y, t0.z, t0.w,
+        Vector4(g.x, g.y, g.z, g.w),
+        Rgba(c.x, c.y, c.z, c.w),
+        t3.x, t3.y, t3.z, t3.w,
+    );
+}
+
+/// One clip spans eleven texels: the device box, the two rounded tests at four each, the kept box,
+/// then the scalars. Each field is fetched where it is used, so a chain with no kept part never
+/// reads one — the discipline the storage path keeps, in a form a GL 3.3 context can run.
+const CLIP_TEXELS: u32 = 11u;
+
+fn clip_aabb(id: u32) -> Bounds {
+    let t = texel_f32(textureLoad(clips, table_texel(id * CLIP_TEXELS + 0u), 0));
+    return Bounds(t.x, t.y, t.z, t.w);
+}
+
+/// Rounded test `which` — zero outermost, one innermost — which spans four texels.
+fn clip_rounded(id: u32, which: u32) -> Rounded {
+    let base = id * CLIP_TEXELS + 1u + which * 4u;
+    let r = texel_f32(textureLoad(clips, table_texel(base + 0u), 0));
+    let lo = texel_f32(textureLoad(clips, table_texel(base + 1u), 0));
+    let hi = texel_f32(textureLoad(clips, table_texel(base + 2u), 0));
+    let e = texel_f32(textureLoad(clips, table_texel(base + 3u), 0));
+    return Rounded(
+        Bounds(r.x, r.y, r.z, r.w),
+        Radii(lo.x, lo.y, lo.z, lo.w, hi.x, hi.y, hi.z, hi.w),
+        e.x,
+        Vector3(e.y, e.z, e.w),
+    );
+}
+
+fn clip_kept_aabb(id: u32) -> Bounds {
+    let t = texel_f32(textureLoad(clips, table_texel(id * CLIP_TEXELS + 9u), 0));
+    return Bounds(t.x, t.y, t.z, t.w);
+}
+
+fn clip_count(id: u32) -> u32 {
+    return textureLoad(clips, table_texel(id * CLIP_TEXELS + 10u), 0).x;
+}
+
+fn clip_space(id: u32) -> u32 {
+    return textureLoad(clips, table_texel(id * CLIP_TEXELS + 10u), 0).y;
+}
+
+fn clip_kept_tests(id: u32) -> u32 {
+    return textureLoad(clips, table_texel(id * CLIP_TEXELS + 10u), 0).z;
+}
+
+/// One gradient stop, which spans two texels.
+fn load_stop(id: u32) -> Stop {
+    let base = id * 2u;
+    let c = texel_f32(textureLoad(stops, table_texel(base + 0u), 0));
+    let r = texel_f32(textureLoad(stops, table_texel(base + 1u), 0));
+    return Stop(Vector4(c.x, c.y, c.z, c.w), r.x, Vector3(r.y, r.z, r.w));
+}
 
 const PAINT_NONE: u32 = 0u;
 const PAINT_SOLID: u32 = 1u;
@@ -223,7 +318,7 @@ fn unit_corner(vertex: u32) -> vec2<f32> {
 
 // A device-space point, transformed and projected into the current target's clip space.
 fn to_clip_position(point: vec2<f32>, spatial_id: u32) -> vec4<f32> {
-    let world = spatial[spatial_id].matrix * vec4<f32>(point, 0.0, 1.0);
+    let world = load_spatial(spatial_id) * vec4<f32>(point, 0.0, 1.0);
     let texel = (world.xy - globals.origin.xy * world.w) * globals.viewport.zw;
     let ndc = vec2<f32>(
         texel.x / globals.viewport.x * 2.0 - world.w,
