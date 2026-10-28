@@ -138,11 +138,21 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     let center = bounds_origin(casting) + half_size;
     let local = in.local;
     let center_to_point = local - center;
-    let corner = pick_corner_radii(center_to_point, radii_from_vec4(in.v_radii_lo, in.v_radii_hi));
+    let radii = radii_from_vec4(in.v_radii_lo, in.v_radii_hi);
+    let element_radii = radii_from_vec4(in.v_element_radii_lo, in.v_element_radii_hi);
+    let corner = pick_corner_radii(center_to_point, radii);
+
+    // An outer shadow paints nothing inside the box that casts it — the multiply at the end of
+    // this function says so, having already paid for the integral. Settled here instead, before
+    // four samples of two error functions and an exponential apiece.
+    let element_distance = quad_sdf(local, element, element_radii, in.v_blur_shape.y);
+    if in.v_clip_inset.y == 0u && element_distance <= -0.5 {
+        return vec4<f32>(0.0);
+    }
 
     var alpha: f32;
     if in.v_blur_shape.x <= 0.0 {
-        alpha = saturate(0.5 - quad_sdf(local, casting, radii_from_vec4(in.v_radii_lo, in.v_radii_hi), in.v_blur_shape.y));
+        alpha = saturate(0.5 - quad_sdf(local, casting, radii, in.v_blur_shape.y));
     } else {
         // The gaussian is negligible beyond three standard deviations, and the shape contributes
         // nothing outside its own extent, so the samples are spent only where the two overlap.
@@ -170,13 +180,11 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     if in.v_clip_inset.y != 0u {
         // An inset shadow is the complement of the blurred hole, clipped to the element it sits in.
         alpha = 1.0 - alpha;
-        let element_distance = quad_sdf(local, element, radii_from_vec4(in.v_element_radii_lo, in.v_element_radii_hi), in.v_blur_shape.y);
         alpha *= saturate(0.5 - element_distance);
     } else {
         // An outer shadow is never painted within the box that casts it. Behind a filled box the
         // difference cannot be seen, but a box with no fill of its own — a field that is a hole in
         // the page — would otherwise wear its own shadow as a wash over its whole interior.
-        let element_distance = quad_sdf(local, element, radii_from_vec4(in.v_element_radii_lo, in.v_element_radii_hi), in.v_blur_shape.y);
         alpha *= saturate(0.5 + element_distance);
     }
 
