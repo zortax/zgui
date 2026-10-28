@@ -123,10 +123,9 @@ impl InstanceTable {
 /// way — one entry an instance, already in draw order, and already uploaded every frame — and
 /// feeding it takes an indirection out of the vertex stage rather than adding one.
 ///
-/// It carries both usages because the data has both readers. The six per-instance pipelines fetch
-/// it as vertex input, one entry an instance. A mark cannot: its instances are its payload's items
-/// and its draw names its *position* in the order, so it indexes the same stream at an arbitrary
-/// place and needs random access. One buffer rather than two, so there is one source of truth.
+/// Seven lanes are fed this way, one entry an instance. The mark lane is fed from a table of its
+/// own instead: its instances are its payload's items and its draw names its *position* in the
+/// order, so it indexes rather than fetches, and this buffer holds nothing for it.
 #[derive(Debug)]
 pub struct OrderBuffer {
     /// The buffer.
@@ -185,11 +184,6 @@ impl OrderBuffer {
         self.buffer.slice(offset.min(self.capacity)..)
     }
 
-    /// The binding a bind group names, for the reader that indexes rather than fetches.
-    pub fn binding(&self) -> wgpu::BindingResource<'_> {
-        self.buffer.as_entire_binding()
-    }
-
     /// How many bytes it currently holds.
     pub fn capacity(&self) -> u64 {
         self.capacity
@@ -218,9 +212,7 @@ fn allocate_order(gpu: &Gpu, label: &'static str, size: u64) -> wgpu::Buffer {
     gpu.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size,
-        usage: wgpu::BufferUsages::VERTEX
-            | wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
 }

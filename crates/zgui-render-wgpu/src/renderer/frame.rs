@@ -8,9 +8,9 @@ use crate::bind::globals::Globals;
 use bytemuck::Pod;
 
 use crate::bind::tables::{DirtySlots, PreparedTables};
-use crate::buffer::instances::OrderBuffer;
+use crate::buffer::instances::{InstanceTable, OrderBuffer};
 use crate::buffer::persist::OrderEntry;
-use crate::buffer::persist::{LANES, PAYLOAD_LANES};
+use crate::buffer::persist::{LANES, MARKS_LANE, PAYLOAD_LANES};
 use crate::buffer::slots::SlotBuffer;
 use crate::buffer::tables::TableTexture;
 use crate::buffer::upload::UploadBelt;
@@ -59,6 +59,13 @@ pub struct FrameBuffers {
     pub chunks: crate::buffer::persist::ChunkStore,
     /// The resolved draw order of each instanced kind, as the vertex stream carries it.
     pub orders: [OrderBuffer; LANES.len()],
+    /// The mark lane's draw order, as a table it can index.
+    ///
+    /// The other lanes are fed the order as vertex input. A mark cannot be: its instances are its
+    /// payload's items and its draw names its *position* in the order, so it needs random access,
+    /// and a table is how a GL 3.3 context gives that. The mark lane's `orders` entry stays empty
+    /// for the same reason — nothing fetches it.
+    mark_order: InstanceTable,
     /// What each order buffer holds, so an unchanged frame skips the upload entirely.
     last_orders: [Vec<OrderEntry>; LANES.len()],
     /// Bind groups whose resources are the stable frame side-table buffers.
@@ -118,6 +125,7 @@ impl FrameBuffers {
                 OrderBuffer::new(gpu, "zgui.order.shaded"),
                 OrderBuffer::new(gpu, "zgui.order.marks"),
             ],
+            mark_order: InstanceTable::new(gpu, "zgui.mark_order"),
             last_orders: Default::default(),
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::default(),
@@ -185,7 +193,12 @@ impl FrameBuffers {
             if resolved == self.last_orders[lane].as_slice() {
                 continue;
             }
-            uploaded += buffer.upload(gpu, &mut self.uploader, encoder, resolved);
+            uploaded += if lane == MARKS_LANE {
+                self.mark_order
+                    .upload(gpu, &mut self.uploader, encoder, resolved)
+            } else {
+                buffer.upload(gpu, &mut self.uploader, encoder, resolved)
+            };
             self.last_orders[lane].clear();
             self.last_orders[lane].extend_from_slice(resolved);
         }
@@ -434,6 +447,7 @@ impl FrameBuffers {
             + self.spatial.capacity()
             + self.chunks.bytes()
             + self.orders.iter().map(OrderBuffer::capacity).sum::<u64>()
+            + self.mark_order.capacity()
             + self.uploader.bytes()
     }
 
@@ -525,8 +539,7 @@ impl FrameBuffers {
         layouts: &Layouts,
         lane: usize,
     ) -> Option<wgpu::BindGroup> {
-        let order = self.orders.get(lane)?;
-        let signature = [self.chunks.generation(lane), order.generation()];
+        let signature = [self.chunks.generation(lane), self.mark_order.generation()];
         if let Some((held, bind)) = self.instance_binds.borrow().get(lane)?
             && *held == signature
         {
@@ -542,7 +555,7 @@ impl FrameBuffers {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: order.binding(),
+                    resource: self.mark_order.binding(),
                 },
             ],
         });
