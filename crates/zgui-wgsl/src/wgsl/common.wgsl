@@ -378,10 +378,7 @@ fn inflated_offset(vertex: u32, b: Bounds) -> vec2<f32> {
     return unit_corner(vertex) * (bounds_size(b) + vec2<f32>(2.0)) - vec2<f32>(1.0);
 }
 
-// A resolved remap entry: the arena slot in the low bits, and above them the index of the frame
-// chunk offset the instance is drawn shifted by. The offsets are what let a chunk that merely
-// moved keep its resident bytes — the geometry shifts here, in the vertex stage, and a fragment
-// stage comparing against encode-space fields takes its sample point without the shift.
-// The widths mirror SLOT_BITS in buffer/persist.rs.
-const REMAP_SLOT_MASK: u32 = 0xFFFFFFu;
-const REMAP_OFFSET_SHIFT: u32 = 24u;
+// The chunk offsets that let a chunk which merely moved keep its resident bytes arrive resolved,
+// as the second attribute of the draw order: the geometry shifts here, in the vertex stage, and a
+// fragment stage comparing against encode-space fields takes its sample point without the shift.
+// The packing that once carried them, and the slot width it cost, are gone from both ends.

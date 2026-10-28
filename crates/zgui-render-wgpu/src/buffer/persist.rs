@@ -56,17 +56,24 @@ const fn payload_arena(kind: usize) -> usize {
     LANES.len() + kind
 }
 
-/// How many low bits of a resolved remap entry name the arena slot.
+/// One entry of a lane's draw order, as the vertex stream carries it.
 ///
-/// The bits above name an entry in the frame's offset table, which is how a chunk that merely
-/// moved keeps its residence: the resident bytes stay where they are and the shader adds the
-/// chunk's offset to what it reads. Twenty-four bits is sixteen million elements a lane — over a
-/// gigabyte of quads — and a resident slot past it falls back to the transient gather, which is
-/// correct and merely copies.
-pub(crate) const SLOT_BITS: u32 = 24;
-
-/// The mask that keeps a resolved remap entry's arena slot.
-pub(crate) const SLOT_MASK: u32 = (1 << SLOT_BITS) - 1;
+/// The arena slot the instance's record is at, and the shift the chunk holding it moved by this
+/// frame. The two are resolved together here so that a shader reads neither a remap nor an
+/// offsets table: the order stream is fetched per instance anyway, and twelve bytes in it cost
+/// less than the indirection they replace.
+///
+/// Resolving the shift on the host is also what retires the packing that used to carry it. A slot
+/// now has a whole `u32`, so neither the slot's range nor the number of offsets a frame can name
+/// is bounded by how the two shared a word.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct OrderEntry {
+    /// The arena slot the instance's record is at.
+    pub slot: u32,
+    /// How far the chunk holding that record moved this frame, in device pixels.
+    pub shift: [f32; 2],
+}
 
 /// The bytes one kind holds in a chunk or in a frame's arrays, which share their field names.
 ///
@@ -368,21 +375,12 @@ pub struct ChunkStore {
     released: Vec<usize>,
     /// Ranges awaiting their submission's completion.
     ledger: RetireLedger,
-    /// Per-frame scratch: the resolved remap for each lane.
-    resolved: [Vec<u32>; LANES.len()],
+    /// Per-frame scratch: the resolved draw order for each lane.
+    resolved: [Vec<OrderEntry>; LANES.len()],
     /// Per-frame scratch: gathered transient element bytes for each lane.
     gathered: [Vec<u8>; LANES.len()],
-    /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
-    ///
-    /// Entry zero is the zero offset every unmoved element names, so a frame with nothing moved
-    /// carries one entry and every remap entry's high bits are clear.
-    frame_offsets: Vec<[f32; 2]>,
-    /// Per-frame scratch: each moved revision's offset index, or the spill marker.
-    ///
-    /// A frame can name at most as many offsets as the remap's high bits can count. A revision
-    /// past that spills to [`u32::MAX`] and is served transiently — the frame arrays hold its
-    /// translated bytes — which is correct and merely copies.
-    offset_of: HashMap<u64, u32>,
+    /// Per-frame scratch: how far each moved revision moved, for the order stream to carry.
+    shift_of: HashMap<u64, [f32; 2]>,
     /// Per-frame scratch: each mark's payload ranges by remap position, one per payload kind.
     mark_payload: Vec<[Range<u32>; PAYLOAD_LANES]>,
 }
@@ -451,8 +449,7 @@ impl ChunkStore {
             ledger: RetireLedger::new(),
             resolved: Default::default(),
             gathered: Default::default(),
-            frame_offsets: vec![[0.0, 0.0]],
-            offset_of: HashMap::new(),
+            shift_of: HashMap::new(),
             mark_payload: Vec::new(),
         }
     }
@@ -495,9 +492,9 @@ impl ChunkStore {
             .sum()
     }
 
-    /// Uploads the frame's chunk changes and transient content, and resolves each lane's remap
-    /// into arena slots. Returns the bytes copied; the resolved remaps are in
-    /// [`ChunkStore::resolved_remap`] afterwards.
+    /// Uploads the frame's chunk changes and transient content, and resolves each lane's order
+    /// into arena slots. Returns the bytes copied; the resolved order is in
+    /// [`ChunkStore::resolved_order`] afterwards.
     pub fn upload_frame(
         &mut self,
         gpu: &Gpu,
@@ -762,18 +759,9 @@ impl ChunkStore {
         scene: &Scene,
     ) -> u64 {
         let mut uploaded = 0;
-        self.frame_offsets.clear();
-        self.frame_offsets.push([0.0, 0.0]);
-        self.offset_of.clear();
+        self.shift_of.clear();
         for (&revision, &offset) in scene.chunk_offsets() {
-            let index = if self.frame_offsets.len() <= (u32::MAX >> SLOT_BITS) as usize {
-                let index = self.frame_offsets.len() as u32;
-                self.frame_offsets.push(offset);
-                index
-            } else {
-                u32::MAX
-            };
-            self.offset_of.insert(revision, index);
+            self.shift_of.insert(revision, offset);
         }
         for (lane, &kind) in LANES.iter().enumerate() {
             let remap = scene.remap(kind);
@@ -789,7 +777,7 @@ impl ChunkStore {
                 .filter(|&&index| {
                     resident_slot(
                         &self.residence,
-                        &self.offset_of,
+                        &self.shift_of,
                         lane,
                         &provenance[index as usize],
                     )
@@ -809,21 +797,20 @@ impl ChunkStore {
             } else {
                 0..0
             };
-            debug_assert!(
-                transient_range.end <= SLOT_MASK,
-                "a lane's transient range left the slot bits; see SLOT_BITS"
-            );
-
             let bytes = lane_bytes(scene, lane);
             let mut placed = 0;
             for &index in remap {
                 let slot = provenance[index as usize];
-                match resident_slot(&self.residence, &self.offset_of, lane, &slot) {
-                    Some(at) => self.resolved[lane].push(at),
+                match resident_slot(&self.residence, &self.shift_of, lane, &slot) {
+                    Some(entry) => self.resolved[lane].push(entry),
                     None => {
                         let at = index as usize * element;
                         self.gathered[lane].extend_from_slice(&bytes[at..at + element]);
-                        self.resolved[lane].push(transient_range.start + placed);
+                        // Gathered where it is drawn, so there is nothing to shift it by.
+                        self.resolved[lane].push(OrderEntry {
+                            slot: transient_range.start + placed,
+                            shift: [0.0, 0.0],
+                        });
                         placed += 1;
                     }
                 }
@@ -865,7 +852,7 @@ impl ChunkStore {
         let resident = |store: &Self, index: u32| {
             resident_slot(
                 &store.residence,
-                &store.offset_of,
+                &store.shift_of,
                 MARKS_LANE,
                 &provenance[index as usize],
             )
@@ -941,14 +928,9 @@ impl ChunkStore {
         uploaded
     }
 
-    /// The resolved remap for `lane`: packed offset-and-slot entries, in draw order.
-    pub fn resolved_remap(&self, lane: usize) -> &[u32] {
+    /// The resolved draw order for `lane`: a slot and a shift each, in draw order.
+    pub fn resolved_order(&self, lane: usize) -> &[OrderEntry] {
         &self.resolved[lane]
-    }
-
-    /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
-    pub fn frame_offsets(&self) -> &[[f32; 2]] {
-        &self.frame_offsets
     }
 
     /// Ties the frame's retirements to the submission just made.
@@ -972,29 +954,26 @@ impl ChunkStore {
     }
 }
 
-/// The packed remap entry serving one primitive from a resident chunk, if one can.
+/// The order entry serving one primitive from a resident chunk, if one can.
 ///
 /// `None` is the transient answer, for every reason there is: the primitive is transient by
-/// provenance, its chunk is not resident, the chunk holds nothing in this lane, the resident
-/// slot lies past what the slot bits can name, or the chunk moved this frame and the offset
-/// table was already full.
+/// provenance, its chunk is not resident, or the chunk holds nothing in this lane. The reasons
+/// that used to be here and are not any more were both about the packing — a slot past what the
+/// slot bits could name, and a frame with more moved chunks than the offset table could hold.
 fn resident_slot(
     residence: &HashMap<u64, Resident>,
-    offset_of: &HashMap<u64, u32>,
+    shift_of: &HashMap<u64, [f32; 2]>,
     lane: usize,
     slot: &zgui_scene::ChunkSlot,
-) -> Option<u32> {
+) -> Option<OrderEntry> {
     if slot.is_transient() {
         return None;
     }
-    let offset = match offset_of.get(&slot.revision) {
-        Some(&u32::MAX) => return None,
-        Some(&index) => index,
-        None => 0,
-    };
     let range = residence.get(&slot.revision)?.ranges[lane].as_ref()?;
-    let at = range.start + slot.index;
-    (at <= SLOT_MASK).then_some((offset << SLOT_BITS) | at)
+    Some(OrderEntry {
+        slot: range.start + slot.index,
+        shift: shift_of.get(&slot.revision).copied().unwrap_or([0.0, 0.0]),
+    })
 }
 
 /// The frame array of `lane`, as bytes.

@@ -13,12 +13,12 @@ fn vs_mark_composite(@builtin(vertex_index) vertex: u32) -> MarkVarying {
     let margin = vec2<f32>(margin_local(item.transform));
     let origin = bounds_origin(item.bounds) - margin;
     let size = bounds_size(item.bounds) + 2.0 * margin;
-    let local = origin + unit_corner(vertex) * size + found.shift;
+    let local = origin + unit_corner(vertex) * size + shift_of(found);
     var out: MarkVarying;
     out.position = to_target(local, item.transform, vec2<f32>(0.0));
     out.local = local;
     out.slot = found.slot;
-    out.shift = found.shift;
+    out.shift = shift_of(found);
     out.prim = 0u;
     out.caps = 0u;
     return out;

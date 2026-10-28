@@ -23,10 +23,6 @@ struct Shadow {
 }
 
 @group(1) @binding(0) var<storage, read> shadows: array<Shadow>;
-// The draw-order permutation: the instance array keeps push order, and a draw's instance
-// range walks this list.
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
 
 struct ShadowVarying {
     @builtin(position) position: vec4<f32>,
@@ -49,11 +45,9 @@ struct ShadowVarying {
 @vertex
 fn vs_shadow(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) instance: u32,
+    @location(0) slot: u32,
+    @location(1) shift: vec2<f32>,
 ) -> ShadowVarying {
-    let packed = remap[instance];
-    let slot = packed & REMAP_SLOT_MASK;
-    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
     let shadow = shadows[slot];
     // `bounds` is already everything the primitive paints: the blurred shape dilated by the
     // gaussian's reach for a drop shadow, and the casting box itself for an inset one.

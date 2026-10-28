@@ -63,8 +63,10 @@ struct MarkDraw {
 }
 
 @group(1) @binding(0) var<storage, read> marks: array<MarkItem>;
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
+// The draw order, indexed rather than fetched. A mark's instances are its payload's items and
+// its draw names its position in the order, so this is the one lane that cannot take the order as
+// vertex input and needs random access into the same stream the others are fed from.
+@group(1) @binding(1) var<storage, read> order: array<MarkRef>;
 @group(2) @binding(0) var<uniform> mark_draw: MarkDraw;
 
 const MARK_UNION: u32 = 1u;
@@ -91,17 +93,24 @@ struct MarkVarying {
 }
 
 // The item a draw names: its arena slot, and the chunk offset it is drawn shifted by.
+//
+// One entry of the draw order, which the host resolves. The same twelve bytes the other lanes
+// receive as two vertex attributes.
+// `shift` is a `Vector2` and not a `vec2<f32>` for the reason that type exists: a `vec2<f32>`
+// aligns to eight bytes, which would stride this array by sixteen where the host writes twelve,
+// and every entry after the first would be read from the wrong place.
 struct MarkRef {
     slot: u32,
-    shift: vec2<f32>,
+    shift: Vector2,
 }
 
 fn item_of(position: u32) -> MarkRef {
-    let packed = remap[position];
-    var found: MarkRef;
-    found.slot = packed & REMAP_SLOT_MASK;
-    found.shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
-    return found;
+    return order[position];
+}
+
+// The shift one entry carries, as a vector.
+fn shift_of(found: MarkRef) -> vec2<f32> {
+    return vec2<f32>(found.shift.x, found.shift.y);
 }
 
 // The length in local units of the shortest device pixel: one over the smallest singular value of
