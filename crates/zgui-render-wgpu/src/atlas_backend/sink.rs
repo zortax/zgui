@@ -268,7 +268,7 @@ impl TextureSink for AtlasTextures {
     fn begin_uploads(&mut self) -> Result<(), SinkError> {
         debug_assert!(!self.batching, "atlas upload batches do not nest");
         self.batching = true;
-        self.uploader.begin_frame(&self.gpu);
+        self.uploader.begin_frame();
         Ok(())
     }
 

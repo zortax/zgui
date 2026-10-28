@@ -159,7 +159,7 @@ impl Renderer for WgpuRenderer {
 
         zgui_profile::latency::mark("r.tables");
         self.buffers.prepare_tables(scene);
-        self.buffers.begin_frame(&self.gpu);
+        self.buffers.begin_frame();
         if let Some(timer) = &mut self.timer {
             timer.begin(&self.gpu);
         }
@@ -319,6 +319,9 @@ impl Renderer for WgpuRenderer {
         // Measured around the call and nowhere else. It is the frame's slack seen from the inside:
         // how much earlier than it needed to be the frame was started.
         self.acquire_block = asked.elapsed();
+        // What the compositor handed back is a buffer nothing in flight still reads, so this is
+        // the one point in the frame where asking the device what it has finished with is free.
+        self.gpu.reclaim();
         zgui_profile::latency::note("acq.out", presented.acquisition.name());
         if crate::gpu::surface::human_visible_wait(self.acquire_block) {
             tracing::warn!(
