@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_geom::{Device, Size};
+use zgui_geom::{Device, Rect, Size};
 use zgui_render::{ExternalTexture, RenderTarget, VectorBackend};
 use zgui_scene::ExternalTextureId;
 
@@ -138,6 +138,26 @@ pub struct WgpuRenderer {
     /// received the composed target. The retry may therefore have no new damage and still owe the
     /// final copy and presentation.
     present_composed_next: bool,
+    /// The rows of the composed target the last frame wrote, merged and in order.
+    ///
+    /// The renderer's own answer, and not the damage set it was handed: a frame that had to widen
+    /// its damage wrote more rows than the caller asked for, and a caller reading back only the
+    /// rows it asked for would then miss what the widening drew.
+    composed_rows: Vec<core::ops::Range<u32>>,
+    /// The rectangles of the composed target the last frame wrote.
+    ///
+    /// Kept beside `composed_rows` because the two are read by different things and want different
+    /// shapes. A copy the processor makes steps whole rows, so rows are what it can use; a copy the
+    /// graphics device makes is a scissor, which is any rectangle at all — and on a frame that
+    /// changed forty-eight scattered places the difference between the two is a third of the
+    /// pixels.
+    composed_rects: Vec<Rect<i32, Device>>,
+    /// The buffer a readback of the composed target copies through.
+    ///
+    /// One buffer for the life of the renderer rather than one a frame. A console reads its whole
+    /// frame back every time it draws one, and on a slow device the allocation alone costs
+    /// milliseconds.
+    staging: crate::renderer::readback::Staging,
     /// The surface being drawn for.
     target: RenderTarget,
     /// Which way round the display's subpixels run.
@@ -249,6 +269,9 @@ impl WgpuRenderer {
             marks_scratch: crate::target::marks::MarksScratch::default(),
             pending_shift: None,
             present_composed_next: false,
+            composed_rows: Vec::new(),
+            composed_rects: Vec::new(),
+            staging: crate::renderer::readback::Staging::new(),
             target,
             subpixel_order: SubpixelOrder::default(),
             externals: BTreeMap::new(),
@@ -553,6 +576,22 @@ impl WgpuRenderer {
         }
     }
 
+    /// Records that whatever supplied the presented textures reads each one out and throws it away.
+    ///
+    /// Answers whether anything took it: only a supplied set has textures to say this about. See
+    /// [`Supplied::is_consumed`](crate::target::swapchain::Supplied::is_consumed) — a set that is
+    /// consumed carries one frame's rectangles and never a debt.
+    #[must_use = "a set that was not told is a set that keeps sending a debt nobody reads"]
+    pub fn presented_textures_are_consumed(&mut self, consumed: bool) -> bool {
+        match &mut self.presentation {
+            Presentation::Supplied(supplied) => {
+                supplied.is_consumed(consumed);
+                true
+            }
+            Presentation::Surface(_) | Presentation::Offscreen(_) => false,
+        }
+    }
+
     /// Reads back the persistent target frames are composed into.
     pub fn read_composed(&self) -> Pixels {
         readback::read(
@@ -561,6 +600,79 @@ impl WgpuRenderer {
             self.composed.format(),
             self.target.size,
         )
+    }
+
+    /// The rows of the composed target the last frame wrote, merged and in order.
+    ///
+    /// A backend copying the target out reads these rather than the damage set it handed in: a
+    /// frame that had to redraw everything — a rebuilt device, a resized surface — wrote rows the
+    /// caller never asked for, and one that copied only the rows it asked for would leave the rest
+    /// holding a frame from before the rebuild.
+    pub fn composed_rows(&self) -> &[core::ops::Range<u32>] {
+        &self.composed_rows
+    }
+
+    /// The rectangles of the composed target the last frame wrote.
+    ///
+    /// What a copy made by the graphics device covers. See [`WgpuRenderer::composed_rows`] for the
+    /// form a copy made by the processor needs, and why they are not the same list.
+    pub fn composed_rects(&self) -> &[Rect<i32, Device>] {
+        &self.composed_rects
+    }
+
+    /// Reads the rows `bands` names of what was presented into `into`, keeping the rest of it.
+    ///
+    /// For a backend that copies every frame out of the renderer and has just been told which rows
+    /// changed. `into` keeps every row no band names, so it stays a whole frame — which is the
+    /// point: reading a hundred rows instead of a thousand is worth having only because the other
+    /// nine hundred are already right.
+    ///
+    /// Where `into` is not already a frame of this extent — the first frame, or one after a
+    /// resize — the whole of it is read whatever `bands` says, because there is nothing there for
+    /// the unnamed rows to keep.
+    ///
+    /// Answers `false`, having read nothing, where what was presented is a window's surface: the
+    /// compositor owns it the moment it is presented.
+    pub fn read_presented_bands(
+        &mut self,
+        into: &mut Pixels,
+        bands: &[core::ops::Range<u32>],
+    ) -> bool {
+        let (texture, format, size) = match &self.presentation {
+            Presentation::Offscreen(offscreen) => (
+                offscreen.texture(),
+                offscreen.formats().surface,
+                self.target.size,
+            ),
+            // At the textures' own extent rather than the target's, for the reason
+            // [`WgpuRenderer::read_presented`] gives.
+            Presentation::Supplied(supplied) => (
+                supplied.texture(),
+                supplied.formats().surface,
+                supplied.size(),
+            ),
+            Presentation::Surface(_) => return false,
+        };
+        let bgra = matches!(
+            format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        let whole = crate::frame::damage::every_row(size.height.max(0) as u32);
+        let bands = if into.holds(size, bgra) {
+            bands
+        } else {
+            &whole
+        };
+        readback::read_bands(
+            &self.gpu,
+            texture,
+            format,
+            size,
+            bands,
+            &mut self.staging,
+            into,
+        );
+        true
     }
 
     /// Reads back what was presented, when what was presented is a texture rather than a window.
