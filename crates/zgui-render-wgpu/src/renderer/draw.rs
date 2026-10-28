@@ -1,6 +1,7 @@
 //! What happens to a display list: the frame, and the two steps either side of it.
 
 use zgui_bits::DamageSet;
+use zgui_geom::{Device, Rect};
 use zgui_profile::{Counter, Phase, counter};
 use zgui_render::{
     ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
@@ -17,6 +18,7 @@ use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::WgpuRenderer;
 use crate::target::acquire::{Acquisition, SurfaceAction};
+use crate::target::swapchain::Presentation;
 
 impl Renderer for WgpuRenderer {
     fn capabilities(&self) -> RenderCapabilities {
@@ -163,6 +165,16 @@ impl Renderer for WgpuRenderer {
             zgui_profile::latency::mark("draw.undamaged");
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
+
+        // Resolved here, before anything is recorded, because the copy that ends the frame is
+        // limited to these rectangles and that copy is recorded below. Taken from what the frame
+        // will draw rather than from what it was asked to draw: the widening above happens between
+        // the two, and a display given only what was asked for misses the rest.
+        let rects = damage::rects(damage, self.composed.used());
+        let redrawn: u64 = rects.iter().map(|rect| damage::area(*rect)).sum();
+        damage::rows_of(&rects, &mut self.composed_rows);
+        self.composed_rects.clear();
+        self.composed_rects.extend_from_slice(&rects);
 
         let formats = self.presentation.formats();
         // Before anything is planned: a display list may name an effect declared since the last
@@ -316,15 +328,13 @@ impl Renderer for WgpuRenderer {
         let presented = self.acquire_surface();
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
-            let limit = self.blit_limit(&presented);
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
-            draw_calls += 1;
+            let scissors = self.blit_scissors(&presented, false);
+            draw_calls += self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.submit_frame(encoder);
         let acquisition = presented.acquisition;
         self.hand_over(presented);
 
-        let redrawn = Self::redrawn(damage, &self.composed);
         counter::add(Counter::DamagePx, redrawn);
         let stats = FrameStats {
             draw_calls,
@@ -351,9 +361,8 @@ impl Renderer for WgpuRenderer {
         let mut encoder = self.frame_encoder();
         let mut draw_calls = 0;
         if let Some(view) = &presented.view {
-            let limit = self.blit_limit(&presented);
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
-            draw_calls = 1;
+            let scissors = self.blit_scissors(&presented, true);
+            draw_calls = self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.gpu.queue().submit([encoder.finish()]);
         let acquisition = presented.acquisition;
@@ -747,22 +756,59 @@ impl WgpuRenderer {
             })
     }
 
-    /// The part of an acquired image the copy writes, when the image is larger than the frame.
-    fn blit_limit(&self, presented: &crate::target::swapchain::Presented) -> Option<(u32, u32)> {
-        let texture = &presented.surface_texture.as_ref()?.texture;
-        let width = (self.target.size.width.max(1) as u32).min(texture.width());
-        let height = (self.target.size.height.max(1) as u32).min(texture.height());
-        (width < texture.width() || height < texture.height()).then_some((width, height))
+    /// The rectangles of the presented texture the copy has to cover.
+    ///
+    /// A supplied set is rotated through and its textures persist, so a frame copies the
+    /// rectangles it drew plus the ones drawn while this texture was not the one being written.
+    /// Where those pixels cross a link, that copy is the largest thing a frame spends. Everything
+    /// else is copied whole: an acquired surface texture is a new resource marked wholly
+    /// uninitialised on every acquisition, so a partial copy onto one comes out black everywhere
+    /// it did not write.
+    ///
+    /// `held` says the copy is of a frame composed earlier. More than one frame can have been
+    /// composed since the last copy, so a supplied texture is then copied whole.
+    fn blit_scissors(
+        &mut self,
+        presented: &crate::target::swapchain::Presented,
+        held: bool,
+    ) -> Vec<Rect<i32, Device>> {
+        match &mut self.presentation {
+            Presentation::Supplied(supplied) => {
+                let slot = supplied.selected();
+                if held {
+                    let whole = Rect::new(zgui_geom::Point::new(0, 0), supplied.size());
+                    supplied.owed(slot, &[whole])
+                } else {
+                    supplied.owed(slot, &self.composed_rects)
+                }
+            }
+            Presentation::Surface(_) | Presentation::Offscreen(_) => {
+                let used = self.composed.used();
+                // A cropping swap chain can be larger than the frame. Only the frame's extent is
+                // shown, so only that is copied, and nothing reads past the composed target.
+                let Some(texture) = presented.surface_texture.as_ref().map(|it| &it.texture) else {
+                    return vec![used];
+                };
+                let width = (self.target.size.width.max(1) as u32).min(texture.width());
+                let height = (self.target.size.height.max(1) as u32).min(texture.height());
+                vec![Rect::new(
+                    zgui_geom::Point::new(0, 0),
+                    zgui_geom::Size::new(width as i32, height as i32),
+                )]
+            }
+        }
     }
 
-    /// Copies the composed target onto whatever is being presented to.
+    /// Copies the composed target onto whatever is being presented to, within `scissors`.
+    ///
+    /// Answers how many draws that took: one for every rectangle that covers any pixel.
     fn blit(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         undo: bool,
-        limit: Option<(u32, u32)>,
-    ) {
+        scissors: &[Rect<i32, Device>],
+    ) -> u32 {
         let kind = if undo {
             PipelineKind::BlitUndoSrgb
         } else {
@@ -771,7 +817,7 @@ impl WgpuRenderer {
         let format = self.presentation.formats().present_attachment();
         let mut pipelines = self.pipelines.borrow_mut();
         let Some(pipeline) = pipelines.get(&self.gpu, kind, format) else {
-            return;
+            return 0;
         };
         let queries = self
             .timer
@@ -784,9 +830,9 @@ impl WgpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    // Every pixel is written, so nothing has to be preserved and no clear is
-                    // inserted ahead of the copy.
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    // The copy covers the rectangles below and no other pixel, so what the texture
+                    // already holds is kept.
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -797,11 +843,24 @@ impl WgpuRenderer {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.composed_binding, &[]);
-        // A cropping swap chain can be larger than the frame. Only the frame's extent is shown, so
-        // only that is copied, and nothing reads past the composed target.
-        if let Some((width, height)) = limit {
-            pass.set_scissor_rect(0, 0, width, height);
+        let mut drawn = 0;
+        for rect in scissors {
+            let (width, height) = (
+                rect.size.width.max(0) as u32,
+                rect.size.height.max(0) as u32,
+            );
+            if width == 0 || height == 0 {
+                continue;
+            }
+            pass.set_scissor_rect(
+                rect.origin.x.max(0) as u32,
+                rect.origin.y.max(0) as u32,
+                width,
+                height,
+            );
+            pass.draw(0..4, 0..1);
+            drawn += 1;
         }
-        pass.draw(0..4, 0..1);
+        drawn
     }
 }
