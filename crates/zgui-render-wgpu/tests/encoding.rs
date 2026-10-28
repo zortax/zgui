@@ -172,7 +172,7 @@ fn compose_into(
     let mut pipelines = Pipelines::new(gpu);
     let mut buffers = FrameBuffers::new(gpu);
     buffers.prepare_tables(scene);
-    buffers.begin_frame(gpu);
+    buffers.begin_frame();
     let globals = buffers
         .globals
         .stage(&Globals::new(size, SubpixelOrder::default()));
