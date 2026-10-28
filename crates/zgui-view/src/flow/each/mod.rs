@@ -155,6 +155,16 @@ pub struct EachState<K> {
     effect: Option<RenderEffect<()>>,
 }
 
+/// Drops the rows together with the state, for the reason given on
+/// [`ReactiveState`](crate::view::ReactiveState).
+impl<K> Drop for EachState<K> {
+    fn drop(&mut self) {
+        if let Ok(mut rows) = self.rows.try_borrow_mut() {
+            rows.items.clear();
+        }
+    }
+}
+
 impl<K: Eq + Hash + Clone + 'static> Anchor for EachState<K> {
     fn mount(&mut self, dom: &DomHandle, parent: NodeId, before: Option<NodeId>) {
         let mut rows = self.rows.borrow_mut();
@@ -635,5 +645,25 @@ mod tests {
         assert_eq!(cleaned.get(), 3);
         assert_eq!(f.text(), "");
         f.window.unmount();
+    }
+
+    #[test]
+    fn a_dropped_list_drops_its_rows_at_once() {
+        // See `a_dropped_hole_drops_its_content_at_once` in `view::reactive`.
+        let f = Fixture::new();
+        let source = f.window.with(|| RwSignal::new(0));
+        f.window.with(|| on_cleanup_local(move || source.set(1)));
+        let state = f.window.with(|| {
+            For::new(
+                || vec![1],
+                |row: &i32| *row,
+                move |_| AnyView::new(move || move || source.get().to_string()),
+            )
+            .build(&mut f.cx())
+        });
+
+        drop(state);
+        f.window.unmount();
+        flush();
     }
 }
