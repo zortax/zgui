@@ -136,7 +136,7 @@ impl Layouts {
             vector: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("zgui.bind.vector"),
                 entries: &[
-                    storage(0),
+                    table(0),
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
