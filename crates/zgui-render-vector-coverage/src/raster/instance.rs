@@ -15,10 +15,11 @@ pub struct Item {
     pub viewport: [f32; 4],
     /// Straight, gamma-encoded colour.
     pub color: [f32; 4],
-    /// The first segment, how many, whether the rule is even-odd, and the first clip run.
+    /// The first band, how many there are, whether the rule is even-odd, and the first clip run.
     pub control: [f32; 4],
-    /// How many clip runs, then three unused lanes.
-    pub clips: [f32; 4],
+    /// How many clip runs, where the first band begins on the surface, how tall one band is, then
+    /// one unused lane.
+    pub bands: [f32; 4],
 }
 
 /// Where one clip's outline is, as a triple the shader can read.
