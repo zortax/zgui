@@ -250,6 +250,10 @@ libloading = "0.8"
 # with `dlopen`, so naming it here is the whole record of what a run needs. The version is the one
 # wgpu-hal links, because the display a copier makes is the one wgpu's GL backend already holds.
 khronos-egl = { version = "6.0", features = ["dynamic"] }
+# OpenGL, for the same crossing. wgpu's GL backend already holds an EGL display and a loaded
+# context; these are the types needed to say anything to them, and both versions are the ones
+# wgpu-hal links.
+glow = "0.17"
 
 # --- test and benchmark tooling ----------------------------------------------------------------
 proptest = "1.11"

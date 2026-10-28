@@ -6083,6 +6083,8 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "ash",
+ "glow",
+ "khronos-egl",
  "raw-window-handle",
  "rustix 1.1.4",
  "tracing",
@@ -6090,6 +6092,7 @@ dependencies = [
  "zgui-color",
  "zgui-drm",
  "zgui-evdev",
+ "zgui-gbm",
  "zgui-geom",
  "zgui-libinput",
  "zgui-platform",

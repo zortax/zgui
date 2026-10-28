@@ -18,6 +18,11 @@ publish = false
 # Everything is gated on Linux. The kernel interface exists nowhere else, so a macOS build of the
 # workspace compiles this crate as an empty one rather than failing on a header it cannot have.
 [target.'cfg(target_os = "linux")'.dependencies]
+# The allocator a buffer a display scans out of is made with, and the EGL and GL a second device
+# draws into it through. Only this crate names them, and only on the path that has no Vulkan.
+zgui-gbm = { path = "../zgui-gbm", version = "0.1.0" }
+khronos-egl.workspace = true
+glow.workspace = true
 # `TreeUpdate`, which the platform contract's `push_a11y_update` takes. This backend implements
 # that method as a no-op: no assistive technology is connected to a console, so the closure is
 # never run and no tree is built. The name is here for the signature.
