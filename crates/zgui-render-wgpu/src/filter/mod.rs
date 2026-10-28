@@ -7,7 +7,7 @@ pub mod drop_shadow;
 pub mod effect;
 pub mod matrix;
 
-use zgui_geom::{Device, Rect};
+use zgui_geom::{Device, Edges, Rect};
 
 use crate::filter::chain::{Chain, Step};
 use crate::filter::matrix::ColorMatrix;
@@ -37,12 +37,18 @@ pub struct Filtered {
     pub shadows: Vec<ShadowLayer>,
 }
 
-/// Plans `chain` over `source`, restricted to `region`.
+/// Plans `chain` writing `output`, reading `source` where it holds `valid`.
 ///
 /// The steps run in the order they were written, because they do not commute: an affine colour map
 /// with a constant term applied before a blur and applied after it are two different pictures.
 /// Only a run of per-pixel functions at the *end* of a chain costs nothing, and that is because
 /// the composite that was going to draw the content anyway carries it.
+///
+/// Each step writes `output` grown by everything the steps after it read outside themselves, cut
+/// to `valid`, so the last one writes exactly `output` and no pass covers a pixel nothing goes on
+/// to read. Passing the same rectangle for both collapses the staging back onto it, which is what
+/// a `filter` over its own isolated target wants: it reads only what it just wrote, so there is
+/// nothing further out to grow towards.
 ///
 /// When the pool cannot lend a target for a step, that step is skipped and counted rather than
 /// faked: content that is one filter less blurred is a visible degradation, and content composited
@@ -51,24 +57,32 @@ pub fn plan(
     builder: &mut PlanBuilder<'_>,
     chain: &Chain,
     source: TargetRef,
-    region: Rect<i32, Device>,
+    output: Rect<i32, Device>,
+    valid: Rect<i32, Device>,
 ) -> Filtered {
     let (steps, folded) = chain.split();
+    let regions = staging(steps, output, valid);
     let mut filtered = Filtered {
         target: source,
         matrix: folded,
         shadows: Vec::new(),
     };
-    for step in steps {
+    // What the target the next step reads is written over, which a skipped step leaves alone.
+    let mut holds = valid;
+    for (step, writes) in steps.iter().zip(regions) {
         match *step {
             Step::Matrix(matrix) => {
-                if let Some(next) = materialise(builder, filtered.target, region, matrix) {
+                if let Some(next) = materialise(builder, filtered.target, writes, matrix) {
                     replace(builder, &mut filtered, source, next);
+                    holds = writes;
                 }
             }
             Step::Blur(deviation) => {
-                if let Some(blurred) = blur::plan(builder, filtered.target, region, deviation) {
+                if let Some(blurred) =
+                    blur::plan(builder, filtered.target, writes, holds, deviation)
+                {
                     replace(builder, &mut filtered, source, blurred.target);
+                    holds = writes;
                 }
             }
             Step::Custom { shader, params, .. } => {
@@ -78,9 +92,10 @@ pub fn plan(
                 // rectangle full of a stranger's numbers.
                 if let Some(block) = effect::block_of(builder, params)
                     && let Some(next) =
-                        effect::plan(builder, filtered.target, region, shader, block)
+                        effect::plan(builder, filtered.target, writes, shader, block)
                 {
                     replace(builder, &mut filtered, source, next);
+                    holds = writes;
                 }
             }
             Step::DropShadow {
@@ -89,10 +104,13 @@ pub fn plan(
                 blur,
                 color,
             } => {
+                // A shadow is a layer drawn *behind* the content rather than a replacement for it,
+                // so it neither advances the chain's target nor what that target holds.
                 if let Some(shadow) = drop_shadow::plan(
                     builder,
                     filtered.target,
-                    region,
+                    writes,
+                    holds,
                     (offset_x, offset_y),
                     blur,
                     color,
@@ -103,6 +121,53 @@ pub fn plan(
         }
     }
     filtered
+}
+
+/// What each step of `steps` has to write for the one after it to be able to read.
+///
+/// Worked backwards from `output`, growing by each step's own reach as it goes and cutting every
+/// answer to `valid`. It is deliberately the *sum* of the reaches beyond a step rather than a
+/// per-step chain of them: a drop shadow reads its input without replacing it, so a later step's
+/// reach and its own both fall on whatever wrote that input, and adding them is the answer that is
+/// right for either arrangement.
+fn staging(
+    steps: &[Step],
+    output: Rect<i32, Device>,
+    valid: Rect<i32, Device>,
+) -> Vec<Rect<i32, Device>> {
+    let mut regions = Vec::with_capacity(steps.len());
+    let mut beyond = 0;
+    for step in steps.iter().rev() {
+        regions.push(
+            output
+                .outset(Edges::uniform(beyond))
+                .intersection(valid)
+                .unwrap_or(output),
+        );
+        beyond += reach_of(step);
+    }
+    regions.reverse();
+    regions
+}
+
+/// How far a step reads outside what it writes, in whole device pixels.
+fn reach_of(step: &Step) -> i32 {
+    match step {
+        Step::Matrix(_) => 0,
+        // A custom effect is scissored to its region and reads the source at the pixel it writes,
+        // so like a per-pixel map it reaches nothing outside itself.
+        Step::Custom { .. } => 0,
+        Step::Blur(deviation) => blur::reach(*deviation),
+        // The copy is displaced as well as blurred, so it reaches its own offset further on the
+        // side it falls towards. One number for every side, because a rectangle grown by four
+        // different amounts would still have to hold the largest of them somewhere.
+        Step::DropShadow {
+            offset_x,
+            offset_y,
+            blur,
+            ..
+        } => blur::reach(*blur) + offset_x.abs().max(offset_y.abs()).ceil() as i32,
+    }
 }
 
 /// Points `filtered` at `next`, returning whatever scratch it held before.

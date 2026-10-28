@@ -575,7 +575,7 @@ fn end_group(
         return;
     }
     let chain = Chain::of(&group.boundary.filters);
-    let filtered = filter::plan(builder, &chain, target, group.region);
+    let filtered = filter::plan(builder, &chain, target, group.region, group.region);
     if !is_source_over(&group.boundary) {
         builder.note_unsupported_blend();
     }
