@@ -442,7 +442,7 @@ impl GroupPool {
     /// Frees each target that has gone without a lease for more than [`GroupPool::IDLE_FRAMES`]
     /// frames in a row. Leases of another size class leave such targets behind, and the budget
     /// alone would hold them until it is full. Then frees targets, the longest idle and largest
-    /// first, until the pool is within its budget again ([`GroupPool::allocate`]).
+    /// first, until the pool is within its budget again.
     pub fn release_all(&mut self) {
         for held in &mut self.entries {
             let Some(entry) = held else {

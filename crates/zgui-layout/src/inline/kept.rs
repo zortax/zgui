@@ -8,7 +8,7 @@
 //! moved.
 //!
 //! Contexts with equal content share one form, so they have to keep equal lines. A context that
-//! keeps other lines gets a copy of the form; see [`restore`].
+//! keeps other lines gets a copy of the form; see `restore`.
 
 use std::sync::Arc;
 

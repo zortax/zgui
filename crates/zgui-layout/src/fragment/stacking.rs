@@ -298,7 +298,7 @@ fn push_subtree(store: &LayoutStore, key: BoxKey, order: &mut Vec<BoxKey>) {
 /// layout position has to know that.
 ///
 /// The box remembers a "yes" until a write can change it, so the fragment diff can ask on each
-/// visit. See [`LayoutOrderMemo`](crate::node::box_node::LayoutOrderMemo).
+/// visit.
 pub fn children_in_layout_order(store: &LayoutStore, key: BoxKey) -> bool {
     let Some(node) = store.get(key) else {
         return true;
