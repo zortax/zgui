@@ -4,13 +4,23 @@
 // is a run separator. An end next to a separator is an outer end and takes the item's cap; every
 // other end is round, which is the round join.
 
-@group(2) @binding(1) var<storage, read> mark_vertices: array<vec2<f32>>;
+@group(2) @binding(1) var mark_vertices: texture_2d<u32>;
+
+/// One polyline vertex of a payload.
+///
+/// Eight bytes in a sixteen-byte texel: the arena puts every element on a texel so that a
+/// record's fields sit where a loader can name them, and a vertex is the one element that
+/// pays for the rule rather than needing it. Packing two to a texel would halve this and
+/// make a run that starts on an odd vertex a read of the texel it shares.
+fn load_mark_vertex(index: u32) -> vec2<f32> {
+    return texel_f32(textureLoad(mark_vertices, table_texel(index), 0)).xy;
+}
 
 fn segment_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     let found = item_of(mark_draw.position);
-    let item = marks[found.slot];
-    let raw_a = mark_vertices[instance];
-    let raw_b = mark_vertices[instance + 1u];
+    let item = load_mark(found.slot);
+    let raw_a = load_mark_vertex(instance);
+    let raw_b = load_mark_vertex(instance + 1u);
     var out: MarkVarying;
     if is_separator(raw_a) || is_separator(raw_b) {
         // A degenerate quad: every corner at one point covers no pixel.
@@ -41,10 +51,10 @@ fn segment_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
 fn segment_caps(at: u32, flags: u32) -> u32 {
     var start = CAP_ROUND;
     var end = CAP_ROUND;
-    if is_separator(mark_vertices[at - 1u]) {
+    if is_separator(load_mark_vertex(at - 1u)) {
         start = (flags >> MARK_START_CAP_SHIFT) & 3u;
     }
-    if is_separator(mark_vertices[at + 2u]) {
+    if is_separator(load_mark_vertex(at + 2u)) {
         end = (flags >> MARK_END_CAP_SHIFT) & 3u;
     }
     return start | (end << 2u);
@@ -97,15 +107,15 @@ fn segment_value(point: vec2<f32>, a: vec2<f32>, b: vec2<f32>, half: f32, caps: 
 // with that segment's distance, which is the distance to the run there. A coverage draw needs no
 // such rule: its bin keeps the largest coverage.
 fn segment_distance(in: MarkVarying, owned: ptr<function, bool>) -> Distance {
-    let item = marks[in.slot];
+    let item = load_mark(in.slot);
     let point = payload_point(in);
     let half = item.half_width;
     let at = in.prim;
-    let a = to_space(item, mark_vertices[at]);
-    let b = to_space(item, mark_vertices[at + 1u]);
+    let a = to_space(item, load_mark_vertex(at));
+    let b = to_space(item, load_mark_vertex(at + 1u));
     let own = segment_value(point, a, b, half, in.caps);
     var nearest = true;
-    let before = mark_vertices[at - 1u];
+    let before = load_mark_vertex(at - 1u);
     if !is_separator(before) {
         let other = segment_value(
             point,
@@ -116,7 +126,7 @@ fn segment_distance(in: MarkVarying, owned: ptr<function, bool>) -> Distance {
         );
         nearest = nearest && own.d < other.d;
     }
-    let after = mark_vertices[at + 2u];
+    let after = load_mark_vertex(at + 2u);
     if !is_separator(after) {
         let other = segment_value(
             point,
@@ -153,16 +163,16 @@ fn fs_segment_paint(in: MarkVarying) -> @location(0) vec4<f32> {
     let down = dpdy(in.point);
     var owned = true;
     let coverage = sdf_coverage(segment_distance(in, &owned), across, down);
-    return mark_paint(in, marks[in.slot], select(0.0, coverage, owned));
+    return mark_paint(in, load_mark(in.slot), select(0.0, coverage, owned));
 }
 
 @fragment
 fn fs_segment_coverage(in: MarkVarying) -> @location(0) vec4<f32> {
     let across = dpdx(in.point);
     let down = dpdy(in.point);
-    let item = marks[in.slot];
-    let a = to_space(item, mark_vertices[in.prim]);
-    let b = to_space(item, mark_vertices[in.prim + 1u]);
+    let item = load_mark(in.slot);
+    let a = to_space(item, load_mark_vertex(in.prim));
+    let b = to_space(item, load_mark_vertex(in.prim + 1u));
     // Each quarter is half a pixel wide, and measured from its own centre.
     let point = payload_point(in);
     let half_across = 0.5 * across;

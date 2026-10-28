@@ -21,6 +21,7 @@
 
 use bytemuck::Pod;
 
+use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// How many texels wide every table is.
@@ -188,6 +189,62 @@ impl TableTexture {
         self.rows = Self::MINIMUM_ROWS;
         self.generation = self.generation.wrapping_add(1);
         freed
+    }
+}
+
+/// Writes `bytes` into `texture` as a run of texels starting at `first`.
+///
+/// A texture write names a rectangle and this data is a line, so a run that crosses a row boundary
+/// is up to three of them: the tail of the row it starts in, the whole rows between, and the head
+/// of the row it ends in. Widening to whole rows instead would be one write, and it would put
+/// whatever this caller does not hold over the elements on either side of the run.
+///
+/// `bytes` has to be a whole number of texels, which every caller's element size gives it.
+pub(crate) fn write_texels(
+    gpu: &Gpu,
+    belt: &mut UploadBelt,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    first: u32,
+    bytes: &[u8],
+) {
+    debug_assert_eq!(bytes.len() % TEXEL, 0, "a run is a whole number of texels");
+    let mut texel = first;
+    let mut rest = bytes;
+
+    while !rest.is_empty() {
+        let column = texel % TEXELS_WIDE;
+        let row = texel / TEXELS_WIDE;
+        let (width, height) = run_extent(texel, (rest.len() / TEXEL) as u32);
+        let taken = width as usize * height as usize * TEXEL;
+
+        belt.write_texels(
+            gpu,
+            encoder,
+            texture,
+            0,
+            (column, row),
+            (width, height),
+            TEXEL as u32,
+            &rest[..taken],
+        );
+
+        texel += width * height;
+        rest = &rest[taken..];
+    }
+}
+
+/// How much of a run starting at `texel` one write can take, as a width and a height in texels.
+///
+/// Whole rows where the run starts on one and has rows left in it; what remains of the current row
+/// otherwise. A run therefore takes at most three writes, whatever its length: a partial row, the
+/// whole ones, and a partial row.
+fn run_extent(texel: u32, held: u32) -> (u32, u32) {
+    let column = texel % TEXELS_WIDE;
+    if column == 0 && held >= TEXELS_WIDE {
+        (TEXELS_WIDE, held / TEXELS_WIDE)
+    } else {
+        ((TEXELS_WIDE - column).min(held), 1)
     }
 }
 

@@ -27,7 +27,32 @@ struct Quad {
     paint_origin: Vector2,
 }
 
-@group(1) @binding(0) var<storage, read> quads: array<Quad>;
+@group(1) @binding(0) var quads: texture_2d<u32>;
+
+/// One `Quad`, which the arena pads to 7 texels.
+fn load_quad(slot: u32) -> Quad {
+    let base = slot * 7u;
+    let t0 = textureLoad(quads, table_texel(base + 0u), 0);
+    let t1 = textureLoad(quads, table_texel(base + 1u), 0);
+    let t2 = textureLoad(quads, table_texel(base + 2u), 0);
+    let t3 = textureLoad(quads, table_texel(base + 3u), 0);
+    let t4 = textureLoad(quads, table_texel(base + 4u), 0);
+    let t5 = textureLoad(quads, table_texel(base + 5u), 0);
+    let t6 = textureLoad(quads, table_texel(base + 6u), 0);
+    return Quad(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        Radii(bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y), bitcast<f32>(t2.z), bitcast<f32>(t2.w), bitcast<f32>(t3.x), bitcast<f32>(t3.y)),
+        Edges(bitcast<f32>(t3.z), bitcast<f32>(t3.w), bitcast<f32>(t4.x), bitcast<f32>(t4.y)),
+        PaintRef(t4.z, t4.w),
+        PaintRef(t5.x, t5.y),
+        t5.z,
+        t5.w,
+        bitcast<f32>(t6.x),
+        Vector2(bitcast<f32>(t6.y), bitcast<f32>(t6.z)),
+    );
+}
 
 const BORDER_SOLID: u32 = 0u;
 const BORDER_DASHED: u32 = 1u;
@@ -61,7 +86,7 @@ fn vs_quad(
     @location(0) slot: u32,
     @location(1) shift: vec2<f32>,
 ) -> QuadVarying {
-    let quad = quads[slot];
+    let quad = load_quad(slot);
     let local = inflated_corner(vertex, quad.bounds) + shift;
     var out: QuadVarying;
     out.position = to_clip_position(local, quad.transform);

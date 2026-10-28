@@ -7,7 +7,26 @@
 
 // Single-channel coverage sprites: glyphs, and shapes rasterised as alpha masks.
 
-@group(1) @binding(0) var<storage, read> sprites: array<Sprite>;
+@group(1) @binding(0) var sprites: texture_2d<u32>;
+
+/// One `Sprite`, which the arena pads to 5 texels.
+fn load_sprite(slot: u32) -> Sprite {
+    let base = slot * 5u;
+    let t0 = textureLoad(sprites, table_texel(base + 0u), 0);
+    let t1 = textureLoad(sprites, table_texel(base + 1u), 0);
+    let t2 = textureLoad(sprites, table_texel(base + 2u), 0);
+    let t3 = textureLoad(sprites, table_texel(base + 3u), 0);
+    let t4 = textureLoad(sprites, table_texel(base + 4u), 0);
+    return Sprite(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        Rgba(bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y)),
+        Tile(t2.z, t2.w, TileRect(bitcast<i32>(t3.x), bitcast<i32>(t3.y), bitcast<i32>(t3.z), bitcast<i32>(t3.w))),
+        t4.x,
+        t4.y,
+    );
+}
 
 @vertex
 fn vs_mono_sprite(
@@ -15,7 +34,7 @@ fn vs_mono_sprite(
     @location(0) slot: u32,
     @location(1) shift: vec2<f32>,
 ) -> SpriteVarying {
-    let sprite = sprites[slot];
+    let sprite = load_sprite(slot);
     let corner = unit_corner(vertex);
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: SpriteVarying;
