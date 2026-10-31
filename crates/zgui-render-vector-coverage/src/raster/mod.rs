@@ -14,6 +14,7 @@ use zgui_render::{
     VectorRaster, VectorTarget,
 };
 use zgui_render_wgpu::Gpu;
+use zgui_render_wgpu::buffer::upload::UploadBelt;
 use zgui_render_wgpu::frame::vector::VectorSource;
 use zgui_scene::{PaintTable, ScenePassPlan, VectorItem};
 
@@ -115,6 +116,12 @@ pub struct CoverageRaster {
     layered: Vec<Vec<usize>>,
     /// The buffers the three of those are uploaded to.
     buffers: Buffers,
+    /// Mapped staging chunks the four tables are written through.
+    ///
+    /// `Queue::write_texture` allocates and maps a staging buffer per call, and on the GL backend
+    /// allocating one while the card is drawing waits for the card. The belt writes through chunks
+    /// it already holds.
+    uploader: UploadBelt,
     /// What the last frame cost and could not do, over every round it rasterised.
     last: Rasterised,
     /// How many layers the last frame's passes needed.
@@ -196,6 +203,7 @@ impl CoverageRaster {
                 runs: Storage::new(gpu, "zgui.vector.coverage.runs"),
                 bands: Storage::new(gpu, "zgui.vector.coverage.bands"),
             },
+            uploader: UploadBelt::default(),
             gpu: Arc::clone(gpu),
             last: Rasterised::default(),
             depth: 0,
@@ -568,7 +576,7 @@ impl CoverageRaster {
     /// the whole layer into what a composite reads. Resolving per pass would convert the same layer
     /// once per pass in it, and every conversion after the first would read what the one before it
     /// had already written.
-    fn record(&self) -> Result<(), VectorError> {
+    fn record(&self, encoder: &mut wgpu::CommandEncoder) -> Result<(), VectorError> {
         let bind = self
             .gpu
             .device()
@@ -594,12 +602,6 @@ impl CoverageRaster {
                     },
                 ],
             });
-        let mut encoder =
-            self.gpu
-                .device()
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("zgui.vector.coverage"),
-                });
         for (layer, indices) in self.layered.iter().enumerate() {
             if indices.is_empty() {
                 continue;
@@ -614,7 +616,7 @@ impl CoverageRaster {
                 });
             };
             {
-                let mut render = begin(&mut encoder, accumulation, "zgui.vector.coverage");
+                let mut render = begin(encoder, accumulation, "zgui.vector.coverage");
                 render.set_pipeline(&self.pipelines.coverage);
                 render.set_bind_group(0, &bind, &[]);
                 for &index in indices {
@@ -635,12 +637,11 @@ impl CoverageRaster {
                         resource: wgpu::BindingResource::TextureView(accumulation),
                     }],
                 });
-            let mut render = begin(&mut encoder, straight, "zgui.vector.coverage.resolve");
+            let mut render = begin(encoder, straight, "zgui.vector.coverage.resolve");
             render.set_pipeline(&self.pipelines.resolve);
             render.set_bind_group(0, &resolve_bind, &[]);
             render.draw(0..4, 0..1);
         }
-        self.gpu.queue().submit([encoder.finish()]);
         Ok(())
     }
 }
@@ -720,6 +721,12 @@ impl VectorRaster for CoverageRaster {
             }
             self.group(frame.plan, round);
         }
+        let mut encoder =
+            self.gpu
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("zgui.vector.coverage"),
+                });
         {
             let _stage = tracing::debug_span!(
                 "cov.upload",
@@ -729,15 +736,31 @@ impl VectorRaster for CoverageRaster {
                 runs = self.runs.len()
             )
             .entered();
-            self.buffers.items.upload(&self.gpu, &self.items);
-            self.buffers.outlines.upload(&self.gpu, &self.outlines);
-            self.buffers.runs.upload(&self.gpu, &self.runs);
-            self.buffers.bands.upload(&self.gpu, &self.bands);
+            self.uploader.begin_frame();
+            self.buffers
+                .items
+                .upload(&self.gpu, &mut self.uploader, &mut encoder, &self.items);
+            self.buffers.outlines.upload(
+                &self.gpu,
+                &mut self.uploader,
+                &mut encoder,
+                &self.outlines,
+            );
+            self.buffers
+                .runs
+                .upload(&self.gpu, &mut self.uploader, &mut encoder, &self.runs);
+            self.buffers
+                .bands
+                .upload(&self.gpu, &mut self.uploader, &mut encoder, &self.bands);
+            // Before the submission that reads them, which is the whole of the belt's contract.
+            self.uploader.finish();
         }
         {
             let _stage = tracing::debug_span!("cov.record").entered();
-            self.record()?;
+            self.record(&mut encoder)?;
         }
+        self.gpu.queue().submit([encoder.finish()]);
+        self.uploader.recall();
         if self.last.unclippable > 0 {
             tracing::warn!(
                 items = self.last.unclippable,

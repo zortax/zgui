@@ -94,10 +94,9 @@ impl UploadBelt {
     const ONE_SHOT: u64 = 1 << 20;
 
     /// Starts a frame, opportunistically reclaiming completed mappings without waiting for them.
-    pub fn begin_frame(&mut self, gpu: &Gpu) {
+    pub fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
         self.allocations = 0;
-        let _ = gpu.device().poll(wgpu::PollType::Poll);
         self.receive();
 
         // Keep at least one chunk warm. Everything else has to have been used recently enough to
