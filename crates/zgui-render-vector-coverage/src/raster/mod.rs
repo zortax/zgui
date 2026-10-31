@@ -459,9 +459,9 @@ impl VectorRaster for CoverageRaster {
         }
         self.group(frame.plan, round);
         self.last.segments += self.segments.len() as u32;
-        self.buffers.items.write(&self.gpu, &self.items);
-        self.buffers.segments.write(&self.gpu, &self.segments);
-        self.buffers.runs.write(&self.gpu, &self.runs);
+        self.buffers.items.upload(&self.gpu, &self.items);
+        self.buffers.segments.upload(&self.gpu, &self.segments);
+        self.buffers.runs.upload(&self.gpu, &self.runs);
         self.record()?;
         let unclippable = self.last.unclippable - unclippable;
         if unclippable > 0 {

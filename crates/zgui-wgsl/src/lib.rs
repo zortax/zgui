@@ -292,7 +292,9 @@ mod tests {
         let branch = body
             .find("if space != NO_SPACE")
             .expect("the kept part is behind one test of the space");
-        for field in ["kept_aabb", "kept_tests", "spatial["] {
+        // The kept system is reached as `spatial[` where the tables are storage buffers and as
+        // `load_spatial(` where they are textures. Either spelling is the same read.
+        for field in ["kept_aabb", "kept_tests", "spatial"] {
             let at = body.find(field).expect("the kept part reads the field");
             assert!(
                 at > branch,

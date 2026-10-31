@@ -1,6 +1,5 @@
 //! The two pipelines and the buffers they read.
 
-use bytemuck::Pod;
 use zgui_render_wgpu::Gpu;
 
 use crate::raster::scratch::FORMAT;
@@ -73,84 +72,21 @@ impl Pipelines {
     }
 }
 
-/// A storage buffer that grows to the largest thing it has held.
-#[derive(Debug)]
-pub struct Storage {
-    /// The buffer.
-    buffer: wgpu::Buffer,
-    /// What it is called, so a driver message names it.
-    label: &'static str,
-    /// How many bytes it holds.
-    capacity: u64,
-}
+/// Where this rasteriser's lookups live.
+///
+/// The same table texture the rest of the renderer reads through, for the same reason: a device
+/// with no storage buffers is precisely the device that falls back to this rasteriser.
+pub use zgui_render_wgpu::buffer::tables::TableTexture as Storage;
 
-impl Storage {
-    /// The smallest allocation, which is also what an empty frame gets: a bind group has to name a
-    /// buffer whether or not this frame put anything in it.
-    const MINIMUM: u64 = 256;
-
-    /// An empty buffer named `label`.
-    pub fn new(gpu: &Gpu, label: &'static str) -> Self {
-        Self {
-            buffer: allocate(gpu, label, Self::MINIMUM),
-            label,
-            capacity: Self::MINIMUM,
-        }
-    }
-
-    /// Writes `values`, growing if they do not fit.
-    pub fn write<T: Pod>(&mut self, gpu: &Gpu, values: &[T]) {
-        let bytes: &[u8] = bytemuck::cast_slice(values);
-        if bytes.len() as u64 > self.capacity {
-            self.capacity = (bytes.len() as u64).next_power_of_two().max(Self::MINIMUM);
-            self.buffer = allocate(gpu, self.label, self.capacity);
-        }
-        if !bytes.is_empty() {
-            gpu.queue().write_buffer(&self.buffer, 0, bytes);
-        }
-    }
-
-    /// The binding a bind group names.
-    pub fn binding(&self) -> wgpu::BindingResource<'_> {
-        self.buffer.as_entire_binding()
-    }
-
-    /// How many bytes it holds.
-    pub fn capacity(&self) -> u64 {
-        self.capacity
-    }
-
-    /// Returns a high-water buffer to the minimum bindable allocation.
-    pub fn shrink(&mut self, gpu: &Gpu) -> u64 {
-        if self.capacity <= Self::MINIMUM {
-            return 0;
-        }
-        let freed = self.capacity - Self::MINIMUM;
-        self.buffer = allocate(gpu, self.label, Self::MINIMUM);
-        self.capacity = Self::MINIMUM;
-        freed
-    }
-}
-
-/// Allocates a storage buffer.
-fn allocate(gpu: &Gpu, label: &'static str, size: u64) -> wgpu::Buffer {
-    gpu.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-
-/// A read-only storage buffer, visible to both stages.
+/// A lookup table, read one texel at a time with no sampler, visible to both stages.
 fn storage(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: true },
-            has_dynamic_offset: false,
-            min_binding_size: None,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Uint,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
         },
         count: None,
     }
