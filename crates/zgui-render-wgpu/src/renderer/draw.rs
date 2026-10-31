@@ -203,6 +203,16 @@ impl Renderer for WgpuRenderer {
         };
         self.marks_scratch
             .ensure(&self.gpu, marks.extent, marks.pages);
+        // A backdrop filter reads a copy of what lies beneath it, and where that copy is the kept
+        // one it has to exist before the plan can name it. Allocated on the first frame a scene
+        // holds a backdrop and kept for as long as one does.
+        if !scene.primitives.backdrops.is_empty() && self.kept.is_none() {
+            self.kept = Some(crate::target::scene_texture::SceneTexture::new(
+                &self.gpu,
+                self.composed.used().size,
+                self.composed.format(),
+            ));
+        }
         let externals = |id| self.externals.get(&id).map(|attached| attached.texture);
         let plan = {
             let builder = PlanBuilder::new(
@@ -271,6 +281,16 @@ impl Renderer for WgpuRenderer {
             counter::bump(Counter::VectorFramesDropped);
         }
         self.groups.release_all();
+        if plan.capture_refused > 0 {
+            // The damage was grown small for a kept copy that could not be used, so this frame
+            // drew a backdrop from pixels it had not all redrawn. One frame of that is a slightly
+            // stale halo; the next frame redraws everything and it is gone.
+            tracing::debug!(
+                backdrops = plan.capture_refused,
+                "a backdrop could not keep its capture; redrawing everything next frame"
+            );
+            self.full_damage_next = true;
+        }
         if plan.deferred > 0 {
             tracing::debug!(
                 composites = plan.deferred,
@@ -645,6 +665,7 @@ impl WgpuRenderer {
             atlas: &self.atlas,
             pool: &self.groups,
             composed: &self.composed,
+            kept: self.kept.as_ref(),
             sampler: &self.sampler,
             externals: &self.externals,
             vectors: self.vectors.as_deref(),

@@ -655,3 +655,162 @@ fn a_square_backdrop_keeps_the_clip_of_its_box() {
         .expect("the card has a fragment");
     assert_eq!(harness.scene().primitives.backdrops[0].clip, card.clip);
 }
+
+/// A full-window scrim with the component library's own backdrop blur, over a page.
+fn scrim_over_a_page() -> Harness {
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("page"), Element::new("scrim")]),
+        "root { display: block; width: 1280px; height: 1024px }
+         page { display: block; height: 1024px; background: #eee }
+         scrim { position: fixed; inset: 0; backdrop-filter: blur(3px) }",
+        1280.0,
+        1024.0,
+    );
+    harness.paint_everything();
+    assert!(
+        !harness.store.read_extents().is_empty(),
+        "the fixture registered no read extent"
+    );
+    harness
+}
+
+/// One whole frame's worth of a spinner turning at a fixed place, and what the damage came to.
+///
+/// Expanded *and* painted, because the two halves are one loop: what the walk emits is what says
+/// whether the next frame may keep the copy, so a fixture that only expanded would never reach a
+/// second frame.
+fn spin(harness: &mut Harness) -> (i64, zgui_paint::Expansion) {
+    harness.clear_damage();
+    harness.damage.absorb(rect(200, 500, 16, 16));
+    let expansion = harness.expand();
+    let area = match harness.damage.is_full() {
+        true => 1280 * 1024,
+        false => harness.damage.area().unwrap_or(0),
+    };
+    harness.paint();
+    (area, expansion)
+}
+
+#[test]
+fn a_spinner_under_a_modal_scrim_costs_the_spinner_rather_than_the_window() {
+    // The case the whole kept copy exists for. A dialog's scrim covers the window and reads all of
+    // it, so every frame that touched anything at all used to redraw everything: sixteen pixels of
+    // spinner became one and a third million, which is the frame rate of the machine this was
+    // found on divided by however many times that is.
+    let mut harness = scrim_over_a_page();
+
+    let (renewing, first) = spin(&mut harness);
+    assert!(
+        first.keeping.is_none(),
+        "the first frame has no copy to keep, so it makes one"
+    );
+    assert_eq!(renewing, 1280 * 1024, "and making one costs the window");
+
+    let (keeping, second) = spin(&mut harness);
+    assert!(second.keeping.is_some(), "the copy is there to be kept");
+    assert!(!second.escalated);
+    // The spinner, widened by how far the blur carries a pixel, and nothing else.
+    assert!(
+        (256..4096).contains(&keeping),
+        "a kept scrim costs {keeping} px, which is neither the spinner nor a halo around it"
+    );
+
+    let (steady, third) = spin(&mut harness);
+    assert_eq!((steady, third.keeping), (keeping, second.keeping));
+}
+
+#[test]
+fn the_damage_a_kept_scrim_grows_by_is_how_far_the_blur_carries_a_pixel() {
+    // Not an arbitrary margin: a filtered pixel is a weighted sum of its neighbourhood, so the
+    // answer changes exactly as far out as the kernel reaches. Asserted against the same function
+    // the renderer's passes are staged by, so the two cannot drift apart.
+    let mut harness = scrim_over_a_page();
+    spin(&mut harness);
+    spin(&mut harness);
+
+    let scrim = harness.fragment_of("scrim");
+    let extent = zgui_paint::read_extent_of(&harness.store, scrim, harness.scale)
+        .expect("the scrim reads outside itself");
+    let reach = pixels(extent.source).size.width - pixels(extent.bounds).size.width;
+    let grown = harness
+        .damage
+        .rects()
+        .iter()
+        .find(|rect| rect.size.width > 16)
+        .copied()
+        .expect("the spinner's rectangle grew");
+    assert_eq!(
+        grown.size.width - 16,
+        reach,
+        "grown by {} against a reach of {reach}",
+        grown.size.width - 16
+    );
+}
+
+#[test]
+fn a_second_backdrop_takes_the_kept_copy_away_from_both() {
+    // There is one kept copy, and two panels would each want it: the second would overwrite what
+    // the first left for the frame after, and the first would then filter the second's
+    // surroundings. Neither keeps anything rather than one of them keeping the wrong thing.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![
+            Element::new("page"),
+            Element::new("first"),
+            Element::new("second"),
+        ]),
+        "root { display: block; width: 1280px; height: 1024px }
+         page { display: block; height: 1024px; background: #eee }
+         first { position: fixed; inset: 0; backdrop-filter: blur(3px) }
+         second { position: fixed; inset: 0; backdrop-filter: blur(3px) }",
+        1280.0,
+        1024.0,
+    );
+    harness.paint_everything();
+
+    for _ in 0..3 {
+        let (_, expansion) = spin(&mut harness);
+        assert!(
+            expansion.keeping.is_none(),
+            "two backdrops and one copy: neither may keep it"
+        );
+    }
+}
+
+#[test]
+fn a_content_blur_still_has_its_whole_source_repainted() {
+    // The corollary, and the reason the two are told apart. A `filter` reads its own target, which
+    // the pool lends fresh every frame — there is nothing kept to read, so every pixel it samples
+    // has to be one this frame painted.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("under"), Element::new("fog")]),
+        "root { display: block; width: 1280px; height: 1024px }
+         under { display: block; height: 600px; background: #eee }
+         fog { display: block; height: 60px; filter: blur(4px) }",
+        1280.0,
+        1024.0,
+    );
+    harness.paint_everything();
+
+    for _ in 0..3 {
+        harness.clear_damage();
+        harness.damage.absorb(rect(0, 590, 1280, 20));
+        let expansion = harness.expand();
+        assert!(
+            expansion.keeping.is_none(),
+            "a content filter keeps nothing"
+        );
+        let fog = harness.fragment_of("fog");
+        let source = zgui_paint::read_extent_of(&harness.store, fog, harness.scale)
+            .expect("a read extent")
+            .source;
+        assert!(
+            harness.damage.is_full()
+                || harness
+                    .damage
+                    .rects()
+                    .iter()
+                    .any(|rect| rect.contains_rect(pixels(source))),
+            "the whole of what the blur reads has to be redrawn"
+        );
+    }
+}

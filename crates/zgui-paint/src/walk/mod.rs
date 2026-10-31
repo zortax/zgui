@@ -104,6 +104,12 @@ pub struct PaintInput<'a> {
     pub scale: f32,
     /// How a scrollbar is painted.
     pub scrollbars: ScrollbarPaint,
+    /// The box whose backdrop filters the copy kept from the last frame.
+    ///
+    /// Decided by [`expand`](crate::expand), which is the only place that can decide it: keeping a
+    /// copy and growing the damage the cheap way are one choice, and a frame that made half of it
+    /// would read pixels it never wrote.
+    pub keeping: Option<BoxKey>,
     /// Whether to record which fragments were emitted, for the completeness oracle.
     ///
     /// Off by default, because a frame that is not being audited should not pay a push per
@@ -156,6 +162,7 @@ impl<'a> PaintInput<'a> {
             opaque_surface: true,
             scale: 1.0,
             scrollbars: crate::emit::scrollbar::default_paint(),
+            keeping: None,
             record_emitted: false,
             verify_replays: zgui_layout::invariants::enabled(),
             placements: None,
@@ -188,6 +195,13 @@ pub struct PaintReport {
     /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
     /// stands. An empty list asks for nothing.
     pub layers_owed: Vec<Rect<i32, Device>>,
+    /// How many `backdrop-filter` primitives reached the display list.
+    pub backdrops: usize,
+    /// Whether any of them was drawn inside a group rather than onto the composite.
+    ///
+    /// Both are for [`BackdropMemory::emitted`](crate::BackdropMemory::emitted), and only the walk
+    /// can answer either: the expansion sees a registry of fragments and not what encloses them.
+    pub backdrop_nested: bool,
 }
 
 /// The vector raster paths selected for one freshly encoded element.
@@ -1201,7 +1215,15 @@ impl stacking::Visitor for Pass<'_, '_> {
             self.bands.push(key);
         }
         if let Some(fragment) = own {
-            self.report.primitives += group::backdrop(
+            // What the expansion chose, and it is the *box* rather than one of its fragments: a box
+            // holding several emits a backdrop for each, and every one of them filters the same
+            // copy of the same surroundings.
+            //
+            // Whether either of those is a reason not to have kept the copy at all is answered
+            // afterwards, by the counts below — a decision that has to be made before the damage
+            // was grown cannot be made here.
+            let keeping = self.input.keeping == Some(key) && self.open.is_empty();
+            let pushed = group::backdrop(
                 self.scene,
                 &style,
                 &node.style,
@@ -1209,7 +1231,13 @@ impl stacking::Visitor for Pass<'_, '_> {
                 fragment.clip,
                 self.input.shaders,
                 self.input.scale,
+                keeping,
             );
+            if pushed > 0 {
+                self.report.backdrops += 1;
+                self.report.backdrop_nested |= !self.open.is_empty();
+            }
+            self.report.primitives += pushed;
             if isolation.needs_target() {
                 let boundary = group::open(
                     self.scene,

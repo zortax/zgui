@@ -63,8 +63,8 @@ pub use crate::content::{
     ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,
 };
-pub use crate::damage::accumulate::{Expansion, expand, vacated};
-pub use crate::damage::ink::{ReadExtent, cull_rect, read_extent_of};
+pub use crate::damage::accumulate::{BackdropMemory, Expansion, expand, vacated};
+pub use crate::damage::ink::{ReadExtent, Reads, cull_rect, read_extent_of};
 pub use crate::emit::highlight::{
     Highlight, HighlightLayer, HighlightRequest, HighlightSource, NoHighlights,
 };

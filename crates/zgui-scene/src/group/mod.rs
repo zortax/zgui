@@ -8,7 +8,7 @@ pub mod source;
 #[cfg(test)]
 mod tests;
 
-pub use crate::group::backdrop::BackdropFilter;
+pub use crate::group::backdrop::{BackdropCapture, BackdropFilter};
 pub use crate::group::boundary::GroupBoundary;
 pub use crate::group::filter::Filter;
 pub use crate::group::source::read_extent;

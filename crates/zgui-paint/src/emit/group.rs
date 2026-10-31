@@ -198,6 +198,11 @@ pub fn close(scene: &mut Scene, boundary: &GroupBoundary) {
 ///
 /// The filtered result is cut to the rounded border box, as the box's background is. `computed` is
 /// the box's computed style, which gives the radii.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a backdrop is described by the style, the box and the clip it is cut to, and a \
+              struct for the set would be built at one call site and read at one other"
+)]
 pub fn backdrop(
     scene: &mut Scene,
     style: &PaintStyle,
@@ -206,6 +211,7 @@ pub fn backdrop(
     clip: ClipId,
     shaders: &dyn crate::content::shader::ShaderSource,
     scale: f32,
+    keeping: bool,
 ) -> usize {
     let mut filters = style.group.backdrop.clone();
     // After the chain the `backdrop-filter` property wrote, for the reason a filter effect goes
@@ -242,9 +248,14 @@ pub fn backdrop(
     } else {
         clip
     };
-    let filter = BackdropFilter::new(fragment.border_box, filters)
+    let mut filter = BackdropFilter::new(fragment.border_box, filters)
         .clipped(clip)
         .in_space(space);
+    // A backdrop the expansion chose may read the copy kept from the last frame; the rest renew
+    // it. See [`BackdropFilter::keeping_its_capture`].
+    if keeping {
+        filter = filter.keeping_its_capture();
+    }
     usize::from(scene.push_backdrop(filter).is_some())
 }
 
@@ -456,6 +467,7 @@ mod tests {
             zgui_scene::ClipId::ROOT,
             &crate::content::shader::NoShaders,
             1.0,
+            false,
         );
         assert_eq!(pushed, 1);
         let backdrop = &scene.primitives.backdrops[0];

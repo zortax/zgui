@@ -255,6 +255,12 @@ pub struct Window {
     raster: Arc<dyn zgui_text::GlyphRaster>,
     /// What this frame must redraw.
     damage: DamageSet,
+    /// What the kept copy of a backdrop's surroundings holds, between frames.
+    ///
+    /// Beside the damage set because the two are one decision: keeping a copy is what lets the
+    /// damage stay small under a frosted panel, and a damage set that stayed small without one
+    /// would leave the panel reading pixels no frame has written.
+    backdrops: zgui_paint::BackdropMemory,
     /// What every fragment pass this frame ran moved rigidly, and whether it moved anything else.
     ///
     /// The input to deciding whether the renderer may translate pixels it already has rather than
@@ -723,6 +729,7 @@ impl Window {
             budgets: crate::budget::Budgets::new(),
             raster,
             damage: DamageSet::full(),
+            backdrops: zgui_paint::BackdropMemory::default(),
             rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
             damage_before_layout: DamageSet::new(),
             layout_passes: 0,

@@ -32,12 +32,12 @@
 
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
-use zgui_geom::{Device, Size};
-use zgui_layout::LayoutStore;
+use zgui_geom::{Device, Edges, Rect, Size};
 use zgui_layout::fragment::diff::pixels;
+use zgui_layout::{BoxKey, FragKey, LayoutStore};
 use zgui_scene::Placements;
 
-use crate::damage::ink::read_extent_of;
+use crate::damage::ink::{Reads, read_extent_of};
 
 /// What one expansion pass did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -53,6 +53,60 @@ pub struct Expansion {
     /// bound being exhausted, which a pathological stack of mutually overlapping blurred panels
     /// could otherwise spin in every frame.
     pub escalated: bool,
+    /// The box whose backdrop may filter the copy kept from the last frame, if there is one.
+    ///
+    /// Set only where the damage was grown the cheap way for it, so it is not a hint: the emitter
+    /// marks exactly this box's backdrop, and the renderer is then entitled to read pixels this
+    /// frame never wrote.
+    pub keeping: Option<BoxKey>,
+}
+
+/// What the kept backdrop copy holds, between frames.
+///
+/// The whole of the state behind [`Expansion::keeping`]. A copy may only be kept when the frame
+/// before this one filled it for the same backdrop over the same region of the same surface — so
+/// the first frame a frosted panel appears on pays for the whole copy, and every frame after it
+/// pays for what moved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BackdropMemory {
+    /// The surface the copy is of.
+    surface: Size<i32, Device>,
+    /// The box whose backdrop it holds what lies beneath, and the region that was read.
+    held: Option<(BoxKey, Rect<i32, Device>)>,
+    /// Whether the frame that last filled the copy left it worth keeping.
+    usable: bool,
+}
+
+impl BackdropMemory {
+    /// Records what the frame just emitted, which is what decides whether the next may keep the
+    /// copy it left behind.
+    ///
+    /// Two things disqualify it and only the emit walk knows either, because both are about what
+    /// *encloses* a backdrop rather than about the backdrop itself. One inside a group filters that
+    /// group's own target rather than the composite, and the kept copy is of the composite — not
+    /// the same picture, and not even the same format. And a frame that drew more than one leaves
+    /// the copy holding whatever the last of them captured, which is not what the first would read.
+    ///
+    /// Both are answered a frame late on purpose. The alternative is to answer them while the walk
+    /// runs, which is after the damage has been grown on the strength of the answer.
+    pub fn emitted(&mut self, backdrops: usize, nested: bool) {
+        self.usable = backdrops == 1 && !nested;
+    }
+
+    /// Whether `candidate` may read the copy kept from the last frame, and remembers it either way.
+    ///
+    /// The surface is part of it because the copy is allocated against the surface: one of a
+    /// different size holds nothing this one can read.
+    fn admit(
+        &mut self,
+        surface: Size<i32, Device>,
+        candidate: Option<(BoxKey, Rect<i32, Device>)>,
+    ) -> Option<BoxKey> {
+        let kept = self.usable && self.surface == surface && self.held == candidate;
+        self.surface = surface;
+        self.held = candidate;
+        kept.then_some(candidate?.0)
+    }
 }
 
 /// The share of the surface above which a damage rectangle is not worth scissoring to.
@@ -80,18 +134,119 @@ pub fn expand(
     surface: Size<i32, Device>,
     scale: f32,
     placements: &Placements,
+    memory: &mut BackdropMemory,
 ) -> Expansion {
     let registry = store.read_extents();
     let mut report = Expansion::default();
     if registry.is_empty() || damage.is_full() {
+        // Nothing is kept across a frame that redraws everything, and nothing needs to be: a full
+        // set covers whatever any filter reads, so the next frame's copy is complete either way.
+        memory.held = None;
         return report;
     }
-    let bound = registry.len();
     let area = f64::from(surface.width.max(0)) * f64::from(surface.height.max(0));
-    for pass in 1..=bound {
-        report.passes = pass;
+
+    // Exactly one, because there is one kept copy. Two frosted panels would each want it, and the
+    // second would overwrite what the first left for the frame after.
+    let sole = sole_backdrop(store, registry, scale);
+    let keeping = memory.admit(surface, sole.map(|(box_, _, source)| (box_, source)));
+
+    if !settle(
+        store,
+        registry,
+        damage,
+        scale,
+        placements,
+        keeping,
+        &mut report,
+    ) {
+        return give_up(damage, registry.len(), report);
+    }
+    let Some((box_, bounds, source)) = keeping.and(sole) else {
+        return finish(damage, area, report);
+    };
+    // The chain's reach, read off the two rectangles rather than recomputed from the filters: the
+    // one was made by inflating the other, so their difference *is* it.
+    let reach = (bounds.left() - source.left())
+        .max(bounds.top() - source.top())
+        .max(source.right() - bounds.right())
+        .max(source.bottom() - bounds.bottom())
+        .max(0);
+
+    // What a kept backdrop costs: not everything it reads, but everywhere its answer *changed* —
+    // which is whatever moved beneath it, widened by how far the filter carries a pixel. A spinner
+    // turning under a full-window scrim is sixteen pixels and a halo rather than the window.
+    let mut grew = false;
+    for rect in changed_by(damage, bounds, reach) {
+        if contains(damage, rect) {
+            continue;
+        }
+        damage.absorb(rect);
+        report.absorbed += 1;
+        grew = true;
+    }
+    if !grew {
+        report.keeping = Some(box_);
+        return finish(damage, area, report);
+    }
+    // The widening can have reached a *content* filter's source, and that one needs its whole read
+    // region painted. Settling again may then widen the damage under the backdrop once more, and
+    // chasing the two around costs more than it saves — so the copy is renewed instead, which is
+    // what every frame did before there was one to keep.
+    let settled = report.absorbed;
+    if !settle(
+        store,
+        registry,
+        damage,
+        scale,
+        placements,
+        keeping,
+        &mut report,
+    ) {
+        return give_up(damage, registry.len(), report);
+    }
+    match report.absorbed > settled {
+        true => {
+            memory.held = None;
+            if !contains(damage, source) {
+                damage.absorb(source);
+            }
+            let _ = settle(
+                store,
+                registry,
+                damage,
+                scale,
+                placements,
+                None,
+                &mut report,
+            );
+        }
+        false => report.keeping = Some(box_),
+    }
+    finish(damage, area, report)
+}
+
+/// Grows `damage` over every read extent it touches, to a fixpoint, leaving `keeping` alone.
+///
+/// Answers whether it settled inside the bound. The bound is the number of registered fragments,
+/// since each pass can absorb at most one source no earlier pass reached.
+fn settle(
+    store: &LayoutStore,
+    registry: &[FragKey],
+    damage: &mut DamageSet,
+    scale: f32,
+    placements: &Placements,
+    keeping: Option<BoxKey>,
+    report: &mut Expansion,
+) -> bool {
+    for pass in 1..=registry.len() {
+        report.passes = report.passes.max(pass);
         let mut grew = false;
         for frag in registry {
+            // Every fragment of the kept box, because they are all the one panel.
+            if keeping.is_some() && store.fragment(*frag).map(|it| it.box_) == keeping {
+                continue;
+            }
             let Some(extent) = read_extent_of(store, *frag, scale) else {
                 continue;
             };
@@ -108,17 +263,72 @@ pub fn expand(
             grew = true;
         }
         if !grew {
-            return finish(damage, area, report);
+            return true;
         }
     }
-    // Every pass grew something, so the fixpoint was not reached inside the bound.
+    false
+}
+
+/// Damages the whole surface, for an expansion that never settled.
+fn give_up(damage: &mut DamageSet, registered: usize, mut report: Expansion) -> Expansion {
     tracing::warn!(
-        registered = registry.len(),
+        registered,
         "damage expansion did not settle; damaging the whole surface"
     );
     damage.set_full();
     report.escalated = true;
+    report.keeping = None;
     report
+}
+
+/// The one box whose backdrop reads outside what it writes, what it writes, and what it reads.
+///
+/// `None` where there is none, and where there is more than one.
+///
+/// **Boxes, not fragments.** A box can hold several fragments and the registry lists every one of
+/// them — a modal scrim was found holding seven — while what reaches the display list is one
+/// backdrop per *painted* fragment. Counting registry entries finds a crowd where there is one
+/// panel, and then no panel ever keeps anything. Their rectangles need not agree either, so the
+/// answer is the union: a rule that has to cover whichever fragment the emitter picks covers all
+/// of them.
+/// The one backdrop a frame may keep a copy for: the box it belongs to, what it writes, and what
+/// it reads.
+type SoleBackdrop = (BoxKey, Rect<i32, Device>, Rect<i32, Device>);
+
+fn sole_backdrop(store: &LayoutStore, registry: &[FragKey], scale: f32) -> Option<SoleBackdrop> {
+    let mut found: Option<SoleBackdrop> = None;
+    for frag in registry {
+        let Some(extent) = read_extent_of(store, *frag, scale) else {
+            continue;
+        };
+        if extent.reads != Reads::WhatIsBeneath {
+            continue;
+        }
+        let box_ = store.fragment(*frag)?.box_;
+        let (bounds, source) = (pixels(extent.bounds), pixels(extent.source));
+        found = match found {
+            None => Some((box_, bounds, source)),
+            Some((held, held_bounds, held_source)) if held == box_ => {
+                Some((held, held_bounds.union(bounds), held_source.union(source)))
+            }
+            Some(_) => return None,
+        };
+    }
+    found
+}
+
+/// Where a filter of `reach` over `bounds` answers differently because `damage` moved.
+///
+/// A pixel of the answer is a weighted sum of its neighbourhood, so it changes exactly when
+/// something inside `reach` of it did. Nothing outside `bounds` is drawn by the filter at all.
+fn changed_by(damage: &DamageSet, bounds: Rect<i32, Device>, reach: i32) -> Vec<Rect<i32, Device>> {
+    damage
+        .rects()
+        .iter()
+        .filter(|rect| rect.intersects(bounds))
+        .filter_map(|rect| rect.outset(Edges::uniform(reach)).intersection(bounds))
+        .filter(|rect| !rect.is_empty())
+        .collect()
 }
 
 /// Escalates to a full redraw when the set has grown past what is worth scissoring to.
@@ -129,6 +339,10 @@ fn finish(damage: &mut DamageSet, area: f64, mut report: Expansion) -> Expansion
     {
         damage.set_full();
         report.escalated = true;
+        // A frame that redraws everything renews the copy by drawing it, so there is nothing left
+        // for keeping one to save and the invariant stays simple: a kept copy means a damage set
+        // that was grown the cheap way.
+        report.keeping = None;
     }
     report
 }
