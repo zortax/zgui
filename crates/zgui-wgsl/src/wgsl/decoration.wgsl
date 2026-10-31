@@ -14,11 +14,26 @@ struct Decoration {
     reserved: u32,
 }
 
-@group(1) @binding(0) var<storage, read> decorations: array<Decoration>;
-// The draw-order permutation: the instance array keeps push order, and a draw's instance
-// range walks this list.
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
+@group(1) @binding(0) var decorations: texture_2d<u32>;
+
+/// One `Decoration`, which the arena pads to 4 texels.
+fn load_decoration(slot: u32) -> Decoration {
+    let base = slot * 4u;
+    let t0 = textureLoad(decorations, table_texel(base + 0u), 0);
+    let t1 = textureLoad(decorations, table_texel(base + 1u), 0);
+    let t2 = textureLoad(decorations, table_texel(base + 2u), 0);
+    let t3 = textureLoad(decorations, table_texel(base + 3u), 0);
+    return Decoration(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        Rgba(bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y)),
+        bitcast<f32>(t2.z),
+        t2.w,
+        t3.x,
+        t3.y,
+    );
+}
 
 const DECORATION_SOLID: u32 = 0u;
 const DECORATION_WAVY: u32 = 1u;
@@ -40,12 +55,10 @@ struct DecorationVarying {
 @vertex
 fn vs_decoration(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) instance: u32,
+    @location(0) slot: u32,
+    @location(1) shift: vec2<f32>,
 ) -> DecorationVarying {
-    let packed = remap[instance];
-    let slot = packed & REMAP_SLOT_MASK;
-    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
-    let decoration = decorations[slot];
+    let decoration = load_decoration(slot);
     let local = inflated_corner(vertex, decoration.bounds) + shift;
     var out: DecorationVarying;
     out.position = to_clip_position(local, decoration.transform);

@@ -21,7 +21,17 @@ struct VectorInstance {
     control: vec4<f32>,
 }
 
-@group(1) @binding(0) var<storage, read> vector_instances: array<VectorInstance>;
+@group(1) @binding(0) var vector_instances: texture_2d<u32>;
+
+/// One `VectorInstance`, which is three whole texels.
+fn load_vector(index: u32) -> VectorInstance {
+    let base = index * 3u;
+    return VectorInstance(
+        texel_f32(textureLoad(vector_instances, table_texel(base + 0u), 0)),
+        texel_f32(textureLoad(vector_instances, table_texel(base + 1u), 0)),
+        texel_f32(textureLoad(vector_instances, table_texel(base + 2u), 0)),
+    );
+}
 @group(1) @binding(1) var vector_scratch: texture_2d<f32>;
 
 struct VectorVarying {
@@ -34,7 +44,7 @@ fn vs_vector(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> VectorVarying {
-    let record = vector_instances[instance];
+    let record = load_vector(instance);
     let device = record.bounds.xy + unit_corner(vertex) * record.bounds.zw;
     var out: VectorVarying;
     out.position = to_clip_position(device, 0u);
@@ -44,7 +54,7 @@ fn vs_vector(
 
 @fragment
 fn fs_vector(in: VectorVarying) -> @location(0) vec4<f32> {
-    let record = vector_instances[in.instance];
+    let record = load_vector(in.instance);
     let device = device_position(in.position.xy);
     // The same chain evaluation every other pipeline applies, so vector content is clipped by
     // exactly what a quad would have been clipped by.

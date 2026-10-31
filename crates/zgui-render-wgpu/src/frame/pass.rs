@@ -75,7 +75,7 @@ pub struct Recorder<'frame> {
     pub(crate) timer: Option<&'frame mut GpuTimer>,
 }
 
-impl Recorder<'_> {
+impl<'frame> Recorder<'frame> {
     /// Records `segments` of `plan` into `encoder`.
     ///
     /// One pass is opened per pass segment and dropped before the next segment, because a live
@@ -272,14 +272,17 @@ impl Recorder<'_> {
     }
 
     /// Issues one planned draw, and says whether it happened.
-    fn issue(
+    fn issue<'pass>(
         &mut self,
-        pass: &mut BoundPass<'_>,
+        pass: &mut BoundPass<'pass>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         draw: &PlannedDraw,
         format: wgpu::TextureFormat,
-    ) -> bool {
+    ) -> bool
+    where
+        'frame: 'pass,
+    {
         match draw {
             PlannedDraw::Clear => {
                 let Some(pipeline) =
@@ -424,14 +427,17 @@ impl Recorder<'_> {
     }
 
     /// Issues one instanced batch of the display list.
-    fn batch(
+    fn batch<'pass>(
         &mut self,
-        pass: &mut BoundPass<'_>,
+        pass: &mut BoundPass<'pass>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         batch: Batch,
         format: wgpu::TextureFormat,
-    ) -> bool {
+    ) -> bool
+    where
+        'frame: 'pass,
+    {
         let (kind, range, texture) = match batch {
             Batch::Quads(range) => (PipelineKind::Quad, range, None),
             Batch::Shadows(range) => (PipelineKind::Shadow, range, None),
@@ -497,7 +503,16 @@ impl Recorder<'_> {
         if let Some(bind_group) = atlas {
             pass.set_bind_group(2, bind_group, &[]);
         }
-        pass.draw(0..4, range.start as u32..range.end as u32);
+        // The draw order arrives as vertex input, bound at this range's own start. Asking for a
+        // non-zero base instance instead would need OpenGL 4.2, and the oldest device this runs on
+        // is 3.3 — so the instances are counted from zero and the offset is in the binding.
+        // Copied out of `self` before the reborrow, because the slice has to outlive the pass and
+        // the buffers do: the field is a shared reference for the whole frame.
+        let buffers = self.buffers;
+        let order = &buffers.orders[lane];
+        let stride = core::mem::size_of::<crate::buffer::persist::OrderEntry>() as u64;
+        pass.set_vertex_buffer(0, order.slice_from(range.start as u64 * stride));
+        pass.draw(0..4, 0..(range.end - range.start) as u32);
         true
     }
 
@@ -568,16 +583,19 @@ impl Recorder<'_> {
     /// and one block more. An effect the renderer was never told about draws nothing: the
     /// alternative is drawing the rectangle with whatever pipeline happened to be bound.
     #[allow(clippy::too_many_arguments)]
-    fn shaded(
+    fn shaded<'pass>(
         &mut self,
-        pass: &mut BoundPass<'_>,
+        pass: &mut BoundPass<'pass>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         shader: zgui_scene::ShaderId,
         params: zgui_scene::ShaderParamsSlot,
         range: core::ops::Range<usize>,
         format: wgpu::TextureFormat,
-    ) -> bool {
+    ) -> bool
+    where
+        'frame: 'pass,
+    {
         if range.is_empty() {
             return false;
         }
@@ -621,7 +639,14 @@ impl Recorder<'_> {
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         pass.set_bind_group(2, &block, &[offset]);
-        pass.draw(0..4, range.start as u32..range.end as u32);
+        // As an ordinary batch does: the order at this range's own start, instances from zero.
+        let buffers = self.buffers;
+        let stride = core::mem::size_of::<crate::buffer::persist::OrderEntry>() as u64;
+        pass.set_vertex_buffer(
+            0,
+            buffers.orders[lane].slice_from(range.start as u64 * stride),
+        );
+        pass.draw(0..4, 0..(range.end - range.start) as u32);
         true
     }
 
@@ -790,6 +815,14 @@ impl<'pass> BoundPass<'pass> {
             self.pass.set_pipeline(pipeline);
             self.pipeline = Some(key);
         }
+    }
+
+    /// Binds the vertex buffer the draws that follow fetch their instances from.
+    ///
+    /// Not cached: every draw binds its own range's start, so two draws of the same lane name
+    /// different slices of the same buffer.
+    fn set_vertex_buffer(&mut self, slot: u32, slice: wgpu::BufferSlice<'pass>) {
+        self.pass.set_vertex_buffer(slot, slice);
     }
 
     /// Sets the scissor the draws that follow are cut to.

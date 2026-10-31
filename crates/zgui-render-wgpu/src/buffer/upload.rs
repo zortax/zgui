@@ -183,14 +183,53 @@ impl UploadBelt {
         format: zgui_atlas::TextureFormat,
         bytes: &[u8],
     ) -> u64 {
-        let width = bounds.size.width.max(0) as u32;
-        let height = bounds.size.height.max(0) as u32;
+        self.write_texels(
+            gpu,
+            encoder,
+            target,
+            mip,
+            (bounds.origin.x.max(0) as u32, bounds.origin.y.max(0) as u32),
+            (
+                bounds.size.width.max(0) as u32,
+                bounds.size.height.max(0) as u32,
+            ),
+            format.bytes_per_texel(),
+            bytes,
+        )
+    }
+
+    /// Copies tightly packed texels into a rectangle of `target`, whatever the texel is.
+    ///
+    /// The same work as [`UploadBelt::write_texture`] with no atlas format to name it: the tables
+    /// and the instance arenas are `rgba32uint`, and their texel is not one of the two an atlas
+    /// has. What matters to a caller is that this reaches the device through the belt rather than
+    /// through `Queue::write_texture`, which allocates and maps a staging buffer for every call —
+    /// and on the GL backend allocating one while the card is drawing waits for the card.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a texture write names a target, a level, an origin, an extent and a texel, and \
+                  the belt and the encoder are what make it a belt write rather than a queue one. \
+                  Wrapping them in a struct would name the arguments at the cost of building one \
+                  per write"
+    )]
+    pub fn write_texels(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        mip: u32,
+        origin: (u32, u32),
+        size: (u32, u32),
+        bytes_per_texel: u32,
+        bytes: &[u8],
+    ) -> u64 {
+        let (width, height) = size;
         if width == 0 || height == 0 {
             return 0;
         }
-        let row = u64::from(width) * u64::from(format.bytes_per_texel());
+        let row = u64::from(width) * u64::from(bytes_per_texel);
         let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64);
-        let size = padded * u64::from(height);
+        let staged = padded * u64::from(height);
         assert_eq!(bytes.len() as u64, row * u64::from(height));
 
         self.receive();
@@ -198,27 +237,27 @@ impl UploadBelt {
         let active = self
             .active
             .iter()
-            .position(|chunk| chunk.allocation(size, alignment).is_some());
+            .position(|chunk| chunk.allocation(staged, alignment).is_some());
         let mut chunk = if let Some(index) = active {
             self.active.swap_remove(index)
         } else if let Some(index) = self
             .free
             .iter()
-            .position(|chunk| chunk.allocation(size, alignment).is_some())
+            .position(|chunk| chunk.allocation(staged, alignment).is_some())
         {
             self.free.swap_remove(index)
         } else {
-            self.allocate_chunk(gpu, size, "zgui.texture-upload.chunk")
+            self.allocate_chunk(gpu, staged, "zgui.texture-upload.chunk")
         };
         let offset = chunk
-            .allocation(size, alignment)
+            .allocation(staged, alignment)
             .expect("a selected texture upload chunk has enough room");
-        chunk.offset = offset + size;
+        chunk.offset = offset + staged;
         chunk.last_used = self.frame;
         self.active.push(chunk);
 
         let chunk = self.active.last().expect("the selected chunk was retained");
-        let slice = chunk.buffer.slice(offset..offset + size);
+        let slice = chunk.buffer.slice(offset..offset + staged);
         {
             let mut mapped = slice.get_mapped_range_mut();
             for y in 0..height as usize {
@@ -242,8 +281,8 @@ impl UploadBelt {
                 texture: target,
                 mip_level: mip,
                 origin: wgpu::Origin3d {
-                    x: bounds.origin.x.max(0) as u32,
-                    y: bounds.origin.y.max(0) as u32,
+                    x: origin.0,
+                    y: origin.1,
                     z: 0,
                 },
                 aspect: wgpu::TextureAspect::All,
