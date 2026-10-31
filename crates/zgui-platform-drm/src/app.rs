@@ -10,22 +10,26 @@
 //!
 //! # What one wait watches
 //!
-//! Four kinds of descriptor, and `watched` builds the set once per turn:
+//! Five kinds of descriptor, and `watched` builds the set once per turn:
 //!
 //! * **the card**, which becomes readable when a display finishes a flip;
 //! * **the wake channel**, which another thread writes;
-//! * **the session daemon's descriptor**, if this run has one, which reports a terminal moving; and
-//! * **every input device the seat holds**, plus the seat's watch on the directory they come from.
+//! * **the session daemon's descriptor**, if this run has one, which reports a terminal moving;
+//! * **every input device the seat holds**, plus the seat's watch on the directory they come from;
+//!   and
+//! * **every frame the card is still drawing**, one sync file each, which is what makes waiting for
+//!   the graphics device a wait like any other rather than a call that blocks the loop inside a
+//!   driver. `Scanout::drawing` answers them and `scanout::watched` says why they are here.
 //!
-//! The last group is why the set is built per turn: it grows with a device plugged in and shrinks
-//! with one that stopped answering.
+//! The last two groups are why the set is built per turn: one grows with a device plugged in and
+//! shrinks with one that stopped answering, and the other holds one frame per display in flight.
 //!
 //! **A descriptor that answers a failure and stays readable turns every later wait into a wait of
 //! no length**, so such a descriptor leaves the set. A device that answers a read with a failure is
 //! dropped from the seat, and the watch is dropped when it can no longer be read. A loop that kept
 //! either would run at the speed of the processor for the rest of the program.
 //!
-//! # The seven ways a turn happens
+//! # The eight ways a turn happens
 //!
 //! The list is exhaustive on purpose. A missing entry is an application that quietly stops
 //! answering one whole class of event.
@@ -56,6 +60,10 @@
 //!    report. It is read at the top of the turn, before anything else, because it moves the
 //!    devices, DRM master and the terminal, and everything below it is then looking at a different
 //!    machine.
+//! 8. **The card finished a frame.** The frame's own sync file becomes readable, and the frame is
+//!    committed at the bottom of the turn. This is the one way a turn happens that used to be a
+//!    wait inside a graphics driver instead, which answered no key and fired no timer while it
+//!    lasted — `scanout::watched` gives the measurement.
 //!
 //! # Three moments nothing wakes the loop for
 //!
@@ -165,7 +173,7 @@ use std::cell::RefCell;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::io::Errno;
@@ -251,6 +259,11 @@ pub fn run(
     displays: &Displays,
     gpu: Option<&Gpu>,
 ) -> Result<(), PlatformError> {
+    // Before the card, so that the trace covers taking it. A console is where this matters most:
+    // standard error is the screen the frame loop is about to overwrite, so a file is the only
+    // place a measurement can go. Nothing is recorded unless `ZGUI_LATENCY` names one.
+    zgui_profile::latency::start_epoch();
+
     // The session is what took the card, so it is what gives back everything the card cost: the
     // console's screen, the master a direct run took, and every device the seat opened. That
     // happens whatever the loop below did, including an error return and a panic.
@@ -293,6 +306,8 @@ fn drive(
         .map(|output| Rc::new(RefCell::new(Cursor::new(device, output, &mut taken))))
         .collect();
 
+    let waker = Arc::new(EventfdWaker::new()?);
+
     let mut scanouts: Vec<Rc<RefCell<Scanout>>> = Vec::with_capacity(outputs.len());
     for (output, cursor) in outputs.iter().zip(&cursors) {
         // Without a graphics device there is nothing to make images on, so every display copies.
@@ -317,7 +332,6 @@ fn drive(
     }
 
     let surfaces = surface::one_per_output(outputs, Arc::clone(device));
-    let waker = Arc::new(EventfdWaker::new()?);
     let clock = Arc::new(SystemClock::new());
     // The device stamps a completed flip on the kernel's monotonic clock, and everything above
     // the contract reads the loop's own. Anchored once, here: reading the kernel clock again per
@@ -679,14 +693,74 @@ fn drive(
             let bound = owed_at.filter(|due| presence.is_active() && outlasts(parked, *due));
             let waiting = bound.map_or(parked, Parked::Until);
 
-            match wait(
+            // A frame the graphics device is still drawing reaches the screen at the next acquire,
+            // and that is where its wait belongs: everything the loop does in between runs while
+            // the card draws. A loop about to block for longer than a refresh has no acquire coming
+            // inside the time that frame could still be shown in, so it settles the frame here
+            // instead — otherwise the last frame an application draws before it goes idle never
+            // appears at all.
+            if let Some(gpu) = gpu
+                && presence.is_active()
+            {
+                let within = match waiting {
+                    Parked::Indefinitely => None,
+                    Parked::Until(due) => Some(due.saturating_duration_since(clock.now())),
+                    // `Never` and any future policy a block could not happen under: settle at once,
+                    // because there is no wait to fold this into.
+                    _ => Some(Duration::ZERO),
+                };
+                for scanout in &scanouts {
+                    let mut committing = commit.borrow_mut();
+                    if let Err(error) = scanout.borrow_mut().settle_before_blocking(
+                        device,
+                        &mut **committing,
+                        gpu,
+                        within,
+                    ) {
+                        warn!(
+                            target: "zgui::platform",
+                            "the frame a display had finished could not be put on the screen, so \
+                             it stays dark until the frame after this one: {error}"
+                        );
+                    }
+                }
+            }
+
+            // Written out here, where the turn is over and the loop is about to block: often enough
+            // that a run killed from outside still leaves a usable trace, and never in the middle
+            // of one.
+            zgui_profile::latency::flush();
+
+            // Every frame the card is still drawing goes into the wait beside the card and the
+            // input devices, so the loop learns that one is ready to be shown in the one place it
+            // is allowed to block. The borrows are held only for the wait, which is the one part of
+            // a turn that touches no display.
+            //
+            // **Only while the session has the screen**, which is the same condition the settle
+            // above runs under. A sync file stays readable once it has signalled, so a frame that
+            // is watched and never settled would end every wait at once for as long as it sat
+            // there — a turn that answers nothing, taken as fast as the processor allows.
+            let drawing: Vec<_> = if presence.is_active() {
+                scanouts.iter().map(|scanout| scanout.borrow()).collect()
+            } else {
+                Vec::new()
+            };
+            let frames: Vec<BorrowedFd<'_>> = drawing
+                .iter()
+                .flat_map(|scanout| scanout.drawing())
+                .collect();
+
+            let waited = wait(
                 device,
                 &waker,
                 session,
                 presence.is_active().then_some(&seat),
+                &frames,
                 waiting,
                 clock.now(),
-            ) {
+            );
+            drop(drawing);
+            match waited {
                 // The wait ran to its end at this loop's own bound. The application's moment is
                 // still ahead of it, so nothing of its is reported and the next turn asks for it
                 // again.
@@ -1024,10 +1098,17 @@ fn wait(
     waker: &EventfdWaker,
     session: &Session,
     seat: Option<&Seat>,
+    frames: &[BorrowedFd<'_>],
     parked: Parked,
     now: Instant,
 ) -> Result<bool, PlatformError> {
-    let mut watched = watched(device.as_fd(), waker.as_fd(), session.descriptor(), seat);
+    let mut watched = watched(
+        device.as_fd(),
+        waker.as_fd(),
+        session.descriptor(),
+        seat,
+        frames,
+    );
     match poll(&mut watched, timeout(parked, now).as_ref()) {
         Ok(ready) => Ok(ready == 0),
         // A signal arrived first. Waiting again here would wait the whole length a second time on
@@ -1046,7 +1127,8 @@ fn wait(
 /// The device and the wake channel are always there. `session` is the session daemon's, and a
 /// direct run has none: nothing owns its terminal and a switch reaches it through nothing at all.
 /// `seat` adds every input device and the watch on the directory they come from, and it is nothing
-/// while another session has the screen.
+/// while another session has the screen. `frames` are the frames the card is still drawing, one
+/// descriptor each, and they are what makes waiting for the card a wait like any other.
 ///
 /// Apart from [`wait`] so that what the set holds can be read without a card, a daemon or a
 /// terminal. A descriptor missing from here is a class of event that reaches the program late or
@@ -1056,6 +1138,7 @@ fn watched<'a>(
     waker: BorrowedFd<'a>,
     session: Option<BorrowedFd<'a>>,
     seat: Option<&'a Seat>,
+    frames: &[BorrowedFd<'a>],
 ) -> Vec<PollFd<'a>> {
     let mut watched = vec![
         PollFd::from_borrowed_fd(device, PollFlags::IN),
@@ -1066,6 +1149,11 @@ fn watched<'a>(
         seat.into_iter()
             .flat_map(Seat::descriptors)
             .map(|worked_with| PollFd::from_borrowed_fd(worked_with, PollFlags::IN)),
+    );
+    watched.extend(
+        frames
+            .iter()
+            .map(|drawing| PollFd::from_borrowed_fd(*drawing, PollFlags::IN)),
     );
     watched
 }
@@ -1267,7 +1355,13 @@ mod tests {
         let waker = EventfdWaker::new().expect("this machine makes an eventfd");
         let daemon = EventfdWaker::new().expect("this machine makes an eventfd");
 
-        let watching = watched(device.as_fd(), waker.as_fd(), Some(daemon.as_fd()), None);
+        let watching = watched(
+            device.as_fd(),
+            waker.as_fd(),
+            Some(daemon.as_fd()),
+            None,
+            &[],
+        );
 
         assert_eq!(
             watching.len(),
@@ -1281,9 +1375,34 @@ mod tests {
              says"
         );
         assert_eq!(
-            watched(device.as_fd(), waker.as_fd(), None, None).len(),
+            watched(device.as_fd(), waker.as_fd(), None, None, &[]).len(),
             2,
             "a direct run has no daemon, and nothing owns its terminal"
+        );
+    }
+
+    #[test]
+    fn a_frame_the_card_is_still_drawing_is_one_of_them_too() {
+        // A frame nothing waits on is a picture that reaches the screen when something else happens
+        // to wake the loop, which on an idle console is never — the same fault as the one above and
+        // with the same symptom. It goes in the wait rather than being waited for anywhere else,
+        // because a wait for the card that is not this one blocks every timer behind it.
+        let device = EventfdWaker::new().expect("this machine makes an eventfd");
+        let waker = EventfdWaker::new().expect("this machine makes an eventfd");
+        let drawing = EventfdWaker::new().expect("this machine makes an eventfd");
+
+        let frames = [drawing.as_fd()];
+        let watching = watched(device.as_fd(), waker.as_fd(), None, None, &frames);
+
+        assert_eq!(
+            watching.len(),
+            3,
+            "the device, the wake channel and the one frame"
+        );
+        assert_eq!(
+            watching[2].as_fd().as_raw_fd(),
+            drawing.as_fd().as_raw_fd(),
+            "and the frame's is the last of them, after everything that was always there"
         );
     }
 

@@ -1,6 +1,24 @@
 //! Where a composed frame is copied to.
 
-use zgui_geom::{Device, Size};
+use zgui_bits::DamageSet;
+use zgui_geom::{Device, Rect, Size};
+
+/// How many disjoint rectangles a supplied texture's outstanding copy is tracked as.
+///
+/// Stated as a multiple of [`MAX_DAMAGE`] rather than as a number, because below it the set cannot
+/// hold even one frame's damage: the rectangles merge, the merged ones cover the gaps between
+/// them, and the copy writes pixels no frame ever changed. On a display whose buffers are on the
+/// far side of a bus that is the largest thing a frame spends — measured at half as much again as
+/// the frame's own damage, for a set one rectangle short of holding it.
+///
+/// Twice, because a texture is written every second or third frame and is owed what was drawn
+/// while it was not. Frame to frame those rectangles mostly land on each other and absorb, so the
+/// second copy is headroom rather than a count of anything.
+///
+/// The other end of the trade is a scissor and a draw per rectangle, inside a pass that is open
+/// anyway. A draw costs about seventeen microseconds on the slowest driver this was measured
+/// against, and a rectangle merged away wastes far more than that in pixels.
+const STALE: usize = zgui_bits::MAX_DAMAGE * 2;
 
 use crate::gpu::device::Gpu;
 use crate::gpu::formats::{self, Formats};
@@ -283,6 +301,25 @@ pub struct Supplied {
     size: Size<i32, Device>,
     /// The formats derived from them.
     formats: Formats,
+    /// Per texture: what was written into some *other* texture since this one was last written.
+    ///
+    /// A supplied set is rotated through, so a frame lands in one of them and what it changed is
+    /// owed to every one it missed. Without this a copy limited to what changed would show, on
+    /// alternate frames, whatever that texture held two frames ago.
+    ///
+    /// A [`DamageSet`] rather than a list, because it is the same problem the damage set already
+    /// solves — keep a bounded number of disjoint rectangles and merge the cheapest pair when one
+    /// more arrives — and a second implementation of it would be a second set of edge cases. The
+    /// capacity is its own: this set costs a scissor and a draw per rectangle inside one pass,
+    /// where the renderer's costs a whole pass, so it can afford to be finer.
+    stale: Vec<DamageSet<STALE>>,
+    /// Whether the caller reads each texture out and throws it away rather than rotating them.
+    ///
+    /// A display that composites its own frames hands out staging buffers: it copies exactly what
+    /// a frame wrote onto a buffer of its own and never reads one again. There is nothing for such
+    /// a texture to owe, and a debt would be pixels sent for nobody. Set by whoever supplied them,
+    /// because only it knows what it does with them afterwards.
+    consumed: bool,
     /// Whether the renderer was configured for an extent these textures do not have.
     ///
     /// The renderer cannot reallocate a supplied set, so this is a state a frame has to stop in
@@ -304,6 +341,8 @@ impl Supplied {
         }
         let first = textures.first()?;
         let size = Size::new(first.width() as i32, first.height() as i32);
+        // Every texture holds nothing, so every one of them owes all of it.
+        let stale = vec![DamageSet::<STALE>::full(); textures.len()];
         // Derived from the textures themselves. The texture already answers its format, and a
         // second statement of it beside them is a way for the two to disagree.
         //
@@ -321,6 +360,11 @@ impl Supplied {
             "an encoded supplied texture with nothing to cancel the encode: {formats:?}"
         );
         Some(Self {
+            stale,
+            // Rotated until whoever supplied them says otherwise, which is the safe direction: a
+            // set wrongly called consumed shows a stale rectangle, and one wrongly called rotated
+            // sends pixels nobody needed.
+            consumed: false,
             textures,
             selected: 0,
             size,
@@ -462,7 +506,45 @@ impl Supplied {
         !self.diverged
     }
 
-    /// Returns which texture the next frame is copied into.
+    /// Records what this frame wrote against every texture, and takes what `slot` is owed.
+    ///
+    /// The debt is what the copy at the end of the frame has to cover: the rectangles this frame
+    /// drew **and** the ones drawn while this texture was not the one being written. Taking it
+    /// leaves the texture owing nothing, because what follows writes exactly those.
+    pub fn owed(&mut self, slot: usize, rects: &[Rect<i32, Device>]) -> Vec<Rect<i32, Device>> {
+        // **A set that is read out and thrown away every frame owes nothing.** Where the caller
+        // composites what it was handed onto a buffer of its own, this frame's rectangles are the
+        // whole of what it needs and a debt would be pixels sent across a link for nobody.
+        if self.consumed {
+            return rects.to_vec();
+        }
+        let whole = Rect::new(zgui_geom::Point::new(0, 0), self.size);
+        for held in &mut self.stale {
+            for rect in rects {
+                held.absorb(*rect);
+            }
+        }
+        let Some(held) = self.stale.get_mut(slot) else {
+            return vec![whole];
+        };
+        let debt = if held.is_full() {
+            vec![whole]
+        } else {
+            held.rects().to_vec()
+        };
+        *held = DamageSet::<STALE>::new();
+        debt
+    }
+
+    /// Records that the caller reads each texture out and throws it away.
+    ///
+    /// The `consumed` flag. A caller that composites what it is handed onto a buffer of its
+    /// own says so here, and every frame then carries its own rectangles and no debt.
+    pub fn is_consumed(&mut self, consumed: bool) {
+        self.consumed = consumed;
+    }
+
+    /// Which texture the next frame is copied into.
     pub fn selected(&self) -> usize {
         self.selected
     }

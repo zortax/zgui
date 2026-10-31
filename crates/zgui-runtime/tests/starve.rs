@@ -179,6 +179,39 @@ fn a_timed_out_acquisition_latches_the_window_and_parks_its_animation() {
     harness.assert_park_invariant();
 }
 
+/// The console's copied path declines a present outright while a flip is on its way, and the
+/// buffer is free again within one refresh. Latching on that would turn a display that answers
+/// within a frame into one frame a second — measured at 69 ms a frame becoming 1069 — so a
+/// decline retries at the refresh interval and the latch stays where the real stalls are.
+#[test]
+fn a_declined_present_neither_latches_the_window_nor_parks_its_animation() {
+    let (mut harness, script) = window_with_script();
+    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()));
+    harness.settle(4);
+    assert!(runs.get() >= 1, "the heartbeat never started");
+
+    script
+        .borrow_mut()
+        .push_back(FrameOutcome::Skipped(SkipReason::Declined));
+    harness.advance(FRAME);
+    harness.pump();
+    assert!(
+        !harness.app().windows()[0].is_starved(),
+        "a declined present latched the window as starved"
+    );
+
+    // The retry is one refresh interval away, so most of a second of virtual time keeps the
+    // heartbeat running at its own rate rather than parking it.
+    let before = runs.get();
+    harness.run_for(Duration::from_millis(900), Duration::from_millis(16));
+    assert!(
+        runs.get() > before + 10,
+        "a declined present parked the heartbeat: only {} more runs",
+        runs.get() - before
+    );
+    harness.assert_park_invariant();
+}
+
 #[test]
 fn the_probe_widens_its_wait_while_the_surface_stays_starved() {
     let (mut harness, script) = window_with_script();

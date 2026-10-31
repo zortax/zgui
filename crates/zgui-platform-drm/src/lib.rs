@@ -44,11 +44,15 @@
 //!
 //! # What this does not have yet
 //!
-//! * **One pointer, and no touch protocol.** Every device drives the same pointer and every event
-//!   reports it as the mouse. A touchscreen and a graphics tablet move it through `ABS_X` and
-//!   `ABS_Y`, and the multi-touch codes under `ABS_MT_SLOT` are read by nothing — so two fingers
-//!   are one pointer that jumps between them, no event carries a pressure, and a tablet is not
-//!   bound to the display it is stuck to.
+//! * **One pointer, and a touch protocol on one of the two input sources.** Every pointing device
+//!   drives the same pointer and every event it produces reports it as the mouse. Read through
+//!   libinput, a touchscreen is separate: each contact is a pointer of its own with its own
+//!   identifier, so several fingers are several pointers and none of them moves the cursor or
+//!   hovers anything. Read from the kernel's own stream, a touchscreen and a graphics tablet move
+//!   the one pointer through `ABS_X` and `ABS_Y` and the codes under `ABS_MT_SLOT` are read by
+//!   nothing — so there two fingers are one pointer that jumps between them. No event carries a
+//!   pressure either way, and a device is bound to no display: one stuck to a single screen reaches
+//!   every screen and matches none.
 //! * **The displays are arranged by this backend rather than by the machine.** The kernel says
 //!   where none of them is, so the pointer crosses from one to the next left to right in the order
 //!   the connectors enumerated — which is not how the monitors sit on the desk unless it happens
@@ -110,9 +114,12 @@
 //! **Nothing on that path waits for the graphics device on this thread.** The barrier that gives a
 //! frame over signals a semaphore exported as a sync file, and the flip carries that descriptor as
 //! the plane's `IN_FENCE_FD`, so the kernel holds the frame back until the device has finished it.
-//! A display that can carry no fence — one on the legacy interface, one whose plane has no such
-//! property, or a graphics driver that exports no sync file — is waited for here instead, and that
-//! is what every frame used to cost.
+//! A graphics driver that exports no sync file — every OpenGL one without
+//! `EGL_ANDROID_native_fence_sync` — reaches the same place by asking the **buffer** instead: a
+//! dma-buf hands over the fences of everything writing it, and that descriptor is the same kind of
+//! object. `import::gl::Signal` names the tiers. A display that can carry no fence at all — one on
+//! the legacy interface, one whose plane has no such property — is waited for here instead, and
+//! that is what every frame used to cost.
 //!
 //! Which shape a display takes is settled once, when it is set up, and written to the log with its
 //! reason. `Copied` names the four reasons: a display whose engine composites no pointer keeps the

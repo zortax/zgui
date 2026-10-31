@@ -1025,3 +1025,90 @@ fn keeping_the_capture_is_what_stops_the_damage_reaching_the_panel() {
         "keeping the copy cost {kept} px against renewing it at {renewed}"
     );
 }
+
+/// The vertical bands `rects` touch, merged the way whatever copies a frame out wants them.
+///
+/// Worked out here from the rectangles the frame reported rather than by calling the renderer's
+/// own helper, so the two answers are checked against each other.
+fn bands(rects: &[Rect<i32, Device>]) -> Vec<core::ops::Range<u32>> {
+    let mut spans: Vec<core::ops::Range<u32>> = rects
+        .iter()
+        .filter(|rect| rect.size.height > 0)
+        .map(|rect| {
+            let top = rect.origin.y.max(0) as u32;
+            top..rect.origin.y.saturating_add(rect.size.height).max(0) as u32
+        })
+        .collect();
+    spans.sort_unstable_by_key(|band| band.start);
+    let mut merged: Vec<core::ops::Range<u32>> = Vec::new();
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+    merged
+}
+
+#[test]
+fn a_frame_says_which_rectangles_and_rows_it_drew() {
+    // Nothing else in this crate reads the answer, so nothing else fails when it is empty. A
+    // console copies exactly these rectangles onto the buffer its display scans out of, and a
+    // frame that reports none is copied nowhere: the display then holds whatever its buffer was
+    // allocated with, which is black. That is a defect no pixel assertion in this file can see,
+    // because the frame itself is drawn correctly either way.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let surface = Rect::new(Point::new(0, 0), Size::new(SIDE, SIDE));
+
+    let items = base();
+    present(&mut renderer, &build(&items));
+    assert_eq!(
+        renderer.composed_rects(),
+        [surface],
+        "a frame drawn against the whole surface drew the whole surface"
+    );
+    assert_eq!(
+        renderer.composed_rows(),
+        bands(&[surface]),
+        "and its rows are the whole of it"
+    );
+
+    // One rectangle changes colour, so the damage is that rectangle and nothing like the surface.
+    let mut recoloured = items.clone();
+    recoloured[2].color = [10, 220, 10];
+    let damage = damage_between(&items, &recoloured);
+    let outcome = renderer.draw(&build(&recoloured), &damage);
+    assert!(outcome.retires_damage(), "{outcome:?}");
+
+    let reported = renderer.composed_rects().to_vec();
+    assert!(
+        !reported.is_empty(),
+        "a damaged frame has to say what it drew, and this one said nothing"
+    );
+    let covered: i64 = reported
+        .iter()
+        .map(|rect| i64::from(rect.size.width) * i64::from(rect.size.height))
+        .sum();
+    assert!(
+        covered < i64::from(SIDE) * i64::from(SIDE),
+        "this frame redrew one rectangle, so its report has to be smaller than the surface: \
+         {reported:?}"
+    );
+    // The ink that changed has to be inside what the frame says it drew, or whatever copies the
+    // frame out leaves part of the change behind on the screen.
+    let changed = Point::new(
+        recoloured[2].bounds.0 as i32 + recoloured[2].bounds.2 as i32 / 2,
+        recoloured[2].bounds.1 as i32 + recoloured[2].bounds.3 as i32 / 2,
+    );
+    assert!(
+        reported.iter().any(|rect| rect.contains(changed)),
+        "the rectangle that changed at {changed:?} is outside the report: {reported:?}"
+    );
+    assert_eq!(
+        renderer.composed_rows(),
+        bands(&reported),
+        "the rows and the rectangles have to be the same answer"
+    );
+}

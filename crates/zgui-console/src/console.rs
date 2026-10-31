@@ -45,7 +45,7 @@
 //! before it arrived, because that decides whether the frame's damage is retired.
 //!
 //! The copied path composes first and offers the picture afterwards. A display that declines it
-//! because a flip is still on its way is [`SkipReason::Timeout`]: the work was submitted, the
+//! because a flip is still on its way is [`SkipReason::Declined`]: the work was submitted, the
 //! damage retires, and asking again after one refresh interval is when the buffer is free.
 //!
 //! The drawn path asks first, because the acquire says which buffer to compose into. Every answer
@@ -59,18 +59,20 @@
 //! and something below the renderer refused to present it. No variant names a kernel that refused a
 //! page flip.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use tracing::warn;
 use zgui_atlas::TextureSink;
 use zgui_bits::DamageSet;
+use zgui_geom::{Device, Rect};
 use zgui_platform::{PlatformError, Surface};
 use zgui_platform_drm::{Displays, DrmDisplay};
 use zgui_render::{
     ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
     ScrollShift, SkipReason, TargetPoolReport, TextureHandle, VectorStatus,
 };
-use zgui_render_wgpu::{Gpu, SharedGraphics, WgpuRenderer};
+use zgui_render_wgpu::{Gpu, Pixels, SharedGraphics, WgpuRenderer, wgpu};
 use zgui_runtime::{AppError, RendererFactory};
 use zgui_scene::Scene;
 
@@ -97,6 +99,12 @@ struct DrmRenderer {
     display: DrmDisplay,
     /// How it gets there.
     delivery: Delivery,
+    /// The last frame read back, on the copied path.
+    ///
+    /// Kept between frames, and the whole of what the renderer composed. A frame reads back only
+    /// the rows it drew and this holds the rest, which is what makes reading a hundred rows
+    /// instead of a thousand both possible and correct.
+    pixels: Pixels,
 }
 
 impl DrmRenderer {
@@ -112,6 +120,7 @@ impl DrmRenderer {
             inner,
             display,
             delivery,
+            pixels: Pixels::nothing(),
         }
     }
 
@@ -120,12 +129,22 @@ impl DrmRenderer {
     /// The drawn path. [`drawn_into_scanout`] holds the order; this composes, once it has been told
     /// which buffer to compose into.
     fn drawn(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+        // Taken before the renderer is borrowed for the frame, because the closure below holds it.
+        let gpu = Arc::clone(self.inner.gpu());
+        let presenting = Presenting {
+            display: &self.display,
+            gpu: &gpu,
+        };
         let inner = &mut self.inner;
-        drawn_into_scanout(&self.display, |slot| {
+        drawn_into_scanout(&presenting, |slot| {
             if !inner.present_into(slot) {
-                return refused_slot(slot);
+                return (refused_slot(slot), Vec::new());
             }
-            inner.draw(scene, damage)
+            let drawn = inner.draw(scene, damage);
+            // Read after the frame, because it is what the frame decided to draw rather than what
+            // it was asked to: a frame that had to widen its damage wrote more than the caller
+            // named, and a display copying only what was asked for would miss it.
+            (drawn, inner.composed_rects().to_vec())
         })
     }
 
@@ -149,20 +168,34 @@ impl DrmRenderer {
             return drawn;
         }
 
-        let Some(pixels) = self.inner.read_presented() else {
+        // The rows the renderer says it composed, which is not always the damage it was handed: a
+        // frame that had to redraw everything widened it, and reading back only what was asked for
+        // would leave the rest of this holding the frame from before.
+        let changed: Vec<Range<u32>> = self.inner.composed_rows().to_vec();
+
+        // The two halves of the copied path, marked because they are the whole of what this path
+        // costs and neither is inside the render phase: `Renderer::draw` ends where the frame is
+        // submitted, and everything below happens after it.
+        zgui_profile::latency::mark("c.readback");
+        if !self.inner.read_presented_bands(&mut self.pixels, &changed) {
             warn!(
                 "this renderer composes into a window surface rather than into a texture, so \
                  there is nothing to read back and nothing reaches the display"
             );
             return FrameOutcome::Skipped(SkipReason::Validation);
-        };
-        match self.display.present(&pixels) {
+        }
+        zgui_profile::latency::mark("c.copy");
+        let put = self.display.present(&self.pixels, &changed);
+        zgui_profile::latency::mark("c.flipped");
+        match put {
             Ok(true) => drawn,
             // The buffer this frame would be written into is the one still on the screen. The
             // frame's work is submitted and the target holds it, so the damage retires and another
             // frame is asked for — which the contract paces at one refresh interval, by which time
-            // the flip has completed.
-            Ok(false) => FrameOutcome::Skipped(SkipReason::Timeout),
+            // the flip has completed. `Declined` rather than `Timeout`, because this refusal
+            // blocked nothing: `Timeout` is what latches a window as starved, and a probe a second
+            // apart turns a display that answers within a refresh into one frame a second.
+            Ok(false) => FrameOutcome::Skipped(SkipReason::Declined),
             Err(error) => {
                 warn!("a frame could not be put on its display: {error}");
                 FrameOutcome::Skipped(SkipReason::Validation)
@@ -199,16 +232,32 @@ trait Bracket {
     /// A display with a flip still on its way holds the frame and shows it when the completion
     /// arrives, because the kernel takes one page flip per CRTC. Either way the frame reaches the
     /// screen, which `true` says.
-    fn present_drawn(&self) -> Result<bool, PlatformError>;
+    ///
+    ///
+    /// `wrote` is the rectangles the frame put in the buffer it was given. A display that
+    /// composites its own frames copies exactly those onto the buffer it scans out of, so a
+    /// rectangle missing here is a rectangle that never reaches the screen.
+    fn present_drawn(&self, wrote: &[Rect<i32, Device>]) -> Result<bool, PlatformError>;
 }
 
-impl Bracket for DrmDisplay {
+/// A display and the device whose frames go on it, so that the pair can answer [`Bracket`].
+///
+/// What says a frame has finished is a fence, and a fence belongs to the device that drew — which
+/// the display does not hold and is built before. Rather than hand the device down through
+/// [`drawn_into_scanout`], where it would reach the two test doubles that have no device at all,
+/// it is carried here beside the display for the length of one frame.
+struct Presenting<'a> {
+    display: &'a DrmDisplay,
+    gpu: &'a Gpu,
+}
+
+impl Bracket for Presenting<'_> {
     fn acquire(&self) -> Result<Option<usize>, PlatformError> {
-        DrmDisplay::acquire(self)
+        self.display.acquire(self.gpu)
     }
 
-    fn present_drawn(&self) -> Result<bool, PlatformError> {
-        DrmDisplay::present_drawn(self)
+    fn present_drawn(&self, wrote: &[Rect<i32, Device>]) -> Result<bool, PlatformError> {
+        self.display.present_drawn(self.gpu, wrote)
     }
 }
 
@@ -237,7 +286,7 @@ impl Bracket for DrmDisplay {
 /// device that could not be rebuilt, and a frame that damaged nothing.
 fn drawn_into_scanout(
     display: &dyn Bracket,
-    compose: impl FnOnce(usize) -> FrameOutcome,
+    compose: impl FnOnce(usize) -> (FrameOutcome, Vec<Rect<i32, Device>>),
 ) -> FrameOutcome {
     let slot = match display.acquire() {
         Ok(Some(slot)) => slot,
@@ -258,12 +307,12 @@ fn drawn_into_scanout(
         }
     };
 
-    let drawn = compose(slot);
+    let (drawn, wrote) = compose(slot);
     if !matches!(drawn, FrameOutcome::Presented(_)) {
         return drawn;
     }
 
-    match display.present_drawn() {
+    match display.present_drawn(&wrote) {
         // The frame reached the display engine. It goes on the screen at the next vertical blank,
         // either as the flip this asked for or as the frame the outstanding flip's completion
         // commits — which is the display's business rather than this frame's.
@@ -379,13 +428,19 @@ pub(crate) fn factory(graphics: SharedGraphics, displays: Displays) -> RendererF
 
 /// Opens the device a display's own buffers are made on.
 ///
-/// Answers `None` on a machine with no usable adapter and on one whose driver would not grant the
-/// Vulkan device extensions an exported image needs. Both are ordinary facts about a machine rather
-/// than a failure to start: the answer to each is the copied path, which every machine has.
+/// Answers `None` only on a machine with no usable adapter at all, which is an ordinary fact about
+/// a machine rather than a failure to start: the answer is the copied path, which every machine
+/// has.
 ///
-/// The extensions are read off the device that opened rather than assumed from what was asked for.
-/// A device extension can be enabled only while a device is created, so a device without them is
-/// the device this program has for the rest of its run.
+/// **A Vulkan device that was refused the extensions is refused here**, and a device on any other
+/// backend is not. The extensions are what an *exported Vulkan image* needs, and a device extension
+/// can be enabled only while a device is created — so a Vulkan device without them will never take
+/// the drawn path however many frames it draws, and saying so here saves every display trying. An
+/// OpenGL device reaches the same arrangement through EGL and needs none of them, so withholding
+/// the device from it would answer a question about Vulkan by refusing something else.
+///
+/// Which drawn shape a display takes, or whether it takes one, is [`Scanout::for_display`]'s to
+/// decide. This only says whether there is a device worth asking with.
 pub(crate) fn scanout_device(graphics: &SharedGraphics) -> Option<Arc<Gpu>> {
     let gpu = match graphics.open_gpu() {
         Ok(gpu) => gpu,
@@ -397,17 +452,19 @@ pub(crate) fn scanout_device(graphics: &SharedGraphics) -> Option<Arc<Gpu>> {
             return None;
         }
     };
-    let enabled = gpu.vulkan_extensions();
-    if let Some(missing) = zgui_platform_drm::EXTENSIONS
-        .iter()
-        .find(|name| !enabled.contains(name))
-    {
-        warn!(
-            "{} did not enable {missing:?}, so every display copies its frames through the \
-             processor",
-            gpu.describe()
-        );
-        return None;
+    if gpu.adapter().get_info().backend == wgpu::Backend::Vulkan {
+        let enabled = gpu.vulkan_extensions();
+        if let Some(missing) = zgui_platform_drm::EXTENSIONS
+            .iter()
+            .find(|name| !enabled.contains(name))
+        {
+            warn!(
+                "{} did not enable {missing:?}, so every display copies its frames through the \
+                 processor",
+                gpu.describe()
+            );
+            return None;
+        }
     }
     Some(gpu)
 }
@@ -438,7 +495,14 @@ fn renderer(
         let inner = graphics.renderer_offscreen(target, zgui_platform_drm::FORMAT, false)?;
         (inner, Delivery::Copied)
     } else {
-        let inner = graphics.renderer_supplied(target, textures)?;
+        let mut inner = graphics.renderer_supplied(target, textures)?;
+        // **What a display hands out on the drawn shape is staging, not scanout.** It composites
+        // what a frame wrote onto a buffer of its own and never reads that staging buffer again, so
+        // a frame carries its own rectangles and no debt — see `Supplied::owed`. Where the display
+        // hands out the buffers it reads directly, they rotate and the debt is real.
+        if !inner.presented_textures_are_consumed(display.composites_its_own_frames()) {
+            warn!("this renderer presents into nothing that was supplied, so nothing was told");
+        }
         (inner, Delivery::Drawn)
     };
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
@@ -522,7 +586,7 @@ mod tests {
         fn frame(&self, composed: FrameOutcome) -> FrameOutcome {
             drawn_into_scanout(self, |slot| {
                 self.note(format!("compose into {slot}"));
-                composed
+                (composed, Vec::new())
             })
         }
     }
@@ -539,7 +603,7 @@ mod tests {
             Ok(Some(back))
         }
 
-        fn present_drawn(&self) -> Result<bool, PlatformError> {
+        fn present_drawn(&self, _wrote: &[Rect<i32, Device>]) -> Result<bool, PlatformError> {
             if self.busy.get() {
                 self.note("give over: no buffer is free");
                 return Ok(false);
@@ -568,7 +632,7 @@ mod tests {
             ))
         }
 
-        fn present_drawn(&self) -> Result<bool, PlatformError> {
+        fn present_drawn(&self, _wrote: &[Rect<i32, Device>]) -> Result<bool, PlatformError> {
             panic!("a frame nothing was drawn for was given to the display engine");
         }
     }
