@@ -45,7 +45,7 @@
 //! before it arrived, because that decides whether the frame's damage is retired.
 //!
 //! The copied path composes first and offers the picture afterwards. A display that declines it
-//! because a flip is still on its way is [`SkipReason::Timeout`]: the work was submitted, the
+//! because a flip is still on its way is [`SkipReason::Declined`]: the work was submitted, the
 //! damage retires, and asking again after one refresh interval is when the buffer is free.
 //!
 //! The drawn path asks first, because the acquire says which buffer to compose into. Every answer
@@ -192,8 +192,10 @@ impl DrmRenderer {
             // The buffer this frame would be written into is the one still on the screen. The
             // frame's work is submitted and the target holds it, so the damage retires and another
             // frame is asked for — which the contract paces at one refresh interval, by which time
-            // the flip has completed.
-            Ok(false) => FrameOutcome::Skipped(SkipReason::Timeout),
+            // the flip has completed. `Declined` rather than `Timeout`, because this refusal
+            // blocked nothing: `Timeout` is what latches a window as starved, and a probe a second
+            // apart turns a display that answers within a refresh into one frame a second.
+            Ok(false) => FrameOutcome::Skipped(SkipReason::Declined),
             Err(error) => {
                 warn!("a frame could not be put on its display: {error}");
                 FrameOutcome::Skipped(SkipReason::Validation)
