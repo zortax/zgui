@@ -44,6 +44,35 @@ pub fn held_key(held: &PaintStyleHeld) -> PaintStyleKey {
     paint_key(&held.style, held.pseudo_identities())
 }
 
+/// Whether two held styles paint alike, given that their keys differ.
+///
+/// The cascade gives each group a matched rule declares into a new allocation, also when the
+/// values do not change. A hover rule that sets only `transition` thus gives the element new
+/// background, box and position groups, and a different key. This compares each group the key
+/// names by value. The generated-content styles and the custom-property maps must keep their
+/// identity, because they are not compared by value.
+pub fn paints_alike(before: &PaintStyleHeld, after: &PaintStyleHeld) -> bool {
+    fn same<T: PartialEq>(before: &T, after: &T) -> bool {
+        core::ptr::eq(before, after) || before == after
+    }
+    let (old, new) = (&before.style, &after.style);
+    let (old_custom, new_custom) = (old.custom_properties(), new.custom_properties());
+    before.pseudo_identities() == after.pseudo_identities()
+        && map_identity(&old_custom.inherited) == map_identity(&new_custom.inherited)
+        && map_identity(&old_custom.non_inherited) == map_identity(&new_custom.non_inherited)
+        && same(old.get_inherited_text(), new.get_inherited_text())
+        && same(old.get_background(), new.get_background())
+        && same(old.get_border(), new.get_border())
+        && same(old.get_effects(), new.get_effects())
+        && same(old.get_outline(), new.get_outline())
+        && same(old.get_svg(), new.get_svg())
+        && same(old.get_inherited_ui(), new.get_inherited_ui())
+        && same(old.get_inherited_box(), new.get_inherited_box())
+        && same(old.get_text(), new.get_text())
+        && same(old.get_box(), new.get_box())
+        && same(old.get_position(), new.get_position())
+}
+
 /// The identity of the group every text colour and text shadow lives in.
 ///
 /// Named on its own because it is asked for twice: once as a field of the key, and once by whoever

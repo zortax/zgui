@@ -235,14 +235,22 @@ pub fn translate(
     let paint = paint_key::paint_key(style, record.pseudos);
     let key = store.key_of(node);
     let a11y = a11y_key::a11y_key(store, node, style);
-    let previous = store
-        .columns_mut()
-        .paint_key
-        .insert(key, held)
+    let before = store.columns_mut().paint_key.insert(key, held);
+    let previous = before
+        .as_ref()
         .map_or(zgui_dom::side::paint_key::PaintStyleKey::UNSTYLED, |held| {
-            paint_key::held_key(&held)
+            paint_key::held_key(held)
         });
-    if previous != paint {
+    // A key that moved with every group still equal in value paints nothing new.
+    let moved = previous != paint
+        && !before.as_ref().is_some_and(|before| {
+            store
+                .columns()
+                .paint_key
+                .get(key)
+                .is_some_and(|after| paint_key::paints_alike(before, after))
+        });
+    if moved {
         out.mark(node, Dirty::REPAINT);
         // The inherited interaction group holds `pointer-events`, which the hit entry copies
         // and the engine reports as a repaint alone. The entry is written again whenever the

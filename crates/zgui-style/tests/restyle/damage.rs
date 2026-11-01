@@ -303,3 +303,34 @@ fn a_custom_property_change_repaints_the_element_that_declares_it() {
          custom property must still produce damage"
     );
 }
+
+/// A row and its text, hovered once, so the hover rule decides everything the row owes.
+fn hovered_row(rule: &str) -> (Harness, zgui_dom::NodeIndex, zgui_dom::NodeIndex) {
+    let mut harness = Harness::new();
+    let row = harness.append(harness.root, "control");
+    harness.set_classes(row, &["row"]);
+    let text = harness.append_text(row, "a row");
+    harness.add_author(&format!(
+        ".row {{ padding: 2px; background-color: rgb(1, 0, 0); \
+                 transition: background-color 90ms }}\n\
+         .row:hover {{ {rule} }}"
+    ));
+    harness.frame();
+    harness.retire_all();
+
+    harness.set_state(row, UiState::HOVER, true);
+    let pass = harness.frame();
+    assert!(
+        pass.records.iter().any(|record| record.index == row),
+        "the hover has to restyle the row, or the case below tests an idle frame"
+    );
+    (harness, row, text)
+}
+
+#[test]
+fn a_hover_that_declares_the_values_already_there_owes_nothing() {
+    // The cascade gives the row new background, box and position groups, with the same values.
+    let (harness, row, text) = hovered_row("background-color: rgb(1, 0, 0)");
+    let owed = harness.owed(row) | harness.owed_below(row) | harness.owed(text);
+    assert!(owed.is_empty(), "no value moved: {owed:?}");
+}
