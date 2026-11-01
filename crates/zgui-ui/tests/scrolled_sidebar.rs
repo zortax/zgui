@@ -1,10 +1,10 @@
 //! A scrolled sidebar whose rows are made again on hover leaves no stale tone.
 //!
-//! The rows change `transition` under the pointer, and the cascade makes a row's box again for
-//! that. So a row that scrolls out from under the pointer loses its pieces in a frame that moves
-//! the port's pixels. The old pieces name their pixels where the drawn frame put them, and the
-//! move puts those pixels somewhere else. Damage left at the old place leaves a band of the old
-//! tone as tall as the move.
+//! The rows change tone and `transition` under the pointer. In the variants they also gain
+//! generated content, and the cascade makes a row's boxes again for that. So a row that scrolls out
+//! from under the pointer loses its pieces in a frame that moves the port's pixels. The old pieces
+//! name their pixels where the drawn frame put them, and the move puts those pixels somewhere else.
+//! Damage left at the old place leaves a band of the old tone as tall as the move.
 //!
 //! Each fixture scrolls the way a wheel and a touchpad do, at the scales a desktop uses, with the
 //! real damage set. It lets every gesture come to rest without a repaint, and then compares the
@@ -254,13 +254,20 @@ struct Opened {
     rows: Vec<NodeRef>,
 }
 
-/// Opens the sidebar at `scale` with the pointer resting over the rows.
-fn open(scale: f64, rows: Rows) -> Option<Opened> {
+/// A hover rule that gives the row generated content, so a row's boxes are made again under the
+/// pointer. The content is empty and out of flow, so it draws nothing.
+const MADE_AGAIN: &str = ".row:hover::after { content: \"\"; position: absolute }";
+
+/// Opens the sidebar at `scale` with the pointer resting over the rows, with `extra` added to the
+/// sheet.
+fn open(scale: f64, rows: Rows, extra: &str) -> Option<Opened> {
     crate::device::use_real_damage();
     let scroll = NodeRef::new();
     let nodes: Vec<NodeRef> = (0..MARKED + MENUS).map(|_| NodeRef::new()).collect();
     let held = nodes.clone();
-    let mut stage = Stage::open(SHEET, move || sidebar(scroll, rows, &held))?;
+    let mut stage = Stage::open(&format!("{SHEET}\n{extra}"), move || {
+        sidebar(scroll, rows, &held)
+    })?;
     if (scale - 1.0).abs() > f64::EPSILON {
         stage.rescale(scale);
     }
@@ -363,8 +370,8 @@ impl Opened {
 ///
 /// Panics when a gesture leaves pixels that a repaint draws differently, when a row shows two
 /// tones, and when too few frames moved composed pixels to test the move at all.
-fn no_stale_tone(scale: f64, rows: Rows, each_frame: bool) {
-    let Some(mut opened) = open(scale, rows) else {
+fn no_stale_tone(scale: f64, rows: Rows, extra: &str, each_frame: bool) {
+    let Some(mut opened) = open(scale, rows, extra) else {
         return;
     };
     let mut faults = Vec::new();
@@ -399,37 +406,54 @@ fn no_stale_tone(scale: f64, rows: Rows, each_frame: bool) {
 
 #[test]
 fn a_scrolled_sidebar_leaves_no_stale_tone_at_scale_1() {
-    no_stale_tone(1.0, Rows::Labelled, false);
+    no_stale_tone(1.0, Rows::Labelled, "", false);
 }
 
 #[test]
 fn a_scrolled_sidebar_leaves_no_stale_tone_at_scale_1_2() {
-    no_stale_tone(1.2, Rows::Labelled, false);
+    no_stale_tone(1.2, Rows::Labelled, "", false);
 }
 
 #[test]
 fn a_scrolled_sidebar_leaves_no_stale_tone_at_scale_1_25() {
-    no_stale_tone(1.25, Rows::Labelled, false);
+    no_stale_tone(1.25, Rows::Labelled, "", false);
 }
 
 #[test]
 fn a_scrolled_sidebar_leaves_no_stale_tone_at_scale_1_5() {
-    no_stale_tone(1.5, Rows::Labelled, false);
+    no_stale_tone(1.5, Rows::Labelled, "", false);
 }
 
 #[test]
 fn a_scrolled_sidebar_leaves_no_stale_tone_at_scale_2() {
-    no_stale_tone(2.0, Rows::Labelled, false);
+    no_stale_tone(2.0, Rows::Labelled, "", false);
 }
 
 /// Bare rows, so every frame can be checked: a row shows its own tone or the sidebar's, never a
 /// band of each.
 #[test]
 fn bare_rows_show_one_tone_in_every_frame_at_scale_1() {
-    no_stale_tone(1.0, Rows::Bare, true);
+    no_stale_tone(1.0, Rows::Bare, "", true);
 }
 
 #[test]
 fn bare_rows_show_one_tone_in_every_frame_at_scale_1_2() {
-    no_stale_tone(1.2, Rows::Bare, true);
+    no_stale_tone(1.2, Rows::Bare, "", true);
+}
+
+/// Rows whose hover rule gives them generated content, so the rows under the pointer are made
+/// again in frames that move the port's pixels.
+#[test]
+fn rows_made_again_leave_no_stale_tone_at_scale_1() {
+    no_stale_tone(1.0, Rows::Labelled, MADE_AGAIN, false);
+}
+
+#[test]
+fn rows_made_again_leave_no_stale_tone_at_scale_1_25() {
+    no_stale_tone(1.25, Rows::Labelled, MADE_AGAIN, false);
+}
+
+#[test]
+fn bare_rows_made_again_show_one_tone_in_every_frame_at_scale_1_2() {
+    no_stale_tone(1.2, Rows::Bare, MADE_AGAIN, true);
 }
