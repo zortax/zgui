@@ -165,6 +165,70 @@ impl ScrollShift {
         .intersection(self.port)
     }
 
+    /// Puts what `owed` names into `damage` at the place the shift leaves those pixels.
+    ///
+    /// `owed` names composed pixels as they were before the shift. Its part outside the port stays
+    /// where it is, because the shift does not move it. Its part inside the port moves with the
+    /// pixels, and what the move takes out of the port is dropped. A full set stays full.
+    ///
+    /// ```
+    /// use zgui_bits::DamageSet;
+    /// use zgui_geom::{Device, Point, Rect, Size};
+    /// use zgui_render::ScrollShift;
+    ///
+    /// let port: Rect<i32, Device> = Rect::new(Point::new(0, 100), Size::new(100, 100));
+    /// let shift = ScrollShift { port, by: (0, -30) };
+    /// let mut owed = DamageSet::new();
+    /// owed.absorb(Rect::new(Point::new(10, 80), Size::new(20, 40)));
+    /// owed.absorb(Rect::new(Point::new(50, 150), Size::new(20, 20)));
+    /// let mut damage = DamageSet::new();
+    /// shift.carry_set(&owed, &mut damage);
+    /// // Above the port: kept. Its part in the port moves out of it.
+    /// assert!(damage.contains(Rect::new(Point::new(10, 80), Size::new(20, 20))));
+    /// assert!(!damage.intersects(Rect::new(Point::new(10, 100), Size::new(20, 20))));
+    /// // In the port: moved with the pixels.
+    /// assert!(damage.contains(Rect::new(Point::new(50, 120), Size::new(20, 20))));
+    /// assert!(!damage.intersects(Rect::new(Point::new(50, 140), Size::new(20, 30))));
+    /// ```
+    pub fn carry_set(&self, owed: &DamageSet, damage: &mut DamageSet) {
+        if owed.is_full() {
+            damage.set_full();
+            return;
+        }
+        for &rect in owed.rects() {
+            self.for_each_outside(rect, |piece| damage.absorb(piece));
+            if let Some(carried) = self.carry(rect) {
+                damage.absorb(carried);
+            }
+        }
+    }
+
+    /// The parts of `rect` outside the port: up to four, which do not overlap.
+    fn for_each_outside(&self, rect: Rect<i32, Device>, mut piece: impl FnMut(Rect<i32, Device>)) {
+        let Some(inside) = rect.intersection(self.port) else {
+            if !rect.is_empty() {
+                piece(rect);
+            }
+            return;
+        };
+        let mut out = |left: i32, top: i32, right: i32, bottom: i32| {
+            if right > left && bottom > top {
+                piece(Rect::new(
+                    Point::new(left, top),
+                    Size::new(right - left, bottom - top),
+                ));
+            }
+        };
+        let (left, top) = (rect.origin.x, rect.origin.y);
+        let (right, bottom) = (left + rect.size.width, top + rect.size.height);
+        let (in_top, in_bottom) = (inside.origin.y, inside.origin.y + inside.size.height);
+        let (in_left, in_right) = (inside.origin.x, inside.origin.x + inside.size.width);
+        out(left, top, right, in_top);
+        out(left, in_bottom, right, bottom);
+        out(left, in_top, in_left, in_bottom);
+        out(in_right, in_top, right, in_bottom);
+    }
+
     /// Puts every exposed band into `damage`.
     ///
     /// What a caller that accepted a shift owes: the shift moves the pixels it can and this is the

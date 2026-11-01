@@ -237,6 +237,7 @@ impl Window {
         // either would decide what to draw from what the last one moved.
         self.rigid_moves = zgui_layout::fragment::diff::RigidMoves::default();
         self.damage_before_layout = DamageSet::new();
+        self.damage_after_layout = DamageSet::new();
         self.layout_passes = 0;
         self.scrolled_this_frame.clear();
 
@@ -461,7 +462,6 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
-            self.layers_inherited.clear();
             // The chunk notes were consumed by the same submission. A skipped frame keeps them
             // for the next drawn one, and anything noted after this point — a budget eviction —
             // stands until then.
@@ -473,7 +473,6 @@ impl Window {
         if !self.layers_owed.is_empty() {
             for owed in self.layers_owed.drain(..) {
                 self.damage.absorb(owed);
-                self.layers_inherited.push(owed);
             }
             self.request_frame();
         }
@@ -773,13 +772,15 @@ impl Window {
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
         let placements = self.host.placements();
+        // Measured on this frame's matrices, so kept apart for a scroll that moves composed pixels.
+        let mut damage = DamageSet::new();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
             layout: &self.layout,
             placements: &placements,
             renderer: &mut *self.renderer,
             content: &mut self.content,
-            damage: &mut self.damage,
+            damage: &mut damage,
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
             scale: self.scale,
@@ -800,6 +801,8 @@ impl Window {
         };
         let report = self.embed.sync(&mut cx);
         self.embed_animating = report.animating;
+        self.damage.absorb_set(&damage);
+        self.damage_after_layout.absorb_set(&damage);
     }
 
     /// Whether anything in the document is animating.
@@ -1468,19 +1471,20 @@ impl Window {
             // kept and drawn over them.
             shift = self.scroll_shift(viewport).ok();
             if let Some(shift) = shift {
-                // Everything this frame owes that the copy does not answer: what it inherited
-                // before any layout pass, what the passes damaged beyond their movement, and the
-                // bands the copy uncovers. What is dropped is exactly the movement's own damage,
-                // which is the whole port and is what the copy is for.
-                self.damage = self.damage_before_layout;
+                // Everything this frame owes that the copy does not answer: what it owed before
+                // any layout pass, what the passes damaged beyond their movement, what the stages
+                // after them damaged, and the bands the copy uncovers. What is dropped is exactly
+                // the movement's own damage, which is the whole port and is what the copy is for.
+                //
+                // What was owed before layout names pixels of the drawn frame: inherited damage,
+                // owed layers, and the old and new places of what the animation stage moved and
+                // recoloured, measured before layout wrote the content space. The copy moves those
+                // pixels, so that damage moves with them.
+                self.damage = DamageSet::new();
+                shift.carry_set(&self.damage_before_layout, &mut self.damage);
                 self.damage.absorb_set(&self.rigid_moves.beyond);
+                self.damage.absorb_set(&self.damage_after_layout);
                 shift.expose_into(&mut self.damage);
-                // An owed rectangle is where the drawing was, and the copy moves its pixels.
-                for owed in &self.layers_inherited {
-                    if let Some(carried) = shift.carry(*owed) {
-                        self.damage.absorb(carried);
-                    }
-                }
             }
             self.damage
                 .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));

@@ -32,12 +32,22 @@ impl Window {
     /// Computes this frame's caret and selection, and damages whatever that moved.
     pub(crate) fn plan_caret(&mut self, now: Instant) {
         let (plan, drawn) = self.caret_plan(now);
-        for rect in self.carets.install(plan, drawn) {
+        // The marks the last frame drew come first in what is owed. They are pixels of the drawn
+        // frame and the rest are this frame's, which tells a scroll that moves composed pixels
+        // which of the two to move.
+        let drawn_before = self.carets.drawn().len();
+        let owed = self.carets.install(plan, drawn);
+        for (index, rect) in owed.into_iter().enumerate() {
             if rect.is_empty() {
                 continue;
             }
-            self.damage
-                .absorb(zgui_layout::fragment::diff::pixels(rect));
+            let rect = zgui_layout::fragment::diff::pixels(rect);
+            self.damage.absorb(rect);
+            if index < drawn_before {
+                self.damage_before_layout.absorb(rect);
+            } else {
+                self.damage_after_layout.absorb(rect);
+            }
         }
         // Where an input method should put its candidate window is a reading of the plan that was
         // just installed, so it is answered here rather than where the caret was asked to move.

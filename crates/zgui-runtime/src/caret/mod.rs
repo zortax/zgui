@@ -252,12 +252,17 @@ impl Carets {
         self.blink.next_flip(now)
     }
 
+    /// The rectangles the installed plan draws, in device pixels of the frame that drew them.
+    pub fn drawn(&self) -> &[Rect<DevicePx, Device>] {
+        &self.drawn
+    }
+
     /// Replaces the plan, and reports every rectangle whose pixels have to be redrawn.
     ///
-    /// Both the rectangles the last frame drew and the ones this frame will: a caret that moved
-    /// leaves its old pixels behind, and a caret that has gone dark leaves all of them behind.
-    /// Returning them rather than damaging from here keeps this a value: the caller owns the damage
-    /// set and is the only thing that may write it.
+    /// Both the rectangles the last frame drew and the ones this frame will, in that order: a caret
+    /// that moved leaves its old pixels behind, and a caret that has gone dark leaves all of them
+    /// behind. Returning them rather than damaging from here keeps this a value: the caller owns
+    /// the damage set and is the only thing that may write it.
     pub fn install(
         &mut self,
         plan: Plan,

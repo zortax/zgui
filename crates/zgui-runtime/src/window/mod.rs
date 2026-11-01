@@ -240,9 +240,6 @@ pub struct Window {
     /// The device rectangles of drawings the last painted frame owes a frame: a CPU layer
     /// stretched from another scale, or one the layer budget deferred.
     layers_owed: Vec<zgui_geom::Rect<i32, zgui_geom::Device>>,
-    /// The owed rectangles the damage holds until a frame retires it, kept apart so a scroll shift
-    /// can move them with the pixels.
-    layers_inherited: Vec<zgui_geom::Rect<i32, zgui_geom::Device>>,
     /// The complex-vector elements present in the frame that first constructed Vello.
     vello_initializers: Vec<zgui_dom::NodeKey>,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
@@ -261,13 +258,19 @@ pub struct Window {
     /// have them drawn again. Reset at the top of each frame and merged across passes, because a
     /// scroll delivered to a listener can relay out inside the frame that delivered it.
     rigid_moves: zgui_layout::fragment::diff::RigidMoves,
-    /// What this frame had damaged before its first layout pass ran.
+    /// What this frame had damaged before its first layout pass ran, measured on the drawn frame.
     ///
     /// The other half of [`Window::rigid_moves`]: the walk reports what *it* damaged beyond the
     /// movement, and this is what was already owed before it started. Held separately because a
     /// frame runs the walk more than once and only the first of them starts from what the frame
-    /// inherited.
+    /// inherited. A caret's old marks join it after layout, because they are pixels of the drawn
+    /// frame too. A scroll that moves composed pixels moves this damage with them.
     damage_before_layout: DamageSet,
+    /// What the stages after the last layout pass damaged, measured on this frame's matrices.
+    ///
+    /// A scroll that moves composed pixels keeps this as it is: it names pixels the frame draws,
+    /// in the places the frame draws them.
+    damage_after_layout: DamageSet,
     /// How many layout passes this frame has run, so the first can be told from the rest.
     layout_passes: u32,
     /// Which containers scrolled this frame, and from where to where.
@@ -718,13 +721,13 @@ impl Window {
             vector_routes: rustc_hash::FxHashMap::default(),
             vector_routes_revision: 0,
             layers_owed: Vec::new(),
-            layers_inherited: Vec::new(),
             vello_initializers: Vec::new(),
             budgets: crate::budget::Budgets::new(),
             raster,
             damage: DamageSet::full(),
             rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
             damage_before_layout: DamageSet::new(),
+            damage_after_layout: DamageSet::new(),
             layout_passes: 0,
             scrolled_this_frame: Vec::new(),
             brushes_moved: false,
