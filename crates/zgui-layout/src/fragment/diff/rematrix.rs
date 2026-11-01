@@ -17,7 +17,7 @@ use zgui_geom::{Device, DevicePx, Matrix4, Rect};
 use zgui_profile::{Counter, counter};
 use zgui_scene::Content;
 
-use crate::fragment::diff::damage::{absorb, overlaps, pairwise_disjoint};
+use crate::fragment::diff::damage::{overlaps, pairwise_disjoint};
 use crate::fragment::diff::dirty::FrameDirty;
 use crate::fragment::diff::{Folded, Pass};
 use crate::fragment::{FragKey, FragmentFlags, transform};
@@ -55,10 +55,18 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let folded = self.rematrix_box(key, outer, fixed);
         // A box with no piece of its own still raises where its subtree is now, in the root space.
         let anchor = before.map_or(self.anchors.root, |(_, anchor)| anchor);
+        // Beyond the move's own damage: a frame that moves a port's pixels keeps this damage and
+        // drops that.
         if let Some((before, _)) = before {
-            absorb(self.damage, self.device_before(before, anchor));
+            self.damage_drawn_beyond_a_move(
+                self.device_before(before, anchor),
+                super::Admitted::everything(),
+            );
         }
-        absorb(self.damage, self.device_now(folded.subtree_ink, anchor));
+        self.damage_beyond_a_move(
+            self.device_now(folded.subtree_ink, anchor),
+            super::Admitted::everything(),
+        );
         folded
     }
 

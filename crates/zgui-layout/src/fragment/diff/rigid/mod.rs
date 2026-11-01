@@ -151,7 +151,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // frame still draws them.
         let admitted = self.admitted(moved.clip);
         let was = self.device_before(before, anchor);
-        self.damage_beyond_a_move(was, super::Admitted::everything());
+        self.damage_drawn_beyond_a_move(was, super::Admitted::everything());
         let is = self.device_now(folded.subtree_ink, anchor);
         self.damage_beyond_a_move(is, admitted);
         // Inside a content space that moved, the frame may move the port's pixels by the space's

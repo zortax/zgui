@@ -170,7 +170,7 @@ pub fn rebuild_in(
     for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
         // that is gone.
-        pass.damage_beyond_a_move(pass.device_before(gone, anchor), Admitted::everything());
+        pass.damage_drawn_beyond_a_move(pass.device_before(gone, anchor), Admitted::everything());
     }
     pass.visit(root, descent, None, None, (0, HitOrder::MAX));
     let moves = pass.moves;
@@ -332,7 +332,17 @@ pub struct RigidMoves {
     ///
     /// Speaks for the walk and not for the frame: what the frame damaged before any walk ran is
     /// the caller's to add, because only the caller knows which walk was the first.
+    ///
+    /// Measured on this pass's placements. What the pass measured on the placements it started
+    /// from is in [`RigidMoves::drawn`].
     pub beyond: DamageSet,
+    /// What this pass damaged beyond a move where the placements it started from put it.
+    ///
+    /// The old places of pieces that left, changed or moved for another reason. For the first
+    /// pass of a frame, these are pixels of the drawn frame. A caller that moves those pixels
+    /// moves this damage with them, because the pixels it names have moved. A caller that keeps
+    /// the pixels where they are uses it as it is.
+    pub drawn: DamageSet,
 }
 
 impl Default for RigidMoves {
@@ -343,6 +353,7 @@ impl Default for RigidMoves {
             conflicted: false,
             count: 0,
             beyond: DamageSet::new(),
+            drawn: DamageSet::new(),
         }
     }
 }
@@ -368,6 +379,7 @@ impl RigidMoves {
         }
         self.count += other.count;
         self.beyond.absorb_set(&other.beyond);
+        self.drawn.absorb_set(&other.drawn);
         self
     }
 
@@ -624,11 +636,27 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// [`rigid`](crate::fragment::diff::rigid), and the split is the whole of what
     /// [`RigidMoves::only`] reports: a caller may shift pixels it already has only when nothing was
     /// composed, removed or repainted in place, and this is where "something was" is recorded.
+    ///
+    /// For new ink, measured by [`Pass::device_now`]. Old ink goes through
+    /// [`Pass::damage_drawn_beyond_a_move`].
     fn damage_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
         let Some(rect) = admitted.cut(rect) else {
             return;
         };
         absorb(&mut self.moves.beyond, rect);
+        absorb(self.damage, rect);
+    }
+
+    /// Damages old ink for a reason other than a subtree moving rigidly.
+    ///
+    /// For ink measured by [`Pass::device_before`], on the placements this pass started from. It
+    /// goes into [`RigidMoves::drawn`], because a caller that moves those pixels moves this damage
+    /// with them.
+    fn damage_drawn_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
+        let Some(rect) = admitted.cut(rect) else {
+            return;
+        };
+        absorb(&mut self.moves.drawn, rect);
         absorb(self.damage, rect);
     }
 
@@ -1507,7 +1535,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             else {
                 continue;
             };
-            self.damage_beyond_a_move(self.device_before(gone, anchor), Admitted::everything());
+            self.damage_drawn_beyond_a_move(
+                self.device_before(gone, anchor),
+                Admitted::everything(),
+            );
         }
         self.scratch.stale.truncate(mark);
         // The index is not touched here: `truncate_fragments` records what it destroyed, and the
@@ -1894,7 +1925,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 }
                 if let Some(previous) = &previous {
                     let was = self.device_before(previous.ink, previous.anchor);
-                    self.damage_beyond_a_move(was, Admitted::everything());
+                    self.damage_drawn_beyond_a_move(was, Admitted::everything());
                 }
                 self.damage_beyond_a_move(self.device_now(next.ink, next.anchor), admitted);
                 self.touch_hit(frag, change, false);
@@ -1949,7 +1980,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                         None => {
                             if let Some(previous) = &previous {
                                 let was = self.device_before(previous.ink, previous.anchor);
-                                self.damage_beyond_a_move(was, Admitted::everything());
+                                self.damage_drawn_beyond_a_move(was, Admitted::everything());
                             }
                             let is = self.device_now(next.ink, next.anchor);
                             self.damage_beyond_a_move(is, admitted);
@@ -1982,7 +2013,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 .is_some_and(|fragment| fragment.flags.contains(FragmentFlags::GROUPS_SUBTREE));
             if groups || previous.flags.contains(FragmentFlags::GROUPS_SUBTREE) {
                 let was = self.device_before(previous.subtree_ink, previous.anchor);
-                self.damage_beyond_a_move(was, admitted);
+                self.damage_drawn_beyond_a_move(was, admitted);
                 let shift = next.border_box.origin - previous.border_box.origin;
                 if shift != zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)) {
                     let carried = previous.subtree_ink.translate(Size::new(shift.x, shift.y));
@@ -2010,7 +2041,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         next: &Geometry,
     ) -> Option<[Option<Rect<DevicePx, Device>>; 4]> {
         let unflagged = |flags: FragmentFlags| flags.without(FragmentFlags::UNCOMPARED);
-        if kind != FragmentKind::Box
+        // Under a content space that moved in this frame, the old ink and the new ink are measured
+        // on two different placements of the space. Strips between them name the wrong pixels.
+        if self.chase.by.is_some()
+            || kind != FragmentKind::Box
             || previous.kind != kind
             || unflagged(previous.flags) != unflagged(next.flags)
             || next.flags.contains(FragmentFlags::HAS_TRANSFORM)

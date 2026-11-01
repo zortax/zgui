@@ -110,6 +110,26 @@ fn compose(frame: &mut Frame, store: &mut LayoutStore, dirty: &mut impl FrameDir
     moves
 }
 
+/// Whether the rectangles of `sets` together cover every pixel of `rect`.
+///
+/// A damage set keeps its rectangles disjoint, so a rectangle it covers can lie across two of them.
+fn covered(sets: &[&zgui_bits::DamageSet], rect: zgui_geom::Rect<i32, Device>) -> bool {
+    let mut union = zgui_bits::DamageSet::<32>::new();
+    for set in sets {
+        for held in set.rects() {
+            union.absorb(*held);
+        }
+    }
+    let area = |rect: zgui_geom::Rect<i32, Device>| i64::from(rect.size.width * rect.size.height);
+    let held: i64 = union
+        .rects()
+        .iter()
+        .filter_map(|held| held.intersection(rect))
+        .map(area)
+        .sum();
+    held == area(rect)
+}
+
 /// A rectangle as four numbers that compare.
 fn numbers(rect: Rect<DevicePx, Device>) -> [f32; 4] {
     [
@@ -901,11 +921,7 @@ fn a_fixed_box_inside_a_content_space_stays_where_a_fresh_build_puts_it() {
                     };
                     let pixels = zgui_layout::fragment::diff::pixels(rect);
                     assert!(
-                        moves
-                            .beyond
-                            .rects()
-                            .iter()
-                            .any(|held| held.contains_rect(pixels)),
+                        covered(&[&moves.beyond], pixels),
                         "scrolled to {by}, the damage beyond the move {:?} leaves {pixels:?} out",
                         moves.beyond.rects()
                     );
@@ -1171,15 +1187,106 @@ fn a_row_that_layout_moves_as_its_port_scrolls_damages_where_the_moved_pixels_pu
         };
         let pixels = zgui_layout::fragment::diff::pixels(rect);
         assert!(
-            moves
-                .beyond
-                .rects()
-                .iter()
-                .any(|held| held.contains_rect(pixels)),
+            covered(&[&moves.beyond], pixels),
             "row {key:?}: the damage beyond the move {:?} leaves {pixels:?} out",
             moves.beyond.rects()
         );
     }
+}
+
+/// A scrollport of `rows` rows, each a narrow box whose words take two lines.
+fn wrapped_page(rows: usize) -> Fixture {
+    let rows: Vec<Element> = (0..rows)
+        .map(|_| Element::new("row").text("alpha bravo"))
+        .collect();
+    Fixture::new(
+        Element::new("root").children(vec![Element::new("port").children(rows)]),
+        "root { display: block; width: 300px; height: 240px }
+         port { display: block; height: 200px; overflow: scroll; margin-top: 20px }
+         row  { display: block; width: 40px; height: 40px }",
+    )
+}
+
+#[test]
+fn a_line_that_goes_as_its_port_scrolls_is_damaged_on_the_drawn_frame() {
+    let _guard = exclusive();
+    let mut fixture = wrapped_page(12);
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
+    let element = port(&store);
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(30.0)));
+    compose(&mut frame, &mut store, &mut Scrolled { node: element });
+    let port_key = port_box(&store);
+    assert!(scrolls_content(&store, port_key));
+    let row = store.node(port_key).children[2];
+    let placements = Placements::of(&frame.spatial);
+    let lines = |store: &LayoutStore, placements: &Placements| -> Vec<Rect<DevicePx, Device>> {
+        let text = store.node(row).children[0];
+        store
+            .fragments_of_box(text)
+            .iter()
+            .filter_map(|frag| store.fragment(*frag))
+            .filter(|piece| matches!(piece.kind, zgui_layout::FragmentKind::Line { .. }))
+            .map(|piece| piece.device_ink(placements))
+            .collect()
+    };
+    let before = lines(&store, &placements);
+    assert_eq!(before.len(), 2, "the words take two lines: {before:?}");
+    let target = store
+        .node(row)
+        .source
+        .expect("the row came from an element");
+
+    // The row widens, so its words take one line, and the port scrolls in the same frame.
+    let index = fixture
+        .document
+        .store()
+        .index_of(target)
+        .expect("a live element");
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.set_style_property(index, "width", Some("200px"));
+    });
+    support::lay_out_only(&mut store, &mut content, 300.0, 240.0);
+    let root = store.root().expect("a root box");
+    let above = vec![
+        store
+            .node(root)
+            .source
+            .expect("the root came from an element"),
+        element,
+    ];
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(45.0)));
+    let mut dirty = Owing {
+        target,
+        above,
+        bits: Dirty::RELAYOUT | Dirty::REPAINT,
+        scrolled: Some(element),
+    };
+    let moves = compose(&mut frame, &mut store, &mut dirty);
+    assert_eq!(
+        moves.by,
+        Some((0.0, -15.0)),
+        "the frame reports the port's move"
+    );
+    let placements = Placements::of(&frame.spatial);
+    assert_eq!(
+        lines(&store, &placements).len(),
+        1,
+        "the words take one line"
+    );
+    // The line that went is measured where the drawn frame put it. A frame that moves the port's
+    // pixels moves this damage with them.
+    let pixels = zgui_layout::fragment::diff::pixels(before[1]);
+    assert!(
+        covered(&[&moves.drawn], pixels),
+        "the line that went {pixels:?} is not in the drawn frame's damage {:?}",
+        moves.drawn.rects()
+    );
 }
 
 #[test]
@@ -1253,14 +1360,12 @@ fn a_port_kept_out_of_a_content_space_damages_every_row_it_carries_where_it_was_
                 continue;
             };
             let pixels = zgui_layout::fragment::diff::pixels(rect);
+            // Where it was is measured on the drawn frame and where it is on this one.
             assert!(
-                moves
-                    .beyond
-                    .rects()
-                    .iter()
-                    .any(|held| held.contains_rect(pixels)),
-                "row {key:?}: the damage beyond the move {:?} leaves {pixels:?} out",
-                moves.beyond.rects()
+                covered(&[&moves.beyond, &moves.drawn], pixels),
+                "row {key:?}: the damage beyond the move {:?} and {:?} leaves {pixels:?} out",
+                moves.beyond.rects(),
+                moves.drawn.rects()
             );
             checked += 1;
         }

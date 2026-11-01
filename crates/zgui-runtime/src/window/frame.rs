@@ -1348,7 +1348,7 @@ impl Window {
         }
         self.layout_passes += 1;
         counter::bump(Counter::LayoutPasses);
-        let moved = zgui_layout::fragment::diff::rebuild_in(
+        let mut moved = zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,
             &mut self.hit,
@@ -1357,6 +1357,13 @@ impl Window {
             root,
             &mut self.damage,
         );
+        // A pass measures old ink on the placements the pass before it published. After a pass
+        // that moved a content space, those are the places a pixel move puts the drawn pixels, so
+        // that old ink is not moved again.
+        if self.rigid_moves.count > 0 {
+            moved.beyond.absorb_set(&moved.drawn);
+            moved.drawn = DamageSet::new();
+        }
         // Merged rather than assigned: a scroll delivered to a listener can re-render and relay
         // out inside the frame that delivered it, so the frame's answer is every pass's together.
         // The walk seeds its own `beyond` from whatever the frame had already damaged.
@@ -1478,10 +1485,12 @@ impl Window {
                 //
                 // What was owed before layout names pixels of the drawn frame: inherited damage,
                 // owed layers, and the old and new places of what the animation stage moved and
-                // recoloured, measured before layout wrote the content space. The copy moves those
-                // pixels, so that damage moves with them.
+                // recoloured, measured before layout wrote the content space. So does the old ink
+                // of what the passes removed or changed. The copy moves those pixels, so that
+                // damage moves with them.
                 self.damage = DamageSet::new();
                 shift.carry_set(&self.damage_before_layout, &mut self.damage);
+                shift.carry_set(&self.rigid_moves.drawn, &mut self.damage);
                 self.damage.absorb_set(&self.rigid_moves.beyond);
                 self.damage.absorb_set(&self.damage_after_layout);
                 shift.expose_into(&mut self.damage);
