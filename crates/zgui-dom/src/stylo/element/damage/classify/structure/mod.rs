@@ -22,12 +22,12 @@ pub(super) fn unchanged(old: &ComputedValues, new: &ComputedValues) -> bool {
     boxes::unchanged(old, new) && generated::unchanged(old, new) && timing(old, new)
 }
 
-/// Whether the animations and transitions declared on the element agree.
+/// Whether the animations declared on the element, and the rest of its interface group, agree.
 ///
-/// They shape no box at all, and they are here because starting or stopping one is a change to what
-/// the element will do next rather than to how it looks now — which is not a thing this
-/// classification is able to describe, and the widest answer is the safe one for a change it cannot
-/// describe.
+/// They shape no box at all. They are here because a change to a keyframe animation changes what
+/// the element does next as well as how it looks now, and this classification cannot describe that.
+/// The widest answer is the safe one for a change it cannot describe. Transitions are in
+/// [`later`](super::later), because they change only what a later change does.
 fn timing(old: &ComputedValues, new: &ComputedValues) -> bool {
     same!(
         old,
@@ -46,11 +46,6 @@ fn timing(old: &ComputedValues, new: &ComputedValues) -> bool {
             animation_range_start,
             animation_timeline,
             animation_timing_function,
-            transition_behavior,
-            transition_delay,
-            transition_duration,
-            transition_property,
-            transition_timing_function,
             user_select,
             view_transition_class,
             view_transition_name,
