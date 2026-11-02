@@ -127,6 +127,24 @@ impl PipelineKind {
         }
     }
 
+    /// Whether this pipeline fetches the draw order as vertex input.
+    ///
+    /// The six per-instance kinds do: one order entry an instance, naming the arena slot its
+    /// record is at and the shift its chunk moved by. Everything else draws one quad from nothing
+    /// — a blit, a clear, a blur pass, a composite — or indexes the order itself, as a mark does,
+    /// and a pipeline that declared a vertex buffer it never bound would fail validation.
+    pub fn takes_order(self) -> bool {
+        matches!(
+            self,
+            Self::Quad
+                | Self::Shadow
+                | Self::Decoration
+                | Self::MonoSprite
+                | Self::ColorSprite
+                | Self::SubpixelSprite
+        )
+    }
+
     /// Its vertex entry point.
     pub fn vertex_entry(self) -> &'static str {
         match self {

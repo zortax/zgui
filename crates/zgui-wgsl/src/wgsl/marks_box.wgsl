@@ -8,18 +8,32 @@ struct MarkBox {
     shape: Vector4,
 }
 
-@group(2) @binding(1) var<storage, read> mark_boxes: array<MarkBox>;
+@group(2) @binding(1) var mark_boxes: texture_2d<u32>;
+
+/// One `MarkBox`, which the arena pads to 4 texels.
+fn load_mark_box(slot: u32) -> MarkBox {
+    let base = slot * 4u;
+    let t0 = textureLoad(mark_boxes, table_texel(base + 0u), 0);
+    let t1 = textureLoad(mark_boxes, table_texel(base + 1u), 0);
+    let t2 = textureLoad(mark_boxes, table_texel(base + 2u), 0);
+    let t3 = textureLoad(mark_boxes, table_texel(base + 3u), 0);
+    return MarkBox(
+        Vector4(bitcast<f32>(t0.x), bitcast<f32>(t0.y), bitcast<f32>(t0.z), bitcast<f32>(t0.w)),
+        Radii(bitcast<f32>(t1.x), bitcast<f32>(t1.y), bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y), bitcast<f32>(t2.z), bitcast<f32>(t2.w)),
+        Vector4(bitcast<f32>(t3.x), bitcast<f32>(t3.y), bitcast<f32>(t3.z), bitcast<f32>(t3.w)),
+    );
+}
 
 fn box_corner(vertex: u32, instance: u32, coverage: bool) -> MarkVarying {
     let found = item_of(mark_draw.position);
-    let item = marks[found.slot];
-    let prim = mark_boxes[instance];
+    let item = load_mark(found.slot);
+    let prim = load_mark_box(instance);
     let margin = vec2<f32>(margin_space(item));
     let bounds = vec4<f32>(
         to_space(item, vec2<f32>(prim.rect.x, prim.rect.y)) - margin,
         to_space(item, vec2<f32>(prim.rect.z, prim.rect.w)) + margin,
     );
-    var out = mark_corner(vertex, bounds, item, found.shift, coverage);
+    var out = mark_corner(vertex, bounds, item, shift_of(found), coverage);
     out.slot = found.slot;
     out.prim = instance;
     return out;
@@ -69,8 +83,8 @@ fn box_cover(
 
 // The coverage of one payload box: its area, less the area inside its border when it has one.
 fn box_coverage(in: MarkVarying, across: vec2<f32>, down: vec2<f32>) -> f32 {
-    let item = marks[in.slot];
-    let prim = mark_boxes[in.prim];
+    let item = load_mark(in.slot);
+    let prim = load_mark_box(in.prim);
     let point = payload_point(in);
     let rect = vec4<f32>(
         to_space(item, vec2<f32>(prim.rect.x, prim.rect.y)),
@@ -115,7 +129,7 @@ fn vs_box_coverage(
 fn fs_box_paint(in: MarkVarying) -> @location(0) vec4<f32> {
     let across = dpdx(in.point);
     let down = dpdy(in.point);
-    return mark_paint(in, marks[in.slot], box_coverage(in, across, down));
+    return mark_paint(in, load_mark(in.slot), box_coverage(in, across, down));
 }
 
 @fragment

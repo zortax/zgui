@@ -9,7 +9,7 @@
 
 @fragment
 fn fs_shaded_coverage(in: ShadedVarying) -> @location(0) vec4<f32> {
-    let quad = shaded[in.instance];
+    let quad = load_shaded(in.instance);
     let clip = clip_coverage(device_position(in.position.xy), quad.clip);
     if clip <= 0.0 {
         return vec4<f32>(0.0);

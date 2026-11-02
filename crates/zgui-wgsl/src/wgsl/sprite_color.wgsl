@@ -7,21 +7,38 @@
 
 // Full-colour sprites: emoji, and decoded images.
 
-@group(1) @binding(0) var<storage, read> sprites: array<ColorSprite>;
-// The draw-order permutation: the instance array keeps push order, and a draw's instance
-// range walks this list.
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
+@group(1) @binding(0) var sprites: texture_2d<u32>;
+
+/// One `ColorSprite`, which the arena pads to 7 texels.
+fn load_sprite(slot: u32) -> ColorSprite {
+    let base = slot * 7u;
+    let t0 = textureLoad(sprites, table_texel(base + 0u), 0);
+    let t1 = textureLoad(sprites, table_texel(base + 1u), 0);
+    let t2 = textureLoad(sprites, table_texel(base + 2u), 0);
+    let t3 = textureLoad(sprites, table_texel(base + 3u), 0);
+    let t4 = textureLoad(sprites, table_texel(base + 4u), 0);
+    let t5 = textureLoad(sprites, table_texel(base + 5u), 0);
+    let t6 = textureLoad(sprites, table_texel(base + 6u), 0);
+    return ColorSprite(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        Bounds(bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y)),
+        Radii(bitcast<f32>(t2.z), bitcast<f32>(t2.w), bitcast<f32>(t3.x), bitcast<f32>(t3.y), bitcast<f32>(t3.z), bitcast<f32>(t3.w), bitcast<f32>(t4.x), bitcast<f32>(t4.y)),
+        Tile(t4.z, t4.w, TileRect(bitcast<i32>(t5.x), bitcast<i32>(t5.y), bitcast<i32>(t5.z), bitcast<i32>(t5.w))),
+        bitcast<f32>(t6.x),
+        t6.y,
+        t6.z,
+    );
+}
 
 @vertex
 fn vs_color_sprite(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) instance: u32,
+    @location(0) slot: u32,
+    @location(1) shift: vec2<f32>,
 ) -> ColorSpriteVarying {
-    let packed = remap[instance];
-    let slot = packed & REMAP_SLOT_MASK;
-    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
-    let sprite = sprites[slot];
+    let sprite = load_sprite(slot);
     let corner = unit_corner(vertex);
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: ColorSpriteVarying;

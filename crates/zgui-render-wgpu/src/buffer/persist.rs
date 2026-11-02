@@ -27,6 +27,7 @@ use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
 use zgui_scene::{ChunkNote, ChunkPrims, PrimitiveKind, Scene};
 
+use crate::buffer::tables::{TEXEL, TEXELS_WIDE, allocate_rows, write_texels};
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
@@ -56,17 +57,24 @@ const fn payload_arena(kind: usize) -> usize {
     LANES.len() + kind
 }
 
-/// How many low bits of a resolved remap entry name the arena slot.
+/// One entry of a lane's draw order, as the vertex stream carries it.
 ///
-/// The bits above name an entry in the frame's offset table, which is how a chunk that merely
-/// moved keeps its residence: the resident bytes stay where they are and the shader adds the
-/// chunk's offset to what it reads. Twenty-four bits is sixteen million elements a lane — over a
-/// gigabyte of quads — and a resident slot past it falls back to the transient gather, which is
-/// correct and merely copies.
-pub(crate) const SLOT_BITS: u32 = 24;
-
-/// The mask that keeps a resolved remap entry's arena slot.
-pub(crate) const SLOT_MASK: u32 = (1 << SLOT_BITS) - 1;
+/// The arena slot the instance's record is at, and the shift the chunk holding it moved by this
+/// frame. The two are resolved together here so that a shader reads neither a remap nor an
+/// offsets table: the order stream is fetched per instance anyway, and twelve bytes in it cost
+/// less than the indirection they replace.
+///
+/// Resolving the shift on the host is also what retires the packing that used to carry it. A slot
+/// now has a whole `u32`, so neither the slot's range nor the number of offsets a frame can name
+/// is bounded by how the two shared a word.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct OrderEntry {
+    /// The arena slot the instance's record is at.
+    pub slot: u32,
+    /// How far the chunk holding that record moved this frame, in device pixels.
+    pub shift: [f32; 2],
+}
 
 /// The bytes one kind holds in a chunk or in a frame's arrays, which share their field names.
 ///
@@ -131,18 +139,31 @@ fn payload_slice(payload: &zgui_scene::MarkPayload, kind: usize) -> &[u8] {
     }
 }
 
-/// One persistent element arena: a buffer, a bump tail, and ranges given back by the ledger.
+/// One persistent element arena: a texture, a bump tail, and ranges given back by the ledger.
+///
+/// A texture rather than a storage buffer, for the reason `buffer::tables` states: a GL 3.3
+/// context and WebGL 2 have no storage buffers at all. An element is written at a texel boundary,
+/// so its fields sit at fixed positions a loader can name, which is what `stride` is for.
 #[derive(Debug)]
 struct Arena {
-    /// The buffer, bound as the pipeline's instance storage.
-    buffer: wgpu::Buffer,
+    /// The texture, bound as the pipeline's instance storage.
+    texture: wgpu::Texture,
+    /// The view a bind group names, kept because the binding borrows it.
+    view: wgpu::TextureView,
     /// What it is called, so a driver message names it.
     label: &'static str,
-    /// One element's size in bytes.
+    /// One element's size in bytes, as the scene encodes it.
     element: u32,
-    /// How many elements the buffer holds.
+    /// What one element occupies in the texture: `element` rounded up to a whole texel.
+    ///
+    /// A record is 56 to 152 bytes and a texel is sixteen. Rounding up costs at most eight bytes
+    /// an element and puts every record on a texel, so a shader reads its fields at offsets it
+    /// knows rather than at ones that rotate with the index. Reading a record word by word
+    /// instead needs no padding and measured fifteen per cent slower.
+    stride: u32,
+    /// How many elements the texture holds.
     capacity: u32,
-    /// Changes whenever `buffer` changes identity, for bind-group cache invalidation.
+    /// Changes whenever `texture` changes identity, for bind-group cache invalidation.
     generation: u64,
     /// The first element never allocated.
     tail: u32,
@@ -151,16 +172,20 @@ struct Arena {
 }
 
 impl Arena {
-    /// The smallest allocation, in bytes — a bind group has to name a buffer either way.
+    /// The smallest allocation, in bytes — a bind group has to name a texture either way.
     const MINIMUM_BYTES: u64 = 256;
 
     /// An empty arena for elements of `element` bytes.
     fn new(gpu: &Gpu, label: &'static str, element: u32) -> Self {
-        let capacity = (Self::MINIMUM_BYTES as u32 / element).max(1);
+        let stride = element.div_ceil(TEXEL as u32).saturating_mul(TEXEL as u32);
+        let capacity = (Self::MINIMUM_BYTES as u32 / stride).max(1);
+        let (texture, view) = allocate(gpu, label, capacity, stride);
         Self {
-            buffer: allocate(gpu, label, u64::from(capacity) * u64::from(element)),
+            texture,
+            view,
             label,
             element,
+            stride,
             capacity,
             generation: 1,
             tail: 0,
@@ -230,6 +255,10 @@ impl Arena {
     }
 
     /// Copies `bytes` over the elements starting at `start`.
+    ///
+    /// The caller holds packed records and the texture holds padded ones, so the run is re-spaced
+    /// on the way in. A chunk is uploaded once and read for as long as it stays resident, so this
+    /// is paid on the rare side of that trade.
     fn upload(
         &mut self,
         gpu: &Gpu,
@@ -241,39 +270,47 @@ impl Arena {
         if bytes.is_empty() {
             return 0;
         }
-        belt.write(
-            gpu,
-            encoder,
-            &self.buffer,
-            u64::from(start) * u64::from(self.element),
-            bytes,
-        )
+        let element = self.element as usize;
+        let stride = self.stride as usize;
+        let count = bytes.len() / element;
+
+        let mut run = vec![0_u8; count * stride];
+        for (index, record) in bytes.chunks_exact(element).enumerate() {
+            run[index * stride..index * stride + element].copy_from_slice(record);
+        }
+
+        let texels = self.stride / TEXEL as u32;
+        write_texels(gpu, belt, encoder, &self.texture, start * texels, &run);
+        run.len() as u64
     }
 
-    /// Replaces the buffer with one holding at least `needed` elements, forgetting every range.
+    /// Replaces the texture with one holding at least `needed` elements, forgetting every range.
     ///
     /// The caller re-uploads every resident chunk afterwards: this is the growth path, the
     /// idle-release path and the device-loss path, and they are deliberately one code path.
     fn reset_with_capacity(&mut self, gpu: &Gpu, needed: u32) {
-        let bytes = (u64::from(needed) * u64::from(self.element))
+        let bytes = (u64::from(needed) * u64::from(self.stride))
             .next_power_of_two()
             .max(Self::MINIMUM_BYTES);
-        self.capacity = (bytes / u64::from(self.element)) as u32;
-        self.buffer = allocate(gpu, self.label, bytes);
+        self.capacity = (bytes / u64::from(self.stride)) as u32;
+        let (texture, view) = allocate(gpu, self.label, self.capacity, self.stride);
+        self.texture = texture;
+        self.view = view;
         self.generation = self.generation.wrapping_add(1);
         self.tail = 0;
         self.free.clear();
     }
 }
 
-/// Allocates a storage buffer of `size` bytes.
-fn allocate(gpu: &Gpu, label: &'static str, size: u64) -> wgpu::Buffer {
-    gpu.device().create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
+/// Allocates a texture holding `capacity` elements of `stride` bytes, and the view naming it.
+fn allocate(
+    gpu: &Gpu,
+    label: &'static str,
+    capacity: u32,
+    stride: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texels = capacity.saturating_mul(stride / TEXEL as u32);
+    allocate_rows(gpu, label, texels.div_ceil(TEXELS_WIDE).max(1))
 }
 
 /// Ranges awaiting reclamation, bucketed by the submission that could still read them.
@@ -368,21 +405,12 @@ pub struct ChunkStore {
     released: Vec<usize>,
     /// Ranges awaiting their submission's completion.
     ledger: RetireLedger,
-    /// Per-frame scratch: the resolved remap for each lane.
-    resolved: [Vec<u32>; LANES.len()],
+    /// Per-frame scratch: the resolved draw order for each lane.
+    resolved: [Vec<OrderEntry>; LANES.len()],
     /// Per-frame scratch: gathered transient element bytes for each lane.
     gathered: [Vec<u8>; LANES.len()],
-    /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
-    ///
-    /// Entry zero is the zero offset every unmoved element names, so a frame with nothing moved
-    /// carries one entry and every remap entry's high bits are clear.
-    frame_offsets: Vec<[f32; 2]>,
-    /// Per-frame scratch: each moved revision's offset index, or the spill marker.
-    ///
-    /// A frame can name at most as many offsets as the remap's high bits can count. A revision
-    /// past that spills to [`u32::MAX`] and is served transiently — the frame arrays hold its
-    /// translated bytes — which is correct and merely copies.
-    offset_of: HashMap<u64, u32>,
+    /// Per-frame scratch: how far each moved revision moved, for the order stream to carry.
+    shift_of: HashMap<u64, [f32; 2]>,
     /// Per-frame scratch: each mark's payload ranges by remap position, one per payload kind.
     mark_payload: Vec<[Range<u32>; PAYLOAD_LANES]>,
 }
@@ -451,28 +479,27 @@ impl ChunkStore {
             ledger: RetireLedger::new(),
             resolved: Default::default(),
             gathered: Default::default(),
-            frame_offsets: vec![[0.0, 0.0]],
-            offset_of: HashMap::new(),
+            shift_of: HashMap::new(),
             mark_payload: Vec::new(),
         }
     }
 
-    /// The buffer a pipeline binds as its instance storage for `lane`.
+    /// The texture a pipeline binds as its instance storage for `lane`.
     pub fn binding(&self, lane: usize) -> wgpu::BindingResource<'_> {
-        self.arenas[lane].buffer.as_entire_binding()
+        wgpu::BindingResource::TextureView(&self.arenas[lane].view)
     }
 
-    /// The allocation epoch of `lane`'s buffer, for bind-group cache keys.
+    /// The allocation epoch of `lane`'s texture, for bind-group cache keys.
     pub fn generation(&self, lane: usize) -> u64 {
         self.arenas[lane].generation
     }
 
-    /// The buffer a mark draw binds as the payload of `kind`.
+    /// The texture a mark draw binds as the payload of `kind`.
     pub fn payload_binding(&self, kind: usize) -> wgpu::BindingResource<'_> {
-        self.arenas[payload_arena(kind)].buffer.as_entire_binding()
+        wgpu::BindingResource::TextureView(&self.arenas[payload_arena(kind)].view)
     }
 
-    /// The allocation epoch of the payload buffer of `kind`.
+    /// The allocation epoch of the payload texture of `kind`.
     pub fn payload_generation(&self, kind: usize) -> u64 {
         self.arenas[payload_arena(kind)].generation
     }
@@ -491,13 +518,13 @@ impl ChunkStore {
     pub fn bytes(&self) -> u64 {
         self.arenas
             .iter()
-            .map(|arena| u64::from(arena.capacity) * u64::from(arena.element))
+            .map(|arena| u64::from(arena.capacity) * u64::from(arena.stride))
             .sum()
     }
 
-    /// Uploads the frame's chunk changes and transient content, and resolves each lane's remap
-    /// into arena slots. Returns the bytes copied; the resolved remaps are in
-    /// [`ChunkStore::resolved_remap`] afterwards.
+    /// Uploads the frame's chunk changes and transient content, and resolves each lane's order
+    /// into arena slots. Returns the bytes copied; the resolved order is in
+    /// [`ChunkStore::resolved_order`] afterwards.
     pub fn upload_frame(
         &mut self,
         gpu: &Gpu,
@@ -653,7 +680,7 @@ impl ChunkStore {
         if let Some(range) = self.arenas[arena].alloc(count) {
             return range;
         }
-        // Grow the arena and settle everything resident into the new buffer, then take the range
+        // Grow the arena and settle everything resident into the new texture, then take the range
         // that now must fit.
         *uploaded += self.grow(gpu, belt, encoder, arena, count);
         self.arenas[arena]
@@ -678,11 +705,11 @@ impl ChunkStore {
         }
     }
 
-    /// Replaces `lane`'s buffer with one that fits everything resident plus `incoming`, and
+    /// Replaces `lane`'s texture with one that fits everything resident plus `incoming`, and
     /// re-uploads every resident chunk's lane, or every resident payload of a payload arena.
     ///
-    /// Nothing in flight can be corrupted: the old buffer is dropped, and the device keeps it
-    /// alive until the submissions reading it complete. The ledger's claims on the old buffer
+    /// Nothing in flight can be corrupted: the old texture is dropped, and the device keeps it
+    /// alive until the submissions reading it complete. The ledger's claims on the old texture
     /// are meaningless afterwards, so they are forgotten with it.
     fn grow(
         &mut self,
@@ -712,7 +739,7 @@ impl ChunkStore {
             .saturating_mul(2)
             .max(self.arenas[lane].capacity.saturating_mul(2));
         self.arenas[lane].reset_with_capacity(gpu, needed);
-        // Every ledger bucket may name ranges in the replaced buffer of this lane; forgetting
+        // Every ledger bucket may name ranges in the replaced texture of this lane; forgetting
         // them all over-forgets other lanes' pending ranges, which costs those elements until
         // their own lanes grow. Rare enough to prefer over per-lane bookkeeping.
         self.ledger.forget();
@@ -762,18 +789,9 @@ impl ChunkStore {
         scene: &Scene,
     ) -> u64 {
         let mut uploaded = 0;
-        self.frame_offsets.clear();
-        self.frame_offsets.push([0.0, 0.0]);
-        self.offset_of.clear();
+        self.shift_of.clear();
         for (&revision, &offset) in scene.chunk_offsets() {
-            let index = if self.frame_offsets.len() <= (u32::MAX >> SLOT_BITS) as usize {
-                let index = self.frame_offsets.len() as u32;
-                self.frame_offsets.push(offset);
-                index
-            } else {
-                u32::MAX
-            };
-            self.offset_of.insert(revision, index);
+            self.shift_of.insert(revision, offset);
         }
         for (lane, &kind) in LANES.iter().enumerate() {
             let remap = scene.remap(kind);
@@ -789,7 +807,7 @@ impl ChunkStore {
                 .filter(|&&index| {
                     resident_slot(
                         &self.residence,
-                        &self.offset_of,
+                        &self.shift_of,
                         lane,
                         &provenance[index as usize],
                     )
@@ -809,21 +827,20 @@ impl ChunkStore {
             } else {
                 0..0
             };
-            debug_assert!(
-                transient_range.end <= SLOT_MASK,
-                "a lane's transient range left the slot bits; see SLOT_BITS"
-            );
-
             let bytes = lane_bytes(scene, lane);
             let mut placed = 0;
             for &index in remap {
                 let slot = provenance[index as usize];
-                match resident_slot(&self.residence, &self.offset_of, lane, &slot) {
-                    Some(at) => self.resolved[lane].push(at),
+                match resident_slot(&self.residence, &self.shift_of, lane, &slot) {
+                    Some(entry) => self.resolved[lane].push(entry),
                     None => {
                         let at = index as usize * element;
                         self.gathered[lane].extend_from_slice(&bytes[at..at + element]);
-                        self.resolved[lane].push(transient_range.start + placed);
+                        // Gathered where it is drawn, so there is nothing to shift it by.
+                        self.resolved[lane].push(OrderEntry {
+                            slot: transient_range.start + placed,
+                            shift: [0.0, 0.0],
+                        });
                         placed += 1;
                     }
                 }
@@ -865,7 +882,7 @@ impl ChunkStore {
         let resident = |store: &Self, index: u32| {
             resident_slot(
                 &store.residence,
-                &store.offset_of,
+                &store.shift_of,
                 MARKS_LANE,
                 &provenance[index as usize],
             )
@@ -941,14 +958,9 @@ impl ChunkStore {
         uploaded
     }
 
-    /// The resolved remap for `lane`: packed offset-and-slot entries, in draw order.
-    pub fn resolved_remap(&self, lane: usize) -> &[u32] {
+    /// The resolved draw order for `lane`: a slot and a shift each, in draw order.
+    pub fn resolved_order(&self, lane: usize) -> &[OrderEntry] {
         &self.resolved[lane]
-    }
-
-    /// The frame's chunk offsets, indexed by the high bits of a resolved remap entry.
-    pub fn frame_offsets(&self) -> &[[f32; 2]] {
-        &self.frame_offsets
     }
 
     /// Ties the frame's retirements to the submission just made.
@@ -972,29 +984,26 @@ impl ChunkStore {
     }
 }
 
-/// The packed remap entry serving one primitive from a resident chunk, if one can.
+/// The order entry serving one primitive from a resident chunk, if one can.
 ///
 /// `None` is the transient answer, for every reason there is: the primitive is transient by
-/// provenance, its chunk is not resident, the chunk holds nothing in this lane, the resident
-/// slot lies past what the slot bits can name, or the chunk moved this frame and the offset
-/// table was already full.
+/// provenance, its chunk is not resident, or the chunk holds nothing in this lane. The reasons
+/// that used to be here and are not any more were both about the packing — a slot past what the
+/// slot bits could name, and a frame with more moved chunks than the offset table could hold.
 fn resident_slot(
     residence: &HashMap<u64, Resident>,
-    offset_of: &HashMap<u64, u32>,
+    shift_of: &HashMap<u64, [f32; 2]>,
     lane: usize,
     slot: &zgui_scene::ChunkSlot,
-) -> Option<u32> {
+) -> Option<OrderEntry> {
     if slot.is_transient() {
         return None;
     }
-    let offset = match offset_of.get(&slot.revision) {
-        Some(&u32::MAX) => return None,
-        Some(&index) => index,
-        None => 0,
-    };
     let range = residence.get(&slot.revision)?.ranges[lane].as_ref()?;
-    let at = range.start + slot.index;
-    (at <= SLOT_MASK).then_some((offset << SLOT_BITS) | at)
+    Some(OrderEntry {
+        slot: range.start + slot.index,
+        shift: shift_of.get(&slot.revision).copied().unwrap_or([0.0, 0.0]),
+    })
 }
 
 /// The frame array of `lane`, as bytes.

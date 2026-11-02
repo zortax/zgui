@@ -5,7 +5,7 @@
 
 @fragment
 fn fs_shaded_paint(in: ShadedVarying) -> @location(0) vec4<f32> {
-    let quad = shaded[in.instance];
+    let quad = load_shaded(in.instance);
     // The clip is in device space, so it is evaluated at the real pixel; the box is in the
     // primitive's own space, so it is evaluated at the point that maps to this pixel.
     let clip = clip_coverage(device_position(in.position.xy), quad.clip);

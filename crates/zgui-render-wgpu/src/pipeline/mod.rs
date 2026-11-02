@@ -282,8 +282,15 @@ fn build(
                 entry_point: Some(kind.vertex_entry()),
                 compilation_options: Default::default(),
                 // Every primitive is four corners of a unit square expanded in the vertex stage,
-                // so there is no vertex data at all: an instance is read straight out of storage.
-                buffers: &[],
+                // so the only vertex data is the draw order: one entry an instance, naming the
+                // arena slot its record is at and the shift its chunk moved by. It is vertex
+                // input rather than a storage buffer because a GL 3.3 context has none, and
+                // fetching it this way takes an indirection out of the vertex stage besides.
+                buffers: if kind.takes_order() {
+                    ORDER_LAYOUT
+                } else {
+                    &[]
+                },
             },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
@@ -305,3 +312,25 @@ fn build(
             cache: cache.handle(),
         })
 }
+
+/// The draw order, as one instance-stepped vertex buffer.
+///
+/// `slot` is the arena slot the record is at and `shift` is how far its chunk moved this frame,
+/// resolved on the host so that neither a remap nor an offsets table is read here. The stride is
+/// [`OrderEntry`](crate::buffer::persist::OrderEntry)'s own, and the two have to agree.
+pub(crate) const ORDER_LAYOUT: &[wgpu::VertexBufferLayout<'static>] = &[wgpu::VertexBufferLayout {
+    array_stride: 12,
+    step_mode: wgpu::VertexStepMode::Instance,
+    attributes: &[
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Uint32,
+            offset: 0,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 4,
+            shader_location: 1,
+        },
+    ],
+}];

@@ -21,6 +21,7 @@
 
 use bytemuck::Pod;
 
+use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
 /// How many texels wide every table is.
@@ -35,10 +36,10 @@ pub const TEXELS_WIDE: u32 = 256;
 /// `rgba32uint`: four thirty-two-bit channels. Every structure a table holds is a multiple of four
 /// bytes, so a texel is a whole number of fields and an index into the table is a whole number of
 /// texels.
-const TEXEL: usize = 16;
+pub(crate) const TEXEL: usize = 16;
 
 /// How many bytes one row holds.
-const ROW: usize = TEXELS_WIDE as usize * TEXEL;
+pub(crate) const ROW: usize = TEXELS_WIDE as usize * TEXEL;
 
 /// A table the shaders read with `textureLoad`, which grows to the largest thing it has held.
 ///
@@ -65,7 +66,7 @@ impl TableTexture {
 
     /// An empty table named `label`.
     pub fn new(gpu: &Gpu, label: &'static str) -> Self {
-        let (texture, view) = allocate(gpu, label, Self::MINIMUM_ROWS);
+        let (texture, view) = allocate_rows(gpu, label, Self::MINIMUM_ROWS);
         Self {
             texture,
             view,
@@ -97,7 +98,7 @@ impl TableTexture {
         let grew = needed > self.rows;
         if grew {
             self.rows = needed.next_power_of_two().max(Self::MINIMUM_ROWS);
-            let (texture, view) = allocate(gpu, self.label, self.rows);
+            let (texture, view) = allocate_rows(gpu, self.label, self.rows);
             self.texture = texture;
             self.view = view;
             self.generation = self.generation.wrapping_add(1);
@@ -182,7 +183,7 @@ impl TableTexture {
             return 0;
         }
         let freed = self.capacity() - u64::from(Self::MINIMUM_ROWS) * ROW as u64;
-        let (texture, view) = allocate(gpu, self.label, Self::MINIMUM_ROWS);
+        let (texture, view) = allocate_rows(gpu, self.label, Self::MINIMUM_ROWS);
         self.texture = texture;
         self.view = view;
         self.rows = Self::MINIMUM_ROWS;
@@ -191,8 +192,71 @@ impl TableTexture {
     }
 }
 
+/// Writes `bytes` into `texture` as a run of texels starting at `first`.
+///
+/// A texture write names a rectangle and this data is a line, so a run that crosses a row boundary
+/// is up to three of them: the tail of the row it starts in, the whole rows between, and the head
+/// of the row it ends in. Widening to whole rows instead would be one write, and it would put
+/// whatever this caller does not hold over the elements on either side of the run.
+///
+/// `bytes` has to be a whole number of texels, which every caller's element size gives it.
+pub(crate) fn write_texels(
+    gpu: &Gpu,
+    belt: &mut UploadBelt,
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    first: u32,
+    bytes: &[u8],
+) {
+    debug_assert_eq!(bytes.len() % TEXEL, 0, "a run is a whole number of texels");
+    let mut texel = first;
+    let mut rest = bytes;
+
+    while !rest.is_empty() {
+        let column = texel % TEXELS_WIDE;
+        let row = texel / TEXELS_WIDE;
+        let (width, height) = run_extent(texel, (rest.len() / TEXEL) as u32);
+        let taken = width as usize * height as usize * TEXEL;
+
+        belt.write_texels(
+            gpu,
+            encoder,
+            texture,
+            0,
+            (column, row),
+            (width, height),
+            TEXEL as u32,
+            &rest[..taken],
+        );
+
+        texel += width * height;
+        rest = &rest[taken..];
+    }
+}
+
+/// How much of a run starting at `texel` one write can take, as a width and a height in texels.
+///
+/// Whole rows where the run starts on one and has rows left in it; what remains of the current row
+/// otherwise. A run therefore takes at most three writes, whatever its length: a partial row, the
+/// whole ones, and a partial row.
+fn run_extent(texel: u32, held: u32) -> (u32, u32) {
+    let column = texel % TEXELS_WIDE;
+    if column == 0 && held >= TEXELS_WIDE {
+        (TEXELS_WIDE, held / TEXELS_WIDE)
+    } else {
+        ((TEXELS_WIDE - column).min(held), 1)
+    }
+}
+
 /// Allocates a table of `rows` rows, and the view a bind group names it by.
-fn allocate(gpu: &Gpu, label: &'static str, rows: u32) -> (wgpu::Texture, wgpu::TextureView) {
+///
+/// Every table of this format is allocated here — the side tables, the instance arenas and the
+/// frame's vector composites — so that one place states the format, the width and the usage.
+pub(crate) fn allocate_rows(
+    gpu: &Gpu,
+    label: &'static str,
+    rows: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {

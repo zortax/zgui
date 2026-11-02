@@ -258,7 +258,15 @@ fn build(
                 module: &effect.module,
                 entry_point: Some(zgui_wgsl::vertex_entry(effect.mode)),
                 compilation_options: Default::default(),
-                buffers: &[],
+                // An effect drawing out of an instance lane fetches the draw order exactly as
+                // the six built-in per-instance pipelines do. A filter or a backdrop draws one
+                // quad over a region instead, with no instance to name — and a pipeline that
+                // declared a vertex buffer it never bound would fail validation.
+                buffers: if effect.mode.is_primitive() {
+                    crate::pipeline::ORDER_LAYOUT
+                } else {
+                    &[]
+                },
             },
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
