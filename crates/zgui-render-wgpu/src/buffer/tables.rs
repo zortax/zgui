@@ -77,8 +77,14 @@ impl TableTexture {
     }
 
     /// Copies all `values` into the table.
-    pub fn upload<T: Pod>(&mut self, gpu: &Gpu, values: &[T]) -> u64 {
-        self.upload_range(gpu, values, 0, values.len())
+    pub fn upload<T: Pod>(
+        &mut self,
+        gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
+        values: &[T],
+    ) -> u64 {
+        self.upload_range(gpu, belt, encoder, values, 0, values.len())
     }
 
     /// Copies one element range, or the whole slice when growing replaced the texture.
@@ -89,6 +95,8 @@ impl TableTexture {
     pub fn upload_range<T: Pod>(
         &mut self,
         gpu: &Gpu,
+        belt: &mut UploadBelt,
+        encoder: &mut wgpu::CommandEncoder,
         values: &[T],
         start: usize,
         end: usize,
@@ -135,28 +143,15 @@ impl TableTexture {
         let mut rows = vec![0_u8; (last - first) * wide as usize * TEXEL];
         rows[..to - from].copy_from_slice(&all[from..to]);
 
-        gpu.queue().write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: first as u32,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
+        belt.write_texels(
+            gpu,
+            encoder,
+            &self.texture,
+            0,
+            (0, first as u32),
+            (wide, (last - first) as u32),
+            TEXEL as u32,
             &rows,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(wide * TEXEL as u32),
-                rows_per_image: Some((last - first) as u32),
-            },
-            wgpu::Extent3d {
-                width: wide,
-                height: (last - first) as u32,
-                depth_or_array_layers: 1,
-            },
         );
 
         rows.len() as u64
