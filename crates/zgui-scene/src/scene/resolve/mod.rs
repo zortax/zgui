@@ -89,7 +89,8 @@ impl Scene {
             .filter_map(|entry| {
                 let sprite = self.primitives.color_sprites.get(entry.index as usize)?;
                 let key = sprite.tile.key()?;
-                let on_device = self.on_device(sprite.transform, sprite.ink());
+                let matrix = crate::scene::device::resolved(&self.spatial, sprite.transform);
+                let on_device = crate::scene::device::place(matrix.as_ref(), sprite.ink());
                 let admitted = self
                     .clips
                     .bounds_placed(sprite.clip_id(), &|space| self.spatial.resolve(space));

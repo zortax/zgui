@@ -3,7 +3,7 @@
 mod support;
 
 use zgui_bits::DamageSet;
-use zgui_geom::Size;
+use zgui_geom::{Point, Rect, Size};
 use zgui_render_wgpu::{GroupPool, TargetScale, wgpu};
 use zgui_scene::{Filter, GroupBoundary, Quad, Scene};
 
@@ -464,9 +464,10 @@ fn a_half_resolution_group_ending_on_an_odd_pixel_keeps_its_last_row_and_column(
 }
 
 #[test]
-fn a_pool_at_its_budget_frees_a_target_no_lease_of_this_frame_used_before_it_degrades() {
-    // A target of another format or resolution is never reused for a lease, so without this it
-    // stays resident and pushes every later lease of every later frame to half resolution.
+fn a_pool_at_its_budget_degrades_what_is_lent_at_once_and_trims_at_the_end_of_the_frame() {
+    // A target this frame lent and returned stays resident, because the plan still names it. The
+    // budget limits what is lent at once, and the end of the frame frees targets until the pool is
+    // within the budget again.
     let Some(renderer) = plain_renderer() else {
         return;
     };
@@ -476,33 +477,69 @@ fn a_pool_at_its_budget_frees_a_target_no_lease_of_this_frame_used_before_it_deg
     let one_full = u64::from(GroupPool::FORMAT.block_copy_size(None).unwrap_or(8))
         * allocated.width as u64
         * allocated.height as u64;
-    let mut pool = GroupPool::new(region, one_full);
+    let mut pool = GroupPool::new(region, one_full + one_full / 4);
     let other = wgpu::TextureFormat::Bgra8Unorm;
 
     let copy = pool
         .acquire(&gpu, TargetScale::Full, other)
         .expect("one copy target fits");
     pool.release(copy);
-    let degraded = pool
+    let group = pool
         .acquire(&gpu, TargetScale::Full, GroupPool::FORMAT)
-        .expect("a half-resolution target fits next to it");
-    assert_eq!(
-        degraded.scale(),
-        TargetScale::Half,
+        .expect("one target lent at a time fits");
+    assert_eq!(group.scale(), TargetScale::Full);
+    assert_eq!(pool.degraded(), 0);
+    assert!(
+        pool.bytes() > pool.budget(),
         "this frame lent the copy target, and its plan still names it, so it stays resident"
     );
+    let degraded = pool
+        .acquire(&gpu, TargetScale::Full, GroupPool::FORMAT)
+        .expect("a half-resolution target fits next to the lent one");
+    assert_eq!(degraded.scale(), TargetScale::Half);
     assert_eq!(pool.degraded(), 1);
+    assert!(
+        pool.acquire_exact(&gpu, TargetScale::Full, GroupPool::FORMAT)
+            .is_none(),
+        "an exact lease never degrades, and the lent targets fill the budget"
+    );
 
     pool.release_all();
+    assert!(pool.bytes() <= pool.budget(), "the end of the frame trims");
     let full = pool
         .acquire(&gpu, TargetScale::Full, GroupPool::FORMAT)
-        .expect("a full-resolution target fits once the idle ones are freed");
+        .expect("a full-resolution target fits in the next frame");
     assert_eq!(full.scale(), TargetScale::Full);
     assert_eq!(pool.degraded(), 1, "and this lease was not reduced");
     assert!(pool.bytes() <= pool.budget());
-    assert_eq!(full.format(), GroupPool::FORMAT);
-    assert!(
-        pool.acquire_exact(&gpu, TargetScale::Full, other).is_none(),
-        "an exact lease never degrades, and this frame lent every other target"
-    );
+}
+
+#[test]
+fn leases_of_growing_regions_in_one_frame_neither_degrade_nor_lose_a_capture() {
+    // Each lease is returned before the next is taken, so each fits the budget on its own. Each
+    // is too large for the target before it, so the frame holds all of them.
+    let Some(renderer) = plain_renderer() else {
+        return;
+    };
+    let gpu = std::sync::Arc::clone(renderer.gpu());
+    let side = |length: i32| Rect::new(Point::new(0, 0), Size::new(length, length));
+    let one = |length: u64| {
+        u64::from(GroupPool::FORMAT.block_copy_size(None).unwrap_or(8)) * length * length
+    };
+    let mut pool = GroupPool::new(Size::new(1024, 1024), one(1024) * 3 / 2);
+    for length in [250, 500, 750] {
+        let slot = pool
+            .acquire_covering(&gpu, TargetScale::Full, GroupPool::FORMAT, side(length))
+            .expect("one lease at a time fits");
+        pool.release(slot);
+    }
+    let capture = pool
+        .acquire_exact_covering(&gpu, TargetScale::Full, GroupPool::FORMAT, side(1000))
+        .expect("a capture is not lost to the targets returned earlier in the frame");
+    assert_eq!(capture.scale(), TargetScale::Full);
+    assert_eq!(pool.degraded(), 0);
+    assert!(pool.bytes() > pool.budget());
+
+    pool.release_all();
+    assert!(pool.bytes() <= pool.budget(), "the end of the frame trims");
 }

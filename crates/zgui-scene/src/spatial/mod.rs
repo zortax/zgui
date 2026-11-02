@@ -45,6 +45,7 @@
 pub mod id;
 pub mod node;
 pub mod placements;
+pub mod poison;
 pub mod space;
 pub mod tree;
 

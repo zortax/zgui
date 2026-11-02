@@ -183,10 +183,8 @@ fn the_last_pixel_of_the_surface_is_covered_by_the_document() {
             .fragments_of_box(root)
             .first()
             .expect("the root box produced a fragment");
-        let box_ = layout
-            .fragment(fragment)
-            .expect("the fragment is live")
-            .border_box;
+        let fragment = layout.fragment(fragment).expect("the fragment is live");
+        let box_ = fragment.on_device(fragment.border_box, &window.placements());
         let corner = (surface.width.0 - 1.0, surface.height.0 - 1.0);
         assert!(
             box_.origin.x.0 <= corner.0
@@ -255,7 +253,7 @@ fn class_box(window: &zgui_runtime::Window, class: &str) -> zgui_geom::Rect<Devi
             continue;
         };
         if let Some(fragment) = layout.fragment(fragment) {
-            return fragment.border_box;
+            return fragment.on_device(fragment.border_box, &window.placements());
         }
     }
     panic!("no element carrying {class:?} produced a fragment");

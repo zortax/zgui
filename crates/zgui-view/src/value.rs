@@ -139,6 +139,10 @@ where
 /// and for every readable reactive value. `M` is the marker that tells those three apart and is
 /// always inferred.
 ///
+/// A binding runs a closure again under the view's owner, with no cleanup between runs. A memo,
+/// signal, context or cleanup that the closure creates is kept until the view is unmounted, once
+/// for each run. Create those outside the closure.
+///
 /// ```
 /// use zgui_reactive::{Mounted, RwSignal, install};
 /// use zgui_view::{IntoReactiveValue, ReactiveValue};

@@ -25,7 +25,7 @@ use std::sync::mpsc;
 
 use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ChunkPrims, PrimitiveKind, Scene};
+use zgui_scene::{ChunkNote, ChunkPrims, PrimitiveKind, Scene};
 
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
@@ -508,22 +508,28 @@ impl ChunkStore {
         self.ledger.reclaim(&mut self.arenas);
         let mut uploaded = 0;
 
+        // The notes apply in note order: they can span frames that never reached a draw, so a
+        // revision can be inserted and retired in one batch, and its retirement must find it.
+        // Payload holds drop only after every insertion, so the new chunks take their holds
+        // before the retired ones drop theirs, and a payload that passes from one revision to the
+        // next stays resident.
         self.released.clear();
-        for &revision in scene.chunk_retired() {
-            if let Some(resident) = self.residence.remove(&revision) {
-                for (lane, range) in resident.ranges.into_iter().enumerate() {
-                    if let Some(range) = range {
-                        self.ledger.retire(lane, range);
+        for note in scene.chunk_notes() {
+            match note {
+                ChunkNote::Inserted { revision, prims } => {
+                    uploaded += self.insert(gpu, belt, encoder, *revision, prims);
+                }
+                ChunkNote::Retired { revision } => {
+                    if let Some(resident) = self.residence.remove(revision) {
+                        for (lane, range) in resident.ranges.into_iter().enumerate() {
+                            if let Some(range) = range {
+                                self.ledger.retire(lane, range);
+                            }
+                        }
+                        self.released.extend_from_slice(&resident.payloads);
                     }
                 }
-                self.released.extend_from_slice(&resident.payloads);
             }
-        }
-
-        // The new chunks take their holds before the retired ones drop theirs, so a payload that
-        // passes from one revision to the next stays resident.
-        for upload in scene.chunk_inserted() {
-            uploaded += self.insert(gpu, belt, encoder, upload.revision, &upload.prims);
         }
         let released = core::mem::take(&mut self.released);
         for key in &released {

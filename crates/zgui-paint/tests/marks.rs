@@ -15,7 +15,7 @@ use zgui_scene::kurbo::{self, BezPath, Circle, Shape as _};
 use zgui_scene::{MarkItem, Paint, Scene};
 use zgui_testkit_scene::counters::Recording;
 
-use support::{Element, Harness};
+use support::{Element, Harness, poison};
 
 /// A root with one canvas in it, at the origin, with no box paint of its own.
 const CSS: &str = "root { display: block; width: 400px; height: 200px }
@@ -348,9 +348,14 @@ fn a_marks_canvas_replays_when_it_moves() {
         20.0,
         "the mark moved with its box"
     );
-    assert_eq!(before.origin, [0.0, 10.0], "the fit places the payload");
+    let unpoisoned = |[x, y]: [f32; 2]| [x - poison(), y - poison()];
     assert_eq!(
-        after.origin,
+        unpoisoned(before.origin),
+        [0.0, 10.0],
+        "the fit places the payload"
+    );
+    assert_eq!(
+        unpoisoned(after.origin),
         [0.0, 30.0],
         "and its payload stayed where it was"
     );

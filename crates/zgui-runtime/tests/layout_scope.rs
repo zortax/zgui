@@ -154,7 +154,7 @@ fn box_of(
         if let Some(&frag) = layout.fragments_of_box(key).first()
             && let Some(fragment) = layout.fragment(frag)
         {
-            return fragment.border_box;
+            return fragment.on_device(fragment.border_box, &window.placements());
         }
     }
     panic!("nothing in the document carries `{class}`")

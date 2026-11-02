@@ -31,7 +31,7 @@ use zgui_geom::CssPx;
 use zgui_text::{ClusterGeometry, ClusterRun, TextDirection};
 
 use crate::shape::brush::SlotBrush;
-use crate::shape::engine::ShapedLayout;
+use crate::shape::engine::{Form, ShapedLayout};
 
 /// Visits the direction-uniform cluster runs of one line, in the order they are drawn.
 pub(crate) fn visit_clusters(
@@ -39,7 +39,11 @@ pub(crate) fn visit_clusters(
     line: u16,
     visit: &mut dyn FnMut(ClusterRun<'_>),
 ) {
-    let Some(line) = shaped.layout.get(line as usize) else {
+    let layout = match &shaped.form {
+        Form::Live(live) => &live.layout,
+        Form::Frozen(frozen) => return frozen.visit_clusters(line, visit),
+    };
+    let Some(line) = layout.get(line as usize) else {
         return;
     };
     let alignment = line.metrics().offset;

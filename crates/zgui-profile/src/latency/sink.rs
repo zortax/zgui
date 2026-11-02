@@ -65,6 +65,8 @@ fn listening() -> bool {
 
 /// Records that `stage` happened now, with nothing further to say about it.
 pub fn mark(stage: &'static str) {
+    #[cfg(feature = "alloc-tags")]
+    crate::alloc_tag::follow_mark(stage);
     if !listening() {
         return;
     }
@@ -73,6 +75,8 @@ pub fn mark(stage: &'static str) {
 
 /// Records that `stage` happened now, with `note` describing it.
 pub fn note(stage: &'static str, note: impl Into<String>) {
+    #[cfg(feature = "alloc-tags")]
+    crate::alloc_tag::follow_mark(stage);
     if !listening() {
         return;
     }
@@ -85,6 +89,8 @@ pub fn note(stage: &'static str, note: impl Into<String>) {
 /// note is built before the enabled check is paid for on every frame of every run, recording or
 /// not, which makes the instrumentation part of what it is measuring.
 pub fn note_with(stage: &'static str, describe: impl FnOnce() -> String) {
+    #[cfg(feature = "alloc-tags")]
+    crate::alloc_tag::follow_mark(stage);
     if !listening() {
         return;
     }
@@ -100,6 +106,8 @@ pub fn note_with(stage: &'static str, describe: impl FnOnce() -> String) {
 
 /// Records that `stage` happened at `at`, which a caller that already read the clock supplies.
 pub fn mark_at(stage: &'static str, at: Instant) {
+    #[cfg(feature = "alloc-tags")]
+    crate::alloc_tag::follow_mark(stage);
     if !listening() {
         return;
     }

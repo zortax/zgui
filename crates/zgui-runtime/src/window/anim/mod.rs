@@ -15,6 +15,7 @@
 
 pub mod cadence;
 mod place;
+mod recolor;
 mod trace;
 
 use zgui_style::AnimationTime;
@@ -51,14 +52,15 @@ impl Window {
                 layout: &layout,
                 scale: self.scale,
                 damage: zgui_bits::DamageSet::new(),
+                painter: &self.painter,
             };
             let tick = self.animator.tick(&mut document, &report, &mut writing);
             (tick, writing.damage)
         };
 
-        // What the writes moved. Nothing else in the frame will put it in the set: the boxes that
-        // moved were not composed again, which is the whole saving, and the pass that would
-        // otherwise have absorbed their old and new rectangles never descended to them.
+        // What the writes moved and recoloured. Nothing else in the frame will put it in the set:
+        // the boxes that moved were not composed again, which is the whole saving, and the pass
+        // that would otherwise have absorbed their old and new rectangles never descended to them.
         self.damage.absorb_set(&moved);
 
         // Asking for a cascade is the engine's to do; deciding which elements need one is not, and

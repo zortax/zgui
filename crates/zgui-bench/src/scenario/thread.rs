@@ -26,7 +26,9 @@ use zgui::view::{Anchor, IntoView, View};
 use zgui::{component, view};
 use zgui_profile::{Counter, counter};
 
-use crate::scenario::band::{Band, Measurement, Pace, STARTUP_TOLERANCE, Spread};
+use crate::scenario::band::{
+    Band, Measurement, Pace, SCHEDULER_TOLERANCE, STARTUP_TOLERANCE, Spread,
+};
 use crate::scenario::{Outcome, counters, fixture, quiet};
 
 /// How many messages the thread holds.
@@ -216,6 +218,10 @@ struct Steps {
     relaid: Vec<f64>,
     /// Paragraphs broken into lines again.
     rebroken: Vec<f64>,
+    /// Of those, the breaks that gave the lines of the break before them.
+    kept: Vec<f64>,
+    /// Of those, the breaks answered without the engine's breaker.
+    skipped: Vec<f64>,
     /// Text runs shaped, which a width step owes none of.
     shaped: Vec<f64>,
     /// Layout passes that started from the document root.
@@ -273,14 +279,18 @@ pub(crate) fn run() -> Outcome {
         )]
         let width = crate::gallery::WIDTH + (step % CYCLE) as f32 * 8.0;
         let mark = counter::snapshot();
+        let gpu = crate::gpu_time::phase("thread.resize");
         let started = std::time::Instant::now();
         harness.deliver_to_first(SurfaceEvent::Resized(wide(width)));
         harness.settle(64);
         let cost = started.elapsed().as_secs_f64() * 1e3;
+        drop(gpu);
         let moved = mark.delta(&counter::snapshot());
         steps.cost_ms.push(cost);
         steps.relaid.push(sample(moved.nodes_relaid_out));
         steps.rebroken.push(sample(moved.text_rebroken));
+        steps.kept.push(sample(moved.text_lines_kept));
+        steps.skipped.push(sample(moved.text_breaks_skipped));
         steps.shaped.push(sample(moved.text_shaped));
         steps.roots.push(sample(moved.layout_reached_root));
         steps.batches.push(sample(moved.layout_batches_distributed));
@@ -334,6 +344,7 @@ pub(crate) fn run() -> Outcome {
     let declined_before = harness.app().windows()[0].declined_frames();
     let deferred_before = harness.app().windows()[0].deferred_resizes();
     let mut width = crate::gallery::WIDTH;
+    let gpu = crate::gpu_time::phase("thread.drag");
     for _ in 0..DRAG_MILLIS {
         harness.deliver(surface, SurfaceEvent::Resized(wide(width)));
         width += 1.0;
@@ -346,6 +357,7 @@ pub(crate) fn run() -> Outcome {
         harness.advance(Duration::from_millis(1));
         harness.pump();
     }
+    drop(gpu);
     let drag_layouts = counter::get(Counter::LayoutReachedRoot) - layouts_before;
     let declined = harness.app().windows()[0].declined_frames() - declined_before;
     let deferred = harness.app().windows()[0].deferred_resizes() - deferred_before;
@@ -371,6 +383,8 @@ pub(crate) fn run() -> Outcome {
     let cost = Spread::of(&mut steps.cost_ms);
     let relaid = Spread::of(&mut steps.relaid);
     let rebroken = Spread::of(&mut steps.rebroken);
+    let kept = Spread::of(&mut steps.kept);
+    let skipped = Spread::of(&mut steps.skipped);
     let reencoded = Spread::of(&mut steps.reencoded);
     let translated = Spread::of(&mut steps.translated);
     let uploaded = Spread::of(&mut steps.uploaded);
@@ -392,12 +406,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: cost.p50,
                 band: Band::Time {
-                    baseline: 13.2,
+                    baseline: 4.8,
                     tolerance: STARTUP_TOLERANCE,
                 },
-                rationale: "measured at 51ms before the resize retention work: the clip identity \
-                            fix alone took it to 13, and the counts beside this say where the \
-                            rest goes",
+                rationale: "measured at 4.2-5.2 ms across thirteen runs. A paragraph whose lines \
+                            hold at the new width keeps them and skips the line breaker, and the \
+                            counts beside this say where the rest goes",
                 budget: Some(8.0),
                 spread: Some(cost),
             },
@@ -406,11 +420,13 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: cost.p95,
                 band: Band::Time {
-                    baseline: 15.0,
-                    tolerance: STARTUP_TOLERANCE,
+                    baseline: 6.0,
+                    tolerance: SCHEDULER_TOLERANCE,
                 },
                 rationale: "the shoulder of the same distribution: a drag is judged by its worst \
-                            steps, which is what a person calls stutter",
+                            steps, which is what a person calls stutter. Measured at 4.5-9.5 ms \
+                            across thirteen runs, because the p95 of 32 steps is the second-worst \
+                            step and the cores it ran on set it",
                 budget: None,
                 spread: Some(cost),
             },
@@ -478,11 +494,14 @@ pub(crate) fn run() -> Outcome {
         notes: vec![
             format!(
                 "one step relays out {:.0} nodes (p50) against {boxes} boxes and re-breaks {:.0} \
-                 of {} paragraphs; {:.0} layout passes reached the root and the pool distributed \
-                 {:.0} batches",
+                 of {} paragraphs, {:.0} of them into the lines of the step before and {:.0} \
+                 without the engine's breaker; {:.0} layout passes reached the root and the pool \
+                 distributed {:.0} batches",
                 relaid.p50,
                 rebroken.p50,
                 paragraphs(),
+                kept.p50,
+                skipped.p50,
                 roots.p50,
                 batches.p50,
             ),

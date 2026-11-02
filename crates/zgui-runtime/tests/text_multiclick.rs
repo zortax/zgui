@@ -75,7 +75,7 @@ fn click(app: &mut Harness, x: f32, y: f32, time: u64) {
     );
 }
 fn location(app: &Harness, column: f32, line: usize) -> (f32, f32) {
-    let mut lines = support::line_boxes(&app.app().windows()[0]);
+    let mut lines = support::lines_on_device(&app.app().windows()[0]);
     lines.sort_by(|a, b| a.origin.y.0.total_cmp(&b.origin.y.0));
     let rect = lines[line];
     (
@@ -168,7 +168,7 @@ fn triple_selection_takes_the_paragraph_across_soft_wraps_and_drags_by_paragraph
         click(&mut app, x, y, t);
     }
     assert_eq!(node.selection(), Some(0..18), "Whole first paragraph");
-    let last = support::line_boxes(&app.app().windows()[0]).len() - 1;
+    let last = support::lines_on_device(&app.app().windows()[0]).len() - 1;
     let (x, y) = location(&app, 2.2, last);
     click(&mut app, x, y, 1000);
     click(&mut app, x, y, 1150);
@@ -370,7 +370,7 @@ fn multi_click_selection_uses_css_coordinates_at_fractional_and_retina_scales() 
             ),
         });
         app.settle(8);
-        let line = support::first_line_box(&app.app().windows()[0]);
+        let line = support::first_line_on_device(&app.app().windows()[0]);
         let x = line.origin.x.0 / scale as f32 + 5.2 * 8.0;
         let y = (line.origin.y.0 + line.size.height.0 / 2.0) / scale as f32;
         click(&mut app, x, y, 0);

@@ -29,7 +29,9 @@ use zgui_ui::prelude::*;
 use zgui_ui_primitives::Orientation;
 use zgui_ui_tokens::prelude::*;
 
-use crate::scenario::band::{Band, INTERACTION_TOLERANCE, Measurement, Pace, Spread};
+use crate::scenario::band::{
+    Band, INTERACTION_TOLERANCE, Measurement, Pace, SCHEDULER_TOLERANCE, Spread,
+};
 use crate::scenario::{Outcome, counters, fixture, quiet};
 
 /// How many icon buttons the head holds, each with a tooltip.
@@ -216,6 +218,7 @@ fn tooltips(harness: &mut Harness<Runtime>) -> Tooltips {
     let before = zgui_profile::counter::snapshot();
     for _ in 0..SWEEPS {
         for &at in &aims {
+            let _gpu = crate::gpu_time::phase("shell.tooltip_crossing");
             let started = std::time::Instant::now();
             harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
             harness.settle(64);
@@ -276,10 +279,12 @@ fn drag(harness: &mut Harness<Runtime>) -> Drag {
         } else {
             DRAG_STEP
         };
+        let gpu = crate::gpu_time::phase("shell.drag_step");
         steps.push(timed(
             harness,
             crate::input::pointer(PointerAction::Moved, Point::new(start.x, CssPx(y))),
         ));
+        drop(gpu);
         harness.advance(Duration::from_micros(8_333));
     }
     let moved = before.delta(&zgui_profile::counter::snapshot());
@@ -324,10 +329,12 @@ fn resize(harness: &mut Harness<Runtime>) -> Resize {
             DevicePx(crate::gallery::WIDTH - shrink),
             DevicePx(crate::gallery::HEIGHT - shrink / 2.0),
         );
+        let gpu = crate::gpu_time::phase("shell.resize_step");
         let started = std::time::Instant::now();
         harness.deliver_to_first(SurfaceEvent::Resized(size));
         harness.settle(64);
         steps.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
         harness.advance(Duration::from_micros(16_667));
         harness.pump();
     }
@@ -411,11 +418,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: step.p50,
                 band: Band::Time {
-                    baseline: 300.0,
+                    baseline: 240.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 0.30 ms; one edge moved: two panels sized, the strips \
-                            along the edge repainted, the log's newly exposed lines built",
+                rationale: "measured at 0.24-0.25 ms across thirteen runs; one edge moved: two \
+                            panels sized, the strips along the edge repainted, the log's newly \
+                            exposed lines built",
                 budget: Some(8_333.0),
                 spread: Some(step),
             },
@@ -463,10 +471,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: size.p50,
                 band: Band::Time {
-                    baseline: 2_000.0,
-                    tolerance: INTERACTION_TOLERANCE,
+                    baseline: 880.0,
+                    tolerance: SCHEDULER_TOLERANCE,
                 },
-                rationale: "measured at 1.2-2.1 ms; every box is asked again at a new size, \
+                rationale: "measured at 0.81-1.41 ms across thirteen runs, the spread set by the \
+                            cores the layout pool ran on; every box is asked again at a new size, \
                             once, in one frame, and only what moved and what is exposed is \
                             painted",
                 budget: None,

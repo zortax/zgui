@@ -14,6 +14,7 @@ use rustc_hash::FxHashMap;
 use zgui_css::ComputedStyle;
 use zgui_profile::{Counter, counter};
 
+use crate::fragment::custom_properties::CustomProperties;
 use crate::style::DeviceStyle;
 use crate::style::calc::CalcTable;
 use crate::style::grid::idents::IdentTable;
@@ -83,6 +84,8 @@ struct StyleEntry {
     lowered: Option<LayoutStyle>,
     /// What the lowering is filed under.
     key: LayoutKey,
+    /// The framework properties the style declares.
+    declared: CustomProperties,
 }
 
 /// Every distinct computed style held by a live box.
@@ -129,6 +132,7 @@ impl StyleTable {
             refs: 1,
             lowered: None,
             key: LayoutKey::of(style),
+            declared: CustomProperties::of(style),
         };
         let index = match self.free.pop() {
             Some(index) => {
@@ -286,6 +290,22 @@ impl StyleTable {
             .as_ref()
             .expect("a live style slot")
             .style
+    }
+
+    /// The framework properties the style a slot names declares, when that style is `style`.
+    ///
+    /// # Panics
+    ///
+    /// If the slot holds no entry.
+    pub(crate) fn declared(
+        &self,
+        slot: StyleSlot,
+        style: &ComputedStyle,
+    ) -> Option<CustomProperties> {
+        let entry = self.entries[slot.0 as usize]
+            .as_ref()
+            .expect("a live style slot");
+        crate::style::same_cascade(&entry.style, style).then_some(entry.declared)
     }
 
     /// How many distinct styles are live.

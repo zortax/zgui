@@ -101,7 +101,9 @@ pub use kurbo;
 pub use peniko;
 
 pub use crate::batch::{Batch, Batches};
-pub use crate::clip::{ClipLink, ClipNode, ClipTable, MaskSource, ResolvedClip, RoundedTest};
+pub use crate::clip::{
+    ClipLink, ClipNode, ClipTable, KeptClip, MaskSource, ResolvedClip, RoundedTest,
+};
 pub use crate::content::{Content, ContentHash};
 pub use crate::group::{BackdropFilter, Filter, GroupBoundary, read_extent};
 pub use crate::id::{
@@ -110,7 +112,8 @@ pub use crate::id::{
 pub use crate::ops::PaintOp;
 pub use crate::order::BoundsTree;
 pub use crate::paint::{
-    GradientKind, Paint, PaintKind, PaintRef, PaintTable, TextPaint, TextPaintTable,
+    GradientKind, Paint, PaintEntry, PaintKind, PaintOwner, PaintRef, PaintRewrite, PaintRole,
+    PaintTable, TextPaint, TextPaintTable,
 };
 pub use crate::pass::{
     MarkBin, MarkPlan, Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassPlan,
@@ -124,7 +127,7 @@ pub use crate::prim::{
 };
 pub use crate::resource::{ResourceGeneration, ResourceKey, ResourceKind, ResourceRegistry};
 pub use crate::scene::resolve::Settle;
-pub use crate::scene::{ChunkPrims, ChunkSlot, ChunkUpload, Scene, SpatialFault, TableHolds};
+pub use crate::scene::{ChunkNote, ChunkPrims, ChunkSlot, Scene, SpatialFault, TableHolds};
 pub use crate::shader::{
     FrameClock, MAX_PARAMS_BYTES, ShaderDeclaration, ShaderField, ShaderId, ShaderMode,
     ShaderParams, ShaderParamsSlot, ShaderParamsTable, ShaderReads, declare_shader, property,

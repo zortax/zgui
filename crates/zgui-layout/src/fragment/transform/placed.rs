@@ -13,7 +13,6 @@ use zgui_geom::{Device, DevicePx, Rect};
 use zgui_scene::{Placements, SpatialId};
 
 use crate::fragment::FragKey;
-use crate::fragment::transform::transformed_bounds;
 use crate::tree::store::LayoutStore;
 
 /// A rectangle measured in the coordinate system `space` names, put where it is drawn.
@@ -26,13 +25,14 @@ use crate::tree::store::LayoutStore;
 /// A name the drawn frame no longer resolves leaves the rectangle where it is rather than
 /// answering nothing: the alternative is a caller with no rectangle at all, which for a caret is
 /// no insertion point and for a consumer outside this process is a control with no position.
+#[inline]
 pub fn onto_device(
     rect: Rect<DevicePx, Device>,
     space: Option<SpatialId>,
     placements: &Placements,
 ) -> Rect<DevicePx, Device> {
-    match space.and_then(|id| placements.moves(id)) {
-        Some(matrix) => transformed_bounds(matrix, rect),
+    match space {
+        Some(id) => placements.place(id, rect),
         None => rect,
     }
 }

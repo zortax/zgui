@@ -37,11 +37,11 @@ fn assert_disjoint<const N: usize>(set: &DamageSet<N>) {
 }
 
 /// A small, deterministic generator, so a ten-thousand-step run is reproducible and cheap.
-struct Xorshift(u64);
+pub(super) struct Xorshift(pub(super) u64);
 
 impl Xorshift {
     /// The next value in the sequence.
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -49,7 +49,7 @@ impl Xorshift {
     }
 
     /// A value below `limit`.
-    fn below(&mut self, limit: i32) -> i32 {
+    pub(super) fn below(&mut self, limit: i32) -> i32 {
         (self.next() % limit as u64) as i32
     }
 }

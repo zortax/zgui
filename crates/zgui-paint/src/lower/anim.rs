@@ -9,8 +9,11 @@
 //! has reverted to the one it shares with its siblings, so it is being drawn through the very same
 //! lowering they are; a value written into that lowering would fade all of them together.
 
+use zgui_color::Color;
 use zgui_dom::side::AnimOverride;
 use zgui_dom::{Document, NodeKey};
+use zgui_geom::{DevicePx, Edges};
+use zgui_scene::{Paint, PaintOwner, PaintRole, PropertyOwner};
 
 use crate::lower::PaintStyle;
 
@@ -76,13 +79,171 @@ pub fn compose(style: &mut PaintStyle, over: &AnimOverride) {
     }
 }
 
+/// Which of a box's paints an animation drives through slots the box owns.
+///
+/// A box in this mode draws its animated colours through [`PaintTable::owned`] slots, and its
+/// paint signature holds this set in place of the animated values. A frame that moves only the
+/// colours therefore replays the box's chunk, and the animation stage rewrites the slots the chunk
+/// names.
+///
+/// The border bit has a second bit for the paint family, which [`border_paint`] decides from the
+/// sides with a width. A primitive names the family, so a change of family changes the signature
+/// and encodes the box again.
+///
+/// [`PaintTable::owned`]: zgui_scene::PaintTable::owned
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OwnedPaints(u8);
+
+impl OwnedPaints {
+    /// The background colour.
+    const BACKGROUND: u8 = 1;
+    /// The border colours.
+    const BORDER: u8 = 1 << 1;
+    /// The border colours differ, so the stroke is one colour per side.
+    const BORDER_SIDES: u8 = 1 << 2;
+    /// The outline colour.
+    const OUTLINE: u8 = 1 << 3;
+    /// Marks a paint signature as an owned set rather than a fingerprint of values.
+    const OWNED: u64 = 1 << 63;
+
+    /// Whether `over` drives a colour and no value a slot cannot hold.
+    ///
+    /// The opacity is such a value: it is folded into every colour the subtree draws.
+    pub fn any(over: &AnimOverride) -> bool {
+        over.opacity.is_none()
+            && (over.background_color.is_some()
+                || over.border_colors.is_some()
+                || over.outline_color.is_some())
+    }
+
+    /// The paints `over` drives on a box with the border widths `border`, or `None` when
+    /// [`OwnedPaints::any`] says no.
+    pub fn of(over: &AnimOverride, border: Edges<DevicePx>) -> Option<Self> {
+        if !Self::any(over) {
+            return None;
+        }
+        let mut bits = 0;
+        if over.background_color.is_some() {
+            bits |= Self::BACKGROUND;
+        }
+        if let Some(colors) = border_colors(over) {
+            bits |= Self::BORDER;
+            if matches!(border_paint(colors, border), Paint::Sides(_)) {
+                bits |= Self::BORDER_SIDES;
+            }
+        }
+        if over.outline_color.is_some() {
+            bits |= Self::OUTLINE;
+        }
+        Some(Self(bits))
+    }
+
+    /// The paint signature of a box in this mode.
+    pub fn signature(self) -> u64 {
+        Self::OWNED | u64::from(self.0)
+    }
+
+    /// Whether the background colour is in an owned slot.
+    pub fn background(self) -> bool {
+        self.0 & Self::BACKGROUND != 0
+    }
+
+    /// Whether the border stroke is in an owned slot.
+    pub fn border(self) -> bool {
+        self.0 & Self::BORDER != 0
+    }
+
+    /// Whether the outline stroke is in an owned slot.
+    pub fn outline(self) -> bool {
+        self.0 & Self::OUTLINE != 0
+    }
+
+    /// Whether the box is drawn even where its shared style draws nothing.
+    ///
+    /// A fully transparent background or border is skipped, and an animation from transparent
+    /// needs the primitive there to rewrite.
+    pub fn forces_box(self) -> bool {
+        self.background() || self.border()
+    }
+
+    /// The paint each owned slot holds for `over`, named after the box `owner` names, whose
+    /// border widths are `border`.
+    ///
+    /// What the animation stage writes. The emission draws the same values from the style
+    /// [`compose`] makes, so the slot holds one value whoever wrote it last.
+    pub fn paints(
+        self,
+        owner: PropertyOwner,
+        over: &AnimOverride,
+        border: Edges<DevicePx>,
+    ) -> impl Iterator<Item = (PaintOwner, Paint)> {
+        let background = over
+            .background_color
+            .as_ref()
+            .filter(|_| self.background())
+            .map(|color| {
+                (
+                    PaintOwner::new(owner, PaintRole::Background),
+                    Paint::Solid(zgui_css::values::color::to_color(color)),
+                )
+            });
+        let border = border_colors(over).filter(|_| self.border()).map(|colors| {
+            (
+                PaintOwner::new(owner, PaintRole::BorderSides),
+                border_paint(colors, border),
+            )
+        });
+        let outline = over
+            .outline_color
+            .as_ref()
+            .filter(|_| self.outline())
+            .map(|color| {
+                (
+                    PaintOwner::new(owner, PaintRole::Outline),
+                    Paint::Solid(zgui_css::values::color::to_color(color)),
+                )
+            });
+        background.into_iter().chain(border).chain(outline)
+    }
+}
+
+/// The animated border colours, top, right, bottom and left, as the emission draws them.
+fn border_colors(over: &AnimOverride) -> Option<[Color; 4]> {
+    over.border_colors
+        .as_ref()
+        .map(|colors| colors.each_ref().map(zgui_css::values::color::to_color))
+}
+
+/// The stroke an owned border slot holds on a box with the border widths `border`.
+///
+/// The sides with a width decide, as they do for a still border: one colour on all of them is one
+/// colour, and different colours are one colour per side. A box with no border width holds the
+/// top colour.
+///
+/// The walk and the animation stage read the widths off the box's first fragment, and the
+/// emission reads each fragment's own. These agree because a box that owns slots has one box
+/// fragment: a nested inline box, which can have more, owns none.
+pub fn border_paint(colors: [Color; 4], border: Edges<DevicePx>) -> Paint {
+    let widths = [border.top.0, border.right.0, border.bottom.0, border.left.0];
+    let mut shown = (0..4)
+        .filter(|&side| widths[side] > 0.0)
+        .map(|side| colors[side]);
+    match shown.next() {
+        Some(first) if shown.all(|color| color == first) => Paint::Solid(first),
+        Some(_) => Paint::Sides(colors),
+        None => Paint::Solid(colors[0]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use zgui_css::StyleDraft;
     use zgui_css::values::color::AbsoluteColor;
     use zgui_dom::side::AnimOverride;
 
-    use super::{AnimOverrides, NoAnim, compose};
+    use zgui_geom::{DevicePx, Edges};
+
+    use super::{AnimOverrides, NoAnim, OwnedPaints, border_paint, compose};
     use crate::lower::lower;
 
     #[test]
@@ -123,5 +284,116 @@ mod tests {
             },
         );
         assert!(!style.border.invisible);
+    }
+
+    /// A border one pixel wide on every side.
+    const EVERY_SIDE: Edges<DevicePx> = Edges {
+        top: DevicePx(1.0),
+        right: DevicePx(1.0),
+        bottom: DevicePx(1.0),
+        left: DevicePx(1.0),
+    };
+
+    /// An override moving every colour a box can own, with the border sides given.
+    fn colours(sides: [AbsoluteColor; 4]) -> AnimOverride {
+        AnimOverride {
+            background_color: Some(AbsoluteColor::srgb_legacy(10, 20, 30, 0.5)),
+            border_colors: Some(sides),
+            outline_color: Some(AbsoluteColor::srgb_legacy(40, 50, 60, 1.0)),
+            ..AnimOverride::new()
+        }
+    }
+
+    #[test]
+    fn an_opacity_keeps_a_box_out_of_owned_slots() {
+        let red = AbsoluteColor::srgb_legacy(255, 0, 0, 1.0);
+        let over = AnimOverride {
+            opacity: Some(0.5),
+            ..colours([red; 4])
+        };
+        assert_eq!(OwnedPaints::of(&over, EVERY_SIDE), None);
+        assert_eq!(OwnedPaints::of(&AnimOverride::new(), EVERY_SIDE), None);
+    }
+
+    #[test]
+    fn a_change_of_border_family_changes_the_signature() {
+        let red = AbsoluteColor::srgb_legacy(255, 0, 0, 1.0);
+        let blue = AbsoluteColor::srgb_legacy(0, 0, 255, 1.0);
+        let one = OwnedPaints::of(&colours([red; 4]), EVERY_SIDE).expect("owned");
+        let again = OwnedPaints::of(&colours([blue; 4]), EVERY_SIDE).expect("owned");
+        let four = OwnedPaints::of(&colours([red, blue, red, blue]), EVERY_SIDE).expect("owned");
+        assert_eq!(
+            one.signature(),
+            again.signature(),
+            "the values are not in it"
+        );
+        assert_ne!(one.signature(), four.signature(), "the family is");
+    }
+
+    #[test]
+    fn the_owned_paints_are_what_the_composed_style_draws() {
+        let red = AbsoluteColor::srgb_legacy(255, 0, 0, 1.0);
+        let blue = AbsoluteColor::srgb_legacy(0, 0, 255, 0.25);
+        let over = colours([red, blue, red, blue]);
+        let mut style = lower(&StyleDraft::initial().build(), 1.0);
+        style.outline = Some(crate::lower::outline::OutlinePaint {
+            width: 2.0,
+            offset: 0.0,
+            color: zgui_color::Color::BLACK,
+            style: crate::lower::border::LineStyle::Solid,
+        });
+        compose(&mut style, &over);
+        let owner = zgui_scene::PropertyOwner::new(7).expect("not the empty word");
+        let owned = OwnedPaints::of(&over, EVERY_SIDE).expect("owned");
+        let paints: Vec<_> = owned.paints(owner, &over, EVERY_SIDE).collect();
+        assert_eq!(
+            paints,
+            vec![
+                (
+                    zgui_scene::PaintOwner::new(owner, zgui_scene::PaintRole::Background),
+                    zgui_scene::Paint::Solid(style.background.color)
+                ),
+                (
+                    zgui_scene::PaintOwner::new(owner, zgui_scene::PaintRole::BorderSides),
+                    zgui_scene::Paint::Sides(style.border.colors)
+                ),
+                (
+                    zgui_scene::PaintOwner::new(owner, zgui_scene::PaintRole::Outline),
+                    zgui_scene::Paint::Solid(style.outline.expect("an outline").color)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_border_on_one_side_takes_the_family_a_still_border_takes() {
+        // Only the bottom side has a width, so only its colour is drawn: one colour, whatever the
+        // other three hold, as the still border's stroke is.
+        let red = AbsoluteColor::srgb_legacy(255, 0, 0, 1.0);
+        let blue = AbsoluteColor::srgb_legacy(0, 0, 255, 1.0);
+        let bottom = Edges {
+            top: DevicePx(0.0),
+            right: DevicePx(0.0),
+            bottom: DevicePx(3.0),
+            left: DevicePx(0.0),
+        };
+        let over = colours([red, red, blue, red]);
+        let owned = OwnedPaints::of(&over, bottom).expect("owned");
+        let alike = OwnedPaints::of(&colours([blue; 4]), EVERY_SIDE).expect("owned");
+        assert_eq!(owned.signature(), alike.signature(), "one colour is drawn");
+        let colors = [red, red, blue, red].map(|color| zgui_css::values::color::to_color(&color));
+        assert_eq!(
+            border_paint(colors, bottom),
+            zgui_scene::Paint::Solid(colors[2])
+        );
+        let owner = zgui_scene::PropertyOwner::new(7).expect("not the empty word");
+        assert!(owned.paints(owner, &over, bottom).any(|(name, paint)| {
+            name.role == zgui_scene::PaintRole::BorderSides
+                && paint == zgui_scene::Paint::Solid(colors[2])
+        }));
+        assert!(matches!(
+            border_paint(colors, EVERY_SIDE),
+            zgui_scene::Paint::Sides(_)
+        ));
     }
 }

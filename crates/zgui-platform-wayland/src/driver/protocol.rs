@@ -80,8 +80,13 @@ impl CompositorHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         surface: &WlSurface,
-        _output: &WlOutput,
+        output: &WlOutput,
     ) {
+        self.outputs_of(surface, |outputs| {
+            if !outputs.contains(output) {
+                outputs.push(output.clone());
+            }
+        });
         self.visibility_changed(surface, |visibility| visibility.entered_output());
     }
 
@@ -90,8 +95,9 @@ impl CompositorHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         surface: &WlSurface,
-        _output: &WlOutput,
+        output: &WlOutput,
     ) {
+        self.outputs_of(surface, |outputs| outputs.retain(|held| held != output));
         self.visibility_changed(surface, |visibility| visibility.left_output());
     }
 }
@@ -109,7 +115,11 @@ impl OutputHandler for WaylandState {
         self.outputs_changed();
     }
 
-    fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
+    fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
+        // The compositor can remove an output without a leave first. Its rate must stop counting.
+        for surface in self.live.surfaces.borrow().iter() {
+            surface.shared().outputs.retain(|held| held != &output);
+        }
         self.outputs_changed();
     }
 }
@@ -246,7 +256,39 @@ impl WaylandState {
             .collect();
         for id in ids {
             self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+            self.declare_rate(id);
         }
+    }
+
+    /// Applies a change to the outputs a surface is on, and declares the rate they run at.
+    fn outputs_of(&mut self, surface: &WlSurface, change: impl FnOnce(&mut Vec<WlOutput>)) {
+        let Some(id) = self.identify(surface) else {
+            return;
+        };
+        if let Some(held) = self.live.surface(id) {
+            change(&mut held.shared().outputs);
+        }
+        self.declare_rate(id);
+    }
+
+    /// Gives a surface the refresh interval of the outputs it is on.
+    ///
+    /// The timing uses it only while the presentation feedback states no interval, which a
+    /// headless output and a variable-refresh output do. Without it, such a surface is paced at
+    /// sixty hertz on any output. Of several outputs, the fastest one gives the interval, because
+    /// the compositor sends a frame callback each time any of them repaints the surface.
+    fn declare_rate(&self, id: zgui_platform::SurfaceId) {
+        let Some(held) = self.live.surface(id) else {
+            return;
+        };
+        let mut shared = held.shared();
+        let interval = shared
+            .outputs
+            .iter()
+            .filter_map(|output| self.outputs.info(output))
+            .filter_map(|info| output::mode::interval(&info))
+            .min();
+        shared.declares(interval);
     }
 }
 

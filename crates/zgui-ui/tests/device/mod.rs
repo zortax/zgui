@@ -50,6 +50,15 @@ pub fn use_real_damage() {
     REAL_DAMAGE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// How many frames moved composed pixels in place of drawing a scrolled port.
+static SHIFTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many frames so far answered a scroll by moving composed pixels.
+#[allow(dead_code, reason = "not every fixture scrolls")]
+pub fn shifts() -> usize {
+    SHIFTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn real_damage() -> bool {
     REAL_DAMAGE.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -73,6 +82,17 @@ impl Renderer for Recording {
 
     fn composed_survives_configure(&self) -> bool {
         real_damage() && self.renderer.composed_survives_configure()
+    }
+
+    // Only with the real damage set: a scroll answered by a pixel move draws the exposed band and
+    // nothing else, which a full redraw would hide.
+    fn shifts_composed_pixels(&self) -> bool {
+        real_damage() && self.renderer.shifts_composed_pixels()
+    }
+
+    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
+        SHIFTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.renderer.shift_composed(shift);
     }
 
     fn target(&self) -> Option<RenderTarget> {

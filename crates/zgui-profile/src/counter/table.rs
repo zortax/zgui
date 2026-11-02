@@ -70,6 +70,14 @@ counters! {
     /// Times a layout pass had to start from the document root instead of a subtree.
     LayoutReachedRoot => layout_reached_root, Group::BackendNeutral;
 
+    /// Layout passes a window ran. Each composes the fragments again; a pass that is not held also
+    /// measures what is owed.
+    ///
+    /// A frame runs one, and one more after each delivery that leaves work owed: a scroll
+    /// handler's, and each geometry observation's. A held pass counts too, so read
+    /// [`Counter::LayoutsHeld`] beside it.
+    LayoutPasses => layout_passes, Group::BackendNeutral;
+
     /// Batches of child layouts that ran across the layout pool's workers.
     ///
     /// Zero on a steady frame: the executor distributes only past its cold-work gates, so this
@@ -98,8 +106,28 @@ counters! {
     /// Paragraphs broken into lines again while reusing the shaping they already had.
     TextRebroken => text_rebroken, Group::BackendNeutral;
 
+    /// Breaking passes that produced the lines of the pass before them, so the reported lines and
+    /// inline-box placements were kept and not read again.
+    TextLinesKept => text_lines_kept, Group::Skip { done: Counter::TextRebroken };
+
+    /// Breaking passes answered without breaking, because the width kept each comparison the
+    /// engine's breaker made in the pass before.
+    TextBreaksSkipped => text_breaks_skipped, Group::Skip { done: Counter::TextRebroken };
+
+    /// Shaped paragraphs held in the frozen form: the glyphs and clusters of their one break,
+    /// without the engine's layout.
+    TextFrozen => text_frozen, Group::BackendNeutral;
+
+    /// Frozen paragraphs shaped again into the engine's layout, because a breaking request asked
+    /// for more than the frozen form holds.
+    TextThawed => text_thawed, Group::BackendNeutral;
+
     /// Shaped paragraphs broken back to their kept lines after a size probe moved them.
     TextFormsRestored => text_forms_restored, Group::BackendNeutral;
+
+    /// Contexts moved to a shaped paragraph of their own, because another context with equal
+    /// content keeps other lines.
+    TextFormsSeparated => text_forms_separated, Group::BackendNeutral;
 
     /// Fragments compared against their previous geometry.
     FragmentsDiffed => fragments_diffed, Group::BackendNeutral;
@@ -107,8 +135,16 @@ counters! {
     /// Fragments whose geometry was recomputed rather than carried over.
     FragmentsRebuilt => fragments_rebuilt, Group::BackendNeutral;
 
-    /// Boxes layout placed elsewhere that were carried with their subtrees instead of composed.
+    /// Boxes that moved and were carried with their subtrees instead of composed.
     BoxesShifted => boxes_shifted, Group::BackendNeutral;
+
+    /// Boxes the fragment pass reached: composed, carried by a move or carried onto a new matrix.
+    ///
+    /// The fragment pass's own share of [`NodesVisited`](Counter::NodesVisited), which the paint
+    /// walk and the invalidation walk also count. A scroll that moves a content space reaches the
+    /// path down to its container. A scroll of a container that keeps its children in its own
+    /// space reaches every box in it.
+    FragmentBoxesVisited => fragment_boxes_visited, Group::BackendNeutral;
 
     /// Elements that took a moved custom property map into their style without a cascade.
     CustomMapsRefreshed => custom_maps_refreshed, Group::BackendNeutral;
@@ -274,6 +310,13 @@ counters! {
     /// Draw calls submitted to the GPU.
     DrawCalls => draw_calls, Group::RendererSpecific;
 
+    /// Instanced batches a renderer left out of a pass, because they write nothing inside its
+    /// scissor.
+    ///
+    /// A frame of several damage rectangles replays its batches once per rectangle. Each batch
+    /// whose pixels miss a rectangle counts here once for that rectangle, and draws nothing there.
+    BatchesCulled => batches_culled, Group::RendererSpecific;
+
     /// Vector rasterisation passes the scene stage planned.
     ///
     /// The plan is made while the scene is finished, not while it is drawn, so this counts a
@@ -308,6 +351,13 @@ counters! {
     /// a total only ever grows, so a session that thrashed for one second and behaved for an hour
     /// is indistinguishable from one that thrashed throughout.
     RebuiltAfterEviction => rebuilt_after_eviction, Group::BackendNeutral;
+
+    /// Glyphs rasterised on the layout workers before the emit walk asked for them.
+    ///
+    /// The walk still counts each key it asks for in [`Counter::GlyphsRasterised`]. A prefetched
+    /// key that the walk does not ask for is wasted work. When this is larger than
+    /// `GlyphsRasterised` on the same frame, the difference is the least waste of the prediction.
+    GlyphsPrefetched => glyphs_prefetched, Group::BackendNeutral;
 
     /// Cached rasters freed to bring the atlas back under its soft limit.
     ///
@@ -378,6 +428,12 @@ counters! {
     /// Read as a high-water sign of image and scene bursts. It falls to zero on its own; a value
     /// that persists means large uploads on every frame.
     StagingOneShotBytes => staging_one_shot_bytes, Group::RendererSpecific;
+
+    /// Nanoseconds the GPU spent in the renderer's timed passes.
+    ///
+    /// Zero unless GPU pass timing is on. A frame's time is added when its result is read back,
+    /// one or two frames after the frame was drawn.
+    GpuTimeNs => gpu_time_ns, Group::RendererSpecific;
 
     /// Frames the loop actually drew.
     ///
@@ -560,6 +616,24 @@ counters! {
     /// everywhere and moving it is not re-anchoring anything.
     PaintsReanchored => paints_reanchored, Group::BackendNeutral;
 
+    /// Bytes the text engine's shaped paragraphs hold right now, as the engine estimates them.
+    ///
+    /// A trend figure: compare it between runs. The allocation tags for shaping and breaking give
+    /// the absolute bytes. Zero for an engine that makes no estimate.
+    ParagraphBytesLive => paragraph_bytes_live, Group::Live;
+
+    /// Brush slots in use in the text paint table, released slots excluded.
+    TextBrushSlotsLive => text_brush_slots_live, Group::Live;
+
+    /// Cascade results the text paint table resolves to a brush slot.
+    TextBrushKeysLive => text_brush_keys_live, Group::Live;
+
+    /// Element runs the window records a brush slot for.
+    TextSlotRecordsLive => text_slot_records_live, Group::Live;
+
+    /// Cascade results the text engine holds so that the brush table can file them by address.
+    TextBrushPinsLive => text_brush_pins_live, Group::Live;
+
     /// Shaped paragraphs thrown away.
     ParagraphsForgotten => paragraphs_forgotten, Group::BackendNeutral;
 
@@ -574,8 +648,16 @@ counters! {
     /// everything the window has ever shaped.
     ParagraphsEvicted => paragraphs_evicted, Group::BackendNeutral;
 
+    /// Shaped paragraphs the shaping cache examined to keep its eviction candidates.
+    ///
+    /// Follows what changed: a frame that releases or shapes no paragraph adds nothing.
+    ParagraphsExamined => paragraphs_examined, Group::BackendNeutral;
+
     /// Boxes whose layout was thrown away because the text in them has to be shaped again.
     BoxesReshaped => boxes_reshaped, Group::BackendNeutral;
+
+    /// Styles replaced by the groups of an equal style an earlier element was given.
+    StylesShared => styles_shared, Group::BackendNeutral;
 }
 
 impl Counter {

@@ -12,11 +12,11 @@ fn fs_shaded_paint(in: ShadedVarying) -> @location(0) vec4<f32> {
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let point = in.local - in.shift;
-    let input = shader_input(quad, point);
+    let input = shader_input(quad, in.local);
     // Outside the unit range a premultiplied colour has no meaning, and one frame of a wrong
     // shader would otherwise reach the screen as saturated noise.
     let color = clamp(shade(input, shader_params.user), vec4<f32>(0.0), vec4<f32>(1.0));
-    let shape = coverage_of(quad_sdf(point, quad.bounds, quad.radii, CORNER_ROUND));
+    let bounds = bounds_from(quad.bounds, in.origin);
+    let shape = coverage_of(quad_sdf(in.local, bounds, quad.radii, CORNER_ROUND));
     return color * shape * clip * quad.opacity;
 }

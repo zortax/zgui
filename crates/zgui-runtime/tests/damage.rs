@@ -134,7 +134,16 @@ impl Renderer for Recorder {
                 .iter()
                 .map(|sprite| Sprite {
                     tile: (sprite.tile.texture, sprite.tile.tile),
-                    x: sprite.bounds[0].floor() as i32,
+                    x: scene
+                        .spatial
+                        .resolve_at(sprite.transform)
+                        .map_or(sprite.ink(), |matrix| {
+                            zgui_geom::transformed_bounds(&matrix, sprite.ink())
+                        })
+                        .origin
+                        .x
+                        .0
+                        .floor() as i32,
                 })
                 .collect(),
             glyph_ink: scene
@@ -142,7 +151,15 @@ impl Renderer for Recorder {
                 .mono_sprites
                 .iter()
                 .map(|sprite| {
-                    let [x, y, width, height] = sprite.bounds;
+                    // Through the sprite's own coordinate system, which puts it on the device.
+                    let ink = scene
+                        .spatial
+                        .resolve_at(sprite.transform)
+                        .map_or(sprite.ink(), |matrix| {
+                            zgui_geom::transformed_bounds(&matrix, sprite.ink())
+                        });
+                    let (x, y) = (ink.origin.x.0, ink.origin.y.0);
+                    let (width, height) = (ink.size.width.0, ink.size.height.0);
                     let (left, top) = (x.floor(), y.floor());
                     Rect::new(
                         Point::new(left as i32, top as i32),
@@ -250,7 +267,7 @@ fn box_of_width(window: &zgui_runtime::Window, width: f32) -> Rect<i32, Device> 
             let Some(fragment) = layout.fragment(*frag) else {
                 continue;
             };
-            let box_of = fragment.border_box;
+            let box_of = fragment.on_device(fragment.border_box, &window.placements());
             if (box_of.size.width.0 - width).abs() < 0.5 {
                 found = Some(box_of);
             }

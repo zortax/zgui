@@ -104,32 +104,51 @@ fn direction(turn: usize) -> f32 {
     }
 }
 
+/// Called after each step of a gesture that can draw, with the frames the step drew.
+pub(crate) type Step<'a> = &'a mut dyn FnMut(&mut Harness<Runtime>, u64);
+
 /// One fast wheel: a notch, and the whole glide it starts.
-fn wheel(harness: &mut Harness<Runtime>, at: Point<CssPx, Css>, turn: usize) -> Duration {
+fn wheel(
+    harness: &mut Harness<Runtime>,
+    at: Point<CssPx, Css>,
+    turn: usize,
+    step: Step<'_>,
+) -> Duration {
     let started = Instant::now();
     harness.deliver_to_first(notch(at, 6.0 * direction(turn)));
-    harness.settle(64);
+    let frames = harness.settle(64);
+    step(harness, frames);
     for _ in 0..GLIDE_TICKS {
         harness.advance(TICK);
-        harness.pump();
+        let frames = harness.pump();
+        step(harness, frames);
     }
     started.elapsed()
 }
 
 /// One touchpad gesture: started, twenty-four deltas at the refresh, ended.
-fn touchpad(harness: &mut Harness<Runtime>, at: Point<CssPx, Css>, turn: usize) -> Duration {
+fn touchpad(
+    harness: &mut Harness<Runtime>,
+    at: Point<CssPx, Css>,
+    turn: usize,
+    step: Step<'_>,
+) -> Duration {
     let pixels = TOUCH_PIXELS * direction(turn);
     let started = Instant::now();
     harness.deliver_to_first(held(at, pixels, ScrollPhase::Started));
-    harness.settle(64);
+    let frames = harness.settle(64);
+    step(harness, frames);
     for _ in 0..TOUCH_STEPS {
         harness.deliver_to_first(held(at, pixels, ScrollPhase::Moved));
-        harness.settle(64);
+        let frames = harness.settle(64);
+        step(harness, frames);
         harness.advance(TICK);
-        harness.pump();
+        let frames = harness.pump();
+        step(harness, frames);
     }
     harness.deliver_to_first(held(at, 0.0, ScrollPhase::Ended));
-    harness.settle(64);
+    let frames = harness.settle(64);
+    step(harness, frames);
     started.elapsed()
 }
 
@@ -161,9 +180,20 @@ impl Gesture {
         at: Point<CssPx, Css>,
         turn: usize,
     ) -> Duration {
+        self.drive_stepped(harness, at, turn, &mut |_, _| {})
+    }
+
+    /// Drives one pass of it, and calls `step` after each step that can draw.
+    pub(crate) fn drive_stepped(
+        self,
+        harness: &mut Harness<Runtime>,
+        at: Point<CssPx, Css>,
+        turn: usize,
+        step: Step<'_>,
+    ) -> Duration {
         match self {
-            Self::Wheel => wheel(harness, at, turn),
-            Self::Touchpad => touchpad(harness, at, turn),
+            Self::Wheel => wheel(harness, at, turn, step),
+            Self::Touchpad => touchpad(harness, at, turn, step),
         }
     }
 }

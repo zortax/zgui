@@ -1,7 +1,7 @@
-//! Who moves the box, when the box can be moved without composing it.
+//! Who moves or recolours the box, when that can be done without composing it.
 
 use zgui_dom::NodeKey;
-use zgui_dom::side::AnimPlacement;
+use zgui_dom::side::{AnimOverride, AnimPlacement};
 
 use crate::frame::apply::Placed;
 
@@ -26,6 +26,27 @@ pub trait Placer {
     /// right for an implementation that was holding nothing.
     fn retired(&mut self, node: NodeKey) {
         let _ = node;
+    }
+
+    /// Writes `node`'s animated colours into the paint slots its box owns, and reports whether
+    /// that is all the frame owes the box.
+    ///
+    /// Called for an element whose override changed. `true` leaves the element owing nothing for
+    /// its colours: the implementation rewrote every slot the box's recorded painting names and
+    /// damaged the box's ink itself. `false` marks the repaint, which is always correct. The
+    /// default answers `false`.
+    fn recolor(&mut self, node: NodeKey, values: &AnimOverride) -> bool {
+        let _ = (node, values);
+        false
+    }
+
+    /// Reports that `node` no longer carries the override `was`, so its box is drawn from its own
+    /// style again.
+    ///
+    /// The repaint that is owed for it is marked as well, so an implementation that does nothing
+    /// is correct for a box the fragment pass damages. The default does nothing.
+    fn uncolored(&mut self, node: NodeKey, was: &AnimOverride) {
+        let _ = (node, was);
     }
 }
 

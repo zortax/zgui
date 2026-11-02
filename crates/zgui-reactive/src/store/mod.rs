@@ -4,10 +4,16 @@
 //! readers of the field that changed, which is what makes a large form or a long list of rows
 //! cost what it should.
 //!
+//! A store makes the signal of a field when it is first read and keeps it. For a large keyed
+//! collection of which a view shows a few rows, [`KeyedFields`] keeps plain values and makes the
+//! signal of a field only while a reader watches it.
+//!
 //! Everything here is re-exported from the crate root.
 
+mod fields;
 mod keyed;
 
+pub use fields::{KeyedFields, Lens};
 pub use keyed::{ArcField, AtKeyed, Field, KeyedSubfield, Patch, Store, StoreField, Subfield};
 
 /// The engine the [`derive@Store`] and [`Patch`] derives generate their paths against.

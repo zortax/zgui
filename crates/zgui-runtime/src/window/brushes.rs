@@ -66,7 +66,14 @@ pub(crate) struct TextSlots {
     owners: FxHashMap<PaintSlot, usize>,
     /// How many records answer to each cascade result's address.
     holders: FxHashMap<u64, usize>,
+    /// The document's dropped-node count at the last sweep.
+    swept_at: u64,
+    /// Slots an update left with no record drawn through them, for the next sweep to release.
+    orphaned: Vec<PaintSlot>,
 }
+
+/// The fewest nodes the document drops between two sweeps of the records.
+pub(crate) const SWEEP_AFTER_DROPPED: u64 = 64;
 
 impl TextSlots {
     /// The record for one element run, if it has been reported.
@@ -109,6 +116,86 @@ impl TextSlots {
     /// Whether any record still answers to the cascade result at `address`.
     fn held_by_anyone(&self, address: u64) -> bool {
         self.holders.contains_key(&address)
+    }
+
+    /// How many records there are.
+    pub(crate) fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Whether a sweep has slots to release, or the document dropped enough nodes since the last
+    /// sweep for a pass over the records to pay.
+    ///
+    /// `dropped` is the document's dropped-node count. A pass over the records examines every
+    /// record, so it waits until the document dropped at least an eighth as many nodes as there
+    /// are records. The records of nodes that are gone are thus at most that many, and a pass
+    /// costs a few checks per dropped node.
+    pub(crate) fn owes_sweep(&self, dropped: u64) -> bool {
+        !self.orphaned.is_empty() || self.records_due(dropped)
+    }
+
+    /// Whether the document dropped enough nodes since the last pass over the records.
+    pub(crate) fn records_due(&self, dropped: u64) -> bool {
+        dropped.saturating_sub(self.swept_at)
+            >= SWEEP_AFTER_DROPPED.max(self.slots.len() as u64 / 8)
+    }
+
+    /// Releases the slots no record is drawn through, and drops the records of the elements
+    /// `is_live` rejects when [`TextSlots::owes_sweep`] says a pass over them pays.
+    ///
+    /// `dropped` is the document's dropped-node count. A cascade result no record answers to any
+    /// more is forgotten by the table, as [`retire`] forgets one. A slot no record is drawn through
+    /// any more is released, unless a key still resolves to it. The released slots are returned,
+    /// so that the text engine can drop the paragraphs shaped through them.
+    pub(crate) fn sweep(
+        &mut self,
+        table: &mut TextPaintTable,
+        dropped: u64,
+        is_live: impl Fn(NodeKey) -> bool,
+    ) -> Vec<PaintSlot> {
+        let mut emptied = core::mem::take(&mut self.orphaned);
+        if !self.records_due(dropped) {
+            return self.release_emptied(table, emptied);
+        }
+        self.swept_at = dropped;
+        let gone: Vec<SlotKey> = self
+            .slots
+            .keys()
+            .filter(|(node, _)| !is_live(*node))
+            .copied()
+            .collect();
+        for key in gone {
+            let Some(held) = self.slots.remove(&key) else {
+                continue;
+            };
+            self.release(&held);
+            let address = address(&held.key);
+            if !self.held_by_anyone(address)
+                && let Some(mapped) = table.slot_of(address)
+            {
+                table.forget(address);
+                if self.owners_of(mapped) == 0 {
+                    emptied.push(mapped);
+                }
+            }
+            if self.owners_of(held.slot) == 0 {
+                emptied.push(held.slot);
+            }
+        }
+        self.release_emptied(table, emptied)
+    }
+
+    /// Releases each of `emptied` that no record is drawn through and no key resolves to, and
+    /// returns the ones released.
+    fn release_emptied(
+        &self,
+        table: &mut TextPaintTable,
+        mut emptied: Vec<PaintSlot>,
+    ) -> Vec<PaintSlot> {
+        emptied.sort_unstable_by_key(|slot| slot.0);
+        emptied.dedup();
+        emptied.retain(|slot| self.owners_of(*slot) == 0 && table.release(*slot));
+        emptied
     }
 }
 
@@ -235,6 +322,7 @@ pub(crate) fn apply(
 
     let recoloured_any = recoloured.iter().any(|moved| *moved);
     let mut split = Vec::new();
+    let mut emptied = Vec::new();
     for (update, moved) in updates.iter().zip(&recoloured) {
         let paint = TextPaint::new(update.paint.color);
         let key = update.paint.key.clone();
@@ -294,8 +382,19 @@ pub(crate) fn apply(
             }
         };
         let previous = slots.insert((update.node, update.run), TextSlot { slot, key });
-        retire(table, slots, previous, claimed);
+        if let Some(left) = previous.as_ref().map(|previous| previous.slot)
+            && left != slot
+        {
+            emptied.push(left);
+        }
+        if let Some(unmapped) = retire(table, slots, previous, claimed) {
+            emptied.push(unmapped);
+        }
     }
+    // An element that left a slot, or a key that was forgotten, can leave a slot nothing is drawn
+    // through and nothing resolves to. The paragraphs of an element that left a slot still name it
+    // until they are shaped again later in the frame, so the slot is released at the frame's end.
+    slots.orphaned.extend(emptied);
     Applied {
         split,
         recoloured: recoloured_any,
@@ -353,15 +452,30 @@ fn rewritable_in_place(
 /// The count matters: siblings that cascaded to one result share the address, and forgetting it
 /// while one of them still names it would send that one's next paragraph to a slot of its own,
 /// which is a slot nothing rewrites when the colour next moves.
-fn retire(table: &mut TextPaintTable, slots: &TextSlots, previous: Option<TextSlot>, claimed: u64) {
-    let Some(previous) = previous else {
-        return;
-    };
+///
+/// Returns the slot the forgotten key resolved to, if a key was forgotten.
+fn retire(
+    table: &mut TextPaintTable,
+    slots: &TextSlots,
+    previous: Option<TextSlot>,
+    claimed: u64,
+) -> Option<PaintSlot> {
+    let previous = previous?;
     let address = address(&previous.key);
     if address == claimed || slots.held_by_anyone(address) {
-        return;
+        return None;
     }
+    let unmapped = table.slot_of(address);
     table.forget(address);
+    unmapped
+}
+
+/// Publishes how many records, slots in use and keys the brush tables hold.
+pub(crate) fn publish(slots: &TextSlots, table: &TextPaintTable) {
+    use zgui_profile::{Counter, counter};
+    counter::set(Counter::TextSlotRecordsLive, slots.len() as u64);
+    counter::set(Counter::TextBrushSlotsLive, table.in_use() as u64);
+    counter::set(Counter::TextBrushKeysLive, table.keys() as u64);
 }
 
 /// The number the table files a cascade result under.
@@ -708,5 +822,41 @@ mod tests {
             );
             assert_eq!(drawn(&slots, &table, n), TextPaint::new(grey(0.9)));
         }
+    }
+
+    /// Siblings that cascaded to one result share its slot. When most of them leave the document,
+    /// the one that stays still answers to that result, so the sweep keeps the key and the slot,
+    /// and a later claim takes a slot of its own.
+    #[test]
+    fn a_sweep_keeps_the_slot_of_a_result_a_survivor_still_holds() {
+        let mut table = TextPaintTable::new();
+        let mut slots = TextSlots::default();
+        let shared = cascade_result();
+        let siblings = super::SWEEP_AFTER_DROPPED as u32 + 8;
+        let arrivals: Vec<_> = (1..=siblings)
+            .map(|n| arriving(n, &shared, grey(0.1)))
+            .collect();
+        apply(&mut slots, &mut table, &arrivals);
+        let kept = slots
+            .get(&(node(1), TextRun::Own))
+            .expect("the survivor was given a slot")
+            .slot;
+
+        let released = slots.sweep(&mut table, u64::from(siblings), |key| key == node(1));
+        assert!(
+            released.is_empty(),
+            "the survivor is still drawn through {kept:?}"
+        );
+        assert_eq!(slots.len(), 1);
+        assert_eq!(table.slot_of(super::address(&shared)), Some(kept));
+
+        let other = cascade_result();
+        apply(&mut slots, &mut table, &[arriving(500, &other, grey(0.8))]);
+        assert_ne!(drawn(&slots, &table, 500), drawn(&slots, &table, 1));
+        assert_eq!(
+            slots.get(&(node(1), TextRun::Own)).map(|held| held.slot),
+            Some(kept)
+        );
+        assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.1)));
     }
 }

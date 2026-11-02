@@ -6,9 +6,21 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use zgui_runtime::MAINTENANCE_DELAY;
+use zgui_platform_headless::Harness;
 use zgui_runtime::embed::{EmbedHost, EmbedMaintenanceCx, EmbedSyncCx, EmbedSyncReport};
+use zgui_runtime::{MAINTENANCE_DELAY, Runtime};
+use zgui_scene::ChunkNote;
 use zgui_view::{BuildCx, IntoView, View};
+
+/// How many chunk insertions the first window's scene holds noted.
+fn inserted_notes(harness: &Harness<Runtime>) -> usize {
+    harness.app().windows()[0]
+        .scene()
+        .chunk_notes()
+        .iter()
+        .filter(|note| matches!(note, ChunkNote::Inserted { .. }))
+        .count()
+}
 
 struct ObservedMaintenance(Rc<Cell<u32>>);
 
@@ -71,10 +83,10 @@ fn a_maintenance_wake_notes_every_recorded_chunk_for_the_next_frame() {
         },
     );
     harness.settle(8);
-    let before = harness.app().windows()[0].scene().chunk_inserted().len();
+    let before = inserted_notes(&harness);
 
     harness.advance(MAINTENANCE_DELAY);
-    let after = harness.app().windows()[0].scene().chunk_inserted().len();
+    let after = inserted_notes(&harness);
     assert!(
         after > before,
         "the idle release left the chunks un-noted: {before} notes before it, {after} after"

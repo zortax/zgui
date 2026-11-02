@@ -14,7 +14,7 @@ use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
 use zgui_scene::{ClipId, ClipLink, ClipNode, Paint, PaintKind, Scene};
 use zgui_testkit_scene::counters::Recording;
 
-use support::{Element, Harness};
+use support::{Element, Harness, poison, unpoisoned};
 
 /// A root with one canvas in it, at the origin, with no box paint of its own.
 const CSS: &str = "root { display: block; width: 400px; height: 200px }
@@ -84,7 +84,7 @@ fn a_filled_circle_with_an_opaque_stroke_is_one_quad() {
         panic!("{} quads", scene.primitives.quads.len());
     };
     assert_eq!(
-        quad.bounds,
+        unpoisoned(quad.bounds),
         [13.0, 13.0, 22.0, 22.0],
         "the stroke's outer edge"
     );
@@ -111,10 +111,10 @@ fn a_filled_circle_with_a_translucent_stroke_is_two_quads_fill_first() {
     let [fill, stroke] = harness.scene().primitives.quads.as_slice() else {
         panic!("{} quads", harness.scene().primitives.quads.len());
     };
-    assert_eq!(fill.bounds, [14.0, 14.0, 20.0, 20.0]);
+    assert_eq!(unpoisoned(fill.bounds), [14.0, 14.0, 20.0, 20.0]);
     assert_eq!(fill.border, [0.0; 4]);
     assert!(fill.stroke.is_none());
-    assert_eq!(stroke.bounds, [13.0, 13.0, 22.0, 22.0]);
+    assert_eq!(unpoisoned(stroke.bounds), [13.0, 13.0, 22.0, 22.0]);
     assert_eq!(stroke.border, [2.0; 4]);
     assert!(
         stroke.fill.is_none(),
@@ -221,7 +221,7 @@ fn a_gradient_filled_rect_is_one_quad_with_its_gradient() {
     let [quad] = scene.primitives.quads.as_slice() else {
         panic!("{} quads", scene.primitives.quads.len());
     };
-    assert_eq!(quad.bounds, [4.0, 4.0, 40.0, 20.0]);
+    assert_eq!(unpoisoned(quad.bounds), [4.0, 4.0, 40.0, 20.0]);
     assert_eq!(quad.paint_origin, [0.0, 0.0]);
     match paint_of(scene, quad.fill) {
         Paint::Gradient {
@@ -230,7 +230,7 @@ fn a_gradient_filled_rect_is_one_quad_with_its_gradient() {
             ..
         } => {
             assert_eq!(
-                (start.x.0, end.x.0),
+                (start.x.0 - poison(), end.x.0 - poison()),
                 (4.0, 44.0),
                 "the ramp in the shape's space"
             );

@@ -24,6 +24,16 @@ pub trait GlyphRaster: Send + Sync + 'static {
     /// extent, which is not the same answer as the face not having the glyph at all.
     fn raster(&self, key: &GlyphKey) -> Option<GlyphImage>;
 
+    /// Rasterises a batch of glyphs, one answer per key in key order.
+    ///
+    /// Several threads may call this at the same time with different batches. Each answer must be
+    /// the answer [`GlyphRaster::raster`] gives for the same key. The default calls it once per
+    /// key; an implementation that serialises `raster` on shared state overrides this to give each
+    /// batch state of its own.
+    fn raster_many(&self, keys: &[GlyphKey]) -> Vec<Option<GlyphImage>> {
+        keys.iter().map(|key| self.raster(key)).collect()
+    }
+
     /// The curves of one glyph, for a run the atlas cannot serve.
     ///
     /// Required rather than defaulted, and deliberately so. A rasteriser that could quietly answer

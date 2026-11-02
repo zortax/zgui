@@ -10,6 +10,7 @@
 pub mod animations;
 pub mod context;
 mod recalc;
+pub(crate) mod share;
 pub mod snapshots;
 pub mod traversal;
 
@@ -120,6 +121,11 @@ pub(crate) struct Pass<'a> {
     pub(crate) now: AnimationTime,
     /// What each rule chain reads and declares, as far as earlier traversals found out.
     pub(crate) refs: &'a traversal::RefsCache,
+    /// The computed styles earlier cascades produced, by rule chain.
+    pub(crate) shared: &'a share::SharedStyles,
+    /// The elements whose animations crossed a lifecycle edge since their last cascade, or `None`
+    /// when every animation tick cascades.
+    pub(crate) settling: Option<&'a rustc_hash::FxHashSet<zgui_dom::NodeIndex>>,
 }
 
 /// What one traversal did.
@@ -172,6 +178,8 @@ pub(crate) fn run_pass(
         animations,
         now,
         refs,
+        shared,
+        settling,
     } = pass;
     let Some(root) = document.root() else {
         return PassOutcome::nothing(Duration::ZERO);
@@ -209,7 +217,7 @@ pub(crate) fn run_pass(
     // The traversal styles each element against the table it drops a finished animation from,
     // so the animations that fill forwards are held running for its length.
     let held = fill::hold(&table);
-    let traverser = RecalcStyle::new(context, refs);
+    let traverser = RecalcStyle::new(context, refs, shared, settling);
     // A worker that panics leaves per-element bookkeeping in a state no later traversal can
     // interpret, and the worker that panicked holds nothing anyone can inspect, so the document is
     // poisoned on the way out and the panic keeps going.

@@ -41,15 +41,11 @@ pub struct HitEntry {
     pub order: crate::fragment::hit::HitOrder,
     /// The clip chain the fragment is drawn under. A point outside any link of it is not on the
     /// fragment however far inside its own rectangle it falls.
-    pub clip: ClipId,
-    /// The coordinate system the clip chain's rectangles were measured in.
     ///
-    /// Held apart from [`HitEntry::space`] because the two are different spaces whenever the
-    /// fragment carries a transform of its own: the clip belongs to whichever ancestor imposed it
-    /// and was measured before this fragment moved. Testing the chain in the fragment's own space
-    /// would let a translated box answer over the part of its ancestor's scrollport it was
-    /// translated out of.
-    pub clip_space: Option<SpatialId>,
+    /// Each link names the coordinate system its rectangle is measured in, which is the system of
+    /// the ancestor that imposed it and differs from [`HitEntry::space`] whenever a transform sits
+    /// between the two.
+    pub clip: ClipId,
     /// The coordinate system this entry's two rectangles are in.
     ///
     /// Also which of the index's trees the entry is filed in: entries are grouped by space so that
@@ -81,7 +77,6 @@ impl HitEntry {
             node: None,
             order: 0,
             clip: ClipId::ROOT,
-            clip_space: None,
             space: None,
             pointer_events: PointerEvents::Auto,
             radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),

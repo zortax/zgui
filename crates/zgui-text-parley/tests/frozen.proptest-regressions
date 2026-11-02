@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c03b65a3c100d31a1d4877f21532ad6599b9a57b075e3f1cebcfc982f3fe50fd # shrinks to case = Case { lead: false, words: [(0, 0), (0, 4)], cuts: [], runs: [RunSpec { size: 11.0, bold: false, letter_spacing: 0.0, brush: 0 }], align: Start, rtl: false, controls: Mark, indent: (12.0, 0.0, false, true), steps: [Step { width: None, basis: None, probe: false, banded: false, realign: None }] }
+cc a5f7e4ddd02e22b22c15cf1e3553219d8046d0e2ec0f1b34fce6adf60f2b7139 # shrinks to case = Case { lead: false, words: [(0, 0)], cuts: [], runs: [RunSpec { size: 11.0, bold: false, letter_spacing: 0.0, brush: 0 }], align: Center, rtl: false, controls: Mark, indent: (0.0, 0.0, false, false), steps: [Step { width: Some(328.31598), basis: None, probe: false, banded: false, realign: None }] }
+cc 8e62760b643d541540f75a974ddf3c0c9c00908bb4b2a64702d101505069704b # shrinks to case = Case { lead: true, words: [(0, 0)], cuts: [], runs: [RunSpec { size: 11.0, bold: false, letter_spacing: 0.0, brush: 0 }], align: Start, rtl: false, controls: Verbatim, indent: (12.0, 0.0, false, false), steps: [Step { width: Some(0.0), basis: None, probe: false, banded: false, realign: None }] }
+cc e1df9bb55ee56e3f7c355e1de9938891fce134d93b1ced8786fedf5d057c9449 # shrinks to case = Case { lead: false, words: [(0, 0)], cuts: [], runs: [RunSpec { size: 11.0, bold: false, letter_spacing: 0.0, brush: 0 }], align: End, rtl: false, controls: Mark, indent: (0.0, 0.0, false, false), steps: [Step { width: None, basis: None, probe: false, banded: false, realign: None }] }
+cc 9de703dedb26e3225258cf1e4b2e0b5eb335edfad0a78eb34d10ab56120d81cc # shrinks to case = Case { lead: false, words: [(2, 0), (0, 0), (0, 4)], cuts: [], runs: [RunSpec { size: 11.0, bold: false, letter_spacing: 0.5, brush: 0 }], align: Start, rtl: false, controls: Mark, indent: (0.0, 0.0, false, false), steps: [Step { width: None, basis: None, probe: false, banded: false, realign: None }] }

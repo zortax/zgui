@@ -21,6 +21,8 @@ struct FilterParams {
     // A filter binds none of the frame's own tables — the content it reads is at group zero — so
     // what it knows about the frame arrives in this block rather than in the shared globals.
     frame: vec4<f32>,
+    // xy: the device pixel the source's first texel holds; zw: the same for the destination.
+    origins: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> filtered: FilterParams;
@@ -55,7 +57,8 @@ fn vs_shaded_filter(@builtin(vertex_index) vertex: u32) -> FilterVarying {
 fn fs_shaded_filter(in: FilterVarying) -> @location(0) vec4<f32> {
     // The device pixel this destination texel's centre sits at, then the same point in the
     // element's own coordinates, which is what the effect is written against.
-    let device = (floor(in.position.xy) + vec2<f32>(0.5)) / filtered.placement.w;
+    let device = (floor(in.position.xy) + vec2<f32>(0.5)) / filtered.placement.w
+        + filtered.origins.zw;
     let local = device - filtered.placement.xy;
 
     var input: ShaderInput;
@@ -70,6 +73,7 @@ fn fs_shaded_filter(in: FilterVarying) -> @location(0) vec4<f32> {
 
     var region: FilterSource;
     region.origin = filtered.placement.xy;
+    region.source_origin = filtered.origins.xy;
     region.scale = filtered.placement.z;
     region.extent = filtered.extents.xy;
     region.low = filtered.valid.xy;

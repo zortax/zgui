@@ -35,8 +35,20 @@
 /// Current inline resolutions pin the entries they name. Crossing the limit therefore removes old
 /// text versions and content no longer present, coldest first, without invalidating the live box
 /// tree. A document whose active text alone exceeds the limit remains over it rather than being
-/// made to reshape on every frame.
+/// made to reshape on every frame. Below this level, [`IDLE_SHAPED_PARAGRAPHS`] bounds the entries
+/// no current resolution names.
 pub const SHAPED_PARAGRAPHS: usize = 16_384;
+
+/// The floor of the allowance for shaped paragraphs no current context names.
+///
+/// An old paragraph is an earlier version of a text that is still shown, or a text that is no
+/// longer shown. Below [`SHAPED_PARAGRAPHS`], a window holds old paragraphs up to the recent peak of
+/// its current ones, or up to this floor if that is more. The peak keeps one complete earlier text
+/// state warm, so a toggle or a switch to another view and back reshapes nothing. The floor keeps
+/// recent edits of a small document warm. A label that changes every frame leaves one old
+/// paragraph per frame, so without the allowance the cache of a small document grows by a shaped
+/// paragraph per change until it reaches the whole bound.
+pub const IDLE_SHAPED_PARAGRAPHS: usize = 1_024;
 
 /// How many decoded-image bytes a window holds before sources nothing shows are dropped.
 ///

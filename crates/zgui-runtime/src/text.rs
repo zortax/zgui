@@ -70,12 +70,42 @@ pub trait TextEngine: MeasureContent + ShapedGlyphs + ShapedClusters {
     /// The count carries the same obligation, over the same paragraphs.
     fn forget_paragraphs(&mut self, keys: &[ParagraphKey]) -> usize;
 
-    /// Drops up to `count` cold entries not named by `active` layout resolutions.
+    /// Records that the last current layout resolution of each of `keys` went away.
     ///
-    /// Engines without entry-local eviction may keep their cache over its soft limit. The default
-    /// is deliberately a no-op rather than falling back to [`TextEngine::forget_shaped`], because
-    /// a soft budget must not turn an active document into a full reshape.
-    fn evict_inactive(&mut self, _active: &[ParagraphKey], _count: usize) -> usize {
+    /// `None` says that any key can be among them. `is_active` tells whether a current layout
+    /// resolution names a key. Called once per frame, before [`TextEngine::evict_inactive`], so an
+    /// engine can keep its candidates as it goes.
+    fn note_released(
+        &mut self,
+        _keys: Option<&[ParagraphKey]>,
+        _is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) {
+    }
+
+    /// Drops up to `count` cold entries for which `is_active` is false.
+    ///
+    /// `is_active` tells whether a current layout resolution names a key. Engines without
+    /// entry-local eviction may keep their cache over its soft limit. The default is deliberately
+    /// a no-op rather than falling back to [`TextEngine::forget_shaped`], because a soft budget
+    /// must not turn an active document into a full reshape.
+    fn evict_inactive(
+        &mut self,
+        _is_active: &dyn Fn(ParagraphKey) -> bool,
+        _count: usize,
+    ) -> usize {
+        0
+    }
+
+    /// Drops what the brush table no longer needs after the window released the slots in
+    /// `released` and forgot keys, and reports how many shaped paragraphs went.
+    ///
+    /// `is_active` tells whether a current layout resolution names a key. The default drops
+    /// nothing, which keeps a cache that cannot tell which brush a result names correct.
+    fn release_brushes(
+        &mut self,
+        _released: &[zgui_text::Brush],
+        _is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) -> usize {
         0
     }
 
@@ -134,8 +164,24 @@ where
         zgui_layout::Paragraphs::forget_paragraphs(self, keys)
     }
 
-    fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
-        zgui_layout::Paragraphs::evict_inactive(self, active, count)
+    fn note_released(
+        &mut self,
+        keys: Option<&[ParagraphKey]>,
+        is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) {
+        zgui_layout::Paragraphs::note_released(self, keys, is_active);
+    }
+
+    fn evict_inactive(&mut self, is_active: &dyn Fn(ParagraphKey) -> bool, count: usize) -> usize {
+        zgui_layout::Paragraphs::evict_inactive(self, is_active, count)
+    }
+
+    fn release_brushes(
+        &mut self,
+        released: &[zgui_text::Brush],
+        is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) -> usize {
+        zgui_layout::Paragraphs::release_brushes(self, released, is_active)
     }
 
     fn pre_shape_paragraphs(
@@ -213,6 +259,15 @@ impl MeasureContent for Box<dyn TextEngine> {
         (**self).shape_keyed(key, content)
     }
 
+    fn shape_variant(
+        &mut self,
+        base: zgui_text::ParagraphKey,
+        variant: zgui_text::ParagraphKey,
+        content: &zgui_text::ParagraphContent<'_>,
+    ) -> Option<zgui_layout::measure::ShapedSummary> {
+        (**self).shape_variant(base, variant, content)
+    }
+
     fn break_lines(
         &mut self,
         key: zgui_text::ParagraphKey,
@@ -251,8 +306,24 @@ impl TextEngine for Box<dyn TextEngine> {
         (**self).forget_paragraphs(keys)
     }
 
-    fn evict_inactive(&mut self, active: &[ParagraphKey], count: usize) -> usize {
-        (**self).evict_inactive(active, count)
+    fn note_released(
+        &mut self,
+        keys: Option<&[ParagraphKey]>,
+        is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) {
+        (**self).note_released(keys, is_active);
+    }
+
+    fn evict_inactive(&mut self, is_active: &dyn Fn(ParagraphKey) -> bool, count: usize) -> usize {
+        (**self).evict_inactive(is_active, count)
+    }
+
+    fn release_brushes(
+        &mut self,
+        released: &[zgui_text::Brush],
+        is_active: &dyn Fn(ParagraphKey) -> bool,
+    ) -> usize {
+        (**self).release_brushes(released, is_active)
     }
 
     fn pre_shape_paragraphs(
@@ -365,7 +436,11 @@ impl TextEngine for NoText {
         0
     }
 
-    fn evict_inactive(&mut self, _active: &[ParagraphKey], _count: usize) -> usize {
+    fn evict_inactive(
+        &mut self,
+        _is_active: &dyn Fn(ParagraphKey) -> bool,
+        _count: usize,
+    ) -> usize {
         0
     }
 }

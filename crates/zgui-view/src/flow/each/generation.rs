@@ -107,8 +107,13 @@ impl Generations {
     /// Called once per reconciliation, after the removals and the insertions.
     pub(super) fn retire_if_needed(&mut self, live_items: u32) {
         let at = self.current();
-        let generation = &self.generations[at];
+        let generation = &mut self.generations[at];
         if generation.created.saturating_sub(generation.live) > live_items {
+            // No later drop names a generation retired with no live item, so its scope goes now.
+            // Kept, it would hold a dead reference to every item it ever had, for good.
+            if generation.live == 0 {
+                generation.owner = None;
+            }
             self.generations.push(Generation {
                 owner: Some(self.root.child()),
                 created: 0,
@@ -165,6 +170,28 @@ mod tests {
         generations.retire_if_needed(1);
         assert_eq!(generations.len(), 2, "the crowded generation was retired");
         assert_eq!(generations.current(), 1);
+    }
+
+    #[test]
+    fn a_generation_retired_with_no_live_item_lets_its_scope_go() {
+        // A list emptied whole, as an unmount of every row does, retires the generation that held
+        // them all. No later drop names it, so it has to go at retirement.
+        install().ok();
+        let root = Owner::new();
+        let mut generations = Generations::new(root);
+        for _ in 0..10 {
+            let _ = generations.scope_for_new_item();
+        }
+        for _ in 0..10 {
+            generations.item_dropped(0);
+        }
+        generations.retire_if_needed(0);
+        assert_eq!(generations.len(), 2);
+        assert_eq!(
+            generations.live_generations(),
+            1,
+            "only the new generation keeps a scope"
+        );
     }
 
     #[test]

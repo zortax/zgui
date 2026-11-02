@@ -6,6 +6,7 @@
 //! ends. A set rebuilt per frame would start every transition again from its beginning on every
 //! frame, which is a value that never moves and a loop that never stops.
 
+use rustc_hash::FxHashSet;
 use style::animation::{AnimationSetKey, DocumentAnimationSet};
 use style::dom::OpaqueNode;
 use zgui_dom::NodeIndex;
@@ -14,18 +15,60 @@ use zgui_dom::id::opaque::{node_from_opaque, opaque_node};
 use crate::driver::animations::AnimationTime;
 
 /// Every animation and transition running in one document.
-#[derive(Default)]
 pub struct Animations {
     /// The engine's own table, shared with the cascade rather than copied into it.
     set: DocumentAnimationSet,
     /// The time the last tick advanced to.
     now: AnimationTime,
+    /// The elements whose animations crossed a lifecycle edge since their last cascade.
+    ///
+    /// A crossing is where a value starts or stops being animated, so the held style of such an
+    /// element is no base to write the next values into, and the element cascades.
+    settling: FxHashSet<NodeIndex>,
+    /// Whether an animation tick may write its values into the held style without a cascade.
+    direct: bool,
+}
+
+impl Default for Animations {
+    fn default() -> Self {
+        Self {
+            set: DocumentAnimationSet::default(),
+            now: AnimationTime::default(),
+            settling: FxHashSet::default(),
+            direct: true,
+        }
+    }
 }
 
 impl Animations {
     /// A document with nothing animating.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The elements an animation tick must cascade, or `None` when every tick cascades.
+    pub(crate) fn settling(&self) -> Option<&FxHashSet<NodeIndex>> {
+        self.direct.then_some(&self.settling)
+    }
+
+    /// Records that an animation of the element at `node` crossed a lifecycle edge.
+    pub(crate) fn note_crossed(&mut self, node: NodeIndex) {
+        self.settling.insert(node);
+    }
+
+    /// Forgets every crossing except those of `waiting`, the elements no restyle has reached yet.
+    pub(crate) fn keep_settling(&mut self, waiting: &[NodeIndex]) {
+        if waiting.is_empty() {
+            self.settling.clear();
+        } else {
+            self.settling.retain(|node| waiting.contains(node));
+        }
+    }
+
+    /// Sends every animation tick through the cascade, for a comparison of the two paths.
+    #[cfg(test)]
+    pub(crate) fn cascade_every_tick(&mut self) {
+        self.direct = false;
     }
 
     /// The time animations are currently being read at.

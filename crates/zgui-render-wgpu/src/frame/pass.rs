@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use zgui_geom::{Device, Rect};
+use zgui_geom::{Device, Rect, Size};
 use zgui_profile::{Counter, counter};
 use zgui_scene::{Batch, ExternalTextureId};
 
@@ -11,6 +11,7 @@ use crate::frame::build::FramePlan;
 use crate::frame::segment::{EncoderOp, PassLoad, PlannedDraw, PlannedPass, Segment};
 use crate::frame::target::TargetRef;
 use crate::gpu::device::Gpu;
+use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::Pipelines;
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
@@ -64,7 +65,9 @@ pub struct Recorder<'frame> {
     /// The bin pages union marks write their coverage into.
     pub marks: &'frame crate::target::marks::MarksScratch,
     /// The device extent of one bin page, which a page pass's block describes.
-    pub mark_extent: zgui_geom::Size<i32, Device>,
+    pub mark_extent: Size<i32, Device>,
+    /// The frame's pass timing, when timing is on.
+    pub(crate) timer: Option<&'frame mut GpuTimer>,
 }
 
 impl Recorder<'_> {
@@ -116,19 +119,22 @@ impl Recorder<'_> {
                 let Some(to) = self.texture(destination) else {
                     return;
                 };
-                // Both targets are at one resolution, so the device region names the same texels
-                // in each.
+                // Both targets are at one resolution, so the device region is the same number of
+                // texels in each. Each side measures it from its own origin.
                 debug_assert_eq!(source.scale(), destination.scale());
-                let region = clamp(source.scale().texels(region), from, to);
-                if region.is_empty() {
+                let scale = source.scale();
+                let read = scale.texels_at(region, source.origin());
+                let write = scale.texels_at(region, destination.origin());
+                let (read, write) = clamp_copy(read, write, size_of(from), size_of(to));
+                if read.is_empty() {
                     return;
                 }
                 encoder.copy_texture_to_texture(
-                    texel_copy(from, region),
-                    texel_copy(to, region),
+                    texel_copy(from, read),
+                    texel_copy(to, write),
                     wgpu::Extent3d {
-                        width: region.size.width as u32,
-                        height: region.size.height as u32,
+                        width: read.size.width as u32,
+                        height: read.size.height as u32,
                         depth_or_array_layers: 1,
                     },
                 );
@@ -144,17 +150,22 @@ impl Recorder<'_> {
         planned: &PlannedPass,
         recorded: &mut Recorded,
     ) {
-        let Some(view) = self.view(planned.target) else {
-            return;
-        };
         let Some(format) = self.format(planned.target) else {
             return;
         };
         let extent = self.extent(planned.target);
         let scissor = scaled(planned.scissor, planned.target, extent);
-        if scissor.is_empty() {
+        if scissor.is_empty() || self.view(planned.target).is_none() {
             return;
         }
+        // Taken only for a pass that opens, because a query nothing writes would resolve to noise.
+        let queries = self
+            .timer
+            .as_deref_mut()
+            .and_then(|timer| timer.pass(timed_work(planned.target)));
+        let Some(view) = self.view(planned.target) else {
+            return;
+        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("zgui.pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -170,13 +181,13 @@ impl Recorder<'_> {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: queries.as_ref().map(PassQueries::render),
             occlusion_query_set: None,
             multiview_mask: None,
         });
         // A target is allocated at a size *class*, so it is usually larger than the region it
-        // holds. The viewport maps device coordinates onto the region rather than onto the whole
-        // allocation; without it everything would be drawn at the wrong scale.
+        // holds. The viewport maps the target's texels, measured from its origin, onto the region
+        // it covers; without it everything would be drawn at the wrong scale.
         pass.set_viewport(
             0.0,
             0.0,
@@ -191,6 +202,7 @@ impl Recorder<'_> {
             scissor.size.width.max(0) as u32,
             scissor.size.height.max(0) as u32,
         );
+        let mut pass = BoundPass::new(pass);
         let tables = self
             .buffers
             .frame_bind_group(self.gpu, self.pipelines.layouts());
@@ -207,7 +219,7 @@ impl Recorder<'_> {
     /// Issues one planned draw, and says whether it happened.
     fn issue(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         draw: &PlannedDraw,
@@ -221,7 +233,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::DamageClear), pipeline);
                 pass.draw(0..4, 0..1);
                 true
             }
@@ -275,7 +287,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::VectorComposite), pipeline);
                 pass.set_bind_group(0, tables, &[planned.globals]);
                 pass.set_bind_group(1, &bind, &[]);
                 pass.draw(0..4, *first..*first + *count);
@@ -321,7 +333,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::MarksComposite), pipeline);
                 pass.set_bind_group(0, tables, &[planned.globals]);
                 pass.set_bind_group(1, &instances, &[]);
                 pass.set_bind_group(2, &bins, &[*block]);
@@ -347,7 +359,7 @@ impl Recorder<'_> {
                 else {
                     return false;
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(Bound::Kind(PipelineKind::External), pipeline);
                 pass.set_bind_group(0, tables, &[planned.globals]);
                 pass.set_bind_group(1, &bind, &[*params]);
                 pass.draw(0..4, 0..1);
@@ -359,7 +371,7 @@ impl Recorder<'_> {
     /// Issues one instanced batch of the display list.
     fn batch(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         batch: Batch,
@@ -424,7 +436,7 @@ impl Recorder<'_> {
         let Some(pipeline) = self.pipelines.get(self.gpu, kind, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Kind(kind), pipeline);
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         if let Some(bind_group) = atlas {
@@ -438,7 +450,7 @@ impl Recorder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn marks_draw(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         kind: crate::pipeline::marks::MarkKind,
@@ -480,13 +492,11 @@ impl Recorder<'_> {
                 None => return false,
             },
         };
-        let Some(pipeline) =
-            self.pipelines
-                .get(self.gpu, PipelineKind::marks(kind, coverage), format)
-        else {
+        let pipeline_kind = PipelineKind::marks(kind, coverage);
+        let Some(pipeline) = self.pipelines.get(self.gpu, pipeline_kind, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Kind(pipeline_kind), pipeline);
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         pass.set_bind_group(2, &payload, &[block]);
@@ -505,7 +515,7 @@ impl Recorder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn shaded(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         planned: &PlannedPass,
         tables: Option<&wgpu::BindGroup>,
         shader: zgui_scene::ShaderId,
@@ -552,7 +562,7 @@ impl Recorder<'_> {
             );
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Effect(shader), pipeline);
         pass.set_bind_group(0, tables, &[planned.globals]);
         pass.set_bind_group(1, &instances, &[]);
         pass.set_bind_group(2, &block, &[offset]);
@@ -569,7 +579,7 @@ impl Recorder<'_> {
     #[allow(clippy::too_many_arguments)]
     fn effect_filter(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         source: TargetRef,
         shader: zgui_scene::ShaderId,
         params: u32,
@@ -596,7 +606,7 @@ impl Recorder<'_> {
         let Some(pipeline) = self.pipelines.effect(self.gpu, shader, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Effect(shader), pipeline);
         pass.set_bind_group(0, &read, &[params]);
         pass.set_bind_group(1, &own, &[block]);
         pass.draw(0..4, 0..1);
@@ -606,7 +616,7 @@ impl Recorder<'_> {
     /// Issues one draw that reads a target through a block of its own.
     fn textured(
         &mut self,
-        pass: &mut wgpu::RenderPass<'_>,
+        pass: &mut BoundPass<'_>,
         kind: PipelineKind,
         source: TargetRef,
         params: u32,
@@ -627,7 +637,7 @@ impl Recorder<'_> {
         let Some(pipeline) = self.pipelines.get(self.gpu, kind, format) else {
             return false;
         };
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(Bound::Kind(kind), pipeline);
         let group = match tables {
             Some((bind_group, offset)) => {
                 pass.set_bind_group(0, bind_group, &[offset]);
@@ -668,12 +678,91 @@ impl Recorder<'_> {
     }
 
     /// A target's extent in texels.
-    fn extent(&self, target: TargetRef) -> zgui_geom::Size<i32, Device> {
+    fn extent(&self, target: TargetRef) -> Size<i32, Device> {
         match target {
             TargetRef::Composed => self.composed.used().size,
-            TargetRef::Pool(slot) => slot.scale().extent(self.pool.region()),
+            TargetRef::Pool(slot) => slot.extent(),
             TargetRef::MarksPage(_) => self.mark_extent,
         }
+    }
+}
+
+/// Which pipeline a pass has bound.
+///
+/// The attachment format is the same for every draw of one pass, so a kind or an effect names one
+/// pipeline there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Bound {
+    /// One of this crate's own pipelines.
+    Kind(PipelineKind),
+    /// The pipeline of an application effect.
+    Effect(zgui_scene::ShaderId),
+}
+
+/// The bind groups a pass can bind at once.
+const BIND_SLOTS: usize = 4;
+
+/// An open render pass, and what it has bound.
+///
+/// A pipeline, a bind group or a dynamic offset that is bound already is not issued again. Each
+/// call the device records costs a validation and a merge of the bind group's resources into the
+/// pass, and consecutive draws of one frame mostly bind the same tables and the same lane.
+struct BoundPass<'pass> {
+    /// The pass.
+    pass: wgpu::RenderPass<'pass>,
+    /// The pipeline bound last.
+    pipeline: Option<Bound>,
+    /// The bind group and the dynamic offset bound last at each index.
+    groups: [Option<(wgpu::BindGroup, Option<u32>)>; BIND_SLOTS],
+}
+
+impl<'pass> BoundPass<'pass> {
+    /// `pass`, with nothing bound yet.
+    fn new(pass: wgpu::RenderPass<'pass>) -> Self {
+        Self {
+            pass,
+            pipeline: None,
+            groups: Default::default(),
+        }
+    }
+
+    /// Binds `pipeline`, which `key` names, unless it is bound already.
+    fn set_pipeline(&mut self, key: Bound, pipeline: &wgpu::RenderPipeline) {
+        if self.pipeline != Some(key) {
+            self.pass.set_pipeline(pipeline);
+            self.pipeline = Some(key);
+        }
+    }
+
+    /// Binds `group` at `index` with `offsets`, unless the same group and offset are bound there.
+    fn set_bind_group(&mut self, index: u32, group: &wgpu::BindGroup, offsets: &[u32]) {
+        debug_assert!(
+            offsets.len() <= 1,
+            "every bind group here has one dynamic offset at most"
+        );
+        let offset = offsets.first().copied();
+        let held = &mut self.groups[index as usize];
+        if held
+            .as_ref()
+            .is_some_and(|(bound, at)| bound == group && *at == offset)
+        {
+            return;
+        }
+        self.pass.set_bind_group(index, group, offsets);
+        *held = Some((group.clone(), offset));
+    }
+
+    /// Draws `instances` of a strip of `vertices`.
+    fn draw(&mut self, vertices: core::ops::Range<u32>, instances: core::ops::Range<u32>) {
+        self.pass.draw(vertices, instances);
+    }
+}
+
+/// The kind of work a pass into `target` is timed as.
+fn timed_work(target: TargetRef) -> TimedWork {
+    match target {
+        TargetRef::Pool(_) => TimedWork::Groups,
+        TargetRef::Composed | TargetRef::MarksPage(_) => TimedWork::Draws,
     }
 }
 
@@ -681,27 +770,42 @@ impl Recorder<'_> {
 fn scaled(
     rect: Rect<i32, Device>,
     target: TargetRef,
-    extent: zgui_geom::Size<i32, Device>,
+    extent: Size<i32, Device>,
 ) -> Rect<i32, Device> {
     target
         .scale()
-        .texels(rect)
+        .texels_at(rect, target.origin())
         .intersection(Rect::new(zgui_geom::Point::new(0, 0), extent))
         .unwrap_or(Rect::ZERO)
 }
 
-/// `region` cut to what both textures actually hold.
-fn clamp(region: Rect<i32, Device>, from: &wgpu::Texture, to: &wgpu::Texture) -> Rect<i32, Device> {
-    let bound = |texture: &wgpu::Texture| {
-        Rect::new(
-            zgui_geom::Point::new(0, 0),
-            zgui_geom::Size::new(texture.width() as i32, texture.height() as i32),
-        )
-    };
-    region
+/// The two sides of a copy, cut to what a source of size `from` and a destination of size `to`
+/// actually hold.
+///
+/// `read` and `write` are the same size, at different texels when the two targets start at
+/// different device pixels. Each cut applies to both sides, so they stay the same size.
+fn clamp_copy(
+    read: Rect<i32, Device>,
+    write: Rect<i32, Device>,
+    from: Size<i32, Device>,
+    to: Size<i32, Device>,
+) -> (Rect<i32, Device>, Rect<i32, Device>) {
+    let bound = |size| Rect::new(zgui_geom::Point::new(0, 0), size);
+    // The destination's bounds in the source's texels, and back.
+    let forward = read.origin.offset_from(write.origin);
+    let back = write.origin.offset_from(read.origin);
+    match read
         .intersection(bound(from))
-        .and_then(|clipped| clipped.intersection(bound(to)))
-        .unwrap_or(Rect::ZERO)
+        .and_then(|clipped| clipped.intersection(bound(to).translate(forward)))
+    {
+        Some(read) => (read, read.translate(back)),
+        None => (Rect::ZERO, Rect::ZERO),
+    }
+}
+
+/// The texel size of `texture`.
+fn size_of(texture: &wgpu::Texture) -> Size<i32, Device> {
+    Size::new(texture.width() as i32, texture.height() as i32)
 }
 
 /// One corner of a copy between two textures.
@@ -734,7 +838,7 @@ fn decode_texture(packed: u32) -> zgui_atlas::TextureId {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_texture;
+    use super::{clamp_copy, decode_texture};
     use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
     use zgui_geom::{Point, Rect, Size};
     use zgui_scene::SpriteTile;
@@ -755,5 +859,44 @@ mod tests {
                 assert_eq!(decode_texture(packed), TextureId::new(kind, index));
             }
         }
+    }
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect<i32, zgui_geom::Device> {
+        Rect::new(Point::new(x, y), Size::new(width, height))
+    }
+
+    #[test]
+    fn a_smaller_destination_at_another_origin_cuts_both_sides_of_a_copy() {
+        // Device pixels (10,10)-(70,70), from a 100x100 source at the device origin into a 40x40
+        // destination that starts at device (20,20).
+        let (read, write) = clamp_copy(
+            rect(10, 10, 60, 60),
+            rect(-10, -10, 60, 60),
+            Size::new(100, 100),
+            Size::new(40, 40),
+        );
+        assert_eq!(write, rect(0, 0, 40, 40));
+        assert_eq!(read, rect(20, 20, 40, 40));
+
+        // A 50x50 source cuts the far edge first, and the destination cuts the near edge.
+        let (read, write) = clamp_copy(
+            rect(10, 10, 60, 60),
+            rect(-10, -10, 60, 60),
+            Size::new(50, 50),
+            Size::new(40, 40),
+        );
+        assert_eq!(read, rect(20, 20, 30, 30));
+        assert_eq!(write, rect(0, 0, 30, 30));
+    }
+
+    #[test]
+    fn a_copy_outside_the_destination_copies_nothing() {
+        let (read, write) = clamp_copy(
+            rect(0, 0, 10, 10),
+            rect(50, 50, 10, 10),
+            Size::new(100, 100),
+            Size::new(40, 40),
+        );
+        assert_eq!((read, write), (Rect::ZERO, Rect::ZERO));
     }
 }

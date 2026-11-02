@@ -10,8 +10,13 @@ use crate::tree::store::LayoutStore;
 
 /// What a confined subtree is, once it has been proved to be one.
 pub(super) struct Held {
-    /// The box the subtree's root hangs under, in both child orders.
+    /// The box that lays the subtree's root out.
     pub(super) parent: BoxKey,
+    /// The box that paints the subtree's root where it was written.
+    ///
+    /// The same box as `parent`, except for an out-of-flow root positioned by an ancestor of the
+    /// box it was written inside.
+    pub(super) painter: BoxKey,
     /// Every box in the subtree, including its root.
     pub(super) subtree: Vec<BoxKey>,
 }
@@ -20,10 +25,12 @@ pub(super) struct Held {
 ///
 /// Three things are checked, and each is a way a splice would otherwise corrupt the tree.
 ///
-/// **The box hangs in one place.** It has to be a child of one box in *both* the layout order and
-/// the paint order. A box that is in one and not the other is out of flow — laid out by an ancestor
-/// and painted where it was written — and replacing it leaves a dead key in whichever list was not
-/// looked at.
+/// **The box hangs in known places.** It has to be a child of one box in *both* the layout order and
+/// the paint order, or an out-of-flow box in the layout order of its containing block and in the
+/// paint order of the box its [`Declared`] record names. [`Held::painter`] tells the two apart, and a
+/// caller that repairs only one list must refuse the second shape.
+///
+/// [`Declared`]: crate::boxtree::absolute::Declared
 ///
 /// **Nothing inside is laid out from outside.** Every box below the root must have its layout
 /// parent inside the subtree, or something out there is holding a name that is about to be removed.
@@ -90,9 +97,18 @@ fn proved(
 ) -> Option<Held> {
     let parent = store.get(old)?.parent?;
     let above = store.get(parent)?;
-    if !above.children.contains(&old) || !above.paint_children.contains(&old) {
+    if !above.children.contains(&old) {
         return None;
     }
+    let painter = if above.paint_children.contains(&old) {
+        parent
+    } else {
+        let painter = store.declared(old)?.parent;
+        if !store.get(painter)?.paint_children.contains(&old) {
+            return None;
+        }
+        painter
+    };
 
     let subtree = collect(store, old);
     let inside: FxHashSet<BoxKey> = subtree.iter().copied().collect();
@@ -108,7 +124,11 @@ fn proved(
             }
         }
     }
-    Some(Held { parent, subtree })
+    Some(Held {
+        parent,
+        painter,
+        subtree,
+    })
 }
 
 /// Every box at or below `root`, in both child orders, each named once.

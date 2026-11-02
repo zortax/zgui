@@ -37,9 +37,11 @@ impl TextPaint {
 /// colour came from a theme variable in the same slot as one whose colour was written literally,
 /// and re-colouring the first would silently re-colour the second.
 ///
-/// Entries live as long as the document. There is no eviction and no reference counting, because a
-/// slot that disappeared while a cached paragraph still named it would draw that paragraph in
-/// whatever colour landed in the slot next.
+/// A slot lives until its owner releases it, and the owner releases a slot only when no element is
+/// drawn through it. A slot that disappeared while a current paragraph still named it would draw
+/// that paragraph in whatever colour landed in the slot next. The table counts the keys that
+/// resolve to each slot and refuses to release a slot that a key still resolves to. A released
+/// slot is claimed again before the table grows.
 ///
 /// ```
 /// use zgui_color::Color;
@@ -60,7 +62,16 @@ pub struct TextPaintTable {
     slots: Vec<TextPaint>,
     /// Caller key to slot.
     by_key: FxHashMap<u64, PaintSlot>,
+    /// How many keys resolve to each slot, indexed by slot. [`RELEASED`] marks a released slot.
+    refs: Vec<u32>,
+    /// The released slots, claimed again before the table grows.
+    free: Vec<PaintSlot>,
+    /// How many slots were claimed since the table was made.
+    claims: u64,
 }
+
+/// The key count of a released slot.
+const RELEASED: u32 = u32::MAX;
 
 impl TextPaintTable {
     /// An empty table.
@@ -68,9 +79,22 @@ impl TextPaintTable {
         Self::default()
     }
 
-    /// How many slots exist.
+    /// How many slots exist, released slots included.
     pub fn len(&self) -> usize {
         self.slots.len()
+    }
+
+    /// How many slots are in use, released slots excluded.
+    pub fn in_use(&self) -> usize {
+        self.slots.len() - self.free.len()
+    }
+
+    /// How many slots were claimed since the table was made.
+    ///
+    /// A claim can take a released slot and leave [`TextPaintTable::len`] as it was, so a copy of
+    /// the table is current when its count is equal to this one and no brush was rewritten.
+    pub fn claims(&self) -> u64 {
+        self.claims
     }
 
     /// Whether no slot has been claimed.
@@ -87,9 +111,22 @@ impl TextPaintTable {
         if let Some(slot) = self.by_key.get(&key) {
             return *slot;
         }
-        let slot = PaintSlot(self.slots.len() as u32);
-        self.slots.push(build());
+        let paint = build();
+        let slot = match self.free.pop() {
+            Some(slot) => {
+                self.slots[slot.0 as usize] = paint;
+                self.refs[slot.0 as usize] = 0;
+                slot
+            }
+            None => {
+                self.slots.push(paint);
+                self.refs.push(0);
+                PaintSlot(self.slots.len() as u32 - 1)
+            }
+        };
+        self.refs[slot.0 as usize] += 1;
         self.by_key.insert(key, slot);
+        self.claims += 1;
         slot
     }
 
@@ -103,7 +140,7 @@ impl TextPaintTable {
         self.by_key.get(&key).copied()
     }
 
-    /// Points `key` at a slot that already exists.
+    /// Points `key` at a slot that already exists and is not released.
     ///
     /// A cascade result is a new object every time the cascade runs, so an element whose colour
     /// changed arrives with a key nothing has seen before while everything already drawn still
@@ -120,8 +157,15 @@ impl TextPaintTable {
     /// assert_eq!(brushes.slot_for(2, || unreachable!()), slot);
     /// ```
     pub fn alias(&mut self, key: u64, slot: PaintSlot) {
-        if (slot.0 as usize) < self.slots.len() {
-            self.by_key.insert(key, slot);
+        let Some(&refs) = self.refs.get(slot.0 as usize) else {
+            return;
+        };
+        if refs == RELEASED {
+            return;
+        }
+        self.refs[slot.0 as usize] += 1;
+        if let Some(previous) = self.by_key.insert(key, slot) {
+            self.refs[previous.0 as usize] -= 1;
         }
     }
 
@@ -148,13 +192,47 @@ impl TextPaintTable {
     /// assert!(brushes.get(slot).is_some(), "what is already drawn through it is not");
     /// ```
     pub fn forget(&mut self, key: u64) {
-        self.by_key.remove(&key);
+        if let Some(slot) = self.by_key.remove(&key) {
+            self.refs[slot.0 as usize] -= 1;
+        }
+    }
+
+    /// Releases `slot` so that a later claim can take it, and reports whether it was released.
+    ///
+    /// The caller releases a slot only when no element is drawn through it. The table refuses a
+    /// slot that a key still resolves to, because a later paragraph flattened under that key would
+    /// be drawn through whatever claims the slot next.
+    ///
+    /// ```
+    /// use zgui_color::Color;
+    /// use zgui_scene::{TextPaint, TextPaintTable};
+    ///
+    /// let mut brushes = TextPaintTable::new();
+    /// let black = TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0));
+    /// let slot = brushes.slot_for(1, || black);
+    /// assert!(!brushes.release(slot), "a key still resolves to it");
+    /// brushes.forget(1);
+    /// assert!(brushes.release(slot));
+    /// assert_eq!(brushes.slot_for(2, || black), slot, "a later claim takes it again");
+    /// assert_eq!(brushes.len(), 1);
+    /// ```
+    pub fn release(&mut self, slot: PaintSlot) -> bool {
+        let Some(refs) = self.refs.get_mut(slot.0 as usize) else {
+            return false;
+        };
+        if *refs != 0 {
+            return false;
+        }
+        *refs = RELEASED;
+        self.free.push(slot);
+        true
     }
 
     /// How many keys resolve to a slot.
     ///
-    /// Slots are permanent and keys are not, so this is the number that says whether the table is
-    /// keeping up with a document whose cascade results are being replaced every frame.
+    /// Slots stay until their owner releases them and keys do not, so this is the number that says
+    /// whether the table is keeping up with a document whose cascade results are being replaced
+    /// every frame.
     pub fn keys(&self) -> usize {
         self.by_key.len()
     }

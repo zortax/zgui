@@ -197,14 +197,14 @@ impl<const N: usize> DamageSet<N> {
         while let Some(index) = self
             .rects()
             .iter()
-            .position(|held| held.intersects(rect) && merge::worth_merging(*held, rect))
+            .position(|held| merge::meets(*held, rect) && merge::worth_merging(*held, rect))
         {
             let held = self.rects[index];
             self.remove(index);
-            rect = held.union(rect);
+            rect = merge::join(held, rect);
         }
         // The common case, answered without carving anything: it meets nothing held.
-        if !self.rects().iter().any(|held| held.intersects(rect)) {
+        if !self.rects().iter().any(|held| merge::meets(*held, rect)) {
             self.push(rect);
             return;
         }
@@ -217,7 +217,7 @@ impl<const N: usize> DamageSet<N> {
             Some(pieces) => {
                 for piece in pieces {
                     // A merge made room for an earlier piece may have grown over this one.
-                    if self.rects().iter().any(|held| held.intersects(piece)) {
+                    if self.rects().iter().any(|held| merge::meets(*held, piece)) {
                         self.absorb_whole(piece);
                     } else {
                         self.push(piece);
@@ -244,8 +244,8 @@ impl<const N: usize> DamageSet<N> {
         let mut merged = rect;
         let mut index = 0;
         while index < self.len {
-            if self.rects[index].intersects(merged) {
-                merged = merged.union(self.rects[index]);
+            if merge::meets(self.rects[index], merged) {
+                merged = merge::join(merged, self.rects[index]);
                 self.remove(index);
                 // The union grew, so a rectangle already passed over may now meet it.
                 index = 0;
@@ -287,7 +287,7 @@ impl<const N: usize> DamageSet<N> {
         if self.full {
             return !rect.is_empty();
         }
-        self.rects().iter().any(|held| held.intersects(rect))
+        self.rects().iter().any(|held| merge::meets(*held, rect))
     }
 
     /// The smallest rectangle containing the whole set, or `None` when it is empty or full.
@@ -328,13 +328,13 @@ impl<const N: usize> DamageSet<N> {
             return;
         }
 
-        let (left, right) = merge::least_wasted_pair(&self.rects[..self.len], rect);
-        if right == self.len {
-            let union = self.rects[left].union(rect);
+        let (left, right) = merge::least_wasted_pair(&self.rects, rect);
+        if right == N {
+            let union = merge::join(self.rects[left], rect);
             self.remove(left);
             self.absorb_whole(union);
         } else {
-            let union = self.rects[left].union(self.rects[right]);
+            let union = merge::join(self.rects[left], self.rects[right]);
             self.remove(right);
             self.remove(left);
             self.push(rect);

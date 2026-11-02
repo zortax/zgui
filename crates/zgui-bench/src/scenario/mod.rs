@@ -208,4 +208,5 @@ pub(crate) fn print(outcome: &Outcome) {
     for measurement in &outcome.measurements {
         println!("  {measurement}");
     }
+    crate::gpu_time::print(outcome.scenario);
 }

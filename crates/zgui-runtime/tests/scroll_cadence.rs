@@ -305,15 +305,16 @@ fn a_spring_that_has_come_back_leaves_the_content_on_the_device_grid() {
         harness.pump();
     }
     let arrived = topmost_row(&harness);
-    assert_eq!(
-        arrived, settled,
+    // Exact at the origin. At the poison offset an f32 holds a row's edge only to a few ulp.
+    let slack = zgui_scene::spatial::poison::origin() * f32::EPSILON * 4.0;
+    assert!(
+        (arrived - settled).abs() <= slack,
         "the return left the topmost row at {arrived} where a list that was never pulled has it \
          at {settled}"
     );
-    assert_eq!(
-        arrived.fract(),
-        0.0,
-        "the content came to rest off the device pixel grid"
+    assert!(
+        (arrived - arrived.round()).abs() <= slack,
+        "the content came to rest off the device pixel grid at {arrived}"
     );
 }
 
@@ -338,12 +339,13 @@ fn topmost_row(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>)
             if matches!(fragment.kind, zgui_layout::FragmentKind::Scrollbar { .. }) {
                 continue;
             }
-            if (fragment.border_box.size.height.0 - 20.0).abs() > 0.5 {
+            let border = fragment.on_device(fragment.border_box, &window.placements());
+            if (border.size.height.0 - 20.0).abs() > 0.5 {
                 continue;
             }
             top = Some(match top {
-                Some(held) => held.min(fragment.border_box.origin.y.0),
-                None => fragment.border_box.origin.y.0,
+                Some(held) => held.min(border.origin.y.0),
+                None => border.origin.y.0,
             });
         }
     }

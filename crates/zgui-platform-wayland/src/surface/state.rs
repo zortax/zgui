@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
@@ -85,6 +86,8 @@ pub(crate) struct Shared {
     pub(crate) bounds: Bounds,
     /// A configure that has arrived and not yet been applied.
     pub(crate) pending_configure: Option<crate::surface::role::xdg::configure::Pending>,
+    /// The outputs the compositor says the surface is on.
+    pub(crate) outputs: Vec<WlOutput>,
 }
 
 impl Shared {
@@ -109,6 +112,7 @@ impl Shared {
             told_resizing: false,
             bounds: (None, None),
             pending_configure: None,
+            outputs: Vec::new(),
         }
     }
 
@@ -189,6 +193,16 @@ impl Shared {
     /// Records a frame reaching the screen, and re-arms the watchdog against the new interval.
     pub(crate) fn presented(&mut self, at: Instant, refresh: Duration) {
         self.timing.presented(at, refresh);
+        self.pacer
+            .watch(Watchdog::for_interval(self.timing.interval()));
+    }
+
+    /// Records the refresh interval of the outputs the surface is on.
+    ///
+    /// The timing uses it while the presentation feedback states no interval. The watchdog is
+    /// re-armed against the interval that results.
+    pub(crate) fn declares(&mut self, interval: Option<Duration>) {
+        self.timing.declares(interval);
         self.pacer
             .watch(Watchdog::for_interval(self.timing.interval()));
     }
@@ -372,6 +386,35 @@ mod tests {
             shared.pacer.deadline(shared.visibility, now),
             Some(now + Duration::from_millis(400))
         );
+    }
+
+    #[test]
+    fn feedback_that_states_no_interval_leaves_the_rate_of_the_output() {
+        // A headless output and a variable-refresh output answer every frame with a refresh of
+        // zero. Without the output's own rate, the runtime paces such a surface at sixty hertz.
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        let hz_240 = Duration::from_nanos(4_166_667);
+        shared.declares(Some(hz_240));
+        shared.presented(now, Duration::ZERO);
+        assert_eq!(shared.snapshot().interval, Some(hz_240));
+        assert_eq!(shared.timing.refresh_rate_millihertz(), Some(240_000));
+
+        // The watchdog is armed against the declared interval. A slow output shows it, because
+        // the watchdog never waits less than its floor.
+        shared.declares(Some(Duration::from_millis(100)));
+        shared.pacer.committed(now);
+        shared.pacer.request();
+        assert_eq!(
+            shared.pacer.deadline(shared.visibility, now),
+            Some(now + Duration::from_millis(400))
+        );
+
+        // A stated interval wins over the declared one.
+        let hz_75 = Duration::from_nanos(13_346_680);
+        shared.presented(now, hz_75);
+        assert_eq!(shared.snapshot().interval, Some(hz_75));
     }
 
     #[test]

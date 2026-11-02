@@ -33,6 +33,8 @@ struct CompositeParams {
     matrix3: vec4<f32>,
     // Its constant term.
     matrix_offset: vec4<f32>,
+    // xy: the device pixel the sampled target's first texel holds; zw: unused.
+    origin: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> composite: CompositeParams;
@@ -81,7 +83,7 @@ fn fs_composite(in: CompositeVarying) -> @location(0) vec4<f32> {
 
 // The isolated target at a device position, through the same grid it was written on.
 fn sample_isolated(device: vec2<f32>) -> vec4<f32> {
-    let uv = device * composite.source.z / composite.source.xy;
+    let uv = (device - composite.origin.xy) * composite.source.z / composite.source.xy;
     return textureSampleLevel(isolated, isolated_sampler, uv, 0.0);
 }
 

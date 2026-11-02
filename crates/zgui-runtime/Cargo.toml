@@ -42,7 +42,7 @@ zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
-zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
@@ -69,6 +69,9 @@ accesskit_consumer.workspace = true
 zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# The budgets read the frame counters, so a release test build has to compile them in. The normal
+# dependency leaves them off, and an application built in release mode ships the inert path.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 # A renderer that records instead of drawing, so the whole loop runs with no graphics device.
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 

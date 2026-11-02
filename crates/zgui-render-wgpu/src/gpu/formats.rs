@@ -96,7 +96,7 @@ impl Formats {
     /// Four formats and a tier, at startup, is the entire diagnostic for "the blending looks
     /// slightly wrong on this machine" — a symptom that no golden, on any machine, can reproduce.
     pub fn log(&self, adapter: &str) {
-        let _startup = Phase::Render.span().entered();
+        let _startup = Phase::Render.enter();
         tracing::info!(
             adapter,
             surface = ?self.surface,

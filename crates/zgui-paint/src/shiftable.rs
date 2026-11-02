@@ -14,11 +14,11 @@
 //!
 //! # What is not tested here, because it cannot happen
 //!
-//! That the movement was rigid. A subtree containing a sticky box, a viewport-anchored box or a
-//! transform has `subtree_rigid` false, so the fragment pass composes it instead of offsetting it
-//! and no move is reported at all — the layout tree's fragment diff decides that in
-//! `can_translate`. By the time anything asks this question, the only
-//! subtrees that moved are ones every piece of which moved by the same vector.
+//! That the movement was rigid. The fragment pass reports a move only for a scroll container that
+//! draws its content in a space of its own, and it reports one move for the whole port. A sticky
+//! or fixed box below it does not move with the content, and the fragment pass damages it beyond
+//! the move: where the moved pixels put it, and where it is now. A container that keeps its
+//! children in its own space reports no move, so the frame draws its port again.
 
 use zgui_css::ComputedStyle;
 use zgui_css::values::image::ImageValue;
@@ -48,10 +48,13 @@ pub enum Refusal {
 
 /// Whether `container`'s scrollport may have its pixels moved, and the port if it may.
 ///
-/// The port is in device pixels, in the same space the damage set is measured in.
+/// The port is in device pixels, in the same space the damage set is measured in: `placements`
+/// puts it there. The tests below compare it against other fragments on the device too, because
+/// fragments outside the container can measure their rectangles in other anchors.
 pub fn port_may_be_shifted(
     store: &LayoutStore,
     container: NodeKey,
+    placements: &zgui_scene::Placements,
 ) -> Result<Rect<DevicePx, Device>, Refusal> {
     let Some(&box_key) = store.boxes_of(container).first() else {
         return Err(Refusal::NotAScroller);
@@ -59,31 +62,49 @@ pub fn port_may_be_shifted(
     if scroll_region::region_of(store, box_key).is_none() {
         return Err(Refusal::NotAScroller);
     }
-    let Some(port) = scrollport_on_device(store, box_key) else {
+    let Some(port) = scrollport_of(store, box_key) else {
         return Err(Refusal::NotAScroller);
     };
+    let piece = store
+        .fragments_of_box(box_key)
+        .first()
+        .and_then(|frag| store.fragment(*frag))
+        .ok_or(Refusal::NotAScroller)?;
+    // The port is the padding box, which is measured in the space the box is laid out in, as
+    // every border box the tests below read.
+    let port =
+        zgui_layout::fragment::transform::placed::onto_device(port, piece.transform, placements);
+    let device = OnDevice { store, placements };
     // Two independent conditions, and neither implies the other. A port with an opaque background
     // of its own still cannot be moved if a dialog is drawn over it, and a port with nothing over
     // it still cannot be moved if what shows through it is a gradient.
-    if !only_this_box_draws_in(store, box_key, port) {
+    if !only_this_box_draws_in(device, box_key, port) {
         return Err(Refusal::Overdrawn);
     }
-    backing(store, box_key, port)?;
+    backing(device, box_key, port)?;
     Ok(port)
 }
 
-/// Where the pixels `box_key` scrolls stand on the device.
+/// The store, and the matrices that put its fragments on the device.
+#[derive(Clone, Copy)]
+struct OnDevice<'a> {
+    /// The boxes and their fragments.
+    store: &'a LayoutStore,
+    /// The matrices of the drawn frame.
+    placements: &'a zgui_scene::Placements,
+}
+
+/// Where the pixels `box_key` scrolls stand, in the space the container is laid out in.
 ///
-/// A scroll region reports its port in the container's own space, at the origin, because that is
-/// the space its offsets are measured in. The composed target and the damage set are measured on
-/// the device, and every test below compares the port against fragments that are. So the port is
-/// taken from the container's own fragment: the padding box, less the scrollbar gutter on the
-/// sides the layout engine took it off. A port read at the origin names the pixels at the top left
-/// of the window, which only coincide with the list's when the list stands there.
-fn scrollport_on_device(store: &LayoutStore, box_key: BoxKey) -> Option<Rect<DevicePx, Device>> {
+/// A scroll region reports its port at the origin, because that is the space its offsets are
+/// measured in. Every test below compares the port against fragments on the device. So the port
+/// is taken from the container's own fragment: the padding box, less the scrollbar gutter on
+/// the sides the layout engine took it off. A port read at the origin names the pixels at the top
+/// left of the window, which only coincide with the list's when the list stands there.
+fn scrollport_of(store: &LayoutStore, box_key: BoxKey) -> Option<Rect<DevicePx, Device>> {
     let layout = store.layout_of(box_key)?;
     let piece = store.fragment(*store.fragments_of_box(box_key).first()?)?;
-    let padding = piece.padding_box;
+    let padding = piece.padding_box();
     let width = (padding.size.width.0 - layout.scrollbar_size.width.0).max(0.0);
     let height = (padding.size.height.0 - layout.scrollbar_size.height.0).max(0.0);
     Some(Rect::new(
@@ -100,11 +121,8 @@ fn scrollport_on_device(store: &LayoutStore, box_key: BoxKey) -> Option<Rect<Dev
 ///
 /// A later sibling whose whole folded subtree misses the port is dismissed without being entered,
 /// so the cost is the container's depth and the fan-out along it rather than the document.
-fn only_this_box_draws_in(
-    store: &LayoutStore,
-    box_key: BoxKey,
-    port: Rect<DevicePx, Device>,
-) -> bool {
+fn only_this_box_draws_in(device: OnDevice<'_>, box_key: BoxKey, port: Pixels) -> bool {
+    let store = device.store;
     let Some(root) = store.root() else {
         return false;
     };
@@ -118,7 +136,7 @@ fn only_this_box_draws_in(
             return false;
         };
         for &later in &order[position + 1..] {
-            if paints_in(store, later, port) {
+            if paints_in(device, later, port) {
                 return false;
             }
         }
@@ -142,18 +160,15 @@ fn only_this_box_draws_in(
 ///
 /// The walk is up the ancestors, and at every level it is the same three questions, so it costs the
 /// container's depth and the fan-out along it — never the document.
-fn backing(
-    store: &LayoutStore,
-    box_key: BoxKey,
-    port: Rect<DevicePx, Device>,
-) -> Result<(), Refusal> {
+fn backing(device: OnDevice<'_>, box_key: BoxKey, port: Pixels) -> Result<(), Refusal> {
+    let store = device.store;
     let Some(root) = store.root() else {
         return Err(Refusal::NotAScroller);
     };
 
     // The container's own background comes first: one that is opaque and flat hides everything
     // behind it, and then nothing above matters at all.
-    if flat_and_opaque_over(store, box_key, port) {
+    if flat_and_opaque_over(device, box_key, port) {
         return Ok(());
     }
 
@@ -171,18 +186,18 @@ fn backing(
         let order = children_in_paint_order(store, parent);
         let position = order.iter().position(|&child| child == inside);
         for &sibling in &order[..position.unwrap_or(0)] {
-            if paints_in(store, sibling, port) {
+            if paints_in(device, sibling, port) {
                 return Err(Refusal::Overdrawn);
             }
         }
 
         // The parent's own painting is behind everything at this level. Flat and opaque over the
         // whole port, it *is* the backing and the walk is done.
-        if flat_and_opaque_over(store, parent, port) {
+        if flat_and_opaque_over(device, parent, port) {
             return Ok(());
         }
         // Anything else it marks inside the port is between whatever backs it and the content.
-        if marks_pixels_in(store, parent, port) {
+        if marks_pixels_in(device, parent, port) {
             return Err(Refusal::NotOpaque);
         }
         if parent == root {
@@ -200,7 +215,8 @@ fn backing(
 /// Flat because a gradient or an image is not the same picture when it is translated, and opaque
 /// because anything less lets what is behind it into the composite. Across the whole port, because
 /// a colour that covers half of it backs half of it.
-fn flat_and_opaque_over(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device>) -> bool {
+fn flat_and_opaque_over(device: OnDevice<'_>, key: BoxKey, port: Pixels) -> bool {
+    let store = device.store;
     let Some(style) = store.get(key).map(|node| &node.style) else {
         return false;
     };
@@ -212,7 +228,14 @@ fn flat_and_opaque_over(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, D
         .fragments_of_box(key)
         .first()
         .and_then(|frag| store.fragment(*frag))
-        .is_some_and(|piece| piece.border_box.intersection(port) == Some(port))
+        .is_some_and(|piece| {
+            let border_box = zgui_layout::fragment::transform::placed::onto_device(
+                piece.border_box,
+                piece.transform,
+                device.placements,
+            );
+            border_box.intersection(port) == Some(port)
+        })
 }
 
 /// Whether a box's own background hides everything behind it, with one flat colour.
@@ -241,10 +264,15 @@ fn paints_opaquely(style: &ComputedStyle) -> bool {
 }
 
 /// Whether `key`'s own fragments mark a pixel inside `port`, ignoring its descendants.
-fn marks_pixels_in(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device>) -> bool {
+fn marks_pixels_in(device: OnDevice<'_>, key: BoxKey, port: Pixels) -> bool {
+    let store = device.store;
     store.fragments_of_box(key).iter().any(|&frag| {
         store.fragment(frag).is_some_and(|piece| {
-            piece.ink.intersection(port).is_some() && marks_pixels(store, key, piece.kind)
+            piece
+                .device_ink(device.placements)
+                .intersection(port)
+                .is_some()
+                && marks_pixels(store, key, piece.kind)
         })
     })
 }
@@ -256,8 +284,9 @@ fn marks_pixels_in(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device
 /// as the answer refuses every document with a full-height sibling in it. So the union is used the
 /// way the emit walk uses it — to dismiss a whole subtree in constant time — and the question is
 /// then asked of each box's own ink.
-fn paints_in(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device>) -> bool {
-    let Some(folded) = subtree_ink(store, key) else {
+fn paints_in(device: OnDevice<'_>, key: BoxKey, port: Pixels) -> bool {
+    let store = device.store;
+    let Some(folded) = subtree_ink(device, key) else {
         return false;
     };
     if folded.intersection(port).is_none() {
@@ -267,7 +296,11 @@ fn paints_in(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device>) -> 
         let Some(piece) = store.fragment(frag) else {
             continue;
         };
-        if piece.ink.intersection(port).is_none() {
+        if piece
+            .device_ink(device.placements)
+            .intersection(port)
+            .is_none()
+        {
             continue;
         }
         if marks_pixels(store, key, piece.kind) {
@@ -277,7 +310,7 @@ fn paints_in(store: &LayoutStore, key: BoxKey, port: Rect<DevicePx, Device>) -> 
     store.get(key).is_some_and(|node| {
         node.children
             .iter()
-            .any(|&child| paints_in(store, child, port))
+            .any(|&child| paints_in(device, child, port))
     })
 }
 
@@ -311,8 +344,15 @@ fn marks_pixels(store: &LayoutStore, key: BoxKey, kind: FragmentKind) -> bool {
     !style.get_effects().box_shadow.0.is_empty()
 }
 
-/// The union of a box's ink and everything below it, as the last fragment pass folded it.
-fn subtree_ink(store: &LayoutStore, key: BoxKey) -> Option<Rect<DevicePx, Device>> {
+/// The union of a box's ink and everything below it, as the last fragment pass folded it, on the
+/// device.
+fn subtree_ink(device: OnDevice<'_>, key: BoxKey) -> Option<Pixels> {
+    let store = device.store;
     let frag = *store.fragments_of_box(key).first()?;
-    store.fragment(frag).map(|fragment| fragment.subtree_ink)
+    store
+        .fragment(frag)
+        .map(|fragment| fragment.device_subtree_ink(device.placements))
 }
+
+/// A rectangle in device pixels.
+type Pixels = Rect<DevicePx, Device>;

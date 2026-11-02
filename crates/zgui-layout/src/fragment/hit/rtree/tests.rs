@@ -216,6 +216,83 @@ fn a_scrolled_document_moves_its_entries_without_reinserting_them() {
 }
 
 #[test]
+fn a_widening_page_keeps_its_rows_in_their_leaves() {
+    // The shape of a resize: every row of a page grows at its right edge by the same amount, every
+    // frame, and stays where it was. The first row of each branch to grow leaves that branch, so a
+    // test of the branch alone sends it through a search, and every search counts towards a
+    // rebuild of the whole index.
+    let mut tree = Tree::default();
+    let mut entries: Vec<(FragKey, Rect<DevicePx, Device>)> = Vec::new();
+    for index in 0..400u32 {
+        // Rows, and inside each row a label of its own width.
+        let width = if index % 2 == 0 { 1200.0 } else { 300.0 };
+        let bounds = rect(
+            8.0,
+            f64::from(index / 2).mul_add(36.0, 8.0) as f32,
+            width,
+            28.0,
+        );
+        tree.insert(key(index + 1), bounds);
+        entries.push((key(index + 1), bounds));
+    }
+    for _ in 0..24 {
+        for (name, bounds) in &mut entries {
+            if bounds.size.width.0 >= 1200.0 {
+                bounds.size.width = DevicePx(bounds.size.width.0 + 8.0);
+                tree.place(*name, *bounds);
+            }
+        }
+    }
+    let placed = tree.placements();
+    assert_eq!(
+        placed.kept() + placed.reinserted,
+        4_800,
+        "every row was placed"
+    );
+    assert_eq!(
+        placed.reinserted, 0,
+        "a row that grew keeps its leaf: {placed:?}"
+    );
+
+    let mut rng = Rng(0x5eed_0f01_2345_6789);
+    let mut found = Vec::new();
+    for _ in 0..10_000 {
+        let point = Point::new(
+            DevicePx(rng.below(1500) as f32),
+            DevicePx(rng.below(7300) as f32),
+        );
+        found.clear();
+        tree.query(point, &mut found);
+        found.sort_unstable();
+        let mut expected: Vec<FragKey> = entries
+            .iter()
+            .filter(|(_, bounds)| bounds.contains(point))
+            .map(|(name, _)| *name)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(found, expected, "at {point:?}");
+    }
+}
+
+#[test]
+fn an_entry_that_was_empty_is_searched_for_where_it_appears() {
+    // An empty rectangle is inside every rectangle, and it says nothing about where the entry was.
+    // Kept in its leaf, an entry that appears far away would stretch that leaf across the gap.
+    let mut tree = Tree::default();
+    for index in 0..64u32 {
+        tree.insert(key(index + 1), rect(index as f32 * 10.0, 0.0, 8.0, 8.0));
+    }
+    tree.insert(key(100), rect(4.0, 4.0, 0.0, 0.0));
+    assert_eq!(
+        tree.place(key(100), rect(5000.0, 5000.0, 8.0, 8.0)),
+        Placed::Reinserted
+    );
+    let mut found = Vec::new();
+    tree.query(Point::new(DevicePx(5002.0), DevicePx(5002.0)), &mut found);
+    assert_eq!(found, vec![key(100)]);
+}
+
+#[test]
 fn placing_an_entry_far_away_still_finds_it_there_and_not_where_it_was() {
     // The other half of `place`: a rectangle that has left its leaf's envelope has to be taken out
     // and put back, and an implementation that only rewrote it in the leaf would answer hits at

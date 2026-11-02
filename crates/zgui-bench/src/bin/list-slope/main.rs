@@ -33,6 +33,13 @@
 //! The damage fraction and `fragments_rebuilt` per drawn frame are dimensionless before anybody
 //! divides them, which makes them the two numbers here that are the same on every machine and need
 //! no baseline at all.
+//!
+//! # And how many layout passes a crossing runs
+//!
+//! At the same configuration, each gesture is driven once more and every step that rebuilt boxes
+//! prints a `CROSS` line with its `LayoutPasses` and `LayoutsHeld`. A `CROSSINGS` line gives the
+//! passes of every crossing step and of every other step that drew. This is advisory and gates
+//! nothing.
 
 #![forbid(unsafe_code)]
 
@@ -159,6 +166,23 @@ fn main() {
             ticks.full,
             ticks.damage,
             ticks.fragments_rebuilt,
+        );
+        let crossed = measure::crossings(
+            &mut document::opened(REFERENCE_ROWS, REFERENCE_PORT),
+            REFERENCE_PORT,
+            gesture,
+        );
+        for line in &crossed.lines {
+            println!("{line}");
+        }
+        println!(
+            "CROSSINGS {} crossing_steps={} layout_passes={:?} steady_steps={} \
+             steady_layout_passes={:?}",
+            gesture.name(),
+            crossed.passes.len(),
+            crossed.passes,
+            crossed.steady.len(),
+            crossed.steady,
         );
         report.judged(&criteria::damage(gesture).judge_directly(ticks.damage));
         report.judged(&criteria::FULL_FRAMES.judge_directly(ticks.full_frames));

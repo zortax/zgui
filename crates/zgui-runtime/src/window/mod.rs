@@ -138,7 +138,7 @@ pub struct Window {
     /// The rule set and the device.
     engine: StyleEngine,
     /// The application's cascade pool, when it runs one.
-    style_pool: Option<Rc<zgui_style::engine::thread_pool::StylePool>>,
+    style_pool: Option<Rc<crate::app::StylePoolCell>>,
     /// Whether the next restyle is a broad one, which is what the pool is for.
     ///
     /// True for the first cascade — the largest this window will ever run — and again whenever
@@ -240,9 +240,6 @@ pub struct Window {
     /// The device rectangles of drawings the last painted frame owes a frame: a CPU layer
     /// stretched from another scale, or one the layer budget deferred.
     layers_owed: Vec<zgui_geom::Rect<i32, zgui_geom::Device>>,
-    /// The owed rectangles the damage holds until a frame retires it, kept apart so a scroll shift
-    /// can move them with the pixels.
-    layers_inherited: Vec<zgui_geom::Rect<i32, zgui_geom::Device>>,
     /// The complex-vector elements present in the frame that first constructed Vello.
     vello_initializers: Vec<zgui_dom::NodeKey>,
     /// What each budgeted cache last did, and the levels the entry-counted ones are held to.
@@ -261,13 +258,19 @@ pub struct Window {
     /// have them drawn again. Reset at the top of each frame and merged across passes, because a
     /// scroll delivered to a listener can relay out inside the frame that delivered it.
     rigid_moves: zgui_layout::fragment::diff::RigidMoves,
-    /// What this frame had damaged before its first layout pass ran.
+    /// What this frame had damaged before its first layout pass ran, measured on the drawn frame.
     ///
     /// The other half of [`Window::rigid_moves`]: the walk reports what *it* damaged beyond the
     /// movement, and this is what was already owed before it started. Held separately because a
     /// frame runs the walk more than once and only the first of them starts from what the frame
-    /// inherited.
+    /// inherited. A caret's old marks join it after layout, because they are pixels of the drawn
+    /// frame too. A scroll that moves composed pixels moves this damage with them.
     damage_before_layout: DamageSet,
+    /// What the stages after the last layout pass damaged, measured on this frame's matrices.
+    ///
+    /// A scroll that moves composed pixels keeps this as it is: it names pixels the frame draws,
+    /// in the places the frame draws them.
+    damage_after_layout: DamageSet,
     /// How many layout passes this frame has run, so the first can be told from the rest.
     layout_passes: u32,
     /// Which containers scrolled this frame, and from where to where.
@@ -718,13 +721,13 @@ impl Window {
             vector_routes: rustc_hash::FxHashMap::default(),
             vector_routes_revision: 0,
             layers_owed: Vec::new(),
-            layers_inherited: Vec::new(),
             vello_initializers: Vec::new(),
             budgets: crate::budget::Budgets::new(),
             raster,
             damage: DamageSet::full(),
             rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
             damage_before_layout: DamageSet::new(),
+            damage_after_layout: DamageSet::new(),
             layout_passes: 0,
             scrolled_this_frame: Vec::new(),
             brushes_moved: false,
@@ -1151,6 +1154,26 @@ impl Window {
         self.renderer.as_ref()
     }
 
+    /// The painter and the paint records it holds, for a memory report.
+    #[doc(hidden)]
+    pub fn painter(&self) -> &Painter {
+        &self.painter
+    }
+
+    /// How many paragraphs the text engine holds shaped, for a memory report.
+    #[doc(hidden)]
+    pub fn shaped_held(&self) -> crate::text::ShapedHeld {
+        self.text.shaped_held()
+    }
+
+    /// How many brush slots the text engine's table has in use, and how many keys resolve to
+    /// one, for a memory report.
+    #[doc(hidden)]
+    pub fn text_brushes_held(&mut self) -> (usize, usize) {
+        let table = self.text.text_paints();
+        (table.in_use(), table.keys())
+    }
+
     /// The raster paths most recently selected by `node`'s own vector content.
     pub fn vector_routes(&self, node: zgui_dom::NodeKey) -> zgui_paint::VectorRoutes {
         self.vector_routes
@@ -1303,7 +1326,7 @@ impl Window {
     }
 
     /// Hands this window the application's cascade pool.
-    pub(crate) fn set_style_pool(&mut self, pool: Rc<zgui_style::engine::thread_pool::StylePool>) {
+    pub(crate) fn set_style_pool(&mut self, pool: Rc<crate::app::StylePoolCell>) {
         self.style_pool = Some(pool);
     }
 

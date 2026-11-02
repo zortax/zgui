@@ -45,8 +45,8 @@
 //! let count = window.with(|| RwSignal::new(0));
 //! let root = dom.create_element(ElementName::new("box"));
 //!
-//! // A closure is a reactive hole: one effect, and the node is written only when the value
-//! // actually changes.
+//! // A closure is a reactive hole: it runs again at the flush, and the node is written only when
+//! // the value actually changes.
 //! let mut state =
 //!     window.with(|| (move || count.get().to_string()).into_view().build(&mut cx.cx()));
 //! state.mount(&dom, root, None);

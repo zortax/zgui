@@ -303,3 +303,80 @@ fn a_custom_property_change_repaints_the_element_that_declares_it() {
          custom property must still produce damage"
     );
 }
+
+/// A row and its text, hovered once, so the hover rule decides everything the row owes.
+fn hovered_row(rule: &str) -> (Harness, zgui_dom::NodeIndex, zgui_dom::NodeIndex) {
+    let mut harness = Harness::new();
+    let row = harness.append(harness.root, "control");
+    harness.set_classes(row, &["row"]);
+    let text = harness.append_text(row, "a row");
+    harness.add_author(&format!(
+        ".row {{ padding: 2px; background-color: rgb(1, 0, 0); \
+                 transition: background-color 90ms }}\n\
+         .row:hover {{ {rule} }}"
+    ));
+    harness.frame();
+    harness.retire_all();
+
+    harness.set_state(row, UiState::HOVER, true);
+    let pass = harness.frame();
+    assert!(
+        pass.records.iter().any(|record| record.index == row),
+        "the hover has to restyle the row, or the case below tests an idle frame"
+    );
+    (harness, row, text)
+}
+
+#[test]
+fn a_hover_that_only_changes_transitions_owes_nothing() {
+    let (harness, row, text) = hovered_row("transition: none");
+    let owed = harness.owed(row) | harness.owed_below(row) | harness.owed(text);
+    assert!(
+        owed.is_empty(),
+        "transitions decide how a later change moves, and nothing reads them now: {owed:?}"
+    );
+}
+
+#[test]
+fn a_hover_that_changes_transitions_and_a_colour_only_repaints() {
+    let (harness, row, text) = hovered_row("background-color: rgb(2, 0, 0); transition: none");
+    let owed = harness.owed(row);
+    assert!(owed.contains(Dirty::REPAINT), "the colour moved: {owed:?}");
+    let laid_out = Dirty::RELAYOUT | Dirty::REBUILD_BOX | Dirty::RESHAPE | Dirty::REBREAK;
+    assert!(
+        !(owed | harness.owed_below(row) | harness.owed(text)).intersects(laid_out),
+        "a colour and a transition lay nothing out: {owed:?}"
+    );
+}
+
+#[test]
+fn a_hover_that_changes_transitions_and_a_length_still_relays_out() {
+    let (harness, row, _) = hovered_row("padding: 3px; transition: none");
+    let owed = harness.owed(row);
+    assert!(
+        owed.contains(Dirty::RELAYOUT),
+        "the padding moved: {owed:?}"
+    );
+    assert!(
+        !owed.contains(Dirty::REBUILD_BOX),
+        "a padding keeps the boxes: {owed:?}"
+    );
+}
+
+#[test]
+fn a_hover_that_changes_transitions_and_the_display_still_rebuilds() {
+    let (harness, row, _) = hovered_row("display: flex; transition: none");
+    let owed = harness.owed(row);
+    assert!(
+        owed.contains(Dirty::RELAYOUT | Dirty::REBUILD_BOX),
+        "a display decides which boxes exist: {owed:?}"
+    );
+}
+
+#[test]
+fn a_hover_that_declares_the_values_already_there_owes_nothing() {
+    // The cascade gives the row new background, box and position groups, with the same values.
+    let (harness, row, text) = hovered_row("background-color: rgb(1, 0, 0)");
+    let owed = harness.owed(row) | harness.owed_below(row) | harness.owed(text);
+    assert!(owed.is_empty(), "no value moved: {owed:?}");
+}

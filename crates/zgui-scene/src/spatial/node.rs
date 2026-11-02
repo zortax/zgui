@@ -44,6 +44,11 @@ pub enum Anchoring {
     },
     /// Takes none of the scroll offsets above it, so it does not move at all when they change.
     Fixed,
+    /// The content of a scroll container: its own transform is the container's scroll offset.
+    ///
+    /// It moves when that offset changes and nothing else does. A reader that measures geometry
+    /// relative to the container can ignore such a move.
+    Content,
 }
 
 /// What a box establishes of its own, when it is not simply drawn in the space above it.

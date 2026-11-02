@@ -155,7 +155,7 @@ impl Animator {
                 }
                 None => Placed::Held,
             };
-            let tier = apply::element(document, element, placed);
+            let tier = apply::element(document, element, placed, place);
             if tier.is_overriding() {
                 // Counted only while it is still moving. An element reported because a finished
                 // animation is holding its last keyframe is not one the loop owes a frame for, and
@@ -201,7 +201,9 @@ impl Animator {
         // zero it entered from.
         for index in &self.overridden {
             if still_overridden.binary_search(index).is_err() {
-                retire::override_on(document, *index);
+                if let Some(was) = retire::override_on(document, *index) {
+                    place.uncolored(document.store().key_of(*index), &was);
+                }
                 if in_report.binary_search(index).is_err()
                     && document.store().try_core(*index).is_some()
                 {

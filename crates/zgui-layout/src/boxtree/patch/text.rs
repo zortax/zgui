@@ -150,7 +150,7 @@ fn rewrite(
             continue;
         }
         store.get_mut(key).expect("a live box").text = Some(text.clone());
-        forget_flattened(store, key);
+        forget_flattened(store, key, None);
         mark_dirty(store, key);
         *rewritten += 1;
     }
@@ -166,11 +166,23 @@ fn rewrite(
 /// is a context whose whole content is itself. The chain is as long as the tree is deep and each
 /// step is one pointer write, so asking the question exactly would cost more than answering it
 /// generously.
-fn forget_flattened(store: &mut LayoutStore, key: BoxKey) -> u32 {
+///
+/// With `climbed`, the walk stops at a box in the set and adds each box it reaches, so a patch
+/// that walks up from many boxes reaches each box once.
+pub(super) fn forget_flattened(
+    store: &mut LayoutStore,
+    key: BoxKey,
+    mut climbed: Option<&mut rustc_hash::FxHashSet<BoxKey>>,
+) -> u32 {
     let mut reached = 0;
     let mut next = Some(key);
     while let Some(current) = next {
         if !store.contains(current) {
+            break;
+        }
+        if let Some(climbed) = climbed.as_deref_mut()
+            && !climbed.insert(current)
+        {
             break;
         }
         store.forget_flattened(current);
@@ -219,7 +231,7 @@ mod tests {
         let outer = insert(&mut store, None, BoxKind::Element);
         let wrapper = insert(&mut store, Some(outer), BoxKind::AnonymousInlineRoot);
         let run = insert(&mut store, Some(wrapper), BoxKind::TextRun);
-        assert_eq!(forget_flattened(&mut store, run), 3);
-        assert_eq!(forget_flattened(&mut store, wrapper), 2);
+        assert_eq!(forget_flattened(&mut store, run, None), 3);
+        assert_eq!(forget_flattened(&mut store, wrapper, None), 2);
     }
 }

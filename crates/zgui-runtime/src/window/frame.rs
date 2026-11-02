@@ -39,6 +39,12 @@ use zgui_render::{FrameOutcome, RenderTarget, SkipReason};
 
 use crate::window::Window;
 
+/// The fewest document nodes a broad restyle hands to the cascade pool.
+///
+/// The count includes text nodes. A smaller document cascades on the frame thread, so an
+/// application that shows only small documents never starts the pool.
+const POOLED_RESTYLE_MIN_NODES: usize = 64;
+
 /// What one frame did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameReport {
@@ -231,6 +237,7 @@ impl Window {
         // either would decide what to draw from what the last one moved.
         self.rigid_moves = zgui_layout::fragment::diff::RigidMoves::default();
         self.damage_before_layout = DamageSet::new();
+        self.damage_after_layout = DamageSet::new();
         self.layout_passes = 0;
         self.scrolled_this_frame.clear();
 
@@ -455,7 +462,6 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
-            self.layers_inherited.clear();
             // The chunk notes were consumed by the same submission. A skipped frame keeps them
             // for the next drawn one, and anything noted after this point — a budget eviction —
             // stands until then.
@@ -467,7 +473,6 @@ impl Window {
         if !self.layers_owed.is_empty() {
             for owed in self.layers_owed.drain(..) {
                 self.damage.absorb(owed);
-                self.layers_inherited.push(owed);
             }
             self.request_frame();
         }
@@ -504,6 +509,7 @@ impl Window {
         // so the next diff drains the same values, and a `PropertyOwner` carries the slot's
         // occupancy counter — a name given back late can never be confused with one since reissued.
         self.layout.borrow_mut().recycle();
+        self.sweep_text_slots();
         let changed_during = self.document.borrow().end_frame();
         // After every stage that can write the document and before the frame's own park decision:
         // what this records is what another window's sweep compares against to find out whether
@@ -765,12 +771,16 @@ impl Window {
 
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
+        let placements = self.host.placements();
+        // Measured on this frame's matrices, so kept apart for a scroll that moves composed pixels.
+        let mut damage = DamageSet::new();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
             layout: &self.layout,
+            placements: &placements,
             renderer: &mut *self.renderer,
             content: &mut self.content,
-            damage: &mut self.damage,
+            damage: &mut damage,
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
             scale: self.scale,
@@ -791,6 +801,8 @@ impl Window {
         };
         let report = self.embed.sync(&mut cx);
         self.embed_animating = report.animating;
+        self.damage.absorb_set(&damage);
+        self.damage_after_layout.absorb_set(&damage);
     }
 
     /// Whether anything in the document is animating.
@@ -1025,11 +1037,12 @@ impl Window {
     pub(crate) fn restyle(&mut self) -> usize {
         let mut document = self.document.borrow_mut();
         // The pool serves broad cascades and the frame thread serves incremental ones — see
-        // `Window::broad_restyle` for the measurement behind the split.
-        let pool = self
-            .broad_restyle
+        // `Window::broad_restyle` for the measurement behind the split. A document under
+        // `POOLED_RESTYLE_MIN_NODES` stays on the frame thread too.
+        let pool = (self.broad_restyle && document.len() >= POOLED_RESTYLE_MIN_NODES)
             .then_some(())
-            .and(self.style_pool.as_deref());
+            .and(self.style_pool.as_deref())
+            .map(crate::app::StylePoolCell::get);
         let pass = self.engine.restyle(&mut document, pool);
         self.broad_restyle = false;
         let mut layout = self.layout.borrow_mut();
@@ -1041,6 +1054,44 @@ impl Window {
             );
         }
         pass.styled
+    }
+
+    /// Releases the brush slots nothing is drawn through, and drops the brush records of the
+    /// elements that left the document once enough of them left.
+    ///
+    /// At the frame's end, because the paragraphs of an element that left a slot name it until
+    /// layout shapes them again, and after the arenas are recycled, because a removed node still
+    /// resolves until then. The text engine then drops the paragraphs shaped through the slots
+    /// that went, and lets go of the cascade results no key resolves to.
+    fn sweep_text_slots(&mut self) {
+        let document = self.document.borrow();
+        let store = document.store();
+        let dropped = store.dropped();
+        if !self.text_slots.owes_sweep(dropped) {
+            return;
+        }
+        let records = self.text_slots.records_due(dropped);
+        let released = self
+            .text_slots
+            .sweep(self.text.text_paints(), dropped, |node| {
+                store.index_of(node).is_some()
+            });
+        drop(document);
+        // Dropping the paragraphs of released slots examines every shaped paragraph, so it waits
+        // for a pass over the records or a large batch. Until then such a paragraph is an old
+        // one like any other: the brush is part of its key, so a later claim of the slot that
+        // finds it draws it through that claim's colour.
+        let dropping: &[zgui_scene::PaintSlot] =
+            if records || released.len() as u64 >= super::brushes::SWEEP_AFTER_DROPPED {
+                &released
+            } else {
+                &[]
+            };
+        let layout = self.layout.borrow();
+        self.text
+            .release_brushes(dropping, &|key| layout.paragraph_is_active(key));
+        drop(layout);
+        super::brushes::publish(&self.text_slots, self.text.text_paints());
     }
 
     /// Writes the text colours the cascade moved through the slots that name them.
@@ -1056,6 +1107,7 @@ impl Window {
             return;
         }
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
+        super::brushes::publish(&self.text_slots, self.text.text_paints());
         self.brushes_moved |= applied.recoloured;
         let split = applied.split;
         if split.is_empty() {
@@ -1116,10 +1168,10 @@ impl Window {
     /// with no symptom at all in a document whose text colour is already the inherited one.
     fn publish_text_brushes(&mut self) {
         let table = self.text.text_paints();
-        // A frame that moved no colour and flattened no new paragraph copies nothing: the slot
+        // A frame that moved no colour and flattened no new paragraph copies nothing: the claim
         // count is what every claim moves, and the brushes themselves are only ever rewritten by
         // the step above.
-        if table.len() == self.scene.text_paints.len() && !self.brushes_moved {
+        if table.claims() == self.scene.text_paints.claims() && !self.brushes_moved {
             return;
         }
         self.brushes_moved = false;
@@ -1270,9 +1322,13 @@ impl Window {
         };
         let mut document = self.document.borrow_mut();
         let scroll = self.scroll.borrow();
+        // The matrices the standing fragments were composed against, published after the last
+        // pass. The walk puts their old ink on the device through these.
+        let drawn = self.host.placements();
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.scene.clips,
             spatial: &mut self.scene.spatial,
+            drawn: &drawn,
             device,
             scroll: scroll.composed(),
             // Written by this frame's own animation tick, which ran before the restyle. An element
@@ -1291,7 +1347,8 @@ impl Window {
             self.damage_before_layout = self.damage;
         }
         self.layout_passes += 1;
-        let moved = zgui_layout::fragment::diff::rebuild_in(
+        counter::bump(Counter::LayoutPasses);
+        let mut moved = zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,
             &mut self.hit,
@@ -1300,10 +1357,18 @@ impl Window {
             root,
             &mut self.damage,
         );
+        // A pass measures old ink on the placements the pass before it published. After a pass
+        // that moved a content space, those are the places a pixel move puts the drawn pixels, so
+        // that old ink is not moved again.
+        if self.rigid_moves.count > 0 {
+            moved.beyond.absorb_set(&moved.drawn);
+            moved.drawn = DamageSet::new();
+        }
         // Merged rather than assigned: a scroll delivered to a listener can re-render and relay
         // out inside the frame that delivered it, so the frame's answer is every pass's together.
         // The walk seeds its own `beyond` from whatever the frame had already damaged.
         self.rigid_moves = self.rigid_moves.and(moved);
+        drop(drawn);
         layout.reclaim_paragraphs();
         // The fragments name their matrices by an index into the table that was just filled, so
         // the two go to the view layer together: a box's place on the screen is only answerable
@@ -1324,6 +1389,19 @@ impl Window {
             &self.scene.spatial,
             watching.then_some(&mut self.moved_spaces),
         );
+        // A content space that moved only because its container scrolled moves nothing the
+        // accessibility tree states: every node inside a container is measured relative to it,
+        // and the container's own node was marked by the scroll.
+        if !self.moved_spaces.is_empty() {
+            let mut moved = self.moved_spaces.clone();
+            moved.sort_unstable();
+            let spatial = &self.scene.spatial;
+            self.moved_spaces.retain(|&id| {
+                spatial
+                    .outside_content(id)
+                    .is_none_or(|outside| moved.binary_search(&outside).is_ok())
+            });
+        }
     }
 
     /// Re-tests what is under a pointer that has not moved.
@@ -1400,19 +1478,22 @@ impl Window {
             // kept and drawn over them.
             shift = self.scroll_shift(viewport).ok();
             if let Some(shift) = shift {
-                // Everything this frame owes that the copy does not answer: what it inherited
-                // before any layout pass, what the passes damaged beyond their movement, and the
-                // bands the copy uncovers. What is dropped is exactly the movement's own damage,
-                // which is the whole port and is what the copy is for.
-                self.damage = self.damage_before_layout;
+                // Everything this frame owes that the copy does not answer: what it owed before
+                // any layout pass, what the passes damaged beyond their movement, what the stages
+                // after them damaged, and the bands the copy uncovers. What is dropped is exactly
+                // the movement's own damage, which is the whole port and is what the copy is for.
+                //
+                // What was owed before layout names pixels of the drawn frame: inherited damage,
+                // owed layers, and the old and new places of what the animation stage moved and
+                // recoloured, measured before layout wrote the content space. So does the old ink
+                // of what the passes removed or changed. The copy moves those pixels, so that
+                // damage moves with them.
+                self.damage = DamageSet::new();
+                shift.carry_set(&self.damage_before_layout, &mut self.damage);
+                shift.carry_set(&self.rigid_moves.drawn, &mut self.damage);
                 self.damage.absorb_set(&self.rigid_moves.beyond);
+                self.damage.absorb_set(&self.damage_after_layout);
                 shift.expose_into(&mut self.damage);
-                // An owed rectangle is where the drawing was, and the copy moves its pixels.
-                for owed in &self.layers_inherited {
-                    if let Some(carried) = shift.carry(*owed) {
-                        self.damage.absorb(carried);
-                    }
-                }
             }
             self.damage
                 .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));
@@ -1426,7 +1507,13 @@ impl Window {
                 )
             });
             mark("p.expand");
-            zgui_paint::expand(&layout, &mut self.damage, viewport, self.scale);
+            zgui_paint::expand(
+                &layout,
+                &mut self.damage,
+                viewport,
+                self.scale,
+                &self.host.placements(),
+            );
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
             // reads any of it, so a document with no effect in it pays three floats.
@@ -1436,6 +1523,20 @@ impl Window {
             // pays a bool and two clears of empty vectors.
             self.scene
                 .record_spatial_dependencies(self.check_spatial_dependencies);
+            // A cold cache rasterises its first frame's glyphs on the layout workers first. The
+            // walk takes the answers where it asks for them, so the atlas is the same as without.
+            if let Some(pool) = &self.layout_pool {
+                self.content.prefetch_glyphs(
+                    &layout,
+                    &self.text,
+                    self.raster.as_ref(),
+                    pool,
+                    zgui_paint::GlyphPrediction {
+                        scale: self.scale,
+                        subpixel: capabilities.subpixel_text && !self.translucent,
+                    },
+                );
+            }
             // No renderer is borrowed here, and none is reachable from anything the walk touches.
             // Rasterising a glyph, giving it a tile and growing the atlas to hold it are decided
             // against this window's own state; what a device is asked to do about any of it is

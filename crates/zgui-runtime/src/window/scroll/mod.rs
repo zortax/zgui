@@ -687,7 +687,7 @@ impl Window {
                 let port = layout.fragments_of_box(container_box).first().copied()?;
                 (
                     layout.fragment(target)?.border_box,
-                    layout.fragment(port)?.content_box,
+                    layout.fragment(port)?.content_box(),
                 )
             }
         };

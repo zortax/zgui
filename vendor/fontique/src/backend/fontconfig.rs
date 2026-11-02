@@ -19,7 +19,7 @@ use fontconfig_sys::statics::{LIB, LIB_RESULT};
 use fontconfig_sys::{
     FcChar8, FcCharSet, FcConfig, FcFontSet, FcLangSet, FcMatchKind, FcMatchPattern, FcPattern,
     FcResult, FcResultMatch, FcResultNoId, FcResultNoMatch, FcResultOutOfMemory,
-    FcResultTypeMismatch, FcSetSystem,
+    FcResultTypeMismatch, FcSetSystem, FcStrList,
     constants::{FC_CHARSET, FC_FAMILY, FC_FILE, FC_INDEX, FC_LANG, FC_SLANT, FC_WEIGHT, FC_WIDTH},
     ffi_dispatch,
 };
@@ -32,9 +32,19 @@ use fontconfig_sys::{
     FcPatternAddLangSet, FcPatternAddString, FcPatternCreate, FcPatternDestroy,
     FcPatternGetInteger, FcPatternGetString, FcPatternReference, FcStrFree,
 };
+// ZGUI-PATCH: what the on-disk cache stamps.
+#[cfg(not(feature = "fontconfig-dlopen"))]
+use fontconfig_sys::{
+    FcConfigGetConfigFiles, FcConfigGetFontDirs, FcGetVersion, FcStrListDone, FcStrListNext,
+};
 
 use hashbrown::{HashMap, HashSet, hash_map::Entry};
 use smallvec::SmallVec;
+
+// ZGUI-PATCH: an on-disk copy of what this backend finds.
+use std::{borrow::ToOwned, string::String, vec::Vec};
+#[path = "fontconfig_cache.rs"]
+mod cache;
 
 use crate::{
     FallbackKey, FamilyId, FamilyInfo, FontInfo, FontStyle, FontWeight, FontWidth,
@@ -437,6 +447,69 @@ struct Config {
 }
 
 impl Config {
+    // ZGUI-PATCH: one place that loads a configuration, for the eager and the lazy path.
+    fn load() -> Option<Self> {
+        crate::system_cache::CONFIG_LOADS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let config =
+            unsafe { ffi_dispatch!(feature = "fontconfig-dlopen", LIB, FcInitLoadConfig,) };
+        // fontconfig returns a new config object each time we call FcInitLoadConfig
+        let config = unsafe { Self::from_raw(config, Ownership::Application) }?;
+        unsafe {
+            ffi_dispatch!(
+                feature = "fontconfig-dlopen",
+                LIB,
+                FcConfigBuildFonts,
+                config.inner.as_ptr()
+            );
+        }
+        Some(config)
+    }
+
+    // ZGUI-PATCH: the font directories and configuration files, for the cache stamps.
+    fn reported(&self) -> cache::Reported {
+        let list = |raw: *mut FcStrList| {
+            let mut out = Vec::new();
+            if raw.is_null() {
+                return out;
+            }
+            loop {
+                let next = unsafe {
+                    ffi_dispatch!(feature = "fontconfig-dlopen", LIB, FcStrListNext, raw)
+                };
+                if next.is_null() {
+                    break;
+                }
+                out.push(
+                    unsafe { CStr::from_ptr(next as *const c_char) }
+                        .to_bytes()
+                        .to_vec(),
+                );
+            }
+            unsafe { ffi_dispatch!(feature = "fontconfig-dlopen", LIB, FcStrListDone, raw) };
+            out
+        };
+        let font_dirs = list(unsafe {
+            ffi_dispatch!(
+                feature = "fontconfig-dlopen",
+                LIB,
+                FcConfigGetFontDirs,
+                self.inner.as_ptr()
+            )
+        });
+        let config_files = list(unsafe {
+            ffi_dispatch!(
+                feature = "fontconfig-dlopen",
+                LIB,
+                FcConfigGetConfigFiles,
+                self.inner.as_ptr()
+            )
+        });
+        cache::Reported {
+            font_dirs,
+            config_files,
+        }
+    }
+
     unsafe fn from_raw(raw: *mut FcConfig, ownership: Ownership) -> Option<Self> {
         let inner = NonNull::new(raw)?;
         // Don't free this object when we are dropped.
@@ -595,6 +668,11 @@ pub(crate) struct SystemFonts {
     family_map: HashMap<FamilyId, Option<FamilyInfo>>,
     config: Option<Config>,
     script_charsets: ScriptCharSetMap,
+    // ZGUI-PATCH: the on-disk cache, when it is on and could be read or written.
+    cache: Option<cache::Live>,
+    // ZGUI-PATCH: whether `config` was loaded or tried. A collection built from the cache loads
+    // it at the first question the cache cannot answer.
+    config_tried: bool,
 }
 
 unsafe impl Send for SystemFonts {}
@@ -610,21 +688,19 @@ impl SystemFonts {
             return Self::default();
         }
 
+        // ZGUI-PATCH: a valid cache file takes the place of the work below.
+        let place = cache::Place::from_env(fontconfig_version());
+        if let Some((base, live)) = place.as_ref().and_then(cache::Place::load) {
+            return Self::from_cache(&base, live);
+        }
+
+        // ZGUI-PATCH: the cache trusts only stamps older than the start of the scan.
+        let started = std::time::SystemTime::now();
+
         // Initialize the config
-        let config =
-            unsafe { ffi_dispatch!(feature = "fontconfig-dlopen", LIB, FcInitLoadConfig,) };
-        // fontconfig returns a new config object each time we call FcInitLoadConfig
-        let Some(config) = (unsafe { Config::from_raw(config, Ownership::Application) }) else {
+        let Some(config) = Config::load() else {
             return Self::default();
         };
-        unsafe {
-            ffi_dispatch!(
-                feature = "fontconfig-dlopen",
-                LIB,
-                FcConfigBuildFonts,
-                config.inner.as_ptr()
-            );
-        }
 
         // Get all the fonts.
 
@@ -652,15 +728,27 @@ impl SystemFonts {
             return Self::default();
         };
 
+        // ZGUI-PATCH: what the cache file keeps, collected only when the cache is on.
+        let mut base = place.as_ref().map(|_| cache::Base {
+            names: Vec::new(),
+            generics: Vec::new(),
+        });
+        let mut seen_names = HashSet::<Vec<String>>::new();
+
         // Populate the family name map.
         let mut name_map = FamilyNameMap::default();
         for pattern in font_set.iter() {
             let mut i = 0;
 
             let mut first_name_id = None;
+            // ZGUI-PATCH: this face's names, for the cache.
+            let mut names = Vec::new();
             // For fonts with more than one family name, the second one is
             // *often* (but not always) an RBIZ name.
             while let Ok(name) = pattern.get_string(FC_FAMILY, i) {
+                if base.is_some() {
+                    names.push(String::from(name.as_ref()));
+                }
                 if i == 0 {
                     // First name
                     first_name_id = Some(name_map.get_or_insert(&name).id());
@@ -668,6 +756,12 @@ impl SystemFonts {
                     name_map.add_alias(first_name_id, &name);
                 }
                 i += 1;
+            }
+            // ZGUI-PATCH: a list seen before adds nothing to the map, so the cache keeps it once.
+            if let Some(base) = &mut base {
+                if !names.is_empty() && seen_names.insert(names.clone()) {
+                    base.names.push(names);
+                }
             }
         }
 
@@ -688,6 +782,8 @@ impl SystemFonts {
             // pattern. Keep track of which ones have already been added to the
             // list.
             let mut added_families = HashSet::new();
+            // ZGUI-PATCH: the names that resolved, for the cache.
+            let mut added_names = Vec::new();
 
             generic_families.append(
                 generic_family,
@@ -705,10 +801,21 @@ impl SystemFonts {
                         return None;
                     }
 
+                    if base.is_some() {
+                        added_names.push(String::from(name.as_ref()));
+                    }
                     Some(family_name.id())
                 }),
             );
+            if let Some(base) = &mut base {
+                base.generics.push(added_names);
+            }
         }
+
+        // ZGUI-PATCH: write the cache file for the next process.
+        let cache = place
+            .zip(base)
+            .and_then(|(place, base)| place.store(&base, &config.reported(), started));
 
         Self {
             name_map: Arc::new(name_map),
@@ -717,7 +824,54 @@ impl SystemFonts {
             family_map: HashMap::default(),
             config: Some(config),
             script_charsets: ScriptCharSetMap::default(),
+            cache,
+            config_tried: true,
         }
+    }
+
+    // ZGUI-PATCH: the collection from a cache file, with no fontconfig work.
+    fn from_cache(base: &cache::Base, live: cache::Live) -> Self {
+        // The same calls in the same order as `new` makes, so the map is the same.
+        let mut name_map = FamilyNameMap::default();
+        for names in &base.names {
+            let mut names = names.iter();
+            let Some(first) = names.next() else {
+                continue;
+            };
+            let first_name_id = name_map.get_or_insert(first).id();
+            for name in names {
+                name_map.add_alias(first_name_id, name);
+            }
+        }
+        let mut generic_families = GenericFamilyMap::default();
+        for ((generic_family, _), names) in GENERIC_FAMILY_NAMES.iter().zip(&base.generics) {
+            generic_families.append(
+                *generic_family,
+                names
+                    .iter()
+                    .filter_map(|name| name_map.get(name).map(FamilyName::id)),
+            );
+        }
+        Self {
+            name_map: Arc::new(name_map),
+            generic_families: Arc::new(generic_families),
+            source_cache: SourcePathMap::default(),
+            family_map: HashMap::default(),
+            config: None,
+            script_charsets: ScriptCharSetMap::default(),
+            cache: Some(live),
+            config_tried: false,
+        }
+    }
+
+    // ZGUI-PATCH: loads the configuration the first time a question needs it. Only a collection
+    // built from the cache defers it; any other collection without one has no library or config.
+    fn ensure_config(&mut self) -> bool {
+        if self.config.is_none() && self.cache.is_some() && !self.config_tried {
+            self.config_tried = true;
+            self.config = Config::load();
+        }
+        self.config.is_some()
     }
 
     pub(crate) fn family(&mut self, id: FamilyId) -> Option<FamilyInfo> {
@@ -733,8 +887,34 @@ impl SystemFonts {
     }
 
     pub(crate) fn fallback(&mut self, key: impl Into<FallbackKey>) -> Option<FamilyId> {
-        let config = self.config.as_ref()?;
         let key: FallbackKey = key.into();
+        // ZGUI-PATCH: the cache answers a question an earlier process asked. Otherwise the answer
+        // goes to the cache, unless the question failed for a reason that can change.
+        let script = key.script().to_bytes();
+        let family_name = match self
+            .cache
+            .as_ref()
+            .and_then(|cache| cache.fallback(script, key.locale_str()))
+        {
+            Some(name) => name.map(String::from),
+            None => {
+                let name = self.fallback_uncached(&key)?;
+                if let Some(cache) = &mut self.cache {
+                    cache.add_fallback(script, key.locale_str(), name.as_deref());
+                }
+                name
+            }
+        };
+        self.name_map.get(&family_name?).map(FamilyName::id)
+    }
+
+    // ZGUI-PATCH: the fontconfig half of `fallback`. `None` when the question failed for a
+    // reason that can change; `Some(None)` when fontconfig has no match.
+    fn fallback_uncached(&mut self, key: &FallbackKey) -> Option<Option<String>> {
+        if !self.ensure_config() {
+            return None;
+        }
+        let config = self.config.as_ref()?;
 
         let mut pattern = Pattern::new()?;
 
@@ -755,17 +935,78 @@ impl SystemFonts {
         config.substitute(&mut pattern, FcMatchPattern);
 
         // This calls FcFontRenderPrepare for us.
-        let font = config.font_match(&pattern).ok()?;
+        let font = match config.font_match(&pattern) {
+            Ok(font) => font,
+            Err(MatchErr::NoMatch) => return Some(None),
+            Err(_) => return None,
+        };
 
-        let family_name = font.get_string(FC_FAMILY, 0).ok()?;
-        self.name_map.get(&family_name).map(FamilyName::id)
+        Some(font.get_string(FC_FAMILY, 0).ok().map(String::from))
     }
 }
 
 impl SystemFonts {
     fn family_uncached(&mut self, id: FamilyId) -> Option<FamilyInfo> {
-        let config = self.config.as_ref()?;
         let name = self.name_map.get_by_id(id).cloned()?;
+
+        // ZGUI-PATCH: the faces come from the cache when an earlier process resolved this
+        // family. Otherwise fontconfig resolves it and the cache keeps the faces.
+        let faces = match self
+            .cache
+            .as_ref()
+            .and_then(|cache| cache.family(name.name()))
+        {
+            Some(faces) => faces.to_vec(),
+            None => {
+                let faces = self.family_faces(&name)?;
+                if let Some(cache) = &mut self.cache {
+                    cache.add_family(name.name(), &faces);
+                }
+                faces
+            }
+        };
+
+        let mut font_infos = SmallVec::<[FontInfo; 4]>::new();
+        for face in faces {
+            if let Some(font_info) = (|| {
+                let source_info = self.source_cache.get_or_insert(Path::new(&face.path));
+
+                let weight = face
+                    .weight
+                    .map(FontWeight::from_fontconfig)
+                    .unwrap_or_default();
+                let width = face
+                    .width
+                    .map(FontWidth::from_fontconfig)
+                    .unwrap_or_default();
+                let style = face
+                    .slant
+                    .map(FontStyle::from_fontconfig)
+                    .unwrap_or_default();
+
+                let mut font_info = FontInfo::from_source(source_info, face.index)?;
+                // TODO(valadaptive): does this do anything anymore?
+                font_info.maybe_override_attributes(width, style, weight);
+                Some(font_info)
+            })() {
+                font_infos.push(font_info);
+            }
+        }
+
+        if font_infos.is_empty() {
+            return None;
+        }
+
+        Some(FamilyInfo::new(name.clone(), font_infos))
+    }
+
+    // ZGUI-PATCH: the fontconfig half of `family_uncached`: the faces of one family, before any
+    // font file is read.
+    fn family_faces(&mut self, name: &FamilyName) -> Option<Vec<cache::RawFace>> {
+        if !self.ensure_config() {
+            return None;
+        }
+        let config = self.config.as_ref()?;
 
         // Match by family name.
         let mut pattern = Pattern::new()?;
@@ -773,7 +1014,7 @@ impl SystemFonts {
         config.substitute(&mut pattern, FcMatchPattern);
 
         let fc_fonts = config.font_sort(&pattern, false).ok()?;
-        let mut font_infos = SmallVec::<[FontInfo; 4]>::new();
+        let mut faces = Vec::new();
         for font in fc_fonts.iter() {
             let Some(font) = config.font_render_prepare(&pattern, &font) else {
                 continue;
@@ -789,41 +1030,25 @@ impl SystemFonts {
                 break;
             }
 
-            if let Some(font_info) = (|| {
-                let path = font.get_c_string(FC_FILE, 0).ok()?;
-                // This part is Unix-specific. Sorry, Windows fontconfig user.
-                let path = Path::new(OsStr::from_bytes(path.to_bytes()));
-                let source_info = self.source_cache.get_or_insert(path);
-
-                let weight = font
-                    .get_int(FC_WEIGHT, 0)
-                    .map(FontWeight::from_fontconfig)
-                    .unwrap_or_default();
-                let width = font
-                    .get_int(FC_WIDTH, 0)
-                    .map(FontWidth::from_fontconfig)
-                    .unwrap_or_default();
-                let style = font
-                    .get_int(FC_SLANT, 0)
-                    .map(FontStyle::from_fontconfig)
-                    .unwrap_or_default();
-                let index = font.get_int(FC_INDEX, 0).map_or(0, |idx| idx.max(0) as u32);
-
-                let mut font_info = FontInfo::from_source(source_info, index)?;
-                // TODO(valadaptive): does this do anything anymore?
-                font_info.maybe_override_attributes(width, style, weight);
-                Some(font_info)
-            })() {
-                font_infos.push(font_info);
-            }
+            let Ok(path) = font.get_c_string(FC_FILE, 0) else {
+                continue;
+            };
+            // This part is Unix-specific. Sorry, Windows fontconfig user.
+            faces.push(cache::RawFace {
+                path: OsStr::from_bytes(path.to_bytes()).to_owned(),
+                index: font.get_int(FC_INDEX, 0).map_or(0, |idx| idx.max(0) as u32),
+                weight: font.get_int(FC_WEIGHT, 0).ok(),
+                width: font.get_int(FC_WIDTH, 0).ok(),
+                slant: font.get_int(FC_SLANT, 0).ok(),
+            });
         }
-
-        if font_infos.is_empty() {
-            return None;
-        }
-
-        Some(FamilyInfo::new(name.clone(), font_infos))
+        Some(faces)
     }
+}
+
+// ZGUI-PATCH: the library version, part of the cache key.
+fn fontconfig_version() -> i32 {
+    unsafe { ffi_dispatch!(feature = "fontconfig-dlopen", LIB, FcGetVersion,) }
 }
 
 const GENERIC_FAMILY_NAMES: &[(GenericFamily, &CStr)] = &[

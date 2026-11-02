@@ -1,5 +1,7 @@
 //! Finishing a frame: planning the vector passes and sorting the remap lists into draw order.
 
+use std::borrow::Cow;
+
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_profile::{Counter, counter};
@@ -7,7 +9,7 @@ use zgui_profile::{Counter, counter};
 use crate::pass::ScenePassPlan;
 use crate::pass::coalesce::{self, Event, Input};
 use crate::pass::overlap::Overlap;
-use crate::prim::PrimitiveKind;
+use crate::prim::{MarkItem, PrimitiveKind};
 use crate::scene::Scene;
 use crate::spatial::{Placements, SpatialId};
 
@@ -26,6 +28,7 @@ impl Scene {
         // Before the sort, because the waiting list is indexed into the arrays and the sort key's
         // first component after draw order is the texture, which a placeholder does not have.
         self.refuse_unresolved();
+        self.keep_placements();
         // Before the sort as well: the sweep is over the emission stream, and the log's indices
         // are the arrays' own for the whole of the frame — nothing rewrites them.
         self.plan_vector_passes(damage, overlap);
@@ -42,16 +45,50 @@ impl Scene {
     /// [`Scene::finish`] plans them against the frame's damage. A renderer that redraws more than
     /// that plans them again here, against what it redraws.
     pub fn plan_marks(&self, damage: &DamageSet, plan: &mut crate::pass::MarkPlan) {
+        let placements = self.placements();
         crate::pass::marks::plan(
             crate::pass::marks::Input {
                 ops: &self.ops,
                 primitives: &self.primitives,
                 spatial: &self.spatial,
+                placements: &placements,
                 viewport: self.viewport,
                 damage,
             },
             plan,
         );
+    }
+
+    /// Every slot's matrix under the tree as it stands.
+    ///
+    /// [`Scene::finish`] resolves them and keeps them until the tree is next written, across frames
+    /// too, so a renderer reading them after the finish borrows that copy. After a write this
+    /// resolves them again.
+    pub fn placements(&self) -> Cow<'_, Placements> {
+        if self.kept_stamp == self.spatial.writes() {
+            debug_assert!(
+                self.kept_placements.same_as(&Placements::of(&self.spatial)),
+                "the kept placements are stale at stamp {}",
+                self.kept_stamp,
+            );
+            Cow::Borrowed(&self.kept_placements)
+        } else {
+            Cow::Owned(Placements::of(&self.spatial))
+        }
+    }
+
+    /// Resolves every slot's matrix again if the tree was written since they were last resolved.
+    ///
+    /// Only for a frame with a reader: vector items or union marks. A frame of quads and text
+    /// keeps the old copy, and [`Scene::placements`] resolves on demand.
+    fn keep_placements(&mut self) {
+        let read = !self.primitives.vectors.is_empty()
+            || self.primitives.marks.iter().any(MarkItem::is_union);
+        let stamp = self.spatial.writes();
+        if read && self.kept_stamp != stamp {
+            self.kept_placements.take(&self.spatial);
+            self.kept_stamp = stamp;
+        }
     }
 
     /// Writes this frame's vector passes into `plan` with none of them cut to the damage.
@@ -178,10 +215,15 @@ impl Scene {
         // Every rectangle is compared on the device. A primitive records its ink in the space it
         // is drawn under, and a vector item's device ink was taken when it was emitted, which a
         // replay carries past a later move of an enclosing space. So both are placed here, under
-        // the matrices this frame draws with.
-        let placements = Placements::of(&self.spatial);
+        // the matrices this frame draws with, which `finish_with` resolved before this.
+        debug_assert_eq!(
+            self.kept_stamp,
+            self.spatial.writes(),
+            "a frame with vectors keeps placements"
+        );
+        let placements = &self.kept_placements;
         for item in &mut self.primitives.vectors {
-            if let Some(ink) = placed(&placements, item.transform, item.local_ink) {
+            if let Some(ink) = placed(placements, item.transform, item.local_ink) {
                 item.ink = ink;
             }
         }
@@ -197,7 +239,7 @@ impl Scene {
                 PrimitiveKind::GroupEnd => Event::Boundary { opens: false },
                 _ => {
                     let ink = self.ink_of(*op);
-                    Event::Occluder(placed(&placements, self.space_of_op(*op), ink).unwrap_or(ink))
+                    Event::Occluder(placed(placements, self.space_of_op(*op), ink).unwrap_or(ink))
                 }
             })
             .collect();

@@ -161,7 +161,7 @@ fn margin_space(item: MarkItem) -> f32 {
 fn to_target(local: vec2<f32>, transform: u32, shift: vec2<f32>) -> vec4<f32> {
     let world = spatial[transform].matrix * vec4<f32>(local, 0.0, 1.0);
     let device = world.xy / world.w + shift;
-    let texel = device * globals.viewport.zw;
+    let texel = (device - globals.origin.xy) * globals.viewport.zw;
     return vec4<f32>(
         texel.x / globals.viewport.x * 2.0 - 1.0,
         1.0 - texel.y / globals.viewport.y * 2.0,

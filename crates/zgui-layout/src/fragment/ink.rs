@@ -12,14 +12,18 @@ use zgui_css::values::image::ImageValue;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
 use zgui_scene::{Filter, read_extent};
 
+use crate::fragment::custom_properties::CustomProperties;
 use crate::fragment::filter;
 
 /// Everything a box paints, starting from its border box.
 ///
 /// The three contributions are independent and each is a union rather than a maximum: an outline
 /// can reach further than a shadow on one side and less on another.
+///
+/// `declared` is the set of framework properties `style` declares, or [`CustomProperties::ALL`].
 pub fn of(
     style: &ComputedStyle,
+    declared: CustomProperties,
     border_box: Rect<DevicePx, Device>,
     scale: f32,
 ) -> Rect<DevicePx, Device> {
@@ -32,7 +36,7 @@ pub fn of(
     }
     // A filter is applied to everything the box already painted, so it spreads what has been
     // accumulated so far rather than the border box alone.
-    let filters = filter::own(style, scale);
+    let filters = filter::own_with(style, declared, scale);
     if !filters.is_empty() {
         ink = bleed(ink, &filters);
     }
@@ -140,7 +144,7 @@ pub fn of_inline(
     ink: crate::inline::strut::Extents,
     scale: f32,
 ) -> Rect<DevicePx, Device> {
-    let mut reach = of(style, rect, scale);
+    let mut reach = of(style, CustomProperties::ALL, rect, scale);
     // A decoration band is a few strokes tall about its line, and its lines lie inside the content
     // area; three device pixels either side cover the band.
     let band = DevicePx((3.0 * scale).ceil());
@@ -266,15 +270,20 @@ fn outline_extent(
 /// anything whose painting depends on the size elsewhere — an image or a gradient, a shadow, an
 /// outline, a filter, a blend, a framework shape or shader, or content that is not the box's own
 /// background. A scroll container's bars are pieces of their own and owe their own damage.
+///
+/// `declared` is the set of framework properties `style` declares, or [`CustomProperties::ALL`].
 pub fn edge_reach(
     style: &ComputedStyle,
+    declared: CustomProperties,
     painted: crate::node::kind::PaintedContent,
     was: Rect<DevicePx, Device>,
     is: Rect<DevicePx, Device>,
     border: Edges<DevicePx>,
     scale: f32,
 ) -> Option<f32> {
-    if painted != crate::node::kind::PaintedContent::Box || filter::reads_outside(style, scale) {
+    if painted != crate::node::kind::PaintedContent::Box
+        || filter::reads_outside(style, declared, scale)
+    {
         return None;
     }
     let background = style.get_background();
@@ -289,9 +298,10 @@ pub fn edge_reach(
         && effects.mix_blend_mode == zgui_css::values::effect::MixBlendModeValue::Normal
         && (outline.outline_style == OutlineStyleValue::none()
             || outline.outline_width.0.to_f32_px() == 0.0)
-        && zgui_css::values::custom::WILDCARD_DECLARERS
-            .iter()
-            .all(|name| zgui_css::values::custom::text(style, name).is_none());
+        && (!declared.any_effect()
+            || zgui_css::values::custom::WILDCARD_PROPERTIES
+                .iter()
+                .all(|property| property.text(style).is_none()));
     if !plain {
         return None;
     }

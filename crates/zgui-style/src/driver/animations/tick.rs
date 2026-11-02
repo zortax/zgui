@@ -248,6 +248,11 @@ pub(crate) fn advance(
     });
     drop(sets);
 
+    for row in &folded {
+        if row.crossed {
+            animations.note_crossed(row.index);
+        }
+    }
     report.elements = folded
         .into_iter()
         .map(|row| {

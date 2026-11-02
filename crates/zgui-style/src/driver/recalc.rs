@@ -428,8 +428,27 @@ fn compute_style<'doc>(
         data.set_restyled();
     }
 
+    // A frame that only advances the clock writes the animated values into the held style.
+    if let RestyleKind::CascadeWithReplacements(replacements) = kind
+        && let Some(settling) = traversal.settling
+    {
+        let old_primary = data.styles.primary.clone();
+        if let Some(hint) = crate::driver::animations::direct::restyle(
+            context,
+            element,
+            data,
+            replacements,
+            settling,
+        ) {
+            return children_hint(old_primary, data, hint, candidates);
+        }
+    }
+
     let mut important_rules_changed = false;
-    let new_styles = match kind {
+    // Styles the engine's sharing cache gave: the element they came from went through the shared
+    // styles already.
+    let mut settled = false;
+    let mut new_styles = match kind {
         RestyleKind::MatchAndCascade => {
             debug_assert!(
                 !context.shared.traversal_flags.for_animation_only() || !data.has_styles(),
@@ -451,6 +470,7 @@ fn compute_style<'doc>(
             match target.share_style_if_possible(context) {
                 Some(shared_styles) => {
                     context.thread_local.statistics.styles_shared += 1;
+                    settled = true;
                     shared_styles
                 }
                 None => {
@@ -510,6 +530,18 @@ fn compute_style<'doc>(
         }
     };
 
+    // An element styled for the first time whose result equals a style an earlier element was
+    // given takes that style's groups, so the two hold one allocation of each group in place of
+    // two.
+    if !settled && !data.has_styles() && !context.shared.traversal_flags.for_animation_only() {
+        let shared = traversal
+            .shared
+            .share(element, context.shared, &mut new_styles);
+        if shared != 0 {
+            counter::add(Counter::StylesShared, shared as u64);
+        }
+    }
+
     // Kept across the call that replaces it: the children's hint is decided by what they can
     // observe of the change, which is the difference between the style they inherited from and
     // the one they will.
@@ -539,6 +571,17 @@ fn compute_style<'doc>(
     {
         hint |= RestyleHint::RECASCADE_SELF;
     }
+    children_hint(old_primary, data, hint, candidates)
+}
+
+/// The hint the children take from an element restyled from `old_primary`, narrowed to what they
+/// can observe, and the custom properties its inherited map changed by.
+fn children_hint(
+    old_primary: Option<ServoArc<ComputedValues>>,
+    data: &ElementData,
+    hint: RestyleHint,
+    candidates: Option<&[String]>,
+) -> (RestyleHint, Option<Arc<ChangedNames>>) {
     match (old_primary, data.styles.get_primary()) {
         (Some(old), Some(new)) if !engine_hints() => {
             let narrowed = narrowed_children_hint(&old, new, hint);

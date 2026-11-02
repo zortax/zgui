@@ -7,6 +7,7 @@
 
 use zgui_bits::Dirty;
 use zgui_dom::dirty::{propagate, walk};
+use zgui_dom::side::AnimOverride;
 use zgui_dom::{Document, NodeIndex, NodeKey};
 
 /// Clears the animating obligation from the whole document.
@@ -25,15 +26,18 @@ pub fn animating(document: &mut Document) {
 }
 
 /// Drops one element's cheap-path override and asks for the frame that draws it without.
-pub fn override_on(document: &mut Document, index: NodeIndex) {
-    let Some(node) = document.store().try_core(index).map(|_| index) else {
-        return;
-    };
+///
+/// Returns the override it dropped, if the element had one.
+pub fn override_on(document: &mut Document, index: NodeIndex) -> Option<Box<AnimOverride>> {
+    let node = document.store().try_core(index).map(|_| index)?;
     let key = document.store().key_of(node);
-    document.store_mut().columns_mut().anim.clear(key);
+    let column = &mut document.store_mut().columns_mut().anim;
+    let was = column.get(key).cloned().flatten();
+    column.clear(key);
     // The value on the screen is the last one the animation wrote, and the style it is drawn from
     // has changed to something else. Without this the element keeps the animation's final frame.
     propagate::mark(document.store_mut(), index, Dirty::REPAINT | Dirty::REHIT);
+    was
 }
 
 /// Asks for the frame that composes one element's box against its own style again.

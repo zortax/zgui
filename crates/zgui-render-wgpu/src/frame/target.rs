@@ -1,14 +1,16 @@
 //! Which target a planned pass draws into.
 
+use zgui_geom::{Device, Point};
+
 use crate::target::group_pool::GroupSlot;
 use crate::target::scale::TargetScale;
 
 /// Where a pass writes.
 ///
 /// A frame writes into the composed target and into targets lent by the pool, and every one of
-/// them holds the same device-pixel coordinates: a quad drawn inside an isolated group lands at
-/// exactly the position it would have landed at without the isolation. What differs is only how
-/// many texels a device pixel covers, which is why the resolution travels with the reference.
+/// them is addressed in device pixels: a quad drawn inside an isolated group lands at exactly the
+/// position it would have landed at without the isolation. A target maps a device pixel to a
+/// texel through its resolution and its origin, so both travel with the reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetRef {
     /// The persistent target the frame is composed into.
@@ -25,6 +27,17 @@ impl TargetRef {
         match self {
             Self::Composed | Self::MarksPage(_) => TargetScale::Full,
             Self::Pool(slot) => slot.scale(),
+        }
+    }
+
+    /// The device pixel this target's first texel holds.
+    ///
+    /// The composed target and a bin page start at the surface origin. A pool target starts
+    /// wherever its lease says.
+    pub fn origin(self) -> Point<i32, Device> {
+        match self {
+            Self::Composed | Self::MarksPage(_) => Point::ORIGIN,
+            Self::Pool(slot) => slot.origin(),
         }
     }
 

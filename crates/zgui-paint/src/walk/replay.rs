@@ -123,6 +123,10 @@ pub struct Painted {
     /// The lowered style is *shared* and does not move while an animation runs, so without this the
     /// first frame of every animation is replayed for the whole of its length: the animation ticks,
     /// the damage is right, and the picture does not change.
+    ///
+    /// A box whose animated colours are drawn through slots it owns holds which slots instead, see
+    /// [`OwnedPaints::signature`](crate::OwnedPaints::signature). The animation stage rewrites
+    /// those slots, so the replay draws the colour of this frame.
     pub anim: u64,
     /// The bits of the alpha folded into every colour this fragment is emitted with.
     ///
@@ -573,6 +577,16 @@ impl PaintCache {
             "a replayed range's clip or transform no longer resolves to what it was recorded with"
         );
         Reuse::Replay(offset)
+    }
+
+    /// The animation signature `fragment`'s record was encoded under, if it has a record.
+    ///
+    /// What the animation stage reads to decide whether rewriting a box's owned slots is all a
+    /// frame owes the box: true only while every record of the box names those slots.
+    pub fn anim_signature(&self, fragment: FragKey) -> Option<u64> {
+        self.records
+            .get(&fragment)
+            .map(|record| record.painted.anim)
     }
 
     /// The number of the tiled source `fragment`'s record draws, if it draws one.

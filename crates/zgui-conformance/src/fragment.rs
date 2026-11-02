@@ -201,8 +201,8 @@ fn write_fragment(
     }
     out.push_str(label(fragment.kind));
     let _ = write!(out, " border={}", rect(fragment.border_box));
-    if fragment.content_box != fragment.border_box {
-        let _ = write!(out, " content={}", rect(fragment.content_box));
+    if fragment.content_box() != fragment.border_box {
+        let _ = write!(out, " content={}", rect(fragment.content_box()));
     }
     if let Some(text) = text.filter(|text| !text.is_empty()) {
         let _ = write!(out, " text={text:?}");
@@ -212,14 +212,14 @@ fn write_fragment(
             out,
             " padding={} ink={} subtree-ink={} flags={} clip={} transform={:?} stacking={:?} \
              scroll={:?} disjoint={}",
-            rect(fragment.padding_box),
+            rect(fragment.padding_box()),
             rect(fragment.ink),
             rect(fragment.subtree_ink),
             fragment.flags.bits(),
             fragment.clip.0,
             fragment.transform.map(zgui_scene::SpatialId::index),
-            fragment.stacking.map(|id| id.0),
-            fragment.scroll.map(|id| id.0),
+            fragment.stacking().map(|id| id.0),
+            fragment.scroll().map(|id| id.0),
             fragment.subtree_disjoint,
         );
     }

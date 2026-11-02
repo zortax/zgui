@@ -10,7 +10,7 @@
 //! cargo run -p zgui-bench --release -- scenarios
 //! ```
 //!
-//! runs the five end-to-end scenarios, stores the run under `docs/perf/runs/`, regenerates
+//! runs the seven end-to-end scenarios, stores the run under `docs/perf/runs/`, regenerates
 //! `docs/performance.md`, and exits non-zero naming every number that left its band. That is what
 //! `cargo xtask perf` runs and what the definition of done runs in turn.
 //!
@@ -45,7 +45,7 @@
 //! | [`input`] | one event, as the platform would have delivered it |
 //! | [`drive`] | opening a window, and running one phase at every document size |
 //! | [`phase`] | the phases themselves, in three groups |
-//! | [`scenario`] | the five end-to-end scenarios and the ratchet around them |
+//! | [`scenario`] | the seven end-to-end scenarios and the ratchet around them |
 //! | [`script`] | the 42-step gallery script the differentials are driven by |
 //! | [`stats`] | what a ledger of interactions reports |
 //! | [`verify`] | the transcript and picture differentials |
@@ -78,6 +78,7 @@ mod shell;
 mod draw;
 mod drive;
 mod gallery;
+mod gpu_time;
 mod growth;
 mod input;
 mod inspect;

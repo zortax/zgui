@@ -250,3 +250,77 @@ fn a_full_atlas_makes_room_rather_than_dropping_the_glyph() {
         "the cold generation is freed and the glyph placed, rather than dropped"
     );
 }
+
+#[test]
+fn a_prefetched_answer_takes_the_tile_the_call_would_have_taken() {
+    // The prefetch replaces the call to the rasteriser and nothing else: the walk still allocates
+    // each tile in the order it asks, so the atlas ends up the same as without one.
+    let keys = [key_for(1), key_for(2), key_for(3)];
+    let serial_raster = Counting::new(Size::new(5, 9));
+    let mut serial_atlas = Atlas::new(AtlasLimits::default());
+    let mut serial = GlyphCache::default();
+    let expected: Vec<_> = keys
+        .iter()
+        .map(|key| tile(serial.tile_for(&mut serial_atlas, &serial_raster, key)))
+        .map(|held| held.map(|held| (held.tile, held.key, held.placement, held.size)))
+        .collect();
+
+    let ahead = Counting::new(Size::new(5, 9));
+    let raster = Counting::new(Size::new(5, 9));
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    let mut cache = GlyphCache::default();
+    // Answered in another order than the walk asks, and with one key the walk never asks for.
+    cache.prefetch(
+        [key_for(3), key_for(9), key_for(1), key_for(2)]
+            .into_iter()
+            .map(|key| (key, ahead.raster(&key))),
+    );
+    let placed: Vec<_> = keys
+        .iter()
+        .map(|key| tile(cache.tile_for(&mut atlas, &raster, key)))
+        .map(|held| held.map(|held| (held.tile, held.key, held.placement, held.size)))
+        .collect();
+
+    assert_eq!(placed, expected);
+    assert_eq!(
+        raster.calls.load(Ordering::Relaxed),
+        0,
+        "the walk asked the rasteriser for a key it had an answer for"
+    );
+    assert_eq!(
+        cache.prefetched.len(),
+        1,
+        "the unasked answer is still held"
+    );
+    cache.drop_prefetched();
+    assert!(cache.prefetched.is_empty());
+    assert_eq!(
+        cache.len(),
+        3,
+        "dropping the answers forgets no placed glyph"
+    );
+}
+
+#[test]
+fn a_prefetch_reads_the_tree_once_per_empty_cache() {
+    let mut atlas = Atlas::new(AtlasLimits::default());
+    let raster = Counting::new(Size::new(5, 9));
+    let mut cache = GlyphCache::default();
+
+    assert!(cache.take_prefetch_turn(), "an empty cache prefetches");
+    assert!(
+        !cache.take_prefetch_turn(),
+        "a cache the walk left empty read every line again"
+    );
+    cache.clear();
+    assert!(
+        cache.take_prefetch_turn(),
+        "an emptied cache prefetches again"
+    );
+    cache.clear();
+    assert!(tile(cache.tile_for(&mut atlas, &raster, &key())).is_some());
+    assert!(
+        !cache.take_prefetch_turn(),
+        "a cache holding a glyph prefetched"
+    );
+}

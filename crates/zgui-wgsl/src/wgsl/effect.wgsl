@@ -40,6 +40,8 @@ struct ShaderInput {
 struct FilterSource {
     // The device position the element's own origin sits at.
     origin: vec2<f32>,
+    // The device position the source's first texel holds.
+    source_origin: vec2<f32>,
     // Texels of the source per device pixel.
     scale: f32,
     // The source's extent, in texels.
@@ -61,7 +63,7 @@ fn source_at(
     region: FilterSource,
     point: vec2<f32>,
 ) -> vec4<f32> {
-    let texel = (region.origin + point) * region.scale;
+    let texel = (region.origin + point - region.source_origin) * region.scale;
     let low = region.low + vec2<f32>(0.5);
     let clamped = clamp(texel, low, max(region.high - vec2<f32>(0.5), low));
     return textureSampleLevel(beneath, beneath_sampler, clamped / region.extent, 0.0);

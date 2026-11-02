@@ -87,10 +87,11 @@ pub(crate) fn refresh(store: &mut LayoutStore, mut key: BoxKey) {
             return;
         }
         let bit = of_children(store, &node.children);
-        let node = store.get_mut(key).expect("a live box");
         if node.atomic_percent_block == bit {
             return;
         }
+        // Written only when the bit moves: a write clears the box's paint-order memo.
+        let node = store.get_mut(key).expect("a live box");
         node.atomic_percent_block = bit;
         match node.parent {
             Some(parent) if node.parent_fc == FormattingContext::Inline => key = parent,

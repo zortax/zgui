@@ -335,6 +335,42 @@ impl zgui::render::Renderer for Listed {
     fn vector_status(&self) -> zgui::render::VectorStatus {
         self.inner.vector_status()
     }
+
+    fn shifts_composed_pixels(&self) -> bool {
+        self.inner.shifts_composed_pixels()
+    }
+
+    fn composed_survives_configure(&self) -> bool {
+        self.inner.composed_survives_configure()
+    }
+
+    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
+        self.inner.shift_composed(shift);
+    }
+
+    fn target_pool(&self) -> zgui::render::TargetPoolReport {
+        self.inner.target_pool()
+    }
+
+    fn release_cached_targets(&mut self) -> u64 {
+        self.inner.release_cached_targets()
+    }
+
+    fn release_idle_resources(&mut self) -> u64 {
+        self.inner.release_idle_resources()
+    }
+
+    fn acquire_block(&self) -> core::time::Duration {
+        self.inner.acquire_block()
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        self.inner.as_any_mut()
+    }
+
+    fn as_any(&self) -> Option<&dyn core::any::Any> {
+        self.inner.as_any()
+    }
 }
 
 /// What one comparison found.

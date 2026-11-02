@@ -274,7 +274,7 @@ fn a_click_on_a_bullet_places_the_caret_in_the_value() {
     let content: &'static str = Box::leak(value.clone().into_boxed_str());
     let mut script = scripted(content);
     assert_eq!(script.shown(), BULLET.repeat(3));
-    let line = support::first_line_box(&script.harness.app().windows()[0]);
+    let line = support::first_line_on_device(&script.harness.app().windows()[0]);
     let y = line.origin.y.0 + line.size.height.0 / 2.0;
 
     script.point(PointerAction::Pressed, line.origin.x.0 + ADVANCE * 2.6, y);

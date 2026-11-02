@@ -8,10 +8,10 @@
 //! the line box's own space, which is the space everything downstream places a line in — and it is
 //! the only conversion here, because the engine is already working in device pixels.
 
-use zgui_text::{FontSource, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRun};
+use zgui_text::{Brush, FontSource, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRun};
 
 use crate::shape::brush::SlotBrush;
-use crate::shape::engine::ShapedLayout;
+use crate::shape::engine::{Form, ShapedLayout};
 use crate::system::FontSystem;
 
 /// Visits the style-uniform runs of one line, positioned against the line box's top-left corner.
@@ -21,7 +21,11 @@ pub(crate) fn visit_line(
     line: u16,
     visit: &mut dyn FnMut(ShapedRun<'_>),
 ) {
-    let Some(line) = shaped.layout.get(line as usize) else {
+    let layout = match &shaped.form {
+        Form::Live(live) => &live.layout,
+        Form::Frozen(frozen) => return frozen.visit_line(fonts, line, visit),
+    };
+    let Some(line) = layout.get(line as usize) else {
         return;
     };
     let metrics = *line.metrics();
@@ -60,23 +64,50 @@ fn described<'a>(
 ) -> ShapedRun<'a> {
     let text = run.run();
     let text_start = text.text_range().start.saturating_sub(prefix);
-    let face = fonts.face_for(text.font());
     let synthesis = text.synthesis();
+    run_of(
+        fonts,
+        text.font(),
+        text.normalized_coords(),
+        text.font_size(),
+        synthesis.embolden(),
+        synthesis.skew().unwrap_or(0.0),
+        run.style().brush.0,
+        glyphs,
+        u32::try_from(text_start).unwrap_or(u32::MAX),
+    )
+}
+
+/// One run of glyphs in one face, described the way a rasteriser needs it.
+///
+/// `embolden` and `skew` are the engine's synthesis. `text_start` is in the caller's string.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fields of one engine run, read once"
+)]
+pub(crate) fn run_of<'a>(
+    fonts: &FontSystem,
+    font: &parley::FontData,
+    coords: &[i16],
+    size: f32,
+    embolden: bool,
+    skew: f32,
+    brush: Brush,
+    glyphs: &'a [ShapedGlyph],
+    text_start: u32,
+) -> ShapedRun<'a> {
+    let face = fonts.face_for(font);
     ShapedRun {
         face,
-        size: text.font_size(),
-        instance: fonts.variation_instance(text.normalized_coords()),
+        size,
+        instance: fonts.variation_instance(coords),
         // The engine reports *whether* to embolden; how much is a rasterisation decision, and it
         // is the same one wherever a synthesised bold is drawn.
-        synthetic_bold: if synthesis.embolden() {
-            SYNTHETIC_BOLD_RATIO
-        } else {
-            0.0
-        },
-        synthetic_slant: synthesis.skew().unwrap_or(0.0),
+        synthetic_bold: if embolden { SYNTHETIC_BOLD_RATIO } else { 0.0 },
+        synthetic_slant: skew,
         has_color: fonts.face(face).is_some_and(|record| record.has_color),
-        brush: run.style().brush.0,
+        brush,
         glyphs,
-        text_start: u32::try_from(text_start).unwrap_or(u32::MAX),
+        text_start,
     }
 }

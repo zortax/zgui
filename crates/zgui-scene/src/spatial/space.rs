@@ -1,5 +1,6 @@
 //! The spatial tree: which coordinate system a box's content is drawn in, and what it resolves to.
 
+use smallvec::SmallVec;
 use zgui_geom::Matrix4;
 
 use crate::spatial::id::{PropertyOwner, SPATIAL_DOMAIN, SpatialId};
@@ -25,9 +26,23 @@ impl SpatialTree {
     /// assert_eq!(tree.viewport(), SpatialId::VIEWPORT);
     /// assert_eq!(tree.resolve(SpatialId::VIEWPORT), Some(Matrix4::IDENTITY));
     /// ```
+    ///
+    /// Under the poison test mode the tree also holds the document's own coordinate system, a
+    /// child of the viewport — see [`SpatialTree::document`].
     pub fn with_viewport() -> Self {
         let mut tree = Self::new(SPATIAL_DOMAIN);
-        tree.root(PropertyOwner::VIEWPORT);
+        let viewport = tree.root(PropertyOwner::VIEWPORT);
+        let poison = crate::spatial::poison::origin();
+        if poison != 0.0 {
+            tree.establish(
+                PropertyOwner::DOCUMENT,
+                SpatialNode {
+                    parent: Some(viewport),
+                    local: Matrix4::translation(-poison, -poison, 0.0),
+                    anchoring: Anchoring::Scrolling,
+                },
+            );
+        }
         tree
     }
 
@@ -35,6 +50,34 @@ impl SpatialTree {
     pub fn viewport(&self) -> SpatialId {
         self.of(PropertyOwner::VIEWPORT)
             .unwrap_or(SpatialId::VIEWPORT)
+    }
+
+    /// The coordinate system the document's root box is laid out in.
+    ///
+    /// The node [`PropertyOwner::DOCUMENT`] established, which only the poison test mode
+    /// establishes, and the viewport otherwise. See [`poison`](crate::spatial::poison).
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::new(zgui_scene::SPATIAL_DOMAIN);
+    /// let viewport = tree.root(PropertyOwner::VIEWPORT);
+    /// assert_eq!(tree.document(), viewport);
+    ///
+    /// let document = tree.establish(
+    ///     PropertyOwner::DOCUMENT,
+    ///     SpatialNode {
+    ///         parent: Some(viewport),
+    ///         local: Matrix4::translation(-8.0, -8.0, 0.0),
+    ///         anchoring: Anchoring::Scrolling,
+    ///     },
+    /// );
+    /// assert_eq!(tree.document(), document);
+    /// ```
+    pub fn document(&self) -> SpatialId {
+        self.of(PropertyOwner::DOCUMENT)
+            .unwrap_or_else(|| self.viewport())
     }
 
     /// The coordinate system everything else is expressed in.
@@ -142,6 +185,12 @@ impl SpatialTree {
     /// the chain has been given back: a name that no longer resolves has no answer rather than a
     /// plausible one.
     ///
+    /// The product is composed from the root down: a root resolves to its own transform, and every
+    /// other node to its own transform followed by its parent's answer. [`Placements`] composes in
+    /// the same order from each parent's kept answer, so the two agree in every bit.
+    ///
+    /// [`Placements`]: crate::Placements
+    ///
     /// ```
     /// use zgui_arena::DomainId;
     /// use zgui_geom::Matrix4;
@@ -158,9 +207,16 @@ impl SpatialTree {
     /// assert_eq!(tree.resolve(inner), Some(Matrix4::translation(14.0, 0.0, 0.0)));
     /// ```
     pub fn resolve(&self, id: SpatialId) -> Option<Matrix4> {
-        self.fold_up(id, Matrix4::IDENTITY, |matrix, node| {
-            matrix.then(&node.local)
-        })
+        let mut chain = SmallVec::<[&Matrix4; 8]>::new();
+        let mut next = Some(id);
+        while let Some(current) = next {
+            let node = self.get(current)?;
+            chain.push(&node.local);
+            next = node.parent;
+        }
+        let mut down = chain.into_iter().rev();
+        let root = *down.next()?;
+        Some(down.fold(root, |above, local| local.then(&above)))
     }
 
     /// The matrix mapping `id`'s own coordinates into `ancestor`'s.
@@ -185,17 +241,101 @@ impl SpatialTree {
     /// assert_eq!(tree.relative(card, label), None, "the label is below the card, not above it");
     /// ```
     pub fn relative(&self, id: SpatialId, ancestor: SpatialId) -> Option<Matrix4> {
-        let mut matrix = Matrix4::IDENTITY;
+        // A search for what is drawn under one node asks this for every primitive, and most of
+        // them are outside that node. So the chain is first walked by name, and the products are
+        // made only for a chain that reaches `ancestor`.
         let mut next = Some(id);
-        while let Some(current) = next {
+        loop {
+            let current = next?;
             if current == ancestor {
-                return Some(matrix);
+                break;
             }
+            next = self.get(current)?.parent;
+        }
+        let mut matrix = Matrix4::IDENTITY;
+        let mut current = id;
+        while current != ancestor {
             let node = self.get(current)?;
             matrix = matrix.then(&node.local);
-            next = node.parent;
+            current = node.parent?;
         }
-        None
+        Some(matrix)
+    }
+
+    /// The nearest coordinate system at or above `id` that is not the content of a scroll
+    /// container.
+    ///
+    /// A content system moves when its container scrolls and nothing else does. A reader that
+    /// measures geometry relative to the container asks this to find the system whose movement
+    /// does change that geometry. `None` when the walk reaches a name that is no longer live.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let content = tree.establish(
+    ///     owner.content(),
+    ///     SpatialNode {
+    ///         parent: Some(tree.viewport()),
+    ///         local: Matrix4::translation(0.0, -40.0, 0.0),
+    ///         anchoring: Anchoring::Content,
+    ///     },
+    /// );
+    /// assert_eq!(tree.outside_content(content), Some(tree.viewport()));
+    /// assert_eq!(tree.outside_content(tree.viewport()), Some(tree.viewport()));
+    /// ```
+    pub fn outside_content(&self, id: SpatialId) -> Option<SpatialId> {
+        let mut current = id;
+        loop {
+            let node = self.get(current)?;
+            if node.anchoring != Anchoring::Content {
+                return Some(current);
+            }
+            current = node.parent?;
+        }
+    }
+
+    /// How far `outer`'s coordinates sit from `inner`'s, when only content systems lie between.
+    ///
+    /// `Some(by)` when `inner` is `outer`, or is reached from it down through content systems
+    /// only: a rectangle measured in `outer` is at `rect + by` in `inner`. A content system's own
+    /// transform is its container's scroll offset, a translation, so the answer is exact. `None`
+    /// for any other pair, and when the walk reaches a name that is no longer live.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let content = tree.establish(
+    ///     owner.content(),
+    ///     SpatialNode {
+    ///         parent: Some(tree.viewport()),
+    ///         local: Matrix4::translation(0.0, -40.0, 0.0),
+    ///         anchoring: Anchoring::Content,
+    ///     },
+    /// );
+    /// assert_eq!(tree.across_content(content, tree.viewport()), Some((0.0, 40.0)));
+    /// assert_eq!(tree.across_content(tree.viewport(), content), None);
+    /// ```
+    pub fn across_content(&self, inner: SpatialId, outer: SpatialId) -> Option<(f32, f32)> {
+        let mut by = (0.0, 0.0);
+        let mut current = inner;
+        loop {
+            if current == outer {
+                return Some(by);
+            }
+            let node = self.get(current)?;
+            if node.anchoring != Anchoring::Content {
+                return None;
+            }
+            let translation = node.local.columns[3];
+            by = (by.0 - translation[0], by.1 - translation[1]);
+            current = node.parent?;
+        }
     }
 
     /// Writes where one coordinate system sits within the one above it.

@@ -136,6 +136,22 @@ pub trait MeasureContent: ShapedClusters {
         shaped
     }
 
+    /// Shapes `content` under `variant`, a [variant](ParagraphKey::variant) of its own key `base`,
+    /// or reports the result already held under `variant`.
+    ///
+    /// The copy has a break of its own, for a context whose lines differ from those of another
+    /// context with equal content. `None` when the measurer holds no such copies; the context then
+    /// shares the form under `base`.
+    fn shape_variant(
+        &mut self,
+        base: ParagraphKey,
+        variant: ParagraphKey,
+        content: &ParagraphContent<'_>,
+    ) -> Option<ShapedSummary> {
+        let _ = (base, variant, content);
+        None
+    }
+
     /// Breaks an already shaped paragraph into lines.
     ///
     /// A key that names nothing has no lines, which is what a measurer with no text engine behind
@@ -233,6 +249,15 @@ impl MeasureContent for Box<dyn WorkerMeasure> {
 
     fn shape_keyed(&mut self, key: ParagraphKey, content: &ParagraphContent<'_>) -> ShapedSummary {
         (**self).shape_keyed(key, content)
+    }
+
+    fn shape_variant(
+        &mut self,
+        base: ParagraphKey,
+        variant: ParagraphKey,
+        content: &ParagraphContent<'_>,
+    ) -> Option<ShapedSummary> {
+        (**self).shape_variant(base, variant, content)
     }
 
     fn break_lines(&mut self, key: ParagraphKey, request: &BreakRequest<'_>) -> BrokenParagraph {

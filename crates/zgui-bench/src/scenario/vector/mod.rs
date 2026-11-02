@@ -147,6 +147,7 @@ pub(crate) fn main(scenario: &str, variant: Option<&str>) {
             other => panic!("unknown vector scenario `{other}`; one of {ALL:?}"),
         }
     }
+    crate::gpu_time::print("vector");
 }
 
 /// Opens a window over `runtime` and drives it to rest.
@@ -197,6 +198,9 @@ impl Stretch {
 
     /// One refresh: advances the clock, runs whatever frames are due and samples them.
     pub(super) fn tick(&mut self, harness: &mut Harness<Runtime>) {
+        let _gpu = crate::gpu_time::enabled().then(|| {
+            crate::gpu_time::phase(&format!("{}.{}.{}", self.scenario, self.variant, self.name))
+        });
         zgui_profile::latency::clear();
         harness.advance(TICK);
         harness.pump();

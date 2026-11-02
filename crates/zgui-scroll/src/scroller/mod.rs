@@ -155,8 +155,8 @@ impl Scroller {
     ///
     /// It is *not a scroll position*: it is a rigid translation of a whole scrollport, added after
     /// the grid snap, taken equally by both edges of every box below it. No size changes, nothing
-    /// is broken anywhere else, and the offsetting path composes it exactly at any fraction — see
-    /// [`Fragment::subtree_rigid`](zgui_layout::Fragment::subtree_rigid).
+    /// is broken anywhere else, and the port's content space carries it exactly at any fraction —
+    /// see `zgui_layout::fragment::scroll_nodes`.
     ///
     /// It is *slower than a pixel per frame for most of its length*. A return covers the band in
     /// about a third of a second, which on a two-hundred-and-forty hertz output is around eighty

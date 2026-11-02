@@ -16,12 +16,11 @@
 //! [`task`](crate::task) for the whole picture.
 
 mod assert;
-mod budget;
+pub(crate) mod budget;
 mod context;
 pub(crate) mod frame;
 pub(crate) mod pool;
 mod shutdown;
-mod through;
 mod ui_thread;
 pub(crate) mod wake;
 
@@ -226,6 +225,59 @@ mod tests {
         owner.cleanup();
     }
 
+    #[test]
+    fn dropped_effects_leave_the_pool_at_the_next_flush() {
+        let (owner, _waker) = runtime();
+        let source = RwSignal::new(0);
+        let effects: Vec<_> = (0..100)
+            .map(|_| RenderEffect::new(move |_| source.get()))
+            .collect();
+        flush();
+        assert_eq!(pool::live(), 100);
+
+        drop(effects);
+        let outcome = flush();
+        assert_eq!(pool::live(), 0, "each effect's task ran to its end");
+        assert!(!outcome.needs_another_frame);
+        owner.cleanup();
+    }
+
+    #[test]
+    fn a_poll_from_inside_a_task_does_nothing() {
+        let (owner, _waker) = runtime();
+        let source = RwSignal::new(0);
+        let ran = Arc::new(AtomicUsize::new(0));
+        let seen_inside = Arc::new(AtomicUsize::new(usize::MAX));
+        let effect = RenderEffect::new({
+            let ran = Arc::clone(&ran);
+            let seen_inside = Arc::clone(&seen_inside);
+            move |_| {
+                if source.get() > 0 {
+                    spawn_local({
+                        let ran = Arc::clone(&ran);
+                        async move {
+                            ran.fetch_add(1, Ordering::SeqCst);
+                        }
+                    });
+                    any_spawner::Executor::poll_local();
+                    seen_inside.store(ran.load(Ordering::SeqCst), Ordering::SeqCst);
+                }
+            }
+        });
+        flush();
+
+        source.set(1);
+        flush();
+        assert_eq!(
+            seen_inside.load(Ordering::SeqCst),
+            0,
+            "the nested poll ran nothing"
+        );
+        assert_eq!(ran.load(Ordering::SeqCst), 1, "the outer poll ran the task");
+        drop(effect);
+        owner.cleanup();
+    }
+
     /// A task that panics must not take the executor with it.
     ///
     /// The flush marks itself as running so a nested call cannot corrupt the pool; if the mark
@@ -255,6 +307,32 @@ mod tests {
             ran.load(Ordering::SeqCst),
             1,
             "the next flush still polls tasks"
+        );
+        owner.cleanup();
+    }
+
+    #[test]
+    fn a_task_the_budget_sets_aside_runs_again_at_the_next_flush() {
+        let (owner, _waker) = runtime();
+        let polls = Arc::new(AtomicUsize::new(0));
+        let _task = spawn_local({
+            let polls = Arc::clone(&polls);
+            std::future::poll_fn(move |cx| {
+                polls.fetch_add(1, Ordering::SeqCst);
+                cx.waker().wake_by_ref();
+                std::task::Poll::<()>::Pending
+            })
+        });
+
+        assert!(flush().budget_exhausted);
+        let first = polls.load(Ordering::SeqCst);
+        assert_eq!(first, budget::BUDGET as usize);
+
+        assert!(flush().budget_exhausted);
+        assert_eq!(
+            polls.load(Ordering::SeqCst),
+            2 * first,
+            "the next flush polled it again with no wake from outside"
         );
         owner.cleanup();
     }

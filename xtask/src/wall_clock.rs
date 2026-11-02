@@ -24,9 +24,17 @@ const TARGET: &str = "wall_clock";
 /// The feature that target is behind.
 const FEATURE: &str = "wall-clock";
 
-/// Lints and then runs every budget target, in an optimised build.
-pub(crate) fn run(root: &Path) -> Result<()> {
+/// The variable a budget target reads to know that it runs on a hosted machine.
+///
+/// A hosted build machine is slower than the reference machine the budgets were measured on, and
+/// its speed changes from run to run. A budget with little headroom over its reference figure
+/// states a second, hosted figure and asserts that one when this variable is set.
+pub(crate) const HOSTED: &str = "ZGUI_WALL_CLOCK_HOSTED";
+
+/// Lints and then runs every budget target, in an optimised build. `hosted` sets [`HOSTED`].
+pub(crate) fn run(root: &Path, hosted: bool) -> Result<()> {
     let cargo = process::cargo();
+    let env: &[(&str, &str)] = if hosted { &[(HOSTED, "1")] } else { &[] };
     for member in WALL_CLOCK_MEMBERS {
         // The workspace clippy run cannot see a target behind a feature it does not turn on, so
         // the budgets would otherwise be the one code in the tree nothing lints.
@@ -44,7 +52,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
                 "--test",
                 TARGET,
             ],
-            &[],
+            env,
         )?;
     }
     Ok(())

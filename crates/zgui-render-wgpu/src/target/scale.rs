@@ -65,6 +65,23 @@ impl TargetScale {
         )
     }
 
+    /// The texels that hold any pixel of a device-pixel rectangle, in a target whose first texel
+    /// holds the device pixel `origin`.
+    ///
+    /// At half resolution, `origin` has to be even on both axes, or a texel holds pixels of two
+    /// grid cells.
+    pub fn texels_at(
+        self,
+        rect: Rect<i32, Device>,
+        origin: Point<i32, Device>,
+    ) -> Rect<i32, Device> {
+        debug_assert!(
+            self == Self::Full || (origin.x % 2 == 0 && origin.y % 2 == 0),
+            "a half-resolution target starts on an even device pixel, not at {origin:?}"
+        );
+        self.texels(rect.translate(Point::ORIGIN.offset_from(origin)))
+    }
+
     /// The texel edge a device pixel edge lies on or inside, rounded up.
     fn texel_end(self, pixels: i32) -> i32 {
         match self {
@@ -111,5 +128,19 @@ mod tests {
             Rect::from_corners(Point::new(1, 0), Point::new(6, 5))
         );
         assert_eq!(TargetScale::Full.texels(rect), rect);
+    }
+
+    #[test]
+    fn a_rectangle_is_measured_from_the_target_origin() {
+        let rect = Rect::from_corners(Point::new(3, 1), Point::new(11, 9));
+        assert_eq!(TargetScale::Full.texels_at(rect, Point::new(0, 0)), rect);
+        assert_eq!(
+            TargetScale::Full.texels_at(rect, Point::new(2, -4)),
+            Rect::from_corners(Point::new(1, 5), Point::new(9, 13))
+        );
+        assert_eq!(
+            TargetScale::Half.texels_at(rect, Point::new(2, -4)),
+            Rect::from_corners(Point::new(0, 2), Point::new(5, 7))
+        );
     }
 }

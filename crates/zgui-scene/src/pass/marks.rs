@@ -130,6 +130,8 @@ pub(crate) struct Input<'a> {
     pub(crate) primitives: &'a Primitives,
     /// The coordinate systems the marks are drawn under.
     pub(crate) spatial: &'a SpatialTree,
+    /// What each of them resolves to.
+    pub(crate) placements: &'a Placements,
     /// The surface's extent.
     pub(crate) viewport: Size<i32, Device>,
     /// What the frame redraws.
@@ -143,6 +145,7 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
         ops,
         primitives,
         spatial,
+        placements,
         viewport: extent,
         damage,
     } = input;
@@ -158,7 +161,6 @@ pub(crate) fn plan(input: Input<'_>, plan: &mut MarkPlan) {
             .backdrops
             .iter()
             .all(|backdrop| backdrop.reads_only_what_it_writes());
-    let placements = Placements::of(spatial);
     let mut shelves = Shelves {
         extent,
         page: 0,

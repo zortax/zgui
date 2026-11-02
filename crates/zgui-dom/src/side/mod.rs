@@ -35,7 +35,7 @@ pub use crate::side::custom_state::CustomStates;
 pub use crate::side::inline_style::StyleBlock;
 pub use crate::side::listeners::{Listener, ListenerId, ListenerSet};
 pub use crate::side::observed::{ObservationSlots, ObservedMask};
-pub use crate::side::paint_key::PaintStyleKey;
+pub use crate::side::paint_key::{PaintStyleHeld, PaintStyleKey};
 pub use crate::side::place::AnimPlacement;
 pub use crate::side::props::PropMap;
 pub use crate::side::semantics::SemanticsSlot;

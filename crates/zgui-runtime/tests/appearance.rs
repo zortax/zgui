@@ -338,8 +338,10 @@ fn every_line_of_text_inside_a_decorated_box_is_decorated() {
     );
     // A strike sits inside the line box it crosses rather than under it, which is what says the
     // line was placed against the text rather than at some fixed offset from the box.
+    // Primitives are recorded in their own space, which the poison test mode moves.
+    let top = line.bounds[1] - zgui_scene::spatial::poison::origin();
     assert!(
-        line.bounds[1] > 0.0 && line.bounds[1] < 24.0,
+        top > 0.0 && top < 24.0,
         "the strike is not inside the line box it crosses: {line:?}"
     );
 }

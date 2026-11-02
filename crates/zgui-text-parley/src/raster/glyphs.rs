@@ -73,14 +73,11 @@ impl Rasteriser {
     }
 }
 
-impl GlyphRaster for Rasteriser {
-    fn raster(&self, key: &GlyphKey) -> Option<GlyphImage> {
+impl Rasteriser {
+    /// Rasterises one glyph through `context`.
+    fn raster_with(&self, context: &mut ScaleContext, key: &GlyphKey) -> Option<GlyphImage> {
         let (blob, index) = self.faces.get(&self.fonts, key.face)?;
         let font = FontRef::from_index(blob.data(), index as usize)?;
-        let mut context = self
-            .scale
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let coords = self.fonts.variation_coords(key.instance);
         let mut scaler = context
             .builder_with_id(font, identity(key.face, index, key.instance))
@@ -90,6 +87,28 @@ impl GlyphRaster for Rasteriser {
             .build();
         let image = renderer(key).render(&mut scaler, key.glyph)?;
         Some(convert(&image))
+    }
+}
+
+impl GlyphRaster for Rasteriser {
+    fn raster(&self, key: &GlyphKey) -> Option<GlyphImage> {
+        let mut context = self
+            .scale
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.raster_with(&mut context, key)
+    }
+
+    /// Rasterises the batch through a context of its own, so batches on other threads do not wait
+    /// for the shared one.
+    ///
+    /// The context lives for the batch only. A batch sorted by face and size prepares each face's
+    /// hinting state once.
+    fn raster_many(&self, keys: &[GlyphKey]) -> Vec<Option<GlyphImage>> {
+        let mut context = ScaleContext::new();
+        keys.iter()
+            .map(|key| self.raster_with(&mut context, key))
+            .collect()
     }
 
     fn outline(&self, key: &OutlineKey) -> Option<GlyphOutline> {

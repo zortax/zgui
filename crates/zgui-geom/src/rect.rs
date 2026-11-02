@@ -72,6 +72,11 @@ impl<T: Unit, S: Space> Rect<T, S> {
     /// assert_eq!(rect.size, Size::new(CssPx(20.0), CssPx(30.0)));
     /// ```
     pub fn from_corners(first: Point<T, S>, second: Point<T, S>) -> Self {
+        // Corners in order are their own minimum and maximum. The two comparisons cost less than
+        // the four below and give the same rectangle in bits.
+        if first.x < second.x && first.y < second.y {
+            return Self::new(first, second.offset_from(first));
+        }
         let min = first.min(second);
         let max = first.max(second);
         Self::new(min, max.offset_from(min))
@@ -226,6 +231,91 @@ mod tests {
             Point::new(CssPx(x), CssPx(y)),
             Size::new(CssPx(width), CssPx(height)),
         )
+    }
+
+    #[test]
+    fn corners_in_order_give_the_rectangle_the_comparisons_give() {
+        let reference = |first: Point<CssPx, Css>, second: Point<CssPx, Css>| {
+            let min = first.min(second);
+            let max = first.max(second);
+            Rect::new(min, max.offset_from(min))
+        };
+        let bits = |rect: Rect<CssPx, Css>| {
+            [
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height,
+            ]
+            .map(|v| v.0.to_bits())
+        };
+        let values = [
+            -3.25,
+            -0.0,
+            0.0,
+            0.1,
+            0.3,
+            17.5,
+            22_000.3,
+            1e30,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+        ];
+        for &ax in &values {
+            for &ay in &values {
+                for &bx in &values {
+                    for &by in &values {
+                        let first = Point::new(CssPx(ax), CssPx(ay));
+                        let second = Point::new(CssPx(bx), CssPx(by));
+                        assert_eq!(
+                            bits(Rect::from_corners(first, second)),
+                            bits(reference(first, second)),
+                            "{first:?} {second:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_rectangle_united_with_itself_is_the_rectangle_its_corners_give() {
+        let bits = |rect: Rect<CssPx, Css>| {
+            [
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height,
+            ]
+            .map(|v| v.0.to_bits())
+        };
+        let values = [
+            -3.25,
+            -0.0,
+            0.0,
+            1e-5,
+            0.1,
+            17.5,
+            22_040.3,
+            f32::INFINITY,
+            f32::NAN,
+        ];
+        for &x in &values {
+            for &y in &values {
+                for &width in &values {
+                    for &height in &values {
+                        let held = rect(x, y, width, height);
+                        let own = if held.is_empty() {
+                            held
+                        } else {
+                            Rect::from_corners(held.origin, held.far_corner())
+                        };
+                        assert_eq!(bits(held.union(held)), bits(own), "{held:?}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

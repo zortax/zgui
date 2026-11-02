@@ -260,11 +260,13 @@ impl PipelineKind {
 
     /// Whether this pipeline may be built for an attachment of `format`.
     ///
-    /// The per-channel coverage pipeline may not be built for an isolated target, and the reason
-    /// is not a device limitation: it writes no alpha, because dual-source blending consumes the
+    /// The per-channel coverage pipeline may not be built for the pool format, and the reason is
+    /// not a device limitation: it writes no alpha, because dual-source blending consumes the
     /// per-channel coverage as its blend factor, and that is meaningless against a destination
     /// that is not opaque. An isolated target never is. Text landing in one is emitted as
     /// single-channel coverage instead, so the variant would be unreachable as well as wrong.
+    /// A plain group's target has the composed format, which has the pipeline. Paint keeps such
+    /// text out of it, and the planner leaves out any such batch that lands in a pool target.
     ///
     /// A coverage draw writes only the bin pages. A surface can have their format, so every other
     /// draw may be built for it.
@@ -418,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn the_per_channel_pipeline_is_the_one_kind_an_isolated_target_may_not_have() {
+    fn the_per_channel_pipeline_is_the_one_kind_the_pool_format_may_not_have() {
         use crate::target::group_pool::GroupPool;
 
         let refused: Vec<PipelineKind> = PipelineKind::ALL
@@ -505,6 +507,48 @@ mod tests {
             assert!(!kind.is_instanced(), "{kind:?} reads the marks lane");
         }
         assert_eq!(MarkKind::Glyph.lane(), 3);
+    }
+
+    #[test]
+    fn a_kind_indexes_its_place_in_the_list_of_every_kind() {
+        // The pipeline table is indexed by the discriminant, so the two orders have to agree. The
+        // match names every kind, so a new kind does not compile here until it has a place, and
+        // that place must be in `ALL`.
+        fn place(kind: PipelineKind) -> usize {
+            match kind {
+                PipelineKind::Quad => 0,
+                PipelineKind::Shadow => 1,
+                PipelineKind::Decoration => 2,
+                PipelineKind::MonoSprite => 3,
+                PipelineKind::ColorSprite => 4,
+                PipelineKind::SubpixelSprite => 5,
+                PipelineKind::Blit => 6,
+                PipelineKind::BlitUndoSrgb => 7,
+                PipelineKind::DamageClear => 8,
+                PipelineKind::BlurDownsample => 9,
+                PipelineKind::BlurAxis => 10,
+                PipelineKind::Composite => 11,
+                PipelineKind::External => 12,
+                PipelineKind::VectorComposite => 13,
+                PipelineKind::MarksDisc => 14,
+                PipelineKind::MarksDiscCoverage => 15,
+                PipelineKind::MarksBox => 16,
+                PipelineKind::MarksBoxCoverage => 17,
+                PipelineKind::MarksPolyline => 18,
+                PipelineKind::MarksPolylineCoverage => 19,
+                PipelineKind::MarksGlyph => 20,
+                PipelineKind::MarksGlyphCoverage => 21,
+                PipelineKind::MarksComposite => 22,
+            }
+        }
+        for (index, kind) in PipelineKind::ALL.into_iter().enumerate() {
+            assert_eq!(kind as usize, index, "{kind:?}");
+            assert_eq!(place(kind), index, "{kind:?}");
+        }
+        assert_eq!(
+            place(PipelineKind::MarksComposite) + 1,
+            PipelineKind::ALL.len()
+        );
     }
 
     #[test]

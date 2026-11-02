@@ -110,7 +110,7 @@ impl Script {
 
     /// The first line fragment's box, which is what every rectangle here is measured against.
     fn line(&self) -> Rect<DevicePx, Device> {
-        support::first_line_box(self.window())
+        support::first_line_on_device(self.window())
     }
 
     /// Every quad in the display list, with the colour it is filled in and where it sorts.
@@ -127,10 +127,19 @@ impl Script {
             .quads
             .iter()
             .map(|quad| Painted {
-                rect: Rect::new(
-                    Point::new(DevicePx(quad.bounds[0]), DevicePx(quad.bounds[1])),
-                    zgui_geom::Size::new(DevicePx(quad.bounds[2]), DevicePx(quad.bounds[3])),
-                ),
+                // Through the quad's own coordinate system, which puts it on the device.
+                rect: {
+                    let local = Rect::new(
+                        Point::new(DevicePx(quad.bounds[0]), DevicePx(quad.bounds[1])),
+                        zgui_geom::Size::new(DevicePx(quad.bounds[2]), DevicePx(quad.bounds[3])),
+                    );
+                    scene
+                        .spatial
+                        .resolve_at(quad.transform)
+                        .map_or(local, |matrix| {
+                            zgui_geom::transformed_bounds(&matrix, local)
+                        })
+                },
                 fill: quad
                     .fill
                     .id()
@@ -160,22 +169,21 @@ impl Script {
     /// "above every glyph in the document" is false of a correct caret, and asserting it would send
     /// somebody to fix a painter that is right.
     fn glyph_sprites(&self) -> Vec<(Rect<DevicePx, Device>, u32)> {
-        self.window()
-            .scene()
+        let scene = self.window().scene();
+        scene
             .primitives
             .mono_sprites
             .iter()
             .map(|sprite| {
-                (
-                    Rect::new(
-                        Point::new(DevicePx(sprite.bounds[0]), DevicePx(sprite.bounds[1])),
-                        zgui_geom::Size::new(
-                            DevicePx(sprite.bounds[2]),
-                            DevicePx(sprite.bounds[3]),
-                        ),
-                    ),
-                    sprite.order,
-                )
+                // Through the sprite's own coordinate system, which puts it on the device.
+                let local = sprite.ink();
+                let placed = scene
+                    .spatial
+                    .resolve_at(sprite.transform)
+                    .map_or(local, |matrix| {
+                        zgui_geom::transformed_bounds(&matrix, local)
+                    });
+                (placed, sprite.order)
             })
             .collect()
     }
@@ -620,7 +628,7 @@ fn an_element_nobody_can_type_into_gets_no_caret_from_a_click() {
     // is the higher of the two. Sorted rather than indexed: the layout reports its line boxes in
     // the order its tree walk produced, which is not document order, and a test that indexed into
     // that list would quietly click the wrong element while reading as if it clicked the right one.
-    let mut lines = support::line_boxes(script.window());
+    let mut lines = support::lines_on_device(script.window());
     lines.sort_by(|a, b| a.origin.y.0.total_cmp(&b.origin.y.0));
     assert_eq!(
         lines.len(),
@@ -710,7 +718,7 @@ fn a_caret_on_the_second_line_of_a_wrapped_field_is_drawn_on_that_line() {
     script.harness.settle(8);
     script.press_named(NamedKey::Tab, KeyCode::Tab);
 
-    let mut lines = support::line_boxes(script.window());
+    let mut lines = support::lines_on_device(script.window());
     lines.sort_by(|a, b| a.origin.y.0.total_cmp(&b.origin.y.0));
     assert_eq!(
         lines.len(),

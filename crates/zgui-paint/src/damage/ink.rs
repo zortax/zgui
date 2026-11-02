@@ -51,8 +51,9 @@ impl ReadExtent {
 pub fn read_extent_of(store: &LayoutStore, frag: FragKey, scale: f32) -> Option<ReadExtent> {
     let fragment = store.fragment(frag)?;
     let node = store.get(fragment.box_)?;
-    let mut chain = filter::own(&node.style, scale);
-    chain.extend(filter::backdrop(&node.style, scale));
+    let declared = store.custom_properties(fragment.box_, &node.style);
+    let mut chain = filter::own_with(&node.style, declared, scale);
+    chain.extend(filter::backdrop_with(&node.style, declared, scale));
     if chain.is_empty() {
         return None;
     }

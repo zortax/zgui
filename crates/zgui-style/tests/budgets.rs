@@ -773,3 +773,43 @@ fn only_a_property_the_keyframes_read_computes_them_again() {
         assert_eq!(read.keyframes_refreshed, 1);
     }
 }
+
+#[test]
+fn a_resize_restyles_only_the_viewport_unit_readers() {
+    let _guard = measuring();
+    let (mut harness, rows) = list(500);
+    harness.add_author(".sized { width: 10vw }");
+    harness.set_classes(rows[100], &["sized"]);
+    harness.set_classes(rows[400], &["sized"]);
+    harness.frame();
+    harness.retire_all();
+
+    // The control: two readers cascade again and nothing else does.
+    counter::reset();
+    let epoch = harness.resize(1000.0, 800.0);
+    harness.frame();
+    let read = counter::snapshot();
+    assert_eq!(epoch.units_probed, 2);
+    assert_eq!(epoch.units_invalidated, 2);
+
+    // The same document after both readers stopped reading: the outgoing device still answered a
+    // viewport-unit question, and the resize restyles nothing.
+    harness.set_classes(rows[100], &[]);
+    harness.set_classes(rows[400], &[]);
+    harness.frame();
+    harness.retire_all();
+    counter::reset();
+    let epoch = harness.resize(900.0, 800.0);
+    let pass = harness.frame();
+    let unread = counter::snapshot();
+    assert!(epoch.viewport_units);
+    assert_eq!(epoch.units_probed, 0);
+    assert!(!pass.traversed);
+
+    if COUNTERS_ENABLED {
+        assert_eq!(read.elements_restyled + read.elements_recascaded, 2);
+        assert_eq!(unread.elements_restyled, 0);
+        assert_eq!(unread.elements_recascaded, 0);
+        assert_eq!(unread.elements_traversed, 0);
+    }
+}

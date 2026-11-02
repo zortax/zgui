@@ -46,12 +46,12 @@ const MIN_COLD_NODES: usize = 8;
 const MIN_BATCH_BOXES: usize = 256;
 
 /// What one worker's chunk was planned to touch.
-/// What one worker hands back: its answers in request order, the boxes it wrote, the boxes its
-/// probes broke, and the axes its answers observed.
+/// What one worker hands back: its answers in request order, the boxes it wrote, the boxes whose
+/// lines it broke, and the axes its answers observed.
 type Outcome = (
     Vec<(usize, LayoutOutput)>,
     Vec<(BoxKey, cephal::Layout)>,
-    Vec<BoxKey>,
+    Vec<(BoxKey, zgui_text::ParagraphKey)>,
     u8,
 );
 
@@ -298,7 +298,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
                         generation,
                         speculation: 0,
                         touched: Vec::new(),
-                        probed: Vec::new(),
+                        noted: Vec::new(),
                         observed: 0,
                     };
                     let outputs = held
@@ -311,7 +311,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
                             )
                         })
                         .collect();
-                    *outcome = Some((outputs, tree.touched, tree.probed, tree.observed));
+                    *outcome = Some((outputs, tree.touched, tree.noted, tree.observed));
                 });
             }
         });
@@ -319,7 +319,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
         // Every result back into request order, then the paragraph identifiers, then the
         // measurers — the same sequence a serial pass produces.
         for outcome in outcomes {
-            let (outputs, touched, probed, observed) =
+            let (outputs, touched, noted, observed) =
                 outcome.expect("every spawned worker finished");
             for (index, output) in outputs {
                 ordered[index] = Some(output);
@@ -327,7 +327,7 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
             // What the answers observed counts for the asking container, as it would serially.
             self.observed |= observed;
             self.touched.extend(touched);
-            self.store.get_mut().probed.extend(probed);
+            self.store.get_mut().noted.extend(noted);
         }
         results.extend(
             ordered

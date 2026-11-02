@@ -8,6 +8,7 @@
 //! | `moved` | an element that moved between its animation mark and the restyle |
 //! | `scope` | the marks a restyle never turns into engine work |
 //! | `settling` | where a transition leaves the element's own style once it has finished |
+//! | `sharing` | equal cascade results under different parents taking one style's groups |
 //! | `fill` | what a finished animation that fills forwards holds through a later restyle |
 //! | `keyframe_vars` | keyframe values that read a custom property, as the property moves |
 //! | `damage` | what each damage level the engine produces makes the frame owe |
@@ -38,6 +39,8 @@ mod pass;
 mod scope;
 #[path = "restyle/settling.rs"]
 mod settling;
+#[path = "restyle/sharing.rs"]
+mod sharing;
 #[path = "restyle/throughput.rs"]
 mod throughput;
 #[path = "restyle/zero.rs"]

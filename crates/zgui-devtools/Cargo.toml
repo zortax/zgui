@@ -35,7 +35,7 @@ zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-style = { path = "../zgui-style", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 zgui-view-dom = { path = "../zgui-view-dom", version = "0.1.0" }
-zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 
 [dev-dependencies]
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
@@ -43,6 +43,13 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # the pointer does and what a headless test cannot.
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-view-dom = { path = "../zgui-view-dom", version = "0.1.0" }
+
+[features]
+default = ["counters"]
+# Keeps the frame counters live in a release build, so that the frame tab can show them. A debug
+# build has them in all cases. An application turns this off to keep the inspector in a release
+# build without the counter cost.
+counters = ["zgui-profile/counters"]
 
 [lints]
 workspace = true

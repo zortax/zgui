@@ -18,6 +18,6 @@ pub mod decompose;
 pub mod matrix4;
 
 pub use crate::transform::affine2::Affine2;
-pub use crate::transform::bounds::transformed_bounds;
+pub use crate::transform::bounds::{transformed_bounds, translated_bounds};
 pub use crate::transform::decompose::Decomposed;
 pub use crate::transform::matrix4::Matrix4;

@@ -17,8 +17,9 @@ use crate::{
 /// `hosted` skips `perf` and `tails`. Their bands are absolute times taken on the reference
 /// machine, so a shared build machine fails them for reasons unrelated to the commit, and `perf`
 /// writes its numbers into `docs/performance.md`. It also skips `resize`, `workloads`, `verify` and
-/// `growth`, which fail on the current tree until their bands and faults are resolved. Every other
-/// gate runs.
+/// `growth`, which fail on the current tree until their bands and faults are resolved. The
+/// wall-clock budgets run with [`wall_clock::HOSTED`] set, so a budget set close to the reference
+/// machine can state a hosted figure. Every other gate runs.
 pub(crate) fn run(root: &Path, hosted: bool) -> Result<()> {
     let cargo = process::cargo();
 
@@ -60,7 +61,7 @@ pub(crate) fn run(root: &Path, hosted: bool) -> Result<()> {
     // execute these — the targets are behind a feature it does not turn on — so this is the only
     // place they run, and it runs every time.
     step("cargo test --release (wall-clock budgets)");
-    wall_clock::run(root)?;
+    wall_clock::run(root, hosted)?;
 
     // In release for the same reason, and beside the ratchet because it is the same kind of
     // instrument: a slope measured in an unoptimised build is a slope of a program nobody runs.

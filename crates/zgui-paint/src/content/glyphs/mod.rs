@@ -40,10 +40,12 @@
 pub(crate) mod cache;
 pub mod curve;
 pub(crate) mod place;
+pub mod prefetch;
 
 pub(crate) use crate::content::glyphs::cache::{GlyphCache, Rasterising};
 pub use crate::content::glyphs::curve::OutlineGlyph;
 pub(crate) use crate::content::glyphs::place::place;
+pub use crate::content::glyphs::prefetch::GlyphPrediction;
 
 use zgui_text::GlyphFormat;
 

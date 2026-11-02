@@ -52,15 +52,7 @@ pub(crate) fn read(
     let mut lines = Vec::with_capacity(layout.len());
     let mut boxes: SmallVec<[InlineBoxPlacement; 2]> = SmallVec::new();
     for (index, line) in layout.lines().enumerate() {
-        let metrics = line.metrics();
-        lines.push(LineGeometry {
-            text: without_prefix(line.text_range(), prefix),
-            top: CssPx(top(metrics)),
-            baseline: CssPx(metrics.baseline),
-            height: CssPx(metrics.line_height),
-            width: CssPx(metrics.advance),
-            offset: CssPx(metrics.offset + metrics.inline_min_coord),
-        });
+        lines.push(line_box(&line, prefix));
         if has_boxes {
             collect_boxes(&line, index, &mut boxes);
         }
@@ -73,6 +65,85 @@ pub(crate) fn read(
         }),
         boxes,
     }
+}
+
+/// One line's box, in the caller's string.
+fn line_box(line: &parley::Line<'_, SlotBrush>, prefix: usize) -> LineGeometry {
+    let metrics = line.metrics();
+    LineGeometry {
+        text: without_prefix(line.text_range(), prefix),
+        top: CssPx(top(metrics)),
+        baseline: CssPx(metrics.baseline),
+        height: CssPx(metrics.line_height),
+        width: CssPx(metrics.advance),
+        offset: CssPx(metrics.offset + metrics.inline_min_coord),
+    }
+}
+
+/// Writes how many items each line of `layout` holds into `out`.
+pub(crate) fn items(layout: &parley::Layout<SlotBrush>, out: &mut SmallVec<[u32; 4]>) {
+    out.clear();
+    out.extend(
+        layout
+            .lines()
+            .map(|line| u32::try_from(line.len()).unwrap_or(u32::MAX)),
+    );
+}
+
+/// Whether [`read`] of the freshly broken `layout` would return `last`, bit for bit.
+///
+/// The check is exact only when the caller makes sure that:
+///
+/// - neither this pass nor the pass of `last` is banded;
+/// - neither pass is justified, so every cluster keeps its shaped advance;
+/// - the inline boxes have the widths and heights the pass of `last` used.
+///
+/// The engine places a box from the line's offset, its baseline and the advances of the items
+/// before it on the line. The line boxes hold the offset and the baseline. Equal text ranges and
+/// equal item counts per line (`items`, from the pass of `last`) put the same items, boxes
+/// included, on each line.
+///
+/// `has_boxes` is whether this pass reads the boxes; it must agree with `last`.
+pub(crate) fn unchanged(
+    layout: &parley::Layout<SlotBrush>,
+    last: &BrokenParagraph,
+    items: &[u32],
+    has_boxes: bool,
+    prefix: usize,
+) -> bool {
+    let geometry = &last.geometry;
+    if geometry.lines.len() != layout.len()
+        || items.len() != layout.len()
+        || has_boxes == last.boxes.is_empty()
+        || geometry.is_rtl != layout.is_rtl()
+        || !same_bits(geometry.size.width, CssPx(layout.width()))
+        || !same_bits(geometry.size.height, CssPx(layout.height()))
+    {
+        return false;
+    }
+    layout
+        .lines()
+        .zip(&geometry.lines)
+        .zip(items)
+        .all(|((line, kept), &count)| {
+            same_line(&line_box(&line, prefix), kept)
+                && u32::try_from(line.len()).ok() == Some(count)
+        })
+}
+
+/// Whether two line boxes are equal bit for bit.
+fn same_line(a: &LineGeometry, b: &LineGeometry) -> bool {
+    a.text == b.text
+        && same_bits(a.top, b.top)
+        && same_bits(a.baseline, b.baseline)
+        && same_bits(a.height, b.height)
+        && same_bits(a.width, b.width)
+        && same_bits(a.offset, b.offset)
+}
+
+/// Whether two lengths are equal bit for bit, which tells `0.0` from `-0.0`.
+fn same_bits(a: CssPx, b: CssPx) -> bool {
+    a.0.to_bits() == b.0.to_bits()
 }
 
 /// One engine range, moved back into the string the caller generated.
