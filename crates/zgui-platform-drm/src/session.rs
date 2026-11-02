@@ -424,8 +424,9 @@ impl Session {
 
     /// Returns the display device this backend drives.
     ///
-    /// The cards [`zgui_drm::cards`] lists are walked in turn. See [`Session::card_from`] for what
-    /// each shape does with that list, and for what one card costs.
+    /// The cards [`zgui_drm::cards`] lists are walked in turn, and the one with a display plugged
+    /// into it is taken. See [`Session::card_from`] for what each shape does with that list, for
+    /// how a display decides which card, and for what one card costs.
     ///
     /// # Errors
     ///
@@ -444,11 +445,26 @@ impl Session {
     /// can put a path that is not a card in front of the real ones — a seat hands out input devices
     /// over the call it hands out cards with, so the walk meets that shape on a real machine.
     ///
-    /// **Seated.** Each path is asked of the seat in turn, and the first the seat opens is the one
-    /// that is used. The device is built over a duplicate of the descriptor the seat handed over,
-    /// and this session keeps the seat's own device.
+    /// **Seated.** Each path is asked of the seat in turn, and the one that is used is the first
+    /// the seat opens **with a display plugged into it**. The device is built over a duplicate of
+    /// the descriptor the seat handed over, and this session keeps the seat's own device.
     ///
-    /// **Direct.** The first path that opens, and DRM master taken on it.
+    /// **Direct.** The first path that opens with a display plugged into it, and DRM master taken
+    /// on it.
+    ///
+    /// # Which card a display decides
+    ///
+    /// A machine with two cards can have the screen on either one, and the lower minor number is
+    /// no guide: the card that sorts first may be the one with nothing plugged in. Such a card
+    /// opens, answers every query and lights nothing, so a walk that stopped at the first one to
+    /// open would leave the screen dark on a machine that has a working one beside it.
+    ///
+    /// So the walk asks [`zgui_drm::Device::has_a_display`] and keeps going until a card answers
+    /// yes. A machine where none does — every card headless, or the question refused — falls back
+    /// to the first card that opened, which is what this did before it asked at all.
+    ///
+    /// This chooses what a frame is *displayed* on. A machine that draws on one card and scans out
+    /// on another asks this only of the second.
     ///
     /// # Master on the seated path
     ///
@@ -785,6 +801,7 @@ fn seated_card(
     cards: &[PathBuf],
 ) -> Result<zgui_drm::Device, PlatformError> {
     let mut refused = Vec::new();
+    let mut dark = None;
 
     for path in cards {
         let device = match seat.open_device(path) {
@@ -809,23 +826,43 @@ fn seated_card(
             }
         };
 
-        match zgui_drm::Device::over(duplicate, path) {
-            Ok(card) => {
-                info!(
-                    target: "zgui::platform",
-                    "the session daemon opened {}", path.display()
-                );
-                held.push(device);
-                return Ok(card);
-            }
+        let card = match zgui_drm::Device::over(duplicate, path) {
+            Ok(card) => card,
             Err(error) => {
                 give_back(seat, device);
                 refused.push(error.to_string());
+                continue;
             }
+        };
+
+        if displays(&card, path) {
+            info!(
+                target: "zgui::platform",
+                "the session daemon opened {}", path.display()
+            );
+            held.push(device);
+            return Ok(card);
+        }
+
+        // The first card with nothing plugged in is kept in case no later one has a display. Every
+        // one after it goes straight back to the daemon, which is what closes it.
+        if dark.is_none() {
+            dark = Some((card, device, path));
+        } else {
+            give_back(seat, device);
         }
     }
 
-    Err(opened_nothing("the seat", &refused))
+    let (card, device, path) = dark.ok_or_else(|| opened_nothing("the seat", &refused))?;
+
+    info!(
+        target: "zgui::platform",
+        "the session daemon opened {}, and no card on this machine has a display plugged in",
+        path.display()
+    );
+    held.push(device);
+
+    Ok(card)
 }
 
 /// Asks the seat for one input device, and keeps the device it answered.
@@ -897,24 +934,69 @@ fn backend_error(error: &dyn std::fmt::Display) -> PlatformError {
 /// a run that gets no further takes neither the console nor the keyboard.
 fn direct_card(cards: &[PathBuf]) -> Result<zgui_drm::Device, PlatformError> {
     let mut refused = Vec::new();
+    let mut dark = None;
 
     for path in cards {
-        match zgui_drm::Device::open(path) {
-            Ok(card) => {
-                card.become_master().map_err(|error| {
-                    PlatformError::Backend(format!(
-                        "this process opened {} and could not take DRM master on it, as \
-                         another process holding the display looks like: {error}",
-                        path.display()
-                    ))
-                })?;
-                return Ok(card);
+        let card = match zgui_drm::Device::open(path) {
+            Ok(card) => card,
+            Err(error) => {
+                refused.push(error.to_string());
+                continue;
             }
-            Err(error) => refused.push(error.to_string()),
+        };
+
+        if displays(&card, path) {
+            return take_master(card, path);
+        }
+
+        if dark.is_none() {
+            dark = Some((card, path));
         }
     }
 
-    Err(opened_nothing("this process", &refused))
+    let (card, path) = dark.ok_or_else(|| opened_nothing("this process", &refused))?;
+
+    take_master(card, path)
+}
+
+/// Takes DRM master on `card`.
+fn take_master(card: zgui_drm::Device, path: &Path) -> Result<zgui_drm::Device, PlatformError> {
+    card.become_master().map_err(|error| {
+        PlatformError::Backend(format!(
+            "this process opened {} and could not take DRM master on it, as \
+             another process holding the display looks like: {error}",
+            path.display()
+        ))
+    })?;
+
+    Ok(card)
+}
+
+/// Returns `true` where a display is plugged into `card`.
+///
+/// A card that cannot be asked answers `false`. It goes to the back of the queue rather than out
+/// of it, so a machine where the question fails still starts on the card it would have taken
+/// before this was asked at all.
+fn displays(card: &zgui_drm::Device, path: &Path) -> bool {
+    match card.has_a_display() {
+        Ok(answer) => {
+            if !answer {
+                info!(
+                    target: "zgui::platform",
+                    "{} has no display plugged in, so a card that has one comes first",
+                    path.display()
+                );
+            }
+            answer
+        }
+        Err(error) => {
+            warn!(
+                target: "zgui::platform",
+                "{} could not be asked what is plugged into it: {error}", path.display()
+            );
+            false
+        }
+    }
 }
 
 /// Returns what a walk that opened no card reports.
