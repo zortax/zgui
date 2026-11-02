@@ -18,6 +18,20 @@ publish = false
 # Everything is gated on Linux. The kernel interface exists nowhere else, so a macOS build of the
 # workspace compiles this crate as an empty one rather than failing on a header it cannot have.
 [target.'cfg(target_os = "linux")'.dependencies]
+# The allocator a buffer a display scans out of is made with, and the EGL and GL a second device
+# draws into it through. Only this crate names them, and only on the path that has no Vulkan.
+zgui-gbm = { path = "../zgui-gbm", version = "0.1.0" }
+# The copy between two scanout buffers, made on the display's own device so that each buffer has
+# exactly one writer and the two devices never contend for one.
+zgui-scanout = { path = "../zgui-scanout", version = "0.1.0" }
+# The damage set a scanout buffer's debt is kept as. The same shape the renderer keeps its own
+# damage in, because it is the same question asked about a different buffer.
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+# The latency trace. A console has no standard error a person can read — it is the screen the frame
+# loop overwrites — so the loop writes its stage marks to the file `ZGUI_LATENCY` names.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+khronos-egl.workspace = true
+glow.workspace = true
 # `TreeUpdate`, which the platform contract's `push_a11y_update` takes. This backend implements
 # that method as a no-op: no assistive technology is connected to a console, so the closure is
 # never run and no tree is built. The name is here for the signature.
@@ -82,7 +96,6 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # display. The renderer contract, the scene it draws, the colour and the damage set are all things
 # a caller builds and states, and every one of them is at this layer or below, so the test reaches
 # across no seam the crate itself may not.
-zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
@@ -92,6 +105,13 @@ zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # thread reads the environment is a data race. `session_direct` also holds this process's
 # descriptor limit at zero for the length of the open, which would fail whatever else was opening a
 # file at the time. A test harness runs its tests on several threads, so neither belongs under one.
+# The GL scanout test drives a real display and reports what it measured, so it prints rather than
+# asserting its way through a harness that would hide the numbers.
+[[test]]
+name = "drawn_gl"
+path = "tests/drawn_gl.rs"
+harness = false
+
 [[test]]
 name = "session_direct"
 path = "tests/session_direct.rs"

@@ -1,6 +1,7 @@
 //! What happens to a display list: the frame, and the two steps either side of it.
 
 use zgui_bits::DamageSet;
+use zgui_geom::{Device, Rect};
 use zgui_profile::{Counter, Phase, counter};
 use zgui_render::{
     ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
@@ -17,6 +18,7 @@ use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::kind::PipelineKind;
 use crate::renderer::WgpuRenderer;
 use crate::target::acquire::{Acquisition, SurfaceAction};
+use crate::target::swapchain::Presentation;
 
 impl Renderer for WgpuRenderer {
     fn capabilities(&self) -> RenderCapabilities {
@@ -151,6 +153,16 @@ impl Renderer for WgpuRenderer {
             zgui_profile::latency::mark("draw.undamaged");
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
+
+        // Resolved here, before anything is recorded, because the copy that ends the frame is
+        // limited to these rectangles and that copy is recorded below. Taken from what the frame
+        // will draw rather than from what it was asked to draw: the widening above happens between
+        // the two, and a display given only what was asked for misses the rest.
+        let rects = damage::rects(damage, self.composed.used());
+        let redrawn: u64 = rects.iter().map(|rect| damage::area(*rect)).sum();
+        damage::rows_of(&rects, &mut self.composed_rows);
+        self.composed_rects.clear();
+        self.composed_rects.extend_from_slice(&rects);
 
         let formats = self.presentation.formats();
         // Before anything is planned: a display list may name an effect declared since the last
@@ -337,8 +349,22 @@ impl Renderer for WgpuRenderer {
         }
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb());
-            draw_calls += 1;
+            // What the copy has to cover. A supplied set is rotated through and its textures
+            // persist, so a frame copies the rectangles it drew plus the ones drawn while this
+            // texture was not the one being written. Where those pixels cross a link, that copy is
+            // the largest thing a frame spends. Everything else is copied whole: an acquired
+            // surface texture is a new resource marked wholly uninitialised on every acquisition,
+            // so a partial copy onto one comes out black everywhere it did not write.
+            let scissors = match &mut self.presentation {
+                Presentation::Supplied(supplied) => {
+                    let slot = supplied.selected();
+                    supplied.owed(slot, &self.composed_rects)
+                }
+                Presentation::Surface(_) | Presentation::Offscreen(_) => {
+                    vec![self.composed.used()]
+                }
+            };
+            draw_calls += self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         if let Some(timer) = &mut self.timer {
             timer.finish(&mut encoder);
@@ -371,10 +397,6 @@ impl Renderer for WgpuRenderer {
         // frame built a pipeline, such as the first one for a group target format.
         self.pipelines.borrow().persist();
 
-        let redrawn: u64 = damage::rects(damage, self.composed.used())
-            .iter()
-            .map(|rect| damage::area(*rect))
-            .sum();
         counter::add(Counter::DamagePx, redrawn);
         let stats = FrameStats {
             draw_calls,
@@ -688,8 +710,16 @@ impl WgpuRenderer {
             })
     }
 
-    /// Copies the composed target onto whatever is being presented to.
-    fn blit(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, undo: bool) {
+    /// Copies the composed target onto whatever is being presented to, within `scissors`.
+    ///
+    /// Answers how many draws that took: one for every rectangle that covers any pixel.
+    fn blit(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        undo: bool,
+        scissors: &[Rect<i32, Device>],
+    ) -> u32 {
         let kind = if undo {
             PipelineKind::BlitUndoSrgb
         } else {
@@ -698,7 +728,7 @@ impl WgpuRenderer {
         let format = self.presentation.formats().present_attachment();
         let mut pipelines = self.pipelines.borrow_mut();
         let Some(pipeline) = pipelines.get(&self.gpu, kind, format) else {
-            return;
+            return 0;
         };
         let queries = self
             .timer
@@ -711,9 +741,9 @@ impl WgpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    // Every pixel is written, so nothing has to be preserved and no clear is
-                    // inserted ahead of the copy.
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    // The copy covers the rectangles below and no other pixel, so what the texture
+                    // already holds is kept.
+                    load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -724,6 +754,24 @@ impl WgpuRenderer {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.composed_binding, &[]);
-        pass.draw(0..4, 0..1);
+        let mut drawn = 0;
+        for rect in scissors {
+            let (width, height) = (
+                rect.size.width.max(0) as u32,
+                rect.size.height.max(0) as u32,
+            );
+            if width == 0 || height == 0 {
+                continue;
+            }
+            pass.set_scissor_rect(
+                rect.origin.x.max(0) as u32,
+                rect.origin.y.max(0) as u32,
+                width,
+                height,
+            );
+            pass.draw(0..4, 0..1);
+            drawn += 1;
+        }
+        drawn
     }
 }

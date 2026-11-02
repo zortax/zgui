@@ -115,13 +115,17 @@ const LEDGER: &[(&str, &[&str])] = &[
     // eventfd its wake channel is, the `poll` its frame loop parks in, the monotonic clock an
     // input report is stamped against, and the `fstat` its tests read an exported descriptor with.
     // `zgui-platform-wayland` is on it for a clock as well: the one the compositor stamps its
-    // presentation feedback in. A row is read by its first match, so the four share one.
+    // presentation feedback in. `zgui-scanout` names it for the `poll` a copier's own thread waits
+    // on a fence descriptor with, and in its hardware test to map a buffer through its descriptor —
+    // `gbm_bo_map` faults inside the driver it is written against. A row is read by its first
+    // match, so all of them share one.
     (
         "rustix",
         &[
             "zgui-drm",
             "zgui-platform-drm",
             "zgui-evdev",
+            "zgui-scanout",
             "zgui-platform-wayland",
         ],
     ),
@@ -139,7 +143,13 @@ const LEDGER: &[(&str, &[&str])] = &[
     // has to start where neither the library nor its data files exist. `zgui-seat` opens libseat,
     // because it has to start where no session daemon answers. `zgui-libinput` opens libinput,
     // because it has to start where that library is absent and read the devices itself.
-    ("libloading", &["zgui-xkb", "zgui-seat", "zgui-libinput"]),
+    // `libgbm` is opened here and nowhere else, so a machine without the library has to start
+    // and say so. The crates that allocate through it do not open it, which is the whole point of
+    // the rule.
+    (
+        "libloading",
+        &["zgui-xkb", "zgui-seat", "zgui-libinput", "zgui-gbm"],
+    ),
     (
         "accesskit",
         &[

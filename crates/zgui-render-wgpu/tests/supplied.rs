@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use zgui_bits::DamageSet;
 use zgui_color::Color;
-use zgui_geom::{Device, Scale, Size};
+use zgui_geom::{Device, Point, Rect, Scale, Size};
 use zgui_render::{FrameOutcome, RenderTarget, Renderer, SkipReason};
 use zgui_render_wgpu::renderer::readback;
 use zgui_render_wgpu::target::swapchain::Supplied;
@@ -490,4 +490,98 @@ fn a_supplied_renderer_cannot_rebuild_itself_after_a_loss() {
         "the refusal does not say whose job the new textures are: {:?}",
         failure.candidates
     );
+}
+
+/// Where the square every rotation assertion reads sits, in device pixels.
+///
+/// Around the centre, so [`centre`] reads it, and well inside the surface, so the background is
+/// still visible at a corner.
+const SQUARE: (f32, f32, f32, f32) = (48.0, 48.0, 32.0, 32.0);
+
+/// The damage naming the square alone, which is what makes a frame here a partial redraw.
+fn square_damage() -> DamageSet {
+    let mut damage = DamageSet::new();
+    damage.absorb(Rect::new(
+        Point::new(SQUARE.0 as i32, SQUARE.1 as i32),
+        Size::new(SQUARE.2 as i32, SQUARE.3 as i32),
+    ));
+    damage
+}
+
+/// A dark background with one square of `colour` on it, declared against `damage`.
+fn square_on_background(colour: Color, damage: &DamageSet) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(extent());
+    let back = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(20, 20, 20)));
+    let front = scene.paints.add(zgui_scene::Paint::Solid(colour));
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, SIDE as f32, SIDE as f32), back));
+    scene.push_quad(Quad::filled(
+        rect(SQUARE.0, SQUARE.1, SQUARE.2, SQUARE.3),
+        front,
+    ));
+    scene.finish(damage);
+    scene
+}
+
+#[test]
+fn a_rotating_set_brings_each_buffer_up_to_date_before_this_frame_goes_on_it() {
+    // Every other assertion in this file draws whole frames, so none of them exercises the debt a
+    // rotated buffer carries. A frame writes the rectangles it drew **and** the ones drawn while
+    // this buffer was not the one being written. A buffer given only the rectangles of the frame
+    // in front of it holds a picture that is part this frame and part as many frames old as the
+    // set is deep — which on a display is a corner of the screen that stopped updating.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+
+    // The square's colour says which step a buffer's picture is from, and the damage names only
+    // the square, so every frame leaves the other two buffers one step further behind.
+    let steps: [[u8; 3]; 7] = [
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [255, 255, 0],
+        [0, 255, 255],
+        [255, 0, 255],
+        [90, 90, 200],
+    ];
+    let damage = square_damage();
+    for (step, bytes) in steps.iter().enumerate() {
+        let colour = opaque(bytes[0], bytes[1], bytes[2]);
+        let slot = step % textures.len();
+        assert!(renderer.present_into(slot), "slot {slot} of three exists");
+        let outcome = renderer.draw(&square_on_background(colour, &damage), &damage);
+        assert!(
+            outcome.stats().is_some(),
+            "step {step} composed nothing and reported {outcome:?}"
+        );
+        // Checked once the renderer has stopped widening frames for reasons of its own: the first
+        // frame redraws everything whatever it was handed, and this assertion is worth nothing
+        // unless the frames under it really are partial.
+        if step == 3 {
+            assert!(
+                renderer.composed_rects().len() == 1
+                    && renderer.composed_rects()[0].size.width < SIDE,
+                "this assertion needs a partial redraw, and the frame reported {:?}",
+                renderer.composed_rects()
+            );
+        }
+
+        let pixels = read(&renderer, &textures[slot]);
+        assert_eq!(
+            centre(&pixels),
+            [bytes[0], bytes[1], bytes[2], 255],
+            "step {step}: buffer {slot} did not get this frame's square"
+        );
+        assert_eq!(
+            pixels.rgba(2, 2),
+            [20, 20, 20, 255],
+            "step {step}: buffer {slot} never received the background, which only the debt it was \
+             owed can have written"
+        );
+    }
 }

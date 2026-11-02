@@ -17,11 +17,16 @@ publish = false
 zgui = { path = "../zgui", version = "0.1.0" }
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+# The rectangles a drawn frame reports, which the display turns into the damage it flips.
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-drm = { path = "../zgui-platform-drm", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
 zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
 zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+# The latency trace. A console has no standard error a person can read — it is the screen the frame
+# loop overwrites — so the stages are written to the file `ZGUI_LATENCY` names.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
@@ -31,7 +36,6 @@ zgui-view = { path = "../zgui-view", version = "0.1.0" }
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 
 [lints]
