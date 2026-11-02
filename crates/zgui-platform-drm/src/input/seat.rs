@@ -2194,15 +2194,12 @@ mod tests {
 
     /// The bytes of one record, as the kernel lays out `input_event`.
     ///
-    /// A `timeval` of two sixty-four-bit halves, then the type, the code and the value. A machine
-    /// where those are not the widths fails these tests loudly rather than quietly: the reader
-    /// would find no `SYN_REPORT` where one was written, and every assertion below would see no
-    /// batch at all.
+    /// The time at the front, then the type, the code and the value. A machine where those are not
+    /// the widths fails these tests loudly rather than quietly: the reader would find no
+    /// `SYN_REPORT` where one was written, and every assertion below would see no batch at all.
     fn record(at: Duration, kind: EventType, code: u16, value: i32) -> Vec<u8> {
-        let mut bytes = Vec::new();
         let seconds = i64::try_from(at.as_secs()).expect("the test uses a small moment");
-        bytes.extend_from_slice(&seconds.to_ne_bytes());
-        bytes.extend_from_slice(&i64::from(at.subsec_micros()).to_ne_bytes());
+        let mut bytes = crate::input::fixture::stamp(seconds, i64::from(at.subsec_micros()));
         bytes.extend_from_slice(&kind.raw().to_ne_bytes());
         bytes.extend_from_slice(&code.to_ne_bytes());
         bytes.extend_from_slice(&value.to_ne_bytes());
