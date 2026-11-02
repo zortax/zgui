@@ -34,12 +34,17 @@ pub struct Scratch {
 /// One array texture and a view per layer.
 #[derive(Debug)]
 struct Textures {
-    /// The texture, held because dropping it would take every view of it with it.
+    /// One texture per layer, held because dropping one would take its view with it.
+    ///
+    /// A layer each rather than one array texture with a layer per pass. Rendering into a layer of
+    /// an array texture writes nothing at all on an OpenGL 3.3 device — no error, no warning, an
+    /// attachment that silently keeps whatever it held — and this rasteriser is the one such a
+    /// device falls back to, so it is the last thing that may depend on that working.
     #[expect(
         dead_code,
-        reason = "held so the views outlive the texture they are of"
+        reason = "held so the views outlive the textures they are of"
     )]
-    texture: wgpu::Texture,
+    textures: Vec<wgpu::Texture>,
     /// One view per layer.
     views: Vec<wgpu::TextureView>,
 }
@@ -197,38 +202,31 @@ impl Default for Scratch {
     }
 }
 
-/// Allocates one array texture and a view per layer.
+/// Allocates one texture per layer, and the view each is drawn into and read through.
 fn allocate(gpu: &Gpu, extent: (u32, u32), layers: u32, label: &'static str) -> Textures {
-    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: extent.0,
-            height: extent.1,
-            depth_or_array_layers: layers,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let views = (0..layers)
-        .map(|layer| {
-            texture.create_view(&wgpu::TextureViewDescriptor {
+    let textures: Vec<wgpu::Texture> = (0..layers)
+        .map(|_| {
+            gpu.device().create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
-                format: Some(FORMAT),
-                dimension: Some(wgpu::TextureViewDimension::D2),
-                usage: None,
-                aspect: wgpu::TextureAspect::All,
-                base_mip_level: 0,
-                mip_level_count: Some(1),
-                base_array_layer: layer,
-                array_layer_count: Some(1),
+                size: wgpu::Extent3d {
+                    width: extent.0,
+                    height: extent.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
             })
         })
         .collect();
-    Textures { texture, views }
+    let views = textures
+        .iter()
+        .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+        .collect();
+    Textures { textures, views }
 }

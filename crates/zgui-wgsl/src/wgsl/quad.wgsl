@@ -203,7 +203,7 @@ fn sides_color(
     widths: vec2<f32>,
     unit: f32,
 ) -> vec4<f32> {
-    let paint = paints[reference.index];
+    let paint = load_paint(reference.index);
     let vertical = side_color(paint, select(1u, 3u, center_to_point.x < 0.0));
     let horizontal = side_color(paint, select(2u, 0u, center_to_point.y < 0.0));
     var toward_vertical = 0.0;

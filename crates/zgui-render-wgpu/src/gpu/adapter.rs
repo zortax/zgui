@@ -234,6 +234,19 @@ pub fn sort_key(info: &wgpu::AdapterInfo, preferred: Option<u32>) -> (u8, u8, u8
     (named, device_type, backend)
 }
 
+/// Returns `true` if this adapter rasterises on the processor.
+///
+/// Such an adapter is a last resort rather than a tier: it draws every pixel on the cores the
+/// application is also running on, and it is offered by a driver that is installed on a great many
+/// machines that also have a real graphics card. `llvmpipe` and `lavapipe` are the two this meets
+/// — Mesa's software renderers for GL and for Vulkan.
+///
+/// A virtualised device answers `false`. It is a real card behind a hypervisor, and it draws on
+/// that card.
+pub fn is_software(info: &wgpu::AdapterInfo) -> bool {
+    matches!(info.device_type, wgpu::DeviceType::Cpu)
+}
+
 /// A one-line description of an adapter, for a rejection list or a startup line.
 pub fn describe(info: &wgpu::AdapterInfo) -> String {
     format!(
@@ -270,7 +283,9 @@ pub fn unavailable(rejections: Vec<(String, String)>) -> GpuUnavailable {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe, instance_flags, parse_backends, sort_key, tiers, unavailable};
+    use super::{
+        describe, instance_flags, is_software, parse_backends, sort_key, tiers, unavailable,
+    };
 
     #[test]
     fn only_debug_instances_validate_indirect_calls() {
@@ -346,6 +361,31 @@ mod tests {
         let cpu = info(1, wgpu::DeviceType::Cpu, wgpu::Backend::Vulkan);
         let virtualised = info(1, wgpu::DeviceType::VirtualGpu, wgpu::Backend::Vulkan);
         assert!(sort_key(&virtualised, None) < sort_key(&cpu, None));
+    }
+
+    /// The sort settles one tier, and this is what holds an adapter back past all of them.
+    ///
+    /// The two answers differ where it matters: a machine can carry a software Vulkan driver
+    /// beside a card whose only driver is OpenGL, and a tier order alone puts such a machine on
+    /// its processor.
+    #[test]
+    fn only_a_processor_adapter_is_software() {
+        assert!(is_software(&info(
+            1,
+            wgpu::DeviceType::Cpu,
+            wgpu::Backend::Vulkan
+        )));
+        for real in [
+            wgpu::DeviceType::DiscreteGpu,
+            wgpu::DeviceType::IntegratedGpu,
+            // A real card behind a hypervisor, which draws on that card.
+            wgpu::DeviceType::VirtualGpu,
+        ] {
+            assert!(
+                !is_software(&info(1, real, wgpu::Backend::Gl)),
+                "{real:?} draws on a card"
+            );
+        }
     }
 
     #[test]

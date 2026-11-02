@@ -23,6 +23,9 @@ pub struct GpuRounded {
     pub radii: [f32; 8],
     /// The superellipse exponent the corners are cut with; two is the ellipse.
     pub shape: f32,
+    /// Written zero. Carries the structure to four whole texels, so that a table held as a
+    /// texture begins each of these on a texel boundary and reads one with a single fetch.
+    pub pad: [f32; 3],
 }
 
 /// A whole clip chain, flattened into what one draw call applies.
@@ -41,12 +44,15 @@ pub struct GpuClip {
     pub first: GpuRounded,
     /// The innermost rounded test.
     pub second: GpuRounded,
+    /// The intersection of the kept links, in that system's coordinates.
+    ///
+    /// Ahead of the scalars below so that it, like every other composite field here, begins on a
+    /// texel boundary when the table is held as a texture.
+    pub kept_aabb: [f32; 4],
     /// How many of the two are meaningful.
     pub count: u32,
     /// The slot of the coordinate system the kept links are measured in, or [`NO_SPACE`].
     pub space: u32,
-    /// The intersection of the kept links, in that system's coordinates.
-    pub kept_aabb: [f32; 4],
     /// Bit 0 for `first`, bit 1 for `second`: set when the test is measured in `space`.
     pub kept_tests: u32,
     /// Written zero, so the structure has no padding.
@@ -854,11 +860,13 @@ fn gpu_clip(clip: &ResolvedClip) -> GpuClip {
             rect: clip.rounded[0].rect,
             radii: clip.rounded[0].radii,
             shape: clip.rounded[0].shape,
+            pad: [0.0; 3],
         },
         second: GpuRounded {
             rect: clip.rounded[1].rect,
             radii: clip.rounded[1].radii,
             shape: clip.rounded[1].shape,
+            pad: [0.0; 3],
         },
         count: clip.rounded_count,
         space: NO_SPACE,

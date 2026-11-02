@@ -22,11 +22,52 @@ struct Item {
     clips: vec4<f32>,
 }
 
-@group(0) @binding(0) var<storage, read> items: array<Item>;
-// Every outline in the frame, end to end: x0, y0, x1, y1.
-@group(0) @binding(1) var<storage, read> segments: array<vec4<f32>>;
+// Textures rather than storage buffers, so that a device with no storage buffers at all — a GL 3.3
+// context, WebGL 2 — can run this. It is the rasteriser such a device falls back *to*, so it above
+// all must not ask for what that device has none of.
+@group(0) @binding(0) var items: texture_2d<u32>;
+// Every outline in the frame, end to end: x0, y0, x1, y1. One texel each.
+@group(0) @binding(1) var segments: texture_2d<u32>;
 // Where each clip's outline starts, how long it is, and whether it is tested even-odd.
-@group(0) @binding(2) var<storage, read> runs: array<vec4<f32>>;
+@group(0) @binding(2) var runs: texture_2d<u32>;
+
+/// How many texels wide every one of them is. `TableTexture` uses the same number.
+const TABLE_TEXELS_WIDE: u32 = 256u;
+
+/// Where texel `index` of a table is.
+fn table_texel(index: u32) -> vec2<i32> {
+    return vec2<i32>(
+        i32(index % TABLE_TEXELS_WIDE),
+        i32(index / TABLE_TEXELS_WIDE),
+    );
+}
+
+/// One segment, which is one texel.
+fn load_segment(index: u32) -> vec4<f32> {
+    return bitcast<vec4<f32>>(textureLoad(segments, table_texel(index), 0));
+}
+
+/// One clip run, which is one texel.
+fn load_run(index: u32) -> vec4<f32> {
+    return bitcast<vec4<f32>>(textureLoad(runs, table_texel(index), 0));
+}
+
+/// One item, which spans 5 texels of the arena.
+fn load_item(slot: u32) -> Item {
+    let base = slot * 5u;
+    let t0 = textureLoad(items, table_texel(base + 0u), 0);
+    let t1 = textureLoad(items, table_texel(base + 1u), 0);
+    let t2 = textureLoad(items, table_texel(base + 2u), 0);
+    let t3 = textureLoad(items, table_texel(base + 3u), 0);
+    let t4 = textureLoad(items, table_texel(base + 4u), 0);
+    return Item(
+        vec4<f32>(bitcast<f32>(t0.x), bitcast<f32>(t0.y), bitcast<f32>(t0.z), bitcast<f32>(t0.w)),
+        vec4<f32>(bitcast<f32>(t1.x), bitcast<f32>(t1.y), bitcast<f32>(t1.z), bitcast<f32>(t1.w)),
+        vec4<f32>(bitcast<f32>(t2.x), bitcast<f32>(t2.y), bitcast<f32>(t2.z), bitcast<f32>(t2.w)),
+        vec4<f32>(bitcast<f32>(t3.x), bitcast<f32>(t3.y), bitcast<f32>(t3.z), bitcast<f32>(t3.w)),
+        vec4<f32>(bitcast<f32>(t4.x), bitcast<f32>(t4.y), bitcast<f32>(t4.z), bitcast<f32>(t4.w)),
+    );
+}
 
 // The sampling grid's side. Sixteen samples per pixel, which is the quality this trades for needing
 // nothing but a fragment shader.
@@ -42,7 +83,7 @@ fn vs_coverage(
     @builtin(vertex_index) vertex: u32,
     @builtin(instance_index) instance: u32,
 ) -> Varying {
-    let item = items[instance];
+    let item = load_item(instance);
     let corner = vec2<f32>(f32(vertex & 1u), 0.5 * f32(vertex & 2u));
     let point = item.bounds.xy + corner * item.bounds.zw;
     let ndc = vec2<f32>(
@@ -57,7 +98,7 @@ fn vs_coverage(
 
 @fragment
 fn fs_coverage(in: Varying) -> @location(0) vec4<f32> {
-    let item = items[in.instance];
+    let item = load_item(in.instance);
     let first = u32(item.control.x);
     let count = u32(item.control.y);
     let even_odd = item.control.z != 0.0;
@@ -80,7 +121,7 @@ fn fs_coverage(in: Varying) -> @location(0) vec4<f32> {
             // keeps the corner where an edge meets a clip from being lighter than either.
             var clipped = false;
             for (var c = 0u; c < clip_count; c = c + 1u) {
-                let run = runs[clip_first + c];
+                let run = load_run(clip_first + c);
                 if !contains(sample, u32(run.x), u32(run.y), run.z != 0.0) {
                     clipped = true;
                     break;
@@ -102,12 +143,12 @@ fn fs_coverage(in: Varying) -> @location(0) vec4<f32> {
     return vec4<f32>(item.color.rgb * alpha, alpha);
 }
 
-// Whether `point` is inside the outline held in `segments[first .. first + count]`.
+// Whether `point` is inside the outline held in segments `first .. first + count`.
 fn contains(point: vec2<f32>, first: u32, count: u32, even_odd: bool) -> bool {
     var winding = 0;
     var crossings = 0;
     for (var index = 0u; index < count; index = index + 1u) {
-        let segment = segments[first + index];
+        let segment = load_segment(first + index);
         let a = segment.xy;
         let b = segment.zw;
         if (a.y > point.y) == (b.y > point.y) {

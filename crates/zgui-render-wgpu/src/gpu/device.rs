@@ -77,7 +77,9 @@ impl Gpu {
     /// Opens a device on `adapter`, or says why it could not.
     ///
     /// A GL adapter is asked for the downlevel limit set rather than its own, because its own is
-    /// routinely more than a device created from it will grant.
+    /// routinely more than a device created from it will grant. The set is then clamped to what
+    /// the adapter reports, because the downlevel set names compute limits and a GL 3.3 context
+    /// has no compute to name them for.
     ///
     /// # Errors
     ///
@@ -117,7 +119,13 @@ impl Gpu {
     ) -> Result<Self, String> {
         let info = adapter.get_info();
         let limits = if info.backend == wgpu::Backend::Gl {
-            wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
+            // Clamped to the adapter's own values, because the downlevel set asks for compute
+            // limits a GL 3.3 context reports zero for. `request_device` refuses a limit set as a
+            // whole, so asking for one number the adapter cannot meet costs the device — and with
+            // it the coverage rasteriser, which is the very thing such a context is for.
+            wgpu::Limits::downlevel_defaults()
+                .using_resolution(adapter.limits())
+                .or_worse_values_from(&adapter.limits())
         } else {
             adapter.limits()
         };
@@ -291,11 +299,35 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
     let downlevel = adapter.get_downlevel_capabilities();
     let features = device.features();
     let limits = device.limits();
+    let subpixel_text = features.contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+    // Said once, because it decides what every glyph small enough for the atlas looks like and
+    // there is otherwise no way to tell from outside which of the two a device settled on. Text
+    // above the atlas threshold is filled as outlines and is grayscale whatever this says, so a
+    // page carrying both sizes shows both answers at once.
+    tracing::info!(
+        target: "zgui::render",
+        "text small enough to be cached is drawn {}",
+        if subpixel_text {
+            "with one coverage value per display subpixel, which assumes the display's stripes run \
+             horizontally red, green, blue"
+        } else {
+            "with one coverage value per pixel"
+        }
+    );
     RenderCapabilities {
-        subpixel_text: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+        subpixel_text,
         vector_compute: downlevel
             .flags
             .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+            // The path renderer's shaders unpack two half floats out of one word, and naga
+            // refuses `unpack2x16float` without this. A software Vulkan device is where it is
+            // absent — those instructions need native half-float support there and nowhere else,
+            // which wgpu-hal knows and reports here. Asking is what keeps the fallback a fallback:
+            // the path renderer panics on a shader it cannot compile rather than answering with an
+            // error, and a panic unwinds past the branch that would have caught it.
+            && downlevel
+                .flags
+                .contains(wgpu::DownlevelFlags::SHADER_F16_IN_F32)
             && adapter
                 .get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm)
                 .allowed_usages

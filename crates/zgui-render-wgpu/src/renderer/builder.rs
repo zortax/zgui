@@ -186,6 +186,16 @@ impl Builder {
 /// A tier is enumerated only when every tier before it has failed, so the backends kept as a
 /// fallback cost a machine that never needs them nothing at all.
 ///
+/// # An adapter that draws on the processor is not a tier
+///
+/// Such an adapter is held back past every tier and tried only when no card answered on any of
+/// them. A tier is ordered by *backend*, and that order says nothing about whether the device
+/// behind it is real: Mesa installs `lavapipe`, a software Vulkan driver, on machines whose card
+/// has a working OpenGL driver and no Vulkan one at all. Taking the first tier that answers puts
+/// such a machine on its processor while its graphics card sits idle, and it looks like a working
+/// program that is merely slow — which is the hardest kind of fault to see. So a card on any tier
+/// beats the processor on every tier.
+///
 /// Separate from [`Builder`] because opening a device and assembling a renderer are two things:
 /// [`SharedGraphics`](crate::SharedGraphics) opens one device and assembles many renderers on it.
 ///
@@ -207,6 +217,10 @@ pub(crate) fn open_device(
     // Adapters passed over for having the names and then being refused a device carrying them.
     // Offered again at the end, where nothing else opened at all.
     let mut deferred: Vec<(wgpu::Instance, wgpu::Adapter)> = Vec::new();
+    // Adapters that rasterise on the processor. Held back past every tier, because a tier is
+    // ordered by backend and a software adapter beats no hardware on any backend. See the head of
+    // this function.
+    let mut software: Vec<(wgpu::Instance, wgpu::Adapter)> = Vec::new();
     // Whether a list was asked for at all. With none, every candidate is equal and the pairing
     // below leaves the preference order exactly as `adapter::candidates` produced it.
     let asked = !extensions.is_empty();
@@ -229,7 +243,14 @@ pub(crate) fn open_device(
         // Stable, so the existing preference survives inside each group.
         candidates.sort_by_key(|(grants, _)| !grants);
         for (grants, candidate) in candidates {
-            let name = adapter::describe(&candidate.get_info());
+            let info = candidate.get_info();
+            let name = adapter::describe(&info);
+            if adapter::is_software(&info) {
+                // Held back rather than rejected: it is what a machine with no graphics driver at
+                // all runs on, and it opens once every tier has been walked.
+                software.push((instance.clone(), candidate));
+                continue;
+            }
             // Kept only where it is about to be judged on the list, so the ordinary path clones
             // nothing.
             let again = grants.then(|| (instance.clone(), candidate.clone()));
@@ -282,6 +303,32 @@ pub(crate) fn open_device(
                     adapter = %gpu.describe(),
                     "graphics device opened without the Vulkan device extensions that were asked \
                      for"
+                );
+                return Ok(opened);
+            }
+            Err(reason) => rejections.push((name, reason)),
+        }
+    }
+
+    // Every tier has been walked and no card answered, so the adapters that draw on the processor
+    // are what is left. This is the whole of what makes them a last resort rather than a tier: the
+    // tiers are ordered by backend, and a machine can have a software Vulkan driver beside a real
+    // OpenGL one — Mesa's `lavapipe` beside a card whose Vulkan driver does not exist.
+    for (instance, candidate) in software {
+        let name = adapter::describe(&candidate.get_info());
+        let gpu = match Gpu::open(instance.clone(), candidate, extensions) {
+            Ok(gpu) => Arc::new(gpu),
+            Err(reason) => {
+                rejections.push((name, reason));
+                continue;
+            }
+        };
+        match offer(&gpu, &mut present) {
+            Ok(opened) => {
+                tracing::warn!(
+                    adapter = %gpu.describe(),
+                    "no graphics card on this machine could be drawn on, so every pixel is drawn \
+                     on the processor"
                 );
                 return Ok(opened);
             }
