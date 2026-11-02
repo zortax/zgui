@@ -81,6 +81,9 @@ pub fn plan_segments(
         .backdrops
         .iter()
         .filter(|backdrop| !backdrop.reads_only_what_it_writes())
+        // A kept copy already holds everything outside the damage, so the rectangles do not have
+        // to reach what this one reads. That is the whole of what makes a frosted panel cheap.
+        .filter(|backdrop| !backdrop.keeps_its_capture())
         .map(|backdrop| rounded_out(on_device(scene, backdrop).1))
         .collect();
 
@@ -575,7 +578,7 @@ fn end_group(
         return;
     }
     let chain = Chain::of(&group.boundary.filters);
-    let filtered = filter::plan(builder, &chain, target, group.region);
+    let filtered = filter::plan(builder, &chain, target, group.region, group.region);
     if !is_source_over(&group.boundary) {
         builder.note_unsupported_blend();
     }
@@ -615,28 +618,30 @@ fn plan_backdrop(
     used: Rect<i32, Device>,
 ) {
     let (written, read) = on_device(scene, backdrop);
-    // The batch stream is replayed once per damage rectangle, so a rectangle nowhere near this
-    // backdrop still reaches here. It writes nothing inside such a rectangle, and capturing what
-    // it would have read is both wasted and impossible — the read lies outside what this pass is
-    // allowed to write.
-    if clamped(written, scissor, used).is_empty() {
-        return;
-    }
     let Some(source) = enclosing(read, used) else {
         return;
     };
-    // What a backdrop reads has to be inside what this frame has already written into the target
-    // beneath it, or it samples the previous frame's composite — which already contains this
-    // filter's own output, and the panel smears a little further every frame. A filter with no
-    // reach is exempt and safe: it reads only the pixel it writes, which the scissor already
-    // covers. A group's target holds no earlier frame: its first pass clears all of it, so a read
-    // past the group's region reads transparent, which is what lies outside a backdrop root.
-    debug_assert!(
-        beneath != TargetRef::Composed
-            || backdrop.reads_only_what_it_writes()
-            || scissor.contains_rect(source),
-        "a backdrop reads {source:?}, which the region {scissor:?} being written does not contain"
-    );
+    let keeps = backdrop.keeps_its_capture() && crate::filter::backdrop::keepable(beneath);
+    if backdrop.keeps_its_capture() && !keeps {
+        // The damage was grown small on the understanding that the kept copy would carry the rest,
+        // and it cannot. This rectangle is drawn from a scratch copy of a region the frame did not
+        // wholly redraw, so the frame after it starts again from everything.
+        builder.note_capture_refused();
+    }
+
+    // A kept copy has to stay current wherever this rectangle redrew what the filter reads, even
+    // where the filter writes nothing here: a rectangle beyond the panel but inside its reach still
+    // changes what the panel reads the next time it is drawn.
+    if keeps && let Some(redrawn) = source.intersection(scissor) {
+        crate::filter::backdrop::capture(builder, beneath, TargetRef::Kept, redrawn);
+    }
+
+    // The batch stream is replayed once per damage rectangle, so a rectangle nowhere near this
+    // backdrop still reaches here, and it writes nothing inside such a rectangle.
+    let bounds = clamped(written, scissor, used);
+    if bounds.is_empty() {
+        return;
+    }
     // A group nothing has been drawn into yet was never cleared, and holds what its last lease left
     // there. What is beneath the backdrop is then transparent, and so is any filter of it.
     if let Some(slot) = beneath.slot() {
@@ -647,15 +652,50 @@ fn plan_backdrop(
         }
     }
     let chain = Chain::of(&backdrop.filters);
-    let Some((filtered, captured)) =
-        crate::filter::backdrop::plan(builder, beneath, &chain, source)
-    else {
-        builder.note_unisolated();
-        return;
+    let (filtered, captured) = if keeps {
+        // Everything the filter reads is in the kept copy already, so the only thing that has to
+        // be produced is what it writes *here* — this rectangle's share of the panel rather than
+        // the whole of it. That is the difference between a frosted panel costing its own area on
+        // every frame and costing whatever moved under it.
+        (
+            filter::plan(builder, &chain, TargetRef::Kept, bounds, source),
+            TargetRef::Kept,
+        )
+    } else {
+        // What a backdrop reads has to be inside what this frame has already written into the
+        // target beneath it, or it samples the previous frame's composite — which already contains
+        // this filter's own output, and the panel smears a little further every frame. A filter
+        // with no reach is exempt and safe: it reads only the pixel it writes, which the scissor
+        // already covers. A group's target holds no earlier frame: its first pass clears all of
+        // it, so a read past the group's region reads transparent, which is what lies outside a
+        // backdrop root.
+        debug_assert!(
+            beneath != TargetRef::Composed
+                || backdrop.reads_only_what_it_writes()
+                || scissor.contains_rect(source),
+            "a backdrop reads {source:?}, which the region {scissor:?} being written does not \
+             contain"
+        );
+        // The copy goes into the kept target wherever it can, even on a frame that renews it:
+        // that is what leaves the frame after this one something to keep. A scratch lease
+        // otherwise, which is a backdrop inside a group — the composite beneath it is that group's
+        // own target and holds a different thing from the composed one.
+        let into = if crate::filter::backdrop::keepable(beneath) {
+            TargetRef::Kept
+        } else {
+            match crate::filter::backdrop::scratch(builder, beneath, source) {
+                Some(into) => into,
+                None => {
+                    builder.note_unisolated();
+                    return;
+                }
+            }
+        };
+        crate::filter::backdrop::capture(builder, beneath, into, source);
+        (filter::plan(builder, &chain, into, source, source), into)
     };
     // A backdrop composites only over what it writes, which is what gives a frosted panel the
     // defined shape its clip describes rather than a soft fade past its own edge.
-    let bounds = clamped(written, scissor, used);
     composite(
         builder,
         &filtered,

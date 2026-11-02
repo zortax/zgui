@@ -94,6 +94,14 @@ impl Item {
 
 /// Builds `items` into a finished scene.
 fn build(items: &[Item]) -> Scene {
+    build_with(items, false)
+}
+
+/// Builds `items` into a finished scene.
+///
+/// `keeping` marks the frosted panels as reading the copy kept from the last frame, which is what
+/// the paint stage does once it has grown the damage on that understanding.
+fn build_with(items: &[Item], keeping: bool) -> Scene {
     let mut scene = Scene::new();
     scene.begin_frame(Size::new(SIDE, SIDE));
     let white = scene
@@ -105,10 +113,12 @@ fn build(items: &[Item]) -> Scene {
     ));
     for (index, item) in items.iter().enumerate() {
         if let Some(deviation) = item.frost {
-            scene.push_backdrop(BackdropFilter::new(
-                item.ink(),
-                [Filter::Blur(deviation)].into_iter().collect(),
-            ));
+            let mut filter =
+                BackdropFilter::new(item.ink(), [Filter::Blur(deviation)].into_iter().collect());
+            if keeping {
+                filter = filter.keeping_its_capture();
+            }
+            scene.push_backdrop(filter);
         } else {
             let paint = scene.paints.add(zgui_scene::Paint::Solid(opaque(
                 item.color[0],
@@ -927,4 +937,91 @@ fn a_backdrop_is_drawn_where_its_coordinate_system_now_is() {
             "shifted by {shift}: the backdrop under the system differs from the backdrop drawn there"
         );
     }
+}
+
+/// The damage a frame owes when the frosted panel reads the copy kept from the last one.
+///
+/// The panel's own read region is deliberately *not* absorbed — that is the whole point of keeping
+/// a copy. What is absorbed is where the panel's answer changed, which is what moved beneath it
+/// grown by how far the blur carries a pixel.
+fn damage_keeping(before: &[Item], after: &[Item]) -> DamageSet {
+    let mut damage: DamageSet = DamageSet::new();
+    for (was, is) in before.iter().zip(after) {
+        if was != is {
+            damage.absorb(whole(was.ink()));
+            damage.absorb(whole(is.ink()));
+        }
+    }
+    for (panel, deviation) in after
+        .iter()
+        .filter_map(|item| item.frost.map(|f| (item, f)))
+    {
+        let bounds = whole(panel.ink());
+        let reach = (Filter::BLUR_EXTENT * deviation).ceil() as i32;
+        for moved in damage.rects().to_vec() {
+            let Some(changed) = moved
+                .outset(zgui_geom::Edges::uniform(reach))
+                .intersection(bounds)
+            else {
+                continue;
+            };
+            damage.absorb(changed);
+        }
+    }
+    damage
+}
+
+#[test]
+fn a_backdrop_that_keeps_its_capture_draws_the_frame_drawn_whole() {
+    // The exactness claim behind the kept copy. Outside the damage that copy holds an *earlier*
+    // frame's composite, and the claim is that at a pixel no frame since has redrawn that is the
+    // same picture — so a panel filtering it produces, to the last level, the frame that redrew
+    // everything. Anything less would be a cheaper blur rather than the same one.
+    let Some((mut tracked, mut whole_surface)) = support::renderer_pair() else {
+        return;
+    };
+    let mut items = backdrop_filter_over_animating_content(0);
+    // The first frame renews the copy, exactly as the expansion says it must: there is nothing
+    // kept yet to read.
+    present(&mut tracked, &build(&items));
+    present(&mut whole_surface, &build(&items));
+
+    for step in 1..8 {
+        let previous = items.clone();
+        items = backdrop_filter_over_animating_content(step);
+        let damage = damage_keeping(&previous, &items);
+        assert!(
+            !damage.is_full(),
+            "step {step}: the fixture stopped being partial"
+        );
+        let outcome = tracked.draw(&build_with(&items, true), &damage);
+        assert!(outcome.retires_damage(), "{outcome:?}");
+        let damaged = tracked
+            .read_presented()
+            .expect("a stand-in surface can be read back");
+        let full = present(&mut whole_surface, &build(&items));
+        assert_eq!(
+            damaged.max_difference(&full),
+            0,
+            "step {step}: the kept copy drew a different picture from the frame drawn whole"
+        );
+    }
+}
+
+#[test]
+fn keeping_the_capture_is_what_stops_the_damage_reaching_the_panel() {
+    // The measurement the change was made for, as an assertion: the same two frames cost the
+    // panel's whole read region when the copy is renewed and only what moved when it is kept.
+    let before = backdrop_filter_over_animating_content(3);
+    let after = backdrop_filter_over_animating_content(4);
+    let renewed: i64 = damage_between(&before, &after)
+        .area()
+        .expect("a bounded set");
+    let kept: i64 = damage_keeping(&before, &after)
+        .area()
+        .expect("a bounded set");
+    assert!(
+        kept * 2 < renewed,
+        "keeping the copy cost {kept} px against renewing it at {renewed}"
+    );
 }
