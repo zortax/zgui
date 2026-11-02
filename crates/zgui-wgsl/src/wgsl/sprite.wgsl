@@ -35,14 +35,33 @@ struct ColorSprite {
 
 const GRAYSCALE: u32 = 1u;
 
+// A coverage sprite's varyings: where in the atlas to read, and the record the fragment stage
+// used to read again — the tile as its rectangle, the tint, and the clip it applies. A coverage
+// sprite shades the texel it samples, so it needs no point in its own space.
 struct SpriteVarying {
+    @builtin(position) position: vec4<f32>,
+    @location(0) texel: vec2<f32>,
+    @location(1) @interpolate(flat) v_tile: vec4<f32>,
+    @location(2) @interpolate(flat) v_color: vec4<f32>,
+    @location(3) @interpolate(flat) v_clip: u32,
+}
+
+// A full-colour sprite's varyings. It carries the frame and its radii as well, and a tint is
+// a pair of flags and an opacity instead of a colour.
+struct ColorSpriteVarying {
     @builtin(position) position: vec4<f32>,
     // The point, from the sprite's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
     @location(1) texel: vec2<f32>,
-    @location(2) @interpolate(flat) instance: u32,
     // The sprite's origin in that space.
-    @location(3) @interpolate(flat) origin: vec2<f32>,
+    @location(2) @interpolate(flat) origin: vec2<f32>,
+    @location(3) @interpolate(flat) v_tile: vec4<f32>,
+    @location(4) @interpolate(flat) v_frame: vec4<f32>,
+    @location(5) @interpolate(flat) v_radii_lo: vec4<f32>,
+    @location(6) @interpolate(flat) v_radii_hi: vec4<f32>,
+    // The clip, and the flags that say how the texels are read.
+    @location(7) @interpolate(flat) v_ids: vec2<u32>,
+    @location(8) @interpolate(flat) v_opacity: f32,
 }
 
 // Where in the atlas a unit-square corner reads from, in texels.
@@ -53,8 +72,7 @@ struct SpriteVarying {
 // It stays in texels through the varying so that the atlas is read in the fragment stage alone:
 // normalising it in the vertex stage would need the texture's extent there, and a texture bound to
 // both stages is a texture every pipeline pays for in both.
-fn tile_texel(corner: vec2<f32>, tile: Tile) -> vec2<f32> {
-    let rect = tile_bounds(tile);
+fn tile_texel(corner: vec2<f32>, rect: vec4<f32>) -> vec2<f32> {
     return rect.xy + corner * rect.zw;
 }
 
@@ -69,8 +87,7 @@ fn tile_texel(corner: vec2<f32>, tile: Tile) -> vec2<f32> {
 // already branched on the clip by the time they sample, and implicit derivatives under nonuniform
 // control flow are undefined. Pools without mip chains clamp every level to zero, which is the
 // behaviour a single-level texture always had.
-fn sample_atlas(texel: vec2<f32>, tile: Tile, lod: f32) -> vec4<f32> {
-    let rect = tile_bounds(tile);
+fn sample_atlas(texel: vec2<f32>, rect: vec4<f32>, lod: f32) -> vec4<f32> {
     let inset = min(vec2<f32>(0.5), rect.zw * 0.5);
     let clamped = clamp(texel, rect.xy + inset, rect.xy + rect.zw - inset);
     return textureSampleLevel(

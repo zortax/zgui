@@ -26,22 +26,21 @@ fn vs_mono_sprite(
     let local = bounds_origin(sprite.bounds) + corner * bounds_size(sprite.bounds) + shift;
     var out: SpriteVarying;
     out.position = to_clip_position(local, sprite.transform);
-    out.local = corner * bounds_size(sprite.bounds);
-    out.texel = tile_texel(corner, sprite.tile);
-    out.instance = slot;
-    out.origin = bounds_origin(sprite.bounds);
+    out.v_tile = tile_bounds(sprite.tile);
+    out.texel = tile_texel(corner, out.v_tile);
+    out.v_color = rgba_of(sprite.color);
+    out.v_clip = sprite.clip;
     return out;
 }
 
 @fragment
 fn fs_mono_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
-    let sprite = sprites[in.instance];
-    let clip = clip_coverage(device_position(in.position.xy), sprite.clip);
+    let clip = clip_coverage(device_position(in.position.xy), in.v_clip);
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let color = rgba_of(sprite.color);
-    let sample = sample_atlas(in.texel, sprite.tile, 0.0).r;
+    let color = in.v_color;
+    let sample = sample_atlas(in.texel, in.v_tile, 0.0).r;
     let coverage = correct_coverage(sample, straight_rgb(color), globals.text.x);
     return color * coverage * clip;
 }

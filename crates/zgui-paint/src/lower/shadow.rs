@@ -99,11 +99,11 @@ fn shadow_color(color: &zgui_css::values::color::ColorValue, current: &AbsoluteC
 
 /// How far outside its own shape a shadow's painted extent reaches, in device pixels.
 ///
-/// Three standard deviations is where a Gaussian falls below one part in a thousand, under half a
-/// level at eight bits per channel. It is the same constant the display list uses to size a
-/// shadow's own rectangle, taken from there rather than written twice.
+/// Taken from the alpha the shadow is drawn with, because a fainter shadow stops moving pixels
+/// sooner. It is the same function the display list sizes a shadow's own rectangle with, called
+/// rather than written twice: the two rectangles have to agree exactly or a shadow clips.
 pub fn reach(spec: &ShadowSpec) -> f32 {
-    zgui_scene::Shadow::BLUR_EXTENT * spec.deviation + spec.spread
+    zgui_scene::Shadow::blur_extent(spec.color.alpha()) * spec.deviation + spec.spread
 }
 
 #[cfg(test)]
@@ -123,18 +123,38 @@ mod tests {
 
     #[test]
     fn reach_counts_both_the_blur_and_the_spread() {
-        let spec = ShadowSpec {
+        let spec = |color| ShadowSpec {
             offset_x: 0.0,
             offset_y: 0.0,
             deviation: 2.0,
             spread: 5.0,
-            color: Color::BLACK,
+            color,
             inset: false,
         };
         assert_eq!(
-            reach(&spec),
-            11.0,
-            "three deviations of blur plus the spread"
+            reach(&spec(Color::BLACK)),
+            zgui_scene::Shadow::blur_extent(1.0) * 2.0 + 5.0,
+            "an opaque shadow's blur plus the spread"
+        );
+    }
+
+    #[test]
+    fn a_fainter_shadow_reaches_less_far_than_an_opaque_one() {
+        // The spread is geometry and is unaffected; only the blur's reach follows the alpha. Stated
+        // here as well as in `zgui-scene` because this is the rectangle the painter dilates by, and
+        // it has to be the one the display list sizes the shadow's own bounds with.
+        let spec = |alpha| ShadowSpec {
+            offset_x: 0.0,
+            offset_y: 0.0,
+            deviation: 2.0,
+            spread: 5.0,
+            color: Color::srgb(0.0, 0.0, 0.0, alpha),
+            inset: false,
+        };
+        assert!(reach(&spec(0.55)) < reach(&spec(1.0)));
+        assert!(
+            reach(&spec(0.0)) == 5.0,
+            "a shadow that paints nothing still spreads by its spread"
         );
     }
 }

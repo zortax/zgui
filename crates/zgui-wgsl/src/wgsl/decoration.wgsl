@@ -30,7 +30,11 @@ struct DecorationVarying {
     @builtin(position) position: vec4<f32>,
     // The point, from the decoration's origin.
     @location(0) local: vec2<f32>,
-    @location(1) @interpolate(flat) instance: u32,
+    // The record the fragment stage used to read again, carried instead.
+    @location(1) @interpolate(flat) v_bounds: vec4<f32>,
+    @location(2) @interpolate(flat) v_color: vec4<f32>,
+    @location(3) @interpolate(flat) v_ids: vec2<u32>,
+    @location(4) @interpolate(flat) v_thickness: f32,
 }
 
 @vertex
@@ -46,22 +50,24 @@ fn vs_decoration(
     var out: DecorationVarying;
     out.position = to_clip_position(local, decoration.transform);
     out.local = inflated_offset(vertex, decoration.bounds);
-    out.instance = slot;
+    out.v_bounds = bounds_of(decoration.bounds);
+    out.v_color = rgba_of(decoration.color);
+    out.v_ids = vec2<u32>(decoration.clip, decoration.style);
+    out.v_thickness = decoration.thickness;
     return out;
 }
 
 @fragment
 fn fs_decoration(in: DecorationVarying) -> @location(0) vec4<f32> {
-    let decoration = decorations[in.instance];
-    let clip = clip_coverage(device_position(in.position.xy), decoration.clip);
+    let clip = clip_coverage(device_position(in.position.xy), in.v_ids.x);
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
 
-    let size = bounds_size(decoration.bounds);
+    let size = bounds_size(bounds_from_vec4(in.v_bounds));
     let local = in.local;
-    let thickness = max(decoration.thickness, 1.0);
-    let style = decoration.style;
+    let thickness = max(in.v_thickness, 1.0);
+    let style = in.v_ids.y;
 
     var coverage = 0.0;
     if style == DECORATION_WAVY {
@@ -90,7 +96,7 @@ fn fs_decoration(in: DecorationVarying) -> @location(0) vec4<f32> {
         }
     }
 
-    return rgba_of(decoration.color) * coverage * clip;
+    return in.v_color * coverage * clip;
 }
 
 // Coverage along the line, antialiased at both ends.

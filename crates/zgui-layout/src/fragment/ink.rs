@@ -7,10 +7,10 @@
 
 use zgui_css::ComputedStyle;
 use zgui_css::values::border::OutlineStyleValue;
-use zgui_css::values::color::{current, to_color};
+use zgui_css::values::color::{self, current, to_color};
 use zgui_css::values::image::ImageValue;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
-use zgui_scene::{Filter, read_extent};
+use zgui_scene::{Filter, Shadow, read_extent};
 
 use crate::fragment::custom_properties::CustomProperties;
 use crate::fragment::filter;
@@ -208,11 +208,21 @@ fn shadow_extent(
     scale: f32,
 ) -> Option<Rect<DevicePx, Device>> {
     let mut extent: Option<Rect<DevicePx, Device>> = None;
+    // Resolved once for the whole list rather than per shadow, and only reached at all by a box
+    // that casts one. `currentColor` is the element's own colour, which is the same for every
+    // shadow it writes.
+    let mut resolved = None;
     for shadow in &*style.get_effects().box_shadow.0 {
         if shadow.inset {
             continue;
         }
-        let blur = Filter::BLUR_EXTENT * (shadow.base.blur.0.px() * scale).max(0.0) / 2.0;
+        // The alpha the shadow is drawn with, because a fainter shadow stops moving pixels sooner
+        // and this rectangle is what damage is computed from. Resolved through `zgui-css`'s own
+        // function and sized by `zgui-scene`'s own, because the painter calls both of those too and
+        // a rectangle that disagreed with the one the shader covers would clip the shadow.
+        let own = *resolved.get_or_insert_with(|| color::current(style));
+        let alpha = color::resolve(&shadow.base.color, own).alpha();
+        let blur = Shadow::blur_extent(alpha) * (shadow.base.blur.0.px() * scale).max(0.0) / 2.0;
         let spread = shadow.spread.px() * scale;
         let reach = blur + spread;
         let rect = border_box

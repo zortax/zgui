@@ -32,9 +32,18 @@ struct ShadowVarying {
     @builtin(position) position: vec4<f32>,
     // The point, from the shadow's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
-    @location(1) @interpolate(flat) instance: u32,
     // The shadow's origin in that space.
-    @location(2) @interpolate(flat) origin: vec2<f32>,
+    @location(1) @interpolate(flat) origin: vec2<f32>,
+    // The record the fragment stage used to read again, carried across instead.
+    @location(2) @interpolate(flat) v_shape_bounds: vec4<f32>,
+    @location(3) @interpolate(flat) v_radii_lo: vec4<f32>,
+    @location(4) @interpolate(flat) v_radii_hi: vec4<f32>,
+    @location(5) @interpolate(flat) v_element_bounds: vec4<f32>,
+    @location(6) @interpolate(flat) v_element_radii_lo: vec4<f32>,
+    @location(7) @interpolate(flat) v_element_radii_hi: vec4<f32>,
+    @location(8) @interpolate(flat) v_color: vec4<f32>,
+    @location(9) @interpolate(flat) v_blur_shape: vec2<f32>,
+    @location(10) @interpolate(flat) v_clip_inset: vec2<u32>,
 }
 
 @vertex
@@ -52,8 +61,16 @@ fn vs_shadow(
     var out: ShadowVarying;
     out.position = to_clip_position(local, shadow.transform);
     out.local = inflated_offset(vertex, shadow.bounds);
-    out.instance = slot;
     out.origin = bounds_origin(shadow.bounds);
+    out.v_shape_bounds = bounds_of(shadow.shape_bounds);
+    out.v_radii_lo = radii_lo(shadow.radii);
+    out.v_radii_hi = radii_hi(shadow.radii);
+    out.v_element_bounds = bounds_of(shadow.element_bounds);
+    out.v_element_radii_lo = radii_lo(shadow.element_radii);
+    out.v_element_radii_hi = radii_hi(shadow.element_radii);
+    out.v_color = rgba_of(shadow.color);
+    out.v_blur_shape = vec2<f32>(shadow.blur, shadow.shape);
+    out.v_clip_inset = vec2<u32>(shadow.clip, shadow.inset);
     return out;
 }
 
@@ -107,8 +124,7 @@ fn blur_along_x(
 
 @fragment
 fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
-    let shadow = shadows[in.instance];
-    let clip = clip_coverage(device_position(in.position.xy), shadow.clip);
+    let clip = clip_coverage(device_position(in.position.xy), in.v_clip_inset.x);
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -116,24 +132,34 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
     // The blurred shape: the element box offset and grown by the spread for a drop shadow, and the
     // hole the shadow leaves open for an inset one. All distances are from the shadow's origin, so
     // they keep their precision far from the origin of the space.
-    let casting = bounds_from(shadow.shape_bounds, in.origin);
-    let element = bounds_from(shadow.element_bounds, in.origin);
+    let casting = bounds_from(bounds_from_vec4(in.v_shape_bounds), in.origin);
+    let element = bounds_from(bounds_from_vec4(in.v_element_bounds), in.origin);
     let half_size = bounds_size(casting) * 0.5;
     let center = bounds_origin(casting) + half_size;
     let local = in.local;
     let center_to_point = local - center;
-    let corner = pick_corner_radii(center_to_point, shadow.radii);
+    let radii = radii_from_vec4(in.v_radii_lo, in.v_radii_hi);
+    let element_radii = radii_from_vec4(in.v_element_radii_lo, in.v_element_radii_hi);
+    let corner = pick_corner_radii(center_to_point, radii);
+
+    // An outer shadow paints nothing inside the box that casts it — the multiply at the end of
+    // this function says so, having already paid for the integral. Settled here instead, before
+    // four samples of two error functions and an exponential apiece.
+    let element_distance = quad_sdf(local, element, element_radii, in.v_blur_shape.y);
+    if in.v_clip_inset.y == 0u && element_distance <= -0.5 {
+        return vec4<f32>(0.0);
+    }
 
     var alpha: f32;
-    if shadow.blur <= 0.0 {
-        alpha = saturate(0.5 - quad_sdf(local, casting, shadow.radii, shadow.shape));
+    if in.v_blur_shape.x <= 0.0 {
+        alpha = saturate(0.5 - quad_sdf(local, casting, radii, in.v_blur_shape.y));
     } else {
         // The gaussian is negligible beyond three standard deviations, and the shape contributes
         // nothing outside its own extent, so the samples are spent only where the two overlap.
         let low = center_to_point.y - half_size.y;
         let high = center_to_point.y + half_size.y;
-        let start = clamp(-3.0 * shadow.blur, low, high);
-        let end = clamp(3.0 * shadow.blur, low, high);
+        let start = clamp(-3.0 * in.v_blur_shape.x, low, high);
+        let end = clamp(3.0 * in.v_blur_shape.x, low, high);
         let step = (end - start) / 4.0;
         var y = start + step * 0.5;
         alpha = 0.0;
@@ -141,29 +167,27 @@ fn fs_shadow(in: ShadowVarying) -> @location(0) vec4<f32> {
             let blurred = blur_along_x(
                 center_to_point.x,
                 center_to_point.y - y,
-                shadow.blur,
+                in.v_blur_shape.x,
                 corner,
                 half_size,
-                shadow.shape,
+                in.v_blur_shape.y,
             );
-            alpha += blurred * gaussian(y, shadow.blur) * step;
+            alpha += blurred * gaussian(y, in.v_blur_shape.x) * step;
             y += step;
         }
     }
 
-    if shadow.inset != 0u {
+    if in.v_clip_inset.y != 0u {
         // An inset shadow is the complement of the blurred hole, clipped to the element it sits in.
         alpha = 1.0 - alpha;
-        let element_distance = quad_sdf(local, element, shadow.element_radii, shadow.shape);
         alpha *= saturate(0.5 - element_distance);
     } else {
         // An outer shadow is never painted within the box that casts it. Behind a filled box the
         // difference cannot be seen, but a box with no fill of its own — a field that is a hole in
         // the page — would otherwise wear its own shadow as a wash over its whole interior.
-        let element_distance = quad_sdf(local, element, shadow.element_radii, shadow.shape);
         alpha *= saturate(0.5 + element_distance);
     }
 
-    return rgba_of(shadow.color) * alpha * clip;
+    return in.v_color * alpha * clip;
 }
 

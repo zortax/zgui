@@ -299,6 +299,31 @@ fn bounds_from(b: Bounds, origin: vec2<f32>) -> Bounds {
     return Bounds(b.x - origin.x, b.y - origin.y, b.w, b.h);
 }
 
+// The four floats a varying carries bounds as.
+fn bounds_of(b: Bounds) -> vec4<f32> {
+    return vec4<f32>(b.x, b.y, b.w, b.h);
+}
+
+// Bounds from the four floats a varying carries them as.
+fn bounds_from_vec4(v: vec4<f32>) -> Bounds {
+    return Bounds(v.x, v.y, v.z, v.w);
+}
+
+// The top two corners, which is the first half of the radii a varying carries.
+fn radii_lo(r: Radii) -> vec4<f32> {
+    return vec4<f32>(r.tl_x, r.tl_y, r.tr_x, r.tr_y);
+}
+
+// The bottom two corners, which is the second half.
+fn radii_hi(r: Radii) -> vec4<f32> {
+    return vec4<f32>(r.br_x, r.br_y, r.bl_x, r.bl_y);
+}
+
+// Radii from the two vectors a varying carries them as.
+fn radii_from_vec4(lo: vec4<f32>, hi: vec4<f32>) -> Radii {
+    return Radii(lo.x, lo.y, lo.z, lo.w, hi.x, hi.y, hi.z, hi.w);
+}
+
 fn rgba_of(c: Rgba) -> vec4<f32> {
     return vec4<f32>(c.r, c.g, c.b, c.a);
 }
