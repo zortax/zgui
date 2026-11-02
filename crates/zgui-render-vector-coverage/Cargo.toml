@@ -15,6 +15,7 @@ include.workspace = true
 [dependencies]
 bytemuck.workspace = true
 kurbo.workspace = true
+rustc-hash.workspace = true
 peniko.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
