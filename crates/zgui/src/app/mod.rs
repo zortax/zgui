@@ -10,14 +10,16 @@ use zgui_view::{Anchor, BuildCx, IntoView, View};
 pub use crate::app::fonts::Fonts;
 
 /// Shaping text outside the paragraph pipeline: the shaper [`Fonts::shaper`] answers with, what one
-/// line is asked for in, and what the resolved face measures.
+/// line is asked for in, the OpenType settings on top of that, and what the resolved face measures.
 ///
 /// An element that positions its own glyphs — text in cells, one line at a time — shapes through
 /// these and draws the result with
 /// [`ScenePainter::glyphs`](zgui_custom::ScenePainter::glyphs). The shaped runs are owned
 /// ([`ShapedRunOwned`](zgui_text::ShapedRunOwned)), so they are held across frames rather than
 /// rebuilt for each one.
-pub use zgui_text_parley::{LineRequest, ResolvedLineMetrics, Shaper};
+pub use zgui_text_parley::{
+    FontFeature, FontVariation, LineRequest, LineSettings, ResolvedLineMetrics, Shaper, tag,
+};
 
 /// A platform backend's entry point: it takes the application and drives it until it stops.
 ///

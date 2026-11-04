@@ -18,5 +18,5 @@ pub(crate) mod style;
 
 pub use crate::shape::brush::SlotBrush;
 pub use crate::shape::engine::ShapedLayout;
-pub use crate::shape::line::{LineRequest, ResolvedLineMetrics};
+pub use crate::shape::line::{LineRequest, LineSettings, ResolvedLineMetrics};
 pub use crate::shape::shaper::Shaper;

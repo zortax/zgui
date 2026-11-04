@@ -2,11 +2,16 @@
 
 mod support;
 
+use std::sync::Arc;
+
 use zgui_geom::CssPx;
 use zgui_interned::Ident;
 use zgui_scene::PaintSlot;
 use zgui_text::{FontSource, ParagraphShaper};
-use zgui_text_parley::{Controls, LineRequest, Shaper};
+use zgui_text_parley::{
+    Controls, FontFeature, FontSystem, FontSystemOptions, FontVariation, LineRequest, LineSettings,
+    Shaper, tag,
+};
 
 /// Arabic text: three letters that shape into fewer glyphs than characters.
 const ARABIC_TEXT: &str = "ملف";
@@ -135,6 +140,64 @@ fn a_ligature_is_one_glyph_naming_the_byte_its_cluster_starts_at() {
     let separate = shaper.shape_line("fi", &off);
     assert_eq!(separate[0].glyphs.len(), 2, "one glyph per character");
     assert_eq!(separate[0].clusters, vec![0, 1]);
+}
+
+/// A feature named in the settings outranks the one the request's ligature switch implies.
+#[test]
+fn a_feature_setting_outranks_the_ligature_switch() {
+    let mut shaper = shaper();
+    let families = [Ident::new(support::LATIN)];
+    let mut off = latin(&families);
+    off.ligatures = false;
+    let liga = [FontFeature {
+        tag: tag(b"liga"),
+        value: 1,
+    }];
+    let settings = LineSettings {
+        features: &liga,
+        ..LineSettings::NONE
+    };
+    let ligated = shaper.shape_line_with("fi", &off, &settings);
+    assert_eq!(
+        ligated[0].glyphs.len(),
+        1,
+        "`liga` turned the ligature back on"
+    );
+    assert_eq!(
+        shaper.shape_line_with("fi", &off, &LineSettings::NONE)[0]
+            .glyphs
+            .len(),
+        2
+    );
+}
+
+/// An axis named in the settings places the line at its own instance of a variable face, and
+/// measuring with the same settings resolves the face the line is shaped from.
+#[test]
+fn a_variation_setting_shapes_at_its_own_instance() {
+    let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    fonts
+        .register(support::face("RubikSubset-Variable.ttf"), None)
+        .expect("the variable face registers");
+    let mut shaper = Shaper::new(fonts);
+    let families = [Ident::new("Rubik")];
+    let request = latin(&families);
+    let heavy = [FontVariation {
+        tag: tag(b"wght"),
+        value: 800.0,
+    }];
+    let settings = LineSettings {
+        variations: &heavy,
+        ..LineSettings::NONE
+    };
+    let plain = shaper.shape_line("hello", &request);
+    let varied = shaper.shape_line_with("hello", &request, &settings);
+    assert_eq!(plain[0].face, varied[0].face, "one file, one face");
+    assert_ne!(plain[0].instance, varied[0].instance);
+    let measured = shaper
+        .line_metrics_with(&request, &settings)
+        .expect("the face resolves");
+    assert_eq!(measured.face, varied[0].face);
 }
 
 #[test]
