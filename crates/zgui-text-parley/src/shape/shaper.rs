@@ -14,7 +14,7 @@ use crate::direction::Controls;
 use crate::shape::brush::SlotBrush;
 use crate::shape::engine::ShapedLayout;
 use crate::shape::frozen::Frozen;
-use crate::shape::line::{LineRequest, ResolvedLineMetrics};
+use crate::shape::line::{LineRequest, LineSettings, ResolvedLineMetrics};
 use crate::shape::strut::StrutCache;
 use crate::shape::{breaking, build};
 use crate::system::FontSystem;
@@ -130,9 +130,21 @@ impl Shaper {
     /// assert!(shaper.shape_line("", &request).is_empty());
     /// ```
     pub fn shape_line(&mut self, text: &str, request: &LineRequest<'_>) -> Vec<ShapedRunOwned> {
+        self.shape_line_with(text, request, &LineSettings::NONE)
+    }
+
+    /// Shapes one line as [`shape_line`](Self::shape_line) does, with OpenType features and
+    /// variable-axis coordinates on top of the request.
+    pub fn shape_line_with(
+        &mut self,
+        text: &str,
+        request: &LineRequest<'_>,
+        settings: &LineSettings<'_>,
+    ) -> Vec<ShapedRunOwned> {
         crate::shape::line::shape(
             text,
             request,
+            settings,
             &self.fonts,
             &mut self.context,
             &mut self.scratch,
@@ -145,7 +157,19 @@ impl Shaper {
     /// so cell geometry taken from these metrics and glyphs taken from that call agree. `None` when
     /// the request matches no face at all.
     pub fn line_metrics(&self, request: &LineRequest<'_>) -> Option<ResolvedLineMetrics> {
-        let style = crate::shape::line::text_style(request);
+        self.line_metrics_with(request, &LineSettings::NONE)
+    }
+
+    /// The face one request resolves to with `settings` on top, and what its line is measured by.
+    ///
+    /// The counterpart of [`shape_line_with`](Self::shape_line_with), as
+    /// [`line_metrics`](Self::line_metrics) is of [`shape_line`](Self::shape_line).
+    pub fn line_metrics_with(
+        &self,
+        request: &LineRequest<'_>,
+        settings: &LineSettings<'_>,
+    ) -> Option<ResolvedLineMetrics> {
+        let style = crate::shape::line::text_style(request, settings);
         let size = CssPx(request.size_device_px);
         let (face, metrics) = self
             .fonts
