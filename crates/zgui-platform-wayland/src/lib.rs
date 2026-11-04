@@ -4,16 +4,12 @@
 //! exists beside [`zgui-platform-winit`], which keeps macOS, Windows and X11, because four things
 //! this desktop needs cannot be reached through that seam:
 //!
-//! * **Frames paced against the compositor.** A Wayland client is told when to draw, by a
-//!   `wl_surface.frame` callback. A portable backend that turns that callback into a lock on
-//!   redraw delivery serialises the present against the next frame's processor work and quantises
-//!   the frame period to whole refresh intervals. Here the callback is the display's clock and
-//!   never a lock: a surface with nothing owed answers a redraw in the same turn it was asked.
-//! * **Presentation that does not block.** The graphics API's own window-system integration
-//!   implements first-in-first-out presentation by waiting on those same callbacks. A surface the
-//!   compositor stops drawing receives none, so the acquisition blocks the thread that also reads
-//!   input until the driver's timeout — a freeze rather than a dropped frame. This backend paces
-//!   frames itself and says so, and the swap chain is configured never to wait.
+//! * **Frame preparation overlaps presentation.** Redraw delivery never waits for a compositor
+//!   callback. The default renderer uses a bounded FIFO presentation worker, allowing the UI to
+//!   prepare the next scene while the previous buffer waits for display.
+//! * **Presentation waits outside the UI.** A dedicated callback queue checks compositor readiness
+//!   before entering graphics-API locks. Hidden surfaces cannot stall input behind a driver wait.
+//!   Buffer scale, viewport and geometry travel with their matching buffer, including on resize.
 //! * **Real visibility.** A compositor says when it has stopped repainting a surface. Without that
 //!   an animation behind a hidden window runs the whole pipeline for ever.
 //! * **The shell protocols.** A pop-up placed by the compositor, and a surface that is a panel, a
