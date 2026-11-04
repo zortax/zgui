@@ -43,6 +43,16 @@ impl WaylandState {
     }
 }
 
+/// Copy and nothing else. A move would ask the source to delete what it handed over, and this
+/// application has no way to promise it took responsibility for it.
+fn copy_only(actions: DndAction) -> DndAction {
+    if actions.contains(DndAction::Copy) {
+        DndAction::Copy
+    } else {
+        DndAction::None
+    }
+}
+
 impl DataDeviceHandler for WaylandState {
     fn enter(
         &mut self,
@@ -62,6 +72,11 @@ impl DataDeviceHandler for WaylandState {
         else {
             return;
         };
+        // Source actions arrive before enter, while the toolkit has not yet made the offer a drag
+        // offer and so does not pass them to `source_actions`. Without an action chosen here the
+        // compositor cancels the drop.
+        let taken = copy_only(offer.source_actions);
+        offer.set_actions(taken, taken);
         self.drag
             .entered(id, offer, crate::input::pointer::position(x, y));
         self.start_drag_read();
@@ -113,13 +128,7 @@ impl DataOfferHandler for WaylandState {
         offer: &mut DragOffer,
         actions: DndAction,
     ) {
-        // Copy and nothing else. A move would ask the source to delete what it handed over, and
-        // this application has no way to promise it took responsibility for it.
-        let taken = if actions.contains(DndAction::Copy) {
-            DndAction::Copy
-        } else {
-            DndAction::None
-        };
+        let taken = copy_only(actions);
         offer.set_actions(taken, taken);
     }
 
