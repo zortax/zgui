@@ -63,10 +63,10 @@ pub const FULL_DAMAGE_SHARE: f64 = 0.5;
 
 /// Grows `damage` to cover everything read by a composite whose read region it already touches.
 ///
-/// Runs to a fixpoint, because a grown rectangle can reach a second group's source region; the
-/// number of passes is bounded by the number of registered fragments, since each pass can absorb at
-/// most one source no earlier pass reached. On exhaustion the whole surface is damaged, which is
-/// correct and, at that point, cheaper than continuing.
+/// Runs to a fixpoint, because a grown rectangle can reach a second group's source region. Each
+/// pass that grows absorbs at least one source no earlier pass reached, so the registered fragments
+/// bound the passes that grow, and one more pass finds the fixpoint. On exhaustion the whole surface
+/// is damaged, which is correct and, at that point, cheaper than continuing.
 ///
 /// After this the damage set is frozen: the emit walk consults it and never adds to it.
 ///
@@ -86,7 +86,8 @@ pub fn expand(
     if registry.is_empty() || damage.is_full() {
         return report;
     }
-    let bound = registry.len();
+    // The passes that can grow, and the pass that finds nothing left to absorb.
+    let bound = registry.len() + 1;
     let area = f64::from(surface.width.max(0)) * f64::from(surface.height.max(0));
     for pass in 1..=bound {
         report.passes = pass;

@@ -385,6 +385,27 @@ fn an_empty_damage_set_paints_nothing_and_a_full_one_paints_everything() {
 }
 
 #[test]
+fn the_expansion_settles_over_one_blurred_panel() {
+    // One registered panel: the pass that absorbs it grows the damage, and the pass after it finds
+    // nothing left, which is the fixpoint and no escalation.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("one")]),
+        "root { display: block; width: 400px; height: 400px }
+         one { display: block; height: 40px; filter: blur(6px) }",
+        400.0,
+        400.0,
+    );
+    harness.paint_everything();
+    harness.clear_damage();
+    harness.damage.absorb(rect(0, 0, 10, 10));
+    let expansion = harness.expand();
+    assert_eq!(expansion.absorbed, 1);
+    assert_eq!(expansion.passes, 2);
+    assert!(!expansion.escalated, "one small panel is not a full redraw");
+    assert!(!harness.damage.is_full());
+}
+
+#[test]
 fn the_expansion_settles_over_two_overlapping_blurred_panels() {
     // Two blurred panels whose source regions overlap: growing the damage to cover the first can
     // bring the second into range, which is why the loop runs to a fixpoint rather than once.
