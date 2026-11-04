@@ -64,6 +64,7 @@ impl CompositorHandler for WaylandState {
         let event = self.live.surface(id).and_then(|surface| {
             let mut shared = surface.shared();
             shared.pacer.callback();
+            shared.gpu_callback_pending = false;
             // The compositor spoke about this surface, which ends whatever run of unanswered
             // frames had accumulated — and with it the only occlusion signal that works on every
             // version of the shell.

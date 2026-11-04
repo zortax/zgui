@@ -31,6 +31,8 @@ pub struct Presented {
 pub enum Presentation {
     /// A real surface, acquired from and presented to every frame.
     Surface(Box<ConfiguredSurface>),
+    /// FIFO surface owned by a worker rather than the UI event loop.
+    Worker(super::present_worker::PresentWorker),
     /// A texture, standing in for a surface that cannot be created.
     Offscreen(Offscreen),
     /// Textures a caller owns, one of which it chooses before each frame.
@@ -42,6 +44,7 @@ impl Presentation {
     pub fn formats(&self) -> Formats {
         match self {
             Self::Surface(surface) => surface.formats(),
+            Self::Worker(worker) => worker.formats(),
             Self::Offscreen(offscreen) => offscreen.formats,
             Self::Supplied(supplied) => supplied.formats,
         }
@@ -51,6 +54,7 @@ impl Presentation {
     pub fn size(&self) -> Size<i32, Device> {
         match self {
             Self::Surface(surface) => surface.size(),
+            Self::Worker(worker) => worker.size(),
             Self::Offscreen(offscreen) => offscreen.size,
             Self::Supplied(supplied) => supplied.size,
         }
@@ -60,6 +64,7 @@ impl Presentation {
     pub fn present_mode(&self) -> Option<wgpu::PresentMode> {
         match self {
             Self::Surface(surface) => Some(surface.present_mode()),
+            Self::Worker(worker) => Some(worker.mode()),
             Self::Offscreen(_) => None,
             // A caller that supplies the textures also decides when one is shown, so there is no
             // swap chain here to hold a mode.
@@ -71,6 +76,7 @@ impl Presentation {
     pub fn is_configured(&self) -> bool {
         match self {
             Self::Surface(surface) => surface.is_configured(),
+            Self::Worker(_) => true,
             // A texture the renderer allocated is ready as soon as it exists: there is no swap
             // chain to negotiate and nothing that waits for a device.
             Self::Offscreen(_) => true,
@@ -90,6 +96,7 @@ impl Presentation {
     pub fn resize(&mut self, gpu: &Gpu, size: Size<i32, Device>) {
         match self {
             Self::Surface(surface) => surface.resize(size),
+            Self::Worker(worker) => worker.resize(size),
             Self::Offscreen(offscreen) => *offscreen = offscreen.resized(gpu, size),
             Self::Supplied(supplied) => supplied.retarget(size),
         }
@@ -99,6 +106,7 @@ impl Presentation {
     pub fn apply_pending(&mut self, gpu: &Gpu) {
         match self {
             Self::Surface(surface) => surface.apply(gpu),
+            Self::Worker(_) => {}
             // A texture owes nothing, supplied or standing in for a surface: nothing about either
             // waits for a device. A supplied set that disagrees with the target is not waiting for
             // this either — only the caller can end that, by supplying a set at the new extent.
@@ -126,6 +134,11 @@ impl Presentation {
                     view,
                 }
             }
+            Self::Worker(_) => Presented {
+                acquisition: Acquisition::Success,
+                surface_texture: None,
+                view: None,
+            },
             Self::Offscreen(offscreen) => Presented {
                 acquisition: Acquisition::Success,
                 surface_texture: None,
@@ -145,6 +158,7 @@ impl Presentation {
     pub fn request_reconfigure(&mut self) {
         match self {
             Self::Surface(surface) => surface.request_reconfigure(),
+            Self::Worker(worker) => worker.request_reconfigure(),
             // Only a swap chain has a configuration to rebuild.
             Self::Offscreen(_) | Self::Supplied(_) => {}
         }
@@ -155,7 +169,7 @@ impl Presentation {
         match self {
             Self::Surface(surface) => surface.reconfigure_pending(),
             // Only a swap chain is ever owed a reconfiguration, and neither of these is one.
-            Self::Offscreen(_) | Self::Supplied(_) => false,
+            Self::Offscreen(_) | Self::Supplied(_) | Self::Worker(_) => false,
         }
     }
 
@@ -163,6 +177,7 @@ impl Presentation {
     pub fn invalidate(&mut self) {
         match self {
             Self::Surface(surface) => surface.invalidate(),
+            Self::Worker(worker) => worker.request_reconfigure(),
             // Neither describes a window, so neither can stop describing one.
             Self::Offscreen(_) | Self::Supplied(_) => {}
         }

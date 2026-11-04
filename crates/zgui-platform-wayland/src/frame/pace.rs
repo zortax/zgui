@@ -18,16 +18,9 @@ enum Owed {
 ///
 /// # The rule
 ///
-/// A Wayland client is told when to draw. It asks for a `wl_surface.frame` callback before the
-/// commit that carries a frame, and the compositor answers when it is ready for the next one. Two
-/// commits with no callback in between is a client racing ahead of the display for no benefit,
-/// because only the last of them is ever shown.
-///
-/// So a surface with a callback owed waits. A surface with nothing owed does **not**: it draws in
-/// the same turn the redraw was asked for. That second half is the whole difference from a
-/// portable backend that turns the callback into a lock on redraw delivery — a window that has
-/// been quiet answers the first click immediately rather than after a round trip through the
-/// compositor.
+/// Redraw requests prepare the next frame independently of the previous compositor callback.
+/// The default renderer bounds GPU work and waits for readiness on its presentation worker,
+/// outside graphics API locks. Blocking preparation here serializes CPU work against vsync.
 ///
 /// # Not configured is a reason to refuse a frame; hidden is not
 ///
@@ -102,9 +95,9 @@ impl Pacer {
         if let Owed::Callback(since) = self.owed
             && self.watchdog.expired(since, now)
         {
-            // The compositor was asked for a callback and has not answered in long enough that it
-            // is not going to. Waiting further is the freeze; drawing again is one wasted frame.
-            self.owed = Owed::Nothing;
+            // Readiness stays owned by the actual callback, but repeated unanswered periods
+            // provide visibility evidence without making the UI wait inside a display driver.
+            self.owed = Owed::Callback(now);
             self.abandoned += 1;
             visibility.unanswered();
             tracing::debug!(
@@ -117,21 +110,18 @@ impl Pacer {
         // the same as being hidden, and the two must not share a gate: attaching a buffer to a
         // surface that has never been configured is a protocol error, and the compositor answers it
         // by closing the connection. The request is kept, and the first configure delivers it.
-        if !self.wanted || !visibility.configured || matches!(self.owed, Owed::Callback(_)) {
+        if !self.wanted || !visibility.configured {
             return false;
         }
         self.wanted = false;
         true
     }
 
-    /// Records that a commit went out and a callback was asked for with it.
-    ///
-    /// Every delivered redraw that *ran* ends here, whether it presented a frame or not. A turn
-    /// that ends without a commit ends the callback chain, and the surface never draws again. A
-    /// declined redraw never committed, so it never reaches this — the pacer keeps owing nothing,
-    /// and the next request is taken the moment it is made.
+    /// Starts liveness tracking for a real callback without extending an older wait.
     pub const fn committed(&mut self, now: Instant) {
-        self.owed = Owed::Callback(now);
+        if matches!(self.owed, Owed::Nothing) {
+            self.owed = Owed::Callback(now);
+        }
     }
 
     /// Records the compositor answering with a frame callback.
@@ -222,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn a_surface_that_has_committed_waits_for_the_compositor() {
+    fn frame_preparation_is_not_locked_by_the_previous_compositor_callback() {
         let mut pacer = Pacer::new();
         let now = Instant::now();
         pacer.request();
@@ -230,7 +220,8 @@ mod tests {
         pacer.committed(now);
 
         pacer.request();
-        assert!(!pacer.take(&mut shown(), now + Duration::from_millis(1)));
+        assert!(pacer.take(&mut shown(), now + Duration::from_millis(1)));
+        pacer.request();
         pacer.callback();
         assert!(pacer.take(&mut shown(), now + Duration::from_millis(2)));
     }
@@ -309,10 +300,9 @@ mod tests {
         pacer.watch(Watchdog::for_interval(Some(Duration::from_millis(100))));
         let now = Instant::now();
         pacer.committed(now);
-        pacer.request();
-
         assert!(!pacer.take(&mut shown(), now + Duration::from_millis(399)));
         assert_eq!(pacer.abandoned(), 0);
+        pacer.request();
         assert!(pacer.take(&mut shown(), now + Duration::from_millis(400)));
         assert_eq!(pacer.abandoned(), 1);
     }

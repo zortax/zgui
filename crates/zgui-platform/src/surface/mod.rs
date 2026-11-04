@@ -80,6 +80,25 @@ pub trait Surface: Send + Sync + 'static {
         PresentPacing::Display
     }
 
+    /// Whether the default renderer should own FIFO presentation on a worker.
+    fn asynchronous_present(&self) -> bool {
+        false
+    }
+
+    /// Waits for compositor readiness outside graphics API locks; cancellation ends the wait.
+    fn wait_for_present(&self, cancelled: &std::sync::atomic::AtomicBool) -> bool {
+        !cancelled.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Applies metadata for this exact frame immediately before worker presentation.
+    fn pre_present_frame(&self, _size: Size<i32, Device>, _scale: f64) -> bool {
+        self.pre_present_notify();
+        true
+    }
+
+    /// Ends a worker presentation's metadata transaction.
+    fn post_present_frame(&self) {}
+
     /// When this surface's frames reach the screen, as far as the platform knows.
     ///
     /// Absent means the platform reports no timing at all, and a caller falls back to

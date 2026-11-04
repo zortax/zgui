@@ -259,6 +259,21 @@ impl WgpuRenderer {
         }
     }
 
+    /// Moves a window's swapchain waits onto one bounded presentation worker.
+    pub fn with_presentation_worker(
+        mut self,
+        hooks: crate::target::present_worker::PresentHooks,
+    ) -> Self {
+        self.presentation = match self.presentation {
+            Presentation::Surface(surface) => Presentation::Worker(
+                crate::target::present_worker::PresentWorker::new(self.gpu.clone(), surface, hooks),
+            ),
+            other => other,
+        };
+        self.pre_present = None;
+        self
+    }
+
     /// Decides whether a vector rasteriser running out of capacity stops the program.
     ///
     /// It does by default in a build with debug assertions on, because a ceiling reached silently
@@ -541,7 +556,9 @@ impl WgpuRenderer {
     pub fn present_into(&mut self, slot: usize) -> bool {
         match &mut self.presentation {
             Presentation::Supplied(supplied) => supplied.select(slot),
-            Presentation::Surface(_) | Presentation::Offscreen(_) => false,
+            Presentation::Surface(_) | Presentation::Worker(_) | Presentation::Offscreen(_) => {
+                false
+            }
         }
     }
 
@@ -583,7 +600,7 @@ impl WgpuRenderer {
                 supplied.formats().surface,
                 supplied.size(),
             )),
-            Presentation::Surface(_) => None,
+            Presentation::Surface(_) | Presentation::Worker(_) => None,
         }
     }
 
