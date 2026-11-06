@@ -41,6 +41,8 @@ use zgui_bits::Dirty;
 use zgui_dom::side::BoxKey;
 use zgui_dom::{Document, NodeIndex, NodeKey, NodeKind};
 
+use crate::boxtree::build::Owed;
+use crate::boxtree::patch::subtree;
 use crate::node::kind::BoxKind;
 use crate::tree::dirty::mark_dirty;
 use crate::tree::store::LayoutStore;
@@ -48,15 +50,19 @@ use crate::tree::store::LayoutStore;
 /// What trying to rewrite a document's re-shaped text in place produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Retext {
-    /// Every re-shaped node was a text node whose box was rewritten where it stood.
+    /// Every re-shaped node was serviced where it stood.
     ///
-    /// Carries how many boxes were rewritten, which is zero when nothing owed a re-shape at all.
+    /// Carries how many boxes were rewritten and subtrees were spliced, which is zero when nothing
+    /// owed a re-shape at all.
     Patched(u32),
     /// Something was found that changes which boxes exist, so the tree has to be built again.
     Rebuild,
 }
 
 /// Rewrites the characters of every box holding text that a re-shape was marked on.
+///
+/// A text node that holds text and has no box is serviced by splicing its container, so that one
+/// label keeps every other box in the document.
 ///
 /// The obligations themselves are left where they are. This stage is not their only reader — the
 /// fragment pass reads a re-shape to decide that a line holding different glyphs has to be painted
@@ -67,18 +73,43 @@ pub enum Retext {
 ///
 /// Panics if `root` names no live node of `document`.
 pub fn retext(store: &mut LayoutStore, document: &Document, root: NodeIndex) -> Retext {
-    let mut rewritten = 0;
-    let mut reshaped = Vec::new();
-    if !visit(store, document, root, &mut rewritten, &mut reshaped) {
+    let mut walk = Walk::default();
+    if !visit(store, document, root, &mut walk) {
         return Retext::Rebuild;
     }
+    let Walk {
+        mut rewritten,
+        reshaped,
+        structural,
+    } = walk;
     if !reshaped.is_empty() {
         // The paragraph keys the walk reports are the old shaping's, which the new keys no longer
         // name; they are left in the cache for the next flip back to the old font and reclaimed
         // with everything else unused when the frame ends.
         let _ = crate::text::reshape::scope(store, reshaped);
     }
+    if !structural.is_empty() {
+        let owed = Owed {
+            rebuilt: structural,
+            children: Vec::new(),
+        };
+        let Some(spliced) = subtree::rebuild(store, document, &owed) else {
+            return Retext::Rebuild;
+        };
+        rewritten += spliced.subtrees;
+    }
     Retext::Patched(rewritten)
+}
+
+/// What the walk over the re-shaped nodes found.
+#[derive(Default)]
+struct Walk {
+    /// How many boxes had their characters rewritten.
+    rewritten: u32,
+    /// The elements whose font moved.
+    reshaped: Vec<NodeKey>,
+    /// The text nodes that hold text and have no box.
+    structural: Vec<NodeIndex>,
 }
 
 /// Services one node and everything below it, and reports whether the patch is still expressible.
@@ -87,13 +118,7 @@ pub fn retext(store: &mut LayoutStore, document: &Document, root: NodeIndex) -> 
 /// the walk every phase that *owns* a bit uses: this stage shares [`Dirty::RESHAPE`] with the
 /// fragment pass, and a descent that cleared it would leave that pass unable to tell a line whose
 /// glyphs changed from one that merely sat still.
-fn visit(
-    store: &mut LayoutStore,
-    document: &Document,
-    index: NodeIndex,
-    rewritten: &mut u32,
-    reshaped: &mut Vec<NodeKey>,
-) -> bool {
+fn visit(store: &mut LayoutStore, document: &Document, index: NodeIndex, walk: &mut Walk) -> bool {
     let core = document.store().core(index);
     let (own, subtree) = core.dirty().get();
     if !(own | subtree).intersects(Dirty::RESHAPE) {
@@ -101,14 +126,14 @@ fn visit(
     }
     if own.contains(Dirty::RESHAPE) {
         if core.kind() == NodeKind::Text {
-            if !rewrite(store, document, index, rewritten) {
+            if !rewrite(store, document, index, walk) {
                 return false;
             }
         } else {
             // An element whose font moved keeps its boxes; what was computed from the old
             // shaping below and around them is thrown away once the walk is done, so that a
             // subtree whose elements all moved together is invalidated once.
-            reshaped.push(document.store().key_of(index));
+            walk.reshaped.push(document.store().key_of(index));
         }
     }
     let children: Vec<NodeIndex> = core
@@ -116,7 +141,7 @@ fn visit(
         .iter(document.store(), index)
         .collect();
     for child in children {
-        if !visit(store, document, child, rewritten, reshaped) {
+        if !visit(store, document, child, walk) {
             return false;
         }
     }
@@ -128,17 +153,18 @@ fn rewrite(
     store: &mut LayoutStore,
     document: &Document,
     index: NodeIndex,
-    rewritten: &mut u32,
+    walk: &mut Walk,
 ) -> bool {
     let text = zgui_dom::text::node::text_of(document.store(), index).unwrap_or_default();
     let source = document.store().key_of(index);
     let boxes = store.boxes_of(source).to_vec();
-    // An empty string generates no box and a non-empty one generates a box, so either of these is
-    // a box appearing or disappearing rather than a box changing.
-    if text.is_empty() != boxes.is_empty() {
-        return false;
-    }
+    // A text node generates a box once it holds a string, and the empty string is a string, so a
+    // node that was emptied keeps its box. A node with no box is either one that held nothing at
+    // all or one inside a subtree that generates nothing. Its container decides which.
     if boxes.is_empty() {
+        if !text.is_empty() {
+            walk.structural.push(index);
+        }
         return true;
     }
     let text: Box<str> = text.into();
@@ -152,7 +178,7 @@ fn rewrite(
         store.get_mut(key).expect("a live box").text = Some(text.clone());
         forget_flattened(store, key, None);
         mark_dirty(store, key);
-        *rewritten += 1;
+        walk.rewritten += 1;
     }
     true
 }
