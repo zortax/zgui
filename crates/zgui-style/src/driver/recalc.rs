@@ -34,6 +34,7 @@ use style::traversal_flags::TraversalFlags;
 use zgui_dom::Node;
 use zgui_profile::{Counter, counter};
 
+use crate::driver::memo;
 use crate::driver::traversal::RecalcStyle;
 
 /// Which custom properties an element's inherited map changed by, for the elements below it.
@@ -508,14 +509,39 @@ fn compute_style<'doc>(
         }
         RestyleKind::CascadeOnly => {
             let cascade_inputs = ElementCascadeInputs::new_from_element_data(data);
-            let new_styles = {
-                let mut resolver = StyleResolverForElement::new(
-                    element,
-                    context,
-                    RuleInclusion::All,
-                    PseudoElementResolution::IfApplicable,
-                );
-                resolver.cascade_styles_with_default_parents(cascade_inputs)
+            let mode = memo::mode();
+            let inputs = (mode != memo::Mode::Off)
+                .then(|| memo::Inputs::of(element, context.shared, data, &cascade_inputs))
+                .flatten();
+            let found = inputs
+                .as_ref()
+                .and_then(|inputs| traversal.memo.find(inputs));
+            match (&inputs, &found) {
+                (_, Some(_)) => counter::bump(Counter::CascadeMemoHits),
+                (Some(_), None) => counter::bump(Counter::CascadeMemoMisses),
+                (None, None) => counter::bump(Counter::CascadeMemoSkips),
+            }
+            let new_styles = match found {
+                Some(found) if mode == memo::Mode::On => found.into_resolved(),
+                found => {
+                    let new_styles = {
+                        let mut resolver = StyleResolverForElement::new(
+                            element,
+                            context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        );
+                        resolver.cascade_styles_with_default_parents(cascade_inputs)
+                    };
+                    match (found, inputs) {
+                        (Some(found), Some(inputs)) => memo::check(&found, &new_styles, &inputs),
+                        (None, Some(inputs)) => {
+                            traversal.memo.keep(inputs, &new_styles);
+                        }
+                        _ => {}
+                    }
+                    new_styles
+                }
             };
             if !new_styles.primary.reused_via_rule_node {
                 context.thread_local.sharing_cache.insert_if_possible(
@@ -647,7 +673,7 @@ fn narrowed_children_hint(
 }
 
 /// Whether every group a child inherits from is the same, by pointer or by value.
-fn inherited_groups_equal(old: &ComputedValues, new: &ComputedValues) -> bool {
+pub(super) fn inherited_groups_equal(old: &ComputedValues, new: &ComputedValues) -> bool {
     macro_rules! same {
         ($get:ident) => {
             core::ptr::eq(old.$get(), new.$get()) || old.$get() == new.$get()

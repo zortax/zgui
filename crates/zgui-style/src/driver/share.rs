@@ -43,7 +43,7 @@ use selectors::Element as _;
 use servo_arc::Arc as ServoArc;
 use smallvec::SmallVec;
 use style::dom::TElement;
-use style::properties::{ComputedValues, ComputedValuesInner};
+use style::properties::{ComputedValues, ComputedValuesInner, style_structs};
 use style::rule_tree::StrongRuleNode;
 use style::selector_parser::{EAGER_PSEUDO_COUNT, PseudoElement};
 use style::style_resolver::ResolvedElementStyles;
@@ -262,6 +262,16 @@ impl SharedStyles {
 ///
 /// The two are equal in every field, so the result is equal to both.
 fn with_own_text(kept: &ComputedValues, own: &ComputedValues) -> ServoArc<ComputedValues> {
+    with_text(kept, own.clone_inherited_text())
+}
+
+/// A style that holds the groups of `kept` and the text group `text`.
+///
+/// `text` must equal the text group of `kept`.
+pub(super) fn with_text(
+    kept: &ComputedValues,
+    text: ServoArc<style_structs::InheritedText>,
+) -> ServoArc<ComputedValues> {
     ComputedValues::new(
         kept.pseudo().as_ref(),
         kept.custom_properties().clone(),
@@ -280,7 +290,7 @@ fn with_own_text(kept: &ComputedValues, own: &ComputedValues) -> ServoArc<Comput
         kept.clone_font(),
         kept.clone_inherited_box(),
         kept.clone_inherited_table(),
-        own.clone_inherited_text(),
+        text,
         kept.clone_inherited_ui(),
         kept.clone_list(),
         kept.clone_margin(),
@@ -298,7 +308,7 @@ fn with_own_text(kept: &ComputedValues, own: &ComputedValues) -> ServoArc<Comput
 ///
 /// Each group is compared by address first and by value after, so styles that already share
 /// their groups compare in a few instructions.
-fn same_values(a: &ServoArc<ComputedValues>, b: &ServoArc<ComputedValues>) -> bool {
+pub(super) fn same_values(a: &ServoArc<ComputedValues>, b: &ServoArc<ComputedValues>) -> bool {
     if ServoArc::ptr_eq(a, b) {
         return true;
     }

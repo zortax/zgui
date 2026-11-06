@@ -144,6 +144,8 @@ pub(crate) struct RecalcStyle<'a> {
     pub(super) wildcard_names: [style::custom_properties::Name; 4],
     /// The computed styles earlier cascades produced, by rule chain.
     pub(super) shared: &'a super::share::SharedStyles,
+    /// The cascade results of this traversal, for the elements after them.
+    pub(super) memo: super::memo::CascadeMemo,
     /// The elements whose animations crossed a lifecycle edge since their last cascade, or `None`
     /// when every animation tick cascades.
     pub(super) settling: Option<&'a FxHashSet<NodeIndex>>,
@@ -220,6 +222,7 @@ impl<'a> RecalcStyle<'a> {
             wildcard_names: zgui_css::values::custom::WILDCARD_DECLARERS
                 .map(style::custom_properties::Name::from),
             shared,
+            memo: super::memo::CascadeMemo::default(),
             settling,
         }
     }

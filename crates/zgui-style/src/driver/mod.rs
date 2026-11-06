@@ -9,6 +9,7 @@
 
 pub mod animations;
 pub mod context;
+mod memo;
 mod recalc;
 pub(crate) mod share;
 pub mod snapshots;
