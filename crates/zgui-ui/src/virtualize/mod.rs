@@ -216,11 +216,11 @@ mod tests {
 
         let reads = std::rc::Rc::new(std::cell::Cell::new(0));
         let counted = std::rc::Rc::clone(&reads);
-        window.scope.with(|| {
+        let _reader = window.scope.with(|| {
             zgui::reactive::RenderEffect::new(move |_| {
                 let _ = seen.window();
                 counted.set(counted.get() + 1);
-            });
+            })
         });
         window.dom.deliver(
             port,
@@ -235,6 +235,13 @@ mod tests {
         );
         window.frame();
         assert_eq!(reads.get(), before, "the same rows are the same window");
+
+        window.dom.deliver(
+            port,
+            ObservedValue::ScrollPosition(scrolled(3_000.0, 400.0, 200_000.0)),
+        );
+        window.frame();
+        assert!(reads.get() > before, "other rows wake the reader");
     }
 
     #[test]
