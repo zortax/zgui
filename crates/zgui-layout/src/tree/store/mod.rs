@@ -86,6 +86,10 @@ pub struct LayoutStore {
     engine_style: PagedVec<BoxKey, Option<EngineStyleId>, 64>,
     /// Boxes whose engine style is owed a refresh before the next pass reads it.
     engine_pending: Vec<BoxKey>,
+    /// The boxes whose new style since the last fragment pass changed colours and nothing else.
+    recoloured: rustc_hash::FxHashSet<BoxKey>,
+    /// Whether a style written since the last fragment pass carried no such proof.
+    restyled_unproven: bool,
     /// The boxes queued for recomputation, deepest first.
     pub(crate) scheduler: cephal::schedule::Scheduler,
     /// The layout pass count, which the engine's cache tags its entries with.
@@ -226,6 +230,8 @@ impl LayoutStore {
             engine_styles: EngineStyles::default(),
             engine_style: PagedVec::for_domain(box_domain),
             engine_pending: Vec::new(),
+            recoloured: rustc_hash::FxHashSet::default(),
+            restyled_unproven: false,
             scheduler: cephal::schedule::Scheduler::new(),
             generation: 1,
             touched: Vec::new(),
@@ -348,6 +354,16 @@ impl LayoutStore {
             return false;
         }
         let sorted = crate::fragment::stacking::sort_inputs(node);
+        // A nested inline element paints into the lines it sits on. A run of text does not.
+        let only_colours = !(node.kind == crate::node::kind::BoxKind::Element
+            && node.is_nested_inline())
+            && crate::fragment::recolour::only_colours_differ(&node.style, style);
+        let declared = self
+            .style_slots
+            .get(key)
+            .copied()
+            .flatten()
+            .and_then(|slot| self.styles.declared(slot, &node.style));
         node.style = style.clone();
         if crate::fragment::stacking::sort_inputs(node) != sorted
             && let Some(parent) = node.parent
@@ -355,12 +371,34 @@ impl LayoutStore {
             self.forget_layout_order(parent);
         }
         let slot = self.styles.intern(style);
+        let none = Some(CustomProperties::NONE);
+        if only_colours && declared == none && self.styles.declared(slot, style) == none {
+            self.recoloured.insert(key);
+        } else {
+            self.restyled_unproven = true;
+        }
         if let Some(held) = self.style_slots.replace(key, Some(slot)) {
             self.styles.release(held);
         }
         self.classify(key, style);
         self.engine_pending.push(key);
         true
+    }
+
+    /// Whether every style written since the last fragment pass proved its box's fragments stand.
+    pub(crate) fn recolours_stand(&self) -> bool {
+        !self.restyled_unproven && !self.recoloured.is_empty()
+    }
+
+    /// Whether the style written on `key` changed colours and nothing else.
+    pub(crate) fn recoloured(&self, key: BoxKey) -> bool {
+        self.recoloured.contains(&key)
+    }
+
+    /// Forgets what the styles written so far proved, once a fragment pass has served them.
+    pub(crate) fn forget_recolours(&mut self) {
+        self.recoloured.clear();
+        self.restyled_unproven = false;
     }
 
     /// The framework custom properties `style` declares, where `style` is the style of box `key`.

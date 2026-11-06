@@ -667,6 +667,12 @@ counters! {
 
     /// Cascades of a restyle that the memo cannot answer.
     CascadeMemoSkips => cascade_memo_skips, Group::BackendNeutral;
+
+    /// Fragment passes that followed repaint marks and composed nothing.
+    RepaintWalks => repaint_walks, Group::BackendNeutral;
+
+    /// Boxes those walks read.
+    RepaintWalkBoxes => repaint_walk_boxes, Group::BackendNeutral;
 }
 
 impl Counter {
