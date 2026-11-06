@@ -67,9 +67,15 @@ pub(super) fn splice(
     // old one nor the new one, and the build that follows a refusal starts from whatever is there.
     let made = build(store, document, &plan)?;
 
+    // The container's two lists are written whole below, so a child of it is only removed here.
+    // Taking each one out of those lists first costs the list's length per departing child.
     let mut removed = 0;
     for &key in &plan.departing {
-        removed += structure::detach(store, key);
+        removed += if store.get(key).and_then(|node| node.parent) == Some(plan.container) {
+            structure::remove_subtree(store, key)
+        } else {
+            structure::detach(store, key)
+        };
     }
     // The layout order: the in-flow children in document order, then the out-of-flow boxes the
     // container positions. Each out-of-flow child records the in-flow sibling it was written after,
@@ -125,6 +131,7 @@ pub(super) fn splice(
     // A container whose child list moved is a container whose own size was computed from the children
     // it used to have, and so was every ancestor's.
     mark_dirty(store, plan.container);
+    crate::boxtree::percent::refresh(store, plan.container);
     Some(Spliced {
         built: made.built,
         removed,

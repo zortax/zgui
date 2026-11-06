@@ -29,7 +29,7 @@ pub fn detach(store: &mut LayoutStore, key: BoxKey) -> u32 {
 }
 
 /// Removes a box and its descendants, leaving every other list alone.
-fn remove_subtree(store: &mut LayoutStore, key: BoxKey) -> u32 {
+pub(super) fn remove_subtree(store: &mut LayoutStore, key: BoxKey) -> u32 {
     let mut removed = 0;
     let mut stack = vec![key];
     while let Some(current) = stack.pop() {
