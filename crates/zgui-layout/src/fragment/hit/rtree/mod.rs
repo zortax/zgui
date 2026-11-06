@@ -30,6 +30,7 @@
 //! [`place::at`](place::at) for the whole of that reasoning; between them the first two answers are
 //! what a scrolled document does to this structure between two frames.
 
+mod bulk;
 mod envelope;
 pub(crate) mod forest;
 mod home;
@@ -144,6 +145,15 @@ impl RTree {
             self.nodes[sibling].parent = Some(grown);
             self.root = Some(grown);
         }
+    }
+
+    /// Files every one of `entries` in this tree, which holds nothing yet.
+    pub(crate) fn fill(
+        &mut self,
+        entries: Vec<(FragKey, Rect<DevicePx, Device>)>,
+        homes: &mut Homes,
+    ) {
+        bulk::fill(self, entries, homes);
     }
 
     /// Removes one entry by name, and reports whether it was there.

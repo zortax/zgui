@@ -356,16 +356,18 @@ impl HitIndex {
             return;
         };
         let mut order = ORDER_STRIDE;
+        let mut staged = Vec::with_capacity(store.fragment_count() as usize);
         for box_ in crate::fragment::stacking::paint_order(store, root) {
             for &frag in store.fragments_of_box(box_) {
                 let Some(entry) = crate::fragment::hit::entry_for(store, frag, order, scale) else {
                     continue;
                 };
-                self.forest.insert(frag, entry.space, entry.envelope);
+                staged.push((frag, entry.space, entry.envelope));
                 self.pack(frag, entry);
                 order += ORDER_STRIDE;
             }
         }
+        self.forest.fill(staged);
         self.fold_orders(store, root);
     }
 

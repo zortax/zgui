@@ -26,6 +26,10 @@ impl Tree {
         self.tree.insert(key, bounds, &mut self.homes);
     }
 
+    fn fill(&mut self, entries: Vec<(FragKey, Rect<DevicePx, Device>)>) {
+        self.tree.fill(entries, &mut self.homes);
+    }
+
     fn remove(&mut self, key: FragKey) -> bool {
         self.tree.remove(key, &mut self.homes)
     }
@@ -348,4 +352,87 @@ fn every_entry_is_reachable_by_name_after_a_thousand_placements() {
     let mut found = Vec::new();
     tree.query(Point::new(DevicePx(350.0), DevicePx(350.0)), &mut found);
     assert!(found.is_empty());
+}
+
+/// Asserts that `tree` answers `points` random points the way a scan of `entries` does.
+fn agrees_with_a_scan(
+    tree: &Tree,
+    entries: &[(FragKey, Rect<DevicePx, Device>)],
+    rng: &mut Rng,
+    points: u32,
+) {
+    let mut found = Vec::new();
+    for _ in 0..points {
+        let point = Point::new(
+            DevicePx(rng.below(1000) as f32),
+            DevicePx(rng.below(1000) as f32),
+        );
+        found.clear();
+        tree.query(point, &mut found);
+        found.sort_unstable();
+        let mut expected: Vec<FragKey> = entries
+            .iter()
+            .filter(|(_, bounds)| bounds.contains(point))
+            .map(|(name, _)| *name)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(found, expected, "at {point:?}");
+    }
+}
+
+#[test]
+fn a_filled_tree_agrees_with_a_scan_at_every_size() {
+    for count in [0u32, 1, 2, 6, 7, 37, 400, 5_000] {
+        let mut rng = Rng(0x0fed_cba9_8765_4321 + u64::from(count));
+        let entries: Vec<(FragKey, Rect<DevicePx, Device>)> = (0..count)
+            .map(|index| {
+                let bounds = rect(
+                    rng.below(900) as f32,
+                    rng.below(900) as f32,
+                    1.0 + rng.below(120) as f32,
+                    1.0 + rng.below(120) as f32,
+                );
+                (key(index + 1), bounds)
+            })
+            .collect();
+        let mut tree = Tree::default();
+        tree.fill(entries.clone());
+        assert_eq!(tree.len(), entries.len());
+        agrees_with_a_scan(&tree, &entries, &mut rng, 500);
+    }
+}
+
+#[test]
+fn a_filled_tree_takes_moves_insertions_and_removals() {
+    let mut rng = Rng(0x1357_9bdf_0246_8ace);
+    let mut entries: Vec<(FragKey, Rect<DevicePx, Device>)> = (0..1_000u32)
+        .map(|index| {
+            let bounds = rect(
+                rng.below(900) as f32,
+                rng.below(900) as f32,
+                1.0 + rng.below(60) as f32,
+                1.0 + rng.below(60) as f32,
+            );
+            (key(index + 1), bounds)
+        })
+        .collect();
+    let mut tree = Tree::default();
+    tree.fill(entries.clone());
+
+    for index in (0..entries.len()).step_by(3) {
+        let bounds = rect(rng.below(900) as f32, rng.below(900) as f32, 20.0, 20.0);
+        tree.place(entries[index].0, bounds);
+        entries[index].1 = bounds;
+    }
+    for index in (0..entries.len()).rev().step_by(5) {
+        assert!(tree.remove(entries[index].0), "entry {index} was filled");
+        entries.remove(index);
+    }
+    for index in 0..300u32 {
+        let bounds = rect(rng.below(900) as f32, rng.below(900) as f32, 12.0, 12.0);
+        tree.insert(key(2_000 + index), bounds);
+        entries.push((key(2_000 + index), bounds));
+    }
+    assert_eq!(tree.len(), entries.len());
+    agrees_with_a_scan(&tree, &entries, &mut rng, 2_000);
 }
