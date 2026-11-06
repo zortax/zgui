@@ -84,11 +84,13 @@ pub struct OffscreenSurface {
     /// sent before it, so a check on one update alone would reject every correct incremental one.
     ///
     /// The sequence is bounded at [`A11Y_LOG_NODES`] nodes over all retained updates. A headless
-    /// surface always has a listener, so a whole tree is published for every frame that owes one,
-    /// and a driver that runs for thousands of frames would otherwise retain every tree it was
+    /// surface has a listener by default, so a whole tree is published for every frame that owes
+    /// one, and a driver that runs for thousands of frames would otherwise retain every tree it was
     /// ever sent. A driver that wants the whole sequence drains it as it goes, through
     /// [`take_a11y_log`](OffscreenSurface::take_a11y_log).
     a11y_log: Mutex<A11yLog>,
+    /// Whether an accessibility consumer listens. Without one, no update is built.
+    a11y_listener: AtomicBool,
     /// Everything the surface was told about text input, in order.
     ///
     /// Whether an input method is wanted at all, and where its candidate window goes, is a state
@@ -127,6 +129,7 @@ impl OffscreenSurface {
             requested: AtomicU64::new(0),
             a11y_updates: AtomicU64::new(0),
             a11y_log: Mutex::new(A11yLog::default()),
+            a11y_listener: AtomicBool::new(true),
             text_input_log: Mutex::new(Vec::new()),
             cursor_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
@@ -167,6 +170,14 @@ impl OffscreenSurface {
     /// therefore one frame, which is exactly what the contract promises.
     pub fn take_pending_redraw(&self) -> bool {
         self.pending.swap(0, Ordering::Relaxed) > 0
+    }
+
+    /// Sets whether an accessibility consumer listens. The default is yes.
+    ///
+    /// With no listener the surface builds no update, as a platform surface does when no assistive
+    /// technology has connected.
+    pub fn set_a11y_listener(&self, listening: bool) {
+        self.a11y_listener.store(listening, Ordering::Relaxed);
     }
 
     /// How many accessibility updates have been published.
@@ -354,9 +365,12 @@ impl Surface for OffscreenSurface {
     }
 
     fn push_a11y_update(&self, build: &mut dyn FnMut() -> TreeUpdate) {
-        // A headless surface always has a listener, because whatever is driving it is the listener.
-        // What it was told is kept rather than discarded: an assertion about the tree is the only
-        // one that can tell a channel that carries the document from one that carries nothing.
+        if !self.a11y_listener.load(Ordering::Relaxed) {
+            return;
+        }
+        // By default, whatever drives a headless surface is the listener. What it was told is kept
+        // rather than discarded: an assertion about the tree is the only one that can tell a
+        // channel that carries the document from one that carries nothing.
         let update = build();
         let mut log = self.a11y_log.lock().expect("the log is not poisoned");
         log.push(update);
@@ -415,6 +429,26 @@ mod tests {
             1_000,
             "the count is what was published, whatever was taken"
         );
+    }
+
+    #[test]
+    fn no_listener_builds_no_accessibility_update() {
+        let surface = surface();
+        surface.set_a11y_listener(false);
+        let mut built = 0;
+        surface.push_a11y_update(&mut || {
+            built += 1;
+            update_of(3)
+        });
+        assert_eq!(built, 0);
+        assert_eq!(surface.a11y_updates(), 0);
+
+        surface.set_a11y_listener(true);
+        surface.push_a11y_update(&mut || {
+            built += 1;
+            update_of(3)
+        });
+        assert_eq!(built, 1, "a listener that arrives gets the next update");
     }
 
     #[test]
