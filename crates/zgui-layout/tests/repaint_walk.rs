@@ -297,3 +297,27 @@ fn an_animation_below_the_repaint_is_composed() {
     );
     assert!(!out.served);
 }
+
+/// A proof also spares the box its engine style, so a change that reaches layout must get none.
+#[test]
+fn a_padding_reaches_the_engine() {
+    let _guard = exclusive();
+    let mut fixture = Fixture::new(
+        block(),
+        "root { display: block; width: 200px }
+         a { display: block }
+         .target { background-color: #246 } .to { padding: 9px 0 }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let _frame = lay_out(&mut store, &mut content, 300.0, 200.0);
+    let target = support::find::with_class(&fixture, "target");
+
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.set_classes(target, &["target".into(), "to".into()]);
+    });
+    let _frame = lay_out(&mut store, &mut content, 300.0, 200.0);
+
+    let (_, _, _, height) = support::find::rect(&store, &fixture, "target");
+    assert_eq!(height, 18.0);
+}

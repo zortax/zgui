@@ -353,35 +353,38 @@ impl LayoutStore {
         if crate::style::same_cascade(&node.style, style) {
             return false;
         }
-        let sorted = crate::fragment::stacking::sort_inputs(node);
         // A nested inline element paints into the lines it sits on. A run of text does not.
-        let only_colours = !(node.kind == crate::node::kind::BoxKind::Element
-            && node.is_nested_inline())
-            && crate::fragment::recolour::only_colours_differ(&node.style, style);
+        let nested = node.kind == crate::node::kind::BoxKind::Element && node.is_nested_inline();
+        let only_colours =
+            !nested && crate::fragment::recolour::only_colours_differ(&node.style, style);
         let declared = self
             .style_slots
             .get(key)
             .copied()
             .flatten()
             .and_then(|slot| self.styles.declared(slot, &node.style));
+        let sorted = (!only_colours).then(|| crate::fragment::stacking::sort_inputs(node));
         node.style = style.clone();
-        if crate::fragment::stacking::sort_inputs(node) != sorted
+        if let Some(sorted) = sorted
+            && crate::fragment::stacking::sort_inputs(node) != sorted
             && let Some(parent) = node.parent
         {
             self.forget_layout_order(parent);
         }
         let slot = self.styles.intern(style);
         let none = Some(CustomProperties::NONE);
-        if only_colours && declared == none && self.styles.declared(slot, style) == none {
-            self.recoloured.insert(key);
-        } else {
-            self.restyled_unproven = true;
-        }
+        let proven = only_colours && declared == none && self.styles.declared(slot, style) == none;
         if let Some(held) = self.style_slots.replace(key, Some(slot)) {
             self.styles.release(held);
         }
-        self.classify(key, style);
-        self.engine_pending.push(key);
+        // A proven box keeps its rosters and its lowering, so its engine style stands.
+        if proven {
+            self.recoloured.insert(key);
+        } else {
+            self.restyled_unproven = true;
+            self.classify(key, style);
+            self.engine_pending.push(key);
+        }
         true
     }
 
