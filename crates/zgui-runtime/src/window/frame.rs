@@ -497,6 +497,7 @@ impl Window {
 
         mark("f.recycle");
         self.dom.end_frame();
+        mark("f.recycle.layout");
         // The box arena ends its frame here for the same reason the document's does, and it has to
         // be here rather than inside `lay_out`: a removed box stays readable until this call, and
         // every stage between layout and now — scroll dispatch, geometry observations, re-hit,
@@ -509,7 +510,9 @@ impl Window {
         // so the next diff drains the same values, and a `PropertyOwner` carries the slot's
         // occupancy counter — a name given back late can never be confused with one since reissued.
         self.layout.borrow_mut().recycle();
+        mark("f.recycle.text");
         self.sweep_text_slots();
+        mark("f.recycle.document");
         let changed_during = self.document.borrow().end_frame();
         // After every stage that can write the document and before the frame's own park decision:
         // what this records is what another window's sweep compares against to find out whether
