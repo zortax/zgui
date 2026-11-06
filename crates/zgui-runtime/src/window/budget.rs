@@ -138,8 +138,46 @@ impl Window {
         let report = manager::report(self);
         manager::enforce(self, &report, epoch);
         self.budgets.record(report);
+        self.retire_clip_chains();
         self.sweep_clip_chains(epoch);
         self.sweep_paints(epoch);
+    }
+
+    /// Frees the clip chains of boxes that left the tree, once they are a share of the table.
+    ///
+    /// Every clipped box names a chain, so content that is mounted and unmounted again grows the id
+    /// space by one slot per box, and each slot costs the renderer a side-table entry. The stride
+    /// sweep frees a bounded number of chains and cannot keep up with a list that remounts its rows.
+    ///
+    /// The pass walks the table and the fragments. Running it when the retired boxes are an eighth
+    /// of what it walks keeps the cost per retired box constant and the table in proportion to the
+    /// live content.
+    fn retire_clip_chains(&mut self) {
+        /// The fewest retired boxes worth a pass.
+        const FLOOR: usize = 64;
+        /// What share of the walked entries has to be retired.
+        const SHARE: usize = 8;
+        /// How many fragments cost as much to walk as one table slot.
+        const FRAGMENTS_PER_SLOT: usize = 8;
+
+        self.retired_clips
+            .extend(self.diff_scratch.take_retired_clips());
+        let layout = self.layout.borrow();
+        let walked = self
+            .scene
+            .clips
+            .slots()
+            .max(layout.fragment_count() as usize / FRAGMENTS_PER_SLOT);
+        if self.retired_clips.len() < FLOOR.max(walked / SHARE) {
+            return;
+        }
+        // A fragment re-encoded later emits under the chain it stored at build.
+        let scene = &mut self.scene;
+        layout.each_fragment(|fragment| {
+            scene.clips.use_of(fragment.clip);
+        });
+        drop(layout);
+        scene.clips.evict_retired_chains(&mut self.retired_clips);
     }
 
     /// Frees the clip chains nothing can reach any more, on a stride of frames.

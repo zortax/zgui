@@ -211,6 +211,12 @@ pub fn rebuild_in(
         let owner = zgui_scene::PropertyOwner::of(gone);
         tables.spatial.release(owner);
         tables.spatial.release(owner.content());
+        if store
+            .get(gone)
+            .is_some_and(|node| crate::fragment::clip::clips_children(&node.style))
+        {
+            scratch.retired_clips.push(owner);
+        }
     }
     // Painting order is a property of the whole document, so a fragment that did not exist before
     // has no place in it and no incremental update can invent one. That, and an index that has been

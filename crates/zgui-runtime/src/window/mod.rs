@@ -158,6 +158,8 @@ pub struct Window {
     clicks: crate::window::clicks::ClickCount,
     /// The reusable buffers the fragment walk works in, warm across frames.
     diff_scratch: zgui_layout::fragment::diff::DiffScratch,
+    /// The boxes that imposed a clip and left the tree, whose chains are still in the table.
+    retired_clips: rustc_hash::FxHashSet<zgui_scene::PropertyOwner>,
     /// Where each scroll container is scrolled to, and everything that moves one over time.
     scroll: Rc<RefCell<zgui_scroll::Scroller>>,
     /// What this desktop means by one detent of a wheel, and which way it points.
@@ -698,6 +700,7 @@ impl Window {
             rehit_seen: 0,
             clicks: crate::window::clicks::ClickCount::default(),
             diff_scratch: zgui_layout::fragment::diff::DiffScratch::default(),
+            retired_clips: rustc_hash::FxHashSet::default(),
             scroll,
             last_frame: None,
             opened_at: None,
