@@ -18,6 +18,7 @@ pub mod filter;
 pub mod hit;
 pub mod index;
 pub mod ink;
+pub(crate) mod recolour;
 pub mod scroll_nodes;
 pub mod stacking;
 pub mod sticky;

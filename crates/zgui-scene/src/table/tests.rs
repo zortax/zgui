@@ -276,3 +276,26 @@ fn a_sweep_frees_no_more_than_its_cap() {
     assert_eq!(table.evict_unreachable(8, 4, |_| None), 4);
     assert_eq!(table.len(), 6, "the rest waits for the next sweep");
 }
+
+#[test]
+fn doomed_entries_go_unless_something_needs_them() {
+    let mut table = table();
+    table.begin_frame();
+    let held = table.intern(shifted(1.0));
+    table.retain(held);
+    let parent = table.intern(shifted(2.0));
+    let child = table.intern(shifted(3.0));
+    let dead = table.intern(shifted(4.0));
+    table.begin_frame();
+
+    let doomed = |value: &Matrix4| {
+        *value == shifted(1.0) || *value == shifted(2.0) || *value == shifted(4.0)
+    };
+    let through = move |value: &Matrix4| (*value == shifted(3.0)).then_some(parent);
+    assert_eq!(table.evict_doomed(doomed, through), 1);
+
+    assert!(!table.contains(dead), "nothing needed it");
+    assert!(table.contains(held), "a hold keeps it");
+    assert!(table.contains(parent), "a kept entry resolves through it");
+    assert!(table.contains(child), "it was never doomed");
+}

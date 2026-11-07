@@ -176,26 +176,37 @@ pub fn bleed(rect: Rect<DevicePx, Device>, filters: &[Filter]) -> Rect<DevicePx,
 /// visible alpha answers no. What this deliberately does not ask about — transforms, clips,
 /// filters, stacking — belongs to the flags a consumer reads beside this.
 pub fn paints_nothing(style: &ComputedStyle, border: Edges<DevicePx>) -> bool {
-    let background = style.get_background();
     border == Edges::ZERO
-        && to_color(
-            &background
-                .background_color
-                .resolve_to_absolute(current(style)),
-        )
-        .alpha()
-            == 0.0
-        && background
-            .background_image
-            .0
-            .iter()
-            .all(|image| matches!(image, ImageValue::None))
+        && background_colour_is_clear(style)
+        && no_background_image(style)
         && style.get_effects().box_shadow.0.is_empty()
         && {
             let outline = style.get_outline();
             outline.outline_style == OutlineStyleValue::none()
                 || outline.outline_width.0.to_f32_px() == 0.0
         }
+}
+
+/// Whether the background colour, resolved against the text colour, has no alpha at all.
+pub(crate) fn background_colour_is_clear(style: &ComputedStyle) -> bool {
+    to_color(
+        &style
+            .get_background()
+            .background_color
+            .resolve_to_absolute(current(style)),
+    )
+    .alpha()
+        == 0.0
+}
+
+/// Whether every background image layer is empty.
+pub(crate) fn no_background_image(style: &ComputedStyle) -> bool {
+    style
+        .get_background()
+        .background_image
+        .0
+        .iter()
+        .all(|image| matches!(image, ImageValue::None))
 }
 
 /// The union of every outer box shadow, or nothing when there are none.

@@ -3,6 +3,7 @@
 //! | Module | Contents |
 //! |---|---|
 //! | `animation` | the second descent an animation that cannot repaint is serviced by |
+//! | `memo` | elements a restyle cascades together, and what keeps their results apart |
 //! | `custom_reader` | a custom property change reaching a custom element that names no `var()` |
 //! | `negation` | a complex selector inside `:not()` as its ancestor and attribute move |
 //! | `moved` | an element that moved between its animation mark and the restyle |
@@ -29,6 +30,8 @@ mod damage;
 mod fill;
 #[path = "restyle/keyframe_vars.rs"]
 mod keyframe_vars;
+#[path = "restyle/memo.rs"]
+mod memo;
 #[path = "restyle/moved.rs"]
 mod moved;
 #[path = "restyle/negation.rs"]

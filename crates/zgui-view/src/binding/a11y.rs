@@ -90,6 +90,13 @@ impl A11yBinding {
         }
     }
 
+    /// Whether nothing here can change, which holds for a binding of a fixed role and nothing else.
+    ///
+    /// A step is an opaque closure, so a binding with any step counts as one that can change.
+    pub(crate) fn is_constant(&self) -> bool {
+        self.steps.is_empty() && matches!(self.role, None | Some(ReactiveValue::Constant(_)))
+    }
+
     /// Adds a step of the caller's own, for a property with no method here yet.
     ///
     /// The closure runs inside the binding's effect, so anything reactive it reads is tracked.

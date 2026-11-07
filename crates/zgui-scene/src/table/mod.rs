@@ -267,6 +267,13 @@ impl<K: TableId, V: Content> Table<K, V> {
         K::from_index(slot)
     }
 
+    /// Visits every value, in slot order, without marking any as used.
+    pub fn each(&self, mut visit: impl FnMut(&V)) {
+        for entry in self.entries.iter().flatten() {
+            visit(&entry.value);
+        }
+    }
+
     /// The id of the entry equal to `value`, without interning it or marking it as used.
     pub fn find(&self, value: &V) -> Option<K> {
         self.lookup(value.content_hash(), value).map(K::from_index)
@@ -421,6 +428,35 @@ impl<K: TableId, V: Content> Table<K, V> {
                 || entry.generation >= horizon
                 || self.used.contains(slot);
         }
+        self.free_unkept(keep, cap, parent_of)
+    }
+
+    /// Frees every entry `doomed` names that nothing else needs, and reports how many went.
+    ///
+    /// An entry stays while something holds it, while this frame touched it, or while a kept entry
+    /// resolves through it. The pass visits every slot, so a caller runs it when the doomed entries
+    /// are a fixed share of the table.
+    pub fn evict_doomed(
+        &mut self,
+        doomed: impl Fn(&V) -> bool,
+        parent_of: impl Fn(&V) -> Option<K>,
+    ) -> usize {
+        let mut keep = vec![false; self.entries.len()];
+        for (slot, held) in self.entries.iter().enumerate() {
+            let Some(entry) = held else { continue };
+            keep[slot] =
+                entry.pinned || entry.refs > 0 || self.used.contains(slot) || !doomed(&entry.value);
+        }
+        self.free_unkept(keep, usize::MAX, parent_of)
+    }
+
+    /// Frees at most `cap` entries `keep` leaves out, after closing `keep` over `parent_of`.
+    fn free_unkept(
+        &mut self,
+        mut keep: Vec<bool>,
+        cap: usize,
+        parent_of: impl Fn(&V) -> Option<K>,
+    ) -> usize {
         // What a kept entry resolves through must keep resolving. A walk continues from every
         // slot it marks, so each chain of parents is climbed once across the whole pass.
         for slot in 0..self.entries.len() {

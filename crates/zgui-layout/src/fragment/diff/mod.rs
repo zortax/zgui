@@ -40,6 +40,7 @@ mod rematrix;
 mod rigid;
 mod scratch;
 pub mod split;
+mod walk;
 
 pub use crate::fragment::diff::damage::pixels;
 pub use crate::fragment::diff::dirty::{DocumentMarks, Everything, FrameDirty, Owed};
@@ -166,13 +167,37 @@ pub fn rebuild_in(
         refused: None,
         chase: Chase::default(),
         resolved: [Cell::new(None), Cell::new(None)],
+        proven: false,
     };
     for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
         // that is gone.
         pass.damage_drawn_beyond_a_move(pass.device_before(gone, anchor), Admitted::everything());
     }
-    pass.visit(root, descent, None, None, (0, HitOrder::MAX));
+    match walk::mode() {
+        walk::Mode::Off => {
+            pass.visit(root, descent, None, None, (0, HitOrder::MAX));
+        }
+        walk::Mode::On => {
+            if !pass.repaint_only(root) {
+                pass.visit(root, descent, None, None, (0, HitOrder::MAX));
+            }
+        }
+        walk::Mode::Shadow => {
+            let before = *pass.damage;
+            let served = pass.repaint_only(root);
+            let walked = core::mem::replace(pass.damage, before);
+            pass.proven = served;
+            pass.visit(root, descent, None, None, (0, HitOrder::MAX));
+            pass.proven = false;
+            assert!(
+                !served || walk::covers(&walked, pass.damage),
+                "the repaint walk left damage the composition owes: {:?} of {:?}",
+                walked.bounds(),
+                pass.damage.bounds(),
+            );
+        }
+    }
     let moves = pass.moves;
     // Every rigid move the walk made wrote its entries and left the hierarchy above them for here,
     // so that a scroll repairs it once instead of once per entry. Nothing may query the index
@@ -195,6 +220,7 @@ pub fn rebuild_in(
     // frame restyle and lay out the document again.
     let root_source = pass.store.node(root).source;
     pass.dirty.retire(root_source, ENTERS | Dirty::REBREAK);
+    pass.store.forget_recolours();
     let restacked = pass.restacked || pass.renumber;
     // Every fragment that ceased to exist since the last pass, including the ones belonging to
     // boxes this walk never reached because they are no longer in the tree. Their entries would
@@ -211,6 +237,12 @@ pub fn rebuild_in(
         let owner = zgui_scene::PropertyOwner::of(gone);
         tables.spatial.release(owner);
         tables.spatial.release(owner.content());
+        if store
+            .get(gone)
+            .is_some_and(|node| crate::fragment::clip::clips_children(&node.style))
+        {
+            scratch.retired_clips.push(owner);
+        }
     }
     // Painting order is a property of the whole document, so a fragment that did not exist before
     // has no place in it and no incremental update can invent one. That, and an index that has been
@@ -616,6 +648,8 @@ struct Pass<'a, 'b, D: FrameDirty> {
     /// The last two coordinate systems [`Pass::resolve`] answered, kept while the tree holds
     /// still.
     resolved: [Cell<Option<Resolved>>; 2],
+    /// Whether the repaint walk served this frame, so that composing it may change no fragment.
+    proven: bool,
 }
 
 /// One coordinate system's matrix, under the spatial tree's write stamp it was resolved at.
@@ -1826,6 +1860,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             Some(previous) => compare(previous, &held, next),
             None => Change::Changed,
         };
+        assert!(
+            !self.proven || change == Change::Identical,
+            "the repaint walk kept a fragment its composition changed: {kind:?}",
+        );
 
         // An extra equal to the one held under the same transform packs to the same record.
         let repack = previous

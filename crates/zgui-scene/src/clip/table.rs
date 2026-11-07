@@ -1,5 +1,6 @@
 //! The clip trie, and the questions asked of it.
 
+use rustc_hash::FxHashSet;
 use zgui_geom::{Corners, Device, DevicePx, Matrix4, Point, Rect, Size, Vec2};
 
 /// A translation of no distance, which is what a link that nothing has carried holds.
@@ -103,6 +104,34 @@ impl ClipTable {
             ClipNode::Link { parent, .. } => Some(*parent),
             ClipNode::Root => None,
         })
+    }
+
+    /// Frees the chains named after the boxes in `retired`, and reports how many went.
+    ///
+    /// A chain that something still holds stays, and its owner stays in `retired` for a later pass.
+    pub fn evict_retired_chains(
+        &mut self,
+        retired: &mut FxHashSet<crate::spatial::PropertyOwner>,
+    ) -> usize {
+        let freed = self.evict_doomed(
+            |node| matches!(node, ClipNode::Link { name: Some(owner), .. } if retired.contains(owner)),
+            |node| match node {
+                ClipNode::Link { parent, .. } => Some(*parent),
+                ClipNode::Root => None,
+            },
+        );
+        let mut standing = FxHashSet::default();
+        self.each(|node| {
+            if let ClipNode::Link {
+                name: Some(owner), ..
+            } = node
+                && retired.contains(owner)
+            {
+                standing.insert(*owner);
+            }
+        });
+        *retired = standing;
+        freed
     }
 
     /// How many links `id` applies.

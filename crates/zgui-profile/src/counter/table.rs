@@ -658,6 +658,21 @@ counters! {
 
     /// Styles replaced by the groups of an equal style an earlier element was given.
     StylesShared => styles_shared, Group::BackendNeutral;
+
+    /// Cascades of a restyle that the traversal's memo answered.
+    CascadeMemoHits => cascade_memo_hits, Group::BackendNeutral;
+
+    /// Cascades of a restyle that the memo could answer and did not hold.
+    CascadeMemoMisses => cascade_memo_misses, Group::BackendNeutral;
+
+    /// Cascades of a restyle that the memo cannot answer.
+    CascadeMemoSkips => cascade_memo_skips, Group::BackendNeutral;
+
+    /// Fragment passes that followed repaint marks and composed nothing.
+    RepaintWalks => repaint_walks, Group::BackendNeutral;
+
+    /// Boxes those walks read.
+    RepaintWalkBoxes => repaint_walk_boxes, Group::BackendNeutral;
 }
 
 impl Counter {

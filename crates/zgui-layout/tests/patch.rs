@@ -128,22 +128,86 @@ fn writing_the_characters_a_box_already_holds_is_not_a_rewrite() {
     );
 }
 
-/// Text that disappears is a box that disappears, and the patch says so instead of guessing.
+/// A document with two paragraphs, and the store its box tree lives in.
+fn two_paragraphs(first: &'static str) -> (Fixture, LayoutStore) {
+    let fixture = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("para").text(first),
+            Element::new("para").text("bravo"),
+        ]),
+        "root { display: block; width: 400px }
+         para { display: block }",
+    );
+    let store = fixture.box_tree();
+    (fixture, store)
+}
+
+/// A label that is cleared keeps its box, and so does everything else.
 ///
-/// An empty text node generates no box at all, so servicing this in place would mean creating and
-/// destroying boxes — and with them anonymous wrapping, inline splitting and paint order. The
-/// answer that keeps the tree honest is to refuse, and the caller rebuilds.
+/// A build gives the empty string a box as well, so the patch and the build agree.
 #[test]
-fn text_that_empties_out_is_refused_rather_than_approximated() {
-    let (mut fixture, mut store) = fixture("alpha");
+fn text_that_empties_out_keeps_every_box() {
+    let (mut fixture, mut store) = two_paragraphs("alpha");
     let mut content = measurer();
     lay_out(&mut store, &mut content, 400.0, 400.0);
+    let before = names(&store);
 
     let text = first_text(&fixture.document, fixture.root);
     fixture.edit_and_restyle(|edit| edit.set_text(text, ""));
-
     let root = fixture.document.root_index().expect("a root element");
-    assert_eq!(retext(&mut store, &fixture.document, root), Retext::Rebuild);
+
+    assert_eq!(
+        retext(&mut store, &fixture.document, root),
+        Retext::Patched(1)
+    );
+    assert_eq!(names(&store), before);
+}
+
+/// A label that is filled again keeps its box, and so does everything else.
+#[test]
+fn text_that_fills_an_emptied_node_keeps_every_box() {
+    let (mut fixture, mut store) = two_paragraphs("");
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 400.0, 400.0);
+    let before = names(&store);
+
+    let text = first_text(&fixture.document, fixture.root);
+    fixture.edit_and_restyle(|edit| edit.set_text(text, "alpha"));
+    let root = fixture.document.root_index().expect("a root element");
+
+    assert_eq!(
+        retext(&mut store, &fixture.document, root),
+        Retext::Patched(1)
+    );
+    assert_eq!(names(&store), before);
+}
+
+/// Text written inside a subtree that generates nothing owes no box and no rebuild.
+#[test]
+fn text_under_a_hidden_element_keeps_every_box() {
+    let mut fixture = Fixture::new(
+        Element::new("root").children(vec![
+            Element::new("para").classes(&["gone"]).text("alpha"),
+            Element::new("para").text("bravo"),
+        ]),
+        "root { display: block; width: 400px }
+         para { display: block }
+         .gone { display: none }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    lay_out(&mut store, &mut content, 400.0, 400.0);
+    let before = names(&store);
+
+    let text = first_text(&fixture.document, fixture.root);
+    fixture.edit_and_restyle(|edit| edit.set_text(text, "charlie"));
+    let root = fixture.document.root_index().expect("a root element");
+
+    assert_eq!(
+        retext(&mut store, &fixture.document, root),
+        Retext::Patched(0)
+    );
+    assert_eq!(names(&store), before);
 }
 
 /// A font that moved keeps every box: what changes is what the text is shaped into, and that
