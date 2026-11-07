@@ -103,6 +103,7 @@ fn renderer(
         pacing,
         notify_wanted(pacing).then(|| pre_present(surface)),
     )?;
+    // A platform that paces its own frames also decides when a composed frame is handed over.
     if pacing == PresentPacing::Platform {
         let gate = Arc::clone(surface);
         renderer.set_present_gate(Box::new(move || gate.present_now()));
