@@ -348,7 +348,6 @@ impl WaylandState {
             let logical = shared.logical;
             shared.resized(logical, scale)
         };
-        crate::surface::scale::declare(&surface);
         if let Some(event) = event {
             self.report(id, event);
         }

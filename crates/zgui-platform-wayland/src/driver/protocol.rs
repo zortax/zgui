@@ -178,7 +178,6 @@ impl LayerShellHandler for WaylandState {
             let scale = shared.ladder.factor();
             (shared.resized(extent, scale), shared.visibility_edge())
         };
-        crate::surface::scale::declare(&surface);
         if let Some(event) = visibility {
             self.report(id, event);
         }

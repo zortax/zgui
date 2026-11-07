@@ -75,8 +75,12 @@ pub(crate) struct Shared {
     /// first configure has to be answered with a frame or the surface is never shown, and every
     /// later restatement is a frame identical to the one already on the screen.
     pub(crate) mapped: bool,
-    /// A viewport destination that has not yet ridden a commit.
-    pub(crate) pending_viewport: Option<Size<CssPx, Css>>,
+    /// The extent and scale whose buffer metadata the compositor was last given.
+    ///
+    /// A buffer scale, a viewport destination and a window geometry are sent only with a buffer
+    /// that they describe. Sent at configure time, they ride whatever commit comes next — an empty
+    /// one, or a buffer drawn at the extent from before the configure.
+    pub(crate) declared: Option<(Size<i32, Device>, f64)>,
     /// The scale the compositor wants, from whichever source it offered.
     pub(crate) ladder: crate::surface::Scale,
     /// Whether the compositor last configured the surface as maximised.
@@ -115,7 +119,7 @@ impl Shared {
             unmapped: false,
             declined: false,
             mapped: false,
-            pending_viewport: None,
+            declared: None,
             ladder: crate::surface::Scale::default(),
             maximized: false,
             fullscreen: false,
@@ -150,7 +154,6 @@ impl Shared {
         self.logical = logical;
         self.scale = scale;
         self.size = size;
-        self.pending_viewport = Some(logical);
         Some(if moved_scale {
             SurfaceEvent::ScaleFactorChanged {
                 scale_factor: scale,
@@ -248,6 +251,32 @@ impl Shared {
         self.pacer.hidden(hidden);
         self.cancel_callbacks();
         Some(SurfaceEvent::Occluded(hidden))
+    }
+
+    /// The logical extent a buffer of `size` drawn at `scale` maps to, when its metadata changed.
+    ///
+    /// The configured extent is the answer for a buffer at the configured size. A buffer drawn
+    /// before the latest configure maps to its own extent, divided back out of its scale.
+    pub(crate) fn frame_metadata(
+        &mut self,
+        size: Size<i32, Device>,
+        scale: f64,
+    ) -> Option<Size<CssPx, Css>> {
+        if self.declared == Some((size, scale)) {
+            return None;
+        }
+        self.declared = Some((size, scale));
+        let current = Size::new(
+            self.size.width.0.round() as i32,
+            self.size.height.0.round() as i32,
+        );
+        if current == size && (self.scale - scale).abs() < 1e-5 {
+            return Some(self.logical);
+        }
+        Some(Size::new(
+            CssPx((f64::from(size.width) / scale) as f32),
+            CssPx((f64::from(size.height) / scale) as f32),
+        ))
     }
 
     /// Numbers a new frame callback, which makes every older one obsolete.
@@ -372,10 +401,31 @@ mod tests {
     }
 
     #[test]
-    fn the_viewport_destination_is_owed_until_a_commit_carries_it() {
+    fn buffer_metadata_is_sent_once_for_each_extent_and_scale() {
         let mut shared = Shared::new();
         shared.resized(logical(800.0, 600.0), 1.5);
-        assert_eq!(shared.pending_viewport, Some(logical(800.0, 600.0)));
+        let buffer = Size::new(1200, 900);
+        assert_eq!(
+            shared.frame_metadata(buffer, 1.5),
+            Some(logical(800.0, 600.0))
+        );
+        assert_eq!(shared.frame_metadata(buffer, 1.5), None);
+    }
+
+    #[test]
+    fn a_buffer_from_before_a_configure_is_described_by_its_own_extent() {
+        let mut shared = Shared::new();
+        shared.resized(logical(800.0, 600.0), 1.25);
+        shared.resized(logical(1000.0, 750.0), 1.25);
+        assert_eq!(
+            shared.frame_metadata(Size::new(1000, 750), 1.25),
+            Some(logical(800.0, 600.0)),
+            "the newer extent was declared for the older buffer"
+        );
+        assert_eq!(
+            shared.frame_metadata(Size::new(1250, 938), 1.25),
+            Some(logical(1000.0, 750.0))
+        );
     }
 
     #[test]

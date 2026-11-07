@@ -393,7 +393,19 @@ impl Surface for WaylandSurface {
     }
 
     fn pre_present_notify(&self) {
-        chrome::pre_present(self);
+        let (size, scale) = {
+            let shared = self.shared();
+            let size = Size::new(
+                shared.size.width.0.round() as i32,
+                shared.size.height.0.round() as i32,
+            );
+            (size, shared.scale)
+        };
+        chrome::pre_present(self, size, scale);
+    }
+
+    fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) {
+        chrome::pre_present(self, size, scale);
     }
 
     fn redraw_declined(&self) {
