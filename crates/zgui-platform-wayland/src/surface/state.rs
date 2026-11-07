@@ -6,7 +6,7 @@ use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
-use crate::frame::{Pacer, Timing, Visibility, Watchdog};
+use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
 
 /// The smallest and largest extents a window may be dragged to, in that order.
 ///
@@ -51,6 +51,8 @@ pub(crate) struct Shared {
     pub(crate) scale: f64,
     /// Whether a redraw is owed, and what the compositor owes back.
     pub(crate) pacer: Pacer,
+    /// Whether the surface's frames fit the interval, which decides whether it composes ahead.
+    pub(crate) ahead: Ahead,
     /// When frames reached the screen.
     pub(crate) timing: Timing,
     /// Whether the compositor is still drawing this surface.
@@ -116,6 +118,7 @@ impl Shared {
             logical: Size::new(CssPx(0.0), CssPx(0.0)),
             scale: 1.0,
             pacer: Pacer::new(),
+            ahead: Ahead::new(crate::frame::ahead::Mode::from_environment()),
             timing: Timing::default(),
             visibility: Visibility::default(),
             told_hidden: true,
@@ -312,8 +315,12 @@ impl Shared {
     }
 
     /// Records the compositor answering frame callback `serial`.
-    pub(crate) fn frame_callback(&mut self, serial: u64) {
+    pub(crate) fn frame_callback(&mut self, serial: u64, now: Instant) {
         if serial == self.callback_serial {
+            if let Some(since) = self.pacer.owed_since() {
+                let latency = now.saturating_duration_since(since);
+                self.ahead.answered(latency, self.timing.interval(), now);
+            }
             self.pacer.callback();
         }
         // The compositor spoke about this surface, which ends whatever run of unanswered frames
@@ -362,7 +369,7 @@ mod tests {
         shared.pacer.committed(now);
         shared.visibility.unanswered();
 
-        shared.frame_callback(old);
+        shared.frame_callback(old, now);
         shared.pacer.request();
         let mut visibility = shared.visibility;
         assert!(
@@ -374,7 +381,7 @@ mod tests {
             "the compositor spoke about the surface"
         );
 
-        shared.frame_callback(current);
+        shared.frame_callback(current, now);
         assert!(shared.pacer.take(&mut visibility, now));
     }
 

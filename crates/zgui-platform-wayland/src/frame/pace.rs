@@ -159,6 +159,14 @@ impl Pacer {
         self.held = false;
     }
 
+    /// When the callback now owed was asked for.
+    pub const fn owed_since(&self) -> Option<Instant> {
+        match self.owed {
+            Owed::Callback(since) => Some(since),
+            Owed::Nothing => None,
+        }
+    }
+
     /// Whether a frame callback is owed.
     pub const fn owes_callback(&self) -> bool {
         matches!(self.owed, Owed::Callback(_))

@@ -214,6 +214,8 @@ impl<A: AppHandler> WaylandApp<A> {
             }
             let due = {
                 let mut shared = surface.shared();
+                let ahead = shared.ahead.wanted(shared.timing.interval(), now);
+                shared.pacer.compose_ahead(ahead);
                 let mut visibility = shared.visibility;
                 let due = shared.pacer.take(&mut visibility, now);
                 shared.visibility = visibility;
@@ -222,12 +224,14 @@ impl<A: AppHandler> WaylandApp<A> {
             if !due {
                 continue;
             }
+            let began = self.state.live.clock.now();
             {
                 let cx = WaylandCx::new(&self.state);
                 self.handler
                     .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
             }
-            surface.finish_redraw(self.state.live.clock.now());
+            let ended = self.state.live.clock.now();
+            surface.finish_redraw(ended, ended.saturating_duration_since(began));
         }
     }
 

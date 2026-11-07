@@ -309,8 +309,16 @@ impl WaylandSurface {
     ///
     /// A redraw that ran while a callback is owed commits nothing either: that callback keeps the
     /// chain alive, and a held frame is committed when it arrives.
-    pub(crate) fn finish_redraw(&self, now: Instant) {
-        let end = self.shared().end_of_redraw(now);
+    /// `cost` is how long the redraw took, which decides whether the next one composes ahead.
+    pub(crate) fn finish_redraw(&self, now: Instant, cost: std::time::Duration) {
+        let end = {
+            let mut shared = self.shared();
+            let end = shared.end_of_redraw(now);
+            if end != crate::surface::state::EndOfRedraw::Declined {
+                shared.ahead.redrawn(cost);
+            }
+            end
+        };
         if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
             self.ask_for_callback();
             self.role.commit();
