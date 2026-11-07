@@ -113,6 +113,16 @@ pub trait Surface: Send + Sync + 'static {
     /// is what keeps frame pacing honest; where it means nothing it costs nothing.
     fn pre_present_notify(&self);
 
+    /// Whether a frame that has just been composed may be presented now.
+    ///
+    /// Asked by the renderer after the frame's work is submitted and before it is handed to the
+    /// surface. `false` means the platform is not ready for another buffer: the renderer keeps the
+    /// composed frame, and the platform delivers [`SurfaceEvent::PresentReady`] when it is ready.
+    /// The default is always ready.
+    fn present_now(&self) -> bool {
+        true
+    }
+
     /// Tells the platform the frame of `size` at `scale` is about to be presented.
     ///
     /// The same moment as [`Surface::pre_present_notify`], with the extent the buffer was drawn

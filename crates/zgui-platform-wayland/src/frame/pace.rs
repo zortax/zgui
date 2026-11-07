@@ -29,6 +29,15 @@ enum Owed {
 /// been quiet answers the first click immediately rather than after a round trip through the
 /// compositor.
 ///
+/// # A window that cannot keep up composes ahead
+///
+/// Waiting for the callback costs nothing to a frame that fits the interval, and it lets that frame
+/// draw from the input that arrived during the wait. A frame that does not fit misses the refresh
+/// it was started for, so every frame lands one refresh late and the period becomes a whole number
+/// of intervals. Such a window composes its next frame while the callback is owed, and the frame
+/// is *held*: it is presented when the callback arrives, so there is still one commit per callback,
+/// and nothing more is composed until it is presented.
+///
 /// # Not configured is a reason to refuse a frame; hidden is not
 ///
 /// The two look alike and are opposites. A surface the compositor has never configured may not be
@@ -65,6 +74,10 @@ pub struct Pacer {
     watchdog: Watchdog,
     /// How many callbacks were given up on rather than waited for.
     abandoned: u64,
+    /// Whether a composed frame waits for the callback before it is presented.
+    held: bool,
+    /// Whether a frame may be composed while a callback is owed.
+    ahead: bool,
 }
 
 impl Pacer {
@@ -75,6 +88,8 @@ impl Pacer {
             wanted: false,
             watchdog: Watchdog::default(),
             abandoned: 0,
+            held: false,
+            ahead: false,
         }
     }
 
@@ -99,6 +114,73 @@ impl Pacer {
     /// `visibility` is read *and written*: a callback given up on is the evidence the compositor
     /// has stopped drawing this surface, and there is nowhere else that evidence appears.
     pub fn take(&mut self, visibility: &mut Visibility, now: Instant) -> bool {
+        self.expire(visibility, now);
+        // A surface the compositor has not configured may not be drawn into *at all*. That is not
+        // the same as being hidden, and the two must not share a gate: attaching a buffer to a
+        // surface that has never been configured is a protocol error, and the compositor answers it
+        // by closing the connection. The request is kept, and the first configure delivers it.
+        //
+        // A held frame is the one frame allowed ahead of the compositor, so nothing more is
+        // composed until it is presented.
+        let waiting = matches!(self.owed, Owed::Callback(_)) && !self.ahead;
+        if !self.wanted || !visibility.configured || self.held || waiting {
+            return false;
+        }
+        self.wanted = false;
+        true
+    }
+
+    /// Whether a frame that has just been composed may be presented now.
+    ///
+    /// Not while a callback is owed: two commits with no callback between them is a client racing
+    /// ahead of the display, and only the second of them is ever shown. The frame is held instead,
+    /// and [`Pacer::take_present`] hands it over when the callback arrives or is given up on.
+    pub fn present_now(&mut self, now: Instant) -> bool {
+        let owed = matches!(self.owed, Owed::Callback(since) if !self.watchdog.expired(since, now));
+        self.held = owed;
+        !owed
+    }
+
+    /// Whether the held frame should be presented now, taking it if so.
+    ///
+    /// Asked once per turn per surface, before [`Pacer::take`]: the held frame goes first, and
+    /// the frame after it is composed while the compositor answers for it.
+    pub fn take_present(&mut self, visibility: &mut Visibility, now: Instant) -> bool {
+        self.expire(visibility, now);
+        if !self.held || matches!(self.owed, Owed::Callback(_)) {
+            return false;
+        }
+        self.held = false;
+        true
+    }
+
+    /// Drops the held frame, which a new extent or scale made obsolete.
+    pub const fn cancel_held(&mut self) {
+        self.held = false;
+    }
+
+    /// Whether a frame callback is owed.
+    pub const fn owes_callback(&self) -> bool {
+        matches!(self.owed, Owed::Callback(_))
+    }
+
+    /// Whether a composed frame is waiting to be presented.
+    pub const fn held(&self) -> bool {
+        self.held
+    }
+
+    /// Lets a frame be composed while a callback is owed, or stops that.
+    ///
+    /// A window whose frames fit the interval waits for the callback, and draws from the input
+    /// that arrived meanwhile. A window that cannot keep up composes its next frame during the
+    /// wait instead, because waiting puts every frame onto the refresh after the one it could
+    /// have made.
+    pub const fn compose_ahead(&mut self, ahead: bool) {
+        self.ahead = ahead;
+    }
+
+    /// Gives up on a callback that has been owed for too long.
+    fn expire(&mut self, visibility: &mut Visibility, now: Instant) {
         if let Owed::Callback(since) = self.owed
             && self.watchdog.expired(since, now)
         {
@@ -113,15 +195,6 @@ impl Pacer {
                 "no frame callback arrived in time; drawing without one"
             );
         }
-        // A surface the compositor has not configured may not be drawn into *at all*. That is not
-        // the same as being hidden, and the two must not share a gate: attaching a buffer to a
-        // surface that has never been configured is a protocol error, and the compositor answers it
-        // by closing the connection. The request is kept, and the first configure delivers it.
-        if !self.wanted || !visibility.configured || matches!(self.owed, Owed::Callback(_)) {
-            return false;
-        }
-        self.wanted = false;
-        true
     }
 
     /// Records that a commit went out and a callback was asked for with it.
@@ -161,7 +234,8 @@ impl Pacer {
 
     /// When the loop must wake to give up on a callback that has not arrived.
     ///
-    /// Nothing while nothing is owed, and nothing while no redraw is waiting. A surface that has
+    /// Nothing while nothing is owed, and nothing while neither a redraw nor a held frame is
+    /// waiting. A surface that has
     /// committed its last frame and been asked for nothing further has no reason to be woken at
     /// all — including a hidden one, which comes back the moment the compositor next says anything
     /// about it: a configure, a focus, an output it entered. Waking anyway to ask would be a wake
@@ -170,7 +244,7 @@ impl Pacer {
     pub fn deadline(&self, visibility: Visibility, now: Instant) -> Option<Instant> {
         let _ = (visibility, now);
         match self.owed {
-            Owed::Callback(since) if self.wanted => Some(self.watchdog.expiry(since)),
+            Owed::Callback(since) if self.wanted || self.held => Some(self.watchdog.expiry(since)),
             _ => None,
         }
     }
@@ -351,5 +425,80 @@ mod tests {
         pacer.request();
         pacer.take(&mut visibility, now + Duration::from_millis(400));
         assert_eq!(visibility.abandoned, 1);
+    }
+
+    #[test]
+    fn a_frame_composed_while_a_callback_is_owed_is_held_until_it_arrives() {
+        let mut pacer = Pacer::new();
+        pacer.compose_ahead(true);
+        let now = Instant::now();
+        let mut visibility = shown();
+        pacer.committed(now);
+        pacer.request();
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the window composes ahead"
+        );
+        assert!(!pacer.present_now(now), "two commits for one callback");
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "a second frame was composed over the held one"
+        );
+        assert!(!pacer.take_present(&mut visibility, now));
+
+        pacer.callback();
+        assert!(pacer.take_present(&mut visibility, now));
+        assert!(!pacer.take_present(&mut visibility, now), "presented twice");
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the next frame is composed"
+        );
+    }
+
+    #[test]
+    fn a_window_that_keeps_up_waits_for_the_callback_before_composing() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        pacer.committed(now);
+        pacer.request();
+        assert!(!pacer.take(&mut shown(), now));
+    }
+
+    #[test]
+    fn a_held_frame_is_presented_when_its_callback_is_given_up_on() {
+        let mut pacer = Pacer::new();
+        pacer.watch(Watchdog::for_interval(Some(Duration::from_millis(100))));
+        pacer.compose_ahead(true);
+        let now = Instant::now();
+        let mut visibility = shown();
+        pacer.committed(now);
+        assert!(!pacer.present_now(now));
+        assert_eq!(
+            pacer.deadline(visibility, now),
+            Some(now + Duration::from_millis(400)),
+            "the loop has to wake for the held frame"
+        );
+        assert!(!pacer.take_present(&mut visibility, now + Duration::from_millis(399)));
+        assert!(pacer.take_present(&mut visibility, now + Duration::from_millis(400)));
+        assert_eq!(visibility.abandoned, 1);
+    }
+
+    #[test]
+    fn a_new_extent_drops_the_held_frame_and_lets_the_next_one_be_composed() {
+        let mut pacer = Pacer::new();
+        pacer.compose_ahead(true);
+        let now = Instant::now();
+        let mut visibility = shown();
+        pacer.committed(now);
+        assert!(!pacer.present_now(now));
+        pacer.cancel_held();
+        pacer.request();
+        assert!(pacer.take(&mut visibility, now));
+        pacer.callback();
+        assert!(
+            !pacer.take_present(&mut visibility, now),
+            "the obsolete frame was presented"
+        );
     }
 }

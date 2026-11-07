@@ -24,6 +24,11 @@ pub(crate) enum EndOfRedraw {
     KeepChainAlive,
     /// The redraw was refused without running; nothing is committed and nothing is owed.
     Declined,
+    /// The redraw composed a frame that waits for the owed callback; nothing is committed yet.
+    Held,
+    /// The redraw ran ahead of an owed callback and presented nothing; that callback keeps the
+    /// chain alive.
+    Waiting,
 }
 
 /// The mutable half of a surface.
@@ -154,6 +159,7 @@ impl Shared {
         self.logical = logical;
         self.scale = scale;
         self.size = size;
+        self.pacer.cancel_held();
         Some(if moved_scale {
             SurfaceEvent::ScaleFactorChanged {
                 scale_factor: scale,
@@ -180,9 +186,24 @@ impl Shared {
             EndOfRedraw::Presented
         } else if declined {
             EndOfRedraw::Declined
+        } else if self.pacer.held() {
+            EndOfRedraw::Held
+        } else if self.pacer.owes_callback() {
+            EndOfRedraw::Waiting
         } else {
             self.pacer.committed(now);
             EndOfRedraw::KeepChainAlive
+        }
+    }
+
+    /// Closes out a delivered [`SurfaceEvent::PresentReady`].
+    ///
+    /// A held frame that reached the surface owes a callback, like any presented frame. One that
+    /// did not — an acquisition that failed, or a frame a configure made obsolete — owes nothing,
+    /// and the application asks for the frame that replaces it.
+    pub(crate) fn end_of_present(&mut self, now: Instant) {
+        if std::mem::replace(&mut self.presented, false) {
+            self.pacer.committed(now);
         }
     }
 
@@ -556,6 +577,40 @@ mod tests {
         shared.pacer.request();
         let mut visibility = shared.visibility;
         assert!(!shared.pacer.take(&mut visibility, now));
+    }
+
+    #[test]
+    fn a_redraw_ahead_of_an_owed_callback_commits_nothing() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.pacer.compose_ahead(true);
+        shared.pacer.committed(now);
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Waiting);
+        assert!(!shared.pacer.present_now(now));
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Held);
+    }
+
+    #[test]
+    fn a_held_frame_that_reached_the_surface_owes_a_callback() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.end_of_present(now);
+        assert!(!shared.pacer.owes_callback(), "nothing was presented");
+        shared.presented = true;
+        shared.end_of_present(now);
+        assert!(shared.pacer.owes_callback());
+    }
+
+    #[test]
+    fn a_new_extent_drops_the_held_frame() {
+        let mut shared = Shared::new();
+        shared.resized(logical(800.0, 600.0), 1.0);
+        shared.pacer.committed(Instant::now());
+        assert!(!shared.pacer.present_now(Instant::now()));
+        shared.resized(logical(900.0, 600.0), 1.0);
+        assert!(!shared.pacer.held());
     }
 
     #[test]

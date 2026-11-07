@@ -6,7 +6,7 @@ use zgui_scene::Scene;
 
 use crate::capabilities::RenderCapabilities;
 use crate::memory::MemoryReport;
-use crate::outcome::FrameOutcome;
+use crate::outcome::{FrameOutcome, SkipReason};
 use crate::pool::TargetPoolReport;
 use crate::shift::ScrollShift;
 use crate::target::RenderTarget;
@@ -149,6 +149,15 @@ pub trait Renderer {
     /// and for one whose surface always has an image spare: neither made the frame wait.
     fn acquire_block(&self) -> core::time::Duration {
         core::time::Duration::ZERO
+    }
+
+    /// Presents the frame that [`draw`](Renderer::draw) held back with [`SkipReason::Held`].
+    ///
+    /// The frame's work is already submitted, so this is only the copy to the surface and the
+    /// handover. A frame that a later [`configure`](Renderer::configure) made obsolete is not
+    /// presented. The default holds nothing, so it presents nothing.
+    fn present_held(&mut self) -> FrameOutcome {
+        FrameOutcome::Skipped(SkipReason::Undamaged)
     }
 
     /// Where rasterised content is uploaded: the device side of the texture atlas.

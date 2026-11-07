@@ -290,6 +290,11 @@ impl WaylandSurface {
         self.wl_surface().frame(&self.qh, callback);
     }
 
+    /// Ends a delivered [`SurfaceEvent::PresentReady`].
+    pub(crate) fn finish_present(&self, now: Instant) {
+        self.shared().end_of_present(now);
+    }
+
     /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
     ///
     /// A frame callback rides a commit. Every reason a *ran* frame can end without presenting —
@@ -301,6 +306,9 @@ impl WaylandSurface {
     /// committed and no callback is owed. The application kept the obligation, and its own
     /// deadline asks for the frame — which the pacer, owing nothing, answers in the same turn.
     /// A bufferless commit here would put that deadline behind a compositor round trip.
+    ///
+    /// A redraw that ran while a callback is owed commits nothing either: that callback keeps the
+    /// chain alive, and a held frame is committed when it arrives.
     pub(crate) fn finish_redraw(&self, now: Instant) {
         let end = self.shared().end_of_redraw(now);
         if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
@@ -406,6 +414,10 @@ impl Surface for WaylandSurface {
 
     fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) {
         chrome::pre_present(self, size, scale);
+    }
+
+    fn present_now(&self) -> bool {
+        self.shared().pacer.present_now(Instant::now())
     }
 
     fn redraw_declined(&self) {

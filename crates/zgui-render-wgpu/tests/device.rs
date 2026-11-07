@@ -242,6 +242,77 @@ fn only_a_frame_that_will_be_presented_tells_the_compositor_it_is_coming() {
 }
 
 #[test]
+fn a_frame_the_platform_is_not_ready_for_is_held_and_presented_later() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use zgui_render::{FrameOutcome, SkipReason};
+
+    let _device = device_lock();
+    let notified = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&notified);
+    let built = Builder::new()
+        .with_pre_present(Box::new(move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }))
+        .offscreen(target(), wgpu::TextureFormat::Bgra8Unorm, false);
+    let Ok(mut renderer) = built else {
+        return;
+    };
+    let ready = Arc::new(AtomicBool::new(false));
+    let gate = Arc::clone(&ready);
+    renderer.set_present_gate(Box::new(move || gate.load(Ordering::Relaxed)));
+
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.finish(&DamageSet::full());
+
+    let outcome = renderer.draw(&scene, &DamageSet::full());
+    assert_eq!(outcome, FrameOutcome::Skipped(SkipReason::Held));
+    assert!(
+        outcome.retires_damage(),
+        "the held frame's work was submitted"
+    );
+    assert_eq!(
+        notified.load(Ordering::Relaxed),
+        0,
+        "a held frame was announced"
+    );
+
+    assert!(matches!(
+        renderer.present_held(),
+        FrameOutcome::Presented(_)
+    ));
+    assert_eq!(notified.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        renderer.present_held(),
+        FrameOutcome::Skipped(SkipReason::Undamaged),
+        "one held frame was presented twice"
+    );
+
+    // A configure between the two makes the held frame obsolete.
+    assert_eq!(
+        renderer.draw(&scene, &DamageSet::full()),
+        FrameOutcome::Skipped(SkipReason::Held)
+    );
+    renderer.configure(RenderTarget::new(
+        Size::new(SIDE + 8, SIDE),
+        Scale::new(1.0),
+    ));
+    assert!(!matches!(
+        renderer.present_held(),
+        FrameOutcome::Presented(_)
+    ));
+    assert_eq!(notified.load(Ordering::Relaxed), 1);
+
+    // The composed target still owes the surface, so an undamaged frame presents it.
+    ready.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        renderer.draw(&scene, &DamageSet::new()),
+        FrameOutcome::Presented(_)
+    ));
+}
+
+#[test]
 fn an_empty_scene_composes_a_frame_that_holds_nothing() {
     let Some(mut renderer) = plain_renderer() else {
         return;
