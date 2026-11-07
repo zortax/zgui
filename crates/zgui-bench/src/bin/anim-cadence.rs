@@ -220,7 +220,7 @@ fn open_device(
     let builder = zgui_render_wgpu::Builder::new();
     let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
         let presented = Arc::clone(surface);
-        builder.with_pre_present(Box::new(move || {
+        builder.with_pre_present(Box::new(move |_| {
             presented.pre_present_notify();
         }))
     } else {

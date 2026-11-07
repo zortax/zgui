@@ -261,7 +261,9 @@ pub(crate) fn renderer(
     let notified = Arc::clone(surface);
     let builder = Builder::new()
         .with_present_pacing(pacing)
-        .with_pre_present(Box::new(move || notified.pre_present_notify()));
+        .with_pre_present(Box::new(move |target| {
+            notified.pre_present_frame(target.size, f64::from(target.scale.get()));
+        }));
     builder.for_surface(target, handles).map_or_else(
         |unavailable| {
             NO_DEVICE.store(true, Ordering::Relaxed);

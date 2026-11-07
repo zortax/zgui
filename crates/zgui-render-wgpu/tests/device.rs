@@ -191,7 +191,7 @@ fn only_a_frame_that_will_be_presented_tells_the_compositor_it_is_coming() {
     let notified = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&notified);
     let built = Builder::new()
-        .with_pre_present(Box::new(move || {
+        .with_pre_present(Box::new(move |_| {
             counter.fetch_add(1, Ordering::Relaxed);
         }))
         .offscreen(target(), wgpu::TextureFormat::Bgra8Unorm, false);

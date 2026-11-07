@@ -15,23 +15,15 @@ use crate::frame::{Pacer, Timing, Visibility, Watchdog};
 /// would leave the other pinned there.
 pub(crate) type Bounds = (Option<Size<CssPx, Css>>, Option<Size<CssPx, Css>>);
 
-/// UI redraw bookkeeping, independent of asynchronous buffer presentation.
+/// How a delivered redraw ended, and what the surface owes the compositor for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EndOfRedraw {
     /// A buffer was committed, and the frame callback rode that commit.
     Presented,
-    /// The redraw ran without a synchronous presentation; no extra commit is needed.
-    NoPresentation,
+    /// The redraw ran and presented nothing; a bufferless commit must keep the chain alive.
+    KeepChainAlive,
     /// The redraw was refused without running; nothing is committed and nothing is owed.
     Declined,
-}
-
-/// Control state may be committed only outside an in-flight buffer transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ControlCommit {
-    None,
-    Empty,
-    Unmap,
 }
 
 /// The mutable half of a surface.
@@ -66,13 +58,15 @@ pub(crate) struct Shared {
     pub(crate) told_hidden: bool,
     /// Whether a buffer was committed during the redraw now being delivered.
     pub(crate) presented: bool,
-    /// Serial and outstanding state of the real compositor callback. Watchdog expiry never
-    /// releases graphics readiness; stale callbacks from an abandoned mapping are ignored.
-    pub(crate) gpu_callback_serial: u64,
-    pub(crate) gpu_callback_pending: bool,
-    pub(crate) presenting: bool,
-    pub(crate) unmap_requested: bool,
-    pub(crate) control_commit: bool,
+    /// The number of the last frame callback asked for.
+    ///
+    /// Only that callback releases the pacer. An older one still counts as the compositor speaking
+    /// about the surface, but it answers for a commit that a hide, an unmap or a later commit
+    /// already made obsolete.
+    pub(crate) callback_serial: u64,
+    /// Whether the application unmapped the surface, so that showing it again starts a new
+    /// configure sequence.
+    pub(crate) unmapped: bool,
     /// Whether the redraw now being delivered was refused without running.
     pub(crate) declined: bool,
     /// Whether any buffer has ever been committed.
@@ -117,11 +111,8 @@ impl Shared {
             visibility: Visibility::default(),
             told_hidden: true,
             presented: false,
-            gpu_callback_serial: 0,
-            gpu_callback_pending: false,
-            presenting: false,
-            unmap_requested: false,
-            control_commit: false,
+            callback_serial: 0,
+            unmapped: false,
             declined: false,
             mapped: false,
             pending_viewport: None,
@@ -133,88 +124,6 @@ impl Shared {
             bounds: (None, None),
             pending_configure: None,
             outputs: Vec::new(),
-        }
-    }
-
-    /// Only one real callback is awaited, regardless of redraw or watchdog count.
-    pub(crate) fn begin_callback(&mut self, now: Instant) -> Option<u64> {
-        if self.gpu_callback_pending {
-            return None;
-        }
-        self.gpu_callback_serial += 1;
-        self.gpu_callback_pending = true;
-        self.pacer.committed(now);
-        Some(self.gpu_callback_serial)
-    }
-
-    pub(crate) fn cancel_callback(&mut self) {
-        self.gpu_callback_serial += 1;
-        self.gpu_callback_pending = false;
-        self.pacer.callback();
-    }
-
-    pub(crate) fn frame_callback(&mut self, serial: u64) {
-        if serial == self.gpu_callback_serial {
-            self.gpu_callback_pending = false;
-            self.pacer.callback();
-        }
-        self.visibility.answered();
-    }
-
-    pub(crate) fn begin_present(&mut self, size: Size<i32, Device>, scale: f64) -> bool {
-        if self.presenting
-            || !scale.is_finite()
-            || scale <= 0.
-            || !self.visibility.configured
-            || self.visibility.is_hidden()
-            || self.unmap_requested
-            || self.size.width.0.round() as i32 != size.width
-            || self.size.height.0.round() as i32 != size.height
-            || (self.scale - scale).abs() > 0.00001
-        {
-            return false;
-        }
-        self.presenting = true;
-        self.mapped = true;
-        self.pending_viewport.take();
-        true
-    }
-
-    pub(crate) fn request_visibility(&mut self, visible: bool) -> ControlCommit {
-        self.unmap_requested = !visible;
-        if visible {
-            if self.visibility.configured {
-                ControlCommit::None
-            } else {
-                ControlCommit::Empty
-            }
-        } else if self.presenting {
-            ControlCommit::None
-        } else {
-            self.visibility.configured = false;
-            self.cancel_callback();
-            ControlCommit::Unmap
-        }
-    }
-
-    pub(crate) fn control_commit(&mut self) -> ControlCommit {
-        if self.presenting {
-            self.control_commit = true;
-            ControlCommit::None
-        } else {
-            ControlCommit::Empty
-        }
-    }
-
-    pub(crate) fn end_present(&mut self) -> ControlCommit {
-        self.presenting = false;
-        let control = std::mem::take(&mut self.control_commit);
-        if self.unmap_requested {
-            self.request_visibility(false)
-        } else if control {
-            ControlCommit::Empty
-        } else {
-            ControlCommit::None
         }
     }
 
@@ -254,16 +163,23 @@ impl Shared {
 
     /// How the redraw just delivered ended, consuming what the delivery recorded.
     ///
-    /// Presentation callbacks belong to buffer commits, never to undamaged UI redraws.
-    pub(crate) fn end_of_redraw(&mut self, _now: Instant) -> EndOfRedraw {
+    /// A redraw that **presented** owes the compositor nothing further here — the callback rode
+    /// the commit `pre_present` made. One that **ran and presented nothing** must keep the chain
+    /// alive with a bufferless commit, or a compositor that answers only commits never speaks
+    /// about this surface again — and the silence that follows such a commit is also how a hidden
+    /// surface is recognised. One that was **declined** never ran: nothing is committed and the
+    /// pacer is left as it was, so the runtime's own deadline is answered the moment it asks.
+    pub(crate) fn end_of_redraw(&mut self, now: Instant) -> EndOfRedraw {
         let presented = std::mem::replace(&mut self.presented, false);
         let declined = std::mem::replace(&mut self.declined, false);
         if presented {
+            self.pacer.committed(now);
             EndOfRedraw::Presented
         } else if declined {
             EndOfRedraw::Declined
         } else {
-            EndOfRedraw::NoPresentation
+            self.pacer.committed(now);
+            EndOfRedraw::KeepChainAlive
         }
     }
 
@@ -330,7 +246,30 @@ impl Shared {
         }
         self.told_hidden = hidden;
         self.pacer.hidden(hidden);
+        self.cancel_callbacks();
         Some(SurfaceEvent::Occluded(hidden))
+    }
+
+    /// Numbers a new frame callback, which makes every older one obsolete.
+    pub(crate) fn begin_callback(&mut self) -> u64 {
+        self.callback_serial += 1;
+        self.callback_serial
+    }
+
+    /// Makes every callback asked for so far obsolete.
+    pub(crate) fn cancel_callbacks(&mut self) {
+        self.callback_serial += 1;
+    }
+
+    /// Records the compositor answering frame callback `serial`.
+    pub(crate) fn frame_callback(&mut self, serial: u64) {
+        if serial == self.callback_serial {
+            self.pacer.callback();
+        }
+        // The compositor spoke about this surface, which ends whatever run of unanswered frames
+        // had accumulated — and with it the only occlusion signal that works on every version of
+        // the shell.
+        self.visibility.answered();
     }
 
     /// The drag edge to report, if the resizing state moved since it was last reported.
@@ -363,82 +302,30 @@ mod tests {
     }
 
     #[test]
-    fn hide_waits_for_the_matching_buffer_then_cancels_its_callback() {
+    fn an_obsolete_callback_releases_nothing_and_still_counts_as_an_answer() {
         let mut shared = Shared::new();
-        shared.resized(logical(800., 600.), 1.);
         shared.visibility.configured = true;
-        assert!(shared.begin_present(Size::new(800, 600), 1.));
-        let callback = shared.begin_callback(Instant::now()).unwrap();
-        assert_eq!(shared.request_visibility(false), super::ControlCommit::None);
-        assert!(shared.visibility.configured);
-        assert_eq!(shared.end_present(), super::ControlCommit::Unmap);
-        assert!(!shared.visibility.configured);
-        assert!(!shared.gpu_callback_pending);
-        assert_ne!(shared.gpu_callback_serial, callback);
-    }
-
-    #[test]
-    fn control_changes_coalesce_until_the_buffer_commit_finishes() {
-        let mut shared = Shared::new();
-        shared.resized(logical(800., 600.), 1.);
-        shared.visibility.configured = true;
-        assert!(shared.begin_present(Size::new(800, 600), 1.));
-        for _ in 0..32 {
-            assert_eq!(shared.control_commit(), super::ControlCommit::None);
-        }
-        assert_eq!(shared.end_present(), super::ControlCommit::Empty);
-        assert_eq!(shared.end_present(), super::ControlCommit::None);
-    }
-
-    #[test]
-    fn showing_again_cancels_a_deferred_unmap() {
-        let mut shared = Shared::new();
-        shared.resized(logical(800., 600.), 1.);
-        shared.visibility.configured = true;
-        assert!(shared.begin_present(Size::new(800, 600), 1.));
-        assert_eq!(shared.request_visibility(false), super::ControlCommit::None);
-        assert_eq!(shared.request_visibility(true), super::ControlCommit::None);
-        assert_eq!(shared.end_present(), super::ControlCommit::None);
-        assert!(shared.visibility.configured);
-    }
-
-    #[test]
-    fn stale_callback_cannot_release_a_new_mapping() {
-        let mut shared = Shared::new();
         let now = Instant::now();
-        let old = shared.begin_callback(now).unwrap();
-        assert!(shared.begin_callback(now).is_none());
-        shared.cancel_callback();
-        let current = shared.begin_callback(now).unwrap();
+        let old = shared.begin_callback();
+        shared.cancel_callbacks();
+        let current = shared.begin_callback();
+        shared.pacer.committed(now);
+        shared.visibility.unanswered();
+
         shared.frame_callback(old);
-        assert!(shared.gpu_callback_pending);
+        shared.pacer.request();
+        let mut visibility = shared.visibility;
+        assert!(
+            !shared.pacer.take(&mut visibility, now),
+            "the old callback released the pacer"
+        );
+        assert_eq!(
+            shared.visibility.abandoned, 0,
+            "the compositor spoke about the surface"
+        );
+
         shared.frame_callback(current);
-        assert!(!shared.gpu_callback_pending);
-    }
-
-    #[test]
-    fn stale_size_or_scale_cannot_commit_new_viewport_metadata() {
-        let mut shared = Shared::new();
-        shared.resized(logical(800., 600.), 1.25);
-        shared.visibility.configured = true;
-        let viewport = shared.pending_viewport;
-        assert!(!shared.begin_present(Size::new(800, 600), 1.25));
-        assert!(!shared.begin_present(Size::new(1000, 750), 1.0));
-        assert_eq!(shared.pending_viewport, viewport);
-        assert!(!shared.presenting);
-        assert!(shared.begin_present(Size::new(1000, 750), 1.25));
-        assert!(shared.pending_viewport.is_none());
-        assert!(shared.presenting);
-    }
-
-    #[test]
-    fn a_hidden_frame_is_rejected_without_starting_a_commit() {
-        let mut shared = Shared::new();
-        shared.resized(logical(800., 600.), 1.);
-        shared.visibility.configured = true;
-        shared.unmap_requested = true;
-        assert!(!shared.begin_present(Size::new(800, 600), 1.));
-        assert!(!shared.presenting);
+        assert!(shared.pacer.take(&mut visibility, now));
     }
 
     #[test]
@@ -610,15 +497,15 @@ mod tests {
     }
 
     #[test]
-    fn a_redraw_without_presentation_does_not_gate_the_next_request() {
+    fn a_redraw_that_ran_and_presented_nothing_still_owes_the_chain_a_commit() {
         let mut shared = Shared::new();
         shared.visibility.configured = true;
         let now = Instant::now();
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::NoPresentation);
-        // GPU callback ownership is independent of no-damage UI frames.
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
+        // The commit went out, so the compositor is owed an answer before the next frame.
         shared.pacer.request();
         let mut visibility = shared.visibility;
-        assert!(shared.pacer.take(&mut visibility, now));
+        assert!(!shared.pacer.take(&mut visibility, now));
     }
 
     #[test]
@@ -638,7 +525,7 @@ mod tests {
         shared.declined = true;
         assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Declined);
         // The next redraw runs normally; yesterday's refusal says nothing about it.
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::NoPresentation);
+        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
     }
 
     #[test]

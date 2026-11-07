@@ -73,8 +73,14 @@ impl Scale {
 /// extent by its viewport; declaring anything else would apply the scaling twice. A surface
 /// without a viewport declares the whole number instead, which is the only scaling available to
 /// it.
-pub fn declare(_surface: &crate::surface::WaylandSurface) {
-    // Buffer scale is applied with the matching buffer on the presentation thread.
+pub fn declare(surface: &crate::surface::WaylandSurface) {
+    let ladder = surface.shared().ladder;
+    let scale = if ladder.is_fractional() {
+        1
+    } else {
+        ladder.buffer_scale()
+    };
+    surface.wl_surface().set_buffer_scale(scale.max(1));
 }
 
 #[cfg(test)]

@@ -20,9 +20,9 @@ pub struct FrameStats {
 /// Why a frame did not reach the screen.
 ///
 /// Most variants mean the frame's work **was** submitted: the target it composes into holds this
-/// frame's pixels, and its damage is retired. Four of them skip before anything is recorded —
-/// [`SkipReason::Unconfigured`], [`SkipReason::Unacquired`], [`SkipReason::Pending`] and
-/// [`SkipReason::DeviceUnavailable`] — so those four retain damage for the next attempt. [`FrameOutcome::retires_damage`] answers
+/// frame's pixels, and its damage is retired. Three of them skip before anything is recorded —
+/// [`SkipReason::Unconfigured`], [`SkipReason::Unacquired`] and [`SkipReason::DeviceUnavailable`] —
+/// so those three retain damage for the next attempt. [`FrameOutcome::retires_damage`] answers
 /// which a variant is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,9 +44,6 @@ pub enum SkipReason {
     /// [`SkipReason::Timeout`] is the same refusal met *after* the frame was composed, where the
     /// work was submitted and the damage retires.
     Unacquired,
-    /// Presentation backpressure refused this frame before recording. Retain damage and wait
-    /// for the renderer's completion wake instead of polling for another frame.
-    Pending,
     /// The window is not visible. **Do not** ask for another frame — waiting for a platform event
     /// or a timer deadline is the difference between a parked loop and a busy one.
     Occluded,
@@ -82,7 +79,7 @@ pub enum SkipReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FrameOutcome {
-    /// The frame was submitted for presentation; display feedback confirms actual delivery.
+    /// The frame reached the screen.
     Presented(FrameStats),
     /// The frame did not reach the screen, for a reason that is usually not a fault.
     Skipped(SkipReason),
@@ -101,10 +98,7 @@ impl FrameOutcome {
         !matches!(
             self,
             Self::Skipped(
-                SkipReason::Unconfigured
-                    | SkipReason::Unacquired
-                    | SkipReason::Pending
-                    | SkipReason::DeviceUnavailable
+                SkipReason::Unconfigured | SkipReason::Unacquired | SkipReason::DeviceUnavailable
             )
         )
     }
@@ -122,15 +116,12 @@ impl FrameOutcome {
             Self::Recovered => true,
             Self::Skipped(reason) => !matches!(
                 reason,
-                SkipReason::Occluded
-                    | SkipReason::Undamaged
-                    | SkipReason::Pending
-                    | SkipReason::DeviceUnavailable
+                SkipReason::Occluded | SkipReason::Undamaged | SkipReason::DeviceUnavailable
             ),
         }
     }
 
-    /// The frame's statistics, if it was submitted for presentation.
+    /// The frame's statistics, if it reached the screen.
     pub const fn stats(&self) -> Option<FrameStats> {
         match self {
             Self::Presented(stats) => Some(*stats),
@@ -190,13 +181,6 @@ mod tests {
     use super::{FrameOutcome, FrameStats, GpuUnavailable, SkipReason};
 
     /// The rule that is easiest to get backwards, stated as a test rather than as a comment.
-    #[test]
-    fn async_backpressure_keeps_damage_and_waits_for_completion_wake() {
-        let pending = FrameOutcome::Skipped(SkipReason::Pending);
-        assert!(!pending.retires_damage());
-        assert!(!pending.wants_another_frame());
-    }
-
     #[test]
     fn damage_is_retired_by_submission_and_not_by_presentation() {
         assert!(FrameOutcome::Presented(FrameStats::default()).retires_damage());

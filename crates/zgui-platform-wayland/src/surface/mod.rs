@@ -4,7 +4,6 @@ pub mod a11y;
 pub mod chrome;
 pub mod fractional;
 mod handles;
-mod present_ready;
 pub mod role;
 pub mod scale;
 pub mod seat;
@@ -86,8 +85,6 @@ pub struct WaylandSurface {
     fractional: Fractional,
     /// Everything about it that changes.
     shared: Mutex<Shared>,
-    callback_queue: Mutex<present_ready::ReadyQueue>,
-    callback_handle: QueueHandle<present_ready::ReadyState>,
     /// A redraw asked for from anywhere, waiting to be pulled into the pacer.
     asked: AtomicBool,
     /// Whether the compositor has configured this surface at least once.
@@ -133,15 +130,11 @@ impl WaylandSurface {
         parent_extent: Size<CssPx, Css>,
         links: Links,
     ) -> Arc<Self> {
-        let callback_queue = present_ready::ReadyQueue::new(&links.conn);
-        let callback_handle = callback_queue.handle();
         Arc::new(Self {
             id,
             role,
             fractional,
             shared: Mutex::new(Shared::new()),
-            callback_queue: Mutex::new(callback_queue),
-            callback_handle,
             asked: AtomicBool::new(false),
             mapped: AtomicBool::new(false),
             ping: links.ping,
@@ -289,27 +282,12 @@ impl WaylandSurface {
     /// asked for after the commit belongs to the *next* one, which never comes: that is the shape
     /// of a client that draws one frame and stops.
     pub(crate) fn ask_for_callback(&self) {
-        let mut shared = self.shared();
-        let Some(serial) = shared.begin_callback(Instant::now()) else {
-            return;
+        let serial = self.shared().begin_callback();
+        let callback = FrameCallback {
+            surface: self.id,
+            serial,
         };
-        drop(shared);
-        self.wl_surface().frame(&self.callback_handle, serial);
-    }
-
-    pub(crate) fn pump_ready(&self) {
-        if let Ok(mut queue) = self.callback_queue.try_lock()
-            && let Some(serial) = queue.dispatch()
-        {
-            self.acknowledge_ready(serial);
-        }
-    }
-
-    fn acknowledge_ready(&self, serial: u64) {
-        let mut shared = self.shared();
-        shared.frame_callback(serial);
-        drop(shared);
-        self.ping.ping();
+        self.wl_surface().frame(&self.qh, callback);
     }
 
     /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
@@ -324,10 +302,21 @@ impl WaylandSurface {
     /// deadline asks for the frame — which the pacer, owing nothing, answers in the same turn.
     /// A bufferless commit here would put that deadline behind a compositor round trip.
     pub(crate) fn finish_redraw(&self, now: Instant) {
-        // Completion of a UI frame does not commit a buffer or spend a display callback.
-        // Actual presentation and its metadata are owned by the renderer's worker.
-        self.shared().end_of_redraw(now);
+        let end = self.shared().end_of_redraw(now);
+        if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
+            self.ask_for_callback();
+            self.role.commit();
+        }
     }
+}
+
+/// What a frame callback answers for: the surface, and which of its callbacks it is.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FrameCallback {
+    /// The surface the callback was asked for.
+    pub(crate) surface: SurfaceId,
+    /// The number [`state::Shared::begin_callback`] gave it.
+    pub(crate) serial: u64,
 }
 
 impl Drop for WaylandSurface {
@@ -376,49 +365,6 @@ impl Surface for WaylandSurface {
         // the frame callbacks this backend is already waiting on, on the thread that also reads
         // input, and a surface the compositor stops drawing blocks it for a second at a time.
         PresentPacing::Platform
-    }
-
-    fn asynchronous_present(&self) -> bool {
-        true
-    }
-
-    fn wait_for_present(&self, cancelled: &AtomicBool) -> bool {
-        loop {
-            if cancelled.load(Ordering::Acquire) {
-                return false;
-            }
-            {
-                let mut shared = self.shared();
-                if !shared.visibility.configured
-                    || shared.visibility.is_hidden()
-                    || shared.unmap_requested
-                {
-                    shared.cancel_callback();
-                    return false;
-                }
-                if !shared.gpu_callback_pending {
-                    return true;
-                }
-            }
-            let mut queue = self.callback_queue.lock().unwrap();
-            // The UI may have dispatched readiness while this thread acquired the queue.
-            if !self.shared().gpu_callback_pending {
-                continue;
-            }
-            let serial = queue.wait();
-            drop(queue);
-            if let Some(serial) = serial {
-                self.acknowledge_ready(serial);
-            }
-        }
-    }
-
-    fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) -> bool {
-        chrome::begin_present(self, size, scale)
-    }
-
-    fn post_present_frame(&self) {
-        chrome::end_present(self);
     }
 
     fn presentation_timing(&self) -> Option<PresentationTiming> {

@@ -6,5 +6,3 @@ pub mod marks;
 pub mod scale;
 pub mod scene_texture;
 pub mod swapchain;
-
-pub mod present_worker;

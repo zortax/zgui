@@ -27,6 +27,9 @@ pub fn request_size(
         shared.resized(size, scale);
         scale
     };
+    if let Some(window) = surface.role().window() {
+        window.set_geometry(size);
+    }
     if let Some(layer) = surface.role().layer() {
         layer.set_size(
             size.width.0.round().max(1.0) as u32,
@@ -88,14 +91,25 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// first frame already does and there is nothing further to ask for. Hiding is a commit with no
 /// buffer, which unmaps it — and the compositor then treats the next buffer as a fresh mapping,
 /// configure sequence and all.
+///
+/// An unmapped surface is shown again by the same empty commit that asked for its first configure.
+/// The pacer holds the redraw until that configure arrives.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
-    let mut shared = surface.shared();
-    let action = shared.request_visibility(visible);
-    commit_control(surface, action);
-    drop(shared);
     if visible {
+        let unmapped = std::mem::take(&mut surface.shared().unmapped);
+        if unmapped {
+            surface.wl_surface().commit();
+        }
         zgui_platform::Surface::request_redraw(surface);
+        return;
     }
+    let wl = surface.wl_surface();
+    wl.attach(None, 0, 0);
+    wl.commit();
+    let mut shared = surface.shared();
+    shared.visibility.configured = false;
+    shared.unmapped = true;
+    shared.cancel_callbacks();
 }
 
 /// Makes the surface transparent to the pointer, or takes it back.
@@ -118,9 +132,7 @@ pub fn set_pointer_passthrough(
     } else {
         wl.set_input_region(None);
     }
-    let mut shared = surface.shared();
-    let action = shared.control_commit();
-    commit_control(surface, action);
+    wl.commit();
     Ok(())
 }
 
@@ -135,19 +147,20 @@ pub fn set_pointer_passthrough(
 ///   committed with is a protocol error, and this is where the matching buffer is known; and
 /// * the **presentation feedback**, because it is asked per content update and this is the update.
 pub fn pre_present(surface: &WaylandSurface) {
-    let (size, scale) = {
+    let logical = {
         let mut shared = surface.shared();
         shared.presented = true;
         shared.mapped = true;
-        shared.pending_viewport.take();
-        (
-            Size::new(shared.size.width.0 as i32, shared.size.height.0 as i32),
-            shared.scale,
-        )
+        shared.pending_viewport.take()
     };
-    apply_frame_metadata(surface, size, scale);
+    if let Some(logical) = logical {
+        surface.fractional().destination(logical);
+    }
     surface.ask_for_callback();
     surface.ask_for_feedback();
+    // Counted where it becomes a statement about visibility: a compositor that is not compositing
+    // this surface cannot answer for its frames, and a run of unanswered ones is the only thing
+    // that says so on a desktop whose shell reports neither suspension nor a leave.
     surface.shared().feedback_asked();
 }
 
@@ -216,53 +229,5 @@ mod tests {
                 "{asked:?} crossed to the wrong edge"
             );
         }
-    }
-}
-
-/// Starts a commit with buffer-specific metadata captured by the UI frame, never newer state.
-pub fn begin_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64) -> bool {
-    let mut shared = surface.shared();
-    if !shared.begin_present(size, scale) {
-        return false;
-    }
-    drop(shared);
-    apply_frame_metadata(surface, size, scale);
-    surface.ask_for_callback();
-    surface.ask_for_feedback();
-    surface.shared().feedback_asked();
-    true
-}
-
-/// Defers control commits until the matching buffer's commit has finished.
-pub fn end_present(surface: &WaylandSurface) {
-    let mut shared = surface.shared();
-    let action = shared.end_present();
-    commit_control(surface, action);
-}
-
-fn commit_control(surface: &WaylandSurface, action: crate::surface::state::ControlCommit) {
-    use crate::surface::state::ControlCommit;
-    if action == ControlCommit::Unmap {
-        surface.wl_surface().attach(None, 0, 0);
-    }
-    if action != ControlCommit::None {
-        surface.wl_surface().commit();
-    }
-}
-
-fn apply_frame_metadata(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64) {
-    let logical = Size::new(
-        CssPx((f64::from(size.width) / scale) as f32),
-        CssPx((f64::from(size.height) / scale) as f32),
-    );
-    let buffer_scale = if surface.fractional().viewport.is_some() {
-        1
-    } else {
-        scale.round().max(1.) as i32
-    };
-    surface.wl_surface().set_buffer_scale(buffer_scale);
-    surface.fractional().destination(logical);
-    if let Some(window) = surface.role().window() {
-        window.set_geometry(logical);
     }
 }

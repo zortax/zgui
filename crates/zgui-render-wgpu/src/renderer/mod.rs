@@ -48,7 +48,10 @@ use crate::target::swapchain::Presentation;
 /// point in the frame where it is meaningful. It runs only for an acquisition that will actually
 /// be presented: announcing a frame after an acquisition failed can leave a compositor waiting for
 /// a surface commit that never comes.
-pub type PrePresent = Box<dyn Fn() + Send + Sync>;
+///
+/// It is given the target the frame was drawn for, which can be older than the window's current
+/// extent.
+pub type PrePresent = Box<dyn Fn(RenderTarget) + Send + Sync>;
 
 /// How a renderer was built, which is what it needs to rebuild itself.
 ///
@@ -257,21 +260,6 @@ impl WgpuRenderer {
             vector_shortfall_is_fatal: cfg!(debug_assertions),
             timer,
         }
-    }
-
-    /// Moves a window's swapchain waits onto one bounded presentation worker.
-    pub fn with_presentation_worker(
-        mut self,
-        hooks: crate::target::present_worker::PresentHooks,
-    ) -> Self {
-        self.presentation = match self.presentation {
-            Presentation::Surface(surface) => Presentation::Worker(
-                crate::target::present_worker::PresentWorker::new(self.gpu.clone(), surface, hooks),
-            ),
-            other => other,
-        };
-        self.pre_present = None;
-        self
     }
 
     /// Decides whether a vector rasteriser running out of capacity stops the program.
@@ -556,9 +544,7 @@ impl WgpuRenderer {
     pub fn present_into(&mut self, slot: usize) -> bool {
         match &mut self.presentation {
             Presentation::Supplied(supplied) => supplied.select(slot),
-            Presentation::Surface(_) | Presentation::Worker(_) | Presentation::Offscreen(_) => {
-                false
-            }
+            Presentation::Surface(_) | Presentation::Offscreen(_) => false,
         }
     }
 
@@ -600,7 +586,7 @@ impl WgpuRenderer {
                 supplied.formats().surface,
                 supplied.size(),
             )),
-            Presentation::Surface(_) | Presentation::Worker(_) => None,
+            Presentation::Surface(_) => None,
         }
     }
 

@@ -129,22 +129,6 @@ impl Renderer for WgpuRenderer {
         // Anything that threw the composed target away, or changed the surface underneath it,
         // leaves it holding nothing this frame may rely on — so the damage set it was handed is
         // widened to all of it exactly once, here, rather than at each of the places that noticed.
-        let permit =
-            if let crate::target::swapchain::Presentation::Worker(worker) = &self.presentation {
-                if worker.take_retry() {
-                    self.present_composed_next = true;
-                }
-                if worker.failed() {
-                    return FrameOutcome::Skipped(SkipReason::DeviceUnavailable);
-                }
-                match worker.reserve() {
-                    Some(permit) => Some(permit),
-                    None => return FrameOutcome::Skipped(SkipReason::Pending),
-                }
-            } else {
-                None
-            };
-
         let everything = DamageSet::full();
         let damage = if core::mem::take(&mut self.full_damage_next) {
             // Nothing is worth moving into a target every pixel of which is about to be drawn
@@ -336,34 +320,7 @@ impl Renderer for WgpuRenderer {
         if let Some(timer) = &mut self.timer {
             timer.finish(&mut encoder);
         }
-        let worker_frame = permit.and_then(|permit| {
-            if !presented.acquisition.response().presents {
-                return None;
-            }
-            let kind = if formats.blit_undoes_srgb() {
-                PipelineKind::BlitUndoSrgb
-            } else {
-                PipelineKind::Blit
-            };
-            let pipeline = self
-                .pipelines
-                .borrow_mut()
-                .get(&self.gpu, kind, formats.present_attachment())
-                .expect("blit pipeline")
-                .clone();
-            let frame = crate::target::present_worker::Frame {
-                target: self.target,
-                binding: self.composed_binding.clone(),
-                pipeline,
-                generation: permit.generation,
-            };
-            draw_calls += 1;
-            Some((permit, frame))
-        });
         self.gpu.queue().submit([encoder.finish()]);
-        if let Some((permit, frame)) = worker_frame {
-            permit.submit(frame);
-        }
         if let Some(timer) = &mut self.timer {
             timer.submitted();
         }
@@ -381,7 +338,7 @@ impl Renderer for WgpuRenderer {
         if response.presents
             && let Some(notify) = &self.pre_present
         {
-            notify();
+            notify(self.target);
         }
         if let Some(texture) = presented.surface_texture {
             texture.present();

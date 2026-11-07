@@ -67,7 +67,7 @@ impl WaylandState {
             return;
         };
 
-        let (resized, visibility, resizing, _extent, answered) = {
+        let (resized, visibility, resizing, extent, answered) = {
             let mut shared = surface.shared();
             let extent = toplevel::extent(pending.size, surface.wanted(), shared.logical);
             let state_flip =
@@ -96,6 +96,9 @@ impl WaylandState {
 
         crate::surface::scale::declare(&surface);
         surface.role().ack(serial);
+        if let Some(window) = surface.role().window() {
+            window.set_geometry(extent);
+        }
         surface.popup_mapped();
 
         if let Some(event) = visibility {

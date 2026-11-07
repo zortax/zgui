@@ -10,7 +10,9 @@ use zgui_runtime::{AppError, RendererFactory};
 /// The compositor notification belonging to `surface`, kept alive with it.
 fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
     let surface = Arc::clone(surface);
-    pre_present_callback(move || surface.pre_present_notify())
+    pre_present_callback(move |target| {
+        surface.pre_present_frame(target.size, f64::from(target.scale.get()));
+    })
 }
 
 /// Whether `surface` is told that a frame is about to be presented.
@@ -42,9 +44,6 @@ fn pacing_override() -> bool {
 
 /// What `pacing` this surface's platform asks the renderer to configure for.
 fn pacing_of(surface: &Arc<dyn Surface>) -> PresentPacing {
-    if surface.asynchronous_present() {
-        return PresentPacing::Display;
-    }
     match surface.present_pacing() {
         zgui_platform::PresentPacing::Platform => PresentPacing::Platform,
         _ => PresentPacing::Display,
@@ -52,7 +51,7 @@ fn pacing_of(surface: &Arc<dyn Surface>) -> PresentPacing {
 }
 
 /// Boxes a platform notification for the renderer seam.
-fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent {
+fn pre_present_callback(notify: impl Fn(RenderTarget) + Send + Sync + 'static) -> PrePresent {
     Box::new(notify)
 }
 
@@ -104,22 +103,6 @@ fn renderer(
         pacing,
         notify_wanted(pacing).then(|| pre_present(surface)),
     )?;
-    if surface.asynchronous_present() {
-        let ready = surface.clone();
-        let prepare = surface.clone();
-        let complete = surface.clone();
-        let wake = surface.clone();
-        renderer = renderer.with_presentation_worker(
-            zgui_render_wgpu::target::present_worker::PresentHooks {
-                ready: Box::new(move |cancelled| ready.wait_for_present(cancelled)),
-                prepare: Box::new(move |target| {
-                    prepare.pre_present_frame(target.size, f64::from(target.scale.get()))
-                }),
-                complete: Box::new(move || complete.post_present_frame()),
-                wake: Box::new(move || wake.request_redraw()),
-            },
-        );
-    }
     renderer.set_group_precision(precision);
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing in the window — every icon — is empty space. Which rasteriser this is comes
@@ -139,11 +122,14 @@ mod tests {
     fn the_default_renderer_callback_runs_its_platform_notification() {
         let notifications = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&notifications);
-        let notify = pre_present_callback(move || {
+        let notify = pre_present_callback(move |_| {
             recorded.fetch_add(1, Ordering::Relaxed);
         });
 
-        notify();
+        notify(RenderTarget::new(
+            zgui_geom::Size::new(1, 1),
+            zgui_geom::Scale::new(1.0),
+        ));
 
         assert_eq!(
             notifications.load(Ordering::Relaxed),

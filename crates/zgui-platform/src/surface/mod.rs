@@ -80,25 +80,6 @@ pub trait Surface: Send + Sync + 'static {
         PresentPacing::Display
     }
 
-    /// Whether the default renderer should own FIFO presentation on a worker.
-    fn asynchronous_present(&self) -> bool {
-        false
-    }
-
-    /// Waits for compositor readiness outside graphics API locks; cancellation ends the wait.
-    fn wait_for_present(&self, cancelled: &std::sync::atomic::AtomicBool) -> bool {
-        !cancelled.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    /// Applies metadata for this exact frame immediately before worker presentation.
-    fn pre_present_frame(&self, _size: Size<i32, Device>, _scale: f64) -> bool {
-        self.pre_present_notify();
-        true
-    }
-
-    /// Ends a worker presentation's metadata transaction.
-    fn post_present_frame(&self) {}
-
     /// When this surface's frames reach the screen, as far as the platform knows.
     ///
     /// Absent means the platform reports no timing at all, and a caller falls back to
@@ -131,6 +112,17 @@ pub trait Surface: Send + Sync + 'static {
     /// Called between finishing the drawing and presenting it. On a compositor that uses it this
     /// is what keeps frame pacing honest; where it means nothing it costs nothing.
     fn pre_present_notify(&self);
+
+    /// Tells the platform the frame of `size` at `scale` is about to be presented.
+    ///
+    /// The same moment as [`Surface::pre_present_notify`], with the extent the buffer was drawn
+    /// at. A platform that declares buffer metadata with each commit reads it from here, because
+    /// the surface can already be at a newer extent than the frame. The default ignores the
+    /// extent.
+    fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) {
+        let _ = (size, scale);
+        self.pre_present_notify();
+    }
 
     /// Tells the platform the redraw just delivered was refused without running.
     ///
