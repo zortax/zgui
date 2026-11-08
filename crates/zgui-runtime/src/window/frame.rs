@@ -1527,6 +1527,17 @@ impl Window {
                 self.scale,
                 &self.host.placements(),
             );
+            if super::damage_coalesce::coalesce(&mut self.damage) {
+                // The larger region must be expanded and emitted too; merging
+                // only at renderer submission would omit its stationary content.
+                zgui_paint::expand(
+                    &layout,
+                    &mut self.damage,
+                    viewport,
+                    self.scale,
+                    &self.host.placements(),
+                );
+            }
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
             // reads any of it, so a document with no effect in it pays three floats.
