@@ -53,6 +53,11 @@ pub trait FrameProbe {
     /// A frame has finished on `window`.
     fn frame_ended(&self, window: &Window);
 
+    /// Completed-frame timings and renderer counters, without requesting another frame.
+    fn frame_reported(&self, window: &Window, _report: &crate::window::frame::FrameReport) {
+        self.frame_ended(window);
+    }
+
     /// What to call this probe in a diagnostic rendering of the window's options.
     ///
     /// Defaulted, because a probe is identified by what it does rather than by what it is called,
