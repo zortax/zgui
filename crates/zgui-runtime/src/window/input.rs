@@ -209,7 +209,16 @@ impl Window {
                         .key(&world, *state, event, modifiers, &shortcuts);
                     (routed.target(), routed.steps.to_vec(), routed.default)
                 }
-                // An input method's edits and a drop are aimed at whatever has focus. No
+                SurfaceEvent::Drag(zgui_platform::DragEvent::Dropped { position, .. }) => {
+                    let chain = world.chain_at(zgui_geom::Point::new(
+                        zgui_geom::DevicePx(position.x.0 * self.scale),
+                        zgui_geom::DevicePx(position.y.0 * self.scale),
+                    ));
+                    let mut plan = zgui_input::dispatch::Plan::default();
+                    zgui_input::dispatch::resolve(document.store(), &chain, kind, &mut plan);
+                    (chain.target(), plan.steps().to_vec(), None)
+                }
+                // An input method's edits are aimed at whatever has focus. No
                 // interaction state changes and there is no framework behaviour to compute: the
                 // path is resolved, walked, and that is all.
                 _ => {
