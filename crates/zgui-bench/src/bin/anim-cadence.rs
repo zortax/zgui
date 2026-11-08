@@ -24,6 +24,9 @@
 //! The report goes to a file named by `ZGUI_CADENCE_OUT`, written by a thread of its own so that
 //! nothing in the measurement is paid for on the loop. That thread also ends the process, which is
 //! what makes a run a fixed length rather than something to be killed from outside.
+//!
+//! `ZGUI_CADENCE_BURN_US` adds that many microseconds of processor work to every frame, which is
+//! how a cadence is measured against frames that do not fit the interval.
 
 #![forbid(unsafe_code)]
 
@@ -215,18 +218,31 @@ fn open_device(
             "this window offers no handles a graphics API can draw into".to_owned(),
         ))
     })?;
-    // The notify only when asked for, matching the application default — a bench wired
-    // differently from the loop it measures reports a cadence no application shows.
-    let builder = zgui_render_wgpu::Builder::new();
-    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
+    // Wired as the application wires it — a bench wired differently from the loop it measures
+    // reports a cadence no application shows. A platform that paces its own frames is told about
+    // every present and decides when a composed frame is handed over; elsewhere the notify only
+    // when asked for.
+    let platform = matches!(
+        surface.present_pacing(),
+        zgui::platform::PresentPacing::Platform
+    );
+    let notify =
+        platform || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify");
+    let mut builder = zgui_render_wgpu::Builder::new();
+    if platform {
+        builder = builder.with_present_pacing(zgui_render_wgpu::PresentPacing::Platform);
+    }
+    if notify {
         let presented = Arc::clone(surface);
-        builder.with_pre_present(Box::new(move || {
-            presented.pre_present_notify();
-        }))
-    } else {
-        builder
-    };
+        builder = builder.with_pre_present(Box::new(move |target| {
+            presented.pre_present_frame(target.size, f64::from(target.scale.get()));
+        }));
+    }
     let mut renderer = builder.for_surface(target, handles)?;
+    if platform {
+        let gate = Arc::clone(surface);
+        renderer.set_present_gate(Box::new(move || gate.present_now()));
+    }
     zgui_render_vector_vello::attach(&mut renderer, target.size);
     Ok(Box::new(renderer))
 }
@@ -243,6 +259,10 @@ struct Stamping {
     stamps: Stamps,
     /// How many frames were skipped rather than presented, which the report must not count.
     skipped: AtomicU64,
+    /// How long each frame spins on the processor before it draws, from `ZGUI_CADENCE_BURN_US`.
+    burn: Duration,
+    /// When the frame now held by the renderer arrived here.
+    held_at: Option<Instant>,
 }
 
 impl Stamping {
@@ -252,6 +272,22 @@ impl Stamping {
             inner,
             stamps,
             skipped: AtomicU64::new(0),
+            burn: Duration::from_micros(
+                std::env::var("ZGUI_CADENCE_BURN_US")
+                    .ok()
+                    .and_then(|value| value.trim().parse().ok())
+                    .unwrap_or(0),
+            ),
+            held_at: None,
+        }
+    }
+}
+
+impl Stamping {
+    /// Records a frame that reached the screen, as arriving at `at`.
+    fn stamp(&self, at: Instant) {
+        if let Ok(mut stamps) = self.stamps.lock() {
+            stamps.push(at);
         }
     }
 }
@@ -271,15 +307,30 @@ impl Renderer for Stamping {
 
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
         let at = Instant::now();
+        // A frame cost set from outside, so that a cadence can be measured against frames that do
+        // and do not fit the interval.
+        while at.elapsed() < self.burn {
+            std::hint::spin_loop();
+        }
         let outcome = self.inner.draw(scene, damage);
         // Only a frame that reached the screen counts. A skipped one is the renderer declining, and
-        // counting it would report a cadence the output never showed.
-        if matches!(outcome, FrameOutcome::Presented(_)) {
-            if let Ok(mut stamps) = self.stamps.lock() {
-                stamps.push(at);
+        // counting it would report a cadence the output never showed. A held one counts when it is
+        // presented, stamped with when it arrived here.
+        match outcome {
+            FrameOutcome::Presented(_) => self.stamp(at),
+            FrameOutcome::Skipped(zgui::render::SkipReason::Held) => self.held_at = Some(at),
+            _ => {
+                self.skipped.fetch_add(1, Ordering::Relaxed);
             }
-        } else {
-            self.skipped.fetch_add(1, Ordering::Relaxed);
+        }
+        outcome
+    }
+
+    fn present_held(&mut self) -> FrameOutcome {
+        let outcome = self.inner.present_held();
+        let held_at = self.held_at.take();
+        if let (FrameOutcome::Presented(_), Some(at)) = (outcome, held_at) {
+            self.stamp(at);
         }
         outcome
     }

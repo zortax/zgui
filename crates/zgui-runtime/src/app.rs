@@ -1185,6 +1185,11 @@ impl AppHandler for Runtime {
                     }
                 }
             }
+            SurfaceEvent::PresentReady => {
+                if let Some(window) = self.window_mut(surface) {
+                    window.present_held(cx.clock().as_ref());
+                }
+            }
             SurfaceEvent::CloseRequested => {
                 // The user asking, which is the one close an application may refuse. Whatever
                 // refuses owes the user another way out.

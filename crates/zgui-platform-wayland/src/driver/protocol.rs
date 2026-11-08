@@ -7,6 +7,7 @@
 
 use smithay_client_toolkit::compositor::CompositorHandler;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::reexports::client::protocol::wl_callback::{self, WlCallback};
 use smithay_client_toolkit::reexports::client::protocol::wl_output::{Transform, WlOutput};
 use smithay_client_toolkit::reexports::client::protocol::wl_region::WlRegion;
 use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
@@ -26,6 +27,7 @@ use zgui_platform::{Surface as _, SurfaceEvent};
 
 use crate::driver::WaylandState;
 use crate::output;
+use crate::surface::FrameCallback;
 
 impl CompositorHandler for WaylandState {
     fn scale_factor_changed(
@@ -55,24 +57,9 @@ impl CompositorHandler for WaylandState {
         // terms of a transformed buffer, so the surface stays upright and the compositor turns it.
     }
 
-    fn frame(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, surface: &WlSurface, _: u32) {
-        // The compositor is ready for another frame. This never draws by itself: it clears what
-        // the surface owed, and the turn draws if something asked for a frame in the meantime.
-        let Some(id) = self.identify(surface) else {
-            return;
-        };
-        let event = self.live.surface(id).and_then(|surface| {
-            let mut shared = surface.shared();
-            shared.pacer.callback();
-            // The compositor spoke about this surface, which ends whatever run of unanswered
-            // frames had accumulated — and with it the only occlusion signal that works on every
-            // version of the shell.
-            shared.visibility.answered();
-            shared.visibility_edge()
-        });
-        if let Some(event) = event {
-            self.report(id, event);
-        }
+    fn frame(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _: &WlSurface, _: u32) {
+        // Unused: every callback is asked for with a `FrameCallback`, which says which of the
+        // surface's callbacks it is. See the `Dispatch` below.
     }
 
     fn surface_enter(
@@ -99,6 +86,34 @@ impl CompositorHandler for WaylandState {
     ) {
         self.outputs_of(surface, |outputs| outputs.retain(|held| held != output));
         self.visibility_changed(surface, |visibility| visibility.left_output());
+    }
+}
+
+impl Dispatch<WlCallback, FrameCallback> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _callback: &WlCallback,
+        event: wl_callback::Event,
+        frame: &FrameCallback,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // The compositor is ready for another frame. This never draws by itself: it clears what
+        // the surface owed, and the turn draws if something asked for a frame in the meantime.
+        let wl_callback::Event::Done { .. } = event else {
+            return;
+        };
+        let event = state.live.surface(frame.surface).and_then(|surface| {
+            let mut shared = surface.shared();
+            shared.frame_callback(
+                frame.serial,
+                zgui_platform::Clock::now(state.live.clock.as_ref()),
+            );
+            shared.visibility_edge()
+        });
+        if let Some(event) = event {
+            state.report(frame.surface, event);
+        }
     }
 }
 
@@ -166,7 +181,6 @@ impl LayerShellHandler for WaylandState {
             let scale = shared.ladder.factor();
             (shared.resized(extent, scale), shared.visibility_edge())
         };
-        crate::surface::scale::declare(&surface);
         if let Some(event) = visibility {
             self.report(id, event);
         }

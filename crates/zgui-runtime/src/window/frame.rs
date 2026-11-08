@@ -202,6 +202,69 @@ impl Window {
         }
     }
 
+    /// Presents the frame the renderer holds, now that the platform is ready for it.
+    ///
+    /// The frame was composed and its damage retired when it ran. This is only the copy to the
+    /// surface and the handover, and what the answer to that means for the next frame.
+    pub fn present_held(&mut self, clock: &dyn Clock) {
+        let now = clock.now();
+        let outcome = self.renderer.present_held();
+        zgui_profile::latency::note_with("f.present_held", || format!("{outcome:?}"));
+        self.settle_retry(outcome, now);
+        self.show_first_frame(outcome);
+    }
+
+    /// Records when a frame is owed again after `outcome`, and what a presented frame resets.
+    fn settle_retry(&mut self, outcome: FrameOutcome, now: Instant) {
+        self.retry_after = match outcome {
+            FrameOutcome::Skipped(SkipReason::Timeout) => {
+                self.starved = true;
+                let backoff = self.starve_backoff;
+                self.starve_backoff = (backoff * 2).min(crate::window::STARVE_BACKOFF_CAP);
+                tracing::info!(
+                    backoff_s = backoff.as_secs(),
+                    "the surface acquisition timed out; treating the window as starved and \
+                     probing after the backoff"
+                );
+                zgui_profile::latency::note_with("f.starved", || {
+                    format!("backoff={}s", backoff.as_secs())
+                });
+                Some(now + backoff)
+            }
+            _ if self.starved => self.retry_after,
+            _ if outcome.wants_another_frame() => Some(now + self.refresh_interval()),
+            _ => None,
+        };
+        if matches!(outcome, FrameOutcome::Presented(_)) {
+            // A presented frame is the compositor consuming the surface again, so the next
+            // starvation — a workspace switch months later — starts from the short wait.
+            self.starve_backoff = crate::window::STARVE_BACKOFF_START;
+        }
+    }
+
+    /// Shows the surface once its first frame has reached it.
+    fn show_first_frame(&mut self, outcome: FrameOutcome) {
+        if self.first_frame && matches!(outcome, FrameOutcome::Presented(_)) {
+            // A surface is shown by its first frame, never before it: showing an unpainted one is
+            // what produces a flash of empty window at launch.
+            self.surface.set_visible(true);
+            self.first_frame = false;
+        } else if self.first_frame
+            && !self.starved
+            && matches!(outcome, FrameOutcome::Skipped(SkipReason::Occluded))
+        {
+            // The converse deadlock, real on macOS: a hidden window's layer hands out no
+            // drawable, so the present that would show the window can never happen behind it.
+            // The composed target already holds the frame's pixels, so the window is shown now
+            // and recorded as occluded. The platform's visibility report then forces the redraw
+            // that presents; the direct request covers a surface that was ready immediately.
+            self.surface.set_visible(true);
+            self.first_frame = false;
+            self.occluded = true;
+            self.request_frame();
+        }
+    }
+
     /// Records the moment this frame is for, and how long the previous one took.
     ///
     /// The frame *moment* rather than the wall clock: it is the same one the framework's own
@@ -551,30 +614,7 @@ impl Window {
         // unbounded run of them. So a timeout latches the window as starved and owes a probe at a
         // growing distance instead, and a frame that ran under the latch leaves the probe's moment
         // where it was.
-        self.retry_after = match outcome {
-            FrameOutcome::Skipped(SkipReason::Timeout) => {
-                self.starved = true;
-                let backoff = self.starve_backoff;
-                self.starve_backoff = (backoff * 2).min(crate::window::STARVE_BACKOFF_CAP);
-                tracing::info!(
-                    backoff_s = backoff.as_secs(),
-                    "the surface acquisition timed out; treating the window as starved and \
-                     probing after the backoff"
-                );
-                zgui_profile::latency::note_with("f.starved", || {
-                    format!("backoff={}s", backoff.as_secs())
-                });
-                Some(now + backoff)
-            }
-            _ if self.starved => self.retry_after,
-            _ if outcome.wants_another_frame() => Some(now + self.refresh_interval()),
-            _ => None,
-        };
-        if matches!(outcome, FrameOutcome::Presented(_)) {
-            // A presented frame is the compositor consuming the surface again, so the next
-            // starvation — a workspace switch months later — starts from the short wait.
-            self.starve_backoff = crate::window::STARVE_BACKOFF_START;
-        }
+        self.settle_retry(outcome, now);
 
         // Measured from when the last normal frame finished, so a continuously active document
         // never trims a working set and a parked one gets exactly one maintenance wake.
@@ -595,25 +635,7 @@ impl Window {
             self.request_frame();
         }
 
-        if self.first_frame && matches!(outcome, FrameOutcome::Presented(_)) {
-            // A surface is shown by its first frame, never before it: showing an unpainted one is
-            // what produces a flash of empty window at launch.
-            self.surface.set_visible(true);
-            self.first_frame = false;
-        } else if self.first_frame
-            && !self.starved
-            && matches!(outcome, FrameOutcome::Skipped(SkipReason::Occluded))
-        {
-            // The converse deadlock, real on macOS: a hidden window's layer hands out no
-            // drawable, so the present that would show the window can never happen behind it.
-            // The composed target already holds the frame's pixels, so the window is shown now
-            // and recorded as occluded. The platform's visibility report then forces the redraw
-            // that presents; the direct request covers a surface that was ready immediately.
-            self.surface.set_visible(true);
-            self.first_frame = false;
-            self.occluded = true;
-            self.request_frame();
-        }
+        self.show_first_frame(outcome);
 
         // Last, with everything this frame produced still standing: the scene it emitted, the
         // damage it answered, the layout it computed. The handle is cloned out first because the

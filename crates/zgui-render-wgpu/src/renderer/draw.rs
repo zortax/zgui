@@ -30,6 +30,8 @@ impl Renderer for WgpuRenderer {
         // what the new extent exposes, and a target that had to be allocated again says so below.
         self.full_damage_next |=
             self.target.scale != target.scale || self.target.opaque != target.opaque;
+        // A frame held for the old target is never presented to the new one.
+        self.held &= self.target == target;
         self.target = target;
         self.resize(target.size);
     }
@@ -284,74 +286,29 @@ impl Renderer for WgpuRenderer {
             );
         }
 
-        // The swap chain is rebuilt here rather than where the resize was noticed. The rebuild
-        // waits for the device to go idle, and everything above has just given it a frame's worth
-        // of CPU time to become so; at the top of the frame the same call stalls on a submission
-        // that was made moments earlier.
-        self.presentation.apply_pending(&self.gpu);
-
-        // Acquisition happens after every draw is recorded and immediately before the copy, so a
-        // failed acquisition costs only the copy — and the frame's work is submitted either way,
-        // which is why its damage is retired either way.
-        zgui_profile::latency::mark("acq.in");
-        let asked = std::time::Instant::now();
-        let presented = present::acquire(&self.presentation, &mut self.faults);
-        // Measured around the call and nowhere else. It is the frame's slack seen from the inside:
-        // how much earlier than it needed to be the frame was started.
-        self.acquire_block = asked.elapsed();
-        zgui_profile::latency::note("acq.out", presented.acquisition.name());
-        if crate::gpu::surface::human_visible_wait(self.acquire_block) {
-            tracing::warn!(
-                stage = "acquire",
-                elapsed_ms = self.acquire_block.as_millis() as u64,
-                width = self.target.size.width,
-                height = self.target.size.height,
-                present_mode = ?self.presentation.present_mode(),
-                frame_latency = crate::gpu::surface::FRAME_LATENCY,
-                acquisition = presented.acquisition.name(),
-                "surface operation blocked the event-loop thread"
-            );
+        // The platform may not be ready for another buffer. The frame is composed and submitted
+        // either way, so its damage retires; the copy to the surface waits for `present_held`.
+        self.held = self.present_gate.as_ref().is_some_and(|gate| !gate());
+        if self.held {
+            self.submit_frame(encoder);
+            zgui_profile::latency::mark("sub.held");
+            self.present_composed_next = true;
+            self.pipelines.borrow().persist();
+            counter::add(Counter::DamagePx, Self::redrawn(damage, &self.composed));
+            return FrameOutcome::Skipped(SkipReason::Held);
         }
+
+        let presented = self.acquire_surface();
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
             self.blit(&mut encoder, view, formats.blit_undoes_srgb());
             draw_calls += 1;
         }
-        if let Some(timer) = &mut self.timer {
-            timer.finish(&mut encoder);
-        }
-        self.gpu.queue().submit([encoder.finish()]);
-        if let Some(timer) = &mut self.timer {
-            timer.submitted();
-        }
-        // Ties the frame's retired arena ranges to the submission just made, so they come back
-        // only once nothing in flight can read them.
-        self.buffers.chunks.submitted(&self.gpu);
-        self.buffers.recall_uploads();
-        zgui_profile::latency::mark("sub.out");
+        self.submit_frame(encoder);
+        let acquisition = presented.acquisition;
+        self.hand_over(presented);
 
-        let response = presented.acquisition.response();
-        // Composition succeeded whichever answer acquisition gave, but only a presenting answer
-        // copied that persistent target to the surface. A retry with no new damage must still run
-        // through acquisition and the final blit rather than taking the undamaged early return.
-        self.present_composed_next = !response.presents;
-        if response.presents
-            && let Some(notify) = &self.pre_present
-        {
-            notify();
-        }
-        if let Some(texture) = presented.surface_texture {
-            texture.present();
-        }
-        zgui_profile::latency::mark("pres.out");
-        // After the present, so the frame reaches the screen first. It does nothing unless this
-        // frame built a pipeline, such as the first one for a group target format.
-        self.pipelines.borrow().persist();
-
-        let redrawn: u64 = damage::rects(damage, self.composed.used())
-            .iter()
-            .map(|rect| damage::area(*rect))
-            .sum();
+        let redrawn = Self::redrawn(damage, &self.composed);
         counter::add(Counter::DamagePx, redrawn);
         let stats = FrameStats {
             draw_calls,
@@ -360,40 +317,35 @@ impl Renderer for WgpuRenderer {
             bytes_uploaded: uploaded,
             memory: self.memory(),
         };
+        acquisition.outcome(stats)
+    }
 
-        if response.force_full_damage {
-            // The surface changed underneath the frame and nothing observed what the compositor
-            // did with it, so what the composed target holds is no longer known to be on screen.
-            self.full_damage_next = true;
+    fn present_held(&mut self) -> FrameOutcome {
+        if !core::mem::take(&mut self.held) {
+            return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
-        match response.surface_action() {
-            SurfaceAction::Nothing => {}
-            SurfaceAction::Reconfigure => self.presentation.request_reconfigure(),
-            SurfaceAction::Recreate => self.presentation.invalidate(),
+        // A configure, a reallocated target or a lost device since the frame was composed leaves
+        // nothing worth presenting. The next frame draws again, and presents what it draws.
+        if self.full_damage_next || !self.presentation.is_configured() || self.gpu.loss().is_lost()
+        {
+            return FrameOutcome::Skipped(SkipReason::Unacquired);
         }
-        if presented.acquisition == Acquisition::Validation {
-            // A run of rejected acquisitions long enough to escalate is a device that will not
-            // start presenting again on its own, so it is recorded as lost and the next frame
-            // takes the rebuild path. Counting to the limit and then only logging would be a
-            // threshold with nothing behind it, and a program retrying an unusable device for
-            // ever.
-            // Counted for this surface alone: with several windows on one device, another window's
-            // successful frames would otherwise keep clearing this one's run of failures and the
-            // threshold would never be reached. The escalation stays device-wide, because a device
-            // that will not present again is not one window's problem.
-            self.consecutive_validation_failures += 1;
-            if self.consecutive_validation_failures
-                >= crate::gpu::loss::DeviceLoss::VALIDATION_FAILURE_LIMIT
-            {
-                self.gpu.loss().report(
-                    wgpu::DeviceLostReason::Unknown,
-                    "acquisition failed validation repeatedly",
-                );
-            }
-        } else {
-            self.consecutive_validation_failures = 0;
+        let formats = self.presentation.formats();
+        let presented = self.acquire_surface();
+        let mut encoder = self.frame_encoder();
+        let mut draw_calls = 0;
+        if let Some(view) = &presented.view {
+            self.blit(&mut encoder, view, formats.blit_undoes_srgb());
+            draw_calls = 1;
         }
-        presented.acquisition.outcome(stats)
+        self.gpu.queue().submit([encoder.finish()]);
+        let acquisition = presented.acquisition;
+        self.hand_over(presented);
+        acquisition.outcome(FrameStats {
+            draw_calls,
+            memory: self.memory(),
+            ..FrameStats::default()
+        })
     }
 
     fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
@@ -653,6 +605,117 @@ impl WgpuRenderer {
             timer: self.timer.as_mut(),
         }
         .record(encoder, plan, segments)
+    }
+
+    /// Rebuilds the swap chain if one is owed, and acquires the texture to present into.
+    fn acquire_surface(&mut self) -> crate::target::swapchain::Presented {
+        // The swap chain is rebuilt here rather than where the resize was noticed. The rebuild
+        // waits for the device to go idle, and everything above has just given it a frame's worth
+        // of CPU time to become so; at the top of the frame the same call stalls on a submission
+        // that was made moments earlier.
+        self.presentation.apply_pending(&self.gpu);
+
+        // Acquisition happens after every draw is recorded and immediately before the copy, so a
+        // failed acquisition costs only the copy — and the frame's work is submitted either way,
+        // which is why its damage is retired either way.
+        zgui_profile::latency::mark("acq.in");
+        let asked = std::time::Instant::now();
+        let presented = present::acquire(&self.presentation, &mut self.faults);
+        // Measured around the call and nowhere else. It is the frame's slack seen from the inside:
+        // how much earlier than it needed to be the frame was started.
+        self.acquire_block = asked.elapsed();
+        zgui_profile::latency::note("acq.out", presented.acquisition.name());
+        if crate::gpu::surface::human_visible_wait(self.acquire_block) {
+            tracing::warn!(
+                stage = "acquire",
+                elapsed_ms = self.acquire_block.as_millis() as u64,
+                width = self.target.size.width,
+                height = self.target.size.height,
+                present_mode = ?self.presentation.present_mode(),
+                frame_latency = crate::gpu::surface::FRAME_LATENCY,
+                acquisition = presented.acquisition.name(),
+                "surface operation blocked the event-loop thread"
+            );
+        }
+        presented
+    }
+
+    /// Submits a frame's encoder, with the timing and arena bookkeeping that follows a submission.
+    fn submit_frame(&mut self, mut encoder: wgpu::CommandEncoder) {
+        if let Some(timer) = &mut self.timer {
+            timer.finish(&mut encoder);
+        }
+        self.gpu.queue().submit([encoder.finish()]);
+        if let Some(timer) = &mut self.timer {
+            timer.submitted();
+        }
+        // Ties the frame's retired arena ranges to the submission just made, so they come back
+        // only once nothing in flight can read them.
+        self.buffers.chunks.submitted(&self.gpu);
+        self.buffers.recall_uploads();
+        zgui_profile::latency::mark("sub.out");
+    }
+
+    /// Hands an acquired texture to the surface, and applies what the acquisition said about it.
+    fn hand_over(&mut self, presented: crate::target::swapchain::Presented) {
+        let response = presented.acquisition.response();
+        // Composition succeeded whichever answer acquisition gave, but only a presenting answer
+        // copied that persistent target to the surface. A retry with no new damage must still run
+        // through acquisition and the final blit rather than taking the undamaged early return.
+        self.present_composed_next = !response.presents;
+        if response.presents
+            && let Some(notify) = &self.pre_present
+        {
+            notify(self.target);
+        }
+        if let Some(texture) = presented.surface_texture {
+            texture.present();
+        }
+        zgui_profile::latency::mark("pres.out");
+        // After the present, so the frame reaches the screen first. It does nothing unless this
+        // frame built a pipeline, such as the first one for a group target format.
+        self.pipelines.borrow().persist();
+
+        if response.force_full_damage {
+            // The surface changed underneath the frame and nothing observed what the compositor
+            // did with it, so what the composed target holds is no longer known to be on screen.
+            self.full_damage_next = true;
+        }
+        match response.surface_action() {
+            SurfaceAction::Nothing => {}
+            SurfaceAction::Reconfigure => self.presentation.request_reconfigure(),
+            SurfaceAction::Recreate => self.presentation.invalidate(),
+        }
+        if presented.acquisition == Acquisition::Validation {
+            // A run of rejected acquisitions long enough to escalate is a device that will not
+            // start presenting again on its own, so it is recorded as lost and the next frame
+            // takes the rebuild path. Counting to the limit and then only logging would be a
+            // threshold with nothing behind it, and a program retrying an unusable device for
+            // ever.
+            // Counted for this surface alone: with several windows on one device, another window's
+            // successful frames would otherwise keep clearing this one's run of failures and the
+            // threshold would never be reached. The escalation stays device-wide, because a device
+            // that will not present again is not one window's problem.
+            self.consecutive_validation_failures += 1;
+            if self.consecutive_validation_failures
+                >= crate::gpu::loss::DeviceLoss::VALIDATION_FAILURE_LIMIT
+            {
+                self.gpu.loss().report(
+                    wgpu::DeviceLostReason::Unknown,
+                    "acquisition failed validation repeatedly",
+                );
+            }
+        } else {
+            self.consecutive_validation_failures = 0;
+        }
+    }
+
+    /// How many pixels `damage` redrew of the composed target.
+    fn redrawn(damage: &DamageSet, composed: &crate::target::scene_texture::SceneTexture) -> u64 {
+        damage::rects(damage, composed.used())
+            .iter()
+            .map(|rect| damage::area(*rect))
+            .sum()
     }
 
     /// A command encoder for this frame's own work.

@@ -6,6 +6,7 @@ use zgui_vocab::SharedString;
 use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
 use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
+use crate::surface::timing::ComposeAhead;
 use crate::theme::ColorScheme;
 
 /// What a surface should be when it is created.
@@ -65,6 +66,8 @@ pub struct SurfaceAttributes {
     /// Read only with [`Decorations::NoTitleBar`] on a desktop that draws its buttons over the
     /// content, which is macOS. Absent leaves them where the desktop puts them.
     pub title_buttons: Option<TitleButtons>,
+    /// Whether the surface composes its next frame before the platform is ready to show it.
+    pub compose_ahead: ComposeAhead,
 }
 
 /// Where the window buttons sit over a window that has no title bar.
@@ -109,6 +112,7 @@ impl SurfaceAttributes {
             icon: None,
             theme: None,
             title_buttons: None,
+            compose_ahead: ComposeAhead::Auto,
         }
     }
 

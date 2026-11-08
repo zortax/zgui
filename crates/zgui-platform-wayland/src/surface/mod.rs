@@ -282,8 +282,18 @@ impl WaylandSurface {
     /// asked for after the commit belongs to the *next* one, which never comes: that is the shape
     /// of a client that draws one frame and stops.
     pub(crate) fn ask_for_callback(&self) {
-        let surface = self.wl_surface();
-        surface.frame(&self.qh, surface.clone());
+        let serial = self.shared().begin_callback();
+        let callback = FrameCallback {
+            surface: self.id,
+            serial,
+        };
+        self.wl_surface().frame(&self.qh, callback);
+    }
+
+    /// Ends a delivered [`SurfaceEvent::PresentReady`].
+    /// `began` is when the present began.
+    pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
+        self.shared().end_of_present(began, now);
     }
 
     /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
@@ -297,13 +307,33 @@ impl WaylandSurface {
     /// committed and no callback is owed. The application kept the obligation, and its own
     /// deadline asks for the frame — which the pacer, owing nothing, answers in the same turn.
     /// A bufferless commit here would put that deadline behind a compositor round trip.
-    pub(crate) fn finish_redraw(&self, now: Instant) {
-        let end = self.shared().end_of_redraw(now);
+    ///
+    /// A redraw that ran while a callback is owed commits nothing either: that callback keeps the
+    /// chain alive, and a held frame is committed when it arrives.
+    /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
+    pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
+        let end = {
+            let mut shared = self.shared();
+            let end = shared.end_of_redraw(began, now);
+            if end != crate::surface::state::EndOfRedraw::Declined {
+                shared.ahead.redrawn(now.saturating_duration_since(began));
+            }
+            end
+        };
         if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
             self.ask_for_callback();
             self.role.commit();
         }
     }
+}
+
+/// What a frame callback answers for: the surface, and which of its callbacks it is.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FrameCallback {
+    /// The surface the callback was asked for.
+    pub(crate) surface: SurfaceId,
+    /// The number [`state::Shared::begin_callback`] gave it.
+    pub(crate) serial: u64,
 }
 
 impl Drop for WaylandSurface {
@@ -380,7 +410,23 @@ impl Surface for WaylandSurface {
     }
 
     fn pre_present_notify(&self) {
-        chrome::pre_present(self);
+        let (size, scale) = {
+            let shared = self.shared();
+            let size = Size::new(
+                shared.size.width.0.round() as i32,
+                shared.size.height.0.round() as i32,
+            );
+            (size, shared.scale)
+        };
+        chrome::pre_present(self, size, scale);
+    }
+
+    fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) {
+        chrome::pre_present(self, size, scale);
+    }
+
+    fn present_now(&self) -> bool {
+        self.shared().pacer.present_now(Instant::now())
     }
 
     fn redraw_declined(&self) {

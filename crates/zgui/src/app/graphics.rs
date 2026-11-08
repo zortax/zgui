@@ -10,7 +10,9 @@ use zgui_runtime::{AppError, RendererFactory};
 /// The compositor notification belonging to `surface`, kept alive with it.
 fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
     let surface = Arc::clone(surface);
-    pre_present_callback(move || surface.pre_present_notify())
+    pre_present_callback(move |target| {
+        surface.pre_present_frame(target.size, f64::from(target.scale.get()));
+    })
 }
 
 /// Whether `surface` is told that a frame is about to be presented.
@@ -49,7 +51,7 @@ fn pacing_of(surface: &Arc<dyn Surface>) -> PresentPacing {
 }
 
 /// Boxes a platform notification for the renderer seam.
-fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent {
+fn pre_present_callback(notify: impl Fn(RenderTarget) + Send + Sync + 'static) -> PrePresent {
     Box::new(notify)
 }
 
@@ -101,6 +103,11 @@ fn renderer(
         pacing,
         notify_wanted(pacing).then(|| pre_present(surface)),
     )?;
+    // A platform that paces its own frames also decides when a composed frame is handed over.
+    if pacing == PresentPacing::Platform {
+        let gate = Arc::clone(surface);
+        renderer.set_present_gate(Box::new(move || gate.present_now()));
+    }
     renderer.set_group_precision(precision);
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing in the window — every icon — is empty space. Which rasteriser this is comes
@@ -120,11 +127,14 @@ mod tests {
     fn the_default_renderer_callback_runs_its_platform_notification() {
         let notifications = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&notifications);
-        let notify = pre_present_callback(move || {
+        let notify = pre_present_callback(move |_| {
             recorded.fetch_add(1, Ordering::Relaxed);
         });
 
-        notify();
+        notify(RenderTarget::new(
+            zgui_geom::Size::new(1, 1),
+            zgui_geom::Scale::new(1.0),
+        ));
 
         assert_eq!(
             notifications.load(Ordering::Relaxed),

@@ -48,7 +48,17 @@ use crate::target::swapchain::Presentation;
 /// point in the frame where it is meaningful. It runs only for an acquisition that will actually
 /// be presented: announcing a frame after an acquisition failed can leave a compositor waiting for
 /// a surface commit that never comes.
-pub type PrePresent = Box<dyn Fn() + Send + Sync>;
+///
+/// It is given the target the frame was drawn for, which can be older than the window's current
+/// extent.
+pub type PrePresent = Box<dyn Fn(RenderTarget) + Send + Sync>;
+
+/// Whether a composed frame may be handed to the surface now.
+///
+/// Asked after a frame's work is submitted and before anything is acquired. `false` keeps the
+/// frame in the composed target, and [`Renderer::present_held`](zgui_render::Renderer::present_held)
+/// presents it when the platform is ready.
+pub type PresentGate = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// How a renderer was built, which is what it needs to rebuild itself.
 ///
@@ -143,6 +153,10 @@ pub struct WgpuRenderer {
     next_handle: u64,
     /// What to run between submission and presentation.
     pre_present: Option<PrePresent>,
+    /// What decides whether a composed frame is presented at once, if anything does.
+    present_gate: Option<PresentGate>,
+    /// Whether the composed target holds a frame the gate held back.
+    held: bool,
     /// How long the last frame waited to be handed a surface to present into.
     acquire_block: std::time::Duration,
     /// How many times *this* surface's acquisition has failed validation in a row.
@@ -247,6 +261,8 @@ impl WgpuRenderer {
             pending_externals: BTreeMap::new(),
             next_handle: 1,
             pre_present,
+            present_gate: None,
+            held: false,
             acquire_block: std::time::Duration::ZERO,
             consecutive_validation_failures: 0,
             origin,
@@ -257,6 +273,15 @@ impl WgpuRenderer {
             vector_shortfall_is_fatal: cfg!(debug_assertions),
             timer,
         }
+    }
+
+    /// Lets `gate` decide whether each composed frame is presented at once.
+    ///
+    /// A frame the gate refuses is kept in the composed target and reported as
+    /// [`SkipReason::Held`](zgui_render::SkipReason::Held). The platform behind the gate then asks
+    /// for [`Renderer::present_held`](zgui_render::Renderer::present_held).
+    pub fn set_present_gate(&mut self, gate: PresentGate) {
+        self.present_gate = Some(gate);
     }
 
     /// Decides whether a vector rasteriser running out of capacity stops the program.
@@ -341,7 +366,9 @@ impl WgpuRenderer {
         // dropped rather than carried over, and whoever attached it attaches one again — carrying
         // it would mean compositing from a scratch texture that no longer exists.
         let had_raster = self.vectors.is_some();
+        let present_gate = self.present_gate.take();
         *self = rebuilt;
+        self.present_gate = present_gate;
         self.subpixel_order = subpixel_order;
         self.groups.set_precision(precision);
         self.vector_factory = vector_factory;

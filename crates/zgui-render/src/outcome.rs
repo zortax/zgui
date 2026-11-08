@@ -69,6 +69,13 @@ pub enum SkipReason {
     /// **Do not** ask for another frame: nothing changed, so nothing would change next time
     /// either.
     Undamaged,
+    /// The frame was composed and submitted, and its presentation waits for the platform.
+    ///
+    /// The platform was not ready for another buffer, so the copy to the surface is left for
+    /// [`Renderer::present_held`](crate::Renderer::present_held), which the caller runs when the
+    /// platform says it is ready. The damage retires, because the work was submitted. **Do not** ask
+    /// for another frame: the platform's answer is what comes next.
+    Held,
 }
 
 /// What [`Renderer::draw`](crate::Renderer::draw) did.
@@ -116,7 +123,10 @@ impl FrameOutcome {
             Self::Recovered => true,
             Self::Skipped(reason) => !matches!(
                 reason,
-                SkipReason::Occluded | SkipReason::Undamaged | SkipReason::DeviceUnavailable
+                SkipReason::Occluded
+                    | SkipReason::Undamaged
+                    | SkipReason::Held
+                    | SkipReason::DeviceUnavailable
             ),
         }
     }

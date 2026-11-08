@@ -187,30 +187,51 @@ impl<A: AppHandler> WaylandApp<A> {
             // given up on is the evidence that the compositor has stopped drawing this surface,
             // and a run of them is the only occlusion signal that needs no protocol version and no
             // cooperation. So the edge it produces is taken here, before anything is drawn.
-            let (due, hidden) = {
+            let (present, hidden) = {
                 let mut shared = surface.shared();
                 if surface.take_request() {
                     shared.pacer.request();
                 }
                 let mut visibility = shared.visibility;
-                let due = shared.pacer.take(&mut visibility, now);
+                let present = shared.pacer.take_present(&mut visibility, now);
                 shared.visibility = visibility;
-                (due, shared.visibility_edge())
+                (present, shared.visibility_edge())
             };
+            let id = surface.id();
             if let Some(event) = hidden {
                 let cx = WaylandCx::new(&self.state);
-                self.handler.surface_event(&cx, surface.id(), event);
+                self.handler.surface_event(&cx, id, event);
             }
+            // The held frame first, so that the frame after it is composed while the compositor
+            // answers for it.
+            if present {
+                let began = self.state.live.clock.now();
+                {
+                    let cx = WaylandCx::new(&self.state);
+                    self.handler
+                        .surface_event(&cx, id, SurfaceEvent::PresentReady);
+                }
+                surface.finish_present(began, self.state.live.clock.now());
+            }
+            let due = {
+                let mut shared = surface.shared();
+                let ahead = shared.ahead.wanted(shared.timing.interval(), now);
+                shared.pacer.compose_ahead(ahead);
+                let mut visibility = shared.visibility;
+                let due = shared.pacer.take(&mut visibility, now);
+                shared.visibility = visibility;
+                due
+            };
             if !due {
                 continue;
             }
-            let id = surface.id();
+            let began = self.state.live.clock.now();
             {
                 let cx = WaylandCx::new(&self.state);
                 self.handler
                     .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
             }
-            surface.finish_redraw(self.state.live.clock.now());
+            surface.finish_redraw(began, self.state.live.clock.now());
         }
     }
 

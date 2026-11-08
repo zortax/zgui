@@ -92,11 +92,11 @@ pub use crate::menu::{AppMenu, MenuAction, MenuEntry, MenuId, MenuRole, Shortcut
 pub use crate::monitor::{MonitorInfo, refresh_interval};
 pub use crate::scroll::ScrollSettings;
 pub use crate::surface::{
-    Anchor, BadIcon, Constrain, CursorStyle, DecorationSource, Decorations, DragEvent,
-    FullscreenMode, GpuSurface, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement,
-    PresentPacing, PresentationTiming, ResizeEdge, Surface, SurfaceAttributes, SurfaceEvent,
-    SurfaceId, SurfaceRole, TextInput, TextInputPurpose, TitleButtons, Watchdog, WindowIcon,
-    WindowLevel,
+    Anchor, BadIcon, ComposeAhead, Constrain, CursorStyle, DecorationSource, Decorations,
+    DragEvent, FullscreenMode, GpuSurface, KeyboardInteractivity, Layer, LayerPlacement,
+    PopupPlacement, PresentPacing, PresentationTiming, ResizeEdge, Surface, SurfaceAttributes,
+    SurfaceEvent, SurfaceId, SurfaceRole, TextInput, TextInputPurpose, TitleButtons, Watchdog,
+    WindowIcon, WindowLevel,
 };
 pub use crate::theme::ColorScheme;
 pub use crate::waker::Waker;

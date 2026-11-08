@@ -6,7 +6,7 @@ use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
-use crate::frame::{Pacer, Timing, Visibility, Watchdog};
+use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
 
 /// The smallest and largest extents a window may be dragged to, in that order.
 ///
@@ -24,6 +24,11 @@ pub(crate) enum EndOfRedraw {
     KeepChainAlive,
     /// The redraw was refused without running; nothing is committed and nothing is owed.
     Declined,
+    /// The redraw composed a frame that waits for the owed callback; nothing is committed yet.
+    Held,
+    /// The redraw ran ahead of an owed callback and presented nothing; that callback keeps the
+    /// chain alive.
+    Waiting,
 }
 
 /// The mutable half of a surface.
@@ -46,6 +51,8 @@ pub(crate) struct Shared {
     pub(crate) scale: f64,
     /// Whether a redraw is owed, and what the compositor owes back.
     pub(crate) pacer: Pacer,
+    /// Whether the surface's frames fit the interval, which decides whether it composes ahead.
+    pub(crate) ahead: Ahead,
     /// When frames reached the screen.
     pub(crate) timing: Timing,
     /// Whether the compositor is still drawing this surface.
@@ -58,6 +65,22 @@ pub(crate) struct Shared {
     pub(crate) told_hidden: bool,
     /// Whether a buffer was committed during the redraw now being delivered.
     pub(crate) presented: bool,
+    /// The number of the last frame callback asked for.
+    ///
+    /// Only that callback releases the pacer. An older one still counts as the compositor speaking
+    /// about the surface, but it answers for a commit that a hide, an unmap or a later commit
+    /// already made obsolete.
+    pub(crate) callback_serial: u64,
+    /// When the last current frame callback arrived.
+    pub(crate) released: Option<Instant>,
+    /// The callback arrival that the owed commit is chained to.
+    ///
+    /// A commit is chained when its work began right after a callback. The callback that answers
+    /// it then measures whether the frame made the refresh after that callback.
+    pub(crate) chained: Option<Instant>,
+    /// Whether the application unmapped the surface, so that showing it again starts a new
+    /// configure sequence.
+    pub(crate) unmapped: bool,
     /// Whether the redraw now being delivered was refused without running.
     pub(crate) declined: bool,
     /// Whether any buffer has ever been committed.
@@ -66,8 +89,12 @@ pub(crate) struct Shared {
     /// first configure has to be answered with a frame or the surface is never shown, and every
     /// later restatement is a frame identical to the one already on the screen.
     pub(crate) mapped: bool,
-    /// A viewport destination that has not yet ridden a commit.
-    pub(crate) pending_viewport: Option<Size<CssPx, Css>>,
+    /// The extent and scale whose buffer metadata the compositor was last given.
+    ///
+    /// A buffer scale, a viewport destination and a window geometry are sent only with a buffer
+    /// that they describe. Sent at configure time, they ride whatever commit comes next — an empty
+    /// one, or a buffer drawn at the extent from before the configure.
+    pub(crate) declared: Option<(Size<i32, Device>, f64)>,
     /// The scale the compositor wants, from whichever source it offered.
     pub(crate) ladder: crate::surface::Scale,
     /// Whether the compositor last configured the surface as maximised.
@@ -98,13 +125,18 @@ impl Shared {
             logical: Size::new(CssPx(0.0), CssPx(0.0)),
             scale: 1.0,
             pacer: Pacer::new(),
+            ahead: Ahead::new(zgui_platform::ComposeAhead::Auto),
             timing: Timing::default(),
             visibility: Visibility::default(),
             told_hidden: true,
             presented: false,
+            callback_serial: 0,
+            released: None,
+            chained: None,
+            unmapped: false,
             declined: false,
             mapped: false,
-            pending_viewport: None,
+            declared: None,
             ladder: crate::surface::Scale::default(),
             maximized: false,
             fullscreen: false,
@@ -139,7 +171,7 @@ impl Shared {
         self.logical = logical;
         self.scale = scale;
         self.size = size;
-        self.pending_viewport = Some(logical);
+        self.pacer.cancel_held();
         Some(if moved_scale {
             SurfaceEvent::ScaleFactorChanged {
                 scale_factor: scale,
@@ -158,18 +190,46 @@ impl Shared {
     /// about this surface again — and the silence that follows such a commit is also how a hidden
     /// surface is recognised. One that was **declined** never ran: nothing is committed and the
     /// pacer is left as it was, so the runtime's own deadline is answered the moment it asks.
-    pub(crate) fn end_of_redraw(&mut self, now: Instant) -> EndOfRedraw {
+    pub(crate) fn end_of_redraw(&mut self, began: Instant, now: Instant) -> EndOfRedraw {
         let presented = std::mem::replace(&mut self.presented, false);
         let declined = std::mem::replace(&mut self.declined, false);
         if presented {
             self.pacer.committed(now);
+            self.chained = self.chain(began);
             EndOfRedraw::Presented
         } else if declined {
             EndOfRedraw::Declined
+        } else if self.pacer.held() {
+            EndOfRedraw::Held
+        } else if self.pacer.owes_callback() {
+            EndOfRedraw::Waiting
         } else {
             self.pacer.committed(now);
+            self.chained = None;
             EndOfRedraw::KeepChainAlive
         }
+    }
+
+    /// Closes out a delivered [`SurfaceEvent::PresentReady`].
+    ///
+    /// A held frame that reached the surface owes a callback, like any presented frame. One that
+    /// did not — an acquisition that failed, or a frame a configure made obsolete — owes nothing,
+    /// and the application asks for the frame that replaces it.
+    pub(crate) fn end_of_present(&mut self, began: Instant, now: Instant) {
+        if std::mem::replace(&mut self.presented, false) {
+            self.pacer.committed(now);
+            self.chained = self.chain(began);
+        }
+    }
+
+    /// The callback arrival a commit whose work began at `began` is chained to, if it is.
+    ///
+    /// Work that began within a quarter of the interval after the callback tries for the refresh
+    /// after it. Work that began later can miss that refresh only because it began late.
+    fn chain(&self, began: Instant) -> Option<Instant> {
+        let slack = self.timing.interval()? / 4;
+        self.released
+            .filter(|&released| began.saturating_duration_since(released) <= slack)
     }
 
     /// Whether a configure that moved nothing still buys a redraw.
@@ -235,7 +295,63 @@ impl Shared {
         }
         self.told_hidden = hidden;
         self.pacer.hidden(hidden);
+        self.cancel_callbacks();
         Some(SurfaceEvent::Occluded(hidden))
+    }
+
+    /// The logical extent a buffer of `size` drawn at `scale` maps to, when its metadata changed.
+    ///
+    /// The configured extent is the answer for a buffer at the configured size. A buffer drawn
+    /// before the latest configure maps to its own extent, divided back out of its scale.
+    pub(crate) fn frame_metadata(
+        &mut self,
+        size: Size<i32, Device>,
+        scale: f64,
+    ) -> Option<Size<CssPx, Css>> {
+        if self.declared == Some((size, scale)) {
+            return None;
+        }
+        self.declared = Some((size, scale));
+        let current = Size::new(
+            self.size.width.0.round() as i32,
+            self.size.height.0.round() as i32,
+        );
+        if current == size && (self.scale - scale).abs() < 1e-5 {
+            return Some(self.logical);
+        }
+        Some(Size::new(
+            CssPx((f64::from(size.width) / scale) as f32),
+            CssPx((f64::from(size.height) / scale) as f32),
+        ))
+    }
+
+    /// Numbers a new frame callback, which makes every older one obsolete.
+    pub(crate) fn begin_callback(&mut self) -> u64 {
+        self.callback_serial += 1;
+        self.callback_serial
+    }
+
+    /// Makes every callback asked for so far obsolete.
+    pub(crate) fn cancel_callbacks(&mut self) {
+        self.callback_serial += 1;
+        self.released = None;
+        self.chained = None;
+    }
+
+    /// Records the compositor answering frame callback `serial`.
+    pub(crate) fn frame_callback(&mut self, serial: u64, now: Instant) {
+        if serial == self.callback_serial {
+            if let Some(released) = self.chained.take() {
+                let period = now.saturating_duration_since(released);
+                self.ahead.answered(period, self.timing.interval(), now);
+            }
+            self.released = Some(now);
+            self.pacer.callback();
+        }
+        // The compositor spoke about this surface, which ends whatever run of unanswered frames
+        // had accumulated — and with it the only occlusion signal that works on every version of
+        // the shell.
+        self.visibility.answered();
     }
 
     /// The drag edge to report, if the resizing state moved since it was last reported.
@@ -265,6 +381,82 @@ mod tests {
 
     fn logical(width: f32, height: f32) -> Size<CssPx, zgui_geom::Css> {
         Size::new(CssPx(width), CssPx(height))
+    }
+
+    #[test]
+    fn an_obsolete_callback_releases_nothing_and_still_counts_as_an_answer() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        let old = shared.begin_callback();
+        shared.cancel_callbacks();
+        let current = shared.begin_callback();
+        shared.pacer.committed(now);
+        shared.visibility.unanswered();
+
+        shared.frame_callback(old, now);
+        shared.pacer.request();
+        let mut visibility = shared.visibility;
+        assert!(
+            !shared.pacer.take(&mut visibility, now),
+            "the old callback released the pacer"
+        );
+        assert_eq!(
+            shared.visibility.abandoned, 0,
+            "the compositor spoke about the surface"
+        );
+
+        shared.frame_callback(current, now);
+        assert!(shared.pacer.take(&mut visibility, now));
+    }
+
+    /// A configured surface on a 120 Hz output whose redraws cost too little to compose ahead.
+    fn on_a_known_output() -> (Shared, Duration) {
+        let interval = Duration::from_micros(8_333);
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        shared.declares(Some(interval));
+        (shared, interval)
+    }
+
+    /// Runs one redraw that began `late` after the last callback and committed 7.5 ms later, and
+    /// answers it `period` after that callback. Returns when the answer arrived.
+    fn frame(shared: &mut Shared, released: Instant, late: Duration, period: Duration) -> Instant {
+        let began = released + late;
+        let serial = shared.begin_callback();
+        shared.presented = true;
+        shared.end_of_redraw(began, began + Duration::from_micros(7_500));
+        let answered = released + period;
+        shared.frame_callback(serial, answered);
+        answered
+    }
+
+    #[test]
+    fn frames_started_on_the_callback_that_miss_the_refresh_compose_ahead() {
+        let (mut shared, interval) = on_a_known_output();
+        let first = shared.begin_callback();
+        let mut at = Instant::now();
+        shared.frame_callback(first, at);
+        // Each frame ends late in the interval. Its commit is answered only a little more than one
+        // interval after the commit, but two intervals after the callback that started it.
+        for _ in 0..2 {
+            at = frame(&mut shared, at, Duration::ZERO, 2 * interval);
+        }
+        assert!(shared.ahead.wanted(shared.timing.interval(), at));
+    }
+
+    #[test]
+    fn frames_started_late_are_not_taken_as_misses() {
+        // A redraw asked for by input in the middle of an interval misses the refresh because it
+        // began late, and composing ahead would not help it.
+        let (mut shared, interval) = on_a_known_output();
+        let first = shared.begin_callback();
+        let mut at = Instant::now();
+        shared.frame_callback(first, at);
+        for _ in 0..4 {
+            at = frame(&mut shared, at, interval / 2, 2 * interval);
+        }
+        assert!(!shared.ahead.wanted(shared.timing.interval(), at));
     }
 
     #[test]
@@ -311,10 +503,31 @@ mod tests {
     }
 
     #[test]
-    fn the_viewport_destination_is_owed_until_a_commit_carries_it() {
+    fn buffer_metadata_is_sent_once_for_each_extent_and_scale() {
         let mut shared = Shared::new();
         shared.resized(logical(800.0, 600.0), 1.5);
-        assert_eq!(shared.pending_viewport, Some(logical(800.0, 600.0)));
+        let buffer = Size::new(1200, 900);
+        assert_eq!(
+            shared.frame_metadata(buffer, 1.5),
+            Some(logical(800.0, 600.0))
+        );
+        assert_eq!(shared.frame_metadata(buffer, 1.5), None);
+    }
+
+    #[test]
+    fn a_buffer_from_before_a_configure_is_described_by_its_own_extent() {
+        let mut shared = Shared::new();
+        shared.resized(logical(800.0, 600.0), 1.25);
+        shared.resized(logical(1000.0, 750.0), 1.25);
+        assert_eq!(
+            shared.frame_metadata(Size::new(1000, 750), 1.25),
+            Some(logical(800.0, 600.0)),
+            "the newer extent was declared for the older buffer"
+        );
+        assert_eq!(
+            shared.frame_metadata(Size::new(1250, 938), 1.25),
+            Some(logical(1000.0, 750.0))
+        );
     }
 
     #[test]
@@ -423,7 +636,7 @@ mod tests {
         shared.visibility.configured = true;
         let now = Instant::now();
         shared.declined = true;
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Declined);
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Declined);
         assert_eq!(
             shared.pacer.deadline(shared.visibility, now),
             None,
@@ -440,11 +653,45 @@ mod tests {
         let mut shared = Shared::new();
         shared.visibility.configured = true;
         let now = Instant::now();
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::KeepChainAlive);
         // The commit went out, so the compositor is owed an answer before the next frame.
         shared.pacer.request();
         let mut visibility = shared.visibility;
         assert!(!shared.pacer.take(&mut visibility, now));
+    }
+
+    #[test]
+    fn a_redraw_ahead_of_an_owed_callback_commits_nothing() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.pacer.compose_ahead(true);
+        shared.pacer.committed(now);
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Waiting);
+        assert!(!shared.pacer.present_now(now));
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Held);
+    }
+
+    #[test]
+    fn a_held_frame_that_reached_the_surface_owes_a_callback() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        shared.end_of_present(now, now);
+        assert!(!shared.pacer.owes_callback(), "nothing was presented");
+        shared.presented = true;
+        shared.end_of_present(now, now);
+        assert!(shared.pacer.owes_callback());
+    }
+
+    #[test]
+    fn a_new_extent_drops_the_held_frame() {
+        let mut shared = Shared::new();
+        shared.resized(logical(800.0, 600.0), 1.0);
+        shared.pacer.committed(Instant::now());
+        assert!(!shared.pacer.present_now(Instant::now()));
+        shared.resized(logical(900.0, 600.0), 1.0);
+        assert!(!shared.pacer.held());
     }
 
     #[test]
@@ -453,7 +700,7 @@ mod tests {
         shared.visibility.configured = true;
         let now = Instant::now();
         shared.presented = true;
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Presented);
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Presented);
     }
 
     #[test]
@@ -462,9 +709,9 @@ mod tests {
         shared.visibility.configured = true;
         let now = Instant::now();
         shared.declined = true;
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::Declined);
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Declined);
         // The next redraw runs normally; yesterday's refusal says nothing about it.
-        assert_eq!(shared.end_of_redraw(now), EndOfRedraw::KeepChainAlive);
+        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::KeepChainAlive);
     }
 
     #[test]

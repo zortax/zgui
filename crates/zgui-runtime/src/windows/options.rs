@@ -2,8 +2,8 @@
 
 use zgui_geom::{CssPx, Point, Size};
 use zgui_platform::{
-    ColorScheme, Decorations, FullscreenMode, SurfaceAttributes, TitleButtons, WindowIcon,
-    WindowLevel,
+    ColorScheme, ComposeAhead, Decorations, FullscreenMode, SurfaceAttributes, TitleButtons,
+    WindowIcon, WindowLevel,
 };
 use zgui_vocab::SharedString;
 
@@ -127,6 +127,14 @@ impl WindowOptions {
     /// A light or dark preference for this window alone.
     pub fn with_theme(mut self, theme: ColorScheme) -> Self {
         self.attributes.theme = Some(theme);
+        self
+    }
+
+    /// Whether the window composes its next frame before the platform is ready to show it.
+    ///
+    /// [`ComposeAhead::Auto`] is the default. See [`ComposeAhead`] for the trade-off.
+    pub fn with_compose_ahead(mut self, compose_ahead: ComposeAhead) -> Self {
+        self.attributes.compose_ahead = compose_ahead;
         self
     }
 

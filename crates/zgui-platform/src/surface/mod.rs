@@ -25,7 +25,7 @@ pub use crate::surface::role::{
     Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
 };
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
-pub use crate::surface::timing::{PresentPacing, PresentationTiming};
+pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
@@ -112,6 +112,27 @@ pub trait Surface: Send + Sync + 'static {
     /// Called between finishing the drawing and presenting it. On a compositor that uses it this
     /// is what keeps frame pacing honest; where it means nothing it costs nothing.
     fn pre_present_notify(&self);
+
+    /// Whether a frame that has just been composed may be presented now.
+    ///
+    /// Asked by the renderer after the frame's work is submitted and before it is handed to the
+    /// surface. `false` means the platform is not ready for another buffer: the renderer keeps the
+    /// composed frame, and the platform delivers [`SurfaceEvent::PresentReady`] when it is ready.
+    /// The default is always ready.
+    fn present_now(&self) -> bool {
+        true
+    }
+
+    /// Tells the platform the frame of `size` at `scale` is about to be presented.
+    ///
+    /// The same moment as [`Surface::pre_present_notify`], with the extent the buffer was drawn
+    /// at. A platform that declares buffer metadata with each commit reads it from here, because
+    /// the surface can already be at a newer extent than the frame. The default ignores the
+    /// extent.
+    fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) {
+        let _ = (size, scale);
+        self.pre_present_notify();
+    }
 
     /// Tells the platform the redraw just delivered was refused without running.
     ///

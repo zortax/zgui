@@ -27,9 +27,6 @@ pub fn request_size(
         shared.resized(size, scale);
         scale
     };
-    if let Some(window) = surface.role().window() {
-        window.set_geometry(size);
-    }
     if let Some(layer) = surface.role().layer() {
         layer.set_size(
             size.width.0.round().max(1.0) as u32,
@@ -91,8 +88,15 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// first frame already does and there is nothing further to ask for. Hiding is a commit with no
 /// buffer, which unmaps it — and the compositor then treats the next buffer as a fresh mapping,
 /// configure sequence and all.
+///
+/// An unmapped surface is shown again by the same empty commit that asked for its first configure.
+/// The pacer holds the redraw until that configure arrives.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
     if visible {
+        let unmapped = std::mem::take(&mut surface.shared().unmapped);
+        if unmapped {
+            surface.wl_surface().commit();
+        }
         zgui_platform::Surface::request_redraw(surface);
         return;
     }
@@ -101,6 +105,8 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
     wl.commit();
     let mut shared = surface.shared();
     shared.visibility.configured = false;
+    shared.unmapped = true;
+    shared.cancel_callbacks();
 }
 
 /// Makes the surface transparent to the pointer, or takes it back.
@@ -127,25 +133,34 @@ pub fn set_pointer_passthrough(
     Ok(())
 }
 
-/// Everything that has to ride the commit a frame is about to make.
+/// Everything that has to ride the commit a frame of `size` at `scale` is about to make.
 ///
 /// Called between the frame's work being submitted and its buffer being handed over, which is the
-/// one moment where all three of these are correct:
+/// one moment where all of these are correct:
 ///
 /// * the **frame callback**, because a callback rides the next commit and the next commit is the
 ///   one about to happen;
-/// * the **viewport destination**, because a destination that does not match the buffer it is
-///   committed with is a protocol error, and this is where the matching buffer is known; and
+/// * the **buffer scale, viewport destination and window geometry**, because each describes the
+///   buffer it is committed with — a destination or a scale that does not match it is a protocol
+///   error — and the frame's own extent is known here, even when a newer configure has already
+///   arrived; and
 /// * the **presentation feedback**, because it is asked per content update and this is the update.
-pub fn pre_present(surface: &WaylandSurface) {
-    let logical = {
+pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64) {
+    let (metadata, fractional) = {
         let mut shared = surface.shared();
         shared.presented = true;
         shared.mapped = true;
-        shared.pending_viewport.take()
+        (
+            shared.frame_metadata(size, scale),
+            shared.ladder.is_fractional(),
+        )
     };
-    if let Some(logical) = logical {
+    if let Some(logical) = metadata {
+        crate::surface::scale::declare(surface, scale, fractional);
         surface.fractional().destination(logical);
+        if let Some(window) = surface.role().window() {
+            window.set_geometry(logical);
+        }
     }
     surface.ask_for_callback();
     surface.ask_for_feedback();

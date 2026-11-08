@@ -23,6 +23,28 @@ pub enum PresentPacing {
     Platform,
 }
 
+/// Whether a surface composes its next frame before the platform is ready to show it.
+///
+/// A window that waits for the platform draws each frame from the newest input. A frame that
+/// costs more than what is left of the refresh interval then misses the refresh, and the window
+/// shows a new frame only every second refresh or less often. A window that composes ahead keeps
+/// up at the full refresh rate, and shows each frame about one refresh later.
+///
+/// Only a platform that paces its own frames reads this. The environment variable
+/// `ZGUI_WAYLAND_COMPOSE_AHEAD` (`auto`, `always` or `never`) overrides it on Wayland.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ComposeAhead {
+    /// Compose ahead while the window cannot keep up with the refresh rate.
+    #[default]
+    Auto,
+    /// Always compose ahead. For a window that animates continuously and gives higher throughput
+    /// priority over input latency.
+    Always,
+    /// Never compose ahead. For a window that gives input latency priority over throughput.
+    Never,
+}
+
 /// What the platform knows about when this surface's frames reach the screen.
 ///
 /// Every field is optional and each is answered separately, because a platform can know the

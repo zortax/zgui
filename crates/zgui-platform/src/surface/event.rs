@@ -43,6 +43,11 @@ pub enum SurfaceEvent {
     /// This arrives only in answer to a redraw request. Nothing else produces it — not a reached
     /// deadline, not a wake — so anything that wants a frame has to ask for one.
     RedrawRequested,
+    /// The platform is ready for the frame the renderer holds.
+    ///
+    /// This arrives only after a surface answered [`Surface::present_now`](crate::Surface::present_now)
+    /// with `false`. It asks for the held frame to be presented, and for nothing to be drawn.
+    PresentReady,
     /// The user asked for the surface to close. Nothing has closed yet.
     CloseRequested,
     /// The surface is gone.
