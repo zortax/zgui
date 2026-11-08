@@ -80,6 +80,10 @@ pub fn ResizableHandle(
             context.set_before(id, size);
         }
     };
+    let travel_untracked = move || {
+        let (context, id) = (context?, id?);
+        context.travel_of_untracked(id)
+    };
 
     // Where the pointer was when the drag started, and what the panel's share was then, so that
     // the drag is measured from where it began rather than accumulating a rounding error per frame.
@@ -147,7 +151,7 @@ pub fn ResizableHandle(
             on:key_down = move |ev| {
                 let forwards = if vertical { NamedKey::ArrowDown } else { NamedKey::ArrowRight };
                 let backwards = if vertical { NamedKey::ArrowUp } else { NamedKey::ArrowLeft };
-                let (_, min, max) = travel().unwrap_or((0.0, 0.0, 100.0));
+                let (_, min, max) = travel_untracked().unwrap_or((0.0, 0.0, 100.0));
                 match &ev.key {
                     Key::Named(key) if *key == forwards => move_by(step),
                     Key::Named(key) if *key == backwards => move_by(-step),
@@ -159,7 +163,7 @@ pub fn ResizableHandle(
                             move_to(size);
                         }
                         None => {
-                            folded.set(travel().map(|(now, _, _)| now));
+                            folded.set(travel_untracked().map(|(now, _, _)| now));
                             move_to(min);
                         }
                     },
@@ -170,7 +174,7 @@ pub fn ResizableHandle(
                 ev.stop_propagation();
             },
             on:pointer_down = move |ev| {
-                let Some((now, _, _)) = travel() else { return };
+                let Some((now, _, _)) = travel_untracked() else { return };
                 let at = if vertical { ev.position.y.0 } else { ev.position.x.0 };
                 ev.capture_pointer();
                 from.set(Some((at, now)));
