@@ -14,7 +14,6 @@ use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{DecorationSource, Surface as _, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
-use crate::surface::role::toplevel;
 use crate::surface::role::xdg::configure::Pending;
 
 impl WaylandState {
@@ -69,11 +68,9 @@ impl WaylandState {
 
         let (resized, visibility, resizing, extent, answered) = {
             let mut shared = surface.shared();
-            let extent = toplevel::extent(pending.size, surface.wanted(), shared.logical);
             let state_flip =
                 shared.maximized != pending.maximized || shared.fullscreen != pending.fullscreen;
-            shared.maximized = pending.maximized;
-            shared.fullscreen = pending.fullscreen;
+            let extent = shared.toplevel_extent(&pending, surface.wanted());
             shared.resizing = pending.resizing;
             shared.visibility.configured = true;
             // The state this whole shell is bound at version six for, and the only signal on this
