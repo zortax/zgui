@@ -81,6 +81,7 @@ impl Window {
                 // it would take the release away from every other default, including the
                 // activation a click on a button is.
                 self.selecting = None;
+                self.text_scroll = None;
                 false
             }
             _ => false,
@@ -160,6 +161,12 @@ impl Window {
         let Some(drag) = self.selecting else {
             return false;
         };
+        let previous = self
+            .text_scroll
+            .as_ref()
+            .map(|(_, time)| *time)
+            .unwrap_or_else(std::time::Instant::now);
+        self.text_scroll = Some((*pointer, previous));
         let Some((offset, affinity)) = self.offset_at(drag.node, self.device_point(pointer)) else {
             return false;
         };
@@ -263,5 +270,51 @@ impl Window {
             DevicePx(pointer.position.x.0 * self.scale),
             DevicePx(pointer.position.y.0 * self.scale),
         )
+    }
+}
+
+impl Window {
+    /// Keep selecting while a held pointer stays outside a field's horizontal edges.
+    pub(crate) fn advance_text_drag(&mut self, now: std::time::Instant) {
+        let Some(drag) = self.selecting else {
+            self.text_scroll = None;
+            return;
+        };
+        let Some((pointer, previous)) = self.text_scroll else {
+            return;
+        };
+        let Some(bounds) = zgui_view::ViewHost::window_box(
+            self.host.as_ref(),
+            zgui_view_dom::id::to_view(drag.node),
+        ) else {
+            return;
+        };
+        let x = self.device_point(&pointer).x.0;
+        let left = bounds.origin.x.0 + 6.0 * self.scale;
+        let right = bounds.origin.x.0 + bounds.size.width.0 - 6.0 * self.scale;
+        let overshoot = if x < left {
+            x - left
+        } else {
+            (x - right).max(0.0)
+        };
+        self.text_scroll = Some((pointer, now));
+        if overshoot == 0.0 {
+            return;
+        }
+        let dt = now
+            .saturating_duration_since(previous)
+            .as_secs_f32()
+            .clamp(0.001, 0.05);
+        let delta = (overshoot * 12.0 * dt).clamp(-80.0 * self.scale, 80.0 * self.scale);
+        let before = self.scroll.borrow().offset_of(drag.node);
+        self.carry_out_scroll(
+            zgui_view_dom::id::to_view(drag.node),
+            zgui_view::ScrollTarget::By(Point::new(DevicePx(delta), DevicePx(0.0))),
+            zgui_view::ScrollBehavior::Instant,
+        );
+        if self.scroll.borrow().offset_of(drag.node) != before {
+            self.drag_through_text(&pointer);
+            self.request_frame();
+        }
     }
 }
