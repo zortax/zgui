@@ -119,7 +119,7 @@ pub fn ToggleGroupItem(
             tabindex = move || item.map_or(Focus::Sequential, |item| item.tabindex().get()),
             on:focus_in = move |_| { if let Some(item) = item { item.activate() } },
             on:click = move |_| {
-                if !is_out() && let Some(group) = group {
+                if !disabled.get_untracked() && let Some(group) = group && !group.is_disabled_untracked() {
                     group.toggle(&value);
                 }
             },
