@@ -294,6 +294,9 @@ impl Window {
         self.note_frame_moment(timestamp);
 
         self.frame_started();
+        // A Wayland configure can change maximized/fullscreen without changing extent.
+        // Refresh before input and reactive work so client decorations follow that state.
+        self.handle.refresh_window_state();
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
         // Both are this frame's answers about this frame's movement, and a frame that inherited
