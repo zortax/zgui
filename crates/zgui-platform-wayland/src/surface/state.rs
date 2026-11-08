@@ -47,6 +47,8 @@ pub(crate) struct Shared {
     pub(crate) size: Size<DevicePx, Device>,
     /// The extent the compositor configured, in logical pixels.
     pub(crate) logical: Size<CssPx, Css>,
+    /// The normal size before entering maximized or fullscreen state.
+    restore_size: Option<Size<CssPx, Css>>,
     /// How many physical pixels there are to a logical one.
     pub(crate) scale: f64,
     /// Whether a redraw is owed, and what the compositor owes back.
@@ -134,6 +136,7 @@ impl Shared {
         Self {
             size: Size::new(DevicePx(0.0), DevicePx(0.0)),
             logical: Size::new(CssPx(0.0), CssPx(0.0)),
+            restore_size: None,
             scale: 1.0,
             pacer: Pacer::new(),
             ahead: Ahead::new(zgui_platform::ComposeAhead::Auto),
@@ -159,6 +162,27 @@ impl Shared {
             pending_configure: None,
             outputs: Vec::new(),
         }
+    }
+
+    /// Applies shell state and chooses an extent when the compositor leaves one unspecified.
+    pub(crate) fn toplevel_extent(
+        &mut self,
+        pending: &crate::surface::role::xdg::configure::Pending,
+        wanted: Size<CssPx, Css>,
+    ) -> Size<CssPx, Css> {
+        let was_expanded = self.maximized || self.fullscreen;
+        let expanded = pending.maximized || pending.fullscreen;
+        if !was_expanded && expanded {
+            self.restore_size = Some(self.logical);
+        }
+        let fallback = if was_expanded && !expanded {
+            self.restore_size.take().unwrap_or(self.logical)
+        } else {
+            self.logical
+        };
+        self.maximized = pending.maximized;
+        self.fullscreen = pending.fullscreen;
+        crate::surface::role::toplevel::extent(pending.size, wanted, fallback)
     }
 
     /// Records the extent and scale the compositor settled on, and what changed with it.
@@ -520,6 +544,58 @@ mod tests {
         assert!(
             shared.compose_ahead_now(now),
             "the frame that showed the extent ends the wait"
+        );
+    }
+
+    #[test]
+    fn restoring_from_maximized_and_fullscreen_recovers_normal_size() {
+        use crate::surface::role::xdg::configure::Pending;
+        for full in [false, true] {
+            let mut shared = Shared::new();
+            let wanted = logical(800.0, 600.0);
+            let normal = logical(940.0, 700.0);
+            shared.resized(normal, 1.5);
+            let expanded = Pending {
+                maximized: !full,
+                fullscreen: full,
+                ..Pending::default()
+            };
+            shared.toplevel_extent(&expanded, wanted);
+            shared.resized(logical(1920.0, 1080.0), 1.5);
+            // Fullscreen from a maximized window must not replace its original restore size.
+            shared.toplevel_extent(
+                &Pending {
+                    fullscreen: true,
+                    ..Pending::default()
+                },
+                wanted,
+            );
+            shared.resized(logical(1920.0, 1200.0), 1.5);
+            assert_eq!(shared.toplevel_extent(&Pending::default(), wanted), normal);
+        }
+    }
+
+    #[test]
+    fn compositor_named_restore_dimensions_override_the_saved_size() {
+        use crate::surface::role::xdg::configure::Pending;
+        let mut shared = Shared::new();
+        let wanted = logical(800.0, 600.0);
+        shared.resized(wanted, 1.0);
+        shared.toplevel_extent(
+            &Pending {
+                maximized: true,
+                ..Pending::default()
+            },
+            wanted,
+        );
+        shared.resized(logical(1920.0, 1080.0), 1.0);
+        let restore = Pending {
+            size: (std::num::NonZeroU32::new(1000), None),
+            ..Pending::default()
+        };
+        assert_eq!(
+            shared.toplevel_extent(&restore, wanted),
+            logical(1000.0, 600.0)
         );
     }
 
