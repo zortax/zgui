@@ -105,7 +105,10 @@ impl Dispatch<WlCallback, FrameCallback> for WaylandState {
         };
         let event = state.live.surface(frame.surface).and_then(|surface| {
             let mut shared = surface.shared();
-            shared.frame_callback(frame.serial, std::time::Instant::now());
+            shared.frame_callback(
+                frame.serial,
+                zgui_platform::Clock::now(state.live.clock.as_ref()),
+            );
             shared.visibility_edge()
         });
         if let Some(event) = event {

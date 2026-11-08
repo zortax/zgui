@@ -205,12 +205,13 @@ impl<A: AppHandler> WaylandApp<A> {
             // The held frame first, so that the frame after it is composed while the compositor
             // answers for it.
             if present {
+                let began = self.state.live.clock.now();
                 {
                     let cx = WaylandCx::new(&self.state);
                     self.handler
                         .surface_event(&cx, id, SurfaceEvent::PresentReady);
                 }
-                surface.finish_present(self.state.live.clock.now());
+                surface.finish_present(began, self.state.live.clock.now());
             }
             let due = {
                 let mut shared = surface.shared();
@@ -230,8 +231,7 @@ impl<A: AppHandler> WaylandApp<A> {
                 self.handler
                     .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
             }
-            let ended = self.state.live.clock.now();
-            surface.finish_redraw(ended, ended.saturating_duration_since(began));
+            surface.finish_redraw(began, self.state.live.clock.now());
         }
     }
 

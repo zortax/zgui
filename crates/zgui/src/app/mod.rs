@@ -309,6 +309,19 @@ impl App {
         self
     }
 
+    /// Whether the window composes its next frame before the platform is ready to show it.
+    ///
+    /// [`ComposeAhead::Auto`](zgui_platform::ComposeAhead::Auto) is the default: the window
+    /// composes ahead only while its frames do not fit the refresh interval.
+    /// [`Always`](zgui_platform::ComposeAhead::Always) suits an application that animates
+    /// continuously and gives throughput priority over input latency. Windows opened later take
+    /// their own setting through
+    /// [`WindowOptions::with_compose_ahead`](zgui_runtime::WindowOptions::with_compose_ahead).
+    pub fn with_compose_ahead(mut self, compose_ahead: zgui_platform::ComposeAhead) -> Self {
+        self.inner.attributes_mut().compose_ahead = compose_ahead;
+        self
+    }
+
     /// Runs `setup` in the scope above every window, before the first one opens.
     ///
     /// Where state belonging to the *application* rather than to one window goes. A context

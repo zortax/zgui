@@ -291,8 +291,9 @@ impl WaylandSurface {
     }
 
     /// Ends a delivered [`SurfaceEvent::PresentReady`].
-    pub(crate) fn finish_present(&self, now: Instant) {
-        self.shared().end_of_present(now);
+    /// `began` is when the present began.
+    pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
+        self.shared().end_of_present(began, now);
     }
 
     /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
@@ -309,13 +310,13 @@ impl WaylandSurface {
     ///
     /// A redraw that ran while a callback is owed commits nothing either: that callback keeps the
     /// chain alive, and a held frame is committed when it arrives.
-    /// `cost` is how long the redraw took, which decides whether the next one composes ahead.
-    pub(crate) fn finish_redraw(&self, now: Instant, cost: std::time::Duration) {
+    /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
+    pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
         let end = {
             let mut shared = self.shared();
-            let end = shared.end_of_redraw(now);
+            let end = shared.end_of_redraw(began, now);
             if end != crate::surface::state::EndOfRedraw::Declined {
-                shared.ahead.redrawn(cost);
+                shared.ahead.redrawn(now.saturating_duration_since(began));
             }
             end
         };

@@ -11,6 +11,8 @@
 //!   never a lock: a surface with nothing owed answers a redraw in the same turn it was asked, and
 //!   a window whose frames do not fit the interval composes its next frame while the callback is
 //!   owed. That frame is held and presented on the callback, on the loop thread.
+//!   [`SurfaceAttributes::compose_ahead`](zgui_platform::SurfaceAttributes::compose_ahead) sets
+//!   this per window.
 //! * **Presentation that does not block.** The graphics API's own window-system integration
 //!   implements first-in-first-out presentation by waiting on those same callbacks. A surface the
 //!   compositor stops drawing receives none, so the acquisition blocks the thread that also reads

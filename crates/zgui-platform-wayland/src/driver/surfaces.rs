@@ -59,6 +59,8 @@ impl WaylandState {
             parent_extent,
             self.links(),
         );
+        surface.shared().ahead =
+            crate::frame::Ahead::new(crate::frame::ahead::mode(attributes.compose_ahead));
         apply(&surface, attributes);
         // The commit that asks to be configured. Nothing is attached to it, which is what makes it
         // the initial commit rather than a frame.

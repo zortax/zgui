@@ -25,7 +25,7 @@ pub use crate::surface::role::{
     Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
 };
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
-pub use crate::surface::timing::{PresentPacing, PresentationTiming};
+pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
