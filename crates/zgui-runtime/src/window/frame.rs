@@ -262,6 +262,7 @@ impl Window {
         // Everything moving on its own: a smooth scroll on its way, an edge springing back. It
         // marks the containers it moved and nothing else, exactly as a wheel event does.
         mark("f.scroll");
+        self.advance_text_drag(now);
         self.advance_scroll(timestamp);
         // A finger held still becomes a long press by the clock and by nothing else, so the frame
         // asks — and leaves behind the one moment it next owes an answer at, which the park merges
@@ -428,6 +429,7 @@ impl Window {
         // that is drawn once and then never changes again.
         mark("f.caret");
         self.plan_caret(now);
+        self.follow_text_caret();
         // After layout and the caret plan, before paint emission: the embed host binds producers
         // to laid-out boxes, attaches whatever they presented, and absorbs the damage the emit
         // walk below is gated on. See the `embed` module for the whole argument.
