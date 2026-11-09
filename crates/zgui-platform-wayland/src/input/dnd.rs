@@ -46,7 +46,9 @@ struct Session {
 impl Drag {
     /// Records a drag arriving over `surface`.
     pub fn entered(&mut self, surface: SurfaceId, offer: DragOffer, at: Point<CssPx, Css>) {
-        *self.read.lock().unwrap_or_else(|held| held.into_inner()) = None;
+        // A cancelled drag's worker can still finish. Give each session its own mailbox
+        // so that an old read cannot supply paths to the next drop.
+        self.read = Arc::default();
         self.session = Some(Session {
             surface,
             offer,
@@ -78,6 +80,11 @@ impl Drag {
 
     /// Records the drag leaving without a drop.
     pub fn left(&mut self) -> Option<(SurfaceId, DragEvent)> {
+        // wl_data_device.leave also follows a successful drop. Keep the offer until
+        // its asynchronous transfer finishes instead of discarding a pending drop.
+        if self.session.as_ref().is_some_and(|session| session.dropped) {
+            return None;
+        }
         let session = self.session.take()?;
         session
             .announced
@@ -148,30 +155,42 @@ impl Drag {
 /// all — a drag of a web address carries something no file system can open, and turning it into a
 /// path would produce a name nothing can read rather than nothing.
 pub fn paths(bytes: &[u8]) -> Vec<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
     String::from_utf8_lossy(bytes)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .filter_map(|line| line.strip_prefix("file://"))
-        .map(|address| PathBuf::from(unescape(address)))
+        .filter_map(|address| {
+            let path = if address.starts_with('/') {
+                address
+            } else {
+                // Localhost is local; other authorities must not become relative paths.
+                address
+                    .strip_prefix("localhost")
+                    .filter(|path| path.starts_with('/'))?
+            };
+            let bytes = unescape(path);
+            (!bytes.contains(&0)).then(|| PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+        })
         .collect()
 }
 
 /// One address with its percent escapes resolved.
-fn unescape(address: &str) -> String {
-    let mut out = String::with_capacity(address.len());
+fn unescape(address: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(address.len());
     let bytes = address.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let pair = &address[index + 1..index + 3];
-            if let Ok(byte) = u8::from_str_radix(pair, 16) {
-                out.push(byte as char);
+            let digit = |byte: u8| (byte as char).to_digit(16).map(|value| value as u8);
+            if let (Some(high), Some(low)) = (digit(bytes[index + 1]), digit(bytes[index + 2])) {
+                out.push(high * 16 + low);
                 index += 3;
                 continue;
             }
         }
-        out.push(bytes[index] as char);
+        out.push(bytes[index]);
         index += 1;
     }
     out
@@ -181,6 +200,27 @@ fn unescape(address: &str) -> String {
 mod tests {
     use super::paths;
     use std::path::PathBuf;
+
+    #[test]
+    fn filenames_preserve_utf8_and_unix_bytes_without_panicking_on_malformed_escapes() {
+        use std::os::unix::ffi::OsStrExt;
+        assert_eq!(
+            paths("file:///tmp/flight%20%C3%BC.ulg\nfile://localhost/tmp/日本.ulg\n".as_bytes()),
+            vec![
+                PathBuf::from("/tmp/flight ü.ulg"),
+                PathBuf::from("/tmp/日本.ulg")
+            ]
+        );
+        assert_eq!(
+            paths(b"file:///tmp/%FF.ulg")[0].as_os_str().as_bytes(),
+            b"/tmp/\xFF.ulg"
+        );
+        assert_eq!(
+            paths("file:///tmp/%é.ulg".as_bytes()),
+            vec![PathBuf::from("/tmp/%é.ulg")]
+        );
+        assert!(paths(b"file://remote/tmp/log.ulg\nfile:///tmp/bad%00.ulg").is_empty());
+    }
 
     #[test]
     fn a_list_with_nothing_on_it_names_no_files() {
