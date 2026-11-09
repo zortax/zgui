@@ -68,6 +68,10 @@ impl ToggleGroupContext {
         self.disabled.get()
     }
 
+    fn is_disabled_untracked(&self) -> bool {
+        self.disabled.get_untracked()
+    }
+
     /// How many of the group may be on at once.
     #[must_use]
     pub fn selection(&self) -> ToggleSelection {
@@ -93,7 +97,7 @@ impl ToggleGroupContext {
     /// leaving nothing selected. A group that refused that would be a radio group wearing a
     /// toolbar's clothes.
     pub fn toggle(&self, value: &str) {
-        let mut next = self.on();
+        let mut next: BTreeSet<String> = self.values.get_untracked().into_iter().collect();
         if next.contains(value) {
             next.remove(value);
         } else {
