@@ -243,8 +243,17 @@ impl Window {
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
             let mut sink = HostSink::new(&host);
+            let event_timestamp = event.timestamp().unwrap_or(timestamp);
             dispatch::run(
-                self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
+                self,
+                &steps,
+                kind,
+                target,
+                &payload,
+                samples,
+                modifiers,
+                event_timestamp,
+                &mut sink,
             )
         };
 
