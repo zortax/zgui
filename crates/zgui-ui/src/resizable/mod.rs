@@ -166,6 +166,19 @@ impl ResizableContext {
         })
     }
 
+    /// Read divider travel for input handling without subscribing.
+    fn travel_of_untracked(self, handle: u64) -> Option<(f64, f64, f64)> {
+        let before = self.panel_before(handle)?;
+        self.entries.with_untracked(|entries| {
+            entries.iter().find_map(|entry| match entry {
+                Entry::Panel {
+                    id, bound, size, ..
+                } if *id == before => Some((*size, bound.min, bound.max)),
+                _ => None,
+            })
+        })
+    }
+
     /// Moves the divider called `handle` by `delta` percentage points, and reports what moved.
     pub fn drag_by(self, handle: u64, delta: f64) -> f64 {
         let Some(boundary) = self.boundary_of(handle) else {
@@ -181,7 +194,7 @@ impl ResizableContext {
 
     /// Puts the panel before the divider called `handle` at `size` percent outright.
     pub fn set_before(self, handle: u64, size: f64) -> f64 {
-        let Some((now, _, _)) = self.travel_of(handle) else {
+        let Some((now, _, _)) = self.travel_of_untracked(handle) else {
             return 0.0;
         };
         self.drag_by(handle, size - now)
