@@ -212,3 +212,47 @@ impl Window {
             .map(|resolution| resolution.paragraph)
     }
 }
+
+impl Window {
+    /// Follow the actual shaped caret, only when selection or field width changes.
+    /// Manual scrolling therefore stays put until the next edit or caret move.
+    pub(crate) fn follow_text_caret(&mut self) {
+        let Some(node) = self.router.interaction().focus.focused() else {
+            self.followed_selection = None;
+            return;
+        };
+        let Some(selection) = self.editors.shown_selection(node) else {
+            return;
+        };
+        let Some(bounds) =
+            zgui_view::ViewHost::window_box(self.host.as_ref(), zgui_view_dom::id::to_view(node))
+        else {
+            return;
+        };
+        let key = (node, selection, bounds.size.width.0);
+        if self.followed_selection == Some(key) {
+            return;
+        }
+        let Some(caret) = self.caret_rect() else {
+            return;
+        };
+        self.followed_selection = Some(key);
+        let margin = 8.0 * self.scale;
+        let left = bounds.origin.x.0 + margin;
+        let right = bounds.origin.x.0 + bounds.size.width.0 - margin;
+        let delta = if selection.focus == 0 {
+            -self.scroll.borrow().offset_of(node).x.0
+        } else if caret.origin.x.0 < left {
+            caret.origin.x.0 - left
+        } else {
+            (caret.origin.x.0 + caret.size.width.0 - right).max(0.0)
+        };
+        if delta.abs() > 0.5 {
+            self.carry_out_scroll(
+                zgui_view_dom::id::to_view(node),
+                zgui_view::ScrollTarget::By(Point::new(DevicePx(delta), DevicePx(0.0))),
+                zgui_view::ScrollBehavior::Instant,
+            );
+        }
+    }
+}
