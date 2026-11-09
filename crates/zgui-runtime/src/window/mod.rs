@@ -13,6 +13,7 @@ pub mod caret;
 mod clicks;
 mod crossing;
 mod cursor;
+mod damage_coalesce;
 pub mod frame;
 pub mod input;
 pub mod observe;

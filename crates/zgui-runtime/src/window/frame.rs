@@ -48,6 +48,10 @@ const POOLED_RESTYLE_MIN_NODES: usize = 64;
 /// What one frame did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameReport {
+    /// Wall time spent processing the frame; excludes waiting for its scheduled start.
+    pub elapsed: std::time::Duration,
+    /// Paint and renderer submission wall time, including any driver wait. Not GPU execution time.
+    pub paint_elapsed: std::time::Duration,
     /// What the renderer made of it.
     pub outcome: FrameOutcome,
     /// Whether anything asked for another frame from inside this one.
@@ -286,6 +290,7 @@ impl Window {
 
     /// The frame itself, with the window's scope already current.
     fn run_frame(&mut self, clock: &dyn Clock) -> FrameReport {
+        let measured_start = Instant::now();
         use zgui_profile::latency::mark;
         mark("f.begin");
         let now = clock.now();
@@ -499,7 +504,9 @@ impl Window {
 
         self.binding.before_paint(timestamp);
         mark("f.paint");
+        let paint_start = Instant::now();
         let outcome = self.paint_and_draw();
+        let paint_elapsed = paint_start.elapsed();
         mark("f.painted");
         // Immediately after the frame that produced them, and against the output this window is
         // actually on: what the acquisition made this frame wait for is how much earlier than
@@ -640,8 +647,17 @@ impl Window {
         // Last, with everything this frame produced still standing: the scene it emitted, the
         // damage it answered, the layout it computed. The handle is cloned out first because the
         // probe is handed the window it is stored on.
+        let report = FrameReport {
+            elapsed: measured_start.elapsed(),
+            paint_elapsed,
+            outcome,
+            needs_another_frame,
+            restyled,
+            timers_fired,
+            animated,
+        };
         if let Some(probe) = self.probe.clone() {
-            probe.frame_ended(self);
+            probe.frame_reported(self, &report);
         }
 
         zgui_profile::latency::note_with("f.end", || {
@@ -652,13 +668,7 @@ impl Window {
             )
             .replace('"', "'")
         });
-        FrameReport {
-            outcome,
-            needs_another_frame,
-            restyled,
-            timers_fired,
-            animated,
-        }
+        report
     }
 
     /// When this window next wants to be woken, if it wants to be woken at all.
@@ -1539,6 +1549,17 @@ impl Window {
                 self.scale,
                 &self.host.placements(),
             );
+            if super::damage_coalesce::coalesce(&mut self.damage) {
+                // The larger region must be expanded and emitted too; merging
+                // only at renderer submission would omit its stationary content.
+                zgui_paint::expand(
+                    &layout,
+                    &mut self.damage,
+                    viewport,
+                    self.scale,
+                    &self.host.placements(),
+                );
+            }
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
             // reads any of it, so a document with no effect in it pays three floats.
