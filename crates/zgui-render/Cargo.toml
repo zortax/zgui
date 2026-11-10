@@ -14,6 +14,7 @@ include.workspace = true
 # L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
 thiserror.workspace = true
+web-time.workspace = true
 # The sink a renderer uploads cached rasters through, which is the one thing the atlas cannot own.
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }

@@ -4,7 +4,7 @@ mod manual;
 
 pub use manual::VirtualClock;
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_vocab::Timestamp;
 
@@ -35,7 +35,7 @@ pub trait Clock: Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use web_time::Duration;
 
     use super::{Clock, VirtualClock};
     use zgui_vocab::Timestamp;

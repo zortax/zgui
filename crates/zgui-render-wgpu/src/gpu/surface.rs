@@ -232,7 +232,7 @@ impl ConfiguredSurface {
             self.config.height = size.height.max(1) as u32;
         }
         zgui_profile::latency::mark("cfg.in");
-        let began = std::time::Instant::now();
+        let began = web_time::Instant::now();
         self.surface.configure(gpu.device(), &self.config);
         let elapsed = began.elapsed();
         if human_visible_wait(elapsed) {

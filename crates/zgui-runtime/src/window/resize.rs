@@ -37,12 +37,12 @@
 //! the turn it arrives in, and a window that owes no reconfiguration is never refused anything at
 //! all.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How often a window's size may be answered with a frame, and what that has skipped.
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use web_time::{Duration, Instant};
 /// use zgui_runtime::ResizePace;
 ///
 /// let interval = Duration::from_millis(16);
@@ -144,7 +144,7 @@ impl ResizePace {
 #[cfg(test)]
 mod tests {
     use super::ResizePace;
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     /// One refresh interval of a seventy-five hertz output, near enough.
     const INTERVAL: Duration = Duration::from_micros(13_347);

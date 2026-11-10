@@ -1,6 +1,6 @@
 //! Where the time comes from when it comes from the machine.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_platform::Clock;
 
@@ -67,6 +67,6 @@ mod tests {
     fn a_clock_never_reads_before_its_own_origin() {
         let clock = SystemClock::new();
         assert!(clock.now() >= clock.origin());
-        assert!(clock.timestamp().since_origin() >= std::time::Duration::ZERO);
+        assert!(clock.timestamp().since_origin() >= web_time::Duration::ZERO);
     }
 }

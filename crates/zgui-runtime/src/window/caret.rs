@@ -5,7 +5,7 @@
 //! clear: a caret that changed phase changes no fragment's geometry, so nothing else in the frame
 //! would ever put its pixels into the damage.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_layout::FragmentKind;

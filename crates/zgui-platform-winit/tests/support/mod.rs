@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use std::thread;
-use std::time::Duration;
+use web_time::Duration;
 
 use zgui_platform::{PlatformError, Waker};
 use zgui_platform_winit::UserEvent;

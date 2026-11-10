@@ -619,7 +619,7 @@ impl WgpuRenderer {
         // failed acquisition costs only the copy — and the frame's work is submitted either way,
         // which is why its damage is retired either way.
         zgui_profile::latency::mark("acq.in");
-        let asked = std::time::Instant::now();
+        let asked = web_time::Instant::now();
         let presented = present::acquire(&self.presentation, &mut self.faults);
         // Measured around the call and nowhere else. It is the frame's slack seen from the inside:
         // how much earlier than it needed to be the frame was started.

@@ -423,7 +423,7 @@ fn a11y_wake(shared: &Shared, event: accesskit_winit::Event) -> Option<WakeReaso
 mod tests {
     use super::WinitApp;
     use crate::park::Parked;
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
     use winit::event_loop::ControlFlow;
     use zgui_platform::{AppHandler, PlatformCx, SurfaceEvent, SurfaceId, WakeReason};
 

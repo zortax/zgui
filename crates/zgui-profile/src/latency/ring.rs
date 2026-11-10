@@ -26,7 +26,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use web_time::Instant;
 
 /// One mark, as a reader inside the process sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]

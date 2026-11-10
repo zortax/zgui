@@ -1,6 +1,6 @@
 //! The report that never came.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How long a report that a frame reached the screen may be owed before waiting for it stops.
 ///
@@ -63,7 +63,7 @@ impl Default for Watchdog {
 #[cfg(test)]
 mod tests {
     use super::Watchdog;
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     #[test]
     fn an_unknown_interval_waits_the_floor() {

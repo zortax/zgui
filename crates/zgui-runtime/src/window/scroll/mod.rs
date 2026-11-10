@@ -367,11 +367,7 @@ impl Window {
     /// than by anything arriving, so the frame has to ask. What it means is the platform's own
     /// convention and not an invention here: on a touch surface, pressing and holding is how a
     /// context menu is opened, and that is the event it is delivered as.
-    pub(crate) fn advance_gestures(
-        &mut self,
-        wall: std::time::Instant,
-        now: zgui_vocab::Timestamp,
-    ) {
+    pub(crate) fn advance_gestures(&mut self, wall: web_time::Instant, now: zgui_vocab::Timestamp) {
         if !self.gestures.awaits_deadline() {
             self.long_press_due = None;
             return;
@@ -403,7 +399,7 @@ impl Window {
     /// is held: nothing about the contact changes between the press and the half-second mark, so
     /// every frame in between draws the same pixels. This is the moment the recogniser actually
     /// owes an answer at, and it is the only wake a held contact is worth.
-    pub(crate) fn gesture_deadline(&self) -> Option<std::time::Instant> {
+    pub(crate) fn gesture_deadline(&self) -> Option<web_time::Instant> {
         self.long_press_due
     }
 

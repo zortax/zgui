@@ -494,7 +494,7 @@ pub struct Runtime {
     /// would be woken every tick and asked to draw on none of them.
     parked: Vec<(
         SurfaceId,
-        std::time::Instant,
+        web_time::Instant,
         crate::window::frame::DeadlineKind,
     )>,
     /// Why the application stopped, if it did.

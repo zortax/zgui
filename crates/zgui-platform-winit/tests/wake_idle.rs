@@ -13,7 +13,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
-use std::time::Duration;
+use web_time::Duration;
 
 use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,

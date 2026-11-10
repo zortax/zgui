@@ -17,6 +17,7 @@ include.workspace = true
 # the accessibility adapter. It is the only crate in the tree that names a windowing library, which
 # is what confines a windowing migration to one manifest and one set of translation tables.
 [dependencies]
+web-time.workspace = true
 accesskit.workspace = true
 accesskit_winit.workspace = true
 arboard.workspace = true

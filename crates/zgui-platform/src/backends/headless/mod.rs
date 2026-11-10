@@ -10,7 +10,7 @@ mod tests;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_geom::{DevicePx, Size};
 

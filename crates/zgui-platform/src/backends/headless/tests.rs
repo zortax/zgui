@@ -1,7 +1,7 @@
 //! The headless backend driven through the contract.
 
 use std::sync::Arc;
-use std::time::Duration;
+use web_time::Duration;
 
 use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use zgui_geom::{CssPx, Point};

@@ -6007,6 +6007,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
  "tracing",
+ "web-time",
  "zgui-arena",
  "zgui-bits",
  "zgui-css",
@@ -6037,6 +6038,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.19",
  "tracing",
+ "web-time",
  "zeno",
  "zgui-arena",
  "zgui-atlas",
@@ -6066,6 +6068,7 @@ dependencies = [
  "accesskit",
  "raw-window-handle",
  "thiserror 2.0.19",
+ "web-time",
  "zgui-geom",
  "zgui-vocab",
 ]
@@ -6151,6 +6154,7 @@ dependencies = [
  "raw-window-handle",
  "smithay-clipboard",
  "tracing",
+ "web-time",
  "winit",
  "zgui-elements",
  "zgui-geom",
@@ -6171,6 +6175,7 @@ version = "0.1.0"
 dependencies = [
  "tracing",
  "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]
@@ -6193,6 +6198,7 @@ name = "zgui-render"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.19",
+ "web-time",
  "zgui-atlas",
  "zgui-bits",
  "zgui-color",
@@ -6260,6 +6266,7 @@ dependencies = [
  "naga",
  "rustc-hash 2.1.3",
  "tracing",
+ "web-time",
  "wgpu",
  "zgui-atlas",
  "zgui-bits",
@@ -6279,6 +6286,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
  "tracing",
+ "web-time",
  "zgui-a11y",
  "zgui-anim",
  "zgui-arena",
@@ -6402,6 +6410,7 @@ dependencies = [
  "stylo",
  "stylo_dom",
  "tracing",
+ "web-time",
  "zgui-bits",
  "zgui-css",
  "zgui-dom",
@@ -6550,6 +6559,7 @@ dependencies = [
 name = "zgui-ui-primitives"
 version = "0.1.0"
 dependencies = [
+ "web-time",
  "zgui",
  "zgui-testkit-view",
 ]

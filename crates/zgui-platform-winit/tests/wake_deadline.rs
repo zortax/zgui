@@ -17,7 +17,7 @@
 #[path = "support/mod.rs"]
 mod support;
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,

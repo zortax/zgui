@@ -1,7 +1,7 @@
 //! A clock that only moves when it is told to.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::clock::Clock;
 
@@ -18,7 +18,7 @@ use crate::clock::Clock;
 /// identically are two clocks that can stop doing so.
 ///
 /// ```
-/// use std::time::Duration;
+/// use web_time::Duration;
 /// use zgui_platform::{Clock, VirtualClock};
 ///
 /// let clock = VirtualClock::new();
@@ -72,7 +72,7 @@ impl Clock for VirtualClock {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use web_time::Duration;
 
     use super::VirtualClock;
     use crate::clock::Clock;

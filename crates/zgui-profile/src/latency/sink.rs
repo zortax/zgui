@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// One recorded moment.
 struct Mark {
@@ -118,7 +118,7 @@ pub fn mark_at(stage: &'static str, at: Instant) {
 ///
 /// For a caller that wants the moment before it takes a lock rather than after.
 pub fn marker() -> Option<Instant> {
-    listening().then(std::time::Instant::now)
+    listening().then(web_time::Instant::now)
 }
 
 /// Appends a mark to whichever sinks are listening.

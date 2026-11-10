@@ -21,6 +21,7 @@ futures.workspace = true
 naga = { workspace = true, features = ["deserialize"] }
 rustc-hash.workspace = true
 tracing.workspace = true
+web-time.workspace = true
 # `naga-ir` is what lets a pipeline be built from a representation rather than from WGSL text.
 wgpu = { workspace = true, features = ["naga-ir"] }
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }

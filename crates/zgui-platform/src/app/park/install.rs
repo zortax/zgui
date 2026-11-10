@@ -1,6 +1,6 @@
 //! The outcome of installing a park, and the obligation it can carry.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::app::park::policy::Parked;
 
@@ -17,7 +17,7 @@ use crate::app::park::policy::Parked;
 /// be discharged.
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use web_time::{Duration, Instant};
 /// use zgui_platform::{IdlePolicy, Park, Parked};
 ///
 /// let mut park = Park::new();

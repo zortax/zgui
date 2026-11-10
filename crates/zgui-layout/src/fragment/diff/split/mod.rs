@@ -48,7 +48,7 @@
 //! clip chain and the cost of translating five rectangles arrive as one number.
 
 use std::cell::Cell;
-use std::time::Instant;
+use web_time::Instant;
 
 /// How the offsetting walk divides its duties.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

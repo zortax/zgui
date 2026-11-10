@@ -15,7 +15,7 @@
 //! cut of the space. The sequence is a fixed generator with a fixed seed, so a failure is a
 //! failure anybody can reproduce.
 
-use std::time::Duration;
+use web_time::Duration;
 
 use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
@@ -54,7 +54,7 @@ struct Ticking {
     /// How many times it was told a moment had arrived.
     arrivals: u64,
     /// Whether it currently wants a frame at all.
-    due: Option<std::time::Instant>,
+    due: Option<web_time::Instant>,
 }
 
 impl AppHandler for Ticking {

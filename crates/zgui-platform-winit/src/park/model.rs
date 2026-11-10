@@ -23,7 +23,7 @@
 //! takes a microsecond. What the model cannot prove is that the adapter routes through it; that is
 //! what the suite against the real loop is for.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_platform::{AppHandler, Clock, IdlePolicy, SurfaceEvent};
 use zgui_platform_headless::Headless;

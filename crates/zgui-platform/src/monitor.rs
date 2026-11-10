@@ -66,7 +66,7 @@ impl MonitorInfo {
     /// here, once, rather than invented separately wherever a rate is missing.
     ///
     /// ```
-    /// use std::time::Duration;
+    /// use web_time::Duration;
     /// use zgui_geom::{DevicePx, Point, Size};
     /// use zgui_platform::MonitorInfo;
     ///
@@ -79,7 +79,7 @@ impl MonitorInfo {
     ///
     /// assert!(monitor.refresh_interval() < Duration::from_millis(7));
     /// ```
-    pub fn refresh_interval(&self) -> std::time::Duration {
+    pub fn refresh_interval(&self) -> web_time::Duration {
         refresh_interval(self.refresh_rate_millihertz)
     }
 }
@@ -87,18 +87,18 @@ impl MonitorInfo {
 /// The refresh interval for a rate in thousandths of a hertz, falling back to sixty hertz.
 ///
 /// A rate of zero is treated as no rate at all rather than as an infinitely fast display.
-pub fn refresh_interval(millihertz: Option<u32>) -> std::time::Duration {
+pub fn refresh_interval(millihertz: Option<u32>) -> web_time::Duration {
     const FALLBACK_MILLIHERTZ: u32 = 60_000;
     let rate = millihertz
         .filter(|rate| *rate > 0)
         .unwrap_or(FALLBACK_MILLIHERTZ);
-    std::time::Duration::from_secs_f64(1_000.0 / f64::from(rate))
+    web_time::Duration::from_secs_f64(1_000.0 / f64::from(rate))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{MonitorInfo, refresh_interval};
-    use std::time::Duration;
+    use web_time::Duration;
     use zgui_geom::{DevicePx, Point, Size};
 
     #[test]

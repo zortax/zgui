@@ -33,7 +33,7 @@ mod value;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
@@ -1008,7 +1008,7 @@ impl Window {
     ///
     /// Zero for a window that has never been made to wait for a surface to present into, which is
     /// every window presenting to something with an image always spare.
-    pub const fn present_hold(&self) -> std::time::Duration {
+    pub const fn present_hold(&self) -> web_time::Duration {
         self.present.hold()
     }
 
@@ -1102,7 +1102,7 @@ impl Window {
     /// everything a window does: a resize step, an animation tick, a held frame. Logged when it
     /// changes, because a fast display silently paced at sixty is indistinguishable from a fast
     /// display that is simply slow, and there is nothing else that would ever say which.
-    pub fn refresh_interval(&self) -> std::time::Duration {
+    pub fn refresh_interval(&self) -> web_time::Duration {
         // What the platform measured, where it measures: an interval taken from the presentation
         // of this surface's own frames is the output it is actually on, restated every frame,
         // where a rate is whatever the surface was last told about.

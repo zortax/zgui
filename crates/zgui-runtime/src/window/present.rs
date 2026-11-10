@@ -61,7 +61,7 @@
 //! costs a steady window nothing, because there the dearest frame is the usual one.
 
 use std::cell::Cell;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// The most the acquisition should still block once the hold has converged.
 ///
@@ -101,7 +101,7 @@ const DECAY: f32 = 0.98;
 /// When a frame that has been asked for is allowed to start, and how that moment is arrived at.
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use web_time::{Duration, Instant};
 /// use zgui_runtime::PresentPace;
 ///
 /// let interval = Duration::from_micros(13_347);
@@ -265,7 +265,7 @@ impl PresentPace {
 #[cfg(test)]
 mod tests {
     use super::{BUDGET, PresentPace, budget};
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     /// One frame of the output every figure in this module was settled against.
     ///

@@ -26,7 +26,7 @@
 //! testing under a stationary pointer** is what stops a dropdown that opens under the cursor from
 //! never being hovered.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_bits::{DamageSet, Dirty};
 use zgui_geom::{Device, DevicePx, Size};
