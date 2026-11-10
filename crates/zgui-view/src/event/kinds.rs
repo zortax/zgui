@@ -94,6 +94,12 @@ events! {
 
     DROP: Drop => Drop, DropEvent, as_drop,
         "Content from outside the window was dropped on the element.";
+    DRAG_ENTER: DragEnter => DragEnter, DropEvent, as_drop,
+        "Content dragged from outside the window moved onto the element or one of its descendants.";
+    DRAG_OVER: DragOver => DragOver, DropEvent, as_drop,
+        "Content dragged from outside the window moved over the element.";
+    DRAG_LEAVE: DragLeave => DragLeave, DropEvent, as_drop,
+        "Content dragged from outside the window moved off the element and all of its descendants.";
 
     INPUT: Input => Input, ValueEvent, as_value,
         "The element's value changed as the user is working.";
