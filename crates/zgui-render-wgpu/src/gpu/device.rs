@@ -115,6 +115,30 @@ impl Gpu {
         adapter: wgpu::Adapter,
         extensions: &[&'static CStr],
     ) -> Result<Self, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            futures::executor::block_on(Self::open_async(instance, adapter, extensions))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (instance, adapter, extensions);
+            Err("browser GPU initialization requires Gpu::open_async or SharedGraphics::for_browser".to_owned())
+        }
+    }
+
+    /// Opens a device without blocking the thread that resolves its requests.
+    ///
+    /// Browser hosts must await this before starting their frame loop. The device reports loss
+    /// through [`Gpu::loss`], as it does when opened synchronously on a native platform.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message from a refused device request.
+    pub async fn open_async(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        extensions: &[&'static CStr],
+    ) -> Result<Self, String> {
         let info = adapter.get_info();
         let limits = if info.backend == wgpu::Backend::Gl {
             wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
@@ -135,9 +159,10 @@ impl Gpu {
         {
             Some(opened) => opened,
             None => {
-                let (device, queue) =
-                    futures::executor::block_on(adapter.request_device(&descriptor))
-                        .map_err(|error| error.to_string())?;
+                let (device, queue) = adapter
+                    .request_device(&descriptor)
+                    .await
+                    .map_err(|error| error.to_string())?;
                 (device, queue, Vec::new())
             }
         };

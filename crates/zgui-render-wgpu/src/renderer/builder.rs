@@ -9,6 +9,7 @@ use zgui_render::{GpuUnavailable, RenderTarget};
 
 use crate::gpu::adapter;
 use crate::gpu::device::Gpu;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::gpu::extensions;
 use crate::gpu::surface::{ConfiguredSurface, PresentPacing, SurfaceSetup};
 use crate::renderer::shared::DeviceState;
@@ -197,6 +198,7 @@ impl Builder {
 /// would then settle on whichever [`adapter::sort_key`] preferred. Where no adapter has them,
 /// every adapter is still tried and one of them opens. [`Gpu::open`] says what the list does to a
 /// device once an adapter is chosen.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn open_device(
     instances: &adapter::Instances,
     extensions: &[&'static CStr],
@@ -295,6 +297,19 @@ pub(crate) fn open_device(
     Err(adapter::unavailable(rejections))
 }
 
+/// Reports that the browser must finish its asynchronous device request first.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn open_device(
+    _instances: &adapter::Instances,
+    _extensions: &[&'static CStr],
+    _present: impl Proof,
+) -> Result<(Rc<DeviceState>, Presentation), GpuUnavailable> {
+    Err(GpuUnavailable::new().rejected(
+        "WebGPU",
+        "await SharedGraphics::for_browser before creating a browser renderer",
+    ))
+}
+
 /// What the candidate loop proves each adapter against.
 pub(crate) trait Proof {
     /// Prepares for the adapters of `tier`, before the loop lists them from `instance`.
@@ -378,6 +393,7 @@ impl<W: Into<wgpu::SurfaceTarget<'static>> + Clone> Proof for WindowSurface<W> {
 /// pipelines: a GL context or a Metal layer is bound to the thread that uses it, and a Windows
 /// swap chain can send messages to the window's thread while this thread waits. A candidate that
 /// is refused at the configure discards the pipelines built for it.
+#[cfg(not(target_arch = "wasm32"))]
 fn offer(
     gpu: &Arc<Gpu>,
     present: &mut impl Proof,

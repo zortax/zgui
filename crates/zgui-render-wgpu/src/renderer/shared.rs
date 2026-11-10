@@ -120,6 +120,29 @@ impl Default for SharedGraphics {
 }
 
 impl SharedGraphics {
+    /// Opens a WebGPU device before the browser's window and frame loop start.
+    ///
+    /// The returned graphics can synchronously create renderers for canvases. A browser adapter
+    /// does not need a canvas while it is selected. Device requests yield to the browser event
+    /// loop, and the ready device is shared by all canvases created afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GpuUnavailable`] when WebGPU or a suitable device is unavailable.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn for_browser() -> Result<Self, GpuUnavailable> {
+        let instance =
+            wgpu::Instance::new(adapter::instance_descriptor(wgpu::Backends::BROWSER_WEBGPU));
+        let selected = instance
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
+            .await
+            .map_err(|error| GpuUnavailable::new().rejected("WebGPU", error.to_string()))?;
+        let gpu = Gpu::open_async(instance, selected, &[])
+            .await
+            .map_err(|error| GpuUnavailable::new().rejected("WebGPU", error))?;
+        Ok(Self::with_gpu(Arc::new(gpu)))
+    }
+
     /// Graphics over the backends the environment allows.
     pub fn new() -> Self {
         Self::with_backends(adapter::requested_backends())
@@ -602,15 +625,25 @@ fn present_on(
     {
         return Err(Rejected::Incompatible);
     }
+    #[cfg(not(target_arch = "wasm32"))]
     let scope = state
         .gpu
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
     let presentation =
         Presentation::Surface(Box::new(ConfiguredSurface::new(&state.gpu, surface, setup)));
-    match futures::executor::block_on(scope.pop()) {
-        None => Ok(presentation),
-        Some(error) => Err(Rejected::Failed(error.to_string())),
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match futures::executor::block_on(scope.pop()) {
+            None => Ok(presentation),
+            Some(error) => Err(Rejected::Failed(error.to_string())),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Browser validation is asynchronous. It reaches the device's error callback; waiting
+        // here would prevent the browser from resolving that validation request.
+        Ok(presentation)
     }
 }
 

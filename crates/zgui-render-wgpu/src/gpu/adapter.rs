@@ -27,6 +27,10 @@ pub const BACKENDS_VARIABLE: &str = "ZGUI_BACKENDS";
 /// GL through EGL, which Apple platforms do not ship, so the Apple set is Metal alone. GL is
 /// enumerated only after the primary has failed — see [`tiers`].
 pub fn default_backends() -> wgpu::Backends {
+    #[cfg(target_arch = "wasm32")]
+    {
+        wgpu::Backends::BROWSER_WEBGPU
+    }
     #[cfg(target_vendor = "apple")]
     {
         wgpu::Backends::METAL
@@ -35,7 +39,7 @@ pub fn default_backends() -> wgpu::Backends {
     {
         wgpu::Backends::DX12 | wgpu::Backends::GL
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
+    #[cfg(not(any(target_arch = "wasm32", target_vendor = "apple", target_os = "windows")))]
     {
         wgpu::Backends::VULKAN | wgpu::Backends::GL
     }
@@ -190,6 +194,7 @@ pub fn parse_backends(value: &str) -> wgpu::Backends {
             "metal" => backends |= wgpu::Backends::METAL,
             "dx12" | "d3d12" => backends |= wgpu::Backends::DX12,
             "gl" | "gles" | "opengl" => backends |= wgpu::Backends::GL,
+            "webgpu" => backends |= wgpu::Backends::BROWSER_WEBGPU,
             "all" => backends |= default_backends(),
             _ => {}
         }
