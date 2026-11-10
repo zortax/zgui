@@ -73,13 +73,20 @@ kernel's own licence. The generated bindings are that use and nothing more.
 
 ## Bundled fonts
 
-The font files below are used only by `zgui-text-parley`'s test suite, which runs with system font
+The font files below are used by `zgui-text-parley`'s test suite, which runs with system font
 enumeration disabled so that shaped advances and rendered pixels are the same on every machine.
-They are not linked into any library and are not redistributed as part of a built artefact.
+The `zgui-web-demo` application also embeds the unchanged `NotoSans-Regular.ttf` file in its
+WebAssembly artefact. The other files remain test fixtures.
+
+Noto Sans Regular is Copyright 2022 The Noto Project Authors
+(https://github.com/notofonts/latin-greek-cyrillic). Its copyright notice and full SIL Open Font
+License 1.1 are in `crates/zgui-text-parley/tests/fonts/OFL-NotoSans.txt`, copied from that upstream
+project's `OFL.txt`. The web demo build script includes the same file as `OFL-NotoSans.txt` beside
+the distributed application.
 
 | File | Family | Copyright | Licence |
 |---|---|---|---|
-| `crates/zgui-text-parley/tests/fonts/NotoSans-Regular.ttf` | Noto Sans | The Noto Project Authors | SIL Open Font License 1.1 |
+| `crates/zgui-text-parley/tests/fonts/NotoSans-Regular.ttf` | Noto Sans | Copyright 2022 The Noto Project Authors | SIL Open Font License 1.1 |
 | `crates/zgui-text-parley/tests/fonts/NotoSansArabic-Regular.ttf` | Noto Sans Arabic | The Noto Project Authors | SIL Open Font License 1.1 |
 | `crates/zgui-text-parley/tests/fonts/NotoZnamennyMusicalNotation-Regular.ttf` | Noto Znamenny Musical Notation | The Noto Project Authors | SIL Open Font License 1.1 |
 | `crates/zgui-text-parley/tests/fonts/RubikSubset-Variable.ttf` | Rubik (variable, subset to eight letters) | The Rubik Project Authors | SIL Open Font License 1.1 |

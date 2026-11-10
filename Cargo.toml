@@ -209,6 +209,7 @@ web-time = "1.1"
 # Browser platform services. Native crates name these only under a wasm target dependency.
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.76"
+console_error_panic_hook = "0.1"
 web-sys = { version = "0.3.103", features = [
     "Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement",
     "Navigator", "Clipboard", "ClipboardEvent", "DataTransfer", "Event", "EventTarget",
@@ -282,3 +283,11 @@ undocumented_unsafe_blocks = "warn"
 # families and loaded faces from one paragraph to the next (see vendor/README.md for the changes).
 [patch.crates-io]
 fontique = { path = "vendor/fontique" }
+
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"
+panic = "abort"

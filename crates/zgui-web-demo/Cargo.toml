@@ -1,0 +1,22 @@
+[package]
+name = "zgui-web-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "A zgui counter and vector scene running in a browser canvas"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# L8 — product. The demo uses the same application API as a native program.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+zgui = { path = "../zgui", version = "0.1.0" }
+zgui-render-canvas = { path = "../zgui-render-canvas", version = "0.1.0" }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys.workspace = true
+console_error_panic_hook.workspace = true
+
+[lints]
+workspace = true

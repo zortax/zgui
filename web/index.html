@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10141b">
+  <title>zgui · WebAssembly</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#e9edf1;color:#172435;font:14px/1.5 system-ui,-apple-system,sans-serif}
+    main{max-width:1120px;margin:36px auto;padding:0 24px}header{display:flex;justify-content:space-between;align-items:baseline;gap:18px;margin-bottom:16px}
+    h1{font-size:17px;font-weight:650;letter-spacing:-.4px;margin:0}h1 span{color:#687788;font-weight:400}
+    a{color:inherit;text-underline-offset:3px}header a{font-size:12px;color:#576779}
+    #viewport{position:relative;width:100%;height:600px;border-radius:16px;background:#10141b;overflow:hidden;box-shadow:0 12px 44px #15253918}
+    main.narrow #viewport{max-width:560px;height:800px;margin-inline:auto}
+    canvas{display:block;width:100%;height:100%;outline:none}canvas:focus-visible{outline:2px solid #53a494;outline-offset:-2px}
+    #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:#dce7f2;background:#10141b;padding:32px;text-align:center}
+    #loading[hidden]{display:none}.spinner{width:22px;height:22px;border:2px solid #344155;border-top-color:#83d7c4;border-radius:50%;animation:spin 1s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}.error .spinner{display:none}#loading h2{font-size:18px;margin:0;font-weight:500}#loading p{max-width:570px;color:#9eafc4;font-size:13px;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+    footer{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:8px;margin-top:14px;color:#657487;font-size:12px}#status{color:#465c70}
+    #resize{border:0;background:none;padding:0;color:inherit;font:inherit;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+    details{margin-top:20px;font-size:12px;color:#566778}summary{cursor:pointer;max-width:max-content}details p{max-width:850px}code{font-family:ui-monospace,monospace;font-size:11px}
+    #diagnostics{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9fb;padding:12px;border-radius:8px;font-size:11px;max-height:220px;overflow:auto}
+    @media(max-width:700px){main{margin:18px auto;padding:0 12px}#viewport{height:760px}header{align-items:center}h1{font-size:15px}footer{font-size:11px}}
+    @media(prefers-reduced-motion:reduce){.spinner{animation:none}}
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>zgui <span>/ WebAssembly</span></h1><a href="https://github.com/zortax/zgui" target="_blank" rel="noreferrer">Upstream source</a></header>
+    <div id="viewport">
+      <canvas id="zgui-canvas" tabindex="0" aria-label="zgui WebAssembly demo canvas"></canvas>
+      <div id="loading" role="status"><div class="spinner"></div><h2 id="loading-title">Starting the renderer</h2><p id="loading-message">Checking browser WebGPU support…</p><a id="fallback" href="?renderer=canvas" hidden>Use Canvas 2D</a></div>
+    </div>
+    <footer><span id="status">Initializing</span><span>Click +1 or change the theme. <button id="resize" type="button" aria-pressed="false">Try a narrow canvas</button></span></footer>
+    <details><summary>Build and browser details</summary>
+      <p>This canvas runs the Rust zgui engine as WebAssembly: reactive views, Stylo CSS, Cephal layout, Parley text, and retained paint scenes. It uses wgpu/Vello when WebGPU is available, with a Canvas 2D scene renderer as a fallback.</p>
+      <p>Renderer: <a href="?renderer=auto">Automatic</a> · <a href="?renderer=webgpu">WebGPU</a> · <a href="?renderer=canvas">Canvas 2D</a></p>
+      <p>Prototype: one browser window, serial layout and style, bundled font. Desktop window management and browser screen-reader semantics are not implemented.</p>
+      <p id="downloads" hidden><a href="zgui-wasm-source.tar.gz">Patched source</a> · <a href="zgui-wasm.patch" download>Patch against upstream</a></p>
+      <pre id="diagnostics"></pre>
+    </details>
+  </main>
+  <script type="module">
+    const status = document.getElementById('status');
+    const loading = document.getElementById('loading');
+    const message = document.getElementById('loading-message');
+    const diagnostics = document.getElementById('diagnostics');
+    const log = text => { diagnostics.textContent += text + '\n'; };
+    const resize = document.getElementById('resize');
+    resize.addEventListener('click', () => {
+      const narrow = document.querySelector('main').classList.toggle('narrow');
+      resize.setAttribute('aria-pressed', String(narrow));
+      resize.textContent = narrow ? 'Use the full canvas' : 'Try a narrow canvas';
+    });
+    const fail = error => {
+      const text = error && error.message ? error.message : String(error);
+      loading.hidden = false; loading.classList.add('error');
+      document.getElementById('loading-title').textContent = 'The renderer could not start';
+      message.textContent = text;
+      status.textContent = 'Startup failed';
+      document.body.dataset.state = 'error';
+      document.getElementById('fallback').hidden = false;
+      log(text);
+    };
+    window.addEventListener('error', event => fail(event.error || event.message));
+    window.addEventListener('unhandledrejection', event => fail(event.reason));
+    try {
+      log('WebGPU API: ' + Boolean(navigator.gpu));
+      log('Secure context: ' + window.isSecureContext);
+      log('Device pixel ratio: ' + window.devicePixelRatio);
+      const requested = new URLSearchParams(location.search).get('renderer');
+      const preference = ['canvas', 'webgpu'].includes(requested) ? requested : 'auto';
+      let adapter = null;
+      if (navigator.gpu && preference !== 'canvas') {
+        try {
+          adapter = await navigator.gpu.requestAdapter({powerPreference:'high-performance'});
+          if (!adapter) adapter = await navigator.gpu.requestAdapter({forceFallbackAdapter:true});
+        } catch (error) {
+          if (preference === 'webgpu') throw error;
+          log('WebGPU adapter request failed; selecting Canvas 2D.');
+        }
+      }
+      if (!adapter && preference === 'webgpu') throw new Error('No WebGPU adapter is available. Open Build and browser details below and choose Canvas 2D to run the same zgui scene without WebGPU.');
+      const info = adapter && adapter.info;
+      if (info) log('Adapter: ' + [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' / '));
+      log('WebGPU adapter available: ' + Boolean(adapter));
+      document.body.dataset.gpu = adapter ? 'available' : 'unavailable';
+      message.textContent = 'Loading the WebAssembly module…';
+      const module = await import('./pkg/zgui_web_demo.js');
+      await module.default();
+      message.textContent = adapter ? 'Creating the WebGPU device and text engine…' : 'Starting the Canvas 2D fallback and text engine…';
+      let backend;
+      try {
+        backend = await module.start(Boolean(adapter));
+      } catch (error) {
+        if (adapter && preference === 'auto') {
+          const fallback = new URL(location.href);
+          fallback.searchParams.set('renderer', 'canvas');
+          fallback.searchParams.set('fallback', 'webgpu-startup');
+          location.replace(fallback);
+          throw new Error('WebGPU initialization failed; restarting with Canvas 2D.');
+        }
+        throw error;
+      }
+      loading.hidden = true;
+      status.textContent = 'Running · WebAssembly + ' + backend;
+      document.body.dataset.state = 'running';
+      log('Application started: ' + backend);
+    } catch (error) { fail(error); }
+  </script>
+</body>
+</html>
