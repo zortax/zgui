@@ -51,10 +51,18 @@ impl SharedRenderer {
     pub fn new(gpu: &Gpu) -> Result<Self, vello::Error> {
         let cache = cache::load(gpu);
         let before = allocated(gpu);
+        // Vello 0.9 unchecked prefix-sum shaders underflow workgroup indices on Mali-G715.
+        // CPU preprocessing avoids those stages; fine rasterisation still runs on the GPU.
+        // https://github.com/linebender/vello/issues/1816
+        let use_cpu =
+            cfg!(target_os = "android") && gpu.adapter().get_info().name.contains("Mali-G715");
+        if use_cpu {
+            tracing::warn!("using Vello CPU preprocessing for Android Mali-G715 shader workaround");
+        }
         let renderer = Renderer::new(
             gpu.device(),
             RendererOptions {
-                use_cpu: false,
+                use_cpu,
                 // Analytic area coverage, and nothing else built beside it.
                 //
                 // Each variant is a separate compilation of the largest shader in the pipeline, and

@@ -29,6 +29,9 @@ zgui-console = { path = "../zgui-console", version = "0.1.0", optional = true }
 
 # Named by examples only, so the library target does not link them.
 [dev-dependencies]
+# Android lab exercises shipped component controls and theme tokens.
+zgui-ui = { path = "../zgui-ui", version = "0.1.0" }
+zgui-ui-tokens = { path = "../zgui-ui-tokens", version = "0.1.0" }
 zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
 # Temporary, for diagnosing the console backend. The rule above holds for every other example: an
 # application names the umbrella crate and nothing else. `tty` is the exception because the console
@@ -112,3 +115,24 @@ required-features = ["drm"]
 
 [lints]
 workspace = true
+
+[[example]]
+name = "android-counter"
+path = "../../examples/android.rs"
+crate-type = ["cdylib"]
+
+[package.metadata.android]
+package = "dev.zgui.counter"
+apk_name = "zgui-counter"
+strip = "strip"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "ZGUI Mobile Lab"
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|screenSize|keyboardHidden"

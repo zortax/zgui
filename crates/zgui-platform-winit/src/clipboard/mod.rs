@@ -22,6 +22,10 @@
 //! the answer usually *is* available at once, and threading it through the loop for that case is
 //! ceremony.
 
+#[cfg(not(target_os = "android"))]
+mod desktop;
+#[cfg(target_os = "android")]
+#[path = "android.rs"]
 mod desktop;
 #[cfg(any(
     target_os = "linux",

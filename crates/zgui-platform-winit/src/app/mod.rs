@@ -81,6 +81,28 @@ pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
         .map_err(|error| PlatformError::Backend(error.to_string()))
 }
 
+/// Runs a NativeActivity application using Android's supplied activity handle.
+///
+/// # Errors
+/// Returns a backend error if creating or running the event loop fails.
+#[cfg(target_os = "android")]
+pub fn run_android(
+    android_app: winit::platform::android::activity::AndroidApp,
+    handler: Box<dyn AppHandler>,
+) -> Result<(), PlatformError> {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .with_android_app(android_app)
+        .build()
+        .map_err(|error| PlatformError::Backend(error.to_string()))?;
+    let mut app = WinitApp::new(&event_loop, handler);
+    zgui_profile::latency::start_epoch();
+    event_loop
+        .run_app(&mut app)
+        .map_err(|error| PlatformError::Backend(error.to_string()))
+}
+
 /// An application, as the event loop sees it.
 ///
 /// Generic over the handler rather than boxing it, so that a caller who owns both can still read

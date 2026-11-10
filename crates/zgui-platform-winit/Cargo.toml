@@ -19,7 +19,6 @@ include.workspace = true
 [dependencies]
 accesskit.workspace = true
 accesskit_winit.workspace = true
-arboard.workspace = true
 raw-window-handle.workspace = true
 tracing.workspace = true
 winit.workspace = true
@@ -84,3 +83,9 @@ objc2-foundation.workspace = true
 
 [lints]
 workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }

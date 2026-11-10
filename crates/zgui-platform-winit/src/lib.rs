@@ -89,3 +89,9 @@ pub use crate::input::scrolling::desktop_scroll_settings;
 pub use crate::park::{Install, Park, Parked};
 pub use crate::surface::WinitSurface;
 pub use crate::waker::{ProxyWaker, UserEvent};
+
+/// Android's native activity handle.
+#[cfg(target_os = "android")]
+pub mod android {
+    pub use winit::platform::android::activity::AndroidApp;
+}

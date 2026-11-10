@@ -5943,6 +5943,8 @@ dependencies = [
  "zgui",
  "zgui-console",
  "zgui-devtools",
+ "zgui-ui",
+ "zgui-ui-tokens",
 ]
 
 [[package]]

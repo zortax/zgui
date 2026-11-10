@@ -1,6 +1,14 @@
 //! An application: a window, what is in it, and what draws it.
 
 pub mod fonts;
+
+/// Android activity handle supplied to the native application entry point.
+#[cfg(target_os = "android")]
+pub use zgui_platform_winit::android::AndroidApp;
+
+/// Android driver for use with [`App::run_on`].
+#[cfg(target_os = "android")]
+pub use zgui_platform_winit::app::run_android;
 mod graphics;
 
 use zgui_platform::{AppHandler, Decorations, PlatformError};
