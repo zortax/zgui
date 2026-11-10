@@ -504,6 +504,40 @@ impl App {
         self.run_on(desktop(), view)
     }
 
+    /// Starts the application in an existing browser canvas.
+    ///
+    /// The host page controls the canvas's CSS width and height. Register bundled fonts with
+    /// [`App::with_fonts`] before starting. This entry point uses serial style and layout, awaits
+    /// the graphics device, and returns while the browser keeps driving the application.
+    ///
+    /// # Errors
+    ///
+    /// Returns a startup error when graphics, the canvas, or the event loop is unavailable.
+    /// Errors after startup are reported to the browser console when the loop stops.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn start_web<F, V>(mut self, canvas_id: &str, view: F) -> Result<(), AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        if self.renderer.is_none() {
+            self.renderer = Some(graphics::factory_for_browser(self.group_precision).await?);
+        }
+        self.inner = self.inner.with_style_threads(1).with_layout_threads(1);
+        let runtime = self.into_handler(view)?.into_runtime();
+        let failure = runtime.failure();
+        let started = zgui_platform_winit::spawn(Box::new(runtime), canvas_id, move || {
+            zgui_reactive::shutdown();
+            if let Some(error) = failure.take() {
+                web_sys::console::error_1(&error.to_string().into());
+            }
+        });
+        if started.is_err() {
+            zgui_reactive::shutdown();
+        }
+        started.map_err(AppError::from)
+    }
+
     /// The same, over a platform backend of the caller's choosing.
     ///
     /// The one thing an application cannot decide for itself is where it is running: a test drives

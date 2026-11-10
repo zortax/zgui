@@ -444,6 +444,10 @@ pub struct Runtime {
     commands: WindowCommands,
     /// The desktop's clipboards, as the application asks for them.
     clipboards: crate::clipboard::Clipboards,
+    /// Browser clipboard reads waiting to paste into the nodes that requested them.
+    #[cfg(target_arch = "wasm32")]
+    pending_pastes:
+        rustc_hash::FxHashMap<zgui_platform::ClipboardSerial, (SurfaceId, Vec<zgui_dom::NodeKey>)>,
     /// The windows as the application holds them.
     windows_api: crate::windows::Windows,
     /// The scope above every window's, where what is shared between them lives.
@@ -666,6 +670,8 @@ impl Runtime {
             primary,
             commands,
             clipboards,
+            #[cfg(target_arch = "wasm32")]
+            pending_pastes: rustc_hash::FxHashMap::default(),
             windows_api,
             scope,
             exit: app.exit,
@@ -1021,6 +1027,7 @@ impl Runtime {
     /// already on the loop, on a desktop that ordinarily has the answer at once. A clipboard that
     /// is empty, refuses, or holds something other than text answers no paste at all — the field
     /// stays as it was, which is what pasting nothing does everywhere else on the desktop.
+    #[cfg(not(target_arch = "wasm32"))]
     fn answer_pastes(cx: &dyn PlatformCx, window: &mut Window) {
         let wanted = window.take_paste_requests();
         if wanted.is_empty() {
@@ -1044,6 +1051,23 @@ impl Runtime {
         }
         // The answer is applied by a frame, and nothing else knows one is owed.
         window.request_frame();
+    }
+
+    /// Starts a browser paste read without blocking the event loop.
+    #[cfg(target_arch = "wasm32")]
+    fn answer_pastes(
+        cx: &dyn PlatformCx,
+        window: &mut Window,
+    ) -> Option<(zgui_platform::ClipboardSerial, Vec<zgui_dom::NodeKey>)> {
+        let wanted = window.take_paste_requests();
+        if wanted.is_empty() {
+            return None;
+        }
+        let serial = cx.clipboard().read(
+            zgui_platform::ClipboardKind::Standard,
+            zgui_platform::ClipboardFormat::Text,
+        );
+        Some((serial, wanted))
     }
 
     /// Closes the window drawing into `surface`, for good.
@@ -1071,6 +1095,9 @@ impl Runtime {
     /// The half a suspend uses: the surface is gone, the window built on it cannot outlive it, and
     /// the specification that says the application wants it is untouched.
     fn forget_surface(&mut self, surface: SurfaceId) {
+        #[cfg(target_arch = "wasm32")]
+        self.pending_pastes
+            .retain(|_, (waiting, _)| *waiting != surface);
         if let Some(position) = self
             .windows
             .iter()
@@ -1198,7 +1225,12 @@ impl AppHandler for Runtime {
                         // The copies first and the pastes second, so a copy and a paste from the
                         // same batch paste what was just copied rather than what preceded it.
                         Self::put_on_clipboard(cx, window);
+                        #[cfg(not(target_arch = "wasm32"))]
                         Self::answer_pastes(cx, window);
+                        #[cfg(target_arch = "wasm32")]
+                        if let Some((serial, nodes)) = Self::answer_pastes(cx, window) {
+                            self.pending_pastes.insert(serial, (surface, nodes));
+                        }
                         self.sweep_other_windows(surface);
                     }
                 }
@@ -1317,6 +1349,21 @@ impl AppHandler for Runtime {
             // A read the application started has been answered. The callback runs before the
             // drain below, so a read that asks for another read is carried out on this same turn.
             WakeReason::ClipboardRead { serial, result } => {
+                #[cfg(target_arch = "wasm32")]
+                if let Some((surface, nodes)) = self.pending_pastes.remove(&serial) {
+                    if let Ok(data) = result
+                        && let Some(text) = data.as_text()
+                        && let Some(window) = self.window_mut(surface)
+                    {
+                        for node in nodes {
+                            window.paste(node, text.to_owned());
+                        }
+                        window.request_frame();
+                    }
+                } else {
+                    self.clipboards.resolve(serial, result);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
                 self.clipboards.resolve(serial, result);
             }
             WakeReason::App(event) => self.app_event(cx, event),

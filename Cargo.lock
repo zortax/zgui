@@ -5634,6 +5634,7 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
+ "web-sys",
  "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
@@ -6154,6 +6155,9 @@ dependencies = [
  "raw-window-handle",
  "smithay-clipboard",
  "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "web-time",
  "winit",
  "zgui-elements",

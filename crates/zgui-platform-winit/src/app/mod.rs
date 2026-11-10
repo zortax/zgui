@@ -72,6 +72,7 @@ pub fn event_loop() -> Result<EventLoop<UserEvent>, PlatformError> {
 ///
 /// Returns [`PlatformError::Backend`] when there is no windowing system to connect to, or when the
 /// loop stopped for a reason of the platform's own.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
     let event_loop = event_loop()?;
     let mut app = WinitApp::new(&event_loop, handler);
@@ -79,6 +80,50 @@ pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
     event_loop
         .run_app(&mut app)
         .map_err(|error| PlatformError::Backend(error.to_string()))
+}
+
+/// Refuses a blocking desktop start on the browser target.
+///
+/// Use [`spawn`] so the browser owns the application until its event loop exits.
+///
+/// # Errors
+///
+/// Always returns an error that names the browser entry point.
+#[cfg(target_arch = "wasm32")]
+pub fn run(_handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
+    Err(PlatformError::Backend(
+        "use App::start_web to start an application in the browser".to_owned(),
+    ))
+}
+
+/// Starts an application in an existing canvas and returns to the browser.
+///
+/// `on_exit` runs after the application receives its shutdown callback.
+///
+/// # Errors
+///
+/// Returns an error if `canvas_id` does not name a canvas or the loop cannot start.
+#[cfg(target_arch = "wasm32")]
+pub fn spawn(
+    handler: Box<dyn AppHandler>,
+    canvas_id: &str,
+    on_exit: impl FnOnce() + 'static,
+) -> Result<(), PlatformError> {
+    use wasm_bindgen::JsCast;
+    use winit::platform::web::EventLoopExtWebSys;
+
+    let canvas = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(canvas_id))
+        .and_then(|element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        .ok_or_else(|| PlatformError::Backend(format!("no canvas named {canvas_id:?}")))?;
+    let event_loop = event_loop()?;
+    let mut app = WinitApp::new(&event_loop, handler);
+    *app.shared.canvas.borrow_mut() = Some(canvas);
+    app.on_exit = Some(Box::new(on_exit));
+    zgui_profile::latency::start_epoch();
+    event_loop.spawn_app(app);
+    Ok(())
 }
 
 /// An application, as the event loop sees it.
@@ -99,6 +144,9 @@ pub struct WinitApp<A: AppHandler> {
     attached: bool,
     /// How many turns of the loop have started.
     turns: u64,
+    /// Browser teardown runs when the loop ends, after startup has returned.
+    #[cfg(target_arch = "wasm32")]
+    on_exit: Option<Box<dyn FnOnce()>>,
 }
 
 impl<A: AppHandler> WinitApp<A> {
@@ -111,6 +159,8 @@ impl<A: AppHandler> WinitApp<A> {
             windows: HashMap::new(),
             attached: false,
             turns: 0,
+            #[cfg(target_arch = "wasm32")]
+            on_exit: None,
         }
     }
 
@@ -374,6 +424,10 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         let cx = WinitCx::new(&self.shared, event_loop);
         self.handler.shutting_down(&cx);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(on_exit) = self.on_exit.take() {
+            on_exit();
+        }
     }
 }
 

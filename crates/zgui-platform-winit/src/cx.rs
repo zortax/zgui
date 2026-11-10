@@ -6,10 +6,11 @@ use std::sync::Arc;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::WindowId;
 use zgui_platform::{
-    AppMenu, Clipboard, ClipboardFormat, Clock, ColorScheme, DecorationSource, FullscreenMode,
-    MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError, ScrollSettings, Surface,
-    SurfaceAttributes, SurfaceId, Waker,
+    AppMenu, Clipboard, Clock, ColorScheme, FullscreenMode, MonitorInfo, PlatformCapabilities,
+    PlatformCx, PlatformError, ScrollSettings, Surface, SurfaceAttributes, SurfaceId, Waker,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use zgui_platform::{ClipboardFormat, DecorationSource};
 
 use crate::clipboard::DesktopClipboard;
 use crate::clock::SystemClock;
@@ -23,6 +24,9 @@ use crate::waker::{ProxyWaker, UserEvent};
 /// This is the loop's own state, held beside it rather than inside the context, because the
 /// context is borrowed for the length of one callback and none of this may be.
 pub(crate) struct Shared {
+    /// The canvas the primary browser surface takes when it opens.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) canvas: RefCell<Option<web_sys::HtmlCanvasElement>>,
     /// The clock every phase reads.
     clock: Arc<SystemClock>,
     /// The desktop's clipboards.
@@ -50,6 +54,8 @@ impl Shared {
     /// The state a loop starts with, with the way in already open.
     pub(crate) fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         Self {
+            #[cfg(target_arch = "wasm32")]
+            canvas: RefCell::new(None),
             clock: Arc::new(SystemClock::new()),
             clipboard: DesktopClipboard::new(),
             waker: Arc::new(ProxyWaker::new(proxy.clone())),
@@ -201,9 +207,29 @@ impl PlatformCx for WinitCx<'_> {
         &self,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<dyn Surface>, PlatformError> {
+        let attributes_for_window = window_attributes(attributes, self.shared.scheme.get());
+        #[cfg(target_arch = "wasm32")]
+        let attributes_for_window = {
+            use winit::platform::web::WindowAttributesExtWebSys;
+            let canvas = self.shared.canvas.borrow_mut().take();
+            let mut attributes_for_window = attributes_for_window;
+            if canvas.is_some() {
+                // The host page owns the existing canvas's CSS size. Winit observes its size and
+                // device-pixel ratio and reports both through ordinary window events.
+                attributes_for_window.inner_size = None;
+                attributes_for_window.min_inner_size = None;
+                attributes_for_window.max_inner_size = None;
+            }
+            attributes_for_window
+                .with_canvas(canvas)
+                .with_append(true)
+                .with_focusable(true)
+                .with_prevent_default(true)
+                .with_visible(true)
+        };
         let window = self
             .event_loop
-            .create_window(window_attributes(attributes, self.shared.scheme.get()))
+            .create_window(attributes_for_window)
             .map_err(|error| PlatformError::SurfaceCreation(error.to_string()))?;
         let window = Arc::new(window);
 
@@ -346,6 +372,7 @@ fn title_buttons(attributes: &SurfaceAttributes) -> Option<zgui_platform::TitleB
 /// Built up from nothing rather than down from everything, so that a capability nobody filled in
 /// reads as absent. An interface that degrades because it was told something is missing is a
 /// working interface; one that offers a command the desktop can never run is not.
+#[cfg(not(target_arch = "wasm32"))]
 fn capabilities(event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCapabilities {
     use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 
@@ -376,5 +403,13 @@ fn capabilities(event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCap
     capabilities.system_color_scheme = knows_scheme;
     capabilities.app_menu = cfg!(target_os = "macos");
     capabilities.reopen = cfg!(target_os = "macos");
+    capabilities
+}
+
+/// The browser backend starts with canvas input and plain-text clipboard support.
+#[cfg(target_arch = "wasm32")]
+fn capabilities(_event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCapabilities {
+    let mut capabilities = PlatformCapabilities::none();
+    capabilities.system_color_scheme = knows_scheme;
     capabilities
 }

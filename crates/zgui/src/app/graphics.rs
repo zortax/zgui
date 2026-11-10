@@ -80,6 +80,18 @@ pub(crate) fn factory(precision: Option<GroupPrecision>) -> RendererFactory {
     Box::new(move |surface, target| renderer(&graphics, surface, target, precision))
 }
 
+/// Opens browser graphics before a synchronous surface factory can be called.
+#[cfg(target_arch = "wasm32")]
+pub(crate) async fn factory_for_browser(
+    precision: Option<GroupPrecision>,
+) -> Result<RendererFactory, AppError> {
+    let graphics = SharedGraphics::for_browser().await?;
+    let precision = precision.unwrap_or_default();
+    Ok(Box::new(move |surface, target| {
+        renderer(&graphics, surface, target, precision)
+    }))
+}
+
 /// Opens a renderer for `surface` on the shared graphics.
 fn renderer(
     graphics: &SharedGraphics,

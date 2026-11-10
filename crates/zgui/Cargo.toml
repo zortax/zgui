@@ -102,3 +102,6 @@ zgui-platform-wayland = { path = "../zgui-platform-wayland", version = "0.1.0" }
 # The `tokio` feature adds public API.
 [package.metadata.docs.rs]
 features = ["tokio"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys.workspace = true

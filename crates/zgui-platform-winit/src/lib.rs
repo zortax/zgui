@@ -69,6 +69,10 @@
 #![allow(unsafe_code)]
 
 pub mod app;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod clipboard;
+#[cfg(target_arch = "wasm32")]
+#[path = "clipboard/web.rs"]
 pub mod clipboard;
 pub mod clock;
 pub mod cx;
@@ -81,6 +85,8 @@ pub mod surface;
 pub mod theme;
 pub mod waker;
 
+#[cfg(target_arch = "wasm32")]
+pub use crate::app::spawn;
 pub use crate::app::{WinitApp, event_loop, run};
 pub use crate::clipboard::DesktopClipboard;
 pub use crate::clock::SystemClock;
