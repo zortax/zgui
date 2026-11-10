@@ -154,7 +154,7 @@ impl<S: ParagraphShaper, R: MeasureContent> Paragraphs<S, R> {
         if misses.is_empty() {
             return;
         }
-        let distributed = misses.len() >= PRE_SHAPE_MIN_MISSES;
+        let distributed = pool.width() > 1 && misses.len() >= PRE_SHAPE_MIN_MISSES;
         if distributed {
             let wanted = pool.width().min(misses.len());
             while self.forks.len() < wanted {

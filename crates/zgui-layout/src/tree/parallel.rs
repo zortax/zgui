@@ -33,9 +33,16 @@ impl LayoutPool {
     ///
     /// No worker starts here. The first call to [`LayoutPool::scope`] or [`LayoutPool::map`]
     /// starts all of them.
+    ///
+    /// On `wasm32`, the width is one. The layout and shaping engines keep their work serial.
     pub fn new(threads: usize) -> Arc<Self> {
+        let width = if cfg!(target_arch = "wasm32") {
+            1
+        } else {
+            threads.clamp(1, MAX_LAYOUT_THREADS)
+        };
         Arc::new(Self {
-            width: threads.clamp(1, MAX_LAYOUT_THREADS),
+            width,
             pool: OnceLock::new(),
         })
     }
@@ -88,6 +95,9 @@ impl LayoutPool {
         items: Vec<T>,
         work: impl Fn(T) -> R + Send + Sync,
     ) -> Vec<R> {
+        if self.width == 1 && cfg!(target_arch = "wasm32") {
+            return items.into_iter().map(work).collect();
+        }
         use rayon::prelude::*;
         self.workers()
             .install(|| items.into_par_iter().map(work).collect())

@@ -99,18 +99,20 @@ impl<'a, C: MeasureContent> LayoutTree<'a, C> {
     /// Runs one batch, serially where it stands or across the pool.
     pub(crate) fn run_batch(&mut self, requests: &[ChildRequest], results: &mut Vec<LayoutOutput>) {
         results.clear();
-        let distributable = requests.len() >= MIN_COLD_NODES && self.batch_pool().is_some() && {
-            // A set, because this runs over the children of one box and a flexible container with
-            // ten thousand of them is a shape this probe should not be quadratic in.
-            let mut cold: rustc_hash::FxHashSet<u64> = rustc_hash::FxHashSet::default();
-            for request in requests {
-                let node = u64::from(request.node);
-                if !cold.contains(&node) && !cephal::compute::is_cached(self, request) {
-                    cold.insert(node);
+        let distributable = requests.len() >= MIN_COLD_NODES
+            && self.batch_pool().is_some_and(|pool| pool.width() > 1)
+            && {
+                // A set, because this runs over the children of one box and a flexible container with
+                // ten thousand of them is a shape this probe should not be quadratic in.
+                let mut cold: rustc_hash::FxHashSet<u64> = rustc_hash::FxHashSet::default();
+                for request in requests {
+                    let node = u64::from(request.node);
+                    if !cold.contains(&node) && !cephal::compute::is_cached(self, request) {
+                        cold.insert(node);
+                    }
                 }
-            }
-            cold.len() >= MIN_COLD_NODES
-        };
+                cold.len() >= MIN_COLD_NODES
+            };
         if !distributable {
             results.extend(
                 requests

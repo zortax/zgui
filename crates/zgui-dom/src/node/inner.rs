@@ -339,14 +339,15 @@ impl NodeInner {
 // dirty-child record, twelve for the two engine words and the post-order counter, four of padding,
 // and twenty-four for the engine's style data.
 //
-// A 32-bit target holds the same fields in sixteen bytes fewer, because the words that are
-// pointers there are half as wide. Both numbers are pinned, so a field added without noticing
-// stops the build on either.
+// Native 32-bit targets hold the same fields in sixteen bytes fewer. The wasm32 ABI lays the
+// record out in 160 bytes. Pin each supported layout so a new field remains visible in a build.
 #[cfg(not(debug_assertions))]
 const _: () = assert!(
     size_of::<NodeInner>()
         == if cfg!(target_pointer_width = "64") {
             168
+        } else if cfg!(target_arch = "wasm32") {
+            160
         } else {
             152
         }

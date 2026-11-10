@@ -198,6 +198,9 @@ const MAX_THREADS: usize = 8;
 /// Asked once: the answer reads the process's scheduling limits, which costs more than
 /// recognising a small path does.
 fn threads() -> usize {
+    if cfg!(target_arch = "wasm32") {
+        return 1;
+    }
     static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *THREADS.get_or_init(|| {
         std::thread::available_parallelism()

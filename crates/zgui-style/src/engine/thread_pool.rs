@@ -6,7 +6,9 @@
 //! panics. So the width is clamped where the pool is built, once, and every throughput figure this
 //! framework quotes is a figure at six workers.
 
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::ThreadPool;
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::ThreadPoolBuilder;
 use style::thread_state::{self, ThreadState};
 use zgui_css::MAX_STYLE_THREADS;
 
@@ -14,12 +16,13 @@ use zgui_css::MAX_STYLE_THREADS;
 ///
 /// Selector matching and the cascade recurse with the document, and the default worker stack is
 /// smaller than a thread's.
+#[cfg(not(target_arch = "wasm32"))]
 const STACK_BYTES: usize = 512 * 1024;
 
 /// A pool of workers a restyle may be handed.
 pub struct StylePool {
     /// The pool itself.
-    pool: ThreadPool,
+    pool: Option<ThreadPool>,
     /// How many workers it has.
     width: usize,
 }
@@ -43,19 +46,32 @@ impl StylePool {
     /// # Panics
     ///
     /// Panics if the pool cannot be built.
+    ///
+    /// On `wasm32`, styling remains serial and no workers are created.
     pub fn exactly(threads: usize) -> Self {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(threads)
-            .thread_name(|index| format!("zgui-style-{index}"))
-            // The engine asserts that the thread touching per-element data is a style worker, so a
-            // pool built without this trips its own assertion before it does any work.
-            .start_handler(|_| thread_state::initialize_layout_worker_thread())
-            .stack_size(STACK_BYTES)
-            .build()
-            .expect("a worker pool of the requested width");
-        Self {
-            width: pool.current_num_threads(),
-            pool,
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = threads;
+            Self {
+                width: 1,
+                pool: None,
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let pool = ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .thread_name(|index| format!("zgui-style-{index}"))
+                // The engine asserts that the thread touching per-element data is a style worker, so a
+                // pool built without this trips its own assertion before it does any work.
+                .start_handler(|_| thread_state::initialize_layout_worker_thread())
+                .stack_size(STACK_BYTES)
+                .build()
+                .expect("a worker pool of the requested width");
+            Self {
+                width: pool.current_num_threads(),
+                pool: Some(pool),
+            }
         }
     }
 
@@ -65,8 +81,8 @@ impl StylePool {
     }
 
     /// The pool itself.
-    pub(crate) fn pool(&self) -> &ThreadPool {
-        &self.pool
+    pub(crate) fn pool(&self) -> Option<&ThreadPool> {
+        self.pool.as_ref()
     }
 }
 

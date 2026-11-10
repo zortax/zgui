@@ -520,6 +520,7 @@ pub(crate) struct StylePoolCell {
 
 impl StylePoolCell {
     /// A cell for a pool of `width` workers, with no worker started.
+    #[cfg(not(target_arch = "wasm32"))]
     fn new(width: usize) -> Self {
         Self {
             width,
@@ -538,6 +539,7 @@ impl StylePoolCell {
 ///
 /// `ZGUI_STYLE_THREADS` overrides the builder so a run can be forced serial, or to an exact
 /// width, without a rebuild.
+#[cfg(not(target_arch = "wasm32"))]
 fn style_pool_for(requested: Option<usize>) -> Option<Rc<StylePoolCell>> {
     let width = style_pool_width(
         std::env::var("ZGUI_STYLE_THREADS").ok().as_deref(),
@@ -547,11 +549,18 @@ fn style_pool_for(requested: Option<usize>) -> Option<Rc<StylePoolCell>> {
     (width > 1).then(|| Rc::new(StylePoolCell::new(width)))
 }
 
+/// Browser styling stays on the main thread, including when a builder requests more workers.
+#[cfg(target_arch = "wasm32")]
+fn style_pool_for(_requested: Option<usize>) -> Option<Rc<StylePoolCell>> {
+    None
+}
+
 /// How wide the cascade pool should be, with the environment over the builder over the machine.
 ///
 /// `0` and `1` mean no pool: a one-worker pool costs scheduling and buys nothing over the frame
 /// thread. An unparseable environment value is ignored rather than honoured as zero, so a typo
 /// degrades to the configured behaviour instead of silently forcing a serial cascade.
+#[cfg(any(not(target_arch = "wasm32"), test))]
 fn style_pool_width(env: Option<&str>, requested: Option<usize>, machine: usize) -> usize {
     env.and_then(|value| value.trim().parse::<usize>().ok())
         .or(requested)
@@ -580,6 +589,7 @@ fn first_extent(
 }
 
 /// The layout pool an application runs with, resolved the same way as the cascade's.
+#[cfg(not(target_arch = "wasm32"))]
 fn layout_pool_for(
     requested: Option<usize>,
 ) -> Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>> {
@@ -589,6 +599,14 @@ fn layout_pool_for(
         std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
     );
     (width > 1).then(|| zgui_layout::tree::parallel::LayoutPool::new(width))
+}
+
+/// Browser layout uses the same algorithms serially and never starts a Rayon pool.
+#[cfg(target_arch = "wasm32")]
+fn layout_pool_for(
+    _requested: Option<usize>,
+) -> Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>> {
+    None
 }
 
 impl Runtime {

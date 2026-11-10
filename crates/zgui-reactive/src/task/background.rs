@@ -24,6 +24,10 @@
 //! anything asks for it, so a program that never spawns background work never starts a thread;
 //! `zgui-tokio` replaces it with a tokio runtime, which is what makes tokio's own timers, sockets
 //! and the libraries built on them usable.
+//!
+//! On `wasm32`, the default schedules browser microtasks on the UI thread. It creates no worker
+//! threads. Synchronous work blocks that thread while it runs, so large CPU jobs need an
+//! application-provided worker executor.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -34,17 +38,20 @@ use std::task::{Context, Poll};
 use futures::channel::oneshot;
 use thiserror::Error;
 
-/// Where work that is not allowed to hold the frame actually runs.
+/// Where asynchronous and synchronous background work is scheduled.
 ///
 /// One implementation is installed per process. The default is a small thread pool; `zgui-tokio`
 /// provides one over a tokio runtime, and an application with its own executor can provide a third.
 ///
-/// Both methods are called from the UI thread and must not block it.
+/// Both methods are called from the UI thread and schedule work before returning. The browser
+/// default runs that work in a later main-thread microtask; it provides no CPU parallelism.
 pub trait BackgroundSpawner: Send + Sync + 'static {
-    /// Runs `future` to completion somewhere that is not the UI thread.
+    /// Runs `future` to completion on the executor. Native defaults use worker threads;
+    /// the browser default uses main-thread microtasks.
     fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + Send>>);
 
-    /// Runs `work` somewhere that is not the UI thread, where blocking is allowed.
+    /// Schedules synchronous `work`. Native defaults use worker threads. The browser default
+    /// runs it on the main thread, where its duration delays input and painting.
     ///
     /// Separate from [`spawn`](BackgroundSpawner::spawn) because a runtime that multiplexes many
     /// futures onto few threads needs to know that this one will not yield.
@@ -106,7 +113,16 @@ fn spawner() -> Arc<dyn BackgroundSpawner> {
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     // Another thread may have installed one between the two locks.
-    let spawner = installed.get_or_insert_with(|| Arc::new(super::threads::Threads::start()));
+    let spawner = installed.get_or_insert_with(|| {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Arc::new(super::browser::Browser)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Arc::new(super::threads::Threads::start())
+        }
+    });
     USED.store(true, Ordering::Release);
     Arc::clone(spawner)
 }
@@ -120,6 +136,9 @@ fn spawner() -> Arc<dyn BackgroundSpawner> {
 /// `future` must be `Send`, and so must its output, because both cross a thread boundary. A future
 /// that touches the document, a node handle or a view is neither, and belongs in
 /// [`spawn_local`](crate::spawn_local) on this side of the `await`.
+///
+/// On `wasm32`, the default executor runs this future on the browser main thread. Use a custom
+/// worker executor for CPU parallelism.
 ///
 /// # Panics
 ///
@@ -143,6 +162,9 @@ pub fn background<T: Send + 'static>(
 /// The variant for synchronous work that has no `async` form: decoding an image, parsing a large
 /// file, a database call through a blocking driver. [`background`] is for work that is already a
 /// future.
+///
+/// On `wasm32`, the default defers `work` to a browser microtask, where it runs synchronously on
+/// the main thread. A long-running closure delays rendering and input.
 ///
 /// # Panics
 ///

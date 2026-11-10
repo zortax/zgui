@@ -111,7 +111,7 @@ impl StyleEngine {
             snapshots: snapshots.len(),
             ..Restyle::default()
         };
-        let pool = pool.map(StylePool::pool);
+        let pool = pool.and_then(StylePool::pool);
         let mut sink = DamageSink::new();
 
         thread_pool::as_layout_thread(|| {

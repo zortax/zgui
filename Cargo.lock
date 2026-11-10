@@ -6191,6 +6191,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "trybuild",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

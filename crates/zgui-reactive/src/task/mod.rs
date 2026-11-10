@@ -50,9 +50,12 @@
 //! ```
 
 mod background;
+#[cfg(target_arch = "wasm32")]
+mod browser;
 mod cancel;
 mod set;
 mod stream;
+#[cfg(not(target_arch = "wasm32"))]
 mod threads;
 mod ui;
 
