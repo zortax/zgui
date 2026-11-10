@@ -176,6 +176,15 @@ events! {
     Drop => "drop", "drop", Drop,
         bubbles: true, cancelable: true,
         "Content from outside the window was dropped on the element.";
+    DragEnter => "drag_enter", "dragenter", Drop,
+        bubbles: false, cancelable: false,
+        "Content dragged from outside the window moved onto the element or one of its descendants.";
+    DragOver => "drag_over", "dragover", Drop,
+        bubbles: true, cancelable: true,
+        "Content dragged from outside the window moved over the element.";
+    DragLeave => "drag_leave", "dragleave", Drop,
+        bubbles: false, cancelable: false,
+        "Content dragged from outside the window moved off the element and all of its descendants.";
 
     Input => "input", "input", Value,
         bubbles: true, cancelable: false,
@@ -267,6 +276,8 @@ mod tests {
             EventKind::Scroll,
             EventKind::PointerEnter,
             EventKind::PointerLeave,
+            EventKind::DragEnter,
+            EventKind::DragLeave,
         ] {
             assert!(!kind.bubbles(), "{kind:?} must not bubble");
         }

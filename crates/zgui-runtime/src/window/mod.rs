@@ -13,6 +13,7 @@ pub mod caret;
 mod clicks;
 mod crossing;
 mod cursor;
+mod drag;
 pub mod frame;
 pub mod input;
 pub mod observe;
@@ -308,6 +309,8 @@ pub struct Window {
     /// caused it is still being routed, with the document's change batch open, and a dispatch may
     /// not begin inside another.
     pending_crossings: Vec<crate::window::crossing::Crossing>,
+    /// What an external drag is over, and what it carries.
+    drag: crate::window::drag::DragOver,
     /// What the raw touch stream means: taps, long presses, drags and flicks.
     gestures: zgui_input::Gestures,
     /// The containers a drag in progress is scrolling, innermost first.
@@ -740,6 +743,7 @@ impl Window {
             router: Router::new(),
             pending_focus: Vec::new(),
             pending_crossings: Vec::new(),
+            drag: crate::window::drag::DragOver::default(),
             gestures: zgui_input::Gestures::new(),
             scroll_settings: zgui_platform::ScrollSettings::default(),
             scroll_frozen: false,

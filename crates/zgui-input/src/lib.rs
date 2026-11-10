@@ -100,4 +100,4 @@ pub use crate::hit::{Hit, HitChain};
 pub use crate::ime::{Ime, Preedit};
 pub use crate::normalize::{HeldModifiers, InputEvent, ScrollUnits};
 pub use crate::router::{Routed, Router, World};
-pub use crate::state::within::Moved;
+pub use crate::state::within::{Moved, move_bit};
