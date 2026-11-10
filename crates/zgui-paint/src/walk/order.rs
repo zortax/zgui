@@ -58,6 +58,8 @@ impl ReplacedSource for NoReplaced {
 pub struct Emission<'a> {
     /// The lowered style the fragment's box carries.
     pub style: &'a PaintStyle,
+    /// The active renderer's optional features.
+    pub capabilities: zgui_render::RenderCapabilities,
     /// Where the box's decorations go.
     pub box_placement: BoxPlacement,
     /// Where its text goes.
@@ -340,6 +342,7 @@ fn content_tracked(
             let text_subpixel = emission.text_placement.keeps_subpixel(scene);
             let mut painter = crate::content::custom::ScenePainter {
                 scene,
+                capabilities: emission.capabilities,
                 content_box: fragment.content_box(),
                 clip: emission.box_placement.clip,
                 transform: emission.box_placement.transform,

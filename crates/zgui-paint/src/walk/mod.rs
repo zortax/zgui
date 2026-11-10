@@ -693,6 +693,7 @@ impl Pass<'_, '_> {
             crate::lower::border::radii_of(&node.style, fragment.border_box, self.input.scale);
         Emission {
             style,
+            capabilities: self.input.capabilities,
             shaders: self.input.shaders,
             pointer: self.input.pointer,
             box_placement: BoxPlacement {

@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
+use zgui_render::RenderCapabilities;
 use zgui_scene::kurbo;
 use zgui_scene::prim::quad::BorderStyle;
 use zgui_scene::{
@@ -60,6 +61,8 @@ impl CustomPaintSource for NoCustom {
 pub struct ScenePainter<'a> {
     /// The display list being built.
     pub(crate) scene: &'a mut Scene,
+    /// The active renderer's optional features.
+    pub(crate) capabilities: RenderCapabilities,
     /// The element's content box, whose corner is the painter's origin.
     pub(crate) content_box: Rect<DevicePx, Device>,
     /// The fragment's clip chain.
@@ -89,6 +92,11 @@ pub struct ScenePainter<'a> {
 }
 
 impl ScenePainter<'_> {
+    /// The active renderer's optional features, for selecting supported primitives.
+    pub fn capabilities(&self) -> RenderCapabilities {
+        self.capabilities
+    }
+
     /// The element's content box size, in device pixels.
     pub fn size(&self) -> Size<DevicePx, Device> {
         self.content_box.size
@@ -364,6 +372,7 @@ mod tests {
     use core::cell::RefCell;
     use zgui_color::Color;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+    use zgui_render::RenderCapabilities;
     use zgui_scene::{ClipId, Scene, SpatialId};
     use zgui_text::{FaceId, RasterStyle, ShapedGlyph, ShapedRun};
 
@@ -435,6 +444,10 @@ mod tests {
     ) -> ScenePainter<'a> {
         ScenePainter {
             scene,
+            capabilities: RenderCapabilities {
+                subpixel_text: subpixel,
+                ..RenderCapabilities::MINIMAL
+            },
             content_box: Rect::new(
                 Point::new(DevicePx(10.5), DevicePx(20.25)),
                 Size::new(DevicePx(100.0), DevicePx(40.0)),
