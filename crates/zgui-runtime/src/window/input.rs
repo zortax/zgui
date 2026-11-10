@@ -165,6 +165,14 @@ impl Window {
             } => self.focus_modality = zgui_input::FocusSource::Pointer,
             _ => {}
         }
+        // A drag's motion is tracked first, so a drop's listeners already see the drag-over
+        // state cleared. Only the drop itself goes on to the dispatch below.
+        if let SurfaceEvent::Drag(drag) = event {
+            self.drag_moved(drag, timestamp);
+            if !drag.is_drop() {
+                return;
+            }
+        }
         let Some((kind, payload)) = event.to_dispatch() else {
             return;
         };
