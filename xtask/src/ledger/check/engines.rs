@@ -179,6 +179,9 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-render-wgpu",
             "zgui-render-vector-vello",
             "zgui-render-vector-coverage",
+            // The browser backend strokes its Béziers itself, because Canvas 2D fills paths
+            // and zgui's stroke styles are richer than its line API.
+            "zgui-render-canvas",
             "zgui-ui-icons",
             "zgui-ui-primitives",
             // A canvas scene's shapes are Béziers in the same vocabulary a document resolves to,
@@ -194,6 +197,9 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-render-wgpu",
             "zgui-render-vector-vello",
             "zgui-render-vector-coverage",
+            // The browser backend reads the same fill rules and gradient stops the display list
+            // carries, and maps them onto Canvas 2D winding rules and gradients.
+            "zgui-render-canvas",
             "zgui-svg",
             "zgui-ui-icons",
             "zgui-ui-primitives",

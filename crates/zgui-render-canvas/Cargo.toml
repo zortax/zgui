@@ -1,0 +1,28 @@
+[package]
+name = "zgui-render-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser Canvas 2D renderer for zgui scenes"
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+include.workspace = true
+
+# L2 — backends. Every dependency is inherited: `foo.workspace = true`.
+[dependencies]
+kurbo.workspace = true
+peniko.workspace = true
+wasm-bindgen.workspace = true
+web-sys.workspace = true
+zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+
+[lints]
+workspace = true

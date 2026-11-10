@@ -6208,6 +6208,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-render-canvas"
+version = "0.1.0"
+dependencies = [
+ "kurbo",
+ "peniko",
+ "wasm-bindgen",
+ "web-sys",
+ "zgui-atlas",
+ "zgui-bits",
+ "zgui-color",
+ "zgui-geom",
+ "zgui-render",
+ "zgui-scene",
+]
+
+[[package]]
 name = "zgui-render-vector-coverage"
 version = "0.1.0"
 dependencies = [
