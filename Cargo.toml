@@ -122,6 +122,9 @@ calloop-wayland-source = "0.4.1"
 # The compositor's own extensions, for the layer shell and — under test — for the virtual input
 # device that gives a headless session something to move.
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+# App-side instrumentation for the fakeland headless compositor. The Wayland backend names it
+# behind its `fakeland-marks` feature only. It lives in a checkout beside this one.
+fakeland-marks = { path = "../fakeland/crates/fakeland-marks" }
 # rustix is named here too, for the monotonic clock the compositor stamps its presentation feedback
 # in. One workspace entry serves both backends; it is below, with the kernel's interfaces.
 

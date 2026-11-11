@@ -84,6 +84,10 @@ tokio = ["dep:zgui-tokio"]
 # and runs that target in release.
 wall-clock = []
 
+# Marks each committed frame on Wayland for the fakeland compositor, when it advertises its marks
+# global. Off by default. See the `fakeland-marks` feature of `zgui-platform-wayland`.
+fakeland-marks = ["zgui-platform-wayland/fakeland-marks"]
+
 # The budgets for the path from an input event to a finished frame. Compiled only when the gate
 # asks for it, and run by the gate in release.
 [[test]]

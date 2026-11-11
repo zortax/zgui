@@ -120,6 +120,8 @@ impl WaylandState {
 
     /// The compositor says a change is complete.
     fn ime_done(&mut self, serial: u32) {
+        #[cfg(feature = "fakeland-marks")]
+        self.input_marked(self.ime.surface, crate::marks::Family::Text);
         let step = std::mem::take(&mut self.ime.pending);
         let Some(id) = self.ime.surface else {
             return;

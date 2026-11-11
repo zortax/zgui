@@ -59,6 +59,8 @@ impl WaylandState {
         let Some(surface) = self.live.surface(id) else {
             return;
         };
+        #[cfg(feature = "fakeland-marks")]
+        self.marks.configured();
         let pending = surface.shared().pending_configure.take();
         let Some(pending) = pending else {
             // A surface acknowledging a description it never received would be acknowledging
