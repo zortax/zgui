@@ -25,6 +25,8 @@ struct Boundary {
     from: &'static str,
     /// The marks that end the phase. The first one after `from` wins.
     to: &'static [&'static str],
+    /// The phase ends at the present when no end mark follows.
+    open: bool,
 }
 
 /// The phases, in pipeline order.
@@ -34,54 +36,64 @@ const BOUNDARIES: &[Boundary] = &[
         name: "events",
         from: "f.drain",
         to: &["f.timers"],
+        open: false,
     },
     // Timers, scrolling, animations, the reactive flush and the commands.
     Boundary {
         name: "update",
         from: "f.timers",
         to: &["f.restyle"],
+        open: false,
     },
     // Selector matching and the cascade.
     Boundary {
         name: "style",
         from: "f.restyle",
         to: &["f.boxes"],
+        open: false,
     },
     // The box tree, layout, fragments, observers and the hit test.
     Boundary {
         name: "layout",
         from: "f.boxes",
         to: &["f.paint"],
+        open: false,
     },
     // Damage expansion, the emit walk and the upload of the paint content.
     Boundary {
         name: "paint",
         from: "f.paint",
         to: &["draw.in"],
+        open: false,
     },
     // The renderer records the frame's command buffers.
     Boundary {
         name: "record",
         from: "draw.in",
         to: &["sub.held", "acq.in"],
+        open: false,
     },
     // A composed frame waits for the frame callback that lets it present.
     Boundary {
         name: "held",
         from: "sub.held",
         to: &["acq.in"],
+        open: false,
     },
     // The swap chain hands out the surface texture.
     Boundary {
         name: "acquire",
         from: "acq.in",
         to: &["acq.out"],
+        open: false,
     },
-    // The copy to the surface texture and the queue submission.
+    // The copy to the surface texture and the queue submission. The present of a held frame
+    // submits without a mark, so that phase ends at the present.
     Boundary {
         name: "submit",
         from: "acq.out",
         to: &["sub.out"],
+        open: true,
     },
 ];
 
@@ -94,7 +106,8 @@ const FRAME: &str = "frame";
 /// Reads the phases of the frame whose redraw began at `began` and that presents at `now`.
 ///
 /// `marks` is in recording order. Marks before `began` or after `now` belong to other frames. The
-/// result holds a `frame` span from the frame begin to `now`, then each phase that has both marks.
+/// result holds a `frame` span from the frame begin to `now`, then each phase whose marks are
+/// present.
 pub(crate) fn extract(
     marks: &[(&'static str, Instant)],
     began: Instant,
@@ -117,13 +130,15 @@ pub(crate) fn extract(
         let Some(from) = find(&window, start, |stage| stage == boundary.from) else {
             continue;
         };
-        let Some(to) = find(&window, from + 1, |stage| boundary.to.contains(&stage)) else {
-            continue;
+        let end = match find(&window, from + 1, |stage| boundary.to.contains(&stage)) {
+            Some(to) => window[to].1,
+            None if boundary.open => now,
+            None => continue,
         };
         phases.push(Phase {
             name: boundary.name,
             begin: window[from].1,
-            end: window[to].1,
+            end,
         });
     }
     phases
@@ -221,6 +236,27 @@ mod tests {
         assert_eq!(span(&phases, "record", base), (3, 5));
         assert_eq!(span(&phases, "held", base), (5, 20));
         assert_eq!(span(&phases, "acquire", base), (20, 21));
+        assert_eq!(span(&phases, "submit", base), (21, 22));
+    }
+
+    #[test]
+    fn a_held_present_submits_until_the_present() {
+        let base = Instant::now();
+        let list = marks(
+            base,
+            &[
+                ("f.begin", 1),
+                ("draw.in", 2),
+                ("sub.out", 3),
+                ("sub.held", 4),
+                ("acq.in", 20),
+                ("acq.out", 21),
+            ],
+        );
+        let phases = extract(&list, base, base + Duration::from_millis(23));
+        assert_eq!(span(&phases, "record", base), (2, 4));
+        assert_eq!(span(&phases, "held", base), (4, 20));
+        assert_eq!(span(&phases, "submit", base), (21, 23));
     }
 
     #[test]
