@@ -36,6 +36,8 @@ wayland-client.workspace = true
 wayland-protocols.workspace = true
 # The settings portal, which is where this desktop keeps its light-or-dark preference.
 zbus.workspace = true
+# Frame, input and phase marks for the fakeland compositor, behind the `fakeland-marks` feature.
+fakeland-marks = { workspace = true, optional = true }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
@@ -106,6 +108,10 @@ required-features = ["wall-clock"]
 [features]
 # Compiles the wall-clock target. Off by default; the gate switches it on and runs it in release.
 wall-clock = []
+# Marks each committed frame for the fakeland compositor when it advertises its marks global: the
+# frame id, the input events the frame handled, the frame's phases and the first frame. Off by
+# default. With it on and no global advertised, each frame and each input event costs one check.
+fakeland-marks = ["dep:fakeland-marks"]
 
 [lints]
 workspace = true

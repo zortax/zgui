@@ -113,6 +113,9 @@ pub struct WaylandState {
     pub(crate) live: Live,
     /// What happened during a dispatch and has not been delivered yet.
     pub(crate) out: Vec<(SurfaceId, SurfaceEvent)>,
+    /// The frame and input marks for the fakeland compositor.
+    #[cfg(feature = "fakeland-marks")]
+    pub(crate) marks: crate::marks::AppMarks,
 }
 
 impl WaylandState {
@@ -148,6 +151,8 @@ impl WaylandState {
         let activation = ActivationState::bind(globals, &qh).ok();
         let data = DataDeviceManagerState::bind(globals, &qh).ok();
         let primary = PrimarySelectionManagerState::bind(globals, &qh).ok();
+        #[cfg(feature = "fakeland-marks")]
+        let marks = crate::marks::AppMarks::bind(&conn, globals);
 
         let offered = Offered {
             layer_shell: layers.is_some(),
@@ -187,6 +192,8 @@ impl WaylandState {
             monotonic: Monotonic::anchor(),
             live: Live::new(capabilities::of(offered), Arc::clone(&waker)),
             out: Vec::new(),
+            #[cfg(feature = "fakeland-marks")]
+            marks,
             qh: qh.clone(),
         };
         state.clipboard.selections().attach(

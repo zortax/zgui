@@ -107,6 +107,23 @@ fn keep(capacity: usize) {
     KEEPING.store(true, Ordering::Relaxed);
 }
 
+/// The instant that every kept mark's [`Recorded::at_ns`] counts from.
+///
+/// It is `None` until a ring is asked for. The first call that asks fixes it, and it never moves.
+///
+/// ```
+/// zgui_profile::latency::retain_marks(16);
+/// let epoch = zgui_profile::latency::epoch().expect("a ring was asked for");
+/// zgui_profile::latency::mark("f.begin");
+/// let kept = zgui_profile::latency::last(1);
+/// let at = epoch + std::time::Duration::from_nanos(kept[0].at_ns as u64);
+/// assert!(at <= std::time::Instant::now());
+/// # zgui_profile::latency::retain(0);
+/// ```
+pub fn epoch() -> Option<Instant> {
+    RING.get().map(|ring| ring.base)
+}
+
 /// Whether marks are being kept in memory.
 pub fn retaining() -> bool {
     KEEPING.load(Ordering::Relaxed)

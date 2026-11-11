@@ -168,6 +168,9 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
     // this surface cannot answer for its frames, and a run of unanswered ones is the only thing
     // that says so on a desktop whose shell reports neither suspension nor a leave.
     surface.shared().feedback_asked();
+    // Last, so the phases end as close to the commit of the present as this side can see.
+    #[cfg(feature = "fakeland-marks")]
+    surface.marks().present(std::time::Instant::now());
 }
 
 /// Begins a compositor-driven move of the surface.

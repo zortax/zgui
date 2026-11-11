@@ -37,6 +37,7 @@
 //! | `waker` | how another thread reaches a parked loop |
 //! | `theme` | the desktop's light or dark preference |
 //! | `capabilities` | what this desktop turned out to be able to do |
+//! | `marks` | frame and input marks for the fakeland compositor, behind `fakeland-marks` |
 //!
 //! [`zgui-platform-winit`]: https://docs.rs/zgui-platform-winit
 
@@ -115,6 +116,17 @@ pub mod frame;
     target_os = "openbsd"
 ))]
 pub mod input;
+#[cfg(all(
+    feature = "fakeland-marks",
+    any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )
+))]
+mod marks;
 #[cfg(any(
     target_os = "linux",
     target_os = "dragonfly",

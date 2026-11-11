@@ -226,6 +226,9 @@ impl<A: AppHandler> WaylandApp<A> {
                 continue;
             }
             let began = self.state.live.clock.now();
+            // The frame this redraw builds contains every input event processed before it.
+            #[cfg(feature = "fakeland-marks")]
+            surface.marks().redraw(began);
             {
                 let cx = WaylandCx::new(&self.state);
                 self.handler

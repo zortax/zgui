@@ -185,7 +185,7 @@ dependencies = [
  "ndk-context",
  "ndk-sys",
  "num_enum",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -222,7 +222,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1384d3fe1eecb464229fcf6eebb72306591c56bf27b373561489458a7c73027d"
 dependencies = [
  "futures",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -330,7 +330,7 @@ dependencies = [
  "futures-lite",
  "parking",
  "polling",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "slab",
  "windows-sys 0.61.2",
 ]
@@ -361,7 +361,7 @@ dependencies = [
  "cfg-if",
  "event-listener",
  "futures-lite",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -387,7 +387,7 @@ dependencies = [
  "cfg-if",
  "futures-core",
  "futures-io",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "signal-hook-registry",
  "slab",
  "windows-sys 0.61.2",
@@ -642,7 +642,7 @@ checksum = "4dbf9978365bac10f54d1d4b04f7ce4427e51f71d61f2fe15e3fed5166474df7"
 dependencies = [
  "bitflags 2.13.1",
  "polling",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "slab",
  "tracing",
 ]
@@ -666,7 +666,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "138efcf0940a02ebf0cc8d1eff41a1682a46b431630f4c52450d6265876021fa"
 dependencies = [
  "calloop 0.14.4",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-client",
 ]
@@ -1136,6 +1136,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1237,6 +1243,37 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fakeland-marks"
+version = "0.1.0"
+dependencies = [
+ "fakeland-protocol",
+ "fakeland-types",
+ "thiserror 2.0.21",
+ "wayland-client",
+]
+
+[[package]]
+name = "fakeland-protocol"
+version = "0.1.0"
+dependencies = [
+ "fakeland-types",
+ "thiserror 2.0.21",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-scanner",
+]
+
+[[package]]
+name = "fakeland-types"
+version = "0.1.0"
+dependencies = [
+ "rustix 1.1.6",
+ "schemars",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1501,7 +1538,7 @@ version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1bd49230192a3797a9a4d6abe9b3eed6f7fa4c8a8a4947977c6f80025f92cbd8"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-link",
 ]
 
@@ -1586,7 +1623,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "log",
  "presser",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "windows",
 ]
 
@@ -1943,7 +1980,7 @@ dependencies = [
  "jni-sys 0.4.1",
  "log",
  "simd_cesu8",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -2249,7 +2286,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "once_cell",
  "png",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "windows-sys 0.61.2",
 ]
 
@@ -2276,7 +2313,7 @@ dependencies = [
  "rustc-hash 1.1.0",
  "serde",
  "spirv",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "unicode-ident",
 ]
 
@@ -3016,7 +3053,7 @@ dependencies = [
  "concurrent-queue",
  "hermit-abi",
  "pin-project-lite",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -3097,7 +3134,7 @@ dependencies = [
  "reactive_graph",
  "reactive_stores",
  "stylo",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tracing",
  "vello",
  "wgpu",
@@ -3317,7 +3354,7 @@ dependencies = [
  "rustc_version",
  "send_wrapper",
  "slotmap",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "web-sys",
 ]
 
@@ -3400,6 +3437,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ref-cast"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e440fb4e4b4147295338efb76001ab9e4efc0e5839df2c47fc5ac2381d365c3"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3479,9 +3536,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.1",
  "errno",
@@ -3515,6 +3572,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "schemars"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
+dependencies = [
+ "dyn-clone",
+ "ref-cast",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3602,6 +3684,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3806,8 +3899,8 @@ dependencies = [
  "log",
  "memmap2",
  "pkg-config",
- "rustix 1.1.4",
- "thiserror 2.0.19",
+ "rustix 1.1.6",
+ "thiserror 2.0.21",
  "wayland-backend",
  "wayland-client",
  "wayland-csd-frame",
@@ -4138,7 +4231,7 @@ dependencies = [
  "fastrand",
  "getrandom 0.4.3",
  "once_cell",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "windows-sys 0.61.2",
 ]
 
@@ -4168,11 +4261,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.19"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.19",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -4188,9 +4281,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.19"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4541,7 +4634,7 @@ dependencies = [
  "png",
  "skrifa 0.42.1",
  "static_assertions",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "vello_encoding",
  "vello_shaders",
  "wgpu",
@@ -4569,7 +4662,7 @@ dependencies = [
  "bytemuck",
  "log",
  "naga",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "vello_encoding",
 ]
 
@@ -4676,13 +4769,13 @@ dependencies = [
 
 [[package]]
 name = "wayland-backend"
-version = "0.3.16"
+version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "016ccf01d1c58b6f8999612813e17c9b2390f7d70671428869913310f83f54b8"
+checksum = "38a91b4eaddff87b1cd1074985e3713da4af2c49742d1b356b2c01670a67a078"
 dependencies = [
  "cc",
  "downcast-rs",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "scoped-tls",
  "smallvec",
  "wayland-sys",
@@ -4695,7 +4788,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3c36a0f861ad76d0901f2800b46321410d9f73f2ea88aac0650d86c32688073"
 dependencies = [
  "bitflags 2.13.1",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "wayland-backend",
  "wayland-scanner",
 ]
@@ -4717,7 +4810,7 @@ version = "0.31.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a52d18780be9b1314328a3de5f930b73d2200112e3849ca6cb11822793fb34d"
 dependencies = [
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "wayland-client",
  "xcursor",
 ]
@@ -4901,7 +4994,7 @@ dependencies = [
  "raw-window-handle",
  "rustc-hash 1.1.0",
  "smallvec",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
  "wgpu-core-deps-windows-linux-android",
@@ -4980,7 +5073,7 @@ dependencies = [
  "raw-window-metal",
  "renderdoc-sys",
  "smallvec",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "wasm-bindgen",
  "wayland-sys",
  "web-sys",
@@ -5342,7 +5435,7 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "x11rb-protocol",
 ]
 
@@ -5407,7 +5500,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "toml",
 ]
 
@@ -5473,7 +5566,7 @@ dependencies = [
  "hex",
  "libc",
  "ordered-stream",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "serde",
  "serde_repr",
  "tracing",
@@ -5706,7 +5799,7 @@ dependencies = [
  "etagere",
  "proptest",
  "rustc-hash 2.1.3",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "zgui-bits",
  "zgui-geom",
 ]
@@ -5894,7 +5987,7 @@ name = "zgui-drm"
 version = "0.1.0"
 dependencies = [
  "bindgen",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -5935,7 +6028,7 @@ name = "zgui-evdev"
 version = "0.1.0"
 dependencies = [
  "bindgen",
- "rustix 1.1.4",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -5963,7 +6056,7 @@ name = "zgui-image"
 version = "0.1.0"
 dependencies = [
  "image",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "zgui-geom",
 ]
 
@@ -6035,7 +6128,7 @@ version = "0.1.0"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tracing",
  "zeno",
  "zgui-arena",
@@ -6065,7 +6158,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "raw-window-handle",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "zgui-geom",
  "zgui-vocab",
 ]
@@ -6077,7 +6170,7 @@ dependencies = [
  "accesskit",
  "ash",
  "raw-window-handle",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "tracing",
  "zgui-bits",
  "zgui-color",
@@ -6113,8 +6206,9 @@ dependencies = [
  "accesskit_unix",
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
+ "fakeland-marks",
  "raw-window-handle",
- "rustix 1.1.4",
+ "rustix 1.1.6",
  "smithay-client-toolkit 0.20.0",
  "tracing",
  "tracing-subscriber",
@@ -6183,7 +6277,7 @@ dependencies = [
  "reactive_stores",
  "send_wrapper",
  "smallvec",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tracing",
  "trybuild",
 ]
@@ -6192,7 +6286,7 @@ dependencies = [
 name = "zgui-render"
 version = "0.1.0"
 dependencies = [
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "zgui-atlas",
  "zgui-bits",
  "zgui-color",
@@ -6277,7 +6371,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
  "rustc-hash 2.1.3",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tracing",
  "zgui-a11y",
  "zgui-anim",
@@ -6420,7 +6514,7 @@ dependencies = [
  "kurbo",
  "peniko",
  "smallvec",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "usvg",
  "zgui-color",
 ]
@@ -6510,7 +6604,7 @@ dependencies = [
 name = "zgui-tokio"
 version = "0.1.0"
 dependencies = [
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "zgui-reactive",

@@ -192,6 +192,8 @@ impl KeyboardHandler for WaylandState {
     ) {
         self.pressed(serial);
         self.key(KeyState::Pressed, &event, false);
+        #[cfg(feature = "fakeland-marks")]
+        self.input_marked(self.seat.keyboard_focus, crate::marks::Family::Key);
     }
 
     fn repeat_key(
@@ -218,6 +220,8 @@ impl KeyboardHandler for WaylandState {
     ) {
         self.observed(serial);
         self.key(KeyState::Released, &event, false);
+        #[cfg(feature = "fakeland-marks")]
+        self.input_marked(self.seat.keyboard_focus, crate::marks::Family::Key);
     }
 
     fn update_modifiers(
@@ -266,6 +270,14 @@ impl PointerHandler for WaylandState {
         for event in events {
             self.pointer_event(event);
         }
+        // The surface the pointer ends the frame on is the one whose next frame shows the effect.
+        #[cfg(feature = "fakeland-marks")]
+        {
+            let surface = events
+                .last()
+                .and_then(|event| self.identify(&event.surface));
+            self.input_marked(surface, crate::marks::Family::Pointer);
+        }
     }
 }
 
@@ -288,6 +300,8 @@ impl TouchHandler for WaylandState {
         let at = crate::input::pointer::position(position.0, position.1);
         self.contacts.down(id, target, at);
         self.contact(target, id, at, PointerAction::Pressed);
+        #[cfg(feature = "fakeland-marks")]
+        self.input_marked(Some(target), crate::marks::Family::Touch);
     }
 
     fn up(
@@ -305,6 +319,8 @@ impl TouchHandler for WaylandState {
             return;
         };
         self.contact(target, id, at, PointerAction::Released);
+        #[cfg(feature = "fakeland-marks")]
+        self.input_marked(Some(target), crate::marks::Family::Touch);
     }
 
     fn motion(
@@ -321,6 +337,8 @@ impl TouchHandler for WaylandState {
             return;
         };
         self.contact(target, id, at, PointerAction::Moved);
+        #[cfg(feature = "fakeland-marks")]
+        self.input_marked(Some(target), crate::marks::Family::Touch);
     }
 
     fn shape(

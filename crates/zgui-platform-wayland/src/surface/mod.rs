@@ -117,6 +117,9 @@ pub struct WaylandSurface {
     /// whichever surface asks. So the loop lends each surface a way to reach it, guarded by
     /// whether that surface is the one the pointer is actually on.
     seat: Arc<SeatLink>,
+    /// The frame and input marks for the fakeland compositor.
+    #[cfg(feature = "fakeland-marks")]
+    marks: crate::marks::FrameMarks,
 }
 
 impl WaylandSurface {
@@ -149,6 +152,8 @@ impl WaylandSurface {
             shell: links.shell,
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
+            #[cfg(feature = "fakeland-marks")]
+            marks: crate::marks::FrameMarks::new(),
         })
     }
 
@@ -204,6 +209,12 @@ impl WaylandSurface {
     /// The channel an assistive technology talks to.
     pub(crate) const fn a11y(&self) -> &A11y {
         &self.a11y
+    }
+
+    /// The frame and input marks for the fakeland compositor.
+    #[cfg(feature = "fakeland-marks")]
+    pub(crate) const fn marks(&self) -> &crate::marks::FrameMarks {
+        &self.marks
     }
 
     /// Where this pop-up was asked to be placed, when it is one.
@@ -346,6 +357,9 @@ impl Drop for WaylandSurface {
         // Before the objects, because the channel is on another thread and a question answered
         // against a surface that has gone is answered against nothing.
         self.a11y.close();
+        // Before the surface, because a marks object only describes a live one.
+        #[cfg(feature = "fakeland-marks")]
+        self.marks.release();
         self.fractional.release();
     }
 }
