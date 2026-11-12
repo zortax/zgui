@@ -70,14 +70,21 @@ const BOUNDARIES: &[Boundary] = &[
     Boundary {
         name: "record",
         from: "draw.in",
-        to: &["sub.held", "acq.in"],
+        to: &["sub.held", "cfg.in", "acq.in"],
         open: false,
     },
     // A composed frame waits for the frame callback that lets it present.
     Boundary {
         name: "held",
         from: "sub.held",
-        to: &["acq.in"],
+        to: &["cfg.in", "acq.in"],
+        open: false,
+    },
+    // The swap chain is rebuilt for a new extent.
+    Boundary {
+        name: "configure",
+        from: "cfg.in",
+        to: &["cfg.out"],
         open: false,
     },
     // The swap chain hands out the surface texture.
@@ -237,6 +244,47 @@ mod tests {
         assert_eq!(span(&phases, "held", base), (5, 20));
         assert_eq!(span(&phases, "acquire", base), (20, 21));
         assert_eq!(span(&phases, "submit", base), (21, 22));
+    }
+
+    #[test]
+    fn a_swap_chain_rebuild_is_its_own_phase() {
+        let base = Instant::now();
+        let list = marks(
+            base,
+            &[
+                ("f.begin", 1),
+                ("draw.in", 2),
+                ("cfg.in", 4),
+                ("cfg.out", 9),
+                ("acq.in", 10),
+                ("acq.out", 11),
+                ("sub.out", 12),
+            ],
+        );
+        let phases = extract(&list, base, base + Duration::from_millis(13));
+        assert_eq!(span(&phases, "record", base), (2, 4));
+        assert_eq!(span(&phases, "configure", base), (4, 9));
+        assert_eq!(span(&phases, "acquire", base), (10, 11));
+    }
+
+    #[test]
+    fn a_held_frame_rebuilds_its_swap_chain_after_the_hold() {
+        let base = Instant::now();
+        let list = marks(
+            base,
+            &[
+                ("f.begin", 1),
+                ("draw.in", 2),
+                ("sub.held", 3),
+                ("cfg.in", 15),
+                ("cfg.out", 19),
+                ("acq.in", 20),
+                ("acq.out", 21),
+            ],
+        );
+        let phases = extract(&list, base, base + Duration::from_millis(23));
+        assert_eq!(span(&phases, "held", base), (3, 15));
+        assert_eq!(span(&phases, "configure", base), (15, 19));
     }
 
     #[test]
