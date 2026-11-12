@@ -669,7 +669,7 @@ impl WgpuRenderer {
             notify(self.target);
         }
         if let Some(texture) = presented.surface_texture {
-            texture.present();
+            self.gpu.queue().present(texture);
         }
         zgui_profile::latency::mark("pres.out");
         // After the present, so the frame reaches the screen first. It does nothing unless this

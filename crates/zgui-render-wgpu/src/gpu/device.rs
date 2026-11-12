@@ -92,9 +92,9 @@ impl Gpu {
     /// unchanged in every respect.
     ///
     /// Which names an exported image needs is the console backend's constant to state, and nothing
-    /// here counts them. wgpu-hal 29.0.4 enables `VK_KHR_external_memory_fd` and
-    /// `VK_EXT_external_memory_dma_buf` on any physical device that has them, so such a list adds
-    /// fewer names than it holds.
+    /// here counts them. wgpu-hal 30.0.2 enables `VK_KHR_external_memory_fd`,
+    /// `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier` on any physical
+    /// device that has them, so such a list adds fewer names than it holds.
     ///
     /// The list is all-or-nothing. Where the adapter is Vulkan and its physical device has every
     /// name, the device is created through wgpu's hal with all of them enabled. Everything else —

@@ -7,5 +7,5 @@ stylo = "=0.19.0"
 reactive_graph = { version = "=0.2.14", features = ["effects"] }
 reactive_stores = "=0.4.3"
 any_spawner = "=0.3.0"
-wgpu = "29.0.4"
+wgpu = "30.0.2"
 cephal = { version = "0.1.0", default-features = false, features = ["block", "flex", "grid"] }

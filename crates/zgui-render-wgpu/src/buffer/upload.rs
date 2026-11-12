@@ -164,8 +164,14 @@ impl UploadBelt {
 
         let chunk = self.active.last().expect("the selected chunk was retained");
         let slice = chunk.buffer.slice(offset..offset + size);
+        match slice.get_mapped_range_mut() {
+            Ok(mut mapped) => mapped.copy_from_slice(bytes),
+            Err(error) => {
+                self.abandon(gpu, &error);
+                return 0;
+            }
+        }
         encoder.copy_buffer_to_buffer(&chunk.buffer, offset, target, target_offset, size);
-        slice.get_mapped_range_mut().copy_from_slice(bytes);
 
         zgui_profile::counter::add(zgui_profile::Counter::BytesUploaded, size);
         size
@@ -220,7 +226,13 @@ impl UploadBelt {
         let chunk = self.active.last().expect("the selected chunk was retained");
         let slice = chunk.buffer.slice(offset..offset + size);
         {
-            let mut mapped = slice.get_mapped_range_mut();
+            let mut mapped = match slice.get_mapped_range_mut() {
+                Ok(mapped) => mapped,
+                Err(error) => {
+                    self.abandon(gpu, &error);
+                    return 0;
+                }
+            };
             for y in 0..height as usize {
                 let source = y * row as usize;
                 let target = y * padded as usize;
@@ -374,5 +386,20 @@ impl UploadBelt {
             last_used: self.frame,
             one_shot,
         }
+    }
+
+    /// Drops the chunk just selected after wgpu refused to map it, and reports the device lost.
+    ///
+    /// A chunk is mapped by construction and its ranges are aligned and disjoint, so a refusal
+    /// means wgpu no longer holds the buffer, which follows a lost device. The frame's uploads are
+    /// moot then, and the report is what makes the next frame rebuild. The chunk is not left for
+    /// `finish`, because unmapping a buffer wgpu no longer holds is itself a validation error.
+    fn abandon(&mut self, gpu: &Gpu, error: &wgpu::MapRangeError) {
+        let chunk = self.active.pop().expect("the selected chunk was retained");
+        if chunk.one_shot {
+            self.oneshot_bytes = self.oneshot_bytes.saturating_sub(chunk.size);
+        }
+        gpu.loss()
+            .report(wgpu::DeviceLostReason::Unknown, &error.to_string());
     }
 }
