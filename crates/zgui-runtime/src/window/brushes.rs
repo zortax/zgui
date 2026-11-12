@@ -183,6 +183,8 @@ pub(crate) struct Applied {
     /// colour — a font change, a theme flip that left the text colour alone — which then rewrites
     /// no brush and owes the display list no copy of the table.
     pub(crate) recoloured: bool,
+    /// For each update, in order, whether its colour differs from what its glyphs were drawn in.
+    pub(crate) moved: Vec<bool>,
 }
 
 pub(crate) fn apply(
@@ -299,6 +301,7 @@ pub(crate) fn apply(
     Applied {
         split,
         recoloured: recoloured_any,
+        moved: recoloured,
     }
 }
 

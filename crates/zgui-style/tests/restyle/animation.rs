@@ -148,3 +148,91 @@ fn the_descent_flag_does_not_survive_the_traversal_that_read_it() {
          later frame descends into a subtree with nothing in it to do"
     );
 }
+
+#[test]
+fn first_frame_render_cost_does_not_consume_new_transition() {
+    let (mut h, button, _) = document();
+    h.set_classes(button, &["btn", "hot"]);
+    h.frame();
+    // Shader preparation took 300ms before first transition frame became visible.
+    h.engine
+        .animations()
+        .presented(zgui_style::AnimationTime(0.300));
+    animation_frame(&mut h, 0.316);
+    let early = colour(&h, button);
+    assert!(
+        early > 0 && early < 1000,
+        "first visible step must be near start: {early}"
+    );
+    // Presenting a later frame must not shift motion that already started.
+    h.engine
+        .animations()
+        .presented(zgui_style::AnimationTime(0.500));
+    animation_frame(&mut h, 0.700);
+    assert!(colour(&h, button) > 7500);
+}
+
+#[test]
+fn keyframe_entrance_starts_when_first_frame_is_presented() {
+    let mut h = Harness::new();
+    h.add_author("root { display:block } .enter { animation: fade 200ms linear both } @keyframes fade { from { opacity:0 } to { opacity:1 } }");
+    let node = h.append(h.root, "box");
+    h.set_classes(node, &["enter"]);
+    h.frame();
+    h.engine
+        .animations()
+        .presented(zgui_style::AnimationTime(0.300));
+    let first = h
+        .engine
+        .animation_tick(&h.document, zgui_style::AnimationTime(0.316));
+    let opacity = first
+        .elements
+        .iter()
+        .find(|e| e.index == node)
+        .unwrap()
+        .values
+        .opacity
+        .unwrap();
+    assert!(
+        opacity > 0.0 && opacity < 0.15,
+        "early visible opacity: {opacity}"
+    );
+    let last = h
+        .engine
+        .animation_tick(&h.document, zgui_style::AnimationTime(0.500));
+    assert_eq!(
+        last.elements
+            .iter()
+            .find(|e| e.index == node)
+            .unwrap()
+            .values
+            .opacity,
+        Some(1.0)
+    );
+}
+
+#[test]
+fn a_transition_started_by_replacing_a_token_sheet_keeps_the_document_animating() {
+    // A theme switch: the sheet holding the colour tokens is replaced, and an element whose colour
+    // reads a token transitions to the new value.
+    let mut h = Harness::new();
+    h.add_author(":root { --fg: rgb(0, 0, 0) }");
+    h.add_author(
+        "root { display: block }
+         .btn { display: block; color: var(--fg); transition: color 400ms linear }",
+    );
+    let root = h.root;
+    let button = h.append(root, "box");
+    h.set_classes(button, &["btn"]);
+    h.frame();
+    h.retire_all();
+
+    h.replace(0, ":root { --fg: rgb(200, 200, 200) }");
+    h.engine.force_author_rules_dirty();
+    h.frame();
+    let marked = h.owed(root) | h.owed_below(root);
+    assert!(
+        marked.contains(zgui_dom::Dirty::ANIMATING),
+        "the transition started and nothing asks for the frames that run it: {marked:?}"
+    );
+}

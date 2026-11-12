@@ -99,6 +99,12 @@ impl Shared {
             .map(Arc::clone)
     }
 
+    /// Every surface that still exists.
+    #[cfg(target_os = "android")]
+    pub(crate) fn all(&self) -> Vec<Arc<WinitSurface>> {
+        self.surfaces.borrow().clone()
+    }
+
     /// The surface drawn into the window `id` names, while it still exists.
     pub(crate) fn by_window(&self, id: WindowId) -> Option<Arc<WinitSurface>> {
         self.surfaces
@@ -230,7 +236,7 @@ impl PlatformCx for WinitCx<'_> {
         // makes it visible — there is no second chance at it later.
         a11y::attach(
             id,
-            accesskit_winit::Adapter::with_event_loop_proxy(
+            a11y::Adapter::with_event_loop_proxy(
                 self.event_loop,
                 &window,
                 self.shared.proxy.clone(),

@@ -36,10 +36,10 @@ style! { pub SliderStyle =>
     // the track in either scheme — a dark-surface thumb on a dark track is a hole, not a handle.
     ":scope > .zui-slider__thumb {
         position: absolute;
-        left: var(--zui-slider-fraction, 0%);
+        inset-inline-start: var(--zui-slider-fraction, 0%);
         width: 16px;
         height: 16px;
-        margin-left: -8px;
+        margin-inline-start: -8px;
         flex: none;
         border: 1px solid var(--zui-color-primary);
         border-radius: var(--zui-radius-full);

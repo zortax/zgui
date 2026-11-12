@@ -4,10 +4,14 @@
 mod controls;
 #[path = "android/app.rs"]
 mod lab;
+#[path = "android/phone.rs"]
+mod phone;
 #[path = "android/tasks.rs"]
 mod tasks;
 #[path = "android/visuals.rs"]
 mod visuals;
+#[path = "android/widgets.rs"]
+mod widgets;
 
 use std::sync::Arc;
 use zgui::prelude::*;
@@ -30,13 +34,22 @@ fn run(
             Some("Demo"),
         )
         .expect("bundled demo font is valid");
+    // Arabic and Hebrew come from the phone, for the right-to-left samples.
+    for (file, family) in [
+        ("/system/fonts/NotoNaskhArabicUI-Regular.ttf", "Arabic"),
+        ("/system/fonts/NotoSansHebrew-Regular.ttf", "Hebrew"),
+    ] {
+        if let Ok(bytes) = std::fs::read(file) {
+            let _ = fonts.register(Arc::new(bytes), Some(family));
+        }
+    }
     app()
         .with_title("ZGUI Mobile Lab")
         .with_application_id("dev.zgui.counter")
         .with_fonts(fonts)
         .with_stylesheet(include_str!("android/style.css"))
         // Application context survives surface loss and document reconstruction.
-        .with_context(|| provide_local_context(lab::State::new()))
+        .with_context(|| provide_local_context(lab::State::load()))
         .run_on(driver, || view! { lab::Lab() })
         .expect("mobile lab runs");
 }
@@ -46,6 +59,9 @@ fn run(
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub fn android_main(android_app: zgui::app::AndroidApp) {
+    if let Some(dir) = android_app.internal_data_path() {
+        let _ = lab::STORE.set(dir.join("lab-state.txt"));
+    }
     run(move |handler| zgui::app::run_android(android_app, handler));
 }
 

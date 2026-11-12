@@ -489,7 +489,16 @@ impl WgpuRenderer {
         if self.vectors.is_none()
             && let Some(factory) = self.vector_factory
         {
-            let raster = factory(&self.gpu, self.target.size);
+            let started = std::time::Instant::now();
+            let raster: Box<dyn crate::frame::vector::VectorSource> =
+                if let Some(worker) = self.vector_preparation.take() {
+                    worker
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                } else {
+                    factory(&self.gpu, self.target.size)
+                };
+            tracing::info!(elapsed = ?started.elapsed(), "vector backend became ready for drawing");
             counter::bump(Counter::VectorBackendBuilt);
             self.vector_backend = Some(raster.backend());
             self.vectors = Some(raster);

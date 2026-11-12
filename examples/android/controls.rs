@@ -1,5 +1,6 @@
 //! Editing, pointer drag, binding and modal overlays.
-use crate::lab::State;
+use crate::lab::{State, notify};
+use std::time::Duration;
 use zgui::prelude::*;
 use zgui_ui::prelude::*;
 
@@ -7,6 +8,17 @@ use zgui_ui::prelude::*;
 pub(crate) fn Controls() -> impl IntoView {
     let s = State::current();
     let progress = Signal::derive_local(move || Some(s.volume.get()));
+    let toasts = use_toaster();
+    let paused = Signal::derive_local(move || !s.enabled.get());
+    let send = move |delay| {
+        let text = s.message.get_untracked();
+        notify(
+            toasts,
+            &format!("Hello, {}", s.name.get_untracked()),
+            &text,
+            delay,
+        );
+    };
     view! {
         column(class = "stack") {
             column(class = "card hero") {
@@ -21,10 +33,19 @@ pub(crate) fn Controls() -> impl IntoView {
             }
             column(class = "card") {
                 row(class = "setting") {
-                    column() { text {"Notifications"} text(class = "muted") {{move || if s.enabled.get() { "Enabled" } else { "Paused" }}} }
+                    column() { text(class = "section-title") {"Notifications"} text(class = "muted") {{move || if s.enabled.get() { "System notifications through Android" } else { "Paused" }}} }
                     spacer()
                     Switch(checked = s.enabled, a11y:label = "Notifications")
                 }
+                Input(value = s.message, label = "Notification text", placeholder = "Message", class = "touch-input")
+                row(class = "actions") {
+                    Button(disabled = paused, on:click = move |_| send(Duration::ZERO)) {"Notify now"}
+                    Button(disabled = paused, variant = ButtonVariant::Outline, on:click = move |_| send(Duration::from_secs(s.reminder.get_untracked().parse().unwrap_or(5)))) {
+                        {move || format!("In {} s", s.reminder.get())}
+                    }
+                }
+            }
+            column(class = "card") {
                 row(class = "setting") {
                     Checkbox(checked = s.checked, a11y:label = "Enable diagnostics")
                     text {"Enable diagnostics"}

@@ -36,18 +36,25 @@ pub struct Dispatched {
 pub struct HostSink<'a> {
     /// Where the commands go.
     host: &'a RuntimeHost,
+    /// The pointer of the event being dispatched, which a capture applies to.
+    pointer: zgui_vocab::PointerId,
 }
 
 impl<'a> HostSink<'a> {
-    /// A sink that appends to `host`'s command queue.
+    /// A sink that appends to `host`'s command queue. A capture applies to the mouse.
     pub fn new(host: &'a RuntimeHost) -> Self {
-        Self { host }
+        Self::for_pointer(host, zgui_vocab::PointerId::MOUSE)
+    }
+
+    /// A sink for an event from `pointer`, which a capture applies to.
+    pub fn for_pointer(host: &'a RuntimeHost, pointer: zgui_vocab::PointerId) -> Self {
+        Self { host, pointer }
     }
 }
 
 impl EventSink for HostSink<'_> {
     fn capture_pointer(&mut self, node: NodeId) {
-        self.host.issue(Command::CapturePointer(node));
+        self.host.issue(Command::CapturePointer(node, self.pointer));
     }
 
     fn release_pointer(&mut self, node: NodeId) {

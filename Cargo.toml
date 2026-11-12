@@ -82,6 +82,7 @@ ash = "0.38"
 # `winit`, `accesskit_winit`, `arboard`, `smithay-clipboard` and `zbus` are the windowing
 # backend's: `zgui-platform-winit` is the only crate that ships one of them, and `probe`, the
 # canary that compiles the pinned versions together, links winit and the winit adapter beside it.
+jni = "0.22.4"
 winit = "0.30.13"
 # The accessibility tree, which belongs to no one backend: nine crates may name it and eight do,
 # from the vocabulary a node is described in up to each backend of the platform contract.

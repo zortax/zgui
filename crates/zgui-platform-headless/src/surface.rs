@@ -96,6 +96,8 @@ pub struct OffscreenSurface {
     /// was said cannot tell a window that reports the caret from one that reports nothing and
     /// leaves every Japanese keyboard unable to type into it.
     text_input_log: Mutex<Vec<Option<TextInput>>>,
+    /// Explicit user requests to show software keyboard, apart from caret updates.
+    text_input_requests: AtomicU64,
     /// Every cursor the surface was told to show, in order.
     ///
     /// Which cursor is over a window is a state the surface is *told*, exactly as text input is:
@@ -128,6 +130,7 @@ impl OffscreenSurface {
             a11y_updates: AtomicU64::new(0),
             a11y_log: Mutex::new(A11yLog::default()),
             text_input_log: Mutex::new(Vec::new()),
+            text_input_requests: AtomicU64::new(0),
             cursor_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
             title: Mutex::new(String::new()),
@@ -210,7 +213,12 @@ impl OffscreenSurface {
         log.updates.drain(..).collect()
     }
 
-    /// Everything the surface was told about text input, in the order it was told.
+    /// Explicit requests to show software keyboard after a user presses a field.
+    pub fn text_input_requests(&self) -> u64 {
+        self.text_input_requests.load(Ordering::Relaxed)
+    }
+
+    /// Everything reported about caret placement and text-input activation.
     pub fn text_input_log(&self) -> Vec<Option<TextInput>> {
         self.text_input_log
             .lock()
@@ -351,6 +359,10 @@ impl Surface for OffscreenSurface {
             .lock()
             .expect("the log is not poisoned")
             .push(state);
+    }
+
+    fn request_text_input(&self) {
+        self.text_input_requests.fetch_add(1, Ordering::Relaxed);
     }
 
     fn push_a11y_update(&self, build: &mut dyn FnMut() -> TreeUpdate) {

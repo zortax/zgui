@@ -118,6 +118,9 @@ impl Window {
         let Some((offset, affinity)) = self.offset_at(node, self.device_point(pointer)) else {
             return false;
         };
+        if crate::editing::Editors::is_editable(&self.document.borrow(), node) {
+            self.surface.request_text_input();
+        }
         let count = self.text_clicks.note(node, timestamp, pointer.position);
         let unit = match count {
             2 => Unit::Word,

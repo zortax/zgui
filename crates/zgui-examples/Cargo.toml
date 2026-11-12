@@ -124,6 +124,8 @@ crate-type = ["cdylib"]
 [package.metadata.android]
 package = "dev.zgui.counter"
 apk_name = "zgui-counter"
+# Launcher icons, generated from `examples/android/logo.png`.
+resources = "../../examples/android/res"
 strip = "strip"
 build_targets = ["aarch64-linux-android"]
 
@@ -133,6 +135,15 @@ target_sdk_version = 35
 
 [package.metadata.android.application]
 label = "ZGUI Mobile Lab"
+icon = "@mipmap/ic_launcher"
 
+# Handling these changes in place keeps Android from recreating the activity.
 [package.metadata.android.application.activity]
-config_changes = "orientation|screenSize|keyboardHidden"
+config_changes = "orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
+
+# GrapheneOS asks for this before apps read motion sensors; stock Android ignores it.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.OTHER_SENSORS"

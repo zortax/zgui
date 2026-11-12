@@ -103,7 +103,32 @@ impl Window {
         let wants_a_frame = match &event {
             zgui_platform::SurfaceEvent::Resized(size) => self.resized(*size, self.scale),
             zgui_platform::SurfaceEvent::ScaleFactorChanged { scale_factor, size } => {
-                self.resized(*size, *scale_factor as f32)
+                let resized = self.resized(*size, *scale_factor as f32);
+                // Inset properties are CSS pixels, so a new scale restates them.
+                if self.insets != zgui_geom::Edges::default() || self.keyboard.0 > 0.0 {
+                    self.publish_environment();
+                }
+                resized
+            }
+            zgui_platform::SurfaceEvent::InsetsChanged {
+                safe_area,
+                keyboard,
+            } => self.insets_changed(*safe_area, *keyboard),
+            zgui_platform::SurfaceEvent::DirectionChanged { rtl } => {
+                let changed = self.rtl != *rtl;
+                self.rtl = *rtl;
+                if changed {
+                    self.publish_environment();
+                }
+                changed
+            }
+            zgui_platform::SurfaceEvent::TextScaleChanged(scale) => {
+                let changed = self.text_scale != *scale;
+                self.text_scale = *scale;
+                if changed {
+                    self.publish_environment();
+                }
+                changed
             }
             zgui_platform::SurfaceEvent::Occluded(occluded) => {
                 let moved = self.occluded != *occluded;
@@ -440,6 +465,13 @@ impl Window {
         // work and not the hold before it. The servo adds its own hold back on, because it is the
         // only thing that knows how much of the interval it gave away.
         let cost = clock.now().saturating_duration_since(now);
+        if outcome.retires_damage() {
+            self.engine
+                .animations()
+                .presented(zgui_style::AnimationTime(
+                    timestamp.since_origin().as_secs_f64() + cost.as_secs_f64(),
+                ));
+        }
         let interval = self.refresh_interval();
         self.present
             .observed(self.renderer.acquire_block(), cost, interval);
@@ -1057,6 +1089,20 @@ impl Window {
         }
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
         self.brushes_moved |= applied.recoloured;
+        // Glyphs name their slot, not their colour, so a rewritten slot changes no paint record
+        // and the fragment pass damages nothing for it. The element's ink is damaged here instead.
+        // Without this, an inherited colour transition draws its first frame and leaves the text
+        // in that colour until something else repaints it.
+        {
+            let layout = self.layout.borrow();
+            for (update, moved) in updates.iter().zip(&applied.moved) {
+                if *moved {
+                    self.damage.absorb(zgui_layout::fragment::diff::pixels(
+                        zgui_layout::fragment::index::ink_of(&layout, update.node),
+                    ));
+                }
+            }
+        }
         let split = applied.split;
         if split.is_empty() {
             return;

@@ -88,4 +88,7 @@ workspace = true
 arboard.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
+jni.workspace = true
 winit = { workspace = true, features = ["android-native-activity"] }
+# TalkBack. Its Java half ships as embedded dex, like `ZguiHost`.
+accesskit_android = { version = "0.7.5", features = ["embedded-dex"] }

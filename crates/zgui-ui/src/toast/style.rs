@@ -33,6 +33,14 @@ style! { pub ToastStyle =>
     // what it would drop is the half that says which corner this is.
     ":scope[data-corner=\"bottom-right\"] { right: 0; bottom: 0; }"
     ":scope[data-corner=\"bottom-left\"] { left: 0; bottom: 0; }"
+    // System bars and the software keyboard (zero off mobile) move the stack further in.
+    ":scope[data-corner^=\"bottom\"] {
+        margin-bottom: calc(var(--zui-space-base) * 6
+            + max(var(--zgui-safe-area-bottom, 0px), var(--zgui-keyboard-height, 0px)));
+    }"
+    ":scope[data-corner^=\"top\"] {
+        margin-top: calc(var(--zui-space-base) * 6 + var(--zgui-safe-area-top, 0px));
+    }"
     ":scope[data-corner=\"top-right\"] { right: 0; top: 0; }"
     ":scope[data-corner=\"top-left\"] { left: 0; top: 0; }"
     // One slot per toast. Three things move it: how far it is from the corner, how far down the deck

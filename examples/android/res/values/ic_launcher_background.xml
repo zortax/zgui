@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The logo's own navy, so the masked edge blends into it. -->
+    <color name="ic_launcher_background">#011C39</color>
+</resources>

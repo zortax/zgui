@@ -115,3 +115,41 @@ fn a_renderer_draws_no_path_until_it_is_attached_and_draws_one_afterwards() {
         "and it drew the path rather than filling the frame"
     );
 }
+
+#[test]
+fn prepared_vector_backend_runs_on_worker_and_is_consumed_once() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use zgui_render_wgpu::Gpu;
+    use zgui_render_wgpu::frame::vector::VectorSource;
+
+    static BUILDS: AtomicUsize = AtomicUsize::new(0);
+    fn lazy(_: &Arc<Gpu>, _: Size<i32, zgui_geom::Device>) -> Box<dyn VectorSource> {
+        panic!("prepared backend must replace lazy construction");
+    }
+    fn prepare(gpu: &Arc<Gpu>, size: Size<i32, zgui_geom::Device>) -> Box<dyn VectorSource + Send> {
+        assert_eq!(std::thread::current().name(), Some("zgui-vector-init"));
+        BUILDS.fetch_add(1, Ordering::SeqCst);
+        Box::new(zgui_render_vector_coverage::CoverageRaster::new(
+            gpu,
+            size.width as u32,
+            size.height as u32,
+        ))
+    }
+
+    let _guard = support::device_lock();
+    let Some(mut renderer) = bare() else { return };
+    BUILDS.store(0, Ordering::SeqCst);
+    renderer.set_vector_factory_for(lazy, VectorBackend::Coverage);
+    renderer.prepare_vector_raster(prepare);
+    renderer.prepare_vector_raster(prepare);
+    let scene = square();
+    renderer.draw(&scene, &DamageSet::full());
+    assert_eq!(BUILDS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        renderer.read_presented().unwrap().rgba(32, 32),
+        [255, 255, 255, 255]
+    );
+    renderer.draw(&scene, &DamageSet::full());
+    assert_eq!(BUILDS.load(Ordering::SeqCst), 1);
+}

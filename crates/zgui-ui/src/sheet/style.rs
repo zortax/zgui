@@ -9,6 +9,7 @@ style! { pub SheetStyle =>
     // The panel carries no padding of its own. Everything in a sheet is a full-width band — a
     // header, a scrolling body, a footer at the bottom — and a panel that inset its contents could
     // not draw one that reaches the edges. The bands pad themselves instead.
+    // Each side below adds only the system insets (zero off mobile) on the edges it touches.
     ":scope {
         position: fixed;
         display: flex;
@@ -44,6 +45,7 @@ style! { pub SheetStyle =>
         width: 75%;
         max-width: 384px;
         border-left: 1px solid var(--zui-color-border);
+        padding: var(--zgui-safe-area-top, 0px) var(--zgui-safe-area-right, 0px) var(--zgui-safe-area-bottom, 0px) 0;
         --zui-surface-enter-x: 100%;
         --zui-surface-exit-x: 100%;
     }"
@@ -52,6 +54,7 @@ style! { pub SheetStyle =>
         width: 75%;
         max-width: 384px;
         border-right: 1px solid var(--zui-color-border);
+        padding: var(--zgui-safe-area-top, 0px) 0 var(--zgui-safe-area-bottom, 0px) var(--zgui-safe-area-left, 0px);
         --zui-surface-enter-x: -100%;
         --zui-surface-exit-x: -100%;
     }"
@@ -59,6 +62,7 @@ style! { pub SheetStyle =>
         left: 0; right: 0; top: 0;
         height: auto;
         border-bottom: 1px solid var(--zui-color-border);
+        padding: var(--zgui-safe-area-top, 0px) var(--zgui-safe-area-right, 0px) 0 var(--zgui-safe-area-left, 0px);
         --zui-surface-enter-y: -100%;
         --zui-surface-exit-y: -100%;
     }"
@@ -66,6 +70,7 @@ style! { pub SheetStyle =>
         left: 0; right: 0; bottom: 0;
         height: auto;
         border-top: 1px solid var(--zui-color-border);
+        padding: 0 var(--zgui-safe-area-right, 0px) var(--zgui-safe-area-bottom, 0px) var(--zgui-safe-area-left, 0px);
         --zui-surface-enter-y: 100%;
         --zui-surface-exit-y: 100%;
     }"

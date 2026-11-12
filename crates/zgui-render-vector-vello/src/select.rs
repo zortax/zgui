@@ -28,7 +28,12 @@ pub enum Choice {
 /// because the two can disagree and only one of them is the thing that will be asked to run a
 /// shader.
 pub fn chosen(gpu: &Gpu) -> Choice {
-    if gpu.capabilities().vector_compute {
+    // Vello 0.9 unchecked prefix-sum shaders underflow workgroup indices on Mali-G715, and Vello's
+    // CPU preprocessing copies about 100 MB of fixed-size buffers on each frame. Coverage avoids both.
+    // https://github.com/linebender/vello/issues/1816
+    let mali_g715 =
+        cfg!(target_os = "android") && gpu.adapter().get_info().name.contains("Mali-G715");
+    if gpu.capabilities().vector_compute && !mali_g715 {
         Choice::Compute
     } else {
         Choice::Coverage
@@ -43,6 +48,11 @@ pub fn chosen(gpu: &Gpu) -> Choice {
 ///
 /// One line is logged when the fallback is taken, naming what was missing.
 pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSource> {
+    prepare_for_device(gpu, size)
+}
+
+/// Built-in rasterisers can be prepared away from the UI thread.
+fn prepare_for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSource + Send> {
     let width = size.width.max(1) as u32;
     let height = size.height.max(1) as u32;
     if chosen(gpu) == Choice::Compute {
@@ -57,9 +67,8 @@ pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSour
     } else {
         tracing::info!(
             adapter = %gpu.describe(),
-            "this device runs no compute shaders over writable storage textures, so vector \
-             content is rasterised by the simpler path: no blend or compose set, and multisampled \
-             coverage rather than analytic"
+            "this device cannot run the path renderer, so vector content is rasterised by the \
+             simpler path: no blend or compose set, and multisampled coverage rather than analytic"
         );
     }
     Box::new(CoverageRaster::new(gpu, width, height))
@@ -91,4 +100,7 @@ pub fn attach(renderer: &mut zgui_render_wgpu::WgpuRenderer, size: Size<i32, Dev
         Choice::Coverage => zgui_render::VectorBackend::Coverage,
     };
     renderer.set_vector_factory_for(for_device, backend);
+    // Mobile interactions should not pay shader compilation when opening their first overlay.
+    #[cfg(target_os = "android")]
+    renderer.prepare_vector_raster(prepare_for_device);
 }

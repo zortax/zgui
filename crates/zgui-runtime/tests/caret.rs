@@ -917,3 +917,47 @@ fn a_caret_stands_in_the_focused_field_alone_when_another_shows_the_same_text() 
         "the caret stands in the field without focus: {carets:?}"
     );
 }
+
+#[test]
+fn caret_updates_do_not_request_a_keyboard_but_an_explicit_field_press_does() {
+    let mut script = scripted("abcdef");
+    let surface = script.harness.platform().offscreens()[0].clone();
+    let before = surface.text_input_requests();
+    script.press_named(NamedKey::ArrowRight, KeyCode::ArrowRight);
+    script.press_named(NamedKey::ArrowRight, KeyCode::ArrowRight);
+    assert_eq!(surface.text_input_requests(), before);
+
+    let line = script.line();
+    let x = line.origin.x.0 + ADVANCE;
+    let y = line.origin.y.0 + line.size.height.0 / 2.0;
+    script.point(PointerAction::Pressed, x, y);
+    script.point(PointerAction::Released, x, y);
+    assert_eq!(surface.text_input_requests(), before + 1);
+    script.press_named(NamedKey::ArrowRight, KeyCode::ArrowRight);
+    assert_eq!(surface.text_input_requests(), before + 1);
+    script.point(PointerAction::Pressed, x, y);
+    assert_eq!(
+        surface.text_input_requests(),
+        before + 2,
+        "tapping already-focused field must reopen manually hidden keyboard"
+    );
+}
+
+#[test]
+fn native_editor_updates_selection_and_rejects_late_field_callbacks() {
+    let mut script = scripted("hello");
+    let target = script.editor.get().unwrap().as_u64();
+    script.deliver(SurfaceEvent::NativeText {
+        target,
+        text: "hello world".into(),
+        selection: (6, 11),
+    });
+    assert_eq!(script.selection(), Some(6..11));
+    // Stale callbacks must neither alter value nor move selection.
+    script.deliver(SurfaceEvent::NativeText {
+        target: target.wrapping_add(1),
+        text: "wrong field".into(),
+        selection: (0, 0),
+    });
+    assert_eq!(script.selection(), Some(6..11));
+}

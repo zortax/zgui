@@ -30,6 +30,8 @@ use crate::frame::vector::VectorSource;
 
 /// A backend companion's lazy vector-rasteriser constructor.
 pub type VectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSource>;
+/// A vector constructor whose result can move from a preparation worker to the UI thread.
+pub type PreparedVectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSource + Send>;
 use crate::gpu::device::Gpu;
 use crate::pipeline::Pipelines;
 use crate::pipeline::kind::PipelineKind;
@@ -106,6 +108,8 @@ pub struct WgpuRenderer {
     vectors: Option<Box<dyn VectorSource>>,
     /// How to initialize `vectors` on the first frame that actually contains complex paths.
     vector_factory: Option<VectorFactory>,
+    /// Optional worker preparing a transferable rasteriser before its first vector frame.
+    vector_preparation: Option<std::thread::JoinHandle<Box<dyn VectorSource + Send>>>,
     /// Which backend the lazy factory intends to build; replaced by the raster's own answer once
     /// it has run, so a Vello construction failure reports the coverage fallback truthfully.
     vector_backend: Option<VectorBackend>,
@@ -237,6 +241,7 @@ impl WgpuRenderer {
             sampler,
             vectors: None,
             vector_factory: None,
+            vector_preparation: None,
             vector_backend: None,
             faults: FaultInjector::from_environment(),
             // Nothing has ever been composed, so the first frame cannot rely on what the target
@@ -426,6 +431,7 @@ impl WgpuRenderer {
         self.vector_backend = Some(raster.backend());
         self.vectors = Some(raster);
         self.vector_factory = None;
+        self.vector_preparation = None;
     }
 
     /// Installs a constructor that runs only when a frame has vector passes to rasterise.
@@ -439,7 +445,51 @@ impl WgpuRenderer {
     pub fn set_vector_factory_for(&mut self, factory: VectorFactory, backend: VectorBackend) {
         self.vector_factory = Some(factory);
         self.vectors = None;
+        self.vector_preparation = None;
         self.vector_backend = Some(backend);
+    }
+
+    /// Prepares an attached vector backend on a worker instead of the first vector frame.
+    ///
+    /// The first frame needing paths takes the result, waiting only if preparation is still
+    /// running. Repeated requests start no additional workers. Replacing the backend discards
+    /// the pending result; its worker finishes independently and releases its resources.
+    pub fn prepare_vector_raster(&mut self, factory: PreparedVectorFactory) {
+        if self.vectors.is_some()
+            || self.vector_preparation.is_some()
+            || self.vector_factory.is_none()
+        {
+            return;
+        }
+        // Compile overlay pipelines before the first visible interaction on Android.
+        // Other platforms retain lazy compilation.
+        #[cfg(target_os = "android")]
+        {
+            let mut pipelines = self.pipelines.borrow_mut();
+            for format in [self.composed.format(), GroupPool::FORMAT] {
+                for kind in [
+                    PipelineKind::Quad,
+                    PipelineKind::Shadow,
+                    PipelineKind::MonoSprite,
+                    PipelineKind::ColorSprite,
+                    PipelineKind::Composite,
+                    PipelineKind::VectorComposite,
+                    PipelineKind::BlurDownsample,
+                    PipelineKind::BlurAxis,
+                ] {
+                    let _ = pipelines.get(&self.gpu, kind, format);
+                }
+            }
+        }
+        let gpu = Arc::clone(&self.gpu);
+        let size = self.target.size;
+        match std::thread::Builder::new()
+            .name("zgui-vector-init".to_owned())
+            .spawn(move || factory(&gpu, size))
+        {
+            Ok(worker) => self.vector_preparation = Some(worker),
+            Err(error) => tracing::warn!(%error, "vector preparation worker could not start"),
+        }
     }
 
     /// Whether a vector rasteriser is attached.

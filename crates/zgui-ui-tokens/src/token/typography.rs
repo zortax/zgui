@@ -27,35 +27,37 @@ group! {
             light = "\"Geist Mono\", ui-monospace, SFMono-Regular, Menlo, monospace",
             dark = "\"Geist Mono\", ui-monospace, SFMono-Regular, Menlo, monospace";
 
+        // Sizes and leading scale by the platform's preferred text size (`--zgui-text-scale`).
+
         /// Captions, badges, a tooltip, and the smallest legible text.
-        size_xs => "size-xs", light = "12px", dark = "12px";
+        size_xs => "size-xs", light = "calc(12px * var(--zgui-text-scale, 1))", dark = "calc(12px * var(--zgui-text-scale, 1))";
         /// The text on a control and in a menu: a button, an input, a table cell.
-        size_sm => "size-sm", light = "14px", dark = "14px";
+        size_sm => "size-sm", light = "calc(14px * var(--zgui-text-scale, 1))", dark = "calc(14px * var(--zgui-text-scale, 1))";
         /// Body text.
-        size_md => "size-md", light = "16px", dark = "16px";
+        size_md => "size-md", light = "calc(16px * var(--zgui-text-scale, 1))", dark = "calc(16px * var(--zgui-text-scale, 1))";
         /// A lead paragraph, or the text on a large control.
-        size_lg => "size-lg", light = "18px", dark = "18px";
+        size_lg => "size-lg", light = "calc(18px * var(--zgui-text-scale, 1))", dark = "calc(18px * var(--zgui-text-scale, 1))";
         /// A section heading.
-        size_xl => "size-xl", light = "20px", dark = "20px";
+        size_xl => "size-xl", light = "calc(20px * var(--zgui-text-scale, 1))", dark = "calc(20px * var(--zgui-text-scale, 1))";
         /// A page heading.
-        size_x2l => "size-2xl", light = "24px", dark = "24px";
+        size_x2l => "size-2xl", light = "calc(24px * var(--zgui-text-scale, 1))", dark = "calc(24px * var(--zgui-text-scale, 1))";
         /// A display heading.
-        size_x3l => "size-3xl", light = "30px", dark = "30px";
+        size_x3l => "size-3xl", light = "calc(30px * var(--zgui-text-scale, 1))", dark = "calc(30px * var(--zgui-text-scale, 1))";
 
         /// The line height for the smallest text.
-        leading_xs => "leading-xs", light = "16px", dark = "16px";
+        leading_xs => "leading-xs", light = "calc(16px * var(--zgui-text-scale, 1))", dark = "calc(16px * var(--zgui-text-scale, 1))";
         /// The line height for a control's text.
-        leading_sm => "leading-sm", light = "20px", dark = "20px";
+        leading_sm => "leading-sm", light = "calc(20px * var(--zgui-text-scale, 1))", dark = "calc(20px * var(--zgui-text-scale, 1))";
         /// The line height for body text.
-        leading_md => "leading-md", light = "24px", dark = "24px";
+        leading_md => "leading-md", light = "calc(24px * var(--zgui-text-scale, 1))", dark = "calc(24px * var(--zgui-text-scale, 1))";
         /// The line height for a lead paragraph.
-        leading_lg => "leading-lg", light = "28px", dark = "28px";
+        leading_lg => "leading-lg", light = "calc(28px * var(--zgui-text-scale, 1))", dark = "calc(28px * var(--zgui-text-scale, 1))";
         /// The line height for a section heading.
-        leading_xl => "leading-xl", light = "28px", dark = "28px";
+        leading_xl => "leading-xl", light = "calc(28px * var(--zgui-text-scale, 1))", dark = "calc(28px * var(--zgui-text-scale, 1))";
         /// The line height for a page heading.
-        leading_x2l => "leading-2xl", light = "32px", dark = "32px";
+        leading_x2l => "leading-2xl", light = "calc(32px * var(--zgui-text-scale, 1))", dark = "calc(32px * var(--zgui-text-scale, 1))";
         /// The line height for a display heading.
-        leading_x3l => "leading-3xl", light = "36px", dark = "36px";
+        leading_x3l => "leading-3xl", light = "calc(36px * var(--zgui-text-scale, 1))", dark = "calc(36px * var(--zgui-text-scale, 1))";
 
         /// Body text.
         weight_normal => "weight-normal", light = "400", dark = "400";
@@ -86,10 +88,13 @@ mod tests {
     use super::TypeTokens;
 
     /// The number of pixels in a length, for a value this module wrote.
+    /// The pixel length before text scaling.
     fn pixels(text: &str) -> f32 {
-        text.trim_end_matches("px")
-            .parse()
-            .expect("every default size and line height is a plain pixel length")
+        text.trim_start_matches("calc(")
+            .split("px")
+            .next()
+            .and_then(|length| length.parse().ok())
+            .expect("every default size and line height is a scaled pixel length")
     }
 
     #[test]

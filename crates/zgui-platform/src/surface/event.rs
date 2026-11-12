@@ -1,6 +1,6 @@
 //! Everything that can happen to one surface.
 
-use zgui_geom::{Device, DevicePx, Size};
+use zgui_geom::{Device, DevicePx, Edges, Size};
 use zgui_vocab::{
     DropEvent, EventKind, ImeEvent, KeyEvent, KeyState, Modifiers, Payload, PointerAction,
     PointerEvent, Timestamp, WheelEvent,
@@ -26,6 +26,15 @@ use crate::theme::ColorScheme;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum SurfaceEvent {
+    /// Full state from an OS editor. Offsets are UTF-8 bytes; target echoes focused field identity.
+    NativeText {
+        /// Opaque field identity supplied by runtime.
+        target: u64,
+        /// Entire value, including provisional composition.
+        text: String,
+        /// Selection anchor and focus in byte offsets.
+        selection: (usize, usize),
+    },
     /// The surface's size changed, in physical pixels.
     Resized(Size<DevicePx, Device>),
     /// The scale the surface is presented at changed.
@@ -65,6 +74,20 @@ pub enum SurfaceEvent {
     ResizingChanged(bool),
     /// The desktop's light or dark preference changed.
     ColorSchemeChanged(ColorScheme),
+    /// The user's preferred text size changed, as a factor of the default size.
+    TextScaleChanged(f32),
+    /// The system layout direction changed, such as for a right-to-left language.
+    DirectionChanged {
+        /// Whether layout runs right to left.
+        rtl: bool,
+    },
+    /// System interface drawn over the surface changed, in physical pixels.
+    InsetsChanged {
+        /// Status bar, navigation bar and display cutout on each edge.
+        safe_area: Edges<DevicePx>,
+        /// Height of the software keyboard, measured up from the surface's bottom edge.
+        keyboard: DevicePx,
+    },
     /// A pointer did something.
     Pointer {
         /// What it did.
@@ -131,7 +154,8 @@ impl SurfaceEvent {
     pub const fn is_input(&self) -> bool {
         matches!(
             self,
-            Self::Pointer { .. }
+            Self::NativeText { .. }
+                | Self::Pointer { .. }
                 | Self::Wheel { .. }
                 | Self::Key { .. }
                 | Self::ModifiersChanged(_)

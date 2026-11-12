@@ -23,8 +23,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+#[cfg(target_os = "android")]
+pub(crate) use crate::android_a11y::Adapter;
 use accesskit::TreeUpdate;
-use accesskit_winit::Adapter;
+#[cfg(not(target_os = "android"))]
+pub(crate) use accesskit_winit::Adapter;
 use winit::event::WindowEvent;
 use winit::window::Window;
 use zgui_platform::SurfaceId;

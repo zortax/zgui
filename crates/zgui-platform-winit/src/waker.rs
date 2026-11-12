@@ -16,6 +16,29 @@ use zgui_platform::{WakeReason, Waker};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum UserEvent {
+    /// Full editor state from Android's UI thread. No text is printed in normal logging.
+    #[cfg(target_os = "android")]
+    NativeText {
+        /// Surface owning the field.
+        surface: zgui_platform::SurfaceId,
+        /// Field identity.
+        target: u64,
+        /// Native edit revision acknowledged by the next snapshot.
+        revision: u64,
+        /// Current text.
+        text: String,
+        /// UTF-8 selection anchor and focus.
+        selection: (usize, usize),
+    },
+    /// Android is destroying the activity; the event loop must end.
+    #[cfg(target_os = "android")]
+    Destroyed,
+    /// Android system insets changed; read them from the host.
+    #[cfg(target_os = "android")]
+    Insets,
+    /// Android dark mode or font scale changed; read them from the host.
+    #[cfg(target_os = "android")]
+    Configuration,
     /// Something outside the surfaces asked for attention.
     Wake(WakeReason),
     /// The accessibility adapter has something to say about one window.

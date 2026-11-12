@@ -82,10 +82,17 @@ impl VelloRaster {
     /// shaders, or no writable storage textures. That is a real device rather than a hypothetical
     /// one, which is why there is a second rasteriser to bind instead of a panic here.
     pub fn new(gpu: &Arc<Gpu>, width: u32, height: u32) -> Result<Self, VectorError> {
+        #[cfg(not(target_os = "android"))]
         let _ = (width, height);
         let shared = for_gpu(gpu).map_err(|error| VectorError::Device {
             detail: error.to_string(),
         })?;
+        #[cfg(target_os = "android")]
+        shared
+            .warm(gpu, width, height)
+            .map_err(|error| VectorError::Device {
+                detail: error.to_string(),
+            })?;
         // Unallocated. The scratch is sized from what a frame's passes actually reach — the far
         // corner anything is drawn at, not the surface — and `plan` asks for that on every frame
         // that has anything to rasterise. Sizing it here instead spent the surface four times over

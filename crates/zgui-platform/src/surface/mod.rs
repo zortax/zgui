@@ -24,7 +24,7 @@ pub use crate::surface::id::SurfaceId;
 pub use crate::surface::role::{
     Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
 };
-pub use crate::surface::text_input::{TextInput, TextInputPurpose};
+pub use crate::surface::text_input::{NativeTextInput, TextInput, TextInputPurpose};
 pub use crate::surface::timing::{PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
 
@@ -69,6 +69,10 @@ pub trait Surface: Send + Sync + 'static {
     fn refresh_rate_millihertz(&self) -> Option<u32> {
         None
     }
+
+    /// Leaves the application as the platform's Back action does, because the application left a
+    /// Back key unhandled. The default does nothing.
+    fn go_back(&self) {}
 
     /// Who waits for the display on this surface.
     ///
@@ -250,7 +254,26 @@ pub trait Surface: Send + Sync + 'static {
     /// One call rather than three, because the parts are only meaningful together: an input method
     /// told a caret moved but not that the field is still active places its candidate window over
     /// the text being composed.
+    ///
+    /// `Some` can be reported repeatedly as the caret moves. Preserve a manually hidden
+    /// keyboard across those updates; [`Surface::request_text_input`] is the explicit reopen.
     fn set_text_input(&self, state: Option<TextInput>);
+
+    /// Requests the software keyboard after an explicit press in an editable field.
+    ///
+    /// Separate from caret updates: moving a caret must not reopen a keyboard the user hid.
+    /// Platforms with no software keyboard need no action.
+    fn request_text_input(&self) {}
+
+    /// Whether this backend mirrors focused fields into an OS editor.
+    fn has_native_text_input(&self) -> bool {
+        false
+    }
+
+    /// Updates the OS editor without reopening a manually dismissed keyboard.
+    fn set_native_text_input(&self, state: Option<NativeTextInput>) {
+        let _ = state;
+    }
 
     /// Abandons any half-composed accent so the next key stands alone.
     fn reset_dead_keys(&self) {}

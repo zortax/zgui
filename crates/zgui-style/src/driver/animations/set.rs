@@ -84,6 +84,27 @@ impl Animations {
             .collect()
     }
 
+    /// Starts newly created motion when its first frame becomes visible.
+    /// Existing motion keeps its timeline; only first-frame rendering cost is excluded.
+    pub fn presented(&self, at: AnimationTime) {
+        let delay = (at.0 - self.now.0).max(0.0);
+        if delay == 0.0 {
+            return;
+        }
+        for set in self.set.sets.write().values_mut() {
+            for animation in &mut set.animations {
+                if animation.is_new {
+                    animation.started_at += delay;
+                }
+            }
+            for transition in &mut set.transitions {
+                if transition.is_new {
+                    transition.start_time += delay;
+                }
+            }
+        }
+    }
+
     /// The table itself, for the cascade to read and write as it styles the document.
     ///
     /// The value shares its storage with this one rather than copying it, which is what lets the

@@ -106,6 +106,9 @@ impl Fonts {
     ///
     /// Returns [`FontError`] when the bytes are not a font file this engine can read.
     pub fn register(&self, data: FontData, family: Option<&str>) -> Result<(), FontError> {
+        // Android's native editor measures text with the first registered font.
+        #[cfg(target_os = "android")]
+        zgui_platform_winit::android::editor_font(data.clone());
         self.system
             .get()
             .register(data, family.map(zgui_view::Ident::new))

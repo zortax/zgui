@@ -4,10 +4,14 @@ mod controls;
 mod harness;
 #[path = "../../../examples/android/app.rs"]
 mod lab;
+#[path = "../../../examples/android/phone.rs"]
+mod phone;
 #[path = "../../../examples/android/tasks.rs"]
 mod tasks;
 #[path = "../../../examples/android/visuals.rs"]
 mod visuals;
+#[path = "../../../examples/android/widgets.rs"]
+mod widgets;
 
 use harness::Harness;
 use zgui::prelude::*;
@@ -62,7 +66,11 @@ fn added_tasks_survive_document_owner_disposal() {
                 .expect("stress button exists");
             h.click(button);
         }
-        assert_eq!(h.find_all("task-row").len(), 56);
+        assert_eq!(state.tasks.get_untracked().len(), 56);
+        assert!(
+            h.find_all("task-row").len() <= 16,
+            "only visible rows should mount"
+        );
         assert_eq!(
             state
                 .tasks
@@ -76,4 +84,53 @@ fn added_tasks_survive_document_owner_disposal() {
         h.window.scope.unmount();
     }
     app_scope.unmount();
+}
+
+#[test]
+fn thousands_of_tasks_mount_only_visible_rows_and_scroll_to_correct_ids() {
+    use zgui::geom::{DevicePx, Point, Size};
+    use zgui::view::ObservedValue;
+    let h = Harness::open();
+    let state = h.window.scope.with(|| {
+        let state = lab::State::new();
+        state.tasks.set(
+            (0..5_000)
+                .map(|id| lab::Task {
+                    id,
+                    title: format!("Task {id}"),
+                    done: false,
+                })
+                .collect(),
+        );
+        state.tab.set("tasks".into());
+        provide_local_context(state);
+        state
+    });
+    h.mount(|| view! { lab::Lab() });
+    let scroll = h.find("zui-scroll-area__viewport");
+    let position = |offset| ScrollPosition {
+        offset: Point::new(DevicePx(0.0), DevicePx(offset)),
+        content_size: Size::new(DevicePx(350.0), DevicePx(300_000.0)),
+        scrollport: Size::new(DevicePx(350.0), DevicePx(330.0)),
+    };
+    h.window
+        .dom
+        .deliver(scroll, ObservedValue::ScrollPosition(position(0.0)));
+    h.window.frame();
+    assert!(h.find_all("task-row").len() <= 16);
+    h.window
+        .dom
+        .deliver(scroll, ObservedValue::ScrollPosition(position(6_000.0)));
+    h.window.frame();
+    let rows = h.find_all("task-row");
+    assert!(rows.len() <= 16);
+    assert_eq!(h.attribute(rows[0], "data-task-id").as_deref(), Some("96"));
+    // Updates to an offscreen task must appear when its row enters view.
+    state.tasks.update(|tasks| tasks[100].done = true);
+    h.window.frame();
+    assert_eq!(h.find_all("complete").len(), 1);
+    assert_eq!(
+        h.attribute(h.find("complete"), "data-task-id").as_deref(),
+        Some("100")
+    );
 }

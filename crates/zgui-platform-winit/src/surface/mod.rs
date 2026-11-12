@@ -49,6 +49,8 @@ pub struct WinitSurface {
     waker: Arc<ProxyWaker>,
     /// Whether the window was shown at least once.
     shown: AtomicBool,
+    /// Whether focused content currently accepts text, independent of caret geometry.
+    text_input_enabled: AtomicBool,
 }
 
 impl WinitSurface {
@@ -65,6 +67,7 @@ impl WinitSurface {
             title_buttons,
             waker,
             shown: AtomicBool::new(false),
+            text_input_enabled: AtomicBool::new(false),
         }
     }
 
@@ -123,10 +126,19 @@ impl Surface for WinitSurface {
     }
 
     fn refresh_rate_millihertz(&self) -> Option<u32> {
+        #[cfg(target_os = "android")]
+        if let Some(rate) = crate::android_host::refresh_rate() {
+            return Some(rate);
+        }
         self.window
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
             .filter(|rate| *rate > 0)
+    }
+
+    #[cfg(target_os = "android")]
+    fn go_back(&self) {
+        crate::android_host::go_back();
     }
 
     fn request_size(&self, size: Size<CssPx, Css>) -> Option<Size<DevicePx, Device>> {
@@ -288,7 +300,46 @@ impl Surface for WinitSurface {
             self.window
                 .set_ime_purpose(crate::input::ime::purpose(state.purpose));
         }
-        self.window.set_ime_allowed(state.is_some());
+        let enabled = state.is_some();
+        // Android treats every `true` as showSoftInput, including caret-only updates after
+        // the user dismisses the keyboard. Only focus activation changes may show/hide it.
+        let changed = self.text_input_enabled.swap(enabled, Ordering::Relaxed) != enabled;
+        #[cfg(target_os = "android")]
+        if crate::android_host::available() {
+            return;
+        }
+        if changed {
+            self.window.set_ime_allowed(enabled);
+        }
+    }
+
+    fn has_native_text_input(&self) -> bool {
+        #[cfg(target_os = "android")]
+        {
+            crate::android_host::available()
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            false
+        }
+    }
+
+    fn set_native_text_input(&self, state: Option<zgui_platform::NativeTextInput>) {
+        #[cfg(target_os = "android")]
+        crate::android_host::update(self.id, state, self.scale());
+        #[cfg(not(target_os = "android"))]
+        let _ = state;
+    }
+
+    fn request_text_input(&self) {
+        #[cfg(target_os = "android")]
+        if self.text_input_enabled.load(Ordering::Relaxed) {
+            if crate::android_host::available() {
+                crate::android_host::show();
+            } else {
+                self.window.set_ime_allowed(true);
+            }
+        }
     }
 
     fn reset_dead_keys(&self) {
