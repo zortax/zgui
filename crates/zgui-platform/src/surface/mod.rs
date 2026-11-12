@@ -80,6 +80,17 @@ pub trait Surface: Send + Sync + 'static {
         PresentPacing::Display
     }
 
+    /// Whether a frame may be presented in a buffer larger than the frame.
+    ///
+    /// A backend that answers `true` shows only the top-left part of each buffer, at the extent of
+    /// the frame it presents. The renderer can then keep its swap chain at a coarser extent and
+    /// rebuild it less often while the window is resized. Rebuilding a swap chain waits for the
+    /// graphics device to go idle, so a drag that rebuilds it on every frame pays that wait on
+    /// every frame.
+    fn crops_buffers(&self) -> bool {
+        false
+    }
+
     /// When this surface's frames reach the screen, as far as the platform knows.
     ///
     /// Absent means the platform reports no timing at all, and a caller falls back to

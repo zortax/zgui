@@ -614,6 +614,16 @@ impl WgpuRenderer {
         }
     }
 
+    /// Lets the swap chain be larger than the frames presented from it.
+    ///
+    /// Only for a window that shows the top-left part of each image at the extent of the frame:
+    /// see `Surface::crops_buffers` in `zgui-platform`. The swap chain is then kept at a size
+    /// class and is rebuilt only when a resize leaves the class. A rebuild waits for the device to
+    /// go idle, so this removes that wait from most frames of a drag.
+    pub fn set_crops_buffers(&mut self, crops: bool) {
+        self.presentation.set_crop(crops);
+    }
+
     /// Rebuilds everything sized against the surface.
     fn resize(&mut self, size: Size<i32, Device>) {
         self.presentation.resize(&self.gpu, size);

@@ -108,6 +108,9 @@ fn renderer(
         let gate = Arc::clone(surface);
         renderer.set_present_gate(Box::new(move || gate.present_now()));
     }
+    // A surface that shows only the frame's extent of each image lets the swap chain stay at a
+    // size class, so most resize steps rebuild nothing.
+    renderer.set_crops_buffers(surface.crops_buffers());
     renderer.set_group_precision(precision);
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing in the window — every icon — is empty space. Which rasteriser this is comes

@@ -312,7 +312,8 @@ impl Renderer for WgpuRenderer {
         let presented = self.acquire_surface();
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb());
+            let limit = self.blit_limit(&presented);
+            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
             draw_calls += 1;
         }
         self.submit_frame(encoder);
@@ -346,7 +347,8 @@ impl Renderer for WgpuRenderer {
         let mut encoder = self.frame_encoder();
         let mut draw_calls = 0;
         if let Some(view) = &presented.view {
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb());
+            let limit = self.blit_limit(&presented);
+            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
             draw_calls = 1;
         }
         self.gpu.queue().submit([encoder.finish()]);
@@ -738,8 +740,22 @@ impl WgpuRenderer {
             })
     }
 
+    /// The part of an acquired image the copy writes, when the image is larger than the frame.
+    fn blit_limit(&self, presented: &crate::target::swapchain::Presented) -> Option<(u32, u32)> {
+        let texture = &presented.surface_texture.as_ref()?.texture;
+        let width = (self.target.size.width.max(1) as u32).min(texture.width());
+        let height = (self.target.size.height.max(1) as u32).min(texture.height());
+        (width < texture.width() || height < texture.height()).then_some((width, height))
+    }
+
     /// Copies the composed target onto whatever is being presented to.
-    fn blit(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, undo: bool) {
+    fn blit(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        undo: bool,
+        limit: Option<(u32, u32)>,
+    ) {
         let kind = if undo {
             PipelineKind::BlitUndoSrgb
         } else {
@@ -774,6 +790,11 @@ impl WgpuRenderer {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.composed_binding, &[]);
+        // A cropping swap chain can be larger than the frame. Only the frame's extent is shown, so
+        // only that is copied, and nothing reads past the composed target.
+        if let Some((width, height)) = limit {
+            pass.set_scissor_rect(0, 0, width, height);
+        }
         pass.draw(0..4, 0..1);
     }
 }

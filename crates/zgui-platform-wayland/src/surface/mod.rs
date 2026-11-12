@@ -377,6 +377,10 @@ impl Surface for WaylandSurface {
         PresentPacing::Platform
     }
 
+    fn crops_buffers(&self) -> bool {
+        self.fractional().crops()
+    }
+
     fn presentation_timing(&self) -> Option<PresentationTiming> {
         Some(self.shared().snapshot())
     }
