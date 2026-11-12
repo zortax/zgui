@@ -337,8 +337,12 @@ impl GpuTimer {
             match flag.load(Ordering::Acquire) {
                 0 => continue,
                 1 => {
-                    completed.push(read(slot, self.period_ns));
-                    slot.readback.unmap();
+                    // A buffer that went with a lost device cannot be read, and unmapping it is a
+                    // validation error. Its timings are dropped, as for a failed map.
+                    if let Some(timing) = read(slot, self.period_ns) {
+                        completed.push(timing);
+                        slot.readback.unmap();
+                    }
                 }
                 _ => {}
             }
@@ -367,14 +371,18 @@ impl GpuTimer {
     }
 }
 
-/// Reads one mapped slot.
-fn read(slot: &Slot, period_ns: f64) -> GpuTiming {
+/// Reads one mapped slot, or nothing where wgpu no longer holds its buffer.
+fn read(slot: &Slot, period_ns: f64) -> Option<GpuTiming> {
     let mut timing = GpuTiming {
         frame: slot.frame,
         untimed: slot.untimed,
         ..GpuTiming::default()
     };
-    let view = slot.readback.slice(0..slot.bytes()).get_mapped_range();
+    let view = slot
+        .readback
+        .slice(0..slot.bytes())
+        .get_mapped_range()
+        .ok()?;
     let mut stamps = view.chunks_exact(8).map(|bytes| {
         let mut word = [0; 8];
         word.copy_from_slice(bytes);
@@ -386,7 +394,7 @@ fn read(slot: &Slot, period_ns: f64) -> GpuTiming {
         };
         timing.add(work, end.saturating_sub(begin), period_ns);
     }
-    timing
+    Some(timing)
 }
 
 /// Submits an empty compute pass that writes the given timestamps.

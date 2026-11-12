@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 ///
 /// The Vulkan backend arrives through `wgpu-core-deps-windows-linux-android`, which wgpu-core
 /// depends on under `cfg(any(windows, target_os = "linux", target_os = "android", target_os =
-/// "freebsd"))` — the four targets below, read out of the manifest of wgpu-core 29.0.4. Elsewhere
+/// "freebsd"))` — the four targets below, read out of the manifest of wgpu-core 30.0.2. Elsewhere
 /// that crate is no dependency of wgpu-core, so `wgpu::hal::api::Vulkan` and `wgpu::hal::vulkan`
 /// need not exist and code naming them need not compile. The condition is stated once here, so
 /// that `src/gpu/extensions.rs` carries one short `cfg`.

@@ -144,7 +144,9 @@ pub fn read(
     slice.map_async(wgpu::MapMode::Read, |_| {});
     gpu.wait();
 
-    let view = slice.get_mapped_range();
+    let view = slice
+        .get_mapped_range()
+        .expect("the readback buffer was mapped by the wait above");
     let mut bytes = Vec::with_capacity((width * height * 4) as usize);
     for row in 0..height {
         let start = (row * padded) as usize;
