@@ -38,6 +38,15 @@ enum Owed {
 /// is *held*: it is presented when the callback arrives, so there is still one commit per callback,
 /// and nothing more is composed until it is presented.
 ///
+/// # A new extent does not wait
+///
+/// A frame for an extent the compositor has just configured is drawn and presented at once, even
+/// while a callback is owed. During a drag, a configure arrives on every refresh, and the frame
+/// that waits for the callback commits just after the refresh, which puts every later configure
+/// one refresh behind. The frame it replaces shows an older extent, so nothing is lost when only
+/// the newer one is shown. The runtime answers at most one configure per refresh interval, so this
+/// adds at most one commit per refresh.
+///
 /// # Not configured is a reason to refuse a frame; hidden is not
 ///
 /// The two look alike and are opposites. A surface the compositor has never configured may not be
@@ -78,6 +87,9 @@ pub struct Pacer {
     held: bool,
     /// Whether a frame may be composed while a callback is owed.
     ahead: bool,
+    /// Whether the next redraw answers a new extent, so it neither waits for nor is held behind an
+    /// owed callback.
+    resizing: bool,
 }
 
 impl Pacer {
@@ -90,6 +102,7 @@ impl Pacer {
             abandoned: 0,
             held: false,
             ahead: false,
+            resizing: false,
         }
     }
 
@@ -122,7 +135,7 @@ impl Pacer {
         //
         // A held frame is the one frame allowed ahead of the compositor, so nothing more is
         // composed until it is presented.
-        let waiting = matches!(self.owed, Owed::Callback(_)) && !self.ahead;
+        let waiting = matches!(self.owed, Owed::Callback(_)) && !self.ahead && !self.resizing;
         if !self.wanted || !visibility.configured || self.held || waiting {
             return false;
         }
@@ -136,7 +149,8 @@ impl Pacer {
     /// ahead of the display, and only the second of them is ever shown. The frame is held instead,
     /// and [`Pacer::take_present`] hands it over when the callback arrives or is given up on.
     pub fn present_now(&mut self, now: Instant) -> bool {
-        let owed = matches!(self.owed, Owed::Callback(since) if !self.watchdog.expired(since, now));
+        let owed = !self.resizing
+            && matches!(self.owed, Owed::Callback(since) if !self.watchdog.expired(since, now));
         self.held = owed;
         !owed
     }
@@ -177,6 +191,11 @@ impl Pacer {
     /// have made.
     pub const fn compose_ahead(&mut self, ahead: bool) {
         self.ahead = ahead;
+    }
+
+    /// Says whether the next redraw answers a new extent, see "A new extent does not wait".
+    pub const fn answer_resize(&mut self, resizing: bool) {
+        self.resizing = resizing;
     }
 
     /// Gives up on a callback that has been owed for too long.
@@ -281,6 +300,19 @@ mod tests {
             suspended: true,
             ..Visibility::default()
         }
+    }
+
+    #[test]
+    fn a_frame_for_a_new_extent_neither_waits_nor_is_held() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        pacer.committed(now);
+        pacer.request();
+        assert!(!pacer.take(&mut shown(), now), "an ordinary frame waits");
+        pacer.answer_resize(true);
+        assert!(pacer.take(&mut shown(), now));
+        assert!(pacer.present_now(now), "and it is presented at once");
+        assert!(!pacer.held());
     }
 
     #[test]

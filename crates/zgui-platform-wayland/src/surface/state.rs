@@ -85,8 +85,9 @@ pub(crate) struct Shared {
     pub(crate) declined: bool,
     /// Whether the compositor configured an extent or a scale that no presented frame shows yet.
     ///
-    /// A frame for a new extent waits for the frame callback instead of composing ahead: the next
-    /// configure would make a held frame obsolete before it is presented.
+    /// A frame for a new extent is never composed ahead, because the next configure would make a
+    /// held frame obsolete before it is presented. It is drawn and presented at once instead, see
+    /// the pacer.
     pub(crate) resize_owed: bool,
     /// Whether the redraw now being delivered answers a new extent or scale.
     ///
