@@ -915,7 +915,15 @@ impl Window {
         self.configured += 1;
         // Before the swapchain rebuild rather than after it, so the interval that paces the next
         // configure is a frame period of the output and not a frame period plus this frame's cost.
-        self.pace.answered(self.clock.now(), self.refresh_interval());
+        let now = self.clock.now();
+        let interval = self.refresh_interval();
+        // The last refresh at or before now, so the pace follows the output.
+        let refresh = self
+            .surface
+            .presentation_timing()
+            .and_then(|timing| timing.refresh_after(now))
+            .and_then(|next| next.checked_sub(interval));
+        self.pace.answered(now, interval, refresh);
         let size = self.surface.size();
         zgui_profile::latency::note_with("w.cfg", || {
             format!(
