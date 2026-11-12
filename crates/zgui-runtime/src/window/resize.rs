@@ -51,7 +51,7 @@ use std::time::{Duration, Instant};
 ///
 /// // Nothing has been answered yet, so the first configure is answered where it arrives.
 /// assert!(pace.admit(now, interval));
-/// pace.answered(now);
+/// pace.answered(now, interval);
 ///
 /// // A second one inside the same interval moves the level and waits for the deadline.
 /// assert!(!pace.admit(now + Duration::from_millis(1), interval));
@@ -118,8 +118,17 @@ impl ResizePace {
     }
 
     /// Records that a frame has just been built for the window's current size.
-    pub fn answered(&mut self, now: Instant) {
-        self.answered = Some(now);
+    ///
+    /// A frame that starts within a quarter of an `interval` after the deadline of the frame before
+    /// it is recorded at that deadline. The loop wakes some time after a deadline, and a pace
+    /// measured from each wake would move every later deadline by that latency. Over a drag, the
+    /// frames would then start later and later after the refresh, until they miss it.
+    pub fn answered(&mut self, now: Instant, interval: Duration) {
+        let stamp = match self.answered.map(|last| last + interval) {
+            Some(due) if now >= due && now.duration_since(due) < interval / 4 => due,
+            _ => now,
+        };
+        self.answered = Some(stamp);
     }
 
     /// Forgets the frame last answered, so the next ask is admitted at once.
@@ -164,7 +173,7 @@ mod tests {
         let mut pace = ResizePace::new();
         let start = Instant::now();
         assert!(pace.admit(start, INTERVAL));
-        pace.answered(start);
+        pace.answered(start, INTERVAL);
 
         let admitted = (1..40)
             .filter(|step| pace.admit(start + Duration::from_micros(100 * step), INTERVAL))
@@ -181,8 +190,47 @@ mod tests {
         let mut pace = ResizePace::new();
         let start = Instant::now();
         assert_eq!(pace.due(INTERVAL), None, "nothing has been answered yet");
-        pace.answered(start);
+        pace.answered(start, INTERVAL);
         assert_eq!(pace.due(INTERVAL), Some(start + INTERVAL));
+    }
+
+    #[test]
+    fn configures_on_the_refresh_keep_their_frames_close_to_the_refresh() {
+        // The compositor sends one configure per refresh. Each frame starts a little after its
+        // deadline, because the loop wakes late. Measured from those starts, every deadline moves
+        // by the latency, and the frames start later after each refresh until they miss it.
+        let start = Instant::now();
+        let mut pace = ResizePace::new();
+        let mut began = start;
+        pace.answered(began, INTERVAL);
+        for refresh in 1..120u32 {
+            let configure = start + INTERVAL * refresh;
+            let ready = if pace.admit(configure, INTERVAL) {
+                configure
+            } else {
+                pace.due(INTERVAL).expect("a deferred configure has a deadline")
+            };
+            // The loop wakes 300 microseconds after the moment it waited for.
+            began = ready.max(configure) + Duration::from_micros(300);
+            pace.answered(began, INTERVAL);
+            assert!(
+                began.duration_since(configure) < Duration::from_millis(1),
+                "refresh {refresh}: the frame began {:?} after its configure",
+                began.duration_since(configure)
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_far_past_its_deadline_starts_a_new_phase() {
+        // A frame that was not ready near its deadline is recorded where it began, so the next
+        // configure cannot come less than one interval after it.
+        let start = Instant::now();
+        let mut pace = ResizePace::new();
+        pace.answered(start, INTERVAL);
+        let late = start + INTERVAL + INTERVAL / 2;
+        pace.answered(late, INTERVAL);
+        assert_eq!(pace.due(INTERVAL), Some(late + INTERVAL));
     }
 
     #[test]
@@ -194,8 +242,8 @@ mod tests {
         let mut slow_pace = ResizePace::new();
         let mut fast_pace = ResizePace::new();
         let start = Instant::now();
-        slow_pace.answered(start);
-        fast_pace.answered(start);
+        slow_pace.answered(start, INTERVAL);
+        fast_pace.answered(start, fast);
 
         let mut slow = 0;
         let mut quick = 0;
@@ -203,11 +251,11 @@ mod tests {
             let now = start + Duration::from_millis(step);
             if slow_pace.admit(now, INTERVAL) {
                 slow += 1;
-                slow_pace.answered(now);
+                slow_pace.answered(now, INTERVAL);
             }
             if fast_pace.admit(now, fast) {
                 quick += 1;
-                fast_pace.answered(now);
+                fast_pace.answered(now, fast);
             }
         }
         assert_eq!(slow, 0, "nothing more fits inside one interval at 75 Hz");
@@ -223,7 +271,7 @@ mod tests {
         for offset in [0, 1, 6_000, 13_346, 13_347, 13_348, 40_000] {
             let now = start + Duration::from_micros(offset);
             let mut paced = ResizePace::new();
-            paced.answered(start);
+            paced.answered(start, INTERVAL);
             let early = paced.too_soon(now, INTERVAL);
             assert_eq!(
                 paced.admit(now, INTERVAL),
@@ -249,7 +297,7 @@ mod tests {
         // in the future is one the loop refuses to install.
         let start = Instant::now();
         let mut pace = ResizePace::new();
-        pace.answered(start);
+        pace.answered(start, INTERVAL);
         for offset in [0, 1, 6_000, 13_346] {
             let now = start + Duration::from_micros(offset);
             assert!(pace.too_soon(now, INTERVAL));
@@ -266,7 +314,7 @@ mod tests {
         // refresh interval, every configure that arrives is already outside it.
         let mut pace = ResizePace::new();
         let start = Instant::now();
-        pace.answered(start);
+        pace.answered(start, INTERVAL);
         assert!(pace.admit(start + INTERVAL * 3, INTERVAL));
         assert_eq!(pace.deferred(), 0);
     }
