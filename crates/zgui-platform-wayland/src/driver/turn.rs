@@ -215,11 +215,14 @@ impl<A: AppHandler> WaylandApp<A> {
             }
             let due = {
                 let mut shared = surface.shared();
-                let ahead = shared.ahead.wanted(shared.timing.interval(), now);
+                let ahead = shared.compose_ahead_now(now);
                 shared.pacer.compose_ahead(ahead);
                 let mut visibility = shared.visibility;
                 let due = shared.pacer.take(&mut visibility, now);
                 shared.visibility = visibility;
+                if due {
+                    shared.redraw_taken();
+                }
                 due
             };
             if !due {

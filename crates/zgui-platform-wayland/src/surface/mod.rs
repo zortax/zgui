@@ -312,14 +312,7 @@ impl WaylandSurface {
     /// chain alive, and a held frame is committed when it arrives.
     /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
     pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
-        let end = {
-            let mut shared = self.shared();
-            let end = shared.end_of_redraw(began, now);
-            if end != crate::surface::state::EndOfRedraw::Declined {
-                shared.ahead.redrawn(now.saturating_duration_since(began));
-            }
-            end
-        };
+        let end = self.shared().redrawn(began, now);
         if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
             self.ask_for_callback();
             self.role.commit();
