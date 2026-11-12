@@ -671,51 +671,120 @@ fn a_group_inside_a_filtered_group_is_composited_over_all_of_what_the_filter_rea
     );
 }
 
+/// A white surface of `side` pixels with a red square near its origin, the same at every size.
+fn resize_scene(side: i32) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(side, side));
+    let white = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+    let red = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(200, 40, 40)));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, side as f32, side as f32),
+        white,
+    ));
+    scene.push_quad(Quad::filled(rect(8.0, 8.0, 40.0, 40.0), red));
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+/// The bands a surface grown from `from` to `to` pixels square exposes.
+fn exposed(from: i32, to: i32) -> DamageSet {
+    let mut bands: DamageSet = DamageSet::new();
+    bands.absorb(Rect::new(Point::new(from, 0), Size::new(to - from, to)));
+    bands.absorb(Rect::new(Point::new(0, from), Size::new(from, to - from)));
+    bands
+}
+
 #[test]
-fn a_target_that_was_thrown_away_is_redrawn_whole_however_small_the_next_damage_set_is() {
-    // The composed target is what makes redrawing part of a frame legal, so a resize that crosses
-    // a size class and reallocates it leaves nothing for the next frame to rely on. Widening that
-    // frame's damage to the whole surface is the mechanism; without it every pixel outside the
-    // damage set is whatever an uninitialised texture holds.
+fn a_reallocated_target_keeps_its_picture() {
+    // A resize that crosses a size class reallocates the composed target. The new target receives
+    // the old picture, so the frame after it owes only the bands the new extent exposes: a full
+    // redraw there makes every resize step cost the whole document.
     let Some(mut renderer) = plain_renderer() else {
         return;
     };
-    let scene = |side: i32| {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(side, side));
-        let white = scene
-            .paints
-            .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
-        let red = scene
-            .paints
-            .add(zgui_scene::Paint::Solid(opaque(200, 40, 40)));
-        scene.push_quad(Quad::filled(
-            rect(0.0, 0.0, side as f32, side as f32),
-            white,
-        ));
-        scene.push_quad(Quad::filled(rect(8.0, 8.0, 40.0, 40.0), red));
-        scene.finish(&DamageSet::full());
-        scene
-    };
-    present(&mut renderer, &scene(SIDE));
+    present(&mut renderer, &resize_scene(SIDE));
 
-    // 128 and 300 are in different size classes, so the target is thrown away rather than reused.
+    // 128 and 300 are in different size classes, so the target is allocated again.
     renderer.configure(RenderTarget::new(Size::new(300, 300), Scale::new(1.0)));
-    let mut corner: DamageSet = DamageSet::new();
-    corner.absorb(Rect::new(Point::new(0, 0), Size::new(16, 16)));
-    let outcome = renderer.draw(&scene(300), &corner);
+    assert!(
+        renderer.composed_survives_configure(),
+        "a reallocation alone must not cost the picture"
+    );
+    let bands = exposed(SIDE, 300);
+    let outcome = renderer.draw(&resize_scene(300), &bands);
     assert_eq!(
         outcome.stats().map(|stats| stats.damage_px),
-        Some(300 * 300),
-        "the frame after a reallocation redraws all of the surface, not its damage set"
+        Some(300 * 300 - SIDE as u64 * SIDE as u64),
+        "the frame after a reallocation redraws the exposed bands only"
     );
     let after_resize = renderer.read_composed();
-
-    renderer.draw(&scene(300), &DamageSet::full());
+    renderer.draw(&resize_scene(300), &DamageSet::full());
     assert_eq!(
         after_resize.max_difference(&renderer.read_composed()),
         0,
         "and what it left behind is the frame drawn whole"
+    );
+}
+
+#[test]
+fn a_target_reallocated_twice_before_a_draw_keeps_the_picture_drawn_last() {
+    // The first replacement was never drawn into, so the picture is in the texture before it.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    present(&mut renderer, &resize_scene(SIDE));
+    renderer.configure(RenderTarget::new(Size::new(300, 300), Scale::new(1.0)));
+    renderer.configure(RenderTarget::new(Size::new(600, 600), Scale::new(1.0)));
+    renderer.draw(&resize_scene(600), &exposed(SIDE, 600));
+    let after_resize = renderer.read_composed();
+    renderer.draw(&resize_scene(600), &DamageSet::full());
+    assert_eq!(
+        after_resize.max_difference(&renderer.read_composed()),
+        0,
+        "the picture drawn last reached the newest target"
+    );
+}
+
+#[test]
+fn a_shrink_that_frees_the_allocation_keeps_the_picture() {
+    // 600 to 100 pixels frees most of the allocation. The shrink exposes nothing, so the frame
+    // after it has no damage and still has to carry the picture over.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    renderer.configure(RenderTarget::new(Size::new(600, 600), Scale::new(1.0)));
+    present(&mut renderer, &resize_scene(600));
+    renderer.configure(RenderTarget::new(Size::new(100, 100), Scale::new(1.0)));
+    renderer.draw(&resize_scene(100), &DamageSet::new());
+    let after_resize = renderer.read_composed();
+    renderer.draw(&resize_scene(100), &DamageSet::full());
+    assert_eq!(
+        after_resize.max_difference(&renderer.read_composed()),
+        0,
+        "the shrunk target holds the frame drawn whole"
+    );
+}
+
+#[test]
+fn a_scale_change_redraws_the_whole_surface_however_small_the_next_damage_set_is() {
+    // A new scale changes what every composed pixel means, so nothing in the target survives it.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    present(&mut renderer, &resize_scene(SIDE));
+    renderer.configure(RenderTarget::new(Size::new(SIDE, SIDE), Scale::new(2.0)));
+    assert!(!renderer.composed_survives_configure());
+    let mut corner: DamageSet = DamageSet::new();
+    corner.absorb(Rect::new(Point::new(0, 0), Size::new(16, 16)));
+    let outcome = renderer.draw(&resize_scene(SIDE), &corner);
+    assert_eq!(
+        outcome.stats().map(|stats| stats.damage_px),
+        Some(SIDE as u64 * SIDE as u64),
+        "the frame after a scale change redraws all of the surface, not its damage set"
     );
 }
 

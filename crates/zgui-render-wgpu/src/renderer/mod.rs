@@ -619,11 +619,10 @@ impl WgpuRenderer {
         self.presentation.resize(&self.gpu, size);
         self.groups.resize(size);
         if self.composed.resize(&self.gpu, size) {
+            // The new target receives the old picture at the start of the next frame, so the
+            // damage the caller gives for the newly exposed bands stays enough.
             self.composed_binding =
                 bind_composed(&self.gpu, &self.pipelines.borrow(), &self.composed);
-            // A reallocated target holds nothing at all, so no rectangle outside this frame's
-            // damage set still shows what the frame before it drew.
-            self.full_damage_next = true;
         }
     }
 }
