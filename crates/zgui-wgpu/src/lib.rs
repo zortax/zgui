@@ -17,9 +17,10 @@
 //! **A producer that draws on demand implements [`SurfaceRenderer`].** zgui owns the texture,
 //! sizes it to the element's content box, and calls
 //! [`render`](SurfaceRenderer::render) on the frames where drawing is owed: the first one, a
-//! resize, a device loss, or every refresh while the renderer keeps asking through
-//! [`SurfaceRenderCx::request_animation_frame`]. This is the shape for a pdf page or a spinning
-//! part preview.
+//! resize, a device loss, every refresh while the renderer keeps asking through
+//! [`SurfaceRenderCx::request_animation_frame`], or the next frame after a
+//! [`SurfaceInvalidator`] asks from outside. This is the shape for a pdf page or a spinning part
+//! preview.
 //!
 //! # Texture lifetime, in one paragraph
 //!
@@ -37,7 +38,7 @@
 #![recursion_limit = "256"]
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -215,8 +216,16 @@ thread_local! {
     ///
     /// Thread-local because a [`SurfaceRenderer`] is UI-thread state — it is handed the frame's
     /// device access — while the handle registry above must be reachable from producer threads.
-    static CALLBACKS: RefCell<FxHashMap<u64, Box<dyn SurfaceRenderer>>> =
+    static CALLBACKS: RefCell<FxHashMap<u64, ParkedRenderer>> =
         RefCell::new(FxHashMap::default());
+}
+
+/// One callback renderer between the element builder and the host that adopts it.
+struct ParkedRenderer {
+    /// The renderer.
+    renderer: Box<dyn SurfaceRenderer>,
+    /// The invalidator bound with it, if any.
+    invalidator: Option<Arc<InvalidatorState>>,
 }
 
 /// One token, never reused, whichever kind of producer it names.
@@ -297,6 +306,69 @@ impl SurfaceHandle {
     }
 }
 
+/// The shared half of one invalidator.
+struct InvalidatorState {
+    /// Whether a render is owed and no frame has taken it yet.
+    owed: AtomicBool,
+    /// How to wake the UI loop, once the renderer is bound to a window.
+    waker: Mutex<Option<Arc<RuntimeWaker>>>,
+}
+
+impl InvalidatorState {
+    /// The waker slot, locked; a poisoned lock is inherited.
+    fn waker(&self) -> std::sync::MutexGuard<'_, Option<Arc<RuntimeWaker>>> {
+        self.waker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The handle that asks a [`SurfaceRenderer`] to render again, from any thread.
+///
+/// Use it when the content changes because of an event outside the renderer: a pointer drag, a
+/// button, a frame from a worker thread. Cloneable, `Send + Sync`. Bind it with its renderer
+/// through [`SurfaceElementExt::renderer_with_invalidator`]. Bind one invalidator to one renderer.
+#[derive(Clone)]
+pub struct SurfaceInvalidator {
+    /// The shared state, kept alive by the clones and by the binding.
+    state: Arc<InvalidatorState>,
+}
+
+impl SurfaceInvalidator {
+    /// Makes an invalidator that is not bound to a renderer.
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(InvalidatorState {
+                owed: AtomicBool::new(false),
+                waker: Mutex::new(None),
+            }),
+        }
+    }
+
+    /// Marks the renderer due and wakes the UI loop.
+    ///
+    /// The next frame calls [`render`](SurfaceRenderer::render) once and damages only the
+    /// element's content box. Calls before that frame merge into one render and one wake. When
+    /// the element is not visible, the render stays owed until it is visible again. Before the
+    /// element is bound, the call only marks the renderer; its first frame renders it.
+    pub fn invalidate(&self) {
+        // A render already owed has its wake already sent, or is kept for a hidden element.
+        if self.state.owed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let waker = self.state.waker().clone();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl Default for SurfaceInvalidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One run of an on-demand renderer.
 pub struct SurfaceRenderCx<'a> {
     /// The device the texture lives on.
@@ -320,7 +392,7 @@ pub struct SurfaceRenderCx<'a> {
 
 impl SurfaceRenderCx<'_> {
     /// Asks to be rendered again next refresh. One-shot, like `requestAnimationFrame`: a
-    /// renderer that stops calling it stops being called.
+    /// renderer that stops calling it stops being called until a [`SurfaceInvalidator`] asks.
     pub fn request_animation_frame(&mut self) {
         *self.animate = true;
     }
@@ -329,8 +401,9 @@ impl SurfaceRenderCx<'_> {
 /// A renderer zgui drives: it owns no texture, no cadence and no lifecycle, only the drawing.
 pub trait SurfaceRenderer: 'static {
     /// Fills the texture. Called on the UI thread, after layout and before paint, on the frames
-    /// where drawing is owed: the first, a resize, a device loss, or continuously while
-    /// [`SurfaceRenderCx::request_animation_frame`] keeps being called.
+    /// where drawing is owed: the first, a resize, a device loss, continuously while
+    /// [`SurfaceRenderCx::request_animation_frame`] keeps being called, or once after
+    /// [`SurfaceInvalidator::invalidate`].
     fn render(&mut self, cx: &mut SurfaceRenderCx<'_>);
 
     /// The format of the texture zgui allocates for this renderer.
@@ -359,6 +432,15 @@ pub trait SurfaceElementExt {
     /// Shows what `renderer` draws, on zgui's own texture and cadence.
     #[must_use]
     fn renderer(self, renderer: impl SurfaceRenderer) -> Self;
+
+    /// Shows what `renderer` draws, as [`renderer`](Self::renderer) does, and renders it again
+    /// each time `invalidator` asks.
+    #[must_use]
+    fn renderer_with_invalidator(
+        self,
+        renderer: impl SurfaceRenderer,
+        invalidator: &SurfaceInvalidator,
+    ) -> Self;
 }
 
 impl SurfaceElementExt for zgui_elements::Element<zgui_elements::Surface> {
@@ -370,15 +452,38 @@ impl SurfaceElementExt for zgui_elements::Element<zgui_elements::Surface> {
     }
 
     fn renderer(self, renderer: impl SurfaceRenderer) -> Self {
-        let token = next_token();
-        CALLBACKS.with(|callbacks| {
-            callbacks.borrow_mut().insert(token, Box::new(renderer));
-        });
-        self.property(
-            PropKey::new(zgui_vocab::prop::surface::SOURCE),
-            PropValue::Integer(token as i64),
-        )
+        park(self, renderer, None)
     }
+
+    fn renderer_with_invalidator(
+        self,
+        renderer: impl SurfaceRenderer,
+        invalidator: &SurfaceInvalidator,
+    ) -> Self {
+        park(self, renderer, Some(Arc::clone(&invalidator.state)))
+    }
+}
+
+/// Parks `renderer` until a host adopts it, and names it on `element`.
+fn park(
+    element: zgui_elements::Element<zgui_elements::Surface>,
+    renderer: impl SurfaceRenderer,
+    invalidator: Option<Arc<InvalidatorState>>,
+) -> zgui_elements::Element<zgui_elements::Surface> {
+    let token = next_token();
+    CALLBACKS.with(|callbacks| {
+        callbacks.borrow_mut().insert(
+            token,
+            ParkedRenderer {
+                renderer: Box::new(renderer),
+                invalidator,
+            },
+        );
+    });
+    element.property(
+        PropKey::new(zgui_vocab::prop::surface::SOURCE),
+        PropValue::Integer(token as i64),
+    )
 }
 
 /// What one binding's producer is.
@@ -395,6 +500,8 @@ enum Producer {
         animate: bool,
         /// Whether anything has been drawn since the texture last changed identity.
         drawn: bool,
+        /// The invalidator bound with the renderer, if any.
+        invalidator: Option<Arc<InvalidatorState>>,
     },
 }
 
@@ -580,8 +687,13 @@ impl EmbedHost for WgpuSurfaces {
 
     fn shutting_down(&mut self) {
         for (_, binding) in self.bindings.drain() {
-            if let Producer::Handle(state) = &binding.producer {
-                tell(state, SurfaceEvent::Detached);
+            match &binding.producer {
+                Producer::Handle(state) => tell(state, SurfaceEvent::Detached),
+                Producer::Callback { invalidator, .. } => {
+                    if let Some(invalidator) = invalidator {
+                        *invalidator.waker() = None;
+                    }
+                }
             }
         }
     }
@@ -629,14 +741,15 @@ impl WgpuSurfaces {
             }
             let producer = if let Some(state) = handles().get(&token).and_then(Weak::upgrade) {
                 Producer::Handle(state)
-            } else if let Some(renderer) =
+            } else if let Some(parked) =
                 CALLBACKS.with(|callbacks| callbacks.borrow_mut().remove(&token))
             {
                 Producer::Callback {
-                    renderer,
+                    renderer: parked.renderer,
                     texture: None,
                     animate: false,
                     drawn: false,
+                    invalidator: parked.invalidator,
                 }
             } else {
                 // A token whose producer is gone — the handle dropped, or a callback adopted by
@@ -669,7 +782,14 @@ impl WgpuSurfaces {
                     let intrinsic = lock(state).config.intrinsic;
                     cx.intrinsics.set(id, intrinsic.lower());
                 }
-                Producer::Callback { renderer, .. } => {
+                Producer::Callback {
+                    renderer,
+                    invalidator,
+                    ..
+                } => {
+                    if let Some(invalidator) = invalidator {
+                        *invalidator.waker() = Some(Arc::clone(cx.waker));
+                    }
                     cx.intrinsics.set(id, renderer.intrinsic().lower());
                 }
             }
@@ -689,11 +809,18 @@ impl WgpuSurfaces {
         if let Some(handle) = binding.registered {
             cx.renderer.release_external(handle);
         }
-        if let Producer::Handle(state) = &binding.producer {
-            let mut locked = lock(state);
-            locked.waker = None;
-            drop(locked);
-            tell(state, SurfaceEvent::Detached);
+        match &binding.producer {
+            Producer::Handle(state) => {
+                let mut locked = lock(state);
+                locked.waker = None;
+                drop(locked);
+                tell(state, SurfaceEvent::Detached);
+            }
+            Producer::Callback { invalidator, .. } => {
+                if let Some(invalidator) = invalidator {
+                    *invalidator.waker() = None;
+                }
+            }
         }
         mark(cx, node);
     }
@@ -837,6 +964,7 @@ impl WgpuSurfaces {
                 texture,
                 animate,
                 drawn,
+                invalidator,
             } => {
                 let Some(size) = size.filter(|_| visible) else {
                     return false;
@@ -865,7 +993,11 @@ impl WgpuSurfaces {
                     *drawn = false;
                 }
                 let held = texture.as_ref().expect("just ensured");
-                let due = !*drawn || *animate;
+                // Taken on every visible frame, so a render owed for any reason absorbs it.
+                let invalidated = invalidator
+                    .as_ref()
+                    .is_some_and(|state| state.owed.swap(false, Ordering::AcqRel));
+                let due = !*drawn || *animate || invalidated;
                 if due {
                     let view = held.create_view(&wgpu::TextureViewDescriptor::default());
                     *animate = false;
