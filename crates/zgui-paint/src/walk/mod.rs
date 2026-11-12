@@ -270,7 +270,10 @@ fn damage_reaches(
     if !damage.is_full() {
         return damage.intersects(rect);
     }
-    surface.is_none_or(|surface| surface.intersection(rect).is_some())
+    // An empty rectangle stays reached, as it was before the bound: it covers no pixel of the
+    // surface or outside it, and what it stands for can still draw, such as a caret on an empty
+    // line.
+    rect.is_empty() || surface.is_none_or(|surface| surface.intersection(rect).is_some())
 }
 
 /// The paint stage's state between frames: the lowered styles, and what each fragment painted.
