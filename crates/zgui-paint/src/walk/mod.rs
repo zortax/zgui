@@ -61,6 +61,12 @@ pub struct PaintInput<'a> {
     pub store: &'a LayoutStore,
     /// The frozen damage set the walk is gated on.
     pub damage: &'a DamageSet,
+    /// The device rectangle of the surface, which bounds a full damage set.
+    ///
+    /// A full set holds no rectangles, so without this bound it reaches every fragment of the
+    /// document, also the rows of a scroll container far outside the window. With it, a full set
+    /// reaches what a set holding the whole surface reaches. `None` keeps a full set unbounded.
+    pub surface: Option<Rect<i32, Device>>,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
     /// Where a run a custom element shaped itself gets its tiles.
@@ -141,6 +147,7 @@ impl<'a> PaintInput<'a> {
         Self {
             store,
             damage,
+            surface: None,
             glyphs: &NoGlyphs,
             glyph_placements: &crate::emit::text::NoGlyphPlacements,
             highlights: &NoHighlights,
@@ -177,6 +184,8 @@ pub struct PaintReport {
     /// Whether [`PaintInput::record_emitted`] was on, so [`PaintReport::emitted`] is the whole list
     /// rather than an empty one nobody filled.
     pub recorded: bool,
+    /// The surface bound the walk applied to a full damage set: [`PaintInput::surface`].
+    pub surface: Option<Rect<i32, Device>>,
     /// Vector routes freshly encoded for elements this frame.
     ///
     /// A route-less entry is meaningful: a vector or custom element was encoded and emitted no
@@ -239,7 +248,7 @@ impl PaintReport {
                     continue;
                 }
                 let ink = fragment.device_ink(placements);
-                let reached = damage.is_full() || damage.intersects(pixels(ink));
+                let reached = damage_reaches(damage, self.surface, pixels(ink));
                 assert!(
                     !reached || self.emitted(*frag),
                     "the damage reaches {frag:?} at {ink:?} and nothing emitted for it"
@@ -247,6 +256,21 @@ impl PaintReport {
             }
         }
     }
+}
+
+/// Whether `damage` reaches `rect`, with a full set bounded by `surface`.
+///
+/// The walk and its completeness oracle share this test, so the two cannot disagree on what a
+/// full set reaches.
+fn damage_reaches(
+    damage: &DamageSet,
+    surface: Option<Rect<i32, Device>>,
+    rect: Rect<i32, Device>,
+) -> bool {
+    if !damage.is_full() {
+        return damage.intersects(rect);
+    }
+    surface.is_none_or(|surface| surface.intersection(rect).is_some())
 }
 
 /// The paint stage's state between frames: the lowered styles, and what each fragment painted.
@@ -330,6 +354,7 @@ impl Painter {
         let Some(root) = input.store.root() else {
             return PaintReport {
                 recorded: input.record_emitted,
+                surface: input.surface,
                 ..self.report_of_nothing()
             };
         };
@@ -341,6 +366,7 @@ impl Painter {
             scene,
             report: PaintReport {
                 recorded: input.record_emitted,
+                surface: input.surface,
                 ..PaintReport::default()
             },
             root,
@@ -614,7 +640,7 @@ impl Pass<'_, '_> {
 
     /// Whether the damage reaches `rect`.
     fn reaches(&self, rect: Rect<DevicePx, Device>) -> bool {
-        self.input.damage.is_full() || self.input.damage.intersects(pixels(rect))
+        damage_reaches(self.input.damage, self.input.surface, pixels(rect))
     }
 
     /// A rectangle widened to cover where its fragment is actually drawn.
