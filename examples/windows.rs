@@ -151,7 +151,10 @@ fn Child(
     };
     // Refuses the first close and relents on the second, as an unsaved document would.
     let asked = RwSignal::new(false);
+    //  Clicking on the title-bar X will trigger this SurfaceEvent::CloseRequested flow.
     let guard = on_close_request(move || {
+        // Event listeners are not tracking contexts, so an ordinary get() here is fine too,
+        // get_untracked just makes the intent explicit, reading a value once during setup.
         if asked.get_untracked() {
             CloseResponse::Close
         } else {
@@ -188,7 +191,13 @@ fn Child(
                     tabindex = Focus::Sequential,
                     on:click = {
                         let this = this.clone();
-                        move |_| this.close()
+                        move |_| {
+                            if asked.get_untracked() {
+                                this.close();
+                            } else {
+                                asked.set(true);
+                            }
+                        }
                     }
                 ) {"Close me"}
             }
