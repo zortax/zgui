@@ -179,7 +179,7 @@ impl ConfiguredSurface {
             pending: None,
             used: Size::new(1, 1),
             crop: false,
-            largest: gpu.capabilities().max_texture_size as i32,
+            largest: gpu.capabilities().max_texture_size,
         };
         // A swap chain larger than the largest texture fails validation, and the device opener
         // then refuses the adapter. The first frame configures again at the window's real extent.
