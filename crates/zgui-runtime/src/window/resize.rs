@@ -217,7 +217,8 @@ mod tests {
             let ready = if pace.admit(configure, INTERVAL) {
                 configure
             } else {
-                pace.due(INTERVAL).expect("a deferred configure has a deadline")
+                pace.due(INTERVAL)
+                    .expect("a deferred configure has a deadline")
             };
             // The loop wakes 300 microseconds after the moment it waited for.
             began = ready.max(configure) + Duration::from_micros(300);

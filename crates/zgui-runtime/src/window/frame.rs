@@ -953,7 +953,10 @@ impl Window {
             Size::new(a.width.max(b.width), a.height.max(b.height))
         };
         let extent = was.map_or(target.size, |was| widest(was.size, target.size));
-        self.damage_extent = Some(self.damage_extent.map_or(extent, |held| widest(held, extent)));
+        self.damage_extent = Some(
+            self.damage_extent
+                .map_or(extent, |held| widest(held, extent)),
+        );
         // What a resize changes is what the layout moves, which damages itself, and the band the
         // larger extent exposes. A change of scale or opacity changes every pixel there is, and so
         // does a first configure, which has no picture to keep.
