@@ -16,6 +16,12 @@ use zgui_platform::{WakeReason, Waker};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum UserEvent {
+    /// Input from an Android activity using Java view dispatch instead of a native input queue.
+    #[cfg(target_os = "android")]
+    AndroidInput(zgui_platform::SurfaceEvent),
+    /// Android's modern Back dispatcher committed a navigation gesture.
+    #[cfg(target_os = "android")]
+    Back,
     /// Full editor state from Android's UI thread. No text is printed in normal logging.
     #[cfg(target_os = "android")]
     NativeText {

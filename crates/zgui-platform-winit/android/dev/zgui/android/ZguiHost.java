@@ -71,6 +71,8 @@ public final class ZguiHost
     private static native void changed(long surface, long target, long revision,
                                        String text, int anchor, int focus);
     private static native void destroyed();
+    private static native void back();
+    private android.window.OnBackInvokedCallback backCallback;
     private static native void insetsChanged(int top, int right, int bottom, int left, int keyboard);
     private static native void refreshRate(float hertz);
     private static native void configurationChanged(boolean dark, float fontScale, boolean rtl);
@@ -87,10 +89,208 @@ public final class ZguiHost
     /** fontPath names the font file the editor measures with; null uses the system font. */
     public ZguiHost(Activity activity, String fontPath) {
         this.activity = activity;
+        Zgui.init(activity);
+        Zgui.host = this;
         activity.runOnUiThread(() -> attach(fontPath));
     }
 
+    /** Operations that need the visible activity. Called by {@link Zgui#call} on any thread. */
+    String[] call(String op, long token, String[] a) throws Exception {
+        switch (op) {
+        case "host.permissions": Zgui.onMain(token, () -> permissions(token, a)); return null;
+        case "host.open": Zgui.onMain(token, () -> openDocument(token, a[0])); return null;
+        case "host.create": Zgui.onMain(token, () -> createDocument(token, a[0], a[1])); return null;
+        case "host.camera": Zgui.onMain(token, () -> camera(token)); return null;
+        case "host.account":
+            Zgui.onMain(token, () -> forResult(token, android.accounts.AccountManager.newChooseAccountIntent(
+                null, null, null, null, null, null, null), (code, data) -> {
+                    if (code == Activity.RESULT_OK && data != null)
+                        Zgui.ok(token, Zgui.str(data.getStringExtra(android.accounts.AccountManager.KEY_ACCOUNT_NAME)));
+                    else Zgui.cancelled(token);
+                }));
+            return null;
+        case "host.biometric": Zgui.onMain(token, () -> biometric(token, a[0], a[1], a[2])); return null;
+        case "host.nfc": Zgui.onMain(token, () -> nfc(token)); return null;
+        case "host.pip": {
+            if (!activity.getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE))
+                throw new UnsupportedOperationException("Picture in picture unsupported");
+            android.app.PictureInPictureParams params = new android.app.PictureInPictureParams.Builder()
+                .setAspectRatio(new android.util.Rational(Integer.parseInt(a[0]), Integer.parseInt(a[1]))).build();
+            main.post(() -> {
+                try { activity.enterPictureInPictureMode(params); }
+                catch (IllegalStateException notDeclared) { android.util.Log.w("zgui", "Picture in picture refused", notDeclared); }
+            });
+            return null;
+        }
+        case "host.window":
+            return new String[] {Zgui.bool(activity.isInMultiWindowMode())[0], Zgui.bool(activity.isInPictureInPictureMode())[0]};
+        default: throw new IllegalArgumentException("Unknown operation " + op);
+        }
+    }
+
+    /** Receives one activity or permission result. NativeActivity has no result callbacks. */
+    @SuppressWarnings("deprecation")
+    public static final class Request extends android.app.Fragment {
+        interface Done { void result(int code, Intent data) throws Exception; }
+        long token;
+        Done done;
+        @Override public void onActivityResult(int request, int code, Intent data) {
+            finish();
+            try { if (done != null) done.result(code, data); } catch (Exception error) { Zgui.fail(token, error); }
+        }
+        @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+            finish();
+            boolean all = results.length > 0;
+            for (int result : results) all &= result == PackageManager.PERMISSION_GRANTED;
+            Zgui.ok(token, Zgui.bool(all));
+        }
+        void finish() { getFragmentManager().beginTransaction().remove(this).commitAllowingStateLoss(); }
+    }
+
+    @SuppressWarnings("deprecation")
+    private Request request(long token) {
+        Request request = new Request();
+        request.token = token;
+        activity.getFragmentManager().beginTransaction().add(request, "zgui-" + token).commitNow();
+        return request;
+    }
+
+    @SuppressWarnings("deprecation")
+    private void forResult(long token, Intent intent, Request.Done done) {
+        Request request = request(token);
+        request.done = done;
+        try {
+            request.startActivityForResult(intent, 1);
+        } catch (ActivityNotFoundException missing) {
+            request.finish();
+            Zgui.fail(token, missing);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private void permissions(long token, String[] asked) {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String permission : asked) {
+            String checked = Zgui.effective(permission);
+            if (checked != null && activity.checkSelfPermission(checked) != PackageManager.PERMISSION_GRANTED) missing.add(checked);
+        }
+        if (missing.isEmpty()) { Zgui.ok(token, "1"); return; }
+        request(token).requestPermissions(missing.toArray(new String[0]), 1);
+    }
+
+    private void openDocument(long token, String mime) {
+        forResult(token, new Intent(Intent.ACTION_OPEN_DOCUMENT).setType(mime).addCategory(Intent.CATEGORY_OPENABLE), (code, data) -> {
+            if (code != Activity.RESULT_OK || data == null || data.getData() == null) { Zgui.cancelled(token); return; }
+            Uri uri = data.getData();
+            try {
+                activity.getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException notPersistable) { /* Access lasts while the process lives. */ }
+            Zgui.ok(token, uri.toString(), Integer.toString(activity.getContentResolver().openFileDescriptor(uri, "r").detachFd()));
+        });
+    }
+
+    private void createDocument(long token, String name, String mime) {
+        forResult(token, new Intent(Intent.ACTION_CREATE_DOCUMENT).setType(mime).addCategory(Intent.CATEGORY_OPENABLE)
+            .putExtra(Intent.EXTRA_TITLE, name), (code, data) -> {
+            if (code != Activity.RESULT_OK || data == null || data.getData() == null) { Zgui.cancelled(token); return; }
+            Uri uri = data.getData();
+            Zgui.ok(token, uri.toString(), Integer.toString(activity.getContentResolver().openFileDescriptor(uri, "w").detachFd()));
+        });
+    }
+
+    private void camera(long token) {
+        File dir = ZguiFiles.dir(activity);
+        dir.mkdirs();
+        String name = "photo-" + System.currentTimeMillis() + ".jpg";
+        Uri uri = ZguiFiles.uri(activity, name);
+        Intent capture = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE)
+            .putExtra(android.provider.MediaStore.EXTRA_OUTPUT, uri)
+            .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        capture.setClipData(ClipData.newRawUri("", uri));
+        forResult(token, capture, (code, data) -> {
+            File photo = new File(dir, name);
+            if (code == Activity.RESULT_OK && photo.length() > 0) Zgui.ok(token, photo.getAbsolutePath());
+            else { photo.delete(); Zgui.cancelled(token); }
+        });
+    }
+
+    private void biometric(long token, String title, String subtitle, String cancel) {
+        if (Build.VERSION.SDK_INT < 28) throw new UnsupportedOperationException("Biometric prompt needs Android 9");
+        android.os.CancellationSignal signal = new android.os.CancellationSignal();
+        android.hardware.biometrics.BiometricPrompt.Builder builder =
+            new android.hardware.biometrics.BiometricPrompt.Builder(activity).setTitle(title);
+        if (!subtitle.isEmpty()) builder.setSubtitle(subtitle);
+        builder.setNegativeButton(cancel, activity.getMainExecutor(), (dialog, which) -> Zgui.cancelled(token))
+            .build().authenticate(signal, activity.getMainExecutor(),
+                new android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                    @Override public void onAuthenticationSucceeded(android.hardware.biometrics.BiometricPrompt.AuthenticationResult result) {
+                        Zgui.ok(token);
+                    }
+                    @Override public void onAuthenticationError(int code, CharSequence message) {
+                        if (code == android.hardware.biometrics.BiometricPrompt.BIOMETRIC_ERROR_CANCELED
+                                || code == android.hardware.biometrics.BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED)
+                            Zgui.cancelled(token);
+                        else Zgui.fail(token, new SecurityException(String.valueOf(message)));
+                    }
+                });
+        Zgui.active.put(token, signal::cancel);
+    }
+
+    /** Token of the active NFC reader, or zero. Reader mode runs only while visible. */
+    private long nfcToken;
+
+    private void nfc(long token) {
+        android.nfc.NfcAdapter adapter = android.nfc.NfcAdapter.getDefaultAdapter(activity);
+        if (adapter == null || !adapter.isEnabled()) throw new IllegalStateException("NFC absent or disabled");
+        nfcToken = token;
+        readNfc(adapter);
+        Zgui.active.put(token, () -> {
+            if (nfcToken != token) return;
+            nfcToken = 0;
+            adapter.disableReaderMode(activity);
+        });
+    }
+
+    private void readNfc(android.nfc.NfcAdapter adapter) {
+        long token = nfcToken;
+        adapter.enableReaderMode(activity, tag -> {
+            android.nfc.tech.Ndef ndef = android.nfc.tech.Ndef.get(tag);
+            android.nfc.NdefMessage message = ndef == null ? null : ndef.getCachedNdefMessage();
+            String[] techs = tag.getTechList();
+            String[] text = new String[techs.length + 1];
+            StringBuilder id = new StringBuilder();
+            for (byte b : tag.getId()) id.append(String.format("%02x", b));
+            text[0] = id.toString();
+            System.arraycopy(techs, 0, text, 1, techs.length);
+            Zgui.send(token, false, Zgui.OK, text, message == null ? null : message.toByteArray());
+        }, android.nfc.NfcAdapter.FLAG_READER_NFC_A | android.nfc.NfcAdapter.FLAG_READER_NFC_B
+            | android.nfc.NfcAdapter.FLAG_READER_NFC_F | android.nfc.NfcAdapter.FLAG_READER_NFC_V, null);
+    }
+
+    /** Android 14+ progress preview. Cancellation restores view without dispatching Back. */
+    private final class BackAnimation implements android.window.OnBackAnimationCallback {
+        private void restore() {
+            View decor = activity.getWindow().getDecorView();
+            decor.setTranslationX(0);
+            decor.setAlpha(1);
+        }
+        @Override public void onBackStarted(android.window.BackEvent event) { restore(); }
+        @Override public void onBackProgressed(android.window.BackEvent event) {
+            View decor = activity.getWindow().getDecorView();
+            float direction = event.getSwipeEdge() == android.window.BackEvent.EDGE_LEFT ? 1 : -1;
+            decor.setTranslationX(direction * event.getProgress() * 32 * activity.getResources().getDisplayMetrics().density);
+            decor.setAlpha(1 - 0.15f * event.getProgress());
+        }
+        @Override public void onBackCancelled() { restore(); }
+        @Override public void onBackInvoked() { restore(); back(); }
+    }
+
     private void attach(String fontPath) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            backCallback = Build.VERSION.SDK_INT >= 34 ? new BackAnimation() : ZguiHost::back;
+            activity.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        }
         editor = new HostEditor();
         editor.setBackgroundColor(Color.TRANSPARENT);
         editor.setTextColor(Color.TRANSPARENT);
@@ -146,6 +346,7 @@ public final class ZguiHost
             decor.setSystemUiVisibility(dark ? flags & ~light : flags | light);
         }
     }
+    @SuppressWarnings("deprecation")
     @Override public void onLowMemory() {}
 
     /** kind: 0 tick, 1 long press, 2 confirm. Follows the system haptics setting. */
@@ -495,6 +696,11 @@ public final class ZguiHost
     }
 
     @Override public void onActivityResumed(Activity resumed) {
+        if (resumed == activity) {
+            ZguiDevice.visible(activity, true);
+            android.nfc.NfcAdapter adapter = nfcToken == 0 ? null : android.nfc.NfcAdapter.getDefaultAdapter(activity);
+            if (adapter != null) readNfc(adapter);
+        }
         if (resumed == activity && tilting) listenToTilt(true);
         Runnable pending = pendingNotification;
         if (resumed != activity || pending == null) return;
@@ -510,6 +716,9 @@ public final class ZguiHost
 
     @Override public void onActivityDestroyed(Activity destroyed) {
         if (destroyed != activity) return;
+        if (Zgui.host == this) Zgui.host = null;
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null)
+            activity.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
         activity.getApplication().unregisterActivityLifecycleCallbacks(this);
         ((DisplayManager)service(Context.DISPLAY_SERVICE)).unregisterDisplayListener(this);
     }
@@ -517,6 +726,11 @@ public final class ZguiHost
     @Override public void onActivityCreated(Activity a, Bundle state) {}
     @Override public void onActivityStarted(Activity a) {}
     @Override public void onActivityPaused(Activity paused) {
+        if (paused == activity) {
+            ZguiDevice.visible(activity, false);
+            android.nfc.NfcAdapter adapter = nfcToken == 0 ? null : android.nfc.NfcAdapter.getDefaultAdapter(activity);
+            if (adapter != null) adapter.disableReaderMode(activity);
+        }
         if (paused == activity && tilting) listenToTilt(false);
     }
     @Override public void onActivityStopped(Activity a) {}

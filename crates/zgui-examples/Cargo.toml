@@ -147,3 +147,7 @@ name = "android.permission.POST_NOTIFICATIONS"
 # GrapheneOS asks for this before apps read motion sensors; stock Android ignores it.
 [[package.metadata.android.uses_permission]]
 name = "android.permission.OTHER_SENSORS"
+
+[target.'cfg(target_os = "android")'.dev-dependencies]
+ureq.workspace = true
+zgui-tokio = { path = "../zgui-tokio", version = "0.1.0" }

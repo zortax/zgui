@@ -37,6 +37,57 @@ use crate::ledger::tree::Tree;
 /// A row is a claim that the producer exists somewhere a textual scan cannot reach it, not a
 /// permission to leave one unwritten.
 const ALLOWED: &[(&str, &str, &str)] = &[
+    // Public Android request vocabulary is constructed by consuming applications.
+    (
+        "Haptic",
+        "Tick",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Haptic",
+        "LongPress",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Haptic",
+        "Confirm",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "JobNetwork",
+        "Any",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "JobNetwork",
+        "Unmetered",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Settings",
+        "BatteryOptimization",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Settings",
+        "Location",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Settings",
+        "Notifications",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Source",
+        "Gps",
+        "an Android request an application passes through the public API",
+    ),
+    (
+        "Source",
+        "Network",
+        "an Android request an application passes through the public API",
+    ),
     // Vocabulary an application hands *to* the framework. The framework branches on every value;
     // which one arrives is the program's choice, so the workspace legitimately builds none of them.
     (

@@ -1,5 +1,5 @@
-//! Android host bridge. Rust loads the library's `ZguiHost` Java class from embedded dex, so
-//! applications use stock `NativeActivity` and need no Java code.
+//! Android host bridge. Rust loads the library's Java classes from embedded dex when the APK
+//! lacks them, so even a stock `NativeActivity` application needs no Java code.
 
 use crate::waker::UserEvent;
 use jni::objects::{Global, JClass, JObject, JString, JValue};
@@ -11,8 +11,8 @@ use winit::platform::android::activity::AndroidApp;
 use zgui_geom::{DevicePx, Edges};
 use zgui_platform::{NativeTextInput, SurfaceId};
 
-/// `ZguiHost` compiled by `android/build-dex.sh`.
-static DEX: &[u8] = include_bytes!("../android/zgui-host.dex");
+/// Java classes compiled by `android/build-dex.sh`.
+static DEX: &[u8] = include_bytes!("../android/zgui.dex");
 
 /// First font file the application registered; the native editor measures text with it.
 static FONT: OnceLock<Arc<dyn AsRef<[u8]> + Send + Sync>> = OnceLock::new();
@@ -54,6 +54,24 @@ fn host<T>(
     call(&bridge.app, |env, _| f(env, bridge.host.as_ref()))
 }
 
+/// Loads class `name` through `loader`.
+fn load_class<'local>(
+    env: &mut Env<'local>,
+    loader: &JObject<'_>,
+    name: &str,
+) -> jni::errors::Result<JClass<'local>> {
+    let name = JString::from_str(env, name)?;
+    let class = env
+        .call_method(
+            loader,
+            jni_str!("loadClass"),
+            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
+            &[JValue::Object(name.as_ref())],
+        )?
+        .l()?;
+    env.cast_local::<JClass>(class)
+}
+
 /// Loads `ZguiHost` from [`DEX`] and creates it for the activity.
 fn load(
     env: &mut Env<'_>,
@@ -75,16 +93,11 @@ fn load(
         jni_sig!("(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V"),
         &[JValue::Object(buffer.as_ref()), JValue::Object(&parent)],
     )?;
-    let name = JString::from_str(env, "dev.zgui.android.ZguiHost")?;
-    let class = env
-        .call_method(
-            &loader,
-            jni_str!("loadClass"),
-            jni_sig!("(Ljava/lang/String;)Ljava/lang/Class;"),
-            &[JValue::Object(name.as_ref())],
-        )?
-        .l()?;
-    let class = env.cast_local::<JClass>(class)?;
+    // The loader asks the APK's loader first, so packaged classes win over embedded ones and
+    // components the manifest names share one class with Rust.
+    let zgui = load_class(env, &loader, "dev.zgui.android.Zgui")?;
+    crate::android::jvm::install(env, &zgui, activity)?;
+    let class = load_class(env, &loader, "dev.zgui.android.ZguiHost")?;
     // SAFETY: Java static native declaration and Rust callback have identical JNI signature.
     unsafe {
         let method = jni::NativeMethod::from_raw_parts(
@@ -96,6 +109,11 @@ fn load(
             jni_str!("destroyed"),
             jni_str!("()V"),
             destroyed as *mut core::ffi::c_void,
+        );
+        let back = jni::NativeMethod::from_raw_parts(
+            jni_str!("back"),
+            jni_str!("()V"),
+            back as *mut core::ffi::c_void,
         );
         let insets = jni::NativeMethod::from_raw_parts(
             jni_str!("insetsChanged"),
@@ -127,6 +145,7 @@ fn load(
             &[
                 method,
                 destroyed,
+                back,
                 insets,
                 rate,
                 configuration,
@@ -186,6 +205,13 @@ pub(crate) fn attach(app: AndroidApp, proxy: EventLoopProxy<UserEvent>) {
 
 pub(crate) fn available() -> bool {
     BRIDGE.get().is_some()
+}
+
+pub(crate) fn dispatch_input(event: zgui_platform::SurfaceEvent) {
+    if let Some(bridge) = BRIDGE.get() {
+        let bridge = bridge.lock().expect("Android host lock");
+        let _ = bridge.proxy.send_event(UserEvent::AndroidInput(event));
+    }
 }
 
 pub(crate) fn acknowledge(surface: SurfaceId, target: u64, revision: u64) {
@@ -555,12 +581,31 @@ extern "system" fn destroyed<'caller>(_env: EnvUnowned<'caller>, _class: JClass<
     }
 }
 
+// SAFETY: signature matches ZguiHost.back.
+extern "system" fn back<'caller>(_env: EnvUnowned<'caller>, _class: JClass<'caller>) {
+    if let Some(bridge) = BRIDGE.get() {
+        let bridge = bridge.lock().expect("Android host lock");
+        let _ = bridge.proxy.send_event(UserEvent::Back);
+    }
+}
+
 /// NativeActivity bypasses Java View touch dispatch. Forward focused-field gestures explicitly.
 pub(crate) fn pointer(surface: SurfaceId, event: &zgui_platform::SurfaceEvent, scale: f64) -> bool {
     use zgui_vocab::PointerAction;
     let zgui_platform::SurfaceEvent::Pointer { action, event, .. } = event else {
         return false;
     };
+    // A hidden keyboard leaves the native field focused. Let touch tap-vs-pan arbitration
+    // run in Rust until editing is visibly active; otherwise EditText consumes scroll starts.
+    if event.kind == zgui_vocab::PointerKind::Touch
+        && !INSETS
+            .lock()
+            .expect("Android insets lock")
+            .as_ref()
+            .is_some_and(|(_, height)| height.0 > 0.0)
+    {
+        return false;
+    }
     let Some(bridge) = BRIDGE.get() else {
         return false;
     };

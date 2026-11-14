@@ -61,7 +61,7 @@ pub(crate) fn Controls() -> impl IntoView {
                 Button(disabled = true, variant = ButtonVariant::Outline) {"Disabled"}
                 Dialog(open = s.dialog) {
                     DialogTrigger(variant = ButtonVariant::Outline) {"Dialog"}
-                    DialogContent(class = "mobile-dialog") {
+                    DialogContent(class = "mobile-dialog", dismiss_on_outside_press = false) {
                         DialogHeader {
                             DialogTitle {"Overlay check"}
                             DialogDescription {"Modal layering, focus containment and dismissal."}

@@ -6,6 +6,8 @@ mod controls;
 mod lab;
 #[path = "android/phone.rs"]
 mod phone;
+#[path = "android/services.rs"]
+mod services;
 #[path = "android/tasks.rs"]
 mod tasks;
 #[path = "android/visuals.rs"]
@@ -25,6 +27,8 @@ fn run(
         .with_max_level(tracing::Level::INFO)
         .with_ansi(false)
         .try_init();
+    #[cfg(target_os = "android")]
+    let _tokio = zgui_tokio::install().expect("Android lab Tokio runtime starts");
     let fonts = Fonts::shipped_only();
     fonts
         .register(
@@ -59,11 +63,21 @@ fn run(
 #[allow(unsafe_code)]
 #[unsafe(no_mangle)]
 pub fn android_main(android_app: zgui::app::AndroidApp) {
+    // NativeActivity can re-enter before winit sees destruction. Runtime and event loop are
+    // process-wide; restart before touching either instead of repeatedly panicking on install.
+    static ENTERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ENTERED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        std::process::exit(0);
+    }
     if let Some(dir) = android_app.internal_data_path() {
         let _ = lab::STORE.set(dir.join("lab-state.txt"));
     }
+    services::init();
     run(move |handler| zgui::app::run_android(android_app, handler));
 }
+
+#[cfg(target_os = "android")]
+zgui::app::android_background!(services::background);
 
 #[cfg(not(target_os = "android"))]
 const _: fn() = || run(zgui::app::desktop());

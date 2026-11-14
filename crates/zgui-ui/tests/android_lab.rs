@@ -13,6 +13,8 @@ mod visuals;
 #[path = "../../../examples/android/widgets.rs"]
 mod widgets;
 
+#[path = "../../../examples/android/services.rs"]
+mod services;
 use harness::Harness;
 use zgui::prelude::*;
 
@@ -133,4 +135,90 @@ fn thousands_of_tasks_mount_only_visible_rows_and_scroll_to_correct_ids() {
         h.attribute(h.find("complete"), "data-task-id").as_deref(),
         Some("100")
     );
+}
+
+#[test]
+fn android_back_closes_demo_dialog() {
+    let h = Harness::open();
+    let state = h.window.scope.with(|| {
+        let state = lab::State::new();
+        provide_local_context(state);
+        state
+    });
+    h.mount(|| view! { lab::Lab() });
+    state.dialog.set(true);
+    h.window.frame();
+    let dialog = h.find("zui-dialog");
+    h.press(dialog, zgui::vocab::NamedKey::BrowserBack);
+    assert!(
+        !state.dialog.get_untracked(),
+        "Back must dismiss demo dialog"
+    );
+}
+
+#[test]
+fn service_actions_report_platform_requirement_and_keep_manual_verification() {
+    let h = Harness::open();
+    let state = h.window.scope.with(|| {
+        let state = lab::State::new();
+        state.tab.set("services".into());
+        provide_local_context(state);
+        state
+    });
+    h.mount(|| view! { lab::Lab() });
+    let action = h
+        .all()
+        .into_iter()
+        .find(|node| h.attribute(*node, "data-service").as_deref() == Some("download"))
+        .expect("download action mounted");
+    h.click(action);
+    assert_eq!(
+        state.service_report.get_untracked(),
+        "download: Android device required"
+    );
+    assert!(
+        state.service_checks.get_untracked().is_empty(),
+        "launching must not claim verification"
+    );
+    let check = h
+        .all()
+        .into_iter()
+        .find(|node| h.attribute(*node, "data-verified").as_deref() == Some("download"))
+        .expect("verification checkbox mounted");
+    h.click(check);
+    assert_eq!(state.service_checks.get_untracked(), vec!["download"]);
+    state.tab.set("controls".into());
+    h.window.frame();
+    state.tab.set("services".into());
+    h.window.frame();
+    assert_eq!(state.service_checks.get_untracked(), vec!["download"]);
+    assert_eq!(
+        state.service_report.get_untracked(),
+        "download: Android device required"
+    );
+}
+
+#[test]
+fn android_demo_dialog_keeps_outside_presses_for_back_gesture() {
+    let h = Harness::open();
+    let state = h.window.scope.with(|| {
+        let state = lab::State::new();
+        provide_local_context(state);
+        state
+    });
+    h.mount(|| view! { lab::Lab() });
+    state.dialog.set(true);
+    h.window.frame();
+    h.click(h.find("lab"));
+    assert!(
+        state.dialog.get_untracked(),
+        "outside press must not dismiss gesture-test dialog"
+    );
+    h.click(h.find("zui-dialog"));
+    assert!(
+        state.dialog.get_untracked(),
+        "dialog body press must not dismiss it"
+    );
+    h.press(h.find("zui-dialog"), zgui::vocab::NamedKey::BrowserBack);
+    assert!(!state.dialog.get_untracked());
 }

@@ -172,6 +172,9 @@ tokio = { version = "1", default-features = false, features = [
     "time",
     "net",
 ] }
+accesskit_android = { version = "0.7.5", features = ["embedded-dex"] }
+# HTTPS for the Android demo's network probes.
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 
 # --- pure-data geometry, colour and GPU plumbing --------------------------------------------
 kurbo = "0.13.1"
@@ -268,4 +271,5 @@ undocumented_unsafe_blocks = "warn"
 # The font collection under the text engine, vendored so that a font query keeps its resolved
 # families and loaded faces from one paragraph to the next (see vendor/README.md for the changes).
 [patch.crates-io]
+accesskit_android = { path = "vendor/accesskit_android" }
 fontique = { path = "vendor/fontique" }

@@ -1,14 +1,18 @@
 # Android Mobile Lab
 
 Bring-up target: ARM64 Android phone, Android 8.0 / API 26 or newer.
-Stock `android.app.NativeActivity` loads Rust `cdylib`; ZGUI renders shipped components with
-bundled font. Application contains no Java. `zgui-platform-winit` embeds compiled `ZguiHost`
-class and loads it from memory at startup. Host supplies Android InputConnection, composing text,
-selection handles, edit menu, clipboard and notifications.
+Demo contains no Java. Its manifest names ZGUI's prebuilt classes: `ZguiActivity` (loads Rust
+`cdylib`), `ZguiService`, `ZguiJobs`, `ZguiReceiver`, `ZguiWidget` and `ZguiFiles`. Rust drives
+them through `zgui::app::android` and handles background work with `android_background!`.
+Full demo builds with `examples/android/package.sh`; plain cargo-apk build retains stock
+NativeActivity and omits background and widget actions.
 Focused editor stays transparent while full text/selection snapshots update Rust document.
 Native revisions prevent delayed Rust snapshots from overwriting newer keyboard edits; field
 identities reject callbacks from an old focus target. UTF-16 Android offsets convert to UTF-8 bytes.
 
+- **Services:** network transfers, files, durable jobs/alarms, foreground work, camera/audio,
+  location/BLE/NFC/USB, biometrics/Keystore, widgets/shortcuts/PiP and persisted manual acceptance
+  checkboxes. See [capability checklist](android-checklist.md) for coverage and device checks.
 - **Controls:** editable name with live greeting, system notifications (now or delayed),
   checkbox, slider, progress, tap counter, disabled button, animated modal with blurred backdrop
   and vector dismiss icon.
@@ -40,7 +44,7 @@ as a silhouette.
 
 ## Notifications
 
-`zgui::app::android_notify(title, text, delay)` asks host to post a system notification.
+`zgui::app::android::notify(title, text, delay)` asks host to post a system notification.
 Android 13 and newer show permission prompt on first use, then post. Delay runs on Android main
 thread, so notification arrives while app stays in background. Tapping notification returns
 to app. Manifest declares `POST_NOTIFICATIONS`. Desktop build shows in-app toast only.
@@ -65,61 +69,58 @@ export ANDROID_HOME="$HOME/Android/Sdk"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/<installed-version>"
 export PATH="$ANDROID_HOME/platform-tools:$PATH"
 rustup target add aarch64-linux-android
-cargo install --git https://github.com/rust-mobile/cargo-apk.git \
-    --rev 887423a9150df52f6699332ba39e58ae4c24c877 cargo-apk
+
 ```
 
-Also requires JDK (`keytool` on PATH) for debug signing key. NDK path must name version directory,
+Also requires JDK (`keytool` on PATH) for debug signing key; no Java compiler runs. NDK path must name version directory,
 not parent `ndk` directory. Initial build uses command-line tools 22.0, SDK Platform 35,
 Build-Tools 35.0.0, NDK 28.2.13676358, and OpenJDK 27.0.1.
-Packager revision pinned above; crates.io release differs.
+Legacy stock-NativeActivity build remains available through cargo-apk; full demo uses package script.
 
 ## Check, build, run
 
-From repository root:
+Full demo needs SDK/NDK/JDK listed above plus Python 3. Gradle and cargo-apk are not required.
+From repository root, with `ANDROID_HOME` and `ANDROID_NDK_HOME` set:
 
 ```bash
 cargo check -p zgui-examples --example android-counter --target aarch64-linux-android
-cargo apk build -p zgui-examples --example android-counter
-```
-
-Check command verifies Rust compilation; SDK/NDK required for linked APK build.
-APK output path appears in build output. Debug APK uses local debug signing key.
-Manifest uses stock NativeActivity. Notification permission and handled configuration changes
-live in `crates/zgui-examples/Cargo.toml` metadata.
-
-Enable USB debugging on phone, connect USB, approve host, then:
-
-```bash
+examples/android/package.sh
 adb devices
-adb install --no-incremental -r target/debug/apk/examples/zgui-counter.apk
-adb shell am start -n dev.zgui.counter/android.app.NativeActivity
+adb install --no-incremental -r target/debug/apk/examples/zgui-mobile-lab.apk
+adb shell am start -n dev.zgui.counter/dev.zgui.android.ZguiActivity
 ```
 
-Packaging follows [cargo-apk's NativeActivity example workflow](https://github.com/rust-mobile/cargo-apk).
+Package script links ARM64 Rust library, copies ZGUI's `zgui.dex` as `classes.dex`, builds
+resources/manifest, aligns APK and signs with local debug certificate. Default key: `target/android-toolchain/debug.keystore`.
+Set `ZGUI_ANDROID_KEYSTORE` and `ZGUI_ANDROID_KEYSTORE_PASSWORD` to reuse existing development
+certificate; installing over APK signed with different key fails. Preserve key across `cargo clean`
+when retaining app data matters. Script currently uses Linux NDK host tools.
 
-## Optimized phone build
+Optimized build: `examples/android/package.sh release`, then install
+`target/release/apk/examples/zgui-mobile-lab.apk`. This remains development signing.
+Use optimized APK for responsiveness checks.
 
-Use release build when assessing responsiveness. After debug build has created local test key:
+Incoming link smoke check:
 
 ```bash
-export CARGO_APK_RELEASE_KEYSTORE="${ANDROID_USER_HOME:-$HOME/.android}/debug.keystore"
-export CARGO_APK_RELEASE_KEYSTORE_PASSWORD=android
-cargo apk build -p zgui-examples --example android-counter --release
-adb install --no-incremental -r target/release/apk/examples/zgui-counter.apk
-adb shell am start -n dev.zgui.counter/android.app.NativeActivity
+adb shell am start -a android.intent.action.VIEW -d 'zgui://lab/services'
 ```
 
-This signs optimized APK with same local development certificate, so it can replace debug APK.
-Release APK: `target/release/apk/examples/zgui-counter.apk` (about 12 MB in tested build).
+Services tab reports incoming intents and action results. Checkbox means **manually verified**;
+launching action never checks it automatically. Checks persist with existing lab state.
+Network download uses `https://example.com/`; upload sends fixed `ZGUI upload probe` text to
+`https://httpbin.org/post`. Neither action sends app state or selected files.
 
-Android prepares vector rasteriser and overlay pipelines during startup.
-New CSS animations and transitions exclude their first frame's rendering cost from their timeline;
-existing motion keeps elapsed time normally. Modal blur and dismiss icon remain enabled.
+Durable scheduling uses JobScheduler and inexact AlarmManager; delivery timing follows OS
+restrictions. Foreground probe stops after 30 seconds; wake lock expires after 5 seconds;
+BLE scan, location and microphone have explicit time limits. Foreground notification stops service.
+Permission denial, absent hardware and cancelled activities report outcomes without checking boxes.
 
-Pixel 9 optimized build, dialog open after idle: first vector frame fell from about 60 ms to
-10 ms, later frames from about 17 ms to 2 ms, after Mali-G715 moved to coverage rasteriser
-(see below).
+Remote push, verified HTTPS app links and OAuth need external provider/domain registration and
+remain outside local-only demo setup. Custom links, local notification payloads and account
+selection are included.
+
+Full capability inventory and PR verification boxes: [Android checklist](android-checklist.md).
 
 ## Device acceptance checks
 
@@ -135,7 +136,9 @@ Pixel 9 optimized build, dialog open after idle: first vector frame fell from ab
 6. Widgets: switch chart type, drag volume and watch bars, pick day, open bottom sheet, show toasts.
 7. Visuals: expand accordion, enable motion, change theme; animation moves without input.
 8. Rotate, Home, return, switch tabs: names, row count, completion, slider and theme survive.
-9. Disable motion and leave editable fields unfocused before measuring idle work.
+9. Phone: run workers, tap responsiveness counter while jobs run; verify completion lists UI and worker thread IDs.
+10. Back: close keyboard, dialog, sheet and popover; root Back backgrounds app. Test navigation button and gesture.
+11. Disable motion and leave editable fields unfocused before measuring idle work.
 
 Demo saves state to `lab-state.txt` in app storage, so it survives process death.
 Android system text clipboard and native field selection/edit menu are connected. Native editor
@@ -155,7 +158,10 @@ fonts, transforms and selection of ordinary labels need further integration.
 - **Theme and text size.** Host reports system dark mode (as `prefers-color-scheme` and
   `ColorScheme::System`) and font scale (as `--zgui-text-scale`). `zgui-ui` type tokens scale by it.
 - **Device services.** `zgui::app::android`: `notify`, `haptic`, `share`, `open_url`, `on_tilt`,
-  `pick_image`. Callbacks run off the UI thread; reach UI state with `ui().post`.
+  `pick_image`, and modules `permission`, `intent`, `document`, `notification`, `background`,
+  `location`, `bluetooth`, `nfc`, `usb`, `media`, `security`, `power`, `system`. Callbacks run
+  off the UI thread; reach UI state with `ui().post`. Module docs list the manifest entry each
+  needs.
 - **Touch capture.** A pointer captured by an element (slider, drawing surface) drags that element
   and no longer pans the scroller under it.
 - **System bar icons** follow system theme; `android::system_bar_theme` sets the theme the app
@@ -164,8 +170,7 @@ fonts, transforms and selection of ordinary labels need further integration.
   Arabic and Hebrew samples (system Noto fonts) with a switch that mirrors the card; `Slider` runs
   from the right edge in RTL (`NodeRef::is_rtl`).
 - **TalkBack.** `accesskit_android` injects into the NativeActivity content view and receives
-  zgui's AccessKit tree: swipe navigation, reading and double-tap activation. Touch exploration does
-  not work yet: winit consumes hover events before any view sees them.
+  zgui's AccessKit tree: swipe navigation, reading and double-tap activation. Touch exploration uses Java hover dispatch in packaged shell; device verification remains pending.
 - **Haptics** follow Android's touch-feedback setting; with it off, Android drops them.
 - **Tilt** needs no permission on stock Android; GrapheneOS asks for its Sensors permission.
 - **Refresh rate.** Host requests display's fastest mode and reports rate in effect; runtime paces
@@ -181,10 +186,12 @@ Android still creates an activity in a process holding an old loop (Android 8–
 process death. Handled `config_changes` (rotation, dark mode, font scale, locale,
 density and others) keep the activity alive, so those changes keep state.
 
-## Host class
+## Java classes
 
-`crates/zgui-platform-winit/android/dev/zgui/android/ZguiHost.java` compiles to committed
-`zgui-host.dex`. Only library maintainers rebuild it, after changing the Java source:
+`crates/zgui-platform-winit/android/dev/zgui/android/*.java` compile to committed `zgui.dex`.
+Rust embeds it for stock NativeActivity applications; packaging copies it into the APK so the
+manifest can name its components. Only library maintainers rebuild it, after changing the Java
+sources:
 
 ```bash
 crates/zgui-platform-winit/android/build-dex.sh
@@ -222,21 +229,6 @@ about 17 ms per frame, and about 60 ms on first frame after idle. ZGUI now selec
 rasteriser for Android adapters named Mali-G715. Coverage fills gradient paths flat and uses
 16-sample edges; CSS gradients, shadows and backdrop blur do not use this path. Other adapters
 retain Vello.
-
-Local build tools installed under ignored `target/android-toolchain/`. In this checkout:
-
-```bash
-source target/android-toolchain/env.sh
-cargo apk build -p zgui-examples --example android-counter
-adb devices
-adb install --no-incremental -r target/debug/apk/examples/zgui-counter.apk
-adb shell am start -n dev.zgui.counter/android.app.NativeActivity
-```
-
-APK: `target/debug/apk/examples/zgui-counter.apk`. Packaged native symbols stripped;
-unstripped library remains under `target/aarch64-linux-android/debug/examples/`.
-Debug signing key stays under `target/android-toolchain/user/`. `cargo clean` removes this
-local tool installation and key; reinstall tools or keep SDK elsewhere for ongoing development.
 
 Example name deliberately differs from `android`: that name would produce `libandroid.so`,
 colliding with Android's system library of same name.

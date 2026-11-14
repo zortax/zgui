@@ -365,6 +365,7 @@ pub struct Window {
     /// gesture *began*: re-deriving it from what is under the pointer now would make every drag
     /// select nothing at all.
     selecting: Option<crate::window::pointer_text::Selecting>,
+    pending_touch_text: Option<crate::window::pointer_text::PendingTouchText>,
     /// Consecutive text presses, separate from generic double-click activations.
     text_clicks: crate::window::pointer_text::TextClicks,
     /// Text an editing command asked to be put on the clipboard, waiting for a turn of the loop
@@ -758,6 +759,7 @@ impl Window {
             focus_modality: zgui_input::FocusSource::Keyboard,
             vertical_goal: None,
             selecting: None,
+            pending_touch_text: None,
             text_clicks: crate::window::pointer_text::TextClicks::default(),
             clipboard: Vec::new(),
             wants_paste: Vec::new(),

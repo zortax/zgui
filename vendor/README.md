@@ -43,3 +43,10 @@ shared clone's changes; a query that finds the state built against another gener
 The sample table builds each `Script` with `Script::from_bytes`. Upstream calls
 `from_str_unchecked`, which parlance 0.1.1 deprecates, and every build that compiles this copy as a
 path dependency printed 161 warnings.
+
+## accesskit_android 0.7.5 (crates.io)
+
+Local event-delivery fix for Android accessibility disconnect. Android throws IllegalStateException
+when queued accessibility events arrive after UI automation or TalkBack disconnects; upstream
+unwrap aborted app. Check manager enabled state and handle delivery error without unwinding JNI.
+See [patch notes](accesskit_android/PATCH.md). Source and committed dex otherwise unchanged.

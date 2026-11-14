@@ -1,5 +1,6 @@
 //! Application state, persistence, device helpers and phone-sized shell.
 
+use crate::services::ServicesProps;
 use crate::{
     controls::ControlsProps, phone::PhoneProps, tasks::TasksProps, visuals::VisualsProps,
     widgets::WidgetsProps,
@@ -26,6 +27,8 @@ pub(crate) struct Task {
 
 #[derive(Clone, Copy)]
 pub(crate) struct State {
+    pub(crate) service_report: RwSignal<String>,
+    pub(crate) service_checks: Local<Vec<String>>,
     pub(crate) tab: Local<String>,
     pub(crate) scheme: Local<ColorScheme>,
     pub(crate) enabled: Local<bool>,
@@ -54,6 +57,8 @@ pub(crate) struct State {
 impl State {
     pub(crate) fn new() -> Self {
         Self {
+            service_checks: RwSignal::new_local(Vec::new()),
+            service_report: RwSignal::new("Ready. Tap service action to begin.".into()),
             tab: RwSignal::new_local("controls".into()),
             scheme: RwSignal::new_local(ColorScheme::System),
             enabled: RwSignal::new_local(true),
@@ -133,6 +138,11 @@ impl State {
             self.chart.get().join(","),
             self.photo.get().unwrap_or_default(),
         );
+        self.service_checks.with(|checks| {
+            for check in checks {
+                out += &format!("service_check={check}\n");
+            }
+        });
         self.tasks.with(|tasks| {
             for task in tasks {
                 out += &format!(
@@ -148,8 +158,10 @@ impl State {
 
     fn restore(&self, text: &str) {
         let mut tasks = Vec::new();
+        let mut checks = Vec::new();
         for (key, value) in text.lines().filter_map(|line| line.split_once('=')) {
             match key {
+                "service_check" => checks.push(value.into()),
                 "tab" => self.tab.set(value.into()),
                 "scheme" => self.scheme.set(match value {
                     "light" => ColorScheme::Light,
@@ -188,6 +200,7 @@ impl State {
             }
         }
         self.tasks.set(tasks);
+        self.service_checks.set(checks);
     }
 }
 
@@ -304,12 +317,14 @@ pub(crate) fn Lab() -> impl IntoView {
                 }
                 Tabs(value = state.tab, label = "Demo sections", class = "lab-tabs") {
                     TabsList(class = "navigation") {
+                        TabsTrigger(value = "services") {"Services"}
                         TabsTrigger(value = "controls") {"Controls"}
                         TabsTrigger(value = "tasks") {"Tasks"}
                         TabsTrigger(value = "phone") {"Phone"}
                         TabsTrigger(value = "widgets") {"Widgets"}
                         TabsTrigger(value = "visuals") {"Visuals"}
                     }
+                    TabsContent(value = "services", class = "panel") { Services() }
                     TabsContent(value = "controls", class = "panel") { Controls() }
                     TabsContent(value = "tasks", class = "panel") { Tasks() }
                     TabsContent(value = "phone", class = "panel") { Phone() }
@@ -320,5 +335,32 @@ pub(crate) fn Lab() -> impl IntoView {
             }
           }
         }
+    }
+}
+
+#[cfg(test)]
+mod service_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn service_acceptance_checks_round_trip_with_existing_lab_state() {
+        use zgui::reactive::{Mounted, install};
+        install().ok();
+        let owner = Mounted::new();
+        owner.with(|| {
+            let original = State::new();
+            original.name.set("Mobile verifier".into());
+            original
+                .service_checks
+                .set(vec!["download".into(), "job".into()]);
+            let restored = State::new();
+            restored.restore(&original.save());
+            assert_eq!(
+                restored.service_checks.get_untracked(),
+                vec!["download", "job"]
+            );
+            assert_eq!(restored.name.get_untracked(), "Mobile verifier");
+            assert_eq!(restored.tasks.get_untracked().len(), 6);
+        });
     }
 }

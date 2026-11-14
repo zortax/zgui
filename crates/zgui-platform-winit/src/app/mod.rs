@@ -279,6 +279,56 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         let reason = match event {
             #[cfg(target_os = "android")]
+            UserEvent::AndroidInput(mut input) => {
+                let timestamp = self.shared.clock().timestamp();
+                match &mut input {
+                    SurfaceEvent::Key {
+                        timestamp: time, ..
+                    }
+                    | SurfaceEvent::Pointer {
+                        timestamp: time, ..
+                    }
+                    | SurfaceEvent::Wheel {
+                        timestamp: time, ..
+                    } => *time = timestamp,
+                    _ => return,
+                }
+                // Android has one activity surface. Java dispatch replaces its native queue.
+                if let Some(surface) = self.shared.all().into_iter().next() {
+                    let id = Surface::id(surface.as_ref());
+                    if !crate::android_host::pointer(id, &input, surface.scale()) {
+                        let cx = WinitCx::new(&self.shared, event_loop);
+                        self.handler.surface_event(&cx, id, input);
+                    }
+                }
+                None
+            }
+            #[cfg(target_os = "android")]
+            UserEvent::Back => {
+                let cx = WinitCx::new(&self.shared, event_loop);
+                for surface in self.shared.all() {
+                    for state in [
+                        zgui_vocab::KeyState::Pressed,
+                        zgui_vocab::KeyState::Released,
+                    ] {
+                        self.handler.surface_event(
+                            &cx,
+                            Surface::id(surface.as_ref()),
+                            SurfaceEvent::Key {
+                                state,
+                                event: zgui_vocab::KeyEvent::named(
+                                    zgui_vocab::NamedKey::BrowserBack,
+                                    zgui_vocab::PhysicalKey::Unidentified(0),
+                                ),
+                                modifiers: zgui_vocab::Modifiers::NONE,
+                                timestamp: self.shared.clock().timestamp(),
+                            },
+                        );
+                    }
+                }
+                None
+            }
+            #[cfg(target_os = "android")]
             UserEvent::NativeText {
                 surface,
                 target,

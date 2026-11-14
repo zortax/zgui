@@ -48,7 +48,72 @@ pub struct Selecting {
     unit: Unit,
 }
 
+/// Touch editing waits for a stationary release; scrolling must not focus an editor.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PendingTouchText {
+    id: zgui_vocab::PointerId,
+    origin: zgui_geom::Point<zgui_geom::CssPx, zgui_geom::Css>,
+    node: NodeKey,
+    moved: bool,
+}
+
 impl Window {
+    pub(super) fn defer_touch_text(
+        &mut self,
+        event: &SurfaceEvent,
+        target: Option<NodeKey>,
+        allowed: bool,
+    ) -> (bool, Option<NodeKey>) {
+        let SurfaceEvent::Pointer {
+            action,
+            event: pointer,
+            ..
+        } = event
+        else {
+            return (false, None);
+        };
+        if pointer.kind != zgui_vocab::PointerKind::Touch {
+            return (false, None);
+        }
+        if *action == PointerAction::Pressed {
+            if let Some(pending) = self.pending_touch_text.as_mut() {
+                pending.moved = true; // A second finger is not a tap.
+                return (true, None);
+            }
+            if allowed
+                && let Some(node) = self.selectable_text_at(target)
+                && crate::editing::Editors::is_editable(&self.document.borrow(), node)
+            {
+                self.pending_touch_text = Some(PendingTouchText {
+                    id: pointer.id,
+                    origin: pointer.position,
+                    node,
+                    moved: false,
+                });
+                return (true, None);
+            }
+        }
+        let Some(mut pending) = self.pending_touch_text.take() else {
+            return (false, None);
+        };
+        if pending.id != pointer.id {
+            self.pending_touch_text = Some(pending);
+            return (true, None);
+        }
+        let dx = pointer.position.x.0 - pending.origin.x.0;
+        let dy = pointer.position.y.0 - pending.origin.y.0;
+        pending.moved |= dx * dx + dy * dy > zgui_input::gesture::SLOP.powi(2);
+        if *action == PointerAction::Cancelled || !allowed {
+            return (true, None);
+        }
+        if *action == PointerAction::Released {
+            let tapped = !pending.moved && self.selectable_text_at(target) == Some(pending.node);
+            return (true, tapped.then_some(pending.node));
+        }
+        self.pending_touch_text = Some(pending);
+        (true, None)
+    }
+
     /// Places or extends the caret from a pointer event, and reports whether it did.
     ///
     /// A press inside an editable element places the caret and anchors a drag; every move while

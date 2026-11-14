@@ -142,6 +142,9 @@ impl Window {
         // taken before the routing: what it changes is what the window is holding on the document's
         // behalf — a composition, a value nobody has been told about, a pointer's leavings.
         if let Some(focused) = Self::surface_focus_of(event) {
+            if !focused {
+                self.pending_touch_text = None;
+            }
             self.surface_focus_changed(focused, timestamp);
             return;
         }
@@ -287,6 +290,26 @@ impl Window {
         if dispatched.default_allowed && !typed && !held && default.is_none() {
             self.note_menu_shortcut(event);
         }
+        let (deferred_text, tapped_text) =
+            self.defer_touch_text(event, target, dispatched.default_allowed);
+        let default = if deferred_text && tapped_text.is_none() {
+            None
+        } else {
+            default
+        };
+        if let Some(node) = tapped_text {
+            self.move_focus(Some(node), zgui_input::FocusSource::Pointer, timestamp);
+            if let SurfaceEvent::Pointer { event: pointer, .. } = event {
+                let press = SurfaceEvent::Pointer {
+                    action: zgui_vocab::PointerAction::Pressed,
+                    event: *pointer,
+                    modifiers,
+                    timestamp,
+                };
+                self.point_at_text(&press, Some(node));
+                self.selecting = None;
+            }
+        }
         let defaulted = dispatched.default_allowed && !typed && !held && default.is_some();
         if dispatched.default_allowed
             && !typed
@@ -320,7 +343,7 @@ impl Window {
         // After the focus default rather than before it, because a press on a field that did not
         // have focus both focuses it and puts the caret where the press landed, and the second of
         // those is meaningless if the first has not happened yet.
-        if dispatched.default_allowed {
+        if dispatched.default_allowed && !deferred_text {
             self.point_at_text(event, target);
         } else if matches!(
             event,

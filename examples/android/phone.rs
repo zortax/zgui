@@ -188,6 +188,7 @@ pub(crate) fn Phone() -> impl IntoView {
     };
     view! {
         column(class = "stack") {
+            WorkProbe()
             column(class = "card") {
                 text(class = "section-title") {"Touch"}
                 text(class = "muted") {"Drag with one finger. Pinch and twist with two."}
@@ -216,6 +217,54 @@ pub(crate) fn Phone() -> impl IntoView {
                         #[cfg(target_os = "android")]
                         zgui::app::android::open_url("https://github.com/zortax/zgui");
                     }) {"Open GitHub"}
+                }
+            }
+        }
+    }
+}
+
+/// Real worker jobs awaited by UI task; controls remain live while jobs run.
+#[component]
+fn WorkProbe() -> impl IntoView {
+    let status = RwSignal::new_local("Ready".to_owned());
+    let running = RwSignal::new_local(false);
+    let taps = RwSignal::new_local(0_u32);
+    let start = move |_: &mut EventCx<'_, events::Click>| {
+        if running.get_untracked() {
+            return;
+        }
+        running.set(true);
+        status.set("Working for 2 seconds; tap responsiveness check".into());
+        zgui::reactive::spawn_local(async move {
+            let ui_thread = std::thread::current().id();
+            let async_job =
+                zgui::reactive::background(async { format!("{:?}", std::thread::current().id()) });
+            let first = zgui::reactive::blocking(|| {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                format!("{:?}", std::thread::current().id())
+            });
+            let second = zgui::reactive::blocking(|| {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                format!("{:?}", std::thread::current().id())
+            });
+            let async_thread = async_job.await;
+            let first = first.await;
+            let second = second.await;
+            status.set(format!(
+                "Done. UI {ui_thread:?}; async {async_thread}; workers {first}, {second}"
+            ));
+            running.set(false);
+        });
+    };
+    view! {
+        column(class = "card") {
+            text(class = "section-title") {"Async & workers"}
+            text(class = "muted") {"UI task awaits async worker and two blocking jobs. Home does not make jobs durable."}
+            text {{move || status.get()}}
+            row(class = "actions") {
+                Button(disabled = Signal::derive_local(move || running.get()), on:click = start) {"Run workers"}
+                Button(variant = ButtonVariant::Outline, on:click = move |_| taps.update(|n| *n += 1)) {
+                    {move || format!("Responsive: {}", taps.get())}
                 }
             }
         }

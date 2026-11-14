@@ -6,9 +6,14 @@ pub mod fonts;
 #[cfg(target_os = "android")]
 pub use zgui_platform_winit::android::AndroidApp;
 
-/// Android services: notifications, haptics, share sheet, links, tilt and photo picker.
+/// Android services: permissions, intents, documents, notifications, background work,
+/// location, Bluetooth, NFC, USB, media, security and system integration.
 #[cfg(target_os = "android")]
 pub use zgui_platform_winit::android;
+
+/// Defines the handler for Android background work; see [`android::background`].
+#[cfg(target_os = "android")]
+pub use zgui_platform_winit::android_background;
 
 /// Android driver for use with [`App::run_on`].
 #[cfg(target_os = "android")]

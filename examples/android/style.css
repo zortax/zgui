@@ -9,8 +9,8 @@
 .eyebrow { font-size:calc(11px * var(--zgui-text-scale, 1)); letter-spacing:2px; color:#7c8faa; }
 .title { font-size:calc(28px * var(--zgui-text-scale, 1)); font-weight:700; }
 .lab-tabs { flex:1; min-height:0; width:100%; }
-.lab .navigation { height:48px; width:100%; flex-shrink:0; }
-.navigation .zui-tabs__trigger { flex:1; min-height:44px; }
+.lab .navigation { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); grid-template-rows:repeat(2, 44px); gap:4px; padding:4px; height:100px; width:100%; flex-shrink:0; overflow:hidden; }
+.navigation .zui-tabs__trigger { width:100%; min-width:0; height:44px; min-height:0; padding:4px; transition:none; }
 .panel { flex:1; min-height:0; overflow-y:auto; }
 .stack { gap:14px; width:100%; }
 .card { padding:18px; border:1px solid #64748b44; border-radius:18px; gap:14px; background:var(--zui-color-card); }
@@ -55,3 +55,5 @@
 .pull { flex:none; overflow:hidden; text-align:center; color:#8995a9; font-size:calc(13px * var(--zgui-text-scale, 1)); }
 .rtl-sample { gap:12px; }
 .rtl-line { font-size:calc(19px * var(--zgui-text-scale, 1)); }
+
+.service-result { max-height:180px; overflow-y:auto; flex-shrink:0; }
