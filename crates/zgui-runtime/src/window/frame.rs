@@ -1057,6 +1057,20 @@ impl Window {
         }
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
         self.brushes_moved |= applied.recoloured;
+        // Glyphs name their slot, not their colour, so a rewritten slot changes no paint record
+        // and the fragment pass damages nothing for it. The element's ink is damaged here instead.
+        // Without this, an inherited colour transition draws its first frame and leaves the text
+        // in that colour until something else repaints it.
+        {
+            let layout = self.layout.borrow();
+            for (update, moved) in updates.iter().zip(&applied.moved) {
+                if *moved {
+                    self.damage.absorb(zgui_layout::fragment::diff::pixels(
+                        zgui_layout::fragment::index::ink_of(&layout, update.node),
+                    ));
+                }
+            }
+        }
         let split = applied.split;
         if split.is_empty() {
             return;
