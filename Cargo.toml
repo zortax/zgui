@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "spikes/*", "xtask"]
+members = ["crates/*", "xtask"]
 exclude = ["xtask/fixtures", "vendor"]
 
 [workspace.package]
