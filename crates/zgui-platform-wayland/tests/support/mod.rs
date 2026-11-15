@@ -10,6 +10,8 @@
 
 #![allow(dead_code)]
 
+#[path = "drag_source.rs"]
+pub(crate) mod drag_source;
 #[path = "paste.rs"]
 pub(crate) mod paste;
 #[path = "seat.rs"]
