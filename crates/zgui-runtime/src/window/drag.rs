@@ -12,7 +12,8 @@
 //!   selector parser has no pseudo-class for the bit, so the state is the selector's way in.
 //!
 //! Each event carries the dragged paths, which the platform gives only on entry, and where the
-//! drag is. A drop clears the state without a `drag_leave`: the drop is the drag's end.
+//! drag is. A `drag_leave` for a drag that left the window carries the last position the platform
+//! gave. A drop clears the state without a `drag_leave`: the drop is the drag's end.
 
 use std::path::PathBuf;
 
@@ -27,11 +28,12 @@ use crate::window::Window;
 /// The custom state an element carries while a drag is over it.
 pub(crate) const DRAG_OVER_STATE: &str = "drag-over";
 
-/// The elements a drag is over, root first, and what it carries.
+/// The elements a drag is over, root first, what it carries and where it was last.
 #[derive(Debug, Default)]
 pub(crate) struct DragOver {
     path: Vec<NodeKey>,
     paths: Vec<PathBuf>,
+    at: Point<CssPx, Css>,
 }
 
 impl Window {
@@ -109,7 +111,8 @@ impl Window {
         }
         // Departures from the innermost outwards, then arrivals from the outermost inwards, as
         // pointer crossings are announced.
-        let at = position.unwrap_or(Point::new(CssPx(0.0), CssPx(0.0)));
+        let at = position.unwrap_or(self.drag.at);
+        self.drag.at = at;
         let payload = |position| {
             Payload::Drop(DropEvent {
                 paths: self.drag.paths.clone(),

@@ -226,9 +226,9 @@ impl Window {
                     zgui_input::dispatch::resolve(document.store(), &chain, kind, &mut plan);
                     (chain.target(), plan.steps().to_vec(), None)
                 }
-                // An input method's edits are aimed at whatever has focus. No
-                // interaction state changes and there is no framework behaviour to compute: the
-                // path is resolved, walked, and that is all.
+                // An input method's edits are aimed at whatever has focus. No interaction state
+                // changes and there is no framework behaviour to compute: the path is resolved,
+                // walked, and that is all.
                 _ => {
                     let chain = match self.router.interaction().focus.focused() {
                         Some(node) => zgui_input::HitChain::to_root(document.store(), node),

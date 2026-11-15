@@ -131,7 +131,7 @@ pub trait Dom {
     ///
     /// An author-defined state is matched by `:state(name)` and is how a view expresses a
     /// condition the closed set of interaction states does not name — that a list item is
-    /// selected, that a step is complete.
+    /// selected, that a step is complete. The runtime owns the name `drag-over`.
     fn set_custom_state(&self, el: NodeId, name: Ident, on: bool);
 
     /// Sets one imperative property, which is neither an attribute nor visible to selectors.

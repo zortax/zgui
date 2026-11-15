@@ -88,7 +88,8 @@ pub fn bind_ui_state<M>(
 /// Binds one author-defined state on or off.
 ///
 /// An author-defined state matches `:state(name)` in a selector, and is how a view expresses a
-/// condition the closed set of interaction states does not name.
+/// condition the closed set of interaction states does not name. The runtime owns the name
+/// `drag-over`: do not bind it.
 pub fn bind_custom_state<M>(
     cx: &BuildCx<'_>,
     el: NodeId,
