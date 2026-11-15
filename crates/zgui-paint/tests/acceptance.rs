@@ -49,6 +49,36 @@ fn a_clean_subtree_far_from_the_damage_is_skipped_whole() {
 }
 
 #[test]
+fn full_damage_reaches_only_the_surface() {
+    // A resize damages the whole surface. The rows below the window are not on it, so the walk
+    // must not visit them: a document of thousands of rows would cost thousands of encodes.
+    let mut harness = Harness::sized(
+        rows(2000),
+        "root { display: block; width: 300px }
+         .btn { display: block; height: 20px; background: #eee }",
+        300.0,
+        400.0,
+    );
+    let unbounded = harness.paint_everything();
+    let report = harness.paint_surface();
+    assert!(
+        report.emitted.len() < 30,
+        "a full frame over a 400px surface emitted {} fragments",
+        report.emitted.len()
+    );
+    assert!(
+        unbounded.emitted.len() > 2000,
+        "an unbounded full frame has to reach every row, or this compares nothing"
+    );
+    assert!(
+        report.skipped_subtrees > 1900,
+        "the rows off the surface were not skipped whole"
+    );
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
+}
+
+#[test]
 fn every_fragment_the_damage_reaches_is_emitted() {
     // The emission-completeness oracle. It is the direct test of where the expansion runs: a
     // damage-rectangle assertion structurally cannot see a region that was added and then painted

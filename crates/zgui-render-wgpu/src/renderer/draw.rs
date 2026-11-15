@@ -72,8 +72,9 @@ impl Renderer for WgpuRenderer {
         true
     }
 
-    /// Yes, unless the configure moved the scale or the opacity or outgrew the target, each of
-    /// which leaves the next frame owing every pixel.
+    /// Yes, unless the configure moved the scale or the opacity, each of which leaves the next
+    /// frame owing every pixel. A target that outgrew its allocation keeps its picture: the next
+    /// frame copies it into the new one.
     fn composed_survives_configure(&self) -> bool {
         !self.full_damage_next
     }
@@ -137,6 +138,7 @@ impl Renderer for WgpuRenderer {
             // again, and a shift against a target the renderer has just declared it cannot rely on
             // would move pixels that are not there.
             self.pending_shift = None;
+            self.composed.drop_carried();
             &everything
         } else {
             damage
@@ -149,7 +151,11 @@ impl Renderer for WgpuRenderer {
         // waits a whole refresh interval to acquire one. This is checked after the widening above,
         // so a frame that has to redraw everything for a reason of the renderer's own never
         // reaches it.
-        if damage.is_empty() && !self.present_composed_next && self.pending_shift.is_none() {
+        if damage.is_empty()
+            && !self.present_composed_next
+            && self.pending_shift.is_none()
+            && !self.composed.carrying()
+        {
             zgui_profile::latency::mark("draw.undamaged");
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
@@ -233,6 +239,11 @@ impl Renderer for WgpuRenderer {
         };
         zgui_profile::latency::mark("r.encoder");
         let mut encoder = self.frame_encoder();
+        // First of all: a target reallocated by a resize receives the picture of the one it
+        // replaced, which the shift below and every pass after it build on.
+        if let Some(carried) = self.composed.carry(&mut encoder) {
+            zgui_profile::latency::note_with("r.carry", || format!("{carried:?}"));
+        }
         // Before anything this frame draws, and after nothing: the passes below clear and redraw
         // each damage rectangle, and the pixels this moves are the ones outside them.
         if let Some(shift) = self.pending_shift.take() {
@@ -301,7 +312,8 @@ impl Renderer for WgpuRenderer {
         let presented = self.acquire_surface();
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb());
+            let limit = self.blit_limit(&presented);
+            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
             draw_calls += 1;
         }
         self.submit_frame(encoder);
@@ -335,7 +347,8 @@ impl Renderer for WgpuRenderer {
         let mut encoder = self.frame_encoder();
         let mut draw_calls = 0;
         if let Some(view) = &presented.view {
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb());
+            let limit = self.blit_limit(&presented);
+            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
             draw_calls = 1;
         }
         self.gpu.queue().submit([encoder.finish()]);
@@ -727,8 +740,22 @@ impl WgpuRenderer {
             })
     }
 
+    /// The part of an acquired image the copy writes, when the image is larger than the frame.
+    fn blit_limit(&self, presented: &crate::target::swapchain::Presented) -> Option<(u32, u32)> {
+        let texture = &presented.surface_texture.as_ref()?.texture;
+        let width = (self.target.size.width.max(1) as u32).min(texture.width());
+        let height = (self.target.size.height.max(1) as u32).min(texture.height());
+        (width < texture.width() || height < texture.height()).then_some((width, height))
+    }
+
     /// Copies the composed target onto whatever is being presented to.
-    fn blit(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, undo: bool) {
+    fn blit(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        undo: bool,
+        limit: Option<(u32, u32)>,
+    ) {
         let kind = if undo {
             PipelineKind::BlitUndoSrgb
         } else {
@@ -763,6 +790,11 @@ impl WgpuRenderer {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.composed_binding, &[]);
+        // A cropping swap chain can be larger than the frame. Only the frame's extent is shown, so
+        // only that is copied, and nothing reads past the composed target.
+        if let Some((width, height)) = limit {
+            pass.set_scissor_rect(0, 0, width, height);
+        }
         pass.draw(0..4, 0..1);
     }
 }

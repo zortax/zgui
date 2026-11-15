@@ -321,3 +321,23 @@ fn a_full_set_contains_everything_and_an_empty_one_contains_nothing_it_has_not_b
     assert!(DamageSet::<4>::full().contains(rect(0, 0, 1, 1)));
     assert!(!DamageSet::<4>::new().contains(rect(0, 0, 1, 1)));
 }
+
+#[test]
+fn a_bounded_set_cuts_what_it_absorbs_to_the_bound() {
+    let mut set: DamageSet<4> = DamageSet::new();
+    set.set_bound(Some(rect(0, 0, 100, 100)));
+    set.absorb(rect(50, 50, 100, 100));
+    assert_eq!(set.rects(), &[rect(50, 50, 50, 50)]);
+}
+
+#[test]
+fn a_bounded_set_ignores_what_lies_outside_the_bound() {
+    // A long document damages every row it moved, nearly all of them far below the window.
+    let mut set: DamageSet<4> = DamageSet::new();
+    set.set_bound(Some(rect(0, 0, 100, 100)));
+    for row in 0..1000 {
+        set.absorb(rect(0, 200 + row * 20, 100, 20));
+    }
+    set.absorb_whole(rect(0, 5000, 100, 20));
+    assert!(set.is_empty());
+}

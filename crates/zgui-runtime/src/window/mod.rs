@@ -254,6 +254,11 @@ pub struct Window {
     raster: Arc<dyn zgui_text::GlyphRaster>,
     /// What this frame must redraw.
     damage: DamageSet,
+    /// The largest extent the surface had since the last frame that retired its damage.
+    ///
+    /// Damage outside it names no pixel of the drawn frame or of the next one, so a layout pass
+    /// cuts what it absorbs to it. `None` until the surface is first configured.
+    damage_extent: Option<zgui_geom::Size<i32, zgui_geom::Device>>,
     /// What every fragment pass this frame ran moved rigidly, and whether it moved anything else.
     ///
     /// The input to deciding whether the renderer may translate pixels it already has rather than
@@ -728,6 +733,7 @@ impl Window {
             budgets: crate::budget::Budgets::new(),
             raster,
             damage: DamageSet::full(),
+            damage_extent: None,
             rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
             damage_before_layout: DamageSet::new(),
             damage_after_layout: DamageSet::new(),

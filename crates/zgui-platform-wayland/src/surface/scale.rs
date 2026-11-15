@@ -69,12 +69,11 @@ impl Scale {
 
 /// Tells the compositor how to read a buffer drawn at `scale`.
 ///
-/// A fractionally scaled surface declares a buffer scale of one and is mapped to its logical
-/// extent by its viewport; declaring anything else would apply the scaling twice. A surface
-/// without a viewport declares the whole number instead, which is the only scaling available to
-/// it.
-pub fn declare(surface: &crate::surface::WaylandSurface, scale: f64, fractional: bool) {
-    let whole = if fractional {
+/// A surface mapped to its logical extent by its viewport declares a buffer scale of one; declaring
+/// anything else would apply the scaling twice. A surface without a viewport declares the whole
+/// number instead, which is the only scaling available to it.
+pub fn declare(surface: &crate::surface::WaylandSurface, scale: f64, viewport: bool) {
+    let whole = if viewport {
         1
     } else {
         (scale.round() as i32).max(1)

@@ -95,6 +95,15 @@ impl Presentation {
         }
     }
 
+    /// Lets a surface's swap chain be larger than its frames, see
+    /// [`ConfiguredSurface::set_crop`](crate::gpu::surface::ConfiguredSurface::set_crop). Textures
+    /// are always at the extent of their frames.
+    pub fn set_crop(&mut self, crop: bool) {
+        if let Self::Surface(surface) = self {
+            surface.set_crop(crop);
+        }
+    }
+
     /// Rebuilds a surface's swap chain if one is owed.
     pub fn apply_pending(&mut self, gpu: &Gpu) {
         match self {

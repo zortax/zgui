@@ -614,16 +614,25 @@ impl WgpuRenderer {
         }
     }
 
+    /// Lets the swap chain be larger than the frames presented from it.
+    ///
+    /// Only for a window that shows the top-left part of each image at the extent of the frame:
+    /// see `Surface::crops_buffers` in `zgui-platform`. The swap chain is then kept at a size
+    /// class and is rebuilt only when a resize leaves the class. A rebuild waits for the device to
+    /// go idle, so this removes that wait from most frames of a drag.
+    pub fn set_crops_buffers(&mut self, crops: bool) {
+        self.presentation.set_crop(crops);
+    }
+
     /// Rebuilds everything sized against the surface.
     fn resize(&mut self, size: Size<i32, Device>) {
         self.presentation.resize(&self.gpu, size);
         self.groups.resize(size);
         if self.composed.resize(&self.gpu, size) {
+            // The new target receives the old picture at the start of the next frame, so the
+            // damage the caller gives for the newly exposed bands stays enough.
             self.composed_binding =
                 bind_composed(&self.gpu, &self.pipelines.borrow(), &self.composed);
-            // A reallocated target holds nothing at all, so no rectangle outside this frame's
-            // damage set still shows what the frame before it drew.
-            self.full_damage_next = true;
         }
     }
 }

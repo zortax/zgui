@@ -156,7 +156,11 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
         )
     };
     if let Some(logical) = metadata {
-        crate::surface::scale::declare(surface, scale, fractional);
+        // A surface with a viewport is always mapped through it: the buffer can be larger than the
+        // frame, and only the frame's extent is shown.
+        let viewport = surface.fractional().crops();
+        crate::surface::scale::declare(surface, scale, fractional || viewport);
+        surface.fractional().source(size);
         surface.fractional().destination(logical);
         if let Some(window) = surface.role().window() {
             window.set_geometry(logical);

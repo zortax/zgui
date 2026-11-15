@@ -450,6 +450,25 @@ impl Harness {
         out
     }
 
+    /// Emits a frame with the whole surface damaged, and the walk bounded by the surface.
+    ///
+    /// This is what a window paints after a resize or a scale change.
+    pub(crate) fn paint_surface(&mut self) -> zgui_paint::PaintReport {
+        self.damage = DamageSet::full();
+        self.scene.begin_frame(self.viewport);
+        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        let mut input = PaintInput::new(&self.store, &self.damage);
+        input.record_emitted = true;
+        input.placements = Some(&placements);
+        input.surface = Some(zgui_geom::Rect::new(
+            zgui_geom::Point::new(0, 0),
+            self.viewport,
+        ));
+        let report = self.painter.emit(&input, &mut self.scene);
+        self.scene.finish(&self.damage);
+        report
+    }
+
     /// Emits a frame with the whole surface damaged.
     pub(crate) fn paint_everything(&mut self) -> zgui_paint::PaintReport {
         self.damage = DamageSet::full();

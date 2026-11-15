@@ -218,10 +218,12 @@ fn rimmed(rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
 fn the_gallery_puts_its_drawings_in_the_display_list() {
     let opened = opened!();
     let frame = settled(opened);
+    // The first frame redraws the whole surface and emits only what is on it: the icons further
+    // down the gallery reach the display list when a scroll brings them into view.
     assert!(
-        frame.drawings.len() >= 30,
-        "the gallery's icons produced only {} vector items, so this is measuring the wrong \
-         document rather than the wrong pixels",
+        frame.drawings.len() >= 15,
+        "the gallery's visible icons produced only {} vector items, so this is measuring the \
+         wrong document rather than the wrong pixels",
         frame.drawings.len()
     );
     assert_eq!(

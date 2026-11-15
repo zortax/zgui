@@ -149,6 +149,7 @@ pub fn rebuild_in(
     // every frame that reports a scroll, which is every frame of a glide. What the frame damaged
     // before *any* pass ran is the caller's to remember, because only the caller knows which pass
     // was the first.
+    let bound = damage.bound();
     let mut pass = Pass {
         store,
         hit,
@@ -160,7 +161,7 @@ pub fn rebuild_in(
         renumber: false,
         born_order: None,
         anchors,
-        moves: RigidMoves::default(),
+        moves: RigidMoves::bounded(bound),
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
         // decided before the frame and must not change part-way through one.
         passes: split::current(),
@@ -391,6 +392,14 @@ impl Default for RigidMoves {
 }
 
 impl RigidMoves {
+    /// No moves, with damage cut to `bound` as the pass's own damage set is.
+    fn bounded(bound: Option<Rect<i32, Device>>) -> Self {
+        let mut moves = Self::default();
+        moves.beyond.set_bound(bound);
+        moves.drawn.set_bound(bound);
+        moves
+    }
+
     /// Both passes' moves, for a frame that ran the walk more than once.
     ///
     /// A scroll delivered to a listener can re-render and relay out inside the same frame, so the

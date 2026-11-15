@@ -525,6 +525,7 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
+            self.damage_extent = self.renderer.target().map(|target| target.size);
             // The chunk notes were consumed by the same submission. A skipped frame keeps them
             // for the next drawn one, and anything noted after this point — a budget eviction —
             // stands until then.
@@ -915,7 +916,15 @@ impl Window {
         self.configured += 1;
         // Before the swapchain rebuild rather than after it, so the interval that paces the next
         // configure is a frame period of the output and not a frame period plus this frame's cost.
-        self.pace.answered(self.clock.now());
+        let now = self.clock.now();
+        let interval = self.refresh_interval();
+        // The last refresh at or before now, so the pace follows the output.
+        let refresh = self
+            .surface
+            .presentation_timing()
+            .and_then(|timing| timing.refresh_after(now))
+            .and_then(|next| next.checked_sub(interval));
+        self.pace.answered(now, interval, refresh);
         let size = self.surface.size();
         zgui_profile::latency::note_with("w.cfg", || {
             format!(
@@ -940,6 +949,14 @@ impl Window {
         };
         let was = self.renderer.target();
         self.renderer.configure(target);
+        let widest = |a: Size<i32, zgui_geom::Device>, b: Size<i32, zgui_geom::Device>| {
+            Size::new(a.width.max(b.width), a.height.max(b.height))
+        };
+        let extent = was.map_or(target.size, |was| widest(was.size, target.size));
+        self.damage_extent = Some(
+            self.damage_extent
+                .map_or(extent, |held| widest(held, extent)),
+        );
         // What a resize changes is what the layout moves, which damages itself, and the band the
         // larger extent exposes. A change of scale or opacity changes every pixel there is, and so
         // does a first configure, which has no picture to keep.
@@ -1373,6 +1390,12 @@ impl Window {
         }
         self.layout_passes += 1;
         counter::bump(Counter::LayoutPasses);
+        // Damage the pass finds outside every extent the surface has had since the last drawn
+        // frame is cut away as it is absorbed, rather than merged first and clipped after.
+        self.damage.set_bound(
+            self.damage_extent
+                .map(|extent| zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent)),
+        );
         let mut moved = zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,
@@ -1633,6 +1656,9 @@ impl Window {
                 scrollbars: zgui_paint::emit::scrollbar::paint_for(
                     self.scheme == zgui_style::ColorScheme::Dark,
                 ),
+                // A full set means the surface and nothing more. Without the bound, the walk visits
+                // every fragment of the document, also the rows of a long scroll container.
+                surface: Some(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport)),
                 ..PaintInput::new(&layout, &self.damage)
             };
             zgui_profile::latency::note_with("d.postexpand", || {

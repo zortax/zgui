@@ -83,6 +83,17 @@ pub(crate) struct Shared {
     pub(crate) unmapped: bool,
     /// Whether the redraw now being delivered was refused without running.
     pub(crate) declined: bool,
+    /// Whether the compositor configured an extent or a scale that no presented frame shows yet.
+    ///
+    /// A frame for a new extent is never composed ahead, because the next configure would make a
+    /// held frame obsolete before it is presented. It is drawn and presented at once instead, see
+    /// the pacer.
+    pub(crate) resize_owed: bool,
+    /// Whether the redraw now being delivered answers a new extent or scale.
+    ///
+    /// Such a redraw rebuilds the swap chain, and a drag sends one per refresh, so its cost and its
+    /// misses say nothing about whether the frames after the drag fit the interval.
+    pub(crate) answering_resize: bool,
     /// Whether any buffer has ever been committed.
     ///
     /// What separates a configure that restates the extent from the one that maps the surface: the
@@ -135,6 +146,8 @@ impl Shared {
             chained: None,
             unmapped: false,
             declined: false,
+            resize_owed: false,
+            answering_resize: false,
             mapped: false,
             declared: None,
             ladder: crate::surface::Scale::default(),
@@ -172,6 +185,7 @@ impl Shared {
         self.scale = scale;
         self.size = size;
         self.pacer.cancel_held();
+        self.resize_owed = true;
         Some(if moved_scale {
             SurfaceEvent::ScaleFactorChanged {
                 scale_factor: scale,
@@ -195,7 +209,13 @@ impl Shared {
         let declined = std::mem::replace(&mut self.declined, false);
         if presented {
             self.pacer.committed(now);
-            self.chained = self.chain(began);
+            // A frame for a new extent is not counted as a miss: see `answering_resize`.
+            self.chained = if self.answering_resize {
+                None
+            } else {
+                self.chain(began)
+            };
+            self.resize_owed = false;
             EndOfRedraw::Presented
         } else if declined {
             EndOfRedraw::Declined
@@ -219,7 +239,31 @@ impl Shared {
         if std::mem::replace(&mut self.presented, false) {
             self.pacer.committed(now);
             self.chained = self.chain(began);
+            // A new extent cancels a held frame, so a held frame that is presented shows the
+            // current extent.
+            self.resize_owed = false;
         }
+    }
+
+    /// Whether the next redraw may be composed while a frame callback is owed.
+    pub(crate) fn compose_ahead_now(&self, now: Instant) -> bool {
+        !self.resize_owed && self.ahead.wanted(self.timing.interval(), now)
+    }
+
+    /// Records that a redraw is about to be delivered.
+    pub(crate) fn redraw_taken(&mut self) {
+        self.answering_resize = self.resize_owed;
+    }
+
+    /// Closes out a delivered redraw: [`Shared::end_of_redraw`], and the redraw's cost for
+    /// [`Ahead`] unless the redraw was declined or answered a new extent.
+    pub(crate) fn redrawn(&mut self, began: Instant, now: Instant) -> EndOfRedraw {
+        let end = self.end_of_redraw(began, now);
+        let answering = std::mem::take(&mut self.answering_resize);
+        if end != EndOfRedraw::Declined && !answering {
+            self.ahead.redrawn(now.saturating_duration_since(began));
+        }
+        end
     }
 
     /// The callback arrival a commit whose work began at `began` is chained to, if it is.
@@ -375,6 +419,7 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use super::{EndOfRedraw, Shared};
+    use crate::frame::Ahead;
     use std::time::{Duration, Instant};
     use zgui_geom::{CssPx, DevicePx, Size};
     use zgui_platform::SurfaceEvent;
@@ -455,6 +500,45 @@ mod tests {
         shared.frame_callback(first, at);
         for _ in 0..4 {
             at = frame(&mut shared, at, interval / 2, 2 * interval);
+        }
+        assert!(!shared.ahead.wanted(shared.timing.interval(), at));
+    }
+
+    #[test]
+    fn a_frame_for_a_new_extent_waits_for_the_callback() {
+        // The next configure of a drag would cancel a frame composed ahead, so the frame for a new
+        // extent is composed when the compositor is ready for it.
+        let (mut shared, _) = on_a_known_output();
+        shared.ahead = Ahead::new(zgui_platform::ComposeAhead::Always);
+        let now = Instant::now();
+        assert!(shared.compose_ahead_now(now));
+        shared.resized(logical(800.0, 600.0), 1.0);
+        assert!(!shared.compose_ahead_now(now));
+        shared.redraw_taken();
+        shared.presented = true;
+        shared.redrawn(now, now + Duration::from_millis(5));
+        assert!(
+            shared.compose_ahead_now(now),
+            "the frame that showed the extent ends the wait"
+        );
+    }
+
+    #[test]
+    fn frames_for_new_extents_neither_cost_nor_miss() {
+        // A drag rebuilds the swap chain on every frame and may miss refreshes. None of that says
+        // whether the frames after the drag fit, so none of it arms composing ahead.
+        let (mut shared, interval) = on_a_known_output();
+        let first = shared.begin_callback();
+        let mut at = Instant::now();
+        shared.frame_callback(first, at);
+        for step in 0..8 {
+            shared.resized(logical(800.0 + step as f32, 600.0), 1.0);
+            shared.redraw_taken();
+            let serial = shared.begin_callback();
+            shared.presented = true;
+            shared.redrawn(at, at + 2 * interval);
+            at += 2 * interval;
+            shared.frame_callback(serial, at);
         }
         assert!(!shared.ahead.wanted(shared.timing.interval(), at));
     }
