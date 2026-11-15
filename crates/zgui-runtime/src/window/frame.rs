@@ -1591,9 +1591,10 @@ impl Window {
                 self.scale,
                 &self.host.placements(),
             );
-            if super::damage_coalesce::coalesce(&mut self.damage) {
-                // The larger region must be expanded and emitted too; merging
-                // only at renderer submission would omit its stationary content.
+            // Close rectangles merge before the emit walk, because the walk culls against the
+            // damage: a merge at the renderer would clear the pixels between them and draw nothing
+            // there. The merged region can reach a new read extent, so it is expanded again.
+            if self.damage.coalesce_dense() {
                 zgui_paint::expand(
                     &layout,
                     &mut self.damage,
