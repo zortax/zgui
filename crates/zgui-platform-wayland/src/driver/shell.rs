@@ -67,7 +67,7 @@ impl WaylandState {
             return;
         };
 
-        let (resized, visibility, resizing, answered) = {
+        let (resized, visibility, resizing, answered, state_flip) = {
             let mut shared = surface.shared();
             let extent = toplevel::extent(pending.size, surface.wanted(), shared.logical);
             let state_flip =
@@ -90,11 +90,20 @@ impl WaylandState {
                 shared.visibility_edge(),
                 shared.resizing_edge(),
                 answered,
+                state_flip,
             )
         };
 
         surface.role().ack(serial);
         surface.popup_mapped();
+        if state_flip {
+            // The runtime reads these states on resize, and a flip can keep the extent, so the
+            // flip is reported on its own. A flip that also resized reads the same state twice.
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::SurfaceStateChanged(id),
+            );
+        }
 
         if let Some(event) = visibility {
             self.report(id, event);

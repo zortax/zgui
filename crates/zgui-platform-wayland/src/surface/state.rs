@@ -280,8 +280,8 @@ impl Shared {
     ///
     /// The first configure has to be answered with a frame, or a surface configured at the extent
     /// it was created with never commits a buffer and is never mapped. A maximise or full-screen
-    /// flip that kept the extent is answered too, conservatively: the runtime reads those levels
-    /// off the surface during a frame.
+    /// flip that kept the extent is answered too, conservatively. The runtime hears of the flip
+    /// through a `SurfaceStateChanged` wake.
     pub(crate) fn answers_restatement(&self, state_flip: bool) -> bool {
         !self.mapped || state_flip
     }

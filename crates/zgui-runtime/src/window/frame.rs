@@ -294,9 +294,6 @@ impl Window {
         self.note_frame_moment(timestamp);
 
         self.frame_started();
-        // A Wayland configure can change maximized/fullscreen without changing extent.
-        // Refresh before input and reactive work so client decorations follow that state.
-        self.handle.refresh_window_state();
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
         // Both are this frame's answers about this frame's movement, and a frame that inherited
@@ -1018,8 +1015,8 @@ impl Window {
             return false;
         }
         // What the handle reports, from the size that was actually taken. Maximising and leaving
-        // full screen both resize the window, so this is where those move too — no desktop reports
-        // them as events of their own.
+        // full screen usually resize the window, so the state is read here too. A change that
+        // keeps the size comes as a `SurfaceStateChanged` wake.
         self.handle.set_geometry(size, scale);
         self.handle.refresh_window_state();
         let admitted = self.pace.admit(self.clock.now(), self.refresh_interval());
