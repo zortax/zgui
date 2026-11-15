@@ -612,8 +612,16 @@ impl Window {
     /// to the corner of the field every time the surface hands the keyboard back — the candidate
     /// window of a person who alt-tabbed away mid-word opens at the start of the field they are
     /// halfway along.
+    ///
+    /// A surface without the keyboard has no input method, so text input stays disabled there
+    /// even while an element of its document has focus.
     pub(crate) fn report_text_input(&mut self) {
-        let focused = self.router.interaction().focus.focused();
+        let focused = self
+            .router
+            .interaction()
+            .focus
+            .focused()
+            .filter(|_| self.surface_focused);
         let editable = focused.filter(|node| {
             let document = self.document.borrow();
             crate::editing::Editors::is_editable(&document, *node)

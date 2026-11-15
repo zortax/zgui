@@ -55,14 +55,10 @@ impl Window {
         // candidate window one character behind the text being composed — and answering it when
         // the surface hands the keyboard back reports no rectangle at all, because the frame that
         // plans one has not run yet. The surface is told only when the answer really changed.
-        // A newly mounted field can be focused before it has layout boxes. In that
-        // case the focus command could not enable native text input, and there is
-        // no IME target for report_caret() to update. Retry now that layout exists.
-        // The IME state deduplicates unchanged reports. Keep background windows
-        // disabled even though their document still remembers the focused field.
-        if self.surface_focused {
-            self.report_text_input();
-        }
+        //
+        // This reports the full text input state. A field that gets focus before it has a box
+        // cannot enable text input when focus moves, and this is the first moment it can.
+        self.report_text_input();
     }
 
     /// This frame's plan, and the absolute rectangles it will draw.
