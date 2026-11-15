@@ -97,19 +97,27 @@ impl Window {
     /// stream of pointer moves is.
     pub(crate) fn drain_input(&mut self, timestamp: Timestamp) -> bool {
         let mut owed = false;
+        let events = core::mem::take(&mut self.queued);
         // The answers to paste requests an earlier frame recorded, applied ahead of this frame's
         // own events and settled like one of them, so a handler for the input a paste announces
-        // has mounted whatever it opens before the next event is routed.
+        // has mounted whatever it opens before the next event is routed. A paste carries the
+        // earliest stamp of the batch, so the stamps of the events after it do not go backwards.
+        let earliest = events
+            .iter()
+            .filter_map(|queued| queued.event.timestamp())
+            .fold(timestamp, Timestamp::min);
         for (node, text) in core::mem::take(&mut self.pastes) {
-            self.apply_paste(node, &text, timestamp);
-            owed |= self.settle_between_events(timestamp);
+            self.apply_paste(node, &text, earliest);
+            owed |= self.settle_between_events(earliest);
         }
-        let events = core::mem::take(&mut self.queued);
         let last = events.len().saturating_sub(1);
         for (position, queued) in events.iter().enumerate() {
-            self.dispatch_one(&queued.event, &queued.samples, timestamp);
+            // Each event and the events it causes carry the moment the platform stamped it. Events
+            // without a stamp carry the frame's moment.
+            let stamp = queued.event.timestamp().unwrap_or(timestamp);
+            self.dispatch_one(&queued.event, &queued.samples, stamp);
             if position < last {
-                owed |= self.settle_between_events(timestamp);
+                owed |= self.settle_between_events(stamp);
             }
         }
         owed
@@ -260,17 +268,8 @@ impl Window {
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
             let mut sink = HostSink::new(&host);
-            let event_timestamp = event.timestamp().unwrap_or(timestamp);
             dispatch::run(
-                self,
-                &steps,
-                kind,
-                target,
-                &payload,
-                samples,
-                modifiers,
-                event_timestamp,
-                &mut sink,
+                self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
         };
 
