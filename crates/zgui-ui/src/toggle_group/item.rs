@@ -83,6 +83,10 @@ pub fn ToggleGroupItem(
         move || group.is_some_and(|group| group.is_on(&value))
     };
     let is_out = move || disabled.get() || group.is_some_and(|group| group.is_disabled());
+    // The same answer for the click handler, which runs outside a reactive scope.
+    let is_out_untracked = move || {
+        disabled.get_untracked() || group.is_some_and(|group| group.is_disabled_untracked())
+    };
 
     // A single-selection group is a set of alternatives, and a reader is told so: its items are
     // radio buttons, because "one of these" is what a radio button means. A multiple-selection
@@ -119,7 +123,7 @@ pub fn ToggleGroupItem(
             tabindex = move || item.map_or(Focus::Sequential, |item| item.tabindex().get()),
             on:focus_in = move |_| { if let Some(item) = item { item.activate() } },
             on:click = move |_| {
-                if !disabled.get_untracked() && let Some(group) = group && !group.is_disabled_untracked() {
+                if !is_out_untracked() && let Some(group) = group {
                     group.toggle(&value);
                 }
             },

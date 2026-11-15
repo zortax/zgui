@@ -56,6 +56,11 @@ impl ToggleGroupContext {
         self.values.get().into_iter().collect()
     }
 
+    /// Everything that is on right now, without subscribing.
+    fn on_untracked(&self) -> BTreeSet<String> {
+        self.values.get_untracked().into_iter().collect()
+    }
+
     /// Whether `value` is on.
     #[must_use]
     pub fn is_on(&self, value: &str) -> bool {
@@ -68,6 +73,7 @@ impl ToggleGroupContext {
         self.disabled.get()
     }
 
+    /// Whether the whole group is out of action, without subscribing.
     fn is_disabled_untracked(&self) -> bool {
         self.disabled.get_untracked()
     }
@@ -97,7 +103,7 @@ impl ToggleGroupContext {
     /// leaving nothing selected. A group that refused that would be a radio group wearing a
     /// toolbar's clothes.
     pub fn toggle(&self, value: &str) {
-        let mut next: BTreeSet<String> = self.values.get_untracked().into_iter().collect();
+        let mut next = self.on_untracked();
         if next.contains(value) {
             next.remove(value);
         } else {
@@ -242,5 +248,55 @@ pub fn ToggleGroup(
         RovingFocus(orientation = orientation, class = class, {..own}, {..attrs}) {
             {children.into_view_once()}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use zgui::prelude::*;
+    use zgui::reactive::{Mounted, RenderEffect, flush, install};
+    use zgui_ui_primitives::Controllable;
+
+    use super::{ToggleGroupContext, ToggleSelection};
+    use crate::toggle::{ToggleSize, ToggleVariant};
+
+    #[test]
+    fn toggle_does_not_subscribe_the_caller_to_the_values() {
+        // An effect that turns a value on runs once, and a later press does not run it again.
+        install().ok();
+        let scope = Mounted::new();
+        scope.with(|| {
+            let context = ToggleGroupContext {
+                values: Controllable::uncontrolled(Vec::new(), None),
+                selection: ToggleSelection::Multiple,
+                disabled: Signal::stored_local(false),
+                variant: ToggleVariant::Default,
+                size: ToggleSize::Md,
+            };
+
+            let runs = Rc::new(Cell::new(0));
+            let counted = Rc::clone(&runs);
+            let effect = RenderEffect::new(move |_| {
+                counted.set(counted.get() + 1);
+                // Only the first run toggles, so a subscribed effect stops after one more run.
+                if counted.get() == 1 {
+                    context.toggle("bold");
+                }
+            });
+            flush();
+
+            context.toggle("italic");
+            flush();
+            assert_eq!(runs.get(), 1, "the effect ran only once");
+            assert_eq!(
+                context.values.get_untracked(),
+                ["bold".to_owned(), "italic".to_owned()]
+            );
+            drop(effect);
+        });
+        scope.unmount();
     }
 }
