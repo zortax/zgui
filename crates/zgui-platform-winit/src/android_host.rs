@@ -198,13 +198,9 @@ pub(crate) fn attach(app: AndroidApp, proxy: EventLoopProxy<UserEvent>) {
                 touching: false,
             }));
         }
-        // Without the host, NativeActivity keeps basic key input.
-        Err(error) => tracing::warn!(%error, "Android host could not load"),
+        // Without the host, there is no software keyboard.
+        Err(error) => tracing::error!(%error, "Android host could not load"),
     }
-}
-
-pub(crate) fn available() -> bool {
-    BRIDGE.get().is_some()
 }
 
 pub(crate) fn dispatch_input(event: zgui_platform::SurfaceEvent) {

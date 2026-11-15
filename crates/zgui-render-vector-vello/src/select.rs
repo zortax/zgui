@@ -48,11 +48,6 @@ pub fn chosen(gpu: &Gpu) -> Choice {
 ///
 /// One line is logged when the fallback is taken, naming what was missing.
 pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSource> {
-    prepare_for_device(gpu, size)
-}
-
-/// Built-in rasterisers can be prepared away from the UI thread.
-fn prepare_for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSource + Send> {
     let width = size.width.max(1) as u32;
     let height = size.height.max(1) as u32;
     if chosen(gpu) == Choice::Compute {
@@ -100,7 +95,4 @@ pub fn attach(renderer: &mut zgui_render_wgpu::WgpuRenderer, size: Size<i32, Dev
         Choice::Coverage => zgui_render::VectorBackend::Coverage,
     };
     renderer.set_vector_factory_for(for_device, backend);
-    // Mobile interactions should not pay shader compilation when opening their first overlay.
-    #[cfg(target_os = "android")]
-    renderer.prepare_vector_raster(prepare_for_device);
 }

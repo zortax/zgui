@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
+members = ["crates/*", "spikes/*", "xtask"]
 exclude = ["xtask/fixtures", "vendor"]
 
 [workspace.package]
@@ -173,8 +173,6 @@ tokio = { version = "1", default-features = false, features = [
     "net",
 ] }
 accesskit_android = { version = "0.7.5", features = ["embedded-dex"] }
-# HTTPS for the Android demo's network probes.
-ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
 
 # --- pure-data geometry, colour and GPU plumbing --------------------------------------------
 kurbo = "0.13.1"

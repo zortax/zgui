@@ -169,12 +169,12 @@ fn service_actions_report_platform_requirement_and_keep_manual_verification() {
     let action = h
         .all()
         .into_iter()
-        .find(|node| h.attribute(*node, "data-service").as_deref() == Some("download"))
-        .expect("download action mounted");
+        .find(|node| h.attribute(*node, "data-service").as_deref() == Some("connectivity"))
+        .expect("connectivity action mounted");
     h.click(action);
     assert_eq!(
         state.service_report.get_untracked(),
-        "download: Android device required"
+        "connectivity: Android device required"
     );
     assert!(
         state.service_checks.get_untracked().is_empty(),
@@ -183,18 +183,18 @@ fn service_actions_report_platform_requirement_and_keep_manual_verification() {
     let check = h
         .all()
         .into_iter()
-        .find(|node| h.attribute(*node, "data-verified").as_deref() == Some("download"))
+        .find(|node| h.attribute(*node, "data-verified").as_deref() == Some("connectivity"))
         .expect("verification checkbox mounted");
     h.click(check);
-    assert_eq!(state.service_checks.get_untracked(), vec!["download"]);
+    assert_eq!(state.service_checks.get_untracked(), vec!["connectivity"]);
     state.tab.set("controls".into());
     h.window.frame();
     state.tab.set("services".into());
     h.window.frame();
-    assert_eq!(state.service_checks.get_untracked(), vec!["download"]);
+    assert_eq!(state.service_checks.get_untracked(), vec!["connectivity"]);
     assert_eq!(
         state.service_report.get_untracked(),
-        "download: Android device required"
+        "connectivity: Android device required"
     );
 }
 

@@ -49,7 +49,6 @@ impl SharedRenderer {
     /// The renderer's own construction error, which on a device without compute shaders or without
     /// writable storage textures is where the shortfall is reported.
     pub fn new(gpu: &Gpu) -> Result<Self, vello::Error> {
-        let started = std::time::Instant::now();
         let cache = cache::load(gpu);
         let before = allocated(gpu);
         let renderer = Renderer::new(
@@ -75,7 +74,6 @@ impl SharedRenderer {
             },
         )?;
         cache.store();
-        tracing::info!(elapsed = ?started.elapsed(), "vector pipelines prepared");
         let fixed = allocated(gpu).saturating_sub(before);
         Ok(Self {
             renderer: Mutex::new(renderer),
@@ -101,12 +99,6 @@ impl SharedRenderer {
             .fetch_add(after.saturating_sub(before), Ordering::Relaxed);
         self.settled.store(true, Ordering::Relaxed);
         value
-    }
-
-    /// Exercises viewport-sized dispatch buffers before Android's first interaction.
-    #[cfg(target_os = "android")]
-    pub(crate) fn warm(&self, gpu: &Gpu, width: u32, height: u32) -> Result<(), vello::Error> {
-        self.measuring(gpu, || warm(gpu, &mut self.lock(), width, height))
     }
 
     /// The renderer itself, for the length of one rasterisation.
@@ -138,56 +130,3 @@ fn allocated(gpu: &Gpu) -> u64 {
 
 /// A handle to the renderer shared by everything on one device.
 pub type Shared = Arc<SharedRenderer>;
-
-/// Exercises fixed Vello allocations and the fine pipeline before any UI frame needs them.
-#[cfg(target_os = "android")]
-fn warm(gpu: &Gpu, renderer: &mut Renderer, width: u32, height: u32) -> Result<(), vello::Error> {
-    use vello::peniko::{Color, Fill};
-    use vello::{AaConfig, RenderParams, Scene};
-    let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
-        label: Some("zgui.vector.warmup"),
-        size: wgpu::Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let mut scene = Scene::new();
-    let clip = kurbo::RoundedRect::new(0.0, 0.0, f64::from(width), f64::from(height), 16.0);
-    scene.push_clip_layer(Fill::NonZero, kurbo::Affine::IDENTITY, &clip);
-    scene.fill(
-        Fill::NonZero,
-        kurbo::Affine::IDENTITY,
-        Color::WHITE,
-        None,
-        &kurbo::Rect::new(0.0, 0.0, f64::from(width), f64::from(height)),
-    );
-    scene.stroke(
-        &kurbo::Stroke::new(2.0),
-        kurbo::Affine::IDENTITY,
-        Color::WHITE,
-        None,
-        &kurbo::Circle::new((128.0, 128.0), 64.0),
-    );
-    scene.pop_layer();
-    renderer.render_to_texture(
-        gpu.device(),
-        gpu.queue(),
-        &scene,
-        &texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        &RenderParams {
-            base_color: Color::TRANSPARENT,
-            width,
-            height,
-            antialiasing_method: AaConfig::Area,
-        },
-    )?;
-    gpu.wait();
-    Ok(())
-}

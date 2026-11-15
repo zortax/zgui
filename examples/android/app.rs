@@ -352,12 +352,12 @@ mod service_persistence_tests {
             original.name.set("Mobile verifier".into());
             original
                 .service_checks
-                .set(vec!["download".into(), "job".into()]);
+                .set(vec!["connectivity".into(), "job".into()]);
             let restored = State::new();
             restored.restore(&original.save());
             assert_eq!(
                 restored.service_checks.get_untracked(),
-                vec!["download", "job"]
+                vec!["connectivity", "job"]
             );
             assert_eq!(restored.name.get_untracked(), "Mobile verifier");
             assert_eq!(restored.tasks.get_untracked().len(), 6);

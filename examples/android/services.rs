@@ -215,32 +215,6 @@ mod native {
         }
     }
 
-    fn network(upload: bool) {
-        say(if upload {
-            "upload started"
-        } else {
-            "download started"
-        });
-        std::thread::spawn(move || {
-            let result = if upload {
-                ureq::post("https://httpbin.org/post")
-                    .header("Content-Type", "text/plain")
-                    .send("ZGUI upload probe")
-            } else {
-                ureq::get("https://example.com/").call()
-            };
-            match result {
-                Ok(mut response) => {
-                    let status = response.status();
-                    let body = response.body_mut().read_to_string().unwrap_or_default();
-                    let body: String = body.chars().take(4096).collect();
-                    say(format!("HTTP {status}\n{body}"));
-                }
-                Err(error) => say(format!("Network failed (check connectivity): {error}")),
-            }
-        });
-    }
-
     fn foreground() {
         let started = background::start_service(
             "probe",
@@ -528,10 +502,6 @@ mod native {
                 Some(net) => format!("Active network: {net:?}"),
                 None => "Offline: no active network".into(),
             })),
-            "download" | "upload" => {
-                network(action == "upload");
-                Ok(None)
-            }
             "open" | "create" | "read-document" | "share-file" => {
                 documents(action);
                 Ok(None)
@@ -699,8 +669,6 @@ pub(crate) fn Services() -> impl IntoView {
             "Network & files",
             &[
                 ("Network / offline status", "connectivity"),
-                ("HTTPS download", "download"),
-                ("HTTPS upload", "upload"),
                 ("Open document", "open"),
                 ("Create document", "create"),
                 ("Share file", "share-file"),
