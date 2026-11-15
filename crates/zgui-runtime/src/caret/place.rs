@@ -86,21 +86,36 @@ impl Located {
     /// has not been laid out yet, or whose box generates none — because there is no line for a
     /// caret to sit on and inventing one would put it at the window's corner.
     pub fn of(layout: &LayoutStore, clusters: &dyn ShapedClusters, node: NodeKey) -> Option<Self> {
-        let box_ = text_box(layout, node)?;
-        let resolution = layout.inline_resolution(box_)?;
+        let mut located = Self::laid_out(layout, clusters, node)?;
         // The *fragment's* content box and not the layout result's. A layout result is measured
         // against the box's own parent; a fragment is where the composition pass put it on the
         // surface, which is the space a pointer arrives in and the space the glyphs were drawn in.
         // Reading the layout result places every caret at the paragraph's offset from its parent
         // instead of at its offset from the window, which for a field near the middle of a page is
         // a hit test that answers a completely different letter.
-        let placed = layout
-            .fragments_of_box(box_)
+        let (origin, transform) = layout
+            .fragments_of_box(located.owner)
             .iter()
             .filter_map(|frag| layout.fragment(*frag))
             .find(|fragment| fragment.kind == zgui_layout::FragmentKind::Box)
             .map(|fragment| (fragment.content_box().origin, fragment.transform))?;
-        let (origin, transform) = placed;
+        located.origin = origin;
+        located.transform = transform;
+        Some(located)
+    }
+
+    /// Reads one element's laid-out text without its place on the surface.
+    ///
+    /// The origin is zero and there is no transform, so every answer is in the paragraph's own
+    /// coordinates. This needs only the layout pass and not the fragment pass, so a caller between
+    /// the two can use it.
+    pub fn laid_out(
+        layout: &LayoutStore,
+        clusters: &dyn ShapedClusters,
+        node: NodeKey,
+    ) -> Option<Self> {
+        let box_ = text_box(layout, node)?;
+        let resolution = layout.inline_resolution(box_)?;
         let geometry: Vec<LineGeometry> = resolution
             .lines
             .iter()
@@ -130,8 +145,8 @@ impl Located {
         Some(Self {
             owner: box_,
             paragraph: resolution.paragraph,
-            origin,
-            transform,
+            origin: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            transform: None,
             lines,
             map: resolution.map.clone(),
             runs,

@@ -478,7 +478,7 @@ impl Window {
     ///
     /// The same as [`Window::place`] with an instant behaviour, less the frame request: the
     /// fragment pass of this frame is still to run, and it composes the mark.
-    fn place_in_frame(
+    pub(crate) fn place_in_frame(
         &mut self,
         container: NodeKey,
         to: Point<zgui_geom::DevicePx, zgui_geom::Device>,

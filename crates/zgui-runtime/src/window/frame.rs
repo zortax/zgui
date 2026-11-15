@@ -325,6 +325,7 @@ impl Window {
         // Everything moving on its own: a smooth scroll on its way, an edge springing back. It
         // marks the containers it moved and nothing else, exactly as a wheel event does.
         mark("f.scroll");
+        self.advance_text_drag(now);
         self.advance_scroll(timestamp);
         // A finger held still becomes a long press by the clock and by nothing else, so the frame
         // asks — and leaves behind the one moment it next owes an answer at, which the park merges
@@ -837,7 +838,7 @@ impl Window {
     /// marked by both the cheap and the expensive animation paths rather than only by the one that
     /// restyles.
     pub fn is_animating(&self) -> bool {
-        if self.is_scrolling() {
+        if self.is_scrolling() || self.is_drag_scrolling() {
             return true;
         }
         // An embedded producer that asked to run every refresh is an animation by any measure the
@@ -1350,6 +1351,8 @@ impl Window {
         // After the clamp, so a scroll is measured against the extents this pass produced, and
         // before the fragment pass, which composes what it moves.
         self.carry_out_owed_scrolls();
+        // For the same reason: the frame that moves the caret then also shows it.
+        self.reveal_caret();
         zgui_profile::latency::note_with("w.laidout", || {
             format!(
                 "asked={width}x{height} scale={} surface={}x{} ran={relaid_out}",
