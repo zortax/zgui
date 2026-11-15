@@ -156,27 +156,16 @@ impl ResizableContext {
     #[must_use]
     pub fn travel_of(self, handle: u64) -> Option<(f64, f64, f64)> {
         let before = self.panel_before(handle)?;
-        self.entries.with(|entries| {
-            entries.iter().find_map(|entry| match entry {
-                Entry::Panel {
-                    id, bound, size, ..
-                } if *id == before => Some((*size, bound.min, bound.max)),
-                _ => None,
-            })
-        })
+        self.entries.with(|entries| travel_in(entries, before))
     }
 
-    /// Read divider travel for input handling without subscribing.
+    /// The same as [`travel_of`](Self::travel_of), without subscribing.
+    ///
+    /// What the key and pointer handlers read: they run outside a reactive scope.
     fn travel_of_untracked(self, handle: u64) -> Option<(f64, f64, f64)> {
         let before = self.panel_before(handle)?;
-        self.entries.with_untracked(|entries| {
-            entries.iter().find_map(|entry| match entry {
-                Entry::Panel {
-                    id, bound, size, ..
-                } if *id == before => Some((*size, bound.min, bound.max)),
-                _ => None,
-            })
-        })
+        self.entries
+            .with_untracked(|entries| travel_in(entries, before))
     }
 
     /// Moves the divider called `handle` by `delta` percentage points, and reports what moved.
@@ -296,6 +285,16 @@ impl ResizableContext {
     }
 }
 
+/// The share and bounds of the panel called `panel` in `entries`.
+fn travel_in(entries: &[Entry], panel: u64) -> Option<(f64, f64, f64)> {
+    entries.iter().find_map(|entry| match entry {
+        Entry::Panel {
+            id, bound, size, ..
+        } if *id == panel => Some((*size, bound.min, bound.max)),
+        _ => None,
+    })
+}
+
 /// Shares the group out among the panels of `entries` from what each was declared as.
 fn share_out(entries: &mut [Entry]) {
     let (sizes, bounds): (Vec<f64>, Vec<PanelBound>) = entries
@@ -404,5 +403,54 @@ pub fn ResizablePanelGroup(
         box(node_ref = element, class = ResizableStyle::CLASS, {..own}, {..attrs}, class = class) {
             {children.into_view_once()}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use zgui::prelude::*;
+    use zgui::reactive::{Mounted, RenderEffect, RwSignal, flush, install};
+    use zgui_ui_primitives::Orientation;
+
+    use super::{PanelBound, ResizableContext};
+
+    #[test]
+    fn set_before_does_not_subscribe_the_caller_to_the_sizes() {
+        // An effect that puts a divider somewhere runs once, and a later drag does not run it
+        // again.
+        install().ok();
+        let scope = Mounted::new();
+        scope.with(|| {
+            let context = ResizableContext {
+                direction: Orientation::Horizontal,
+                entries: RwSignal::new_local(Vec::new()),
+                next: RwSignal::new_local(1),
+                group: NodeRef::default(),
+                on_change: StoredValue::new_local(None),
+            };
+            let _first = context.register_panel(PanelBound::default(), 50.0);
+            let handle = context.register_handle();
+            let _second = context.register_panel(PanelBound::default(), 50.0);
+
+            let runs = Rc::new(Cell::new(0));
+            let counted = Rc::clone(&runs);
+            let effect = RenderEffect::new(move |_| {
+                counted.set(counted.get() + 1);
+                context.set_before(handle, 30.0);
+            });
+            flush();
+            let before = || context.travel_of_untracked(handle).map(|(now, _, _)| now);
+            assert_eq!(before(), Some(30.0));
+
+            context.drag_by(handle, 10.0);
+            flush();
+            assert_eq!(before(), Some(40.0), "the drag stayed");
+            assert_eq!(runs.get(), 1, "the effect ran only once");
+            drop(effect);
+        });
+        scope.unmount();
     }
 }

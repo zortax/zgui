@@ -66,6 +66,7 @@ pub fn ResizableHandle(
     let direction = context.map_or(Orientation::Horizontal, ResizableContext::direction);
     let vertical = matches!(direction, Orientation::Vertical);
 
+    // The tracked read the a11y bindings below subscribe to.
     let travel = move || {
         let (context, id) = (context?, id?);
         context.travel_of(id)
