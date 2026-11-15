@@ -492,7 +492,6 @@ impl Window {
         // that is drawn once and then never changes again.
         mark("f.caret");
         self.plan_caret(now);
-        self.follow_text_caret();
         // After layout and the caret plan, before paint emission: the embed host binds producers
         // to laid-out boxes, attaches whatever they presented, and absorbs the damage the emit
         // walk below is gated on. See the `embed` module for the whole argument.
@@ -839,7 +838,7 @@ impl Window {
     /// marked by both the cheap and the expensive animation paths rather than only by the one that
     /// restyles.
     pub fn is_animating(&self) -> bool {
-        if self.is_scrolling() {
+        if self.is_scrolling() || self.is_drag_scrolling() {
             return true;
         }
         // An embedded producer that asked to run every refresh is an animation by any measure the
@@ -1352,6 +1351,8 @@ impl Window {
         // After the clamp, so a scroll is measured against the extents this pass produced, and
         // before the fragment pass, which composes what it moves.
         self.carry_out_owed_scrolls();
+        // For the same reason: the frame that moves the caret then also shows it.
+        self.reveal_caret();
         zgui_profile::latency::note_with("w.laidout", || {
             format!(
                 "asked={width}x{height} scale={} surface={}x{} ran={relaid_out}",

@@ -413,7 +413,14 @@ pub(crate) fn place(
         from.stacking
     };
 
-    let scrolls = crate::scroll_region::is_scroll_container(&node.style);
+    // A box only code scrolls is a scroll frame while its offset is away from the origin.
+    let code_offset = if crate::scroll_region::scrolls_by_code_only(&node.style) {
+        node.source.map(|element| tables.scroll.of(element))
+    } else {
+        None
+    };
+    let scrolls = crate::scroll_region::is_scroll_container(&node.style)
+        || code_offset.is_some_and(|at| at.x.0 != 0.0 || at.y.0 != 0.0);
     let scroll = if scrolls {
         Some(ScrollFrameId(key.index()))
     } else {

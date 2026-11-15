@@ -29,7 +29,7 @@ pub use crate::caret::place::Located;
 ///
 /// One CSS pixel, and never less than one device pixel: a caret rounded to nothing is a field with
 /// no insertion point at all, which is the defect this whole module exists to remove.
-fn caret_width(scale: f32) -> f32 {
+pub(crate) fn caret_width(scale: f32) -> f32 {
     scale.round().max(1.0)
 }
 
