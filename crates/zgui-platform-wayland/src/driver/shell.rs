@@ -68,9 +68,7 @@ impl WaylandState {
 
         let (resized, visibility, resizing, answered, state_flip) = {
             let mut shared = surface.shared();
-            let state_flip =
-                shared.maximized != pending.maximized || shared.fullscreen != pending.fullscreen;
-            let extent = shared.toplevel_extent(&pending, surface.wanted());
+            let (extent, state_flip) = shared.apply_shell_states(&pending, surface.wanted());
             shared.resizing = pending.resizing;
             shared.visibility.configured = true;
             // The state this whole shell is bound at version six for, and the only signal on this

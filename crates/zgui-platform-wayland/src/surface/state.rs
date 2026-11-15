@@ -7,6 +7,8 @@ use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
 use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
+use crate::surface::role::toplevel;
+use crate::surface::role::xdg::configure::Pending;
 
 /// The smallest and largest extents a window may be dragged to, in that order.
 ///
@@ -47,7 +49,10 @@ pub(crate) struct Shared {
     pub(crate) size: Size<DevicePx, Device>,
     /// The extent the compositor configured, in logical pixels.
     pub(crate) logical: Size<CssPx, Css>,
-    /// The normal size before entering maximized or fullscreen state.
+    /// The normal extent from before the window became maximised or full screen.
+    ///
+    /// A zero extent means the window opened maximised or full screen. A restore then uses the
+    /// extent the application asked for.
     restore_size: Option<Size<CssPx, Css>>,
     /// How many physical pixels there are to a logical one.
     pub(crate) scale: f64,
@@ -125,7 +130,7 @@ pub(crate) struct Shared {
     /// includes the pair that made it unresizable.
     pub(crate) bounds: Bounds,
     /// A configure that has arrived and not yet been applied.
-    pub(crate) pending_configure: Option<crate::surface::role::xdg::configure::Pending>,
+    pub(crate) pending_configure: Option<Pending>,
     /// The outputs the compositor says the surface is on.
     pub(crate) outputs: Vec<WlOutput>,
 }
@@ -164,12 +169,17 @@ impl Shared {
         }
     }
 
-    /// Applies shell state and chooses an extent when the compositor leaves one unspecified.
-    pub(crate) fn toplevel_extent(
+    /// Applies the maximised and full-screen states of a configure.
+    ///
+    /// Returns the extent to draw at, and whether either state changed. An axis the compositor
+    /// leaves unnamed takes the saved normal extent when the window leaves maximised or full
+    /// screen. A second expanded state keeps the extent saved by the first.
+    pub(crate) fn apply_shell_states(
         &mut self,
-        pending: &crate::surface::role::xdg::configure::Pending,
+        pending: &Pending,
         wanted: Size<CssPx, Css>,
-    ) -> Size<CssPx, Css> {
+    ) -> (Size<CssPx, Css>, bool) {
+        let flipped = self.maximized != pending.maximized || self.fullscreen != pending.fullscreen;
         let was_expanded = self.maximized || self.fullscreen;
         let expanded = pending.maximized || pending.fullscreen;
         if !was_expanded && expanded {
@@ -182,7 +192,7 @@ impl Shared {
         };
         self.maximized = pending.maximized;
         self.fullscreen = pending.fullscreen;
-        crate::surface::role::toplevel::extent(pending.size, wanted, fallback)
+        (toplevel::extent(pending.size, wanted, fallback), flipped)
     }
 
     /// Records the extent and scale the compositor settled on, and what changed with it.
@@ -444,6 +454,8 @@ impl Shared {
 mod tests {
     use super::{EndOfRedraw, Shared};
     use crate::frame::Ahead;
+    use crate::surface::role::xdg::configure::Pending;
+    use std::num::NonZeroU32;
     use std::time::{Duration, Instant};
     use zgui_geom::{CssPx, DevicePx, Size};
     use zgui_platform::SurfaceEvent;
@@ -547,56 +559,85 @@ mod tests {
         );
     }
 
+    fn expanded(full: bool) -> Pending {
+        Pending {
+            maximized: !full,
+            fullscreen: full,
+            ..Pending::default()
+        }
+    }
+
     #[test]
     fn restoring_from_maximized_and_fullscreen_recovers_normal_size() {
-        use crate::surface::role::xdg::configure::Pending;
         for full in [false, true] {
             let mut shared = Shared::new();
             let wanted = logical(800.0, 600.0);
             let normal = logical(940.0, 700.0);
             shared.resized(normal, 1.5);
-            let expanded = Pending {
-                maximized: !full,
-                fullscreen: full,
-                ..Pending::default()
-            };
-            shared.toplevel_extent(&expanded, wanted);
+            shared.apply_shell_states(&expanded(full), wanted);
             shared.resized(logical(1920.0, 1080.0), 1.5);
-            // Fullscreen from a maximized window must not replace its original restore size.
-            shared.toplevel_extent(
-                &Pending {
-                    fullscreen: true,
-                    ..Pending::default()
-                },
-                wanted,
-            );
-            shared.resized(logical(1920.0, 1200.0), 1.5);
-            assert_eq!(shared.toplevel_extent(&Pending::default(), wanted), normal);
+            let (extent, _) = shared.apply_shell_states(&Pending::default(), wanted);
+            assert_eq!(extent, normal);
         }
     }
 
     #[test]
-    fn compositor_named_restore_dimensions_override_the_saved_size() {
-        use crate::surface::role::xdg::configure::Pending;
+    fn a_second_expanded_state_keeps_the_first_saved_extent() {
+        let mut shared = Shared::new();
+        let wanted = logical(800.0, 600.0);
+        let normal = logical(940.0, 700.0);
+        shared.resized(normal, 1.0);
+        shared.apply_shell_states(&expanded(false), wanted);
+        shared.resized(logical(1920.0, 1080.0), 1.0);
+        shared.apply_shell_states(&expanded(true), wanted);
+        shared.resized(logical(1920.0, 1200.0), 1.0);
+        shared.apply_shell_states(&expanded(false), wanted);
+        shared.resized(logical(1920.0, 1080.0), 1.0);
+        let (extent, _) = shared.apply_shell_states(&Pending::default(), wanted);
+        assert_eq!(extent, normal);
+    }
+
+    #[test]
+    fn a_window_opened_expanded_restores_to_the_extent_it_asked_for() {
+        for full in [false, true] {
+            let mut shared = Shared::new();
+            let wanted = logical(800.0, 600.0);
+            let named = Pending {
+                size: (NonZeroU32::new(1920), NonZeroU32::new(1080)),
+                ..expanded(full)
+            };
+            let (extent, _) = shared.apply_shell_states(&named, wanted);
+            shared.resized(extent, 1.0);
+            let (extent, _) = shared.apply_shell_states(&Pending::default(), wanted);
+            assert_eq!(extent, wanted);
+        }
+    }
+
+    #[test]
+    fn a_restore_naming_one_axis_takes_the_saved_size_on_the_other() {
         let mut shared = Shared::new();
         let wanted = logical(800.0, 600.0);
         shared.resized(wanted, 1.0);
-        shared.toplevel_extent(
-            &Pending {
-                maximized: true,
-                ..Pending::default()
-            },
-            wanted,
-        );
+        shared.apply_shell_states(&expanded(false), wanted);
         shared.resized(logical(1920.0, 1080.0), 1.0);
         let restore = Pending {
-            size: (std::num::NonZeroU32::new(1000), None),
+            size: (NonZeroU32::new(1000), None),
             ..Pending::default()
         };
-        assert_eq!(
-            shared.toplevel_extent(&restore, wanted),
-            logical(1000.0, 600.0)
-        );
+        let (extent, _) = shared.apply_shell_states(&restore, wanted);
+        assert_eq!(extent, logical(1000.0, 600.0));
+    }
+
+    #[test]
+    fn only_a_changed_state_reports_a_flip() {
+        let mut shared = Shared::new();
+        let wanted = logical(800.0, 600.0);
+        shared.resized(wanted, 1.0);
+        assert!(!shared.apply_shell_states(&Pending::default(), wanted).1);
+        assert!(shared.apply_shell_states(&expanded(false), wanted).1);
+        assert!(!shared.apply_shell_states(&expanded(false), wanted).1);
+        assert!(shared.apply_shell_states(&expanded(true), wanted).1);
+        assert!(shared.apply_shell_states(&Pending::default(), wanted).1);
     }
 
     #[test]
