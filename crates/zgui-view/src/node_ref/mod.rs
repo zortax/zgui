@@ -169,6 +169,14 @@ impl NodeRef {
         bound.host.window_box(bound.node)
     }
 
+    /// Whether this element's computed `direction` is right to left, from the last restyle.
+    ///
+    /// False when this handle is not bound.
+    pub fn is_rtl(&self) -> bool {
+        self.bound()
+            .is_some_and(|bound| bound.host.is_rtl(bound.node))
+    }
+
     /// How many device pixels one CSS pixel is on the surface this element is on.
     ///
     /// One outside a window, where there is no surface to ask. Inside one it is what converts a
