@@ -46,11 +46,19 @@ use crate::window::Window;
 const POOLED_RESTYLE_MIN_NODES: usize = 64;
 
 /// What one frame did.
+///
+/// Equality compares the wall times too, so two reports of the same work are seldom equal.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FrameReport {
-    /// Wall time spent processing the frame; excludes waiting for its scheduled start.
+    /// Wall time from the start of the frame to the probe call.
+    ///
+    /// Does not include the wait before the frame starts.
     pub elapsed: std::time::Duration,
-    /// Paint and renderer submission wall time, including any driver wait. Not GPU execution time.
+    /// Wall time of paint and renderer submission, including a wait for the surface.
+    ///
+    /// Does not include GPU execution, or the present of a held frame in
+    /// [`Window::present_held`].
     pub paint_elapsed: std::time::Duration,
     /// What the renderer made of it.
     pub outcome: FrameOutcome,
@@ -206,6 +214,13 @@ impl Window {
         }
     }
 
+    /// What the last frame did, or `None` before the first frame.
+    ///
+    /// A probe reads the report of the frame that has just ended.
+    pub fn last_frame_report(&self) -> Option<FrameReport> {
+        self.last_report
+    }
+
     /// Presents the frame the renderer holds, now that the platform is ready for it.
     ///
     /// The frame was composed and its damage retired when it ran. This is only the copy to the
@@ -290,7 +305,7 @@ impl Window {
 
     /// The frame itself, with the window's scope already current.
     fn run_frame(&mut self, clock: &dyn Clock) -> FrameReport {
-        let measured_start = Instant::now();
+        let started = Instant::now();
         use zgui_profile::latency::mark;
         mark("f.begin");
         let now = clock.now();
@@ -647,10 +662,10 @@ impl Window {
         self.show_first_frame(outcome);
 
         // Last, with everything this frame produced still standing: the scene it emitted, the
-        // damage it answered, the layout it computed. The handle is cloned out first because the
-        // probe is handed the window it is stored on.
+        // damage it answered, the layout it computed, and this report. The handle is cloned out
+        // first because the probe is handed the window it is stored on.
         let report = FrameReport {
-            elapsed: measured_start.elapsed(),
+            elapsed: started.elapsed(),
             paint_elapsed,
             outcome,
             needs_another_frame,
@@ -658,8 +673,9 @@ impl Window {
             timers_fired,
             animated,
         };
+        self.last_report = Some(report);
         if let Some(probe) = self.probe.clone() {
-            probe.frame_reported(self, &report);
+            probe.frame_ended(self);
         }
 
         zgui_profile::latency::note_with("f.end", || {

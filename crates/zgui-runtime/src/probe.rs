@@ -43,7 +43,8 @@ use crate::window::Window;
 ///
 /// Called with the window in the state the frame left it: the scene it emitted, the damage it
 /// answered, the layout it computed and the renderer's own report are all still the ones belonging
-/// to the frame that has just been presented.
+/// to the frame that has just been presented. [`Window::last_frame_report`] gives the frame's own
+/// report, with its wall times.
 ///
 /// The method takes `&self` rather than `&mut self` because the window is borrowed for the call, so
 /// a probe that wanted to keep something writes it through a cell or a signal. That is not a
@@ -52,11 +53,6 @@ use crate::window::Window;
 pub trait FrameProbe {
     /// A frame has finished on `window`.
     fn frame_ended(&self, window: &Window);
-
-    /// Completed-frame timings and renderer counters, without requesting another frame.
-    fn frame_reported(&self, window: &Window, _report: &crate::window::frame::FrameReport) {
-        self.frame_ended(window);
-    }
 
     /// What to call this probe in a diagnostic rendering of the window's options.
     ///
