@@ -84,6 +84,14 @@ pub trait ViewHost {
     /// boxes did not survive to a fragment — one inside a subtree that was skipped.
     fn window_box(&self, node: NodeId) -> Option<Rect<DevicePx, Device>>;
 
+    /// Whether `node`'s computed `direction` is right to left, from the last restyle.
+    ///
+    /// False for a node that is not styled. A control that maps a pointer onto its own axis, such
+    /// as a slider, reads this to run from the right edge.
+    fn is_rtl(&self, _node: NodeId) -> bool {
+        false
+    }
+
     /// How many device pixels one CSS pixel is on this window's surface.
     ///
     /// A pointer event reports where it is in **CSS** pixels; [`ViewHost::window_box`] reports
