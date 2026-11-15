@@ -302,7 +302,13 @@ impl Window {
     pub(crate) fn carry_out_gestures(&mut self, read: &[zgui_input::Gesture]) {
         for gesture in read {
             match gesture {
-                zgui_input::Gesture::PanStart { from, .. } => {
+                zgui_input::Gesture::PanStart { pointer, from } => {
+                    // A captured pointer belongs to the element that captured it, such as a
+                    // slider or a drawing surface, and drags it rather than a scroller.
+                    if self.router.capture().of(*pointer).is_some() {
+                        self.panning = Vec::new();
+                        continue;
+                    }
                     // Decided once, where the finger went down, and held for the whole drag. A
                     // container re-derived from where the finger is *now* is a list that stops
                     // following it the moment the drag leaves the scrollport — which is most

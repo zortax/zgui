@@ -54,8 +54,8 @@ pub enum Command {
         /// Whether to animate getting there.
         behavior: ScrollBehavior,
     },
-    /// Route subsequent pointer events to this node until the button is released.
-    CapturePointer(NodeId),
+    /// Route the pointer's subsequent events to this node until the button is released.
+    CapturePointer(NodeId, zgui_vocab::PointerId),
     /// Install this style sheet at the author origin, or replace it when the name is taken.
     InstallStylesheet {
         /// What the sheet is installed under.
@@ -118,9 +118,11 @@ impl core::fmt::Debug for Command {
                 .field("target", target)
                 .field("behavior", behavior)
                 .finish(),
-            Self::CapturePointer(node) => {
-                formatter.debug_tuple("CapturePointer").field(node).finish()
-            }
+            Self::CapturePointer(node, pointer) => formatter
+                .debug_tuple("CapturePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::InstallStylesheet { name, css } => formatter
                 .debug_struct("InstallStylesheet")
                 .field("name", name)
