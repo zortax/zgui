@@ -267,7 +267,11 @@ impl Window {
 
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
-            let mut sink = HostSink::new(&host);
+            let pointer = match event {
+                SurfaceEvent::Pointer { event, .. } => event.id,
+                _ => zgui_vocab::PointerId::MOUSE,
+            };
+            let mut sink = HostSink::for_pointer(&host, pointer);
             dispatch::run(
                 self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
@@ -339,9 +343,8 @@ impl Window {
             self.text_clicks.forget();
         }
         // A finger produces presses and moves and nothing else; what those *mean* is read here and
-        // acted on after the listeners, exactly as the wheel's own default is. A handler that took
-        // responsibility for the press has already stopped the reading from reaching a scroll,
-        // because the recogniser only ever sees what the platform sent.
+        // acted on after the listeners, exactly as the wheel's own default is. A handler that
+        // captured the pointer keeps the reading from reaching a scroll.
         if let SurfaceEvent::Pointer {
             action,
             event,
@@ -774,9 +777,8 @@ impl Window {
                 let key = node.and_then(zgui_view_dom::id::to_document);
                 self.move_focus(key, zgui_input::FocusSource::Script, timestamp);
             }
-            Command::CapturePointer(node) => {
+            Command::CapturePointer(node, pointer) => {
                 if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    let pointer = zgui_vocab::PointerId::MOUSE;
                     self.router.capture_mut().set(pointer, key);
                 }
             }
