@@ -212,7 +212,7 @@ fn keyframe_entrance_starts_when_first_frame_is_presented() {
 }
 
 #[test]
-fn a_transition_started_by_replacing_a_token_sheet_keeps_the_document_animating() {
+fn a_transition_started_by_replacing_a_token_sheet_runs_to_the_new_value() {
     // A theme switch: the sheet holding the colour tokens is replaced, and an element whose colour
     // reads a token transitions to the new value.
     let mut h = Harness::new();
@@ -221,8 +221,7 @@ fn a_transition_started_by_replacing_a_token_sheet_keeps_the_document_animating(
         "root { display: block }
          .btn { display: block; color: var(--fg); transition: color 400ms linear }",
     );
-    let root = h.root;
-    let button = h.append(root, "box");
+    let button = h.append(h.root, "box");
     h.set_classes(button, &["btn"]);
     h.frame();
     h.retire_all();
@@ -230,9 +229,23 @@ fn a_transition_started_by_replacing_a_token_sheet_keeps_the_document_animating(
     h.replace(0, ":root { --fg: rgb(200, 200, 200) }");
     h.engine.force_author_rules_dirty();
     h.frame();
-    let marked = h.owed(root) | h.owed_below(root);
+    h.retire_all();
+    assert_eq!(
+        colour(&h, button),
+        0,
+        "the transition starts at the old value"
+    );
+
+    animation_frame(&mut h, 0.160);
+    let midway = colour(&h, button);
     assert!(
-        marked.contains(zgui_dom::Dirty::ANIMATING),
-        "the transition started and nothing asks for the frames that run it: {marked:?}"
+        midway > 0 && midway < 7843,
+        "the transition does not move between frames: {midway}"
+    );
+    animation_frame(&mut h, 0.500);
+    assert_eq!(
+        colour(&h, button),
+        7843,
+        "the transition does not reach the new token value"
     );
 }
