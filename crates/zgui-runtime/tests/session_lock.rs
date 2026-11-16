@@ -183,3 +183,26 @@ fn a_lock_window_opened_after_the_lock_is_over_does_not_open() {
     assert!(!late.is_open());
     assert!(harness.platform().offscreens().is_empty());
 }
+
+#[test]
+fn each_lock_window_reports_its_first_frame_on_the_screen() {
+    let mut harness = application(true);
+    let lock = harness
+        .app()
+        .scope()
+        .with(SessionLock::lock)
+        .expect("the lock is asked for");
+    let window = harness
+        .app()
+        .scope()
+        .with(|| lock.open_surface(MonitorId::new(1), zgui_elements::column));
+    assert!(
+        !window.presented().get_untracked(),
+        "a window that drew nothing shows nothing"
+    );
+    harness.settle(8);
+    assert!(
+        window.presented().get_untracked(),
+        "a platform without presentation reports counts the first frame as shown"
+    );
+}

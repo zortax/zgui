@@ -143,6 +143,11 @@ impl Window {
             zgui_platform::SurfaceEvent::ColorSchemeChanged(scheme) => {
                 self.set_platform_color_scheme(*scheme)
             }
+            // The first frame reached the screen. Nothing changes in what the window draws.
+            zgui_platform::SurfaceEvent::Presented => {
+                self.handle.set_presented();
+                false
+            }
             // Keyboard focus is a level as well, and it is one whose *edges* do work that must not
             // be done twice: losing it settles the field being typed into, which is the event a
             // form validates on, and a window system that re-states the focus it already reported
@@ -271,8 +276,12 @@ impl Window {
         self.first_frame = false;
     }
 
-    /// Shows the surface once its first frame has reached it.
+    /// Shows the surface once its first frame has reached it. Where the platform reports no
+    /// presentation, that frame also counts as shown.
     fn show_first_frame(&mut self, outcome: FrameOutcome) {
+        if matches!(outcome, FrameOutcome::Presented(_)) && !self.surface.reports_presentation() {
+            self.handle.set_presented();
+        }
         if self.first_frame && matches!(outcome, FrameOutcome::Presented(_)) {
             // A surface is shown by its first frame, never before it: showing an unpainted one is
             // what produces a flash of empty window at launch.

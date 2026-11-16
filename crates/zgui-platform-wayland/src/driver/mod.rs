@@ -313,13 +313,13 @@ impl WaylandState {
             return;
         };
         let at = self.monotonic.instant(seconds, nanoseconds);
-        let event = {
+        let (edge, first) = {
             let mut shared = surface.shared();
             shared.presented(at, refresh);
             shared.visibility.answered();
-            shared.visibility_edge()
+            (shared.visibility_edge(), shared.presentation_edge(true))
         };
-        if let Some(event) = event {
+        for event in [edge, first].into_iter().flatten() {
             self.report(id, event);
         }
     }

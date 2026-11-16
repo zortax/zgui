@@ -1,6 +1,6 @@
 //! The session lock is offered only with its global, confirmed with lock windows, and unlocked.
 //!
-//! Five properties, read off what the application is told:
+//! Six properties, read off what the application is told:
 //!
 //! * **The capability is the global.** A compositor without `ext_session_lock_manager_v1`
 //!   declares no session lock, and a lock asked for there ends at once.
@@ -11,6 +11,8 @@
 //! * **A lock window follows its output.** The output changes its mode while the session is
 //!   locked. The lock window draws at the new extent, and the compositor raises no protocol
 //!   error. Only sway changes a mode on request, so elsewhere this property is skipped.
+//! * **A lock window reports its first frame on the screen.** The compositor shows a frame of each
+//!   lock window, and each window says so before the unlock.
 //! * **An unlock closes the lock windows.** The windows close with
 //!   [`CloseReason::Application`], and the compositor raises no protocol error.
 //!
@@ -71,6 +73,8 @@ struct Seen {
     mode_changed: bool,
     /// Whether the lock window drew [`FOLLOWED_FRAMES`] frames at the new extent.
     followed: bool,
+    /// Whether every lock window reported a frame on the screen.
+    presented: bool,
     /// Why each lock window closed.
     reasons: Vec<Option<CloseReason>>,
 }
@@ -134,10 +138,16 @@ impl Drive {
                 self.step = Step::Following;
             }
         }
+        let presented = lock
+            .windows()
+            .iter()
+            .all(|window| window.presented().get_untracked());
         if self.step == Step::Following
+            && presented
             && (!self.seen.mode_changed || self.followed_frames >= FOLLOWED_FRAMES)
         {
             self.seen.followed = self.followed_frames >= FOLLOWED_FRAMES;
+            self.seen.presented = true;
             if lock.unlock() {
                 self.step = Step::Unlocking;
             }
@@ -325,6 +335,10 @@ fn main() {
     assert!(
         seen.duplicate_refused,
         "a second lock surface on an output was asked for: {seen:?}"
+    );
+    assert!(
+        seen.presented,
+        "a lock window never reported a frame on the screen: {seen:?}"
     );
     if seen.mode_changed {
         assert!(

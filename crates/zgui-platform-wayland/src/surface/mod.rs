@@ -548,6 +548,10 @@ impl Surface for WaylandSurface {
         Some(self.shared().snapshot())
     }
 
+    fn reports_presentation(&self) -> bool {
+        true
+    }
+
     fn request_size(&self, size: Size<CssPx, Css>) -> Option<Size<DevicePx, Device>> {
         chrome::request_size(self, size)
     }

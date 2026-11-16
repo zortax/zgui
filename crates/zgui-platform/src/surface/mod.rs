@@ -103,6 +103,13 @@ pub trait Surface: Send + Sync + 'static {
         None
     }
 
+    /// Whether the platform sends [`SurfaceEvent::Presented`] for this surface.
+    ///
+    /// Without it, a caller counts the first frame handed to the surface as shown.
+    fn reports_presentation(&self) -> bool {
+        false
+    }
+
     /// Asks for a different content size, and reports the size actually taken.
     ///
     /// A platform may refuse, in which case the answer is the size that was kept.

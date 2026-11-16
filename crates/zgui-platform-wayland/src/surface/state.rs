@@ -75,6 +75,8 @@ pub(crate) struct Shared {
     pub(crate) told_hidden: bool,
     /// Whether a buffer was committed during the redraw now being delivered.
     pub(crate) presented: bool,
+    /// Whether the application has been told that a frame reached the screen.
+    pub(crate) told_presented: bool,
     /// The number of the last frame callback asked for.
     ///
     /// Only that callback releases the pacer. An older one still counts as the compositor speaking
@@ -205,6 +207,7 @@ impl Shared {
             visibility: Visibility::default(),
             told_hidden: true,
             presented: false,
+            told_presented: false,
             callback_serial: 0,
             released: None,
             chained: None,
@@ -468,6 +471,18 @@ impl Shared {
         self.pacer.hidden(hidden);
         self.cancel_callbacks();
         Some(SurfaceEvent::Occluded(hidden))
+    }
+
+    /// The first-presentation event, once a committed buffer reached the screen.
+    ///
+    /// `shown` says the compositor showed a frame of this surface. The event goes out once, and
+    /// only after a buffer was committed.
+    pub(crate) fn presentation_edge(&mut self, shown: bool) -> Option<SurfaceEvent> {
+        if !shown || !self.mapped || self.told_presented {
+            return None;
+        }
+        self.told_presented = true;
+        Some(SurfaceEvent::Presented)
     }
 
     /// Records that a lock surface acknowledged a configure that its next commit has to match.
@@ -896,6 +911,25 @@ mod tests {
             shared.feedback_asked();
         }
         assert!(shared.visibility.is_hidden());
+    }
+
+    #[test]
+    fn the_first_frame_on_the_screen_is_reported_once_after_a_buffer() {
+        let mut shared = Shared::new();
+        assert!(
+            shared.presentation_edge(true).is_none(),
+            "an answer before any buffer shows nothing"
+        );
+        shared.mapped = true;
+        assert!(shared.presentation_edge(false).is_none());
+        assert!(matches!(
+            shared.presentation_edge(true),
+            Some(SurfaceEvent::Presented)
+        ));
+        assert!(
+            shared.presentation_edge(true).is_none(),
+            "the event goes out once"
+        );
     }
 
     #[test]

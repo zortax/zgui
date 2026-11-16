@@ -48,6 +48,11 @@ pub enum SurfaceEvent {
     /// This arrives only after a surface answered [`Surface::present_now`](crate::Surface::present_now)
     /// with `false`. It asks for the held frame to be presented, and for nothing to be drawn.
     PresentReady,
+    /// A frame of the surface reached the screen for the first time.
+    ///
+    /// A platform sends it once per surface, and only when
+    /// [`Surface::reports_presentation`](crate::Surface::reports_presentation) answers true.
+    Presented,
     /// The user asked for the surface to close. Nothing has closed yet.
     CloseRequested,
     /// The desktop took the surface away, and it cannot be shown again.

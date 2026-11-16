@@ -100,15 +100,21 @@ impl Dispatch<WlCallback, FrameCallback> for WaylandState {
         let wl_callback::Event::Done { .. } = event else {
             return;
         };
-        let event = state.live.surface(frame.surface).and_then(|surface| {
+        // Without presentation feedback, the answer for a committed buffer is the best sign that
+        // the compositor showed it.
+        let unreported = !state.presentation.reports();
+        let events = state.live.surface(frame.surface).map(|surface| {
             let mut shared = surface.shared();
             shared.frame_callback(
                 frame.serial,
                 zgui_platform::Clock::now(state.live.clock.as_ref()),
             );
-            shared.visibility_edge()
+            [
+                shared.visibility_edge(),
+                shared.presentation_edge(unreported),
+            ]
         });
-        if let Some(event) = event {
+        for event in events.into_iter().flatten().flatten() {
             state.report(frame.surface, event);
         }
     }

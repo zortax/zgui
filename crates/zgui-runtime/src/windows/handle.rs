@@ -71,6 +71,8 @@ pub(crate) struct WindowShared {
     pub(crate) focus_listeners: Rc<RefCell<crate::windows::focus::FocusListeners>>,
     /// Whether the desktop says nothing of the window is visible.
     pub(crate) occluded: ArcRwSignal<bool>,
+    /// Whether a frame of the window has reached the screen.
+    pub(crate) presented: ArcRwSignal<bool>,
     /// Whether the window is maximised.
     pub(crate) maximized: ArcRwSignal<bool>,
     /// How the window fills the screen, if it does.
@@ -113,6 +115,7 @@ impl WindowHandle {
                 focused: ArcRwSignal::new(true),
                 focus_listeners: Rc::default(),
                 occluded: ArcRwSignal::new(false),
+                presented: ArcRwSignal::new(false),
                 maximized: ArcRwSignal::new(false),
                 fullscreen: ArcRwSignal::new(None),
                 close_reason: ArcRwSignal::new(None),
@@ -214,6 +217,13 @@ impl WindowHandle {
         self.shared.occluded.set(occluded);
     }
 
+    /// Records that a frame of the window reached the screen.
+    pub(crate) fn set_presented(&self) {
+        if !self.shared.presented.get_untracked() {
+            self.shared.presented.set(true);
+        }
+    }
+
     /// Asks the surface again whether it is maximised or full screen.
     ///
     /// Read on resize, and when the platform reports a state change. A desktop can change either
@@ -306,6 +316,15 @@ impl WindowHandle {
     /// What an application watches to stop animating something nobody can see.
     pub fn occluded(&self) -> Signal<bool> {
         self.shared.occluded.clone().into()
+    }
+
+    /// Whether a frame of the window has reached the screen.
+    ///
+    /// It turns true once and stays true. Where the platform reports presentation, the desktop says
+    /// when the first frame was shown. Elsewhere it turns true when the first frame is handed to the
+    /// desktop. A lock screen reads it to know that every output shows the lock.
+    pub fn presented(&self) -> Signal<bool> {
+        self.shared.presented.clone().into()
     }
 
     /// Whether the window is maximised.
