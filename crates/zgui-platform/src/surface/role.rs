@@ -129,7 +129,20 @@ impl Constrain {
 }
 
 /// Where a shell layer sits and how much of the screen it claims.
+///
+/// ```
+/// use zgui_geom::{CssPx, Edges};
+/// use zgui_platform::{ExclusiveZone, Layer, LayerPlacement};
+///
+/// // A bar across the top of the screen that keeps windows out of its 34 pixels.
+/// let bar = LayerPlacement::new(Layer::Top)
+///     .with_anchors(Edges::new(true, true, false, true))
+///     .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(34.0)))
+///     .with_namespace("bar");
+/// assert_eq!(bar.namespace.as_deref(), Some("bar"));
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct LayerPlacement {
     /// Which layer of the desktop it belongs to.
     pub layer: Layer,
@@ -140,16 +153,88 @@ pub struct LayerPlacement {
     pub anchors: Edges<bool>,
     /// How far in from each anchored edge it sits.
     pub margin: Edges<CssPx>,
-    /// How much room to reserve for it, so that ordinary windows do not open underneath.
-    ///
-    /// Absent lets the desktop take the surface's own extent along its anchored edge, which is what
-    /// a dock wants. Zero reserves nothing, which is what an overlay wants.
-    pub exclusive_zone: Option<CssPx>,
+    /// How the surface and the room other shell surfaces reserve affect each other.
+    pub exclusive_zone: ExclusiveZone,
     /// Whether the surface takes the keyboard.
     pub keyboard: KeyboardInteractivity,
     /// The output to place it on, named as [`MonitorInfo::name`](crate::MonitorInfo::name)
     /// reports it. Absent lets the desktop choose.
     pub monitor: Option<String>,
+    /// What the surface is for, in a word the desktop's rules can match, such as `bar` or
+    /// `notifications`.
+    ///
+    /// Absent uses the application identifier. The desktop reads it once, when the surface is
+    /// made.
+    pub namespace: Option<String>,
+}
+
+impl LayerPlacement {
+    /// A surface on `layer`, anchored to no edge, that avoids the room other surfaces reserve.
+    pub fn new(layer: Layer) -> Self {
+        Self {
+            layer,
+            ..Self::default()
+        }
+    }
+
+    /// The same placement fastened to `anchors`.
+    pub fn with_anchors(mut self, anchors: Edges<bool>) -> Self {
+        self.anchors = anchors;
+        self
+    }
+
+    /// The same placement, `margin` in from each anchored edge.
+    pub fn with_margin(mut self, margin: Edges<CssPx>) -> Self {
+        self.margin = margin;
+        self
+    }
+
+    /// The same placement with `zone` as its exclusive zone.
+    pub fn with_exclusive_zone(mut self, zone: ExclusiveZone) -> Self {
+        self.exclusive_zone = zone;
+        self
+    }
+
+    /// The same placement, taking the keyboard as `keyboard` says.
+    pub fn with_keyboard(mut self, keyboard: KeyboardInteractivity) -> Self {
+        self.keyboard = keyboard;
+        self
+    }
+
+    /// The same placement on the output called `monitor`.
+    pub fn with_monitor(mut self, monitor: impl Into<String>) -> Self {
+        self.monitor = Some(monitor.into());
+        self
+    }
+
+    /// The same placement under `namespace`.
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = Some(namespace.into());
+        self
+    }
+}
+
+/// How a shell layer and the room other shell surfaces reserve affect each other.
+///
+/// A bar reserves a strip along its edge so that windows and other layers do not cover it. Every
+/// other layer either moves to stay out of the strips the others reserve, or ignores them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum ExclusiveZone {
+    /// Reserve nothing, and stay out of the room other surfaces reserve.
+    ///
+    /// What a pop-over below a bar wants: it opens below the bar, not under it.
+    #[default]
+    Avoid,
+    /// Reserve this much room along the anchored edge, measured from that edge.
+    ///
+    /// What a bar or a dock wants. The room is reserved only when the surface is anchored to one
+    /// edge, or to one edge and the two edges beside it.
+    Reserve(CssPx),
+    /// Reserve nothing, and extend under the room other surfaces reserve.
+    ///
+    /// What a wallpaper, a full-screen overlay or a lock screen wants.
+    Ignore,
 }
 
 /// Which layer of the desktop a shell surface belongs to.
@@ -185,7 +270,10 @@ pub enum KeyboardInteractivity {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Constrain, KeyboardInteractivity, Layer, PopupPlacement, SurfaceRole};
+    use super::{
+        Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPlacement,
+        PopupPlacement, SurfaceRole,
+    };
     use crate::surface::id::SurfaceId;
     use zgui_geom::{CssPx, Point, Rect, Size};
 
@@ -227,5 +315,15 @@ mod tests {
         const { assert!(!Constrain::NONE.slide) };
         assert_eq!(Constrain::default(), Constrain::NONE);
         const { assert!(Constrain::ANY.slide && Constrain::ANY.flip && Constrain::ANY.resize) };
+    }
+
+    #[test]
+    fn a_layer_avoids_the_room_others_reserve_unless_it_asks() {
+        // A pop-over that ignored the bar's zone would open under the bar.
+        assert_eq!(ExclusiveZone::default(), ExclusiveZone::Avoid);
+        assert_eq!(
+            LayerPlacement::default().exclusive_zone,
+            ExclusiveZone::Avoid
+        );
     }
 }

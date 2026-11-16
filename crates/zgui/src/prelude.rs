@@ -29,8 +29,8 @@ pub use crate::error::Error;
 /// another. Every operation on a window that has closed does nothing, as does every operation this
 /// desktop cannot carry out — so none of this needs a branch per platform.
 pub use zgui_runtime::windows::{
-    CloseGuard, WindowHandle, WindowId, WindowOptions, Windows, on_close_request, try_use_window,
-    try_use_windows, use_window, use_windows,
+    CloseGuard, LayerOptions, WindowHandle, WindowId, WindowOptions, Windows, on_close_request,
+    try_use_window, try_use_windows, use_window, use_windows,
 };
 
 /// The desktop's clipboards: what to copy onto, and what to read back.
@@ -48,8 +48,8 @@ pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 /// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
 /// overrides one window's.
 pub use zgui_platform::{
-    ComposeAhead, CursorStyle, Decorations, FullscreenMode, ResizeEdge, TitleButtons, WindowIcon,
-    WindowLevel,
+    ComposeAhead, CursorStyle, Decorations, ExclusiveZone, FullscreenMode, KeyboardInteractivity,
+    ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
 };
 pub use zgui_runtime::{CloseResponse, ExitPolicy};
 

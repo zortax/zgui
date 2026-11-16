@@ -26,9 +26,11 @@
 
 mod drag;
 mod handle;
+mod layer;
 mod options;
 
 pub use crate::windows::handle::{WindowHandle, WindowId};
+pub use crate::windows::layer::LayerOptions;
 pub use crate::windows::options::WindowOptions;
 
 use std::cell::RefCell;

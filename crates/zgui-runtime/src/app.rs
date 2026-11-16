@@ -154,6 +154,8 @@ pub struct App {
     style_threads: Option<usize>,
     /// How many workers the layout engine may use, when the default is not wanted.
     layout_threads: Option<usize>,
+    /// Whether the application opens a window when it starts.
+    primary_window: bool,
 }
 
 impl Default for App {
@@ -179,7 +181,37 @@ impl App {
             menu: None,
             style_threads: None,
             layout_threads: None,
+            primary_window: true,
         }
+    }
+
+    /// Starts the application with no window open.
+    ///
+    /// The view that [`App::into_handler`] and [`App::run`] take is then not built, and the window
+    /// attributes set on this builder are not used. The application opens its windows itself, from
+    /// [`App::with_context`] or from anything that runs under it, through
+    /// [`use_windows`](crate::windows::use_windows). This is what a desktop shell does: it opens
+    /// one bar for each monitor and a pop-over on demand, and no one of them is the main window.
+    ///
+    /// Pair it with [`ExitPolicy::Explicit`] when the application must keep running while no
+    /// window is open. With [`ExitPolicy::WhenPrimaryCloses`] there is no primary window to wait
+    /// for, and the application stops when its last window closes.
+    pub fn without_primary_window(mut self) -> Self {
+        self.primary_window = false;
+        self
+    }
+
+    /// Whether the application opens a window when it starts.
+    pub fn has_primary_window(&self) -> bool {
+        self.primary_window
+    }
+
+    /// Makes the window the application starts with a shell window, placed as `layer` says.
+    ///
+    /// See [`WindowOptions::layer`](crate::windows::WindowOptions::layer).
+    pub fn with_layer(mut self, layer: crate::windows::LayerOptions) -> Self {
+        layer.apply_to(&mut self.attributes);
+        self
     }
 
     /// How many workers the layout engine may use.
@@ -438,8 +470,8 @@ pub struct Runtime {
     app_options: WindowContent,
     /// Every window the application wants, open or not. The first is the one it launched with.
     live: Vec<LiveWindow>,
-    /// The name of the window the application launched with.
-    primary: WindowToken,
+    /// The name of the window the application launched with, when it launched with one.
+    primary: Option<WindowToken>,
     /// What the application has asked its own runtime to do.
     commands: WindowCommands,
     /// The desktop's clipboards, as the application asks for them.
@@ -625,23 +657,28 @@ impl Runtime {
             menu = build_menu.map(crate::desktop::MenuSlot::new);
         });
         let application_id = app.attributes.application_id.clone();
-        let primary = commands.mint();
-        let live = vec![LiveWindow {
-            token: primary,
-            spec: Box::new(WindowSpec::new(
-                app.attributes,
-                WindowContent::default(),
-                view,
-            )),
-            surface: None,
-            // The window the application launched with is opened rather than asked for, and still
-            // needs the handle every other window has.
-            handle: crate::windows::WindowHandle::pending(
-                primary,
-                commands.clone(),
-                Rc::clone(windows_api.capabilities_slot()),
-            ),
-        }];
+        let mut live = Vec::new();
+        let mut primary = None;
+        if app.primary_window {
+            let token = commands.mint();
+            primary = Some(token);
+            live.push(LiveWindow {
+                token,
+                spec: Box::new(WindowSpec::new(
+                    app.attributes,
+                    WindowContent::default(),
+                    view,
+                )),
+                surface: None,
+                // The window the application launched with is opened rather than asked for, and
+                // still needs the handle every other window has.
+                handle: crate::windows::WindowHandle::pending(
+                    token,
+                    commands.clone(),
+                    Rc::clone(windows_api.capabilities_slot()),
+                ),
+            });
+        }
         Self {
             app_options: app.options,
             live,
@@ -968,9 +1005,10 @@ impl Runtime {
     fn apply_exit_policy(&self, cx: &dyn PlatformCx) {
         let done = match self.exit {
             ExitPolicy::WhenAllWindowsClose => self.live.is_empty(),
-            ExitPolicy::WhenPrimaryCloses => {
-                !self.live.iter().any(|live| live.token == self.primary)
-            }
+            ExitPolicy::WhenPrimaryCloses => match self.primary {
+                Some(primary) => !self.live.iter().any(|live| live.token == primary),
+                None => self.live.is_empty(),
+            },
             ExitPolicy::Explicit => false,
         };
         if done {
@@ -1075,6 +1113,19 @@ impl Runtime {
         }
     }
 
+    /// Flushes the reactive work above the windows when no window is open, and reports whether it
+    /// did.
+    ///
+    /// A window's frame is what ordinarily flushes, so with no window open nothing else would.
+    /// That work still has to run: it is what opens the next window.
+    fn flush_without_windows(&self) -> bool {
+        if !self.windows.is_empty() {
+            return false;
+        }
+        self.scope.with(zgui_reactive::flush);
+        true
+    }
+
     /// Asks every other window whether this frame wrote its document, and asks it to draw if so.
     ///
     /// The reactive flush is thread-wide: a frame in one window runs every effect that is ready,
@@ -1127,7 +1178,7 @@ impl AppHandler for Runtime {
                 tracing::error!(target: "zgui::app", %error, "the window could not be opened");
                 // The window the application launched with failing to open is the application
                 // failing: there is nothing left to run.
-                if self.live[index].token == self.primary {
+                if Some(self.live[index].token) == self.primary {
                     self.failure.record(error);
                     cx.request_exit();
                     return;
@@ -1135,6 +1186,11 @@ impl AppHandler for Runtime {
             }
         }
         self.drain_window_commands(cx);
+        // An application that opened no window has had no frame to start the effects its setup
+        // made. Until the first flush polls them, a write to what they read wakes nothing.
+        if self.flush_without_windows() {
+            self.drain_window_commands(cx);
+        }
         self.apply_menu(cx);
     }
 
@@ -1257,6 +1313,7 @@ impl AppHandler for Runtime {
                         window.request_frame();
                     }
                 }
+                self.flush_without_windows();
             }
             // The desktop-wide route, which a backend that has no per-surface notification uses.
             // The preference is *read* here and pushed into every window, because a frame alone

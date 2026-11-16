@@ -41,7 +41,7 @@ impl WaylandState {
         let wanted = attributes.size.unwrap_or(DEFAULT_SIZE);
         let wl = self.compositor.create_surface(&self.qh);
         let fractional = Fractional::attach(&self.extras, &self.qh, &wl, id);
-        let role = self.make_role(id, attributes, wl)?;
+        let role = self.make_role(id, attributes, wanted, wl)?;
 
         let (placement, parent_extent) = match &attributes.role {
             SurfaceRole::Popup(placement) => (
@@ -74,10 +74,17 @@ impl WaylandState {
         &self,
         id: SurfaceId,
         attributes: &SurfaceAttributes,
+        wanted: Size<CssPx, Css>,
         wl: wayland_client::protocol::wl_surface::WlSurface,
     ) -> Result<Role, PlatformError> {
         match &attributes.role {
-            SurfaceRole::Layer(placement) => self.make_layer(wl, placement),
+            SurfaceRole::Layer(placement) => {
+                let application = attributes
+                    .application_id
+                    .as_ref()
+                    .map(zgui_vocab::SharedString::as_str);
+                self.make_layer(wl, placement, application, wanted)
+            }
             SurfaceRole::Popup(placement) => self.make_popup(id, wl, placement, attributes),
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
                 &self.xdg,
@@ -129,10 +136,16 @@ impl WaylandState {
     }
 
     /// A surface that is part of the desktop shell rather than a window.
+    ///
+    /// The namespace is the placement's own, or else the application identifier. A compositor's
+    /// layer rules match it, so two kinds of shell surface from one application stay apart only
+    /// when each names its own.
     fn make_layer(
         &self,
         wl: wayland_client::protocol::wl_surface::WlSurface,
         placement: &LayerPlacement,
+        application: Option<&str>,
+        wanted: Size<CssPx, Css>,
     ) -> Result<Role, PlatformError> {
         let Some(shell) = &self.layers else {
             return Err(PlatformError::Unsupported(Unsupported));
@@ -149,10 +162,10 @@ impl WaylandState {
             &self.qh,
             wl,
             layer::layer(placement.layer),
-            Some("zgui"),
+            Some(layer::namespace(placement, application)),
             output.as_ref(),
         );
-        layer::apply(&surface, placement);
+        layer::apply(&surface, placement, wanted);
         Ok(Role::Layer(Box::new(surface)))
     }
 
@@ -198,13 +211,5 @@ fn apply(surface: &Arc<WaylandSurface>, attributes: &SurfaceAttributes) {
             let fixed = attributes.size;
             window.set_bounds(fixed, fixed);
         }
-    }
-    if let Some(size) = attributes.size
-        && let Some(layer) = surface.role().layer()
-    {
-        layer.set_size(
-            size.width.0.round().max(1.0) as u32,
-            size.height.0.round().max(1.0) as u32,
-        );
     }
 }

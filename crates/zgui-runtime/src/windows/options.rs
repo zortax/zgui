@@ -9,6 +9,7 @@ use zgui_vocab::SharedString;
 
 use crate::commands::CloseResponse;
 use crate::window::WindowContent;
+use crate::windows::layer::LayerOptions;
 
 /// Everything a window can be asked for.
 ///
@@ -33,6 +34,18 @@ impl WindowOptions {
             runtime: WindowContent::default(),
             on_close_request: None,
         }
+    }
+
+    /// A shell window, such as a bar, a dock or a pop-over, placed as `layer` says.
+    ///
+    /// Undecorated and not resizable, because the desktop draws no frame around a part of the
+    /// shell. A desktop that has no shell windows refuses to open it; ask
+    /// [`PlatformCapabilities::layer_surfaces`](zgui_platform::PlatformCapabilities::layer_surfaces)
+    /// first.
+    pub fn layer(layer: LayerOptions) -> Self {
+        let mut options = Self::new("");
+        layer.apply_to(&mut options.attributes);
+        options
     }
 
     /// Names the window. This is what a user reads, and it changes with the document.
@@ -187,6 +200,25 @@ mod tests {
         assert!(options.attributes().resizable, "the default is resizable");
         assert_eq!(options.attributes().decorations, Decorations::Full);
         assert_eq!(options.attributes().position, None);
+    }
+
+    #[test]
+    fn a_shell_window_carries_its_placement_and_its_size() {
+        use crate::windows::LayerOptions;
+        use zgui_platform::{Layer, SurfaceRole};
+
+        let options =
+            WindowOptions::layer(LayerOptions::overlay().with_size(300.0, 120.0)).with_title("osd");
+        let SurfaceRole::Layer(placement) = &options.attributes().role else {
+            panic!("a shell window is a layer surface");
+        };
+        assert_eq!(placement.layer, Layer::Overlay);
+        assert_eq!(
+            options.attributes().size.map(|size| size.height),
+            Some(CssPx(120.0))
+        );
+        assert_eq!(options.attributes().decorations, Decorations::None);
+        assert_eq!(options.attributes().title.as_str(), "osd");
     }
 
     #[test]
