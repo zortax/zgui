@@ -84,9 +84,13 @@ pub fn element(
             {
                 bits |= Dirty::REPAINT | Dirty::REHIT;
             }
-            // `ANIMATING` because nothing else will ask for the frame after this one.
+            // `ANIMATING` because nothing else will ask for the frame after this one. An element
+            // whose values hold still until a later moment owes no frame before it, and the caller
+            // wakes the loop at that moment instead.
             if animation.advancing {
-                bits |= Dirty::ANIMATING;
+                if animation.hold.is_none() {
+                    bits |= Dirty::ANIMATING;
+                }
                 counter::bump(Counter::TierBTransitions);
             }
             if !bits.is_empty() {
@@ -245,6 +249,7 @@ mod tests {
                 },
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -281,6 +286,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -307,6 +313,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Recomposed,
@@ -342,6 +349,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Written,
@@ -376,6 +384,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: false,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -402,6 +411,7 @@ mod tests {
                 },
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Recomposed,
@@ -441,6 +451,7 @@ mod tests {
             },
             placement: None,
             advancing: false,
+            hold: None,
             crossed: false,
         };
         element(&mut document, &held, Placed::Held, &mut Recomposing);
@@ -481,6 +492,7 @@ mod tests {
             },
             placement: None,
             advancing: false,
+            hold: None,
             crossed: false,
         };
         element(&mut document, &held, Placed::Held, &mut Recomposing);
@@ -511,6 +523,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: false,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -538,6 +551,7 @@ mod tests {
             },
             placement: None,
             advancing: true,
+            hold: None,
             crossed: false,
         };
         element(&mut document, &fading, Placed::Held, &mut Recomposing);

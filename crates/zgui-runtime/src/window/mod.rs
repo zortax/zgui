@@ -201,6 +201,15 @@ pub struct Window {
     /// deadline recomputed from the present moment is pushed forward by every wake the window has
     /// for any other reason. See [`AnimationCadence`](crate::AnimationCadence).
     animation: crate::window::anim::cadence::AnimationCadence,
+    /// How long after the start of the last frame the stepped animations, whose values hold still,
+    /// owe their next tick. Set by the animation stage and turned into `hold_due` when
+    /// the frame paces its animations.
+    hold_after: Option<std::time::Duration>,
+    /// The moment the stepped animations owe their next tick at.
+    ///
+    /// They ask for no frame at every refresh, so this moment is the only thing that wakes the
+    /// loop for them.
+    hold_due: Option<Instant>,
     /// The display list.
     scene: Scene,
     /// The paint stage's state between frames.
@@ -730,6 +739,8 @@ impl Window {
             frame_clock: zgui_scene::FrameClock::default(),
             animator: zgui_anim::Animator::new(),
             animation: crate::window::anim::cadence::AnimationCadence::parked(),
+            hold_after: None,
+            hold_due: None,
             scene: Scene::new(),
             painter: Painter::new(),
             verify_replays: zgui_layout::invariants::enabled(),

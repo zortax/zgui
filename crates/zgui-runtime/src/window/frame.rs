@@ -752,6 +752,9 @@ impl Window {
         let blink = (!(self.occluded || self.starved))
             .then(|| self.carets.next_flip(now))
             .flatten();
+        // The next step boundary of the stepped animations, excluded on a hidden or starved
+        // surface for the reason the blink is.
+        let hold = self.hold_due.filter(|_| !(self.occluded || self.starved));
         // A frame being held back owes a moment of its own, and it is the only source that owes one
         // for a frame that has already been asked for. Without it a window whose whole reason to
         // draw is the input it has already queued is held and never woken again.
@@ -768,6 +771,7 @@ impl Window {
             self.gesture_deadline(),
             resize,
             blink,
+            hold,
             held,
             retry,
         ]

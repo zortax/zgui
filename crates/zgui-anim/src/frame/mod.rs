@@ -38,6 +38,12 @@ pub struct Tick {
     pub placed: usize,
     /// Every lifecycle edge crossed, ready to be dispatched.
     pub edges: Vec<Edge>,
+    /// The earliest moment, on the animation clock, at which a repaint-only element whose values
+    /// hold still owes its next tick.
+    ///
+    /// Such an element asks for no frame at every refresh, so the caller wakes the loop at this
+    /// moment. `None` when no element holds.
+    pub wake: Option<f64>,
 }
 
 impl Tick {
@@ -163,6 +169,9 @@ impl Animator {
                 if element.advancing {
                     if tier.is_cheap() {
                         tick.cheap += 1;
+                        if let Some(at) = element.hold {
+                            tick.wake = Some(tick.wake.map_or(at, |was: f64| was.min(at)));
+                        }
                     } else {
                         tick.placed += 1;
                     }

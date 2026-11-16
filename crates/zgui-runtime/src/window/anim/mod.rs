@@ -11,7 +11,9 @@
 //! rather than a guessed duration.
 //!
 //! The moment the *next* tick is owed at is decided here as well, at the other end of the frame,
-//! and it is a phase rather than a delay: see [`cadence`].
+//! and it is a phase rather than a delay: see [`cadence`]. Stepped animations whose values hold
+//! still owe no tick at every refresh. They owe one at their next step boundary, and the frame
+//! records that moment beside the phase.
 
 pub mod cadence;
 mod place;
@@ -22,6 +24,9 @@ use zgui_style::AnimationTime;
 use zgui_vocab::Timestamp;
 
 use crate::dispatch::{self, HostSink};
+
+/// How long after a step boundary the loop wakes for it.
+const HOLD_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
 use crate::window::Window;
 
 impl Window {
@@ -57,6 +62,10 @@ impl Window {
             let tick = self.animator.tick(&mut document, &report, &mut writing);
             (tick, writing.damage)
         };
+        // A boundary sampled a little early shows the old step, so the wake lands just after it.
+        self.hold_after = tick
+            .wake
+            .map(|wake| std::time::Duration::from_secs_f64((wake - now.0).max(0.0)) + HOLD_SLACK);
 
         // What the writes moved and recoloured. Nothing else in the frame will put it in the set:
         // the boxes that moved were not composed again, which is the whole saving, and the pass
@@ -99,6 +108,11 @@ impl Window {
     /// drawn correctly whenever it is shown again, but the phase they were on describes a rate the
     /// window was not running at, and an occlusion is not bounded by anything.
     pub(crate) fn pace_animations(&mut self, now: std::time::Instant) {
+        self.hold_due = self
+            .hold_after
+            .take()
+            .filter(|_| !(self.occluded || self.starved))
+            .map(|after| now + after);
         if self.occluded || self.starved || !self.is_animating() {
             self.animation.park();
             return;

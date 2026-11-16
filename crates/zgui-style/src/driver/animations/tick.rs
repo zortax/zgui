@@ -25,6 +25,7 @@ use zgui_dom::{Document, NodeIndex, NodeKey};
 use zgui_vocab::Pseudo;
 
 use crate::driver::animations::hidden;
+use crate::driver::animations::hold;
 use crate::driver::animations::sample::{self, AnimatedProperties};
 use crate::driver::animations::set::{self, Animations};
 use crate::driver::animations::zero;
@@ -115,6 +116,11 @@ pub struct ElementAnimation {
     /// nonetheless be allowed to sleep. A caller that conflated the two either drops the held value
     /// on the frame after the animation ended, or never parks again.
     pub advancing: bool,
+    /// The moment, on the animation clock, before which the values stay as sampled.
+    ///
+    /// Present only for an advancing element on the repaint-only path whose every animation steps.
+    /// Such an element owes no tick before this moment, so the loop can sleep until then.
+    pub hold: Option<f64>,
     /// Whether one of this element's animations crossed a lifecycle edge on this tick.
     ///
     /// True on the frame an animation starts, iterates or ends, and it is the *ending* one that
@@ -229,6 +235,7 @@ pub(crate) fn advance(
         // of *which* properties moved cannot see the difference between that and a transform being
         // nudged. So the classification is only final once the two styles have been compared.
         let mut sampled = None;
+        let mut held = None;
         if properties.is_paint_only() || properties.is_placement_only() {
             let Some(style) = document.node(index).primary_style() else {
                 return alive;
@@ -239,8 +246,17 @@ pub(crate) fn advance(
             } else {
                 sampled = Some(taken);
             }
+            if advancing && properties.is_paint_only() {
+                held = hold::until(set, context, document.node(index), &style, now);
+            }
         }
         let entry = fold(&mut folded, index, properties, advancing, crossed);
+        entry.hold = match (entry.hold, held) {
+            (Hold::Unset, Some(at)) => Hold::Until(at),
+            (Hold::Until(was), Some(at)) => Hold::Until(was.min(at)),
+            (_, None) if advancing => Hold::Never,
+            (was, _) => was,
+        };
         if let Some(sampled) = sampled {
             if entry.values.is_empty() {
                 entry.values = sampled.paint;
@@ -275,6 +291,10 @@ pub(crate) fn advance(
                 },
                 placement: if usable { row.placement } else { None },
                 advancing: row.advancing,
+                hold: match row.hold {
+                    Hold::Until(at) if row.advancing && row.properties.is_paint_only() => Some(at),
+                    _ => None,
+                },
                 crossed: row.crossed,
             }
         })
@@ -294,8 +314,21 @@ struct Row {
     placement: Option<AnimPlacement>,
     /// Whether anything on it is still to be advanced.
     advancing: bool,
+    /// How long its values hold still.
+    hold: Hold,
     /// Whether anything on it crossed a lifecycle edge.
     crossed: bool,
+}
+
+/// How long the values of one element's rows hold still, folded over its rows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Hold {
+    /// No advancing row said anything yet.
+    Unset,
+    /// Every advancing row holds until this moment at the earliest.
+    Until(f64),
+    /// An advancing row moves at every refresh.
+    Never,
 }
 
 /// Merges one animation set's answer into the element's row, and hands the row back.
@@ -325,6 +358,7 @@ fn fold(
                 values: AnimOverride::new(),
                 placement: None,
                 advancing,
+                hold: Hold::Unset,
                 crossed,
             });
             folded.len() - 1
