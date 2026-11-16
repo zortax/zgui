@@ -122,6 +122,9 @@ calloop-wayland-source = "0.4.1"
 # The compositor's own extensions, for the layer shell and — under test — for the virtual input
 # device that gives a headless session something to move.
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+# The code generator for the protocol descriptions no published crate carries, such as Hyprland's
+# focus grab. The descriptions are vendored beside the code that speaks them.
+wayland-scanner = "0.31.11"
 # rustix is named here too, for the monotonic clock the compositor stamps its presentation feedback
 # in. One workspace entry serves both backends; it is below, with the kernel's interfaces.
 

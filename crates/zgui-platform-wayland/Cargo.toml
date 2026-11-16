@@ -34,6 +34,7 @@ tracing.workspace = true
 wayland-backend.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
+wayland-scanner.workspace = true
 # The settings portal, which is where this desktop keeps its light-or-dark preference.
 zbus.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
@@ -107,6 +108,11 @@ harness = false
 [[test]]
 name = "monitors"
 path = "tests/monitors.rs"
+harness = false
+
+[[test]]
+name = "focus_grab"
+path = "tests/focus_grab.rs"
 harness = false
 
 # A declined redraw must not wait out the watchdog's grace, which only a wall-clock bound can see.

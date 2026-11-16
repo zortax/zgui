@@ -33,6 +33,7 @@
 //! | `frame` | when to draw: the callbacks, the timing, the visibility and the watchdog |
 //! | `output` | what is known about the outputs |
 //! | `cx` | the borrowed context handed to every callback |
+//! | `grab` | Hyprland's focus grab, from its vendored protocol description |
 //! | `clock` | the monotonic clock, and the compositor's placed on it |
 //! | `waker` | how another thread reaches a parked loop |
 //! | `theme` | the desktop's light or dark preference |
@@ -107,6 +108,14 @@ pub mod driver;
     target_os = "openbsd"
 ))]
 pub mod frame;
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+pub mod grab;
 #[cfg(any(
     target_os = "linux",
     target_os = "dragonfly",

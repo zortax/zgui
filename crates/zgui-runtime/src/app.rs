@@ -964,11 +964,29 @@ impl Runtime {
                     }
                     closed_any = true;
                 }
+                // Carried out below, once every window this drain opens or closes has.
+                WindowCommand::SyncGrabs => {}
                 WindowCommand::Quit => cx.request_exit(),
             }
         }
+        self.sync_grabs(cx);
         if closed_any {
             self.apply_exit_policy(cx);
+        }
+    }
+
+    /// Gives every focus grab the surfaces of its windows that are open, and forgets the grabs
+    /// the application dropped.
+    fn sync_grabs(&self, cx: &dyn PlatformCx) {
+        let mut gone = Vec::new();
+        for grab in self.commands.grabs() {
+            if !grab.sync(cx, &self.commands) {
+                gone.push(grab);
+            }
+        }
+        if !gone.is_empty() {
+            self.commands
+                .retain_grabs(|grab| !gone.iter().any(|held| Rc::ptr_eq(held, grab)));
         }
     }
 
@@ -1105,6 +1123,9 @@ impl Runtime {
             self.windows_api.note_closed(self.live[index].token);
             self.live.remove(index);
         }
+        // A grab over the window lets go of it before the surface is destroyed at the end of the
+        // turn.
+        self.sync_grabs(cx);
     }
 
     /// Tears down the window drawing into `surface`, leaving what the application wants alone.
@@ -1388,6 +1409,16 @@ impl AppHandler for Runtime {
             WakeReason::App(event) => self.app_event(cx, event),
             // The effects that read the list run in the next frame's flush, or here when no window
             // is open. One that opens or closes a window queues it like any other caller.
+            WakeReason::FocusGrabCleared(grab) => {
+                if let Some(entry) = self
+                    .commands
+                    .grabs()
+                    .into_iter()
+                    .find(|entry| entry.is(grab))
+                {
+                    self.scope.with(|| entry.cleared());
+                }
+            }
             WakeReason::MonitorsChanged if self.monitors.refresh(cx) => {
                 for window in &self.windows {
                     window.request_frame();

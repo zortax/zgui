@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use zgui_geom::{DevicePx, Size};
 use zgui_platform::{
-    Clipboard, Clock, ColorScheme, MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError,
-    ScrollSettings, Surface, SurfaceAttributes, SurfaceId, VirtualClock, WakeReason, Waker,
+    Clipboard, Clock, ColorScheme, FocusGrabId, MonitorInfo, PlatformCapabilities, PlatformCx,
+    PlatformError, ScrollSettings, Surface, SurfaceAttributes, SurfaceId, VirtualClock, WakeReason,
+    Waker,
 };
 
 use crate::clipboard::MemoryClipboard;
@@ -41,6 +42,10 @@ pub struct Headless {
     scroll: Mutex<ScrollSettings>,
     /// Whether the loop has been asked to finish.
     exiting: AtomicBool,
+    /// Every focus grab that exists, with the surfaces it limits focus to.
+    grabs: Mutex<Vec<(FocusGrabId, Vec<SurfaceId>)>>,
+    /// The next focus grab number, never reused.
+    next_grab: AtomicU64,
 }
 
 impl Default for Headless {
@@ -68,6 +73,8 @@ impl Headless {
             color_scheme: Mutex::new(None),
             scroll: Mutex::new(ScrollSettings::desktop()),
             exiting: AtomicBool::new(false),
+            grabs: Mutex::new(Vec::new()),
+            next_grab: AtomicU64::new(1),
         }
     }
 
@@ -147,6 +154,42 @@ impl Headless {
             .collect()
     }
 
+    /// The surfaces focus grab `grab` limits focus to, while it exists.
+    pub fn focus_grab(&self, grab: FocusGrabId) -> Option<Vec<SurfaceId>> {
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .iter()
+            .find(|(held, _)| *held == grab)
+            .map(|(_, surfaces)| surfaces.clone())
+    }
+
+    /// Every focus grab that exists, oldest first.
+    pub fn focus_grabs(&self) -> Vec<FocusGrabId> {
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .iter()
+            .map(|(grab, _)| *grab)
+            .collect()
+    }
+
+    /// Clears focus grab `grab`, as a desktop does when the user presses outside its surfaces,
+    /// and wakes the loop with [`WakeReason::FocusGrabCleared`].
+    pub fn clear_focus_grab(&self, grab: FocusGrabId) {
+        let cleared = {
+            let mut grabs = self.grabs.lock().expect("the grabs are not poisoned");
+            grabs
+                .iter_mut()
+                .find(|(held, surfaces)| *held == grab && !surfaces.is_empty())
+                .map(|(_, surfaces)| surfaces.clear())
+                .is_some()
+        };
+        if cleared {
+            self.waker.wake(WakeReason::FocusGrabCleared(grab));
+        }
+    }
+
     /// Takes every wake delivered since the last call.
     pub fn drain_wakes(&self) -> Vec<WakeReason> {
         self.waker.drain()
@@ -209,6 +252,42 @@ impl PlatformCx for Headless {
             .expect("the outputs are not poisoned")
             .first()
             .cloned()
+    }
+
+    fn create_focus_grab(&self) -> Option<FocusGrabId> {
+        if !self.capabilities.focus_grab {
+            return None;
+        }
+        let grab = FocusGrabId::new(self.next_grab.fetch_add(1, Ordering::Relaxed));
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .push((grab, Vec::new()));
+        Some(grab)
+    }
+
+    fn set_focus_grab(&self, grab: FocusGrabId, surfaces: &[SurfaceId]) {
+        let existing: Vec<SurfaceId> = surfaces
+            .iter()
+            .copied()
+            .filter(|surface| self.offscreen(*surface).is_some())
+            .collect();
+        if let Some((_, held)) = self
+            .grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .iter_mut()
+            .find(|(held, _)| *held == grab)
+        {
+            *held = existing;
+        }
+    }
+
+    fn destroy_focus_grab(&self, grab: FocusGrabId) {
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .retain(|(held, _)| *held != grab);
     }
 
     fn color_scheme(&self) -> Option<ColorScheme> {

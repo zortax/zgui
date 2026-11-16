@@ -6,6 +6,7 @@ use crate::capabilities::PlatformCapabilities;
 use crate::clipboard::Clipboard;
 use crate::clock::Clock;
 use crate::error::PlatformError;
+use crate::grab::FocusGrabId;
 use crate::menu::AppMenu;
 use crate::monitor::MonitorInfo;
 use crate::scroll::ScrollSettings;
@@ -102,6 +103,30 @@ pub trait PlatformCx {
     /// it, which is what the default does.
     fn set_app_menu(&self, menu: &AppMenu) {
         let _ = menu;
+    }
+
+    /// Makes a focus grab with no surfaces, which limits nothing until surfaces are given to it.
+    ///
+    /// Nothing where the desktop cannot limit focus, which
+    /// [`PlatformCapabilities::focus_grab`] says beforehand. The default is a desktop that cannot.
+    fn create_focus_grab(&self) -> Option<FocusGrabId> {
+        None
+    }
+
+    /// Limits the keyboard and the pointer to `surfaces` while `grab` exists.
+    ///
+    /// The set replaces the one given before. A set with surfaces in it starts the grab, and an
+    /// empty set stops it. After the desktop clears a grab its set is empty, so the next set
+    /// with surfaces in it starts the grab again. A surface that has gone is left out.
+    fn set_focus_grab(&self, grab: FocusGrabId, surfaces: &[SurfaceId]) {
+        let _ = (grab, surfaces);
+    }
+
+    /// Destroys `grab`, which stops it.
+    ///
+    /// Destroying a grab that has already gone does nothing.
+    fn destroy_focus_grab(&self, grab: FocusGrabId) {
+        let _ = grab;
     }
 
     /// Asks the loop to finish.

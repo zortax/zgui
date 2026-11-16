@@ -67,6 +67,7 @@ pub mod clipboard;
 pub mod clock;
 pub mod cx;
 pub mod error;
+pub mod grab;
 pub mod menu;
 pub mod monitor;
 pub mod scroll;
@@ -88,6 +89,7 @@ pub use crate::clipboard::{
 pub use crate::clock::{Clock, VirtualClock};
 pub use crate::cx::PlatformCx;
 pub use crate::error::{PlatformError, Unsupported};
+pub use crate::grab::FocusGrabId;
 pub use crate::menu::{AppMenu, MenuAction, MenuEntry, MenuId, MenuRole, Shortcut, Submenu};
 pub use crate::monitor::{
     MonitorId, MonitorInfo, MonitorTarget, MonitorTransform, refresh_interval,

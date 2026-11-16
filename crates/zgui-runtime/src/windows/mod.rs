@@ -135,6 +135,11 @@ impl Windows {
         self.capabilities.borrow().clone()
     }
 
+    /// Where a request goes onto.
+    pub(crate) fn commands(&self) -> &WindowCommands {
+        &self.commands
+    }
+
     /// Where this records what the platform said it can do.
     pub(crate) fn capabilities_slot(&self) -> &Rc<RefCell<PlatformCapabilities>> {
         &self.capabilities

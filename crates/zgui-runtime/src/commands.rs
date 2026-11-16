@@ -169,6 +169,8 @@ pub(crate) enum WindowCommand {
     },
     /// Close a window, without asking what it thinks about that.
     Close(WindowToken),
+    /// Give every focus grab the surfaces of its windows.
+    SyncGrabs,
     /// Stop the application.
     Quit,
 }
@@ -205,6 +207,8 @@ struct Inner {
     status: FxHashMap<WindowToken, WindowStatus>,
     /// How to wake the loop, once there is a loop to wake.
     platform: Option<Arc<dyn Waker>>,
+    /// Every focus grab that exists.
+    grabs: Vec<Rc<crate::grab::GrabEntry>>,
 }
 
 impl WindowCommands {
@@ -249,6 +253,38 @@ impl WindowCommands {
             .queue
             .push_back(WindowCommand::Close(token));
         self.ping();
+    }
+
+    /// Asks for every focus grab to be given the surfaces of its windows.
+    pub(crate) fn sync_grabs(&self) {
+        let mut inner = self.inner.borrow_mut();
+        // One is enough: the sync reads every grab as it is when the queue is drained.
+        if inner
+            .queue
+            .iter()
+            .any(|command| matches!(command, WindowCommand::SyncGrabs))
+        {
+            return;
+        }
+        inner.queue.push_back(WindowCommand::SyncGrabs);
+        drop(inner);
+        self.ping();
+    }
+
+    /// Records a focus grab, so that the runtime gives it its surfaces.
+    pub(crate) fn register_grab(&self, grab: Rc<crate::grab::GrabEntry>) {
+        self.inner.borrow_mut().grabs.push(grab);
+        self.sync_grabs();
+    }
+
+    /// Every focus grab that exists, as a snapshot.
+    pub(crate) fn grabs(&self) -> Vec<Rc<crate::grab::GrabEntry>> {
+        self.inner.borrow().grabs.clone()
+    }
+
+    /// Forgets the focus grabs that `keep` refuses.
+    pub(crate) fn retain_grabs(&self, keep: impl FnMut(&Rc<crate::grab::GrabEntry>) -> bool) {
+        self.inner.borrow_mut().grabs.retain(keep);
     }
 
     /// Asks for the application to stop.

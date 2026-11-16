@@ -39,6 +39,7 @@
 //! | [`selection`] | the selection each editable node carries, and the one that is focused |
 //! | [`binding`] | the seam a downstream script engine attaches to |
 //! | [`monitors`] | the outputs the desktop has, as a signal |
+//! | [`grab`] | the keyboard and the pointer, limited to a set of windows |
 //!
 //! ```no_run
 //! use zgui_runtime::App;
@@ -76,6 +77,7 @@ pub mod editing;
 pub mod embed;
 pub mod error;
 pub mod frame_callbacks;
+pub mod grab;
 pub mod host;
 mod images;
 pub mod monitors;
@@ -106,6 +108,7 @@ pub use crate::embed::{
 };
 pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;
+pub use crate::grab::{ClearedGuard, FocusGrab};
 pub use crate::host::RuntimeHost;
 pub use crate::monitors::{try_use_monitors, use_monitors};
 pub use crate::probe::FrameProbe;

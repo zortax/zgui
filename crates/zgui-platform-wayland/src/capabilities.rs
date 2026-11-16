@@ -41,6 +41,7 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     capabilities.window_levels = false;
     // An input region is core protocol, on every surface of every role.
     capabilities.input_regions = true;
+    capabilities.focus_grab = offered.focus_grab;
     capabilities.decorations = if offered.server_decorations {
         DecorationSource::Platform
     } else {
@@ -81,6 +82,8 @@ pub struct Offered {
     pub text_input: bool,
     /// A settings portal that answers the light-or-dark question.
     pub color_scheme: bool,
+    /// `hyprland_focus_grab_manager_v1`.
+    pub focus_grab: bool,
 }
 
 #[cfg(test)]
@@ -132,9 +135,22 @@ mod tests {
             primary_selection: true,
             text_input: true,
             color_scheme: true,
+            focus_grab: true,
         });
         assert!(!everything.absolute_window_position);
         assert!(!everything.window_levels);
+    }
+
+    #[test]
+    fn a_focus_grab_is_offered_only_where_the_compositor_has_the_global() {
+        assert!(!of(Offered::default()).focus_grab);
+        assert!(
+            of(Offered {
+                focus_grab: true,
+                ..Offered::default()
+            })
+            .focus_grab
+        );
     }
 
     #[test]

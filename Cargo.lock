@@ -6122,6 +6122,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "wayland-scanner",
  "zbus",
  "zgui-elements",
  "zgui-geom",

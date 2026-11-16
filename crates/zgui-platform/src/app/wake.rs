@@ -4,6 +4,7 @@ use accesskit::ActionRequest;
 
 use crate::app::event::AppEvent;
 use crate::clipboard::{ClipboardData, ClipboardError, ClipboardSerial};
+use crate::grab::FocusGrabId;
 use crate::surface::SurfaceId;
 
 /// Why the loop was woken by something that is not a surface event.
@@ -61,6 +62,11 @@ pub enum WakeReason {
     /// [`PlatformCx::monitors`](crate::PlatformCx::monitors) gives the new list. A backend sends
     /// this once for a batch of changes the desktop announced together.
     MonitorsChanged,
+    /// The desktop cleared a focus grab, because the user pressed outside its surfaces or for a
+    /// reason of its own.
+    ///
+    /// The grab has no surfaces after this. It stays until it is destroyed.
+    FocusGrabCleared(FocusGrabId),
     /// The desktop changed the maximised or full-screen state of a surface.
     ///
     /// The change can come with no resize, or after the last resize of the change.
