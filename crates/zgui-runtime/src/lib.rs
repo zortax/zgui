@@ -73,6 +73,7 @@ pub mod clipboard;
 pub mod commands;
 pub mod desktop;
 pub mod dispatch;
+mod documents;
 pub mod editing;
 pub mod embed;
 pub mod error;

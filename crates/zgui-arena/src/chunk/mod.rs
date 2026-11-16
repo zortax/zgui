@@ -7,12 +7,14 @@
 pub(crate) mod alloc;
 pub(crate) mod block;
 mod recycle;
+mod succession;
 
 use crate::chunk::alloc::{SlotState, Slots};
 use crate::chunk::block::Block;
 use crate::key::{DomainId, Key};
 
 pub use crate::chunk::block::BLOCK_LEN;
+pub use crate::chunk::succession::Succession;
 
 /// Storage whose element addresses never change.
 ///

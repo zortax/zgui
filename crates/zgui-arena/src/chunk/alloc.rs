@@ -60,6 +60,40 @@ impl Slots {
         self.states.len() as u32
     }
 
+    /// A table whose slots are all vacant, each on the counter `generations` gives it.
+    ///
+    /// A slot whose entry is [`None`] is retired. The free list hands the lowest slot out first.
+    pub(crate) fn succeeding(generations: &[Option<Generation>]) -> Self {
+        let free: Vec<u32> = (0..generations.len() as u32)
+            .rev()
+            .filter(|index| generations[*index as usize].is_some())
+            .collect();
+        let retired = generations.len() as u32 - free.len() as u32;
+        Self {
+            generations: generations.to_vec(),
+            states: vec![SlotState::Vacant; generations.len()],
+            pending: Vec::new(),
+            free,
+            live: 0,
+            retired,
+        }
+    }
+
+    /// The counter each slot's next occupant carries, once every value is dropped.
+    ///
+    /// A slot that holds a value moves on to its next counter, and one that runs out is retired.
+    /// A vacant slot already carries the counter of its next occupant.
+    pub(crate) fn successors(&self) -> Vec<Option<Generation>> {
+        self.generations
+            .iter()
+            .zip(&self.states)
+            .map(|(generation, state)| match state {
+                SlotState::Vacant => *generation,
+                SlotState::Live | SlotState::Removed => generation.and_then(Generation::next),
+            })
+            .collect()
+    }
+
     /// What a slot is doing, for a slot number that exists.
     pub(crate) fn state(&self, index: u32) -> SlotState {
         self.states[index as usize]

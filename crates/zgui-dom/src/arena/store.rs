@@ -3,7 +3,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use style::shared_lock::SharedRwLock;
 use style::values::AtomIdent;
-use zgui_arena::{ChunkArena, DomainId};
+use zgui_arena::{ChunkArena, DomainId, Generation, Succession};
 use zgui_interned::{Ident, NamespaceId};
 
 use crate::arena::class_pool::ClassPool;
@@ -73,9 +73,33 @@ const _: () = crate::assert_sync::<DocumentStore>();
 impl DocumentStore {
     /// An empty store for `document`.
     pub fn new(document: DocumentId) -> Self {
+        Self::over(document, ChunkArena::new(node_domain(document)))
+    }
+
+    /// An empty store for `document`, taking the identity over from the store `succession` came
+    /// from.
+    ///
+    /// No node key of the old store resolves here. See [`DocumentStore::succession`].
+    pub fn succeeding(document: DocumentId, succession: &Succession) -> Self {
+        Self::over(
+            document,
+            ChunkArena::succeeding(node_domain(document), succession),
+        )
+    }
+
+    /// The node counters this store hands on to a store that takes its identity over.
+    ///
+    /// Every node counts as dropped, so a key to any node of this store never resolves in the
+    /// successor.
+    pub fn succession(&self) -> Succession {
+        self.arena.succession()
+    }
+
+    /// An empty store for `document` over the node arena `arena`.
+    fn over(document: DocumentId, arena: ChunkArena<NodeInner>) -> Self {
         let domain = node_domain(document);
         Self {
-            arena: ChunkArena::new(domain),
+            arena,
             keys: Vec::new(),
             classes: ClassPool::new(),
             idents: IdentTable::new(),
@@ -454,12 +478,17 @@ impl DocumentStore {
     pub(crate) fn push(&mut self, make: impl FnOnce(NodeKey) -> NodeInner) -> NodeIndex {
         let key = self.arena.insert_with(make);
         let slot = key.index() as usize;
+        // An arena that took its domain over skips the slots its predecessor retired. They hold a
+        // key that never resolves, because a retired slot has no counter.
+        let domain = self.arena.domain();
+        while self.keys.len() < slot {
+            let skipped = self.keys.len() as u32;
+            self.keys
+                .push(NodeKey::new(skipped, Generation::LAST, domain));
+        }
         match self.keys.get_mut(slot) {
             Some(held) => *held = key,
-            None => {
-                debug_assert_eq!(slot, self.keys.len(), "the arena hands out slots in order");
-                self.keys.push(key);
-            }
+            None => self.keys.push(key),
         }
         NodeIndex::new(key.index())
     }

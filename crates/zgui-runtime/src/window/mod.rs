@@ -575,7 +575,9 @@ pub struct Window {
 }
 
 impl Window {
-    /// Opens a window over `surface`, drawn by `renderer`, and builds `view` into it.
+    /// Opens a window over `surface`, drawn by `renderer`, and builds `view` into `document`.
+    ///
+    /// `document` is empty and carries the identity the runtime gave this window.
     ///
     /// # Errors
     ///
@@ -585,7 +587,7 @@ impl Window {
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         surface: Arc<dyn Surface>,
-        document: zgui_dom::DocumentId,
+        document: Document,
         renderer: Box<dyn Renderer>,
         text: Box<dyn TextEngine>,
         raster: Arc<dyn zgui_text::GlyphRaster>,
@@ -598,9 +600,10 @@ impl Window {
         close: Rc<RefCell<crate::commands::CloseCallbacks>>,
         view: impl FnOnce(&mut zgui_view::BuildCx<'_>) -> Box<dyn Anchor>,
     ) -> Self {
-        // The identity the runtime minted for this window. Every node handle carries it, which is
-        // what stops one window's handle resolving inside another window's tree.
-        let document = Rc::new(RefCell::new(Document::with_id(document)));
+        // The document carries the identity the runtime gave this window. Every node handle
+        // carries it, which is what stops one window's handle resolving inside another window's
+        // tree.
+        let document = Rc::new(RefCell::new(document));
         let replaced_images = crate::replaced::IntrinsicTable::new();
         let replaced_surfaces = crate::replaced::IntrinsicTable::new();
         document.borrow_mut().install_replaced_content(Arc::new(

@@ -92,6 +92,7 @@ pub use crate::node::discipline::CellDisciplined;
 pub use crate::node::inner::NodeInner;
 pub use crate::node::kind::NodeKind;
 pub use crate::node::{Node, NodeFlags};
+pub use zgui_arena::Succession;
 
 /// Statically requires `T` to be safe to share across threads.
 ///

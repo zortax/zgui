@@ -510,8 +510,8 @@ pub struct Runtime {
     menu: Option<crate::desktop::MenuSlot>,
     /// The shortcuts of the menu's actions, shared with every window.
     menu_keys: crate::desktop::MenuKeys,
-    /// The next document identity to mint.
-    next_document: u16,
+    /// The document identities, fresh and given back by closed windows.
+    documents: crate::documents::Documents,
     /// What the desktop groups this application's windows under.
     ///
     /// Application-wide rather than per window: it is what a compositor matches window rules,
@@ -736,7 +736,7 @@ impl Runtime {
             hooks,
             menu,
             menu_keys: crate::desktop::MenuKeys::default(),
-            next_document: 0,
+            documents: crate::documents::Documents::default(),
             application_id: application_id.clone(),
             renderer: app.renderer.unwrap_or_else(|| {
                 Box::new(|_, _| Err(AppError::GpuUnavailable(zgui_render::GpuUnavailable::new())))
@@ -786,18 +786,13 @@ impl Runtime {
         &self.scope
     }
 
-    /// Mints the next document identity.
+    /// A document for a window that opens, under a fresh identity or one a closed window gave
+    /// back.
     ///
-    /// Never reused. A node handle carries the document it was minted in, and state above the
-    /// windows can outlive a window while still holding one: with reuse, such a handle would
-    /// resolve inside an unrelated later document and pass every ownership assertion while doing
-    /// it. Four thousand window-opens in one process is the honest limit that buys that, and
-    /// reaching it fails loudly rather than aliasing.
-    fn allocate_document(&mut self) -> Result<zgui_dom::DocumentId, AppError> {
-        let id =
-            zgui_dom::DocumentId::new(self.next_document).ok_or(AppError::DocumentsExhausted)?;
-        self.next_document += 1;
-        Ok(id)
+    /// See [`documents`](crate::documents) for when an identity comes back and why a stale node
+    /// handle never resolves in the document that takes it over.
+    fn allocate_document(&mut self) -> Result<zgui_dom::Document, AppError> {
+        self.documents.allocate()
     }
 
     /// The window `token` names, if it is one the application still wants.
@@ -833,7 +828,22 @@ impl Runtime {
     /// The one path a window is opened by, whether it is the window the application launched with,
     /// one it asked for later, or one being opened again after the platform took its surface away.
     fn open_live_window(&mut self, cx: &dyn PlatformCx, index: usize) -> Result<(), AppError> {
-        let document = self.allocate_document()?;
+        let mut document = Some(self.allocate_document()?);
+        let opened = self.open_live_window_into(cx, index, &mut document);
+        // A window that failed to open gives its document's identity straight back.
+        if let Some(unused) = document {
+            self.documents.give_back(&Rc::new(RefCell::new(unused)));
+        }
+        opened
+    }
+
+    /// The same, building the window into the document `document` holds and taking it.
+    fn open_live_window_into(
+        &mut self,
+        cx: &dyn PlatformCx,
+        index: usize,
+        document: &mut Option<zgui_dom::Document>,
+    ) -> Result<(), AppError> {
         // A window opened while the application runs belongs to the same application as the one it
         // was opened from. Without this the desktop sees an unnamed window: no icon, no window
         // rule matches it, and it groups under nothing.
@@ -917,7 +927,7 @@ impl Runtime {
         let mut window = self.scope.with(|| {
             Window::open(
                 Arc::clone(&surface),
-                document,
+                document.take().expect("the document is taken once"),
                 renderer,
                 text,
                 raster,
@@ -1261,7 +1271,11 @@ impl Runtime {
             .position(|window| window.surface().id() == surface)
         {
             self.windows[position].close();
-            self.windows.remove(position);
+            let window = self.windows.remove(position);
+            // The identity comes back once the document is dropped, which is here unless
+            // something outside the window still holds it.
+            self.documents.give_back(window.document());
+            drop(window);
         }
         if let Some(live) = self
             .live
