@@ -7,7 +7,7 @@ mod support;
 
 use zgui_geom::{Css, CssPx, DevicePx, Point, Rect, Size};
 use zgui_platform::SurfaceEvent;
-use zgui_runtime::windows::use_input_region;
+use zgui_runtime::windows::{use_input_region, use_window};
 use zgui_view::{BuildCx, IntoView, NodeRef, View};
 
 /// A card of a known size in a known place, on a root that fills the window.
@@ -68,5 +68,17 @@ fn the_input_region_is_the_card_at_every_scale() {
         log.windows(2).all(|pair| pair[0] != pair[1]),
         "a region that did not change was sent again: {log:?}"
     );
+    harness.shut_down();
+}
+
+#[test]
+fn a_region_set_while_the_window_builds_reaches_its_surface() {
+    let mut harness = support::app(CSS, |cx: &mut BuildCx<'_>| {
+        use_window().set_input_region(Some(Vec::new()));
+        let view = zgui_elements::column().class("root").into_view();
+        Box::new(view.build(cx)) as Box<dyn zgui_view::Anchor>
+    });
+    harness.settle(16);
+    assert_eq!(last_region(&harness), Some(Vec::new()));
     harness.shut_down();
 }

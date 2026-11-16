@@ -79,7 +79,16 @@ pub(crate) struct WindowShared {
     pub(crate) close_reason: ArcRwSignal<Option<CloseReason>>,
     /// Which lock keys are on, as of the last change the window was told about.
     pub(crate) lock_keys: ArcRwSignal<Modifiers>,
+    /// The last input region the application gave, if it gave one.
+    ///
+    /// A surface takes it when it attaches, so a region set while the window builds holds.
+    pub(crate) input_region: RefCell<Option<Region>>,
+    /// The last opaque region the application gave, if it gave one.
+    pub(crate) opaque_region: RefCell<Option<Region>>,
 }
+
+/// A region in CSS pixels, or `None` for the whole window.
+type Region = Option<Vec<Rect<CssPx, Css>>>;
 
 impl WindowHandle {
     /// A handle for a window that has been asked for and does not exist yet.
@@ -108,6 +117,8 @@ impl WindowHandle {
                 fullscreen: ArcRwSignal::new(None),
                 close_reason: ArcRwSignal::new(None),
                 lock_keys: ArcRwSignal::new(Modifiers::NONE),
+                input_region: RefCell::new(None),
+                opaque_region: RefCell::new(None),
             }),
         }
     }
@@ -127,6 +138,12 @@ impl WindowHandle {
         ));
         self.shared.maximized.set(surface.is_maximized());
         self.shared.fullscreen.set(surface.fullscreen());
+        if let Some(region) = self.shared.input_region.borrow().as_ref() {
+            let _ = surface.set_input_region(region.as_deref());
+        }
+        if let Some(region) = self.shared.opaque_region.borrow().as_ref() {
+            surface.set_opaque_region(region.as_deref());
+        }
     }
 
     /// Takes the surface away, leaving the window named but not open.
@@ -451,23 +468,33 @@ impl WindowHandle {
     ///
     /// Input on the rest of the window reaches whatever is behind it. `None` makes the whole
     /// window take input again, and an empty list makes none of it take input. The change reaches
-    /// the screen with the next frame. Does nothing where the desktop cannot do it; see
-    /// [`PlatformCapabilities::input_regions`].
+    /// the screen with the next frame. A region set before the window has a surface reaches the
+    /// surface when the window opens, and every later surface gets it on a resume. Does nothing
+    /// where the desktop cannot do it; see [`PlatformCapabilities::input_regions`].
     ///
     /// [`use_input_region`](crate::windows::use_input_region) keeps the region equal to the boxes
     /// of some elements, which is what a pop-over or a stack of notifications wants.
     pub fn set_input_region(&self, region: Option<Vec<Rect<CssPx, Css>>>) {
+        if self.shared.closed.get() {
+            return;
+        }
         self.act(|surface| {
             let _ = surface.set_input_region(region.as_deref());
         });
+        *self.shared.input_region.borrow_mut() = Some(region);
     }
 
     /// Tells the desktop which part of the window is opaque, in CSS pixels.
     ///
     /// A hint that lets a compositor skip drawing what is behind the opaque part. `None` says
-    /// nothing is opaque. The change reaches the screen with the next frame.
+    /// nothing is opaque. The change reaches the screen with the next frame. A region set before
+    /// the window has a surface reaches the surface when the window opens.
     pub fn set_opaque_region(&self, region: Option<Vec<Rect<CssPx, Css>>>) {
+        if self.shared.closed.get() {
+            return;
+        }
         self.act(|surface| surface.set_opaque_region(region.as_deref()));
+        *self.shared.opaque_region.borrow_mut() = Some(region);
     }
 
     /// Sets the picture the desktop shows for this window.
