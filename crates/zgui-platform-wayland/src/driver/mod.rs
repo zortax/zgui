@@ -231,6 +231,11 @@ impl WaylandState {
             offer.serial,
             Some(crate::clipboard::mime::URI_LIST.to_owned()),
         );
+        // The source actions arrive before the offer becomes a drag offer, so the toolkit never
+        // passes them to `source_actions`. Without an action set here, the compositor cancels the
+        // drop.
+        let taken = crate::driver::data::copy_only(offer.source_actions);
+        offer.set_actions(taken, taken);
         let Ok(reader) = offer.receive(crate::clipboard::mime::URI_LIST.to_owned()) else {
             return;
         };

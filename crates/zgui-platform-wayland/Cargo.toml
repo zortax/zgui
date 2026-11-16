@@ -80,6 +80,11 @@ path = "tests/clipboard.rs"
 harness = false
 
 [[test]]
+name = "file_drop"
+path = "tests/file_drop.rs"
+harness = false
+
+[[test]]
 name = "wake_idle"
 path = "tests/wake_idle.rs"
 harness = false

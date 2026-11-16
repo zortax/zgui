@@ -43,6 +43,16 @@ impl WaylandState {
     }
 }
 
+/// Copy and nothing else. A move would ask the source to delete what it handed over, and this
+/// application has no way to promise it took responsibility for it.
+pub(crate) fn copy_only(actions: DndAction) -> DndAction {
+    if actions.contains(DndAction::Copy) {
+        DndAction::Copy
+    } else {
+        DndAction::None
+    }
+}
+
 impl DataDeviceHandler for WaylandState {
     fn enter(
         &mut self,
@@ -113,13 +123,7 @@ impl DataOfferHandler for WaylandState {
         offer: &mut DragOffer,
         actions: DndAction,
     ) {
-        // Copy and nothing else. A move would ask the source to delete what it handed over, and
-        // this application has no way to promise it took responsibility for it.
-        let taken = if actions.contains(DndAction::Copy) {
-            DndAction::Copy
-        } else {
-            DndAction::None
-        };
+        let taken = copy_only(actions);
         offer.set_actions(taken, taken);
     }
 
