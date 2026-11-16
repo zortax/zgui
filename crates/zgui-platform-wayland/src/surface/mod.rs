@@ -452,13 +452,16 @@ impl WaylandSurface {
     /// A bufferless commit here would put that deadline behind a compositor round trip.
     ///
     /// A redraw that ran while a callback is owed commits nothing either: that callback keeps the
-    /// chain alive, and a held frame is committed when it arrives.
+    /// chain alive, and a held frame is committed when it arrives. Nor does a redraw that ran,
+    /// presented nothing and left nothing asked for: no chain needs to stay alive.
     /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
     pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
+        // A redraw asked for while this one ran is pulled into the pacer on the next turn.
+        let again = self.asked.load(Ordering::Acquire);
         let (end, bare, exact_owed) = {
             let mut shared = self.shared();
             (
-                shared.redrawn(began, now),
+                shared.redrawn(began, now, again),
                 shared.may_commit_bare(),
                 shared.exact_owed,
             )

@@ -31,6 +31,9 @@ pub(crate) enum EndOfRedraw {
     /// The redraw ran ahead of an owed callback and presented nothing; that callback keeps the
     /// chain alive.
     Waiting,
+    /// The redraw ran and presented nothing, and nothing asks for another one or for a change of
+    /// the surface. Nothing is committed and nothing is owed.
+    Settled,
 }
 
 /// The mutable half of a surface.
@@ -305,7 +308,17 @@ impl Shared {
     /// about this surface again — and the silence that follows such a commit is also how a hidden
     /// surface is recognised. One that was **declined** never ran: nothing is committed and the
     /// pacer is left as it was, so the runtime's own deadline is answered the moment it asks.
-    pub(crate) fn end_of_redraw(&mut self, began: Instant, now: Instant) -> EndOfRedraw {
+    ///
+    /// A redraw that ran and presented nothing is **settled** when `again` says no other redraw
+    /// was asked for and the surface owes the compositor no change of its own. There is no chain
+    /// to keep alive then, so nothing is committed and nothing is owed. The next request is
+    /// answered the moment it is made.
+    pub(crate) fn end_of_redraw(
+        &mut self,
+        began: Instant,
+        now: Instant,
+        again: bool,
+    ) -> EndOfRedraw {
         let presented = std::mem::replace(&mut self.presented, false);
         let declined = std::mem::replace(&mut self.declined, false);
         if presented {
@@ -324,6 +337,9 @@ impl Shared {
             EndOfRedraw::Held
         } else if self.pacer.owes_callback() {
             EndOfRedraw::Waiting
+        } else if !again && !self.pacer.wanted() && !self.owes_surface_change() {
+            self.chained = None;
+            EndOfRedraw::Settled
         } else {
             self.pacer.committed_bare(now);
             self.chained = None;
@@ -357,10 +373,19 @@ impl Shared {
         self.drawing = true;
     }
 
+    /// Whether a change of the surface waits for a commit: a layer placement, a region, or a
+    /// buffer at an exact extent.
+    const fn owes_surface_change(&self) -> bool {
+        self.layer_owed
+            || self.input_owed.is_some()
+            || self.opaque_owed.is_some()
+            || self.exact_owed
+    }
+
     /// Closes out a delivered redraw: [`Shared::end_of_redraw`], and the redraw's cost for
     /// [`Ahead`] unless the redraw was declined or answered a new extent.
-    pub(crate) fn redrawn(&mut self, began: Instant, now: Instant) -> EndOfRedraw {
-        let end = self.end_of_redraw(began, now);
+    pub(crate) fn redrawn(&mut self, began: Instant, now: Instant, again: bool) -> EndOfRedraw {
+        let end = self.end_of_redraw(began, now, again);
         let answering = std::mem::take(&mut self.answering_resize);
         if end != EndOfRedraw::Declined && !answering {
             self.ahead.redrawn(now.saturating_duration_since(began));
@@ -601,7 +626,7 @@ mod tests {
         let began = released + late;
         let serial = shared.begin_callback();
         shared.presented = true;
-        shared.end_of_redraw(began, began + Duration::from_micros(7_500));
+        shared.end_of_redraw(began, began + Duration::from_micros(7_500), true);
         let answered = released + period;
         shared.frame_callback(serial, answered);
         answered
@@ -647,7 +672,7 @@ mod tests {
         assert!(!shared.compose_ahead_now(now));
         shared.redraw_taken();
         shared.presented = true;
-        shared.redrawn(now, now + Duration::from_millis(5));
+        shared.redrawn(now, now + Duration::from_millis(5), true);
         assert!(
             shared.compose_ahead_now(now),
             "the frame that showed the extent ends the wait"
@@ -748,7 +773,7 @@ mod tests {
             shared.redraw_taken();
             let serial = shared.begin_callback();
             shared.presented = true;
-            shared.redrawn(at, at + 2 * interval);
+            shared.redrawn(at, at + 2 * interval, true);
             at += 2 * interval;
             shared.frame_callback(serial, at);
         }
@@ -932,7 +957,7 @@ mod tests {
         shared.visibility.configured = true;
         let now = Instant::now();
         shared.declined = true;
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Declined);
+        assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Declined);
         assert_eq!(
             shared.pacer.deadline(shared.visibility, now),
             None,
@@ -949,7 +974,10 @@ mod tests {
         let mut shared = Shared::new();
         shared.visibility.configured = true;
         let now = Instant::now();
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::KeepChainAlive);
+        assert_eq!(
+            shared.end_of_redraw(now, now, true),
+            EndOfRedraw::KeepChainAlive
+        );
         // The commit went out, so the compositor is owed an answer before the next frame.
         shared.pacer.request();
         let mut visibility = shared.visibility;
@@ -958,6 +986,28 @@ mod tests {
         shared.pacer.input();
         assert!(shared.pacer.take(&mut visibility, now));
         assert!(shared.pacer.present_now(now));
+    }
+
+    #[test]
+    fn a_redraw_that_presented_nothing_and_asks_for_nothing_commits_nothing() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        assert_eq!(shared.end_of_redraw(now, now, false), EndOfRedraw::Settled);
+        assert!(!shared.pacer.owes_callback(), "nothing was committed");
+        shared.pacer.request();
+        let mut visibility = shared.visibility;
+        assert!(
+            shared.pacer.take(&mut visibility, now),
+            "the next request is answered at once"
+        );
+
+        // A change of the placement waits for a commit.
+        shared.layer_owed = true;
+        assert_eq!(
+            shared.end_of_redraw(now, now, false),
+            EndOfRedraw::KeepChainAlive
+        );
     }
 
     #[test]
@@ -989,9 +1039,9 @@ mod tests {
         let now = Instant::now();
         shared.pacer.compose_ahead(true);
         shared.pacer.committed(now);
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Waiting);
+        assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Waiting);
         assert!(!shared.pacer.present_now(now));
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Held);
+        assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Held);
     }
 
     #[test]
@@ -1022,7 +1072,7 @@ mod tests {
         shared.visibility.configured = true;
         let now = Instant::now();
         shared.presented = true;
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Presented);
+        assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Presented);
     }
 
     #[test]
@@ -1031,9 +1081,12 @@ mod tests {
         shared.visibility.configured = true;
         let now = Instant::now();
         shared.declined = true;
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::Declined);
+        assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Declined);
         // The next redraw runs normally; yesterday's refusal says nothing about it.
-        assert_eq!(shared.end_of_redraw(now, now), EndOfRedraw::KeepChainAlive);
+        assert_eq!(
+            shared.end_of_redraw(now, now, true),
+            EndOfRedraw::KeepChainAlive
+        );
     }
 
     #[test]
