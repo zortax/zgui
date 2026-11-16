@@ -1,11 +1,13 @@
 //! A shell layer keeps its placement through a change and through a hide and a show.
 //!
-//! Three properties, each read off the compositor:
+//! Each property is read off the compositor or off the events the application hears:
 //!
 //! * **The reserved room is the room asked for.** A bar that reserves 34 pixels at the top moves
 //!   the space windows get down by 34 pixels.
 //! * **A placement changed at run time reaches the compositor.** The change goes out with the next
 //!   frame, so the reserved room grows once a frame has been drawn.
+//! * **A requested extent reaches the application.** The bar asks for the new height with the
+//!   change, and the application hears a resize to it.
 //! * **A placement and the regions change in one frame.** The input and opaque regions go out with
 //!   the same commit, rounded to whole pixels, and the compositor accepts them.
 //! * **A remap sends the placement again.** The shell forgets everything about a layer surface
@@ -32,6 +34,9 @@ use zgui_view::{BuildCx, IntoView, View};
 
 /// The top of the area sway gives its workspace at each step, in order.
 static TOPS: Mutex<Vec<Option<i64>>> = Mutex::new(Vec::new());
+
+/// The heights of the resizes the application heard, in device pixels.
+static RESIZED: Mutex<Vec<f32>> = Mutex::new(Vec::new());
 
 /// How many frames the bar has drawn.
 static DRAWN: AtomicU64 = AtomicU64::new(0);
@@ -82,6 +87,12 @@ impl AppHandler for Drive {
 
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         let drawn = matches!(event, SurfaceEvent::RedrawRequested);
+        if let SurfaceEvent::Resized(size) = &event {
+            RESIZED
+                .lock()
+                .expect("the record is not poisoned")
+                .push(size.height.0);
+        }
         self.inner.surface_event(cx, surface, event);
         if !drawn {
             return;
@@ -97,6 +108,7 @@ impl AppHandler for Drive {
                     LayerPatch::new().with_exclusive_zone(ExclusiveZone::Reserve(CssPx(SECOND)));
                 bar.set_layer_placement(&patch)
                     .expect("a shell layer takes a new placement");
+                let _ = bar.request_size(Size::new(CssPx(0.0), CssPx(SECOND)));
                 // Between pixels, as a fractional scale leaves them. The regions ride the same
                 // frame, and a region the compositor refused would end the connection.
                 let card = Rect::new(
@@ -234,6 +246,11 @@ fn main() {
         );
         return;
     }
+    let resized = RESIZED.lock().expect("the record is not poisoned").clone();
+    assert!(
+        resized.contains(&SECOND),
+        "the application heard no resize to the requested height: {resized:?}"
+    );
     let tops = TOPS.lock().expect("the record is not poisoned").clone();
     assert_eq!(tops.len(), 3, "the bar did not reach every step: {tops:?}");
     if tops.iter().any(Option::is_none) {

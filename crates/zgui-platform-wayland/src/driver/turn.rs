@@ -223,6 +223,12 @@ impl<A: AppHandler> WaylandApp<A> {
                 }
                 surface.finish_present(began, self.state.live.clock.now());
             }
+            // A resize the application asked for reaches the runtime before the frame drawn at it.
+            let unreported = surface.shared().unreported.take();
+            if let Some(event) = unreported {
+                let cx = WaylandCx::new(&self.state);
+                self.handler.surface_event(&cx, id, event);
+            }
             let due = {
                 let mut shared = surface.shared();
                 let ahead = shared.compose_ahead_now(now);

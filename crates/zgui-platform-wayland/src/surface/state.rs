@@ -104,6 +104,11 @@ pub(crate) struct Shared {
     /// held frame obsolete before it is presented. It is drawn and presented at once instead, see
     /// the pacer.
     pub(crate) resize_owed: bool,
+    /// A resize the application asked for and the runtime has not heard of yet.
+    ///
+    /// A requested extent takes effect at once, so the configure that answers it changes nothing
+    /// and reports nothing. The driver reports this event before the next redraw instead.
+    pub(crate) unreported: Option<SurfaceEvent>,
     /// Whether a lock surface acknowledged an extent that no committed buffer shows yet.
     ///
     /// The commit after a lock surface acknowledges a configure has to carry a buffer of exactly
@@ -192,6 +197,7 @@ impl Shared {
             drawing: false,
             hide_owed: false,
             resize_owed: false,
+            unreported: None,
             exact_owed: false,
             answering_resize: false,
             mapped: false,
@@ -262,6 +268,7 @@ impl Shared {
         self.logical = logical;
         self.scale = scale;
         self.size = size;
+        self.unreported = None;
         self.pacer.cancel_held();
         self.resize_owed = true;
         Some(if moved_scale {

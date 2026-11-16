@@ -51,7 +51,8 @@ pub fn request_size(
                 shared.logical.height
             },
         );
-        shared.resized(size, scale);
+        let resized = shared.resized(size, scale);
+        shared.unreported = resized;
         // A shell layer states its extent with the frame drawn at it, so the two change together.
         shared.layer_owed |= shared.layer.is_some();
         (scale, size)
