@@ -171,6 +171,12 @@ impl<A: AppHandler> WaylandApp<A> {
         // surface, and both of those record events of their own.
         let events = std::mem::take(&mut self.state.out);
         for (id, event) in events {
+            // Input lets the redraw it asks for through a callback that only keeps the chain alive.
+            if event.is_input()
+                && let Some(surface) = self.state.live.surface(id)
+            {
+                surface.shared().pacer.input();
+            }
             let closing = matches!(event, SurfaceEvent::Destroyed | SurfaceEvent::Closed(_));
             let cx = WaylandCx::new(&self.state);
             self.handler.surface_event(&cx, id, event);

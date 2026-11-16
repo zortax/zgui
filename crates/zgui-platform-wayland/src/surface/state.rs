@@ -325,7 +325,7 @@ impl Shared {
         } else if self.pacer.owes_callback() {
             EndOfRedraw::Waiting
         } else {
-            self.pacer.committed(now);
+            self.pacer.committed_bare(now);
             self.chained = None;
             EndOfRedraw::KeepChainAlive
         }
@@ -954,6 +954,10 @@ mod tests {
         shared.pacer.request();
         let mut visibility = shared.visibility;
         assert!(!shared.pacer.take(&mut visibility, now));
+        // That commit carried no buffer, so a press draws and presents without the answer.
+        shared.pacer.input();
+        assert!(shared.pacer.take(&mut visibility, now));
+        assert!(shared.pacer.present_now(now));
     }
 
     #[test]
