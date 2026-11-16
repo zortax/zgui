@@ -117,6 +117,10 @@ impl<A: AppHandler> AppHandler for DropOnWindow<A> {
 fn main() {
     const PROPERTY: &str = "a file dragged from another application is dropped on the window";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

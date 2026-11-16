@@ -231,6 +231,10 @@ fn main() {
     const PROPERTY: &str =
         "a pop-up on a shell layer grabs from its press, survives the release, and is dismissed";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

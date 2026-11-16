@@ -68,6 +68,10 @@ impl AppHandler for Probe {
 fn main() {
     const PROPERTY: &str = "an idle window with no animation parks and burns no cpu";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::watchdog(PROPERTY);
     let Some(mut app) = support::loop_for(PROPERTY, Probe::default()) else {
         return;

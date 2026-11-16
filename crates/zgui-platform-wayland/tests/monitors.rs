@@ -229,6 +229,10 @@ fn application() -> Result<Runtime, AppError> {
 fn main() {
     const PROPERTY: &str = "outputs come and go, and a shell window on one that goes closes";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

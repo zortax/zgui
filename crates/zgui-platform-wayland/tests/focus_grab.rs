@@ -196,6 +196,10 @@ fn main() {
     const PROPERTY: &str =
         "a focus grab is offered only with its global, and its requests are accepted";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

@@ -181,6 +181,50 @@ pub(crate) fn loop_for<A: AppHandler>(
     }
 }
 
+/// The variable that lets a program run against a compositor.
+///
+/// Its value is the name of the nested display, and it must equal `WAYLAND_DISPLAY`.
+/// `cargo xtask wayland` starts a nested headless sway and sets both.
+pub(crate) const NESTED: &str = "ZGUI_NESTED_COMPOSITOR";
+
+/// Whether this program may open surfaces on the compositor that `WAYLAND_DISPLAY` names.
+///
+/// These programs lock the session, press keys, move the pointer and take the focus. So each one
+/// runs only on a nested compositor that the run names in [`NESTED`]. Any other display is the
+/// desktop of the person at the machine, and the program skips.
+pub(crate) fn require_nested(property: &str) -> bool {
+    let display = std::env::var_os("WAYLAND_DISPLAY").filter(|display| !display.is_empty());
+    let nested = std::env::var_os(NESTED).filter(|nested| !nested.is_empty());
+    match (display, nested) {
+        (Some(display), Some(nested)) if display == nested => true,
+        (None, _) => {
+            skipped(
+                property,
+                "no compositor to run on: WAYLAND_DISPLAY is not set",
+            );
+            false
+        }
+        (Some(_), None) => {
+            skipped(
+                property,
+                &format!("{NESTED} does not name the display; run `cargo xtask wayland`"),
+            );
+            false
+        }
+        (Some(display), Some(nested)) => {
+            skipped(
+                property,
+                &format!(
+                    "WAYLAND_DISPLAY is {}, and {NESTED} names {}",
+                    display.to_string_lossy(),
+                    nested.to_string_lossy()
+                ),
+            );
+            false
+        }
+    }
+}
+
 /// Announces that this machine has nothing to say about the property.
 pub(crate) fn skipped(property: &str, reason: &str) {
     eprintln!("SKIPPED: {property}: {reason}");

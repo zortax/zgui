@@ -200,6 +200,10 @@ fn bar() -> Result<Runtime, AppError> {
 fn main() {
     const PROPERTY: &str = "a shell layer keeps its placement through a change and a remap";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

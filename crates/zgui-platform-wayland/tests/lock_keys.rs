@@ -145,6 +145,10 @@ impl AppHandler for Drive {
 fn main() {
     const PROPERTY: &str = "the lock keys reach the window that holds the keyboard";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

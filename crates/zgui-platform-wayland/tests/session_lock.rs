@@ -9,7 +9,8 @@
 //! * **An unlock closes the lock windows.** The windows close with
 //!   [`CloseReason::Application`], and the compositor raises no protocol error.
 //!
-//! This program locks the session of the compositor it runs on. Run it on a nested compositor.
+//! This program locks the session of the compositor it runs on, so it runs only on a nested
+//! compositor: `cargo xtask wayland` starts one.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -174,6 +175,10 @@ fn application() -> Result<Runtime, AppError> {
 fn main() {
     const PROPERTY: &str =
         "a session lock is offered with its global, covers each output, and unlocks";
+
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
 
     support::tracing();
     support::watchdog(PROPERTY);

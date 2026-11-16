@@ -88,6 +88,10 @@ impl<A: AppHandler> AppHandler for Recording<A> {
 fn main() {
     const PROPERTY: &str = "a surface reports the refresh rate of the output it is on";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

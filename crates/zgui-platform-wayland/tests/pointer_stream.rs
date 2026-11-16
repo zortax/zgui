@@ -128,6 +128,10 @@ fn give_up_after(waker: std::sync::Arc<dyn zgui_platform::Waker>) {
 fn main() {
     const PROPERTY: &str = "a pointer the compositor moved arrives as pointer events";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 
