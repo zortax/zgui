@@ -186,7 +186,7 @@ fn application() -> Result<Runtime, AppError> {
                 .with_namespace("zgui-test-bar"),
         )
         .with_stylesheet("root { display: block; width: 100%; height: 100% }")
-        .with_renderer(Box::new(support::renderer))
+        .with_renderer(support::renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().class("root").into_view().build(cx))
         })

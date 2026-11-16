@@ -12,11 +12,6 @@
 //!
 //! Only sway can add and remove an output on request. On another compositor this program says it
 //! was skipped.
-//!
-//! The NVIDIA Vulkan driver (610.43) crashes inside `vkDestroySwapchainKHR` when a swapchain is
-//! destroyed after an output that showed another swapchain was unplugged. The crash is in the
-//! driver and happens at the shutdown of this program. Run it on another driver, for example
-//! with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -220,7 +215,7 @@ fn application() -> Result<Runtime, AppError> {
                 .with_namespace("zgui-test-bar"),
         )
         .with_stylesheet("root { display: block; height: 30px }")
-        .with_renderer(Box::new(support::renderer))
+        .with_renderer(support::renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().class("root").into_view().build(cx))
         })

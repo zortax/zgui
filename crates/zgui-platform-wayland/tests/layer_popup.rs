@@ -1,6 +1,6 @@
 //! A pop-up on a shell layer takes a grab from the press that opens it and is dismissed outside.
 //!
-//! Three properties, read off what the application is told:
+//! Four properties, read off what the application is told:
 //!
 //! * **The press gives a serial.** The bar's handle reports the serial of the press while the
 //!   press is being handled, and the pop-up opens with a grab on it.
@@ -8,13 +8,13 @@
 //!   it came up.
 //! * **A press outside dismisses.** A press on the empty desktop closes the pop-up with
 //!   [`CloseReason::Dismissed`], and the bar stays open.
+//! * **The bar draws on after the pop-up is gone.** The output then changes its mode, and the
+//!   bar draws at the new width. That replaces the bar's swap chain after the pop-up's swap chain
+//!   was destroyed, and the shutdown destroys the bar's swap chain last.
 //!
 //! A compositor without a virtual pointer has nothing to press with, and this program says it was
+//! skipped. Only sway changes the mode of an output on request, so elsewhere the last property is
 //! skipped.
-//!
-//! The NVIDIA Vulkan driver (610.43) crashes inside `vkDestroySwapchainKHR` at the shutdown of
-//! this program, after the pop-up's swapchain was destroyed. Run it on another driver, for example
-//! with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`.
 
 #[path = "support/mod.rs"]
 mod support;
@@ -37,6 +37,15 @@ use zgui_vocab::PointerAction;
 /// The height of the bar, in CSS pixels.
 const BAR: f32 = 60.0;
 
+/// The output mode after the dismissal, and the mode the run restores at the end.
+///
+/// The bar spans the output, so its width follows the mode. The two widths fall in different
+/// size classes, so the renderer replaces the bar's swap chain.
+const MODES: [(u32, u32); 2] = [(1920, 1080), (1280, 720)];
+
+/// How many frames the bar draws at its new width before the program ends.
+const GROWN_FRAMES: u32 = 3;
+
 /// How long the pop-up has to stay open after the press that opened it.
 const STAYS: Duration = Duration::from_millis(400);
 
@@ -58,6 +67,10 @@ struct Seen {
     reason: Option<CloseReason>,
     /// Whether the bar was open at the end.
     bar_open: bool,
+    /// Whether the compositor changed the output mode after the dismissal.
+    mode_changed: bool,
+    /// Whether the bar drew [`GROWN_FRAMES`] frames at its new width after the dismissal.
+    grew: bool,
 }
 
 /// What the program saw, kept for after the loop.
@@ -77,11 +90,16 @@ struct Drive {
     opened_at: Option<Instant>,
     /// When the program started pressing.
     started: Option<Instant>,
+    /// How many frames the bar drew at the width of the first of [`MODES`] after the dismissal.
+    grown_frames: u32,
 }
 
 impl Drive {
     /// Keeps what was seen and finishes the loop.
     fn finish(&mut self, cx: &dyn PlatformCx) {
+        if self.seen.mode_changed {
+            set_mode(MODES[1]);
+        }
         self.seen.bar_open = self.bar.as_ref().is_some_and(WindowHandle::is_open);
         *SEEN.lock().expect("the record is not poisoned") = Some(self.seen);
         cx.request_exit();
@@ -136,11 +154,21 @@ impl Drive {
                 let at = *self.opened_at.get_or_insert_with(Instant::now);
                 self.seen.stayed |= at.elapsed() >= STAYS;
             }
-            if let Some(reason) = menu.close_reason().get_untracked() {
+            if self.seen.reason.is_none()
+                && let Some(reason) = menu.close_reason().get_untracked()
+            {
                 self.seen.reason = Some(reason);
-                self.finish(cx);
-                return;
+                self.seen.mode_changed = set_mode(MODES[0]);
+                if !self.seen.mode_changed {
+                    self.finish(cx);
+                    return;
+                }
             }
+        }
+        if self.grown_frames >= GROWN_FRAMES {
+            self.seen.grew = true;
+            self.finish(cx);
+            return;
         }
         if self
             .started
@@ -180,6 +208,14 @@ impl AppHandler for Drive {
         }
         if drawn {
             self.start(cx);
+            // The pop-up is closed by then, so the frame is the bar's.
+            let width = f64::from(MODES[0].0);
+            let grown = cx.surface(surface).is_some_and(|bar| {
+                (f64::from(bar.size().width.0) / bar.scale_factor() - width).abs() < 0.5
+            });
+            if self.seen.reason.is_some() && grown {
+                self.grown_frames += 1;
+            }
         }
         self.watch(cx);
         // A still document asks for one frame, so each frame asks for the next.
@@ -209,6 +245,12 @@ impl AppHandler for Drive {
     }
 }
 
+/// Asks sway to set the mode of every output, and reports whether it did.
+fn set_mode((width, height): (u32, u32)) -> bool {
+    std::env::var_os("SWAYSOCK").is_some()
+        && support::ask_compositor(&format!("output * mode {width}x{height}"), "")
+}
+
 /// A bar across the top, which keeps the application running.
 fn application() -> Result<Runtime, AppError> {
     App::new()
@@ -221,7 +263,7 @@ fn application() -> Result<Runtime, AppError> {
                 .with_namespace("zgui-test-bar"),
         )
         .with_stylesheet("root { display: block; width: 100%; height: 100% }")
-        .with_renderer(Box::new(support::renderer))
+        .with_renderer(support::renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().class("root").into_view().build(cx))
         })
@@ -252,6 +294,7 @@ fn main() {
         menu: None,
         opened_at: None,
         started: None,
+        grown_frames: 0,
     };
     let Some(mut app) = support::loop_for(PROPERTY, handler) else {
         return;
@@ -283,8 +326,21 @@ fn main() {
         "a press outside did not dismiss the pop-up: {seen:?}"
     );
     assert!(seen.bar_open, "the bar closed with its pop-up: {seen:?}");
+    if !seen.mode_changed {
+        support::skipped(
+            "the bar draws on after its pop-up is gone",
+            "only sway changes the mode of an output on request",
+        );
+        support::passed(
+            PROPERTY,
+            "opened with a grab, stayed through the release, dismissed by a press outside",
+        );
+        return;
+    }
+    assert!(seen.grew, "the bar did not draw at its new width: {seen:?}");
     support::passed(
         PROPERTY,
-        "opened with a grab, stayed through the release, dismissed by a press outside",
+        "opened with a grab, stayed through the release, dismissed by a press outside, \
+         and the bar drew on at a new width",
     );
 }

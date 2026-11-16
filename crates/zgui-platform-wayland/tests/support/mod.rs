@@ -30,7 +30,8 @@ use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, PresentPacing};
+use zgui_render_wgpu::renderer::PrePresent;
+use zgui_render_wgpu::{PresentPacing, SharedGraphics};
 use zgui_runtime::{App, AppError};
 use zgui_view::{BuildCx, IntoView, View};
 
@@ -288,12 +289,22 @@ impl<A: AppHandler> AppHandler for StopAfter<A> {
     }
 }
 
+/// The renderer factory every window of this program draws through.
+///
+/// One device behind all of them, as in the application. So a property about several windows
+/// exercises the path that a shell with a bar, pop-ups and lock windows runs on.
+pub(crate) fn renderers() -> zgui_runtime::RendererFactory {
+    let graphics = SharedGraphics::new();
+    Box::new(move |surface, target| renderer(&graphics, surface, target))
+}
+
 /// Builds whatever this surface can actually be drawn through.
 ///
-/// The pacing is asked for rather than assumed, exactly as the application does it: a backend that
-/// paces frames itself gets presentation that never blocks, and is told when a buffer is about to
-/// be committed so that it can ask the compositor for the next frame.
-pub(crate) fn renderer(
+/// The pacing is asked for, exactly as the application does it: a backend that paces frames
+/// itself gets presentation that never blocks, and is told when a buffer is about to be committed
+/// so that it can ask the compositor for the next frame.
+fn renderer(
+    graphics: &SharedGraphics,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
@@ -307,18 +318,18 @@ pub(crate) fn renderer(
         _ => PresentPacing::Display,
     };
     let notified = Arc::clone(surface);
-    let builder = Builder::new()
-        .with_present_pacing(pacing)
-        .with_pre_present(Box::new(move |target| {
-            notified.pre_present_frame(target.size, f64::from(target.scale.get()));
-        }));
-    builder.for_surface(target, handles).map_or_else(
-        |unavailable| {
-            NO_DEVICE.store(true, Ordering::Relaxed);
-            Err(AppError::from(unavailable))
-        },
-        |renderer| Ok(Box::new(renderer) as Box<dyn Renderer>),
-    )
+    let pre_present: PrePresent = Box::new(move |target| {
+        notified.pre_present_frame(target.size, f64::from(target.scale.get()));
+    });
+    graphics
+        .renderer_for_surface(target, handles, pacing, Some(pre_present))
+        .map_or_else(
+            |unavailable| {
+                NO_DEVICE.store(true, Ordering::Relaxed);
+                Err(AppError::from(unavailable))
+            },
+            |renderer| Ok(Box::new(renderer) as Box<dyn Renderer>),
+        )
 }
 
 /// The identifier every window these properties open is grouped under.
@@ -345,7 +356,7 @@ fn styled(title: &'static str, css: &'static str) -> Result<zgui_runtime::Runtim
         .with_application_id(APP_ID)
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(renderer))
+        .with_renderer(renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(
                 zgui_elements::column()

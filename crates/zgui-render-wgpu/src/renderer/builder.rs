@@ -22,6 +22,12 @@ use crate::target::swapchain::{Offscreen, Presentation};
 /// known once a device has been created from it and a surface configured for it — adapters on
 /// hybrid graphics report capabilities a device made from them turns out not to have. So: take the
 /// window's handles, make a surface on each candidate's instance, then configure it.
+///
+/// Each builder creates its own instances, and its renderer destroys them when it drops. Use
+/// [`SharedGraphics`](crate::SharedGraphics) for more than one window: it keeps one instance for
+/// all of them. On the NVIDIA Vulkan driver 610.43 under Wayland, the destruction of one instance
+/// breaks the swap chains of every other instance on the same display. The next swap chain that
+/// is created or destroyed there crashes the process inside the driver.
 pub struct Builder {
     /// One instance per backend tier, each created when the candidate loop reaches it.
     instances: adapter::Instances,
