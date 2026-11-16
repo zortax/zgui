@@ -24,6 +24,8 @@ pub struct WindowOptions {
     pub(crate) runtime: WindowContent,
     /// What to ask before a close the user asked for is carried out.
     pub(crate) on_close_request: Option<Box<dyn FnMut() -> CloseResponse>>,
+    /// Whether the window stays hidden until the application shows it.
+    pub(crate) hidden: bool,
 }
 
 impl WindowOptions {
@@ -33,6 +35,7 @@ impl WindowOptions {
             attributes: SurfaceAttributes::new(title),
             runtime: WindowContent::default(),
             on_close_request: None,
+            hidden: false,
         }
     }
 
@@ -69,6 +72,16 @@ impl WindowOptions {
     /// The largest the user may make it, in CSS pixels.
     pub fn with_max_size(mut self, width: f32, height: f32) -> Self {
         self.attributes.max_size = Some(Size::new(CssPx(width), CssPx(height)));
+        self
+    }
+
+    /// Whether the window is shown once its first frame is drawn.
+    ///
+    /// A hidden window has its document built and drawn, and stays off the screen until
+    /// [`WindowHandle::set_visible`](crate::windows::WindowHandle::set_visible) shows it. A
+    /// pop-over is opened hidden and shown on demand, so showing it costs one frame.
+    pub fn with_visible(mut self, visible: bool) -> Self {
+        self.hidden = !visible;
         self
     }
 

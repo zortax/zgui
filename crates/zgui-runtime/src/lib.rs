@@ -117,7 +117,7 @@ pub use crate::window::present::PresentPace;
 pub use crate::window::resize::ResizePace;
 pub use crate::window::{MAINTENANCE_DELAY, Window, WindowContent};
 pub use crate::windows::{
-    CloseGuard, WindowHandle, WindowId, Windows, on_close_request, try_use_window, try_use_windows,
-    use_input_region, use_window, use_windows,
+    CloseGuard, FocusGuard, WindowHandle, WindowId, Windows, on_close_request, try_use_window,
+    try_use_windows, use_input_region, use_window, use_windows,
 };
 pub use crate::windows::{LayerOptions, WindowOptions};

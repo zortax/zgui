@@ -834,6 +834,13 @@ impl Runtime {
         let metrics = (self.metrics)();
         let timers = Rc::clone(&self.timers);
         let handle = self.live[index].handle.clone();
+        // A shell window is given the keyboard by an edge of its own, and one that takes no
+        // keyboard is never given it. Every other window is given it as it opens.
+        let starts_focused = !matches!(
+            self.live[index].spec.attributes.role,
+            zgui_platform::SurfaceRole::Layer(_)
+        );
+        handle.set_focused(starts_focused);
         let close = Rc::clone(&self.live[index].spec.close);
         let view = &mut self.live[index].spec.view;
         // Under the application's scope, so that this window's own scope is a child of it: what the
@@ -867,6 +874,13 @@ impl Runtime {
         // above this line is a wheel that is wrong on every machine but the one it was written on.
         window.set_scroll_settings(cx.scroll_settings());
         window.set_translucent(translucent);
+        window.assume_surface_focus(starts_focused);
+        // A window opened hidden is hidden before its first frame, so that frame never reaches
+        // the screen. Only the first open: a window shown since then is shown again on a resume.
+        if std::mem::take(&mut self.live[index].spec.hidden) {
+            surface.set_visible(false);
+            window.keep_hidden();
+        }
         if let Some(pool) = &self.style_pool {
             window.set_style_pool(Rc::clone(pool));
         }

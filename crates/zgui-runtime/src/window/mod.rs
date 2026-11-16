@@ -451,7 +451,8 @@ pub struct Window {
     ///
     /// A window that has just been opened is treated as focused. Every backend reports focus
     /// arriving rather than being held, so the alternative is a window that answers its first real
-    /// report by doing the work of losing focus it never had.
+    /// report by doing the work of losing focus it never had. A shell window is treated as not
+    /// focused, because the desktop gives it the keyboard with an edge of its own, if at all.
     surface_focused: bool,
     /// The shortcuts of the application menu's actions, shared by every window.
     menu_keys: crate::desktop::MenuKeys,

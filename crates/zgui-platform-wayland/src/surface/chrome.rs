@@ -151,6 +151,8 @@ pub(crate) fn unmap(surface: &WaylandSurface) {
     shared.hide_owed = false;
     shared.visibility.configured = false;
     shared.unmapped = true;
+    // A frame held for the compositor would map the surface again when it is presented.
+    shared.pacer.cancel_held();
     shared.cancel_callbacks();
 }
 

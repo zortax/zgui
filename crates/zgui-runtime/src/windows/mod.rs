@@ -25,11 +25,13 @@
 //! what lets the code above be the same code on every platform.
 
 mod drag;
+mod focus;
 mod handle;
 mod layer;
 mod options;
 mod region;
 
+pub use crate::windows::focus::FocusGuard;
 pub use crate::windows::handle::{WindowHandle, WindowId};
 pub use crate::windows::layer::LayerOptions;
 pub use crate::windows::options::WindowOptions;
@@ -84,6 +86,7 @@ impl Windows {
             attributes,
             runtime,
             on_close_request,
+            hidden,
         } = options;
         if let Some(callback) = on_close_request {
             close.borrow_mut().insert(callback);
@@ -100,7 +103,8 @@ impl Windows {
             token,
             WindowSpec::new(attributes, runtime, view)
                 .with_close_callbacks(close)
-                .with_handle(handle.clone()),
+                .with_handle(handle.clone())
+                .with_hidden(hidden),
         );
         handle
     }

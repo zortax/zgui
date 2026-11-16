@@ -177,7 +177,9 @@ impl LayerShellHandler for WaylandState {
                     CssPx(height as f32)
                 },
             );
-            shared.visibility.configured = true;
+            // A configure that reaches a surface the application hid answers a commit made before
+            // the hide. Drawing into it would map the surface again, so it waits for the show.
+            shared.visibility.configured |= !shared.unmapped;
             let scale = shared.ladder.factor();
             (shared.resized(extent, scale), shared.visibility_edge())
         };

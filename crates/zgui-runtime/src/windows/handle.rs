@@ -66,6 +66,8 @@ pub(crate) struct WindowShared {
     pub(crate) scale: ArcRwSignal<f32>,
     /// Whether the window holds the keyboard.
     pub(crate) focused: ArcRwSignal<bool>,
+    /// What hears about the window gaining and losing the keyboard.
+    pub(crate) focus_listeners: Rc<RefCell<crate::windows::focus::FocusListeners>>,
     /// Whether the desktop says nothing of the window is visible.
     pub(crate) occluded: ArcRwSignal<bool>,
     /// Whether the window is maximised.
@@ -92,8 +94,10 @@ impl WindowHandle {
                 size: ArcRwSignal::new(Size::new(CssPx(0.0), CssPx(0.0))),
                 scale: ArcRwSignal::new(1.0),
                 // A window is opened focused until the desktop says otherwise, which is the same
-                // assumption the window itself starts from.
+                // assumption the window itself starts from. A shell window is the exception, and
+                // the runtime says so when it opens one.
                 focused: ArcRwSignal::new(true),
+                focus_listeners: Rc::default(),
                 occluded: ArcRwSignal::new(false),
                 maximized: ArcRwSignal::new(false),
                 fullscreen: ArcRwSignal::new(None),
@@ -158,7 +162,14 @@ impl WindowHandle {
 
     /// Records whether the window holds the keyboard.
     pub(crate) fn set_focused(&self, focused: bool) {
-        self.shared.focused.set(focused);
+        if self.shared.focused.get_untracked() != focused {
+            self.shared.focused.set(focused);
+        }
+    }
+
+    /// Tells the callbacks registered with [`WindowHandle::on_focus_change`] about an edge.
+    pub(crate) fn focus_changed(&self, focused: bool) {
+        crate::windows::focus::tell(&self.shared.focus_listeners, focused);
     }
 
     /// Records whether the desktop says nothing of the window is visible.
@@ -213,8 +224,26 @@ impl WindowHandle {
     }
 
     /// Whether the window holds the keyboard.
+    ///
+    /// An ordinary window starts as focused, because the desktop gives a new window the keyboard.
+    /// A shell window starts as not focused: one that takes no keyboard is never given it, and
+    /// one that takes it on demand is given it when the desktop says so.
     pub fn focused(&self) -> Signal<bool> {
         self.shared.focused.clone().into()
+    }
+
+    /// Calls `callback` each time the window gains the keyboard or loses it, with `true` for a
+    /// gain.
+    ///
+    /// Each call is one edge: a gain and a loss inside one frame are two calls, where the
+    /// [`WindowHandle::focused`] signal can settle on the value it started from. A pop-over
+    /// closes itself from the loss. The callback runs inside the frame that handles the edge, as
+    /// a listener does, and a signal it reads is not subscribed to.
+    ///
+    /// The guard removes the callback when it is dropped. Keep it for as long as the edges
+    /// matter.
+    pub fn on_focus_change(&self, callback: impl FnMut(bool) + 'static) -> crate::FocusGuard {
+        crate::windows::focus::listen(&self.shared.focus_listeners, callback)
     }
 
     /// Whether the desktop says nothing of the window is visible.

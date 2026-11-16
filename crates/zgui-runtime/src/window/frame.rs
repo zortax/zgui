@@ -261,6 +261,11 @@ impl Window {
         }
     }
 
+    /// Leaves the surface hidden after its first frame, for a window the application shows itself.
+    pub(crate) fn keep_hidden(&mut self) {
+        self.first_frame = false;
+    }
+
     /// Shows the surface once its first frame has reached it.
     fn show_first_frame(&mut self, outcome: FrameOutcome) {
         if self.first_frame && matches!(outcome, FrameOutcome::Presented(_)) {

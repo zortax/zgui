@@ -58,6 +58,8 @@ pub struct WindowSpec {
     /// exists, so the handle it answered with is the one the window has to be filled into. A
     /// specification made without one is given a handle when it opens.
     pub(crate) handle: Option<crate::windows::WindowHandle>,
+    /// Whether the window stays hidden after its first frame, until the application shows it.
+    pub(crate) hidden: bool,
 }
 
 impl WindowSpec {
@@ -69,7 +71,14 @@ impl WindowSpec {
             view,
             close: Rc::new(RefCell::new(CloseCallbacks::default())),
             handle: None,
+            hidden: false,
         }
+    }
+
+    /// The same, staying hidden until the application shows it.
+    pub fn with_hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
     }
 
     /// The same, asking `close` before a close the user asked for is carried out.
