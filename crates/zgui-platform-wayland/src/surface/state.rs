@@ -104,6 +104,12 @@ pub(crate) struct Shared {
     /// held frame obsolete before it is presented. It is drawn and presented at once instead, see
     /// the pacer.
     pub(crate) resize_owed: bool,
+    /// Whether a lock surface acknowledged an extent that no committed buffer shows yet.
+    ///
+    /// The commit after a lock surface acknowledges a configure has to carry a buffer of exactly
+    /// that extent, and any other commit is a protocol error. So while this is set the surface
+    /// commits only a frame at the configured extent.
+    pub(crate) exact_owed: bool,
     /// Whether the redraw now being delivered answers a new extent or scale.
     ///
     /// Such a redraw rebuilds the swap chain, and a drag sends one per refresh, so its cost and its
@@ -186,6 +192,7 @@ impl Shared {
             drawing: false,
             hide_owed: false,
             resize_owed: false,
+            exact_owed: false,
             answering_resize: false,
             mapped: false,
             declared: None,
@@ -415,6 +422,37 @@ impl Shared {
         Some(SurfaceEvent::Occluded(hidden))
     }
 
+    /// Records that a lock surface acknowledged a configure that its next commit has to match.
+    pub(crate) const fn owe_exact_extent(&mut self) {
+        self.exact_owed = true;
+    }
+
+    /// Records that a frame of `size` is about to be committed.
+    ///
+    /// A frame at the configured extent pays what [`Shared::owe_exact_extent`] recorded.
+    pub(crate) fn committing_frame(&mut self, size: Size<i32, Device>) {
+        if size == self.device_extent() {
+            self.exact_owed = false;
+        }
+    }
+
+    /// Whether a commit that carries no new buffer is allowed now.
+    ///
+    /// Such a commit keeps the buffer on the screen. It is refused while the surface is hidden or
+    /// about to be, because it would map the surface again. It is refused while a lock surface owes
+    /// a buffer at a new extent, because the buffer on the screen has the old one.
+    pub(crate) const fn may_commit_bare(&self) -> bool {
+        !self.unmapped && !self.hide_owed && !self.exact_owed
+    }
+
+    /// The configured extent, in whole device pixels.
+    fn device_extent(&self) -> Size<i32, Device> {
+        Size::new(
+            self.size.width.0.round() as i32,
+            self.size.height.0.round() as i32,
+        )
+    }
+
     /// The logical extent a buffer of `size` drawn at `scale` maps to, when its metadata changed.
     ///
     /// The configured extent is the answer for a buffer at the configured size. A buffer drawn
@@ -428,11 +466,7 @@ impl Shared {
             return None;
         }
         self.declared = Some((size, scale));
-        let current = Size::new(
-            self.size.width.0.round() as i32,
-            self.size.height.0.round() as i32,
-        );
-        if current == size && (self.scale - scale).abs() < 1e-5 {
+        if self.device_extent() == size && (self.scale - scale).abs() < 1e-5 {
             return Some(self.logical);
         }
         Some(Size::new(
@@ -897,6 +931,28 @@ mod tests {
         shared.pacer.request();
         let mut visibility = shared.visibility;
         assert!(!shared.pacer.take(&mut visibility, now));
+    }
+
+    #[test]
+    fn a_lock_surface_commits_only_a_frame_at_its_new_extent() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let _ = shared.resized(logical(1280.0, 720.0), 1.0);
+        shared.committing_frame(Size::new(1280, 720));
+        assert!(shared.may_commit_bare());
+
+        // The output changed its mode; the toolkit acknowledged the configure on arrival.
+        let _ = shared.resized(logical(1920.0, 1080.0), 1.0);
+        shared.owe_exact_extent();
+        assert!(
+            !shared.may_commit_bare(),
+            "the buffer on the screen is 1280x720"
+        );
+        // A frame drawn before the configure pays nothing.
+        shared.committing_frame(Size::new(1280, 720));
+        assert!(!shared.may_commit_bare());
+        shared.committing_frame(Size::new(1920, 1080));
+        assert!(shared.may_commit_bare());
     }
 
     #[test]

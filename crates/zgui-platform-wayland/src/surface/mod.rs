@@ -442,21 +442,26 @@ impl WaylandSurface {
     /// chain alive, and a held frame is committed when it arrives.
     /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
     pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
-        let (end, unmapped) = {
+        let (end, bare, exact_owed) = {
             let mut shared = self.shared();
             (
                 shared.redrawn(began, now),
-                shared.unmapped || shared.hide_owed,
+                shared.may_commit_bare(),
+                shared.exact_owed,
             )
         };
+        let keep_alive = end == crate::surface::state::EndOfRedraw::KeepChainAlive;
         // A surface that is hidden, or about to be, owes the compositor nothing: an empty commit
         // would ask the shell to map it again.
-        if end == crate::surface::state::EndOfRedraw::KeepChainAlive && !unmapped {
+        if keep_alive && bare {
             // A change asked for with no new content to draw still goes out, with this commit.
             self.send_layer(false);
             self.send_regions();
             self.ask_for_callback();
             self.role.commit();
+        } else if keep_alive && exact_owed {
+            // A lock surface that still owes a buffer at its new extent draws again next turn.
+            zgui_platform::Surface::request_redraw(self);
         }
         self.end_drawing();
     }

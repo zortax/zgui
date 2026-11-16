@@ -10,6 +10,7 @@ use smithay_client_toolkit::shell::WaylandSurface as _;
 use smithay_client_toolkit::shell::wlr_layer::LayerSurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 
+use crate::lock::LockSurface;
 pub use crate::surface::role::xdg::popup::Popup;
 pub use crate::surface::role::xdg::toplevel::Toplevel;
 
@@ -28,7 +29,7 @@ pub enum Role {
     /// A part of the desktop shell: a panel, a wallpaper, a notification.
     Layer(Box<LayerSurface>),
     /// The lock screen on one output.
-    Lock(Box<SessionLockSurface>),
+    Lock(Box<LockSurface>),
 }
 
 impl Role {
@@ -38,7 +39,7 @@ impl Role {
             Self::Toplevel(window) => window.wl_surface(),
             Self::Popup(popup) => popup.wl_surface(),
             Self::Layer(layer) => layer.wl_surface(),
-            Self::Lock(lock) => lock.wl_surface(),
+            Self::Lock(lock) => lock.surface().wl_surface(),
         }
     }
 
@@ -90,7 +91,7 @@ impl Role {
     /// The lock surface, when this is one.
     pub fn lock(&self) -> Option<&SessionLockSurface> {
         match self {
-            Self::Lock(lock) => Some(lock),
+            Self::Lock(lock) => Some(lock.surface()),
             _ => None,
         }
     }

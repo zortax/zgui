@@ -2,9 +2,11 @@
 //!
 //! The compositor answers a lock request later, with `locked` or with `finished`. Both answers
 //! reach the application as a wake. A lock surface covers one output and is sized by its
-//! configure, which the toolkit acknowledges on arrival.
+//! configure, which the toolkit acknowledges on arrival. An output takes one lock surface of a
+//! lock: a second one is a protocol error, so it is refused before it is asked for.
 
 use std::cell::RefCell;
+use std::sync::{Arc, Weak};
 
 use smithay_client_toolkit::reexports::client::globals::GlobalList;
 use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
@@ -28,6 +30,27 @@ pub struct Locks {
     manager: Option<SessionLockState>,
     /// The lock, from the request until it is unlocked or finished.
     held: RefCell<Option<SessionLock>>,
+    /// The outputs that show a lock surface of the held lock, each with the claim of its surface.
+    ///
+    /// A claim ends when its lock surface is destroyed. An output whose claim has ended takes a
+    /// new lock surface.
+    covered: RefCell<Vec<(WlOutput, Weak<()>)>>,
+}
+
+/// The lock surface on one output, and its claim to that output.
+#[derive(Debug)]
+pub struct LockSurface {
+    /// The toolkit's lock surface. Dropping it destroys it.
+    surface: SessionLockSurface,
+    /// What tells [`Locks`] that the output shows this surface. Dropped after the surface.
+    _claim: Arc<()>,
+}
+
+impl LockSurface {
+    /// The toolkit's lock surface.
+    pub const fn surface(&self) -> &SessionLockSurface {
+        &self.surface
+    }
 }
 
 impl Locks {
@@ -40,6 +63,7 @@ impl Locks {
         Self {
             manager: offered.then(|| SessionLockState::new(globals, qh)),
             held: RefCell::new(None),
+            covered: RefCell::new(Vec::new()),
         }
     }
 
@@ -68,6 +92,7 @@ impl Locks {
             .lock(qh)
             .map_err(|error| PlatformError::Backend(format!("ext_session_lock_v1: {error}")))?;
         *held = Some(lock);
+        self.covered.borrow_mut().clear();
         Ok(())
     }
 
@@ -85,20 +110,42 @@ impl Locks {
     }
 
     /// Makes `wl` the lock surface on `output`, while a lock is held.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SurfaceCreation`] when no lock is held, and when `output` shows a
+    /// lock surface of this lock already.
     pub fn surface(
         &self,
         wl: WlSurface,
         output: &WlOutput,
         qh: &QueueHandle<WaylandState>,
-    ) -> Option<SessionLockSurface> {
+    ) -> Result<LockSurface, PlatformError> {
         let held = self.held.borrow();
-        held.as_ref()
-            .map(|lock| lock.create_lock_surface(wl, output, qh))
+        let Some(lock) = held.as_ref() else {
+            return Err(PlatformError::SurfaceCreation(
+                "a lock surface needs the session lock this application holds".to_owned(),
+            ));
+        };
+        let mut covered = self.covered.borrow_mut();
+        covered.retain(|(_, claim)| claim.strong_count() > 0);
+        if covered.iter().any(|(shown, _)| shown == output) {
+            return Err(PlatformError::SurfaceCreation(
+                "this output shows a lock surface already".to_owned(),
+            ));
+        }
+        let claim = Arc::new(());
+        covered.push((output.clone(), Arc::downgrade(&claim)));
+        Ok(LockSurface {
+            surface: lock.create_lock_surface(wl, output, qh),
+            _claim: claim,
+        })
     }
 
     /// Forgets the lock the compositor ended. Dropping it destroys it, as the protocol asks.
     fn finished(&self) {
         self.held.borrow_mut().take();
+        self.covered.borrow_mut().clear();
     }
 }
 

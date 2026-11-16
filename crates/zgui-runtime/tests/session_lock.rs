@@ -1,8 +1,8 @@
 //! The session lock, as the application holds it.
 //!
 //! A lock is asked for on the next turn, confirmed or ended by the desktop, and unlocked only
-//! after the confirmation. Its lock windows open on the outputs they name, and close when the lock
-//! is over.
+//! after the confirmation. Its lock windows open on the outputs they name, one per output, and
+//! close when the lock is over.
 
 mod support;
 
@@ -112,6 +112,21 @@ fn a_lock_opens_a_window_on_each_output_and_unlocks_after_the_desktop_confirms()
         !lock.unlock(),
         "a lock that is over cannot be unlocked again"
     );
+}
+
+#[test]
+fn an_output_keeps_the_lock_window_it_has() {
+    let mut harness = application(true);
+    let lock = lock(&mut harness);
+    // Asked for again, as an effect over a monitor list that restates an output does.
+    let again = harness.app().scope().with(|| {
+        lock.open_surface(MonitorId::new(1), zgui_elements::column);
+        lock.open_surface(MonitorId::new(1), zgui_elements::column)
+    });
+    harness.settle(4);
+    assert_eq!(again, lock.windows()[0], "the output's window answers");
+    assert_eq!(lock.windows().len(), 2);
+    assert_eq!(harness.platform().offscreens().len(), 2);
 }
 
 #[test]

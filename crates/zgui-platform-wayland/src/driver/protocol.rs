@@ -205,7 +205,13 @@ impl WaylandState {
             // the hide. Drawing into it would map the surface again, so it waits for the show.
             shared.visibility.configured |= !shared.unmapped;
             let scale = shared.ladder.factor();
-            (shared.resized(extent, scale), shared.visibility_edge())
+            let resized = shared.resized(extent, scale);
+            // The toolkit acknowledged this configure on arrival, so a lock surface's next commit
+            // has to carry a buffer at the new extent. The first configure owes the first buffer.
+            if surface.role().lock().is_some() && (resized.is_some() || !shared.mapped) {
+                shared.owe_exact_extent();
+            }
+            (resized, shared.visibility_edge())
         };
         if let Some(event) = visibility {
             self.report(id, event);

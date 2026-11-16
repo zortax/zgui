@@ -123,12 +123,6 @@ impl WaylandState {
                 self.locks
                     .surface(wl, output, &self.qh)
                     .map(|lock| Role::Lock(Box::new(lock)))
-                    .ok_or_else(|| {
-                        PlatformError::SurfaceCreation(
-                            "a lock surface needs the session lock this application holds"
-                                .to_owned(),
-                        )
-                    })
             }
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
                 &self.xdg,

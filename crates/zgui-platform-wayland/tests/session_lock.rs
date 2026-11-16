@@ -1,11 +1,16 @@
 //! The session lock is offered only with its global, confirmed with lock windows, and unlocked.
 //!
-//! Three properties, read off what the application is told:
+//! Five properties, read off what the application is told:
 //!
 //! * **The capability is the global.** A compositor without `ext_session_lock_manager_v1`
 //!   declares no session lock, and a lock asked for there ends at once.
 //! * **A lock window covers its output.** The compositor configures each lock window at the
 //!   extent of its output, and confirms the lock once every output shows one.
+//! * **An output takes one lock window.** A second lock surface on an output is refused before
+//!   the compositor sees it, because the compositor answers it with a protocol error.
+//! * **A lock window follows its output.** The output changes its mode while the session is
+//!   locked. The lock window draws at the new extent, and the compositor raises no protocol
+//!   error. Only sway changes a mode on request, so elsewhere this property is skipped.
 //! * **An unlock closes the lock windows.** The windows close with
 //!   [`CloseReason::Application`], and the compositor raises no protocol error.
 //!
@@ -21,13 +26,31 @@ use std::time::{Duration, Instant};
 
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{AppHandler, CloseReason, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId};
-use zgui_platform::{MonitorInfo, WakeReason};
+use zgui_platform::{MonitorInfo, SurfaceAttributes, WakeReason};
 use zgui_runtime::lock::{LockHandle, SessionLock};
 use zgui_runtime::{App, AppError, ExitPolicy, Runtime};
 use zgui_view::prelude::GetUntracked;
 
 /// How long the program waits for the compositor.
 const PATIENCE: Duration = Duration::from_secs(8);
+
+/// The output mode set while the session is locked, and the mode the run restores at the end.
+const MODES: [(u32, u32); 2] = [(1600, 900), (1280, 720)];
+
+/// How many frames the lock window draws at the new extent before the unlock.
+const FOLLOWED_FRAMES: u32 = 3;
+
+/// Where the program is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Step {
+    /// Waiting for the confirmation and the first frames.
+    #[default]
+    Locking,
+    /// The output mode changed; waiting for frames at the new extent.
+    Following,
+    /// The unlock was asked for.
+    Unlocking,
+}
 
 /// What the program saw.
 #[derive(Clone, Debug, Default)]
@@ -42,6 +65,12 @@ struct Seen {
     locked: bool,
     /// The extents of the lock windows when the lock was confirmed.
     extents: Vec<Size<CssPx, Css>>,
+    /// Whether a second lock surface on an output was refused.
+    duplicate_refused: bool,
+    /// Whether the compositor changed the output mode while the session was locked.
+    mode_changed: bool,
+    /// Whether the lock window drew [`FOLLOWED_FRAMES`] frames at the new extent.
+    followed: bool,
     /// Why each lock window closed.
     reasons: Vec<Option<CloseReason>>,
 }
@@ -57,8 +86,10 @@ struct Drive {
     seen: Seen,
     /// The lock, once it is asked for.
     lock: Option<LockHandle>,
-    /// Whether the unlock was asked for.
-    unlocked: bool,
+    /// Where the program is.
+    step: Step,
+    /// How many frames were drawn at the new extent.
+    followed_frames: u32,
     /// When the lock was asked for.
     since: Option<Instant>,
 }
@@ -66,6 +97,9 @@ struct Drive {
 impl Drive {
     /// Keeps what was seen and finishes the loop.
     fn finish(&mut self, cx: &dyn PlatformCx) {
+        if self.seen.mode_changed {
+            set_mode(MODES[1]);
+        }
         *SEEN.lock().expect("the record is not poisoned") = Some(self.seen.clone());
         cx.request_exit();
     }
@@ -83,7 +117,7 @@ impl Drive {
             self.finish(cx);
             return;
         }
-        if !self.unlocked && lock.locked().get_untracked() {
+        if self.step == Step::Locking && lock.locked().get_untracked() {
             // A frame at the configured extent has to reach the screen before the extent is read.
             let windows = lock.windows();
             if windows
@@ -95,12 +129,22 @@ impl Drive {
                     .iter()
                     .map(|window| window.size().get_untracked())
                     .collect();
-                self.unlocked = lock.unlock();
+                self.seen.duplicate_refused = self.duplicate_refused(cx);
+                self.seen.mode_changed = set_mode(MODES[0]);
+                self.step = Step::Following;
+            }
+        }
+        if self.step == Step::Following
+            && (!self.seen.mode_changed || self.followed_frames >= FOLLOWED_FRAMES)
+        {
+            self.seen.followed = self.followed_frames >= FOLLOWED_FRAMES;
+            if lock.unlock() {
+                self.step = Step::Unlocking;
             }
         }
         let windows = lock.windows();
         let closed = windows.iter().all(|window| !window.is_open());
-        if (self.unlocked && closed) || lock.finished().get_untracked() {
+        if (self.step == Step::Unlocking && closed) || lock.finished().get_untracked() {
             self.seen.reasons = windows
                 .iter()
                 .map(|window| window.close_reason().get_untracked())
@@ -112,6 +156,45 @@ impl Drive {
             self.finish(cx);
         }
     }
+}
+
+impl Drive {
+    /// Asks for a second lock surface on the first output, and reports whether it was refused.
+    fn duplicate_refused(&self, cx: &dyn PlatformCx) -> bool {
+        let Some(id) = self.seen.outputs.iter().find_map(|monitor| monitor.id) else {
+            return false;
+        };
+        match cx.create_surface(&SurfaceAttributes::lock(id)) {
+            Ok(surface) => {
+                cx.destroy_surface(surface.id());
+                false
+            }
+            Err(_) => true,
+        }
+    }
+
+    /// Counts a frame of `surface` when it is drawn at the extent of the first of [`MODES`].
+    fn count_followed(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) {
+        if self.step != Step::Following || !self.seen.mode_changed {
+            return;
+        }
+        let (width, height) = MODES[0];
+        let at_new_extent = cx.surface(surface).is_some_and(|held| {
+            let scale = held.scale_factor();
+            let size = held.size();
+            (f64::from(size.width.0) / scale - f64::from(width)).abs() < 0.5
+                && (f64::from(size.height.0) / scale - f64::from(height)).abs() < 0.5
+        });
+        if at_new_extent {
+            self.followed_frames += 1;
+        }
+    }
+}
+
+/// Asks sway to set the mode of every output, and reports whether it did.
+fn set_mode((width, height): (u32, u32)) -> bool {
+    std::env::var_os("SWAYSOCK").is_some()
+        && support::ask_compositor(&format!("output * mode {width}x{height}"), "")
 }
 
 impl AppHandler for Drive {
@@ -133,6 +216,9 @@ impl AppHandler for Drive {
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         let drawn = matches!(event, SurfaceEvent::RedrawRequested);
         self.inner.surface_event(cx, surface, event);
+        if drawn {
+            self.count_followed(cx, surface);
+        }
         self.step(cx);
         if drawn
             && !cx.is_exiting()
@@ -194,7 +280,8 @@ fn main() {
         inner,
         seen: Seen::default(),
         lock: None,
-        unlocked: false,
+        step: Step::Locking,
+        followed_frames: 0,
         since: None,
     };
     let Some(mut app) = support::loop_for(PROPERTY, handler) else {
@@ -236,6 +323,21 @@ fn main() {
         );
     }
     assert!(
+        seen.duplicate_refused,
+        "a second lock surface on an output was asked for: {seen:?}"
+    );
+    if seen.mode_changed {
+        assert!(
+            seen.followed,
+            "the lock window did not draw at the new extent: {seen:?}"
+        );
+    } else {
+        support::skipped(
+            "a lock window follows its output",
+            "only sway changes the mode of an output on request",
+        );
+    }
+    assert!(
         seen.reasons
             .iter()
             .all(|reason| *reason == Some(CloseReason::Application)),
@@ -244,8 +346,14 @@ fn main() {
     support::passed(
         PROPERTY,
         &format!(
-            "{} lock window(s) at the extent of their outputs, closed by the unlock",
-            seen.extents.len()
+            "{} lock window(s) at the extent of their outputs, a second one refused, {}closed \
+             by the unlock",
+            seen.extents.len(),
+            if seen.mode_changed {
+                "drawn at the new mode, "
+            } else {
+                ""
+            }
         ),
     );
 }

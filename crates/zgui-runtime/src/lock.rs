@@ -1,9 +1,6 @@
 //! The session lock: the desktop hidden behind lock windows this application draws.
 //!
 //! ```no_run
-//! use std::cell::RefCell;
-//! use std::collections::HashSet;
-//!
 //! use zgui_reactive::RenderEffect;
 //! use zgui_reactive::prelude::*;
 //! use zgui_runtime::lock::SessionLock;
@@ -13,14 +10,12 @@
 //! let lock = SessionLock::lock()?;
 //!
 //! // One lock window per output, including the outputs connected while the session is locked.
+//! // An output that has a lock window keeps it.
 //! let monitors = use_monitors();
-//! let covered = RefCell::new(HashSet::new());
 //! let opener = lock.clone();
 //! let effect = RenderEffect::new(move |_| {
 //!     for id in monitors.get().iter().filter_map(|monitor| monitor.id) {
-//!         if covered.borrow_mut().insert(id) {
-//!             opener.open_surface(id, zgui_elements::column);
-//!         }
+//!         opener.open_surface(id, zgui_elements::column);
 //!     }
 //! });
 //!
@@ -41,7 +36,7 @@ use zgui_reactive::prelude::*;
 use zgui_reactive::{ArcRwSignal, Signal};
 use zgui_view::IntoView;
 
-use crate::commands::WindowCommands;
+use crate::commands::{WindowCommands, WindowStatus};
 use crate::windows::{WindowHandle, WindowOptions, Windows};
 
 /// Why a session lock could not be asked for.
@@ -131,8 +126,8 @@ pub(crate) struct LockEntry {
     locked: ArcRwSignal<bool>,
     /// Whether the desktop refused the lock or ended it.
     finished: ArcRwSignal<bool>,
-    /// The lock windows, in the order they were opened.
-    windows: RefCell<Vec<WindowHandle>>,
+    /// The lock windows, in the order they were opened, each with its output.
+    windows: RefCell<Vec<(MonitorId, WindowHandle)>>,
 }
 
 impl LockHandle {
@@ -143,16 +138,37 @@ impl LockHandle {
     /// outputs with [`use_monitors`](crate::monitors::use_monitors). The window closes with
     /// [`CloseReason::OutputGone`](zgui_platform::CloseReason::OutputGone) when its output goes
     /// away, and it closes when the lock is over. A window opened after that does not open.
+    ///
+    /// An output takes one lock window. While the window for `monitor` is open or about to open,
+    /// this answers that window and leaves `view` unused.
     pub fn open_surface<F, V>(&self, monitor: MonitorId, view: F) -> WindowHandle
     where
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
+        if let Some(held) = self.surface_on(monitor) {
+            return held;
+        }
         let mut options = WindowOptions::new("");
         options.attributes = SurfaceAttributes::lock(monitor);
         let handle = self.windows.open(options, view);
-        self.entry.windows.borrow_mut().push(handle.clone());
+        self.entry
+            .windows
+            .borrow_mut()
+            .push((monitor, handle.clone()));
         handle
+    }
+
+    /// The lock window on `monitor` that is open or about to open.
+    fn surface_on(&self, monitor: MonitorId) -> Option<WindowHandle> {
+        self.entry
+            .windows
+            .borrow()
+            .iter()
+            .filter(|(on, _)| *on == monitor)
+            .map(|(_, window)| window)
+            .find(|window| self.commands.status(window.id()) != WindowStatus::Closed)
+            .cloned()
     }
 
     /// Whether the desktop confirmed the lock and it holds now.
@@ -186,7 +202,7 @@ impl LockHandle {
 
     /// The lock windows that were opened, open or not.
     pub fn windows(&self) -> Vec<WindowHandle> {
-        self.entry.windows.borrow().clone()
+        self.entry.windows()
     }
 }
 
@@ -225,6 +241,10 @@ impl LockEntry {
 
     /// The lock windows.
     pub(crate) fn windows(&self) -> Vec<WindowHandle> {
-        self.windows.borrow().clone()
+        self.windows
+            .borrow()
+            .iter()
+            .map(|(_, window)| window.clone())
+            .collect()
     }
 }

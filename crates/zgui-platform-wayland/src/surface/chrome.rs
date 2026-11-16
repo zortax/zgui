@@ -172,15 +172,16 @@ pub(crate) fn unmap(surface: &WaylandSurface) {
 /// at once rather than with the next frame: a region that waits for a frame would let through the
 /// very click it was set for. It replaces an input region asked for and not yet sent. A hidden
 /// surface commits nothing, because an empty commit asks the shell to map it; the region then
-/// goes out with the commit that shows the surface again.
+/// goes out with the commit that shows the surface again. A lock surface that owes a buffer at a
+/// new extent commits nothing either; the region goes out with that buffer.
 pub fn set_pointer_passthrough(
     surface: &WaylandSurface,
     passthrough: bool,
 ) -> Result<(), Unsupported> {
-    let unmapped = {
+    let bare = {
         let mut shared = surface.shared();
         shared.input_owed = None;
-        shared.unmapped || shared.hide_owed
+        shared.may_commit_bare()
     };
     let wl = surface.wl_surface();
     if passthrough {
@@ -193,7 +194,7 @@ pub fn set_pointer_passthrough(
     } else {
         wl.set_input_region(None);
     }
-    if !unmapped {
+    if bare {
         wl.commit();
     }
     Ok(())
@@ -216,6 +217,7 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
         let mut shared = surface.shared();
         shared.presented = true;
         shared.mapped = true;
+        shared.committing_frame(size);
         (
             shared.frame_metadata(size, scale),
             shared.ladder.is_fractional(),
