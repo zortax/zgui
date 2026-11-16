@@ -27,6 +27,8 @@ accesskit.workspace = true
 accesskit_unix.workspace = true
 calloop.workspace = true
 calloop-wayland-source.workspace = true
+# Drives the settings portal connection on its own thread.
+futures.workspace = true
 raw-window-handle.workspace = true
 rustix.workspace = true
 smithay-client-toolkit.workspace = true
