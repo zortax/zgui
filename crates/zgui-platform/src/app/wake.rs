@@ -56,8 +56,9 @@ pub enum WakeReason {
     ColorSchemeChanged,
     /// The desktop asked something of the application as a whole.
     App(AppEvent),
-    /// The desktop finished changing the state of a surface, such as taking it out of full
-    /// screen, after the last resize the change made.
+    /// The desktop changed the maximised or full-screen state of a surface.
+    ///
+    /// The change can come with no resize, or after the last resize of the change.
     SurfaceStateChanged(SurfaceId),
 }
 

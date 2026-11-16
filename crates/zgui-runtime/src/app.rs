@@ -1302,8 +1302,8 @@ impl AppHandler for Runtime {
                 self.clipboards.resolve(serial, result);
             }
             WakeReason::App(event) => self.app_event(cx, event),
-            // A resize is where the state is read, and the last resize came before the change
-            // was done.
+            // The desktop changed the state with no resize, or after the last resize of the
+            // change. Read the state again and draw it.
             WakeReason::SurfaceStateChanged(surface) => {
                 if let Some(window) = self.window_mut(surface) {
                     window.refresh_window_state();

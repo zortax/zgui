@@ -107,6 +107,12 @@ pub struct OffscreenSurface {
     cursor_log: Mutex<Vec<CursorStyle>>,
     /// Whether the surface has been shown.
     visible: AtomicBool,
+    /// Whether the surface was last asked to be maximised.
+    ///
+    /// A headless desktop grants each request at once and sends no event.
+    maximized: AtomicBool,
+    /// How the surface was last asked to fill the screen.
+    fullscreen: Mutex<Option<FullscreenMode>>,
     /// The last title it was given.
     title: Mutex<String>,
     /// What the surface was asked to be when it was created.
@@ -133,6 +139,8 @@ impl OffscreenSurface {
             text_input_log: Mutex::new(Vec::new()),
             cursor_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
+            maximized: AtomicBool::new(false),
+            fullscreen: Mutex::new(None),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
         }
@@ -344,11 +352,23 @@ impl Surface for OffscreenSurface {
 
     fn set_resizable(&self, _resizable: bool) {}
 
-    fn set_maximized(&self, _maximized: bool) {}
+    fn set_maximized(&self, maximized: bool) {
+        self.maximized.store(maximized, Ordering::Relaxed);
+    }
+
+    fn is_maximized(&self) -> bool {
+        self.maximized.load(Ordering::Relaxed)
+    }
 
     fn set_minimized(&self, _minimized: bool) {}
 
-    fn set_fullscreen(&self, _mode: Option<FullscreenMode>) {}
+    fn set_fullscreen(&self, mode: Option<FullscreenMode>) {
+        *self.fullscreen.lock().expect("the state is not poisoned") = mode;
+    }
+
+    fn fullscreen(&self) -> Option<FullscreenMode> {
+        *self.fullscreen.lock().expect("the state is not poisoned")
+    }
 
     fn set_cursor(&self, cursor: CursorStyle) {
         self.cursor_log

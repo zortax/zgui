@@ -168,8 +168,8 @@ impl WindowHandle {
 
     /// Asks the surface again whether it is maximised or full screen.
     ///
-    /// Neither is reported as an event by any desktop, and both always resize the window — so a
-    /// resize is where they are noticed.
+    /// Read on resize, and when the platform reports a state change. A desktop can change either
+    /// state and keep the size of the window.
     pub(crate) fn refresh_window_state(&self) {
         if let Some(surface) = self.surface() {
             let maximized = surface.is_maximized();

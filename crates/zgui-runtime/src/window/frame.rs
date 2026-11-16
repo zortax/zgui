@@ -1015,8 +1015,8 @@ impl Window {
             return false;
         }
         // What the handle reports, from the size that was actually taken. Maximising and leaving
-        // full screen both resize the window, so this is where those move too — no desktop reports
-        // them as events of their own.
+        // full screen usually resize the window, so the state is read here too. A change that
+        // keeps the size comes as a `SurfaceStateChanged` wake.
         self.handle.set_geometry(size, scale);
         self.handle.refresh_window_state();
         let admitted = self.pace.admit(self.clock.now(), self.refresh_interval());
