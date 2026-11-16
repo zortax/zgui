@@ -78,6 +78,13 @@ impl WindowOptions {
         self
     }
 
+    /// Names the application this window belongs to, such as a Wayland app id. A window without
+    /// one takes the application's.
+    pub fn with_application_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.attributes.application_id = Some(id.into());
+        self
+    }
+
     /// The size the content should start at, in CSS pixels.
     pub fn with_size(mut self, width: f32, height: f32) -> Self {
         self.attributes.size = Some(Size::new(CssPx(width), CssPx(height)));
@@ -234,6 +241,16 @@ mod tests {
         assert!(options.attributes().resizable, "the default is resizable");
         assert_eq!(options.attributes().decorations, Decorations::Full);
         assert_eq!(options.attributes().position, None);
+        assert_eq!(options.attributes().application_id, None);
+        let named = WindowOptions::new("settings").with_application_id("app-settings");
+        assert_eq!(
+            named
+                .attributes()
+                .application_id
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("app-settings")
+        );
     }
 
     #[test]
