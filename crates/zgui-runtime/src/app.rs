@@ -805,6 +805,17 @@ impl Runtime {
                 .application_id
                 .clone_from(&self.application_id);
         }
+        if let Some(parent) = self.live[index].spec.popup_parent {
+            let surface = self
+                .live_index(parent)
+                .and_then(|parent| self.live[parent].surface)
+                .ok_or_else(|| {
+                    zgui_platform::PlatformError::SurfaceCreation(
+                        "the window this pop-up belongs to is not open".to_owned(),
+                    )
+                })?;
+            crate::windows::popup::set_parent(&mut self.live[index].spec.attributes, surface);
+        }
         let surface = cx.create_surface(&self.live[index].spec.attributes)?;
         let scale = surface.scale_factor();
         let size = first_extent(surface.size(), self.live[index].spec.attributes.size, scale);
@@ -840,11 +851,11 @@ impl Runtime {
         let metrics = (self.metrics)();
         let timers = Rc::clone(&self.timers);
         let handle = self.live[index].handle.clone();
-        // A shell window is given the keyboard by an edge of its own, and one that takes no
-        // keyboard is never given it. Every other window is given it as it opens.
+        // A shell window and a pop-up are given the keyboard by an edge of their own, and one
+        // that takes no keyboard is never given it. Every other window is given it as it opens.
         let starts_focused = !matches!(
             self.live[index].spec.attributes.role,
-            zgui_platform::SurfaceRole::Layer(_)
+            zgui_platform::SurfaceRole::Layer(_) | zgui_platform::SurfaceRole::Popup(_)
         );
         handle.set_focused(starts_focused);
         let close = Rc::clone(&self.live[index].spec.close);
@@ -1109,6 +1120,22 @@ impl Runtime {
     /// The window stops being one the application wants, which is what tells this apart from a
     /// platform taking every surface away: a window closed here does not come back on resume.
     fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, reason: CloseReason) {
+        // The pop-ups placed against the window close first: a desktop takes a parent down only
+        // after its pop-ups.
+        if let Some(token) = self
+            .live_for_surface(surface)
+            .map(|index| self.live[index].token)
+        {
+            let children: Vec<SurfaceId> = self
+                .live
+                .iter()
+                .filter(|live| live.spec.popup_parent == Some(token))
+                .filter_map(|live| live.surface)
+                .collect();
+            for child in children {
+                self.close_window(cx, child, CloseReason::Dismissed);
+            }
+        }
         // Looked up before the teardown, which is what clears the surface this names it by.
         let index = self.live_for_surface(surface);
         self.forget_surface(surface);

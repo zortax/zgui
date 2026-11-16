@@ -466,6 +466,15 @@ impl WindowHandle {
         self.act(|surface| surface.focus());
     }
 
+    /// The token of the latest press the user made, for a pop-up that takes a grab.
+    ///
+    /// Read it in the handler of the press that opens a menu, and pass it to
+    /// [`PopupOptions::with_grab`](crate::windows::PopupOptions::with_grab). `None` before the
+    /// first press, while the window is not open, and on a desktop that needs no token.
+    pub fn input_serial(&self) -> Option<zgui_platform::InputSerial> {
+        self.surface().and_then(|surface| surface.input_serial())
+    }
+
     /// Asks the desktop to draw attention to this window, or stops asking.
     pub fn request_attention(&self, urgent: bool) {
         self.act(|surface| surface.request_attention(urgent));

@@ -29,12 +29,14 @@ mod focus;
 mod handle;
 mod layer;
 mod options;
+pub(crate) mod popup;
 mod region;
 
 pub use crate::windows::focus::FocusGuard;
 pub use crate::windows::handle::{WindowHandle, WindowId};
 pub use crate::windows::layer::LayerOptions;
 pub use crate::windows::options::WindowOptions;
+pub use crate::windows::popup::PopupOptions;
 pub use crate::windows::region::use_input_region;
 
 use std::cell::RefCell;
@@ -87,6 +89,7 @@ impl Windows {
             runtime,
             on_close_request,
             hidden,
+            popup_parent,
         } = options;
         if let Some(callback) = on_close_request {
             close.borrow_mut().insert(callback);
@@ -104,7 +107,8 @@ impl Windows {
             WindowSpec::new(attributes, runtime, view)
                 .with_close_callbacks(close)
                 .with_handle(handle.clone())
-                .with_hidden(hidden),
+                .with_hidden(hidden)
+                .with_popup_parent(popup_parent),
         );
         handle
     }

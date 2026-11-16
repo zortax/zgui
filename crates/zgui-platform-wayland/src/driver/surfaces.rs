@@ -122,6 +122,10 @@ impl WaylandState {
     /// space the anchor rectangle arrives in and the space the compositor measures it in. A
     /// rectangle outside it, or one of no extent, is a protocol error rather than a placement the
     /// compositor corrects, so both are clamped before they are sent.
+    ///
+    /// A window or another pop-up is the pop-up's parent directly. A shell layer adopts a pop-up
+    /// made with no parent. The adoption and the grab both precede the first commit, which the
+    /// protocol requires of each.
     fn make_popup(
         &self,
         id: SurfaceId,
@@ -134,14 +138,17 @@ impl WaylandState {
                 "the surface this pop-up belongs to has already gone".to_owned(),
             ));
         };
-        let Some(anchor) = parent.role().xdg_surface() else {
+        let layer = parent.role().layer();
+        let anchor = parent.role().xdg_surface();
+        if layer.is_none() && anchor.is_none() {
             return Err(PlatformError::SurfaceCreation(
-                "a pop-up can only be placed against a window or another pop-up".to_owned(),
+                "a pop-up can only be placed against a window, a pop-up or a shell layer"
+                    .to_owned(),
             ));
-        };
+        }
         let extent = parent.shared().logical;
         let size = attributes.size.unwrap_or(extent);
-        Ok(Role::Popup(Box::new(Popup::new(
+        let popup = Popup::new(
             &self.xdg,
             &self.qh,
             wl,
@@ -152,7 +159,17 @@ impl WaylandState {
                 parent: extent,
                 size,
             },
-        ))))
+        );
+        if let Some(layer) = layer {
+            layer.get_popup(popup.xdg_popup());
+        }
+        if let Some(serial) = placement.grab {
+            match &self.seat.serials.seat {
+                Some(seat) => popup.grab(seat, serial.raw()),
+                None => tracing::debug!(?serial, "a pop-up grab with no seat to grab on"),
+            }
+        }
+        Ok(Role::Popup(Box::new(popup)))
     }
 
     /// A surface that is part of the desktop shell rather than a window.

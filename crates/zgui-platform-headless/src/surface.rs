@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, LayerPatch, Surface, SurfaceAttributes, SurfaceId,
-    SurfaceRole, TextInput, Unsupported,
+    CursorStyle, Decorations, FullscreenMode, InputSerial, LayerPatch, Surface, SurfaceAttributes,
+    SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -131,6 +131,8 @@ pub struct OffscreenSurface {
     /// can otherwise check about an application identifier, a window level or an icon is nothing at
     /// all, and an attribute nothing reads is an attribute that silently stops being sent.
     requested_attributes: Mutex<SurfaceAttributes>,
+    /// The token of the latest press, as a test sets it.
+    input_serial: Mutex<Option<InputSerial>>,
 }
 
 impl OffscreenSurface {
@@ -156,7 +158,16 @@ impl OffscreenSurface {
             fullscreen: Mutex::new(None),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
+            input_serial: Mutex::new(None),
         }
+    }
+
+    /// Sets the token [`Surface::input_serial`] answers with, as a press on a real desktop would.
+    pub fn set_input_serial(&self, serial: Option<InputSerial>) {
+        *self
+            .input_serial
+            .lock()
+            .expect("the serial is not poisoned") = serial;
     }
 
     /// Records what the surface was asked to be.
@@ -410,6 +421,13 @@ impl Surface for OffscreenSurface {
 
     fn fullscreen(&self) -> Option<FullscreenMode> {
         *self.fullscreen.lock().expect("the state is not poisoned")
+    }
+
+    fn input_serial(&self) -> Option<InputSerial> {
+        *self
+            .input_serial
+            .lock()
+            .expect("the serial is not poisoned")
     }
 
     fn set_cursor(&self, cursor: CursorStyle) {

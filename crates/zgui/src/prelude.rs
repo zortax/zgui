@@ -29,8 +29,9 @@ pub use crate::error::Error;
 /// another. Every operation on a window that has closed does nothing, as does every operation this
 /// desktop cannot carry out — so none of this needs a branch per platform.
 pub use zgui_runtime::windows::{
-    CloseGuard, FocusGuard, LayerOptions, WindowHandle, WindowId, WindowOptions, Windows,
-    on_close_request, try_use_window, try_use_windows, use_input_region, use_window, use_windows,
+    CloseGuard, FocusGuard, LayerOptions, PopupOptions, WindowHandle, WindowId, WindowOptions,
+    Windows, on_close_request, try_use_window, try_use_windows, use_input_region, use_window,
+    use_windows,
 };
 
 /// The desktop's clipboards: what to copy onto, and what to read back.
@@ -54,9 +55,12 @@ pub use zgui_runtime::grab::{ClearedGuard, FocusGrab};
 /// name of the theme a view asks for, and a window's is a different question with the same answer
 /// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
 /// overrides one window's.
+///
+/// A pop-up's anchor point is [`zgui::platform::Anchor`](zgui_platform::Anchor), because the view
+/// layer has an `Anchor` of its own.
 pub use zgui_platform::{
-    CloseReason, ComposeAhead, CursorStyle, Decorations, ExclusiveZone, FullscreenMode,
-    KeyboardInteractivity, ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
+    CloseReason, ComposeAhead, Constrain, CursorStyle, Decorations, ExclusiveZone, FullscreenMode,
+    InputSerial, KeyboardInteractivity, ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
 };
 pub use zgui_runtime::{CloseResponse, ExitPolicy};
 

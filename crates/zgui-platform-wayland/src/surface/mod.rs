@@ -629,6 +629,12 @@ impl Surface for WaylandSurface {
         self.seat.activate(self.id, true);
     }
 
+    fn input_serial(&self) -> Option<zgui_platform::InputSerial> {
+        self.seat
+            .press_serial()
+            .map(zgui_platform::InputSerial::new)
+    }
+
     fn request_attention(&self, urgent: bool) {
         // Turning it off is not a request this protocol has: a desktop stops drawing attention when
         // the person looks at the window, which is its decision and not the application's.

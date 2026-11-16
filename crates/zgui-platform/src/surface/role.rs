@@ -4,6 +4,7 @@ use zgui_geom::{Css, CssPx, Edges, Rect};
 
 use crate::monitor::MonitorTarget;
 use crate::surface::id::SurfaceId;
+use crate::surface::serial::InputSerial;
 
 /// What a surface is to the desktop.
 ///
@@ -31,6 +32,9 @@ pub enum SurfaceRole {
 /// a rectangle on the parent, a corner of that rectangle the pop-up is anchored to, and the corner
 /// of the pop-up that meets it. What happens when the result would leave the screen is
 /// [`Constrain`]'s.
+///
+/// The parent is an ordinary window, another pop-up or a shell layer. A pop-up on a shell layer is
+/// how a bar opens a menu that extends past the bar's own edges.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopupPlacement {
     /// The surface the pop-up belongs to and is measured against.
@@ -43,15 +47,20 @@ pub struct PopupPlacement {
     pub gravity: Anchor,
     /// What to do when the pop-up would not fit.
     pub constrain: Constrain,
-    /// Whether the pop-up takes the pointer and keyboard until it is dismissed.
+    /// The press that lets the pop-up take the pointer and the keyboard until it is dismissed.
     ///
-    /// A menu does; a tooltip does not. A grab is only granted against a press the user made, so a
-    /// pop-up asking for one without a preceding press is dismissed by the desktop immediately.
-    pub grab: bool,
+    /// A menu takes them; a tooltip does not, and has `None`. A desktop grants the grab only
+    /// against a press the user made, so the serial comes from the handler of the press that opens
+    /// the pop-up. A grab that quotes anything else makes the desktop dismiss the pop-up at once.
+    /// A grabbing pop-up closes with [`CloseReason::Dismissed`](crate::CloseReason::Dismissed)
+    /// when the user presses outside it.
+    pub grab: Option<InputSerial>,
 }
 
 impl PopupPlacement {
-    /// A grabbing pop-up under `anchor_rect`, aligned to its left, sliding to stay on screen.
+    /// A pop-up under `anchor_rect`, aligned to its left, sliding to stay on screen.
+    ///
+    /// It takes no grab. Add one with [`PopupPlacement::with_grab`].
     pub fn below(parent: SurfaceId, anchor_rect: Rect<CssPx, Css>) -> Self {
         Self {
             parent,
@@ -59,8 +68,14 @@ impl PopupPlacement {
             anchor: Anchor::BottomLeft,
             gravity: Anchor::BottomRight,
             constrain: Constrain::SLIDE,
-            grab: true,
+            grab: None,
         }
+    }
+
+    /// The same placement, taking the pointer and the keyboard against the press `serial`.
+    pub fn with_grab(mut self, serial: InputSerial) -> Self {
+        self.grab = Some(serial);
+        self
     }
 }
 
@@ -396,7 +411,9 @@ mod tests {
         assert_eq!(placement.anchor, Anchor::BottomLeft);
         assert_eq!(placement.gravity, Anchor::BottomRight);
         assert_eq!(placement.constrain, Constrain::SLIDE);
-        assert!(placement.grab);
+        assert_eq!(placement.grab, None);
+        let menu = placement.with_grab(crate::InputSerial::new(12));
+        assert_eq!(menu.grab, Some(crate::InputSerial::new(12)));
     }
 
     #[test]

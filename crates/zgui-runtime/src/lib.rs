@@ -126,4 +126,4 @@ pub use crate::windows::{
     CloseGuard, FocusGuard, WindowHandle, WindowId, Windows, on_close_request, try_use_window,
     try_use_windows, use_input_region, use_window, use_windows,
 };
-pub use crate::windows::{LayerOptions, WindowOptions};
+pub use crate::windows::{LayerOptions, PopupOptions, WindowOptions};

@@ -8,6 +8,7 @@ mod gpu;
 mod icon;
 mod id;
 mod role;
+mod serial;
 mod text_input;
 mod timing;
 mod watchdog;
@@ -25,6 +26,7 @@ pub use crate::surface::role::{
     Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
     PopupPlacement, SurfaceRole,
 };
+pub use crate::surface::serial::InputSerial;
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
@@ -237,6 +239,15 @@ pub trait Surface: Send + Sync + 'static {
     /// A desktop is free to refuse: stealing focus from what the user is typing into is the
     /// behaviour focus-stealing prevention exists to stop.
     fn focus(&self) {}
+
+    /// The token of the latest press the user made on this surface's seat.
+    ///
+    /// A request that the desktop grants only against a press quotes it: a pop-up's grab, read in
+    /// the handler of the press that opens the pop-up. `None` before the first press, and on a
+    /// desktop that needs no token.
+    fn input_serial(&self) -> Option<InputSerial> {
+        None
+    }
 
     /// Asks the desktop to draw attention to this surface, or stops asking.
     ///

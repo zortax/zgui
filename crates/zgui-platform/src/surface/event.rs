@@ -230,8 +230,9 @@ impl SurfaceEvent {
 
 /// Why a window closed.
 ///
-/// A backend reports [`CloseReason::OutputGone`] and [`CloseReason::Desktop`] through
-/// [`SurfaceEvent::Closed`]. The runtime reports all four to the application.
+/// A backend reports [`CloseReason::OutputGone`], [`CloseReason::Dismissed`] and
+/// [`CloseReason::Desktop`] through [`SurfaceEvent::Closed`]. The runtime reports all of them to
+/// the application.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum CloseReason {
@@ -246,6 +247,11 @@ pub enum CloseReason {
     OutputGone,
     /// The desktop took it away for a reason of its own.
     Desktop,
+    /// The desktop dismissed a pop-up.
+    ///
+    /// A grabbing pop-up is dismissed when the user presses outside it. A pop-up also closes with
+    /// this reason when its parent closes first.
+    Dismissed,
 }
 
 #[cfg(test)]

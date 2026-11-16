@@ -14,11 +14,14 @@
 //! * `use_input_region` makes the card the only part of the pop-over window that takes a press.
 //!   The transparent margin around the card lets presses through to what is behind it;
 //! * the pop-over takes the keyboard on demand, and closes when it loses the keyboard or when
-//!   Escape is pressed. `on_focus_change` hears each edge.
+//!   Escape is pressed. `on_focus_change` hears each edge;
+//! * the menu button opens a pop-up window on the bar from the press itself. The press handler
+//!   reads `input_serial` and gives it to the pop-up as its grab, so the release does not close
+//!   the menu and a press outside it does.
 
 use std::time::{Duration, Instant};
 
-use zgui::geom::{CssPx, Edges};
+use zgui::geom::{CssPx, Edges, Point, Rect, Size};
 use zgui::prelude::*;
 use zgui::reactive::RenderEffect;
 
@@ -71,12 +74,63 @@ fn Bar() -> impl IntoView {
             "Open the pop-over"
         }
     };
+    let button = NodeRef::new();
     view! {
         row(class = "bar") {
             control(class = "bar__button", on:click = move |_| shell.toggle()) {{label}}
+            control(
+                class = "bar__button",
+                node_ref = button,
+                on:pointer_down = move |_| open_menu(button)
+            ) {"Menu"}
             label(class = "bar__title") {"zgui shell"}
         }
     }
+}
+
+/// Opens a menu below `button`, grabbing with the press that is being handled.
+fn open_menu(button: NodeRef) {
+    let bar = use_window();
+    // The button's box is in device pixels, and a pop-up is placed in CSS pixels.
+    let scale = bar.scale().get_untracked().max(f32::EPSILON);
+    let anchor = button.window_bounds().map_or_else(
+        || {
+            Rect::new(
+                Point::new(CssPx(0.0), CssPx(0.0)),
+                Size::new(CssPx(1.0), CssPx(34.0)),
+            )
+        },
+        |device| {
+            Rect::new(
+                Point::new(
+                    CssPx(device.origin.x.0 / scale),
+                    CssPx(device.origin.y.0 / scale),
+                ),
+                Size::new(
+                    CssPx(device.size.width.0 / scale),
+                    CssPx(device.size.height.0 / scale),
+                ),
+            )
+        },
+    );
+    use_windows().open(
+        WindowOptions::popup(
+            &bar,
+            PopupOptions::new(anchor)
+                .with_constrain(Constrain::ANY)
+                .with_grab(bar.input_serial())
+                .with_size(180.0, 96.0),
+        )
+        .with_stylesheet(MENU_SHEET),
+        || {
+            view! {
+                column(class = "menu") {
+                    label(class = "menu__item") {"A menu on the bar"}
+                    label(class = "menu__item") {"Press outside to close it"}
+                }
+            }
+        },
+    );
 }
 
 /// The pop-over below the bar: a card in a transparent window.
@@ -183,6 +237,15 @@ const BAR_SHEET: &str = css!(
     .bar__button:hover { background-color: #2b3243 }
 
     .bar__title { font-size: 13px; color: #7d879b }"
+);
+
+/// What the menu looks like.
+const MENU_SHEET: &str = css!(
+    ":root { background-color: #171a22; color: #e8ecf4; font-family: sans-serif }
+
+    .menu { gap: 4px; padding: 8px; border: 1px solid #2f3646 }
+
+    .menu__item { padding: 6px 8px; font-size: 13px }"
 );
 
 /// What the pop-over looks like. The window is transparent, and only the card is painted.

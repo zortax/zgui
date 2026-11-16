@@ -9,7 +9,9 @@ use zgui_vocab::SharedString;
 
 use crate::commands::CloseResponse;
 use crate::window::WindowContent;
+use crate::windows::handle::{WindowHandle, WindowId};
 use crate::windows::layer::LayerOptions;
+use crate::windows::popup::PopupOptions;
 
 /// Everything a window can be asked for.
 ///
@@ -26,6 +28,8 @@ pub struct WindowOptions {
     pub(crate) on_close_request: Option<Box<dyn FnMut() -> CloseResponse>>,
     /// Whether the window stays hidden until the application shows it.
     pub(crate) hidden: bool,
+    /// The window a pop-up is placed against.
+    pub(crate) popup_parent: Option<WindowId>,
 }
 
 impl WindowOptions {
@@ -36,6 +40,7 @@ impl WindowOptions {
             runtime: WindowContent::default(),
             on_close_request: None,
             hidden: false,
+            popup_parent: None,
         }
     }
 
@@ -48,6 +53,22 @@ impl WindowOptions {
     pub fn layer(layer: LayerOptions) -> Self {
         let mut options = Self::new("");
         layer.apply_to(&mut options.attributes);
+        options
+    }
+
+    /// A pop-up, such as a menu, placed against `parent` as `popup` says.
+    ///
+    /// The parent is an ordinary window, another pop-up or a shell window, and it must be open
+    /// when the pop-up opens. The pop-up closes with
+    /// [`CloseReason::Dismissed`](zgui_platform::CloseReason::Dismissed) when the desktop dismisses
+    /// it and when its parent closes. A desktop that has no pop-up surfaces refuses to open it;
+    /// ask
+    /// [`PlatformCapabilities::native_popup_surfaces`](zgui_platform::PlatformCapabilities::native_popup_surfaces)
+    /// first.
+    pub fn popup(parent: &WindowHandle, popup: PopupOptions) -> Self {
+        let mut options = Self::new("");
+        popup.apply_to(&mut options.attributes);
+        options.popup_parent = Some(parent.id());
         options
     }
 

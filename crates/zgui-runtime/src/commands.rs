@@ -60,6 +60,8 @@ pub struct WindowSpec {
     pub(crate) handle: Option<crate::windows::WindowHandle>,
     /// Whether the window stays hidden after its first frame, until the application shows it.
     pub(crate) hidden: bool,
+    /// The window a pop-up is placed against, resolved to its surface when the pop-up opens.
+    pub(crate) popup_parent: Option<WindowToken>,
 }
 
 impl WindowSpec {
@@ -72,6 +74,7 @@ impl WindowSpec {
             close: Rc::new(RefCell::new(CloseCallbacks::default())),
             handle: None,
             hidden: false,
+            popup_parent: None,
         }
     }
 
@@ -84,6 +87,12 @@ impl WindowSpec {
     /// The same, asking `close` before a close the user asked for is carried out.
     pub fn with_close_callbacks(mut self, close: Rc<RefCell<CloseCallbacks>>) -> Self {
         self.close = close;
+        self
+    }
+
+    /// The same, as a pop-up placed against the window `parent`.
+    pub(crate) fn with_popup_parent(mut self, parent: Option<WindowToken>) -> Self {
+        self.popup_parent = parent;
         self
     }
 
