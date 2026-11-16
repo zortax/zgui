@@ -74,12 +74,15 @@ pub fn size(size: Size<CssPx, Css>, anchors: Edges<bool>) -> (u32, u32) {
 }
 
 /// The namespace the surface is made under: its own, the application's, or the default.
+///
+/// An empty name counts as no name.
 pub fn namespace<'a>(placement: &'a LayerPlacement, application: Option<&'a str>) -> &'a str {
+    let named = |name: &&str| !name.is_empty();
     placement
         .namespace
         .as_deref()
-        .or(application)
-        .filter(|name| !name.is_empty())
+        .filter(named)
+        .or(application.filter(named))
         .unwrap_or(DEFAULT_NAMESPACE)
 }
 
@@ -162,6 +165,12 @@ mod tests {
         );
         assert_eq!(namespace(&unnamed, None), DEFAULT_NAMESPACE);
         assert_eq!(namespace(&unnamed, Some("")), DEFAULT_NAMESPACE);
+        let empty = LayerPlacement::default().with_namespace("");
+        assert_eq!(
+            namespace(&empty, Some("dev.example.Shell")),
+            "dev.example.Shell"
+        );
+        assert_eq!(namespace(&empty, None), DEFAULT_NAMESPACE);
     }
 
     #[test]
