@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use zgui_geom::{Css, CssPx, Point, Size};
+use zgui_geom::{Css, CssPx, Point, Rect, Size};
 use zgui_platform::{
     ColorScheme, CursorStyle, Decorations, FullscreenMode, LayerPatch, PlatformCapabilities,
     ResizeEdge, Surface, WindowIcon, WindowLevel,
@@ -369,6 +369,29 @@ impl WindowHandle {
         self.act(|surface| {
             let _ = surface.set_layer_placement(&patch);
         });
+    }
+
+    /// Sets the part of the window that takes pointer and touch input, in CSS pixels.
+    ///
+    /// Input on the rest of the window reaches whatever is behind it. `None` makes the whole
+    /// window take input again, and an empty list makes none of it take input. The change reaches
+    /// the screen with the next frame. Does nothing where the desktop cannot do it; see
+    /// [`PlatformCapabilities::input_regions`].
+    ///
+    /// [`use_input_region`](crate::windows::use_input_region) keeps the region equal to the boxes
+    /// of some elements, which is what a pop-over or a stack of notifications wants.
+    pub fn set_input_region(&self, region: Option<Vec<Rect<CssPx, Css>>>) {
+        self.act(|surface| {
+            let _ = surface.set_input_region(region.as_deref());
+        });
+    }
+
+    /// Tells the desktop which part of the window is opaque, in CSS pixels.
+    ///
+    /// A hint that lets a compositor skip drawing what is behind the opaque part. `None` says
+    /// nothing is opaque. The change reaches the screen with the next frame.
+    pub fn set_opaque_region(&self, region: Option<Vec<Rect<CssPx, Css>>>) {
+        self.act(|surface| surface.set_opaque_region(region.as_deref()));
     }
 
     /// Sets the picture the desktop shows for this window.

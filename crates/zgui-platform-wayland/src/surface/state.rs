@@ -151,6 +151,10 @@ pub(crate) struct Shared {
     /// The change goes out with the next commit that carries a frame, so the placement and the
     /// content drawn for it are shown together.
     pub(crate) layer_owed: bool,
+    /// The part of the surface that takes input, as asked for and not yet sent.
+    pub(crate) input_owed: crate::surface::region::Owed,
+    /// The part of the surface that is opaque, as asked for and not yet sent.
+    pub(crate) opaque_owed: crate::surface::region::Owed,
 }
 
 impl Shared {
@@ -188,6 +192,8 @@ impl Shared {
             outputs: Vec::new(),
             layer: None,
             layer_owed: false,
+            input_owed: None,
+            opaque_owed: None,
         }
     }
 

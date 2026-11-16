@@ -4,6 +4,7 @@ pub mod a11y;
 pub mod chrome;
 pub mod fractional;
 mod handles;
+pub mod region;
 pub mod role;
 pub mod scale;
 pub mod seat;
@@ -24,7 +25,7 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
     CursorStyle, Decorations, FullscreenMode, GpuSurface, PresentPacing, PresentationTiming,
     Surface, SurfaceId, TextInput, Unsupported,
@@ -252,6 +253,51 @@ impl WaylandSurface {
         crate::surface::role::layer::apply(layer, &placement, extent);
     }
 
+    /// Sends the input and opaque regions asked for since the last send, right before a commit.
+    ///
+    /// Nothing is committed here: both regions are state of the surface that the next commit
+    /// applies, and that commit carries the frame drawn for them.
+    pub(crate) fn send_regions(&self) {
+        let (input, opaque) = {
+            let mut shared = self.shared();
+            (shared.input_owed.take(), shared.opaque_owed.take())
+        };
+        let wl = self.wl_surface();
+        if let Some(input) = input {
+            match input {
+                None => wl.set_input_region(None),
+                Some(rects) => {
+                    let region = self.region_of(&rects, region::outward);
+                    wl.set_input_region(Some(&region));
+                    region.destroy();
+                }
+            }
+        }
+        if let Some(opaque) = opaque {
+            match opaque {
+                Some(rects) if !rects.is_empty() => {
+                    let region = self.region_of(&rects, region::inward);
+                    wl.set_opaque_region(Some(&region));
+                    region.destroy();
+                }
+                _ => wl.set_opaque_region(None),
+            }
+        }
+    }
+
+    /// A region holding `rects`, each rounded to whole pixels by `round`.
+    fn region_of(
+        &self,
+        rects: &[Rect<CssPx, Css>],
+        round: fn(Rect<CssPx, Css>) -> Option<region::Whole>,
+    ) -> WlRegion {
+        let region = self.empty_region();
+        for (x, y, width, height) in rects.iter().copied().filter_map(round) {
+            region.add(x, y, width, height);
+        }
+        region
+    }
+
     /// Fractional scaling's objects, for the commit that carries a new extent.
     pub(crate) const fn fractional(&self) -> &Fractional {
         &self.fractional
@@ -408,6 +454,7 @@ impl WaylandSurface {
         if end == crate::surface::state::EndOfRedraw::KeepChainAlive && !unmapped {
             // A change asked for with no new content to draw still goes out, with this commit.
             self.send_layer(false);
+            self.send_regions();
             self.ask_for_callback();
             self.role.commit();
         }
@@ -604,6 +651,17 @@ impl Surface for WaylandSurface {
 
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
         chrome::set_pointer_passthrough(self, passthrough)
+    }
+
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        self.shared().input_owed = Some(region.map(<[_]>::to_vec));
+        self.request_redraw();
+        Ok(())
+    }
+
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        self.shared().opaque_owed = Some(region.map(<[_]>::to_vec));
+        self.request_redraw();
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

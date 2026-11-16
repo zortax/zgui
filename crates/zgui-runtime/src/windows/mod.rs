@@ -28,10 +28,12 @@ mod drag;
 mod handle;
 mod layer;
 mod options;
+mod region;
 
 pub use crate::windows::handle::{WindowHandle, WindowId};
 pub use crate::windows::layer::LayerOptions;
 pub use crate::windows::options::WindowOptions;
+pub use crate::windows::region::use_input_region;
 
 use std::cell::RefCell;
 use std::rc::Rc;

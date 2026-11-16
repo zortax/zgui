@@ -123,6 +123,7 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
         };
         if unmapped {
             surface.send_layer(true);
+            surface.send_regions();
             surface.wl_surface().commit();
         }
         zgui_platform::Surface::request_redraw(surface);
@@ -157,11 +158,18 @@ pub(crate) fn unmap(surface: &WaylandSurface) {
 ///
 /// An empty input region is the protocol's way of saying "nothing here is mine". It is committed
 /// at once rather than with the next frame: a region that waits for a frame would let through the
-/// very click it was set for.
+/// very click it was set for. It replaces an input region asked for and not yet sent. A hidden
+/// surface commits nothing, because an empty commit asks the shell to map it; the region then
+/// goes out with the commit that shows the surface again.
 pub fn set_pointer_passthrough(
     surface: &WaylandSurface,
     passthrough: bool,
 ) -> Result<(), Unsupported> {
+    let unmapped = {
+        let mut shared = surface.shared();
+        shared.input_owed = None;
+        shared.unmapped || shared.hide_owed
+    };
     let wl = surface.wl_surface();
     if passthrough {
         // A region with nothing added to it is empty, and an empty input region is the whole
@@ -173,7 +181,9 @@ pub fn set_pointer_passthrough(
     } else {
         wl.set_input_region(None);
     }
-    wl.commit();
+    if !unmapped {
+        wl.commit();
+    }
     Ok(())
 }
 
@@ -211,6 +221,7 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
         }
     }
     surface.send_layer(false);
+    surface.send_regions();
     surface.ask_for_callback();
     surface.ask_for_feedback();
     // Counted where it becomes a statement about visibility: a compositor that is not compositing

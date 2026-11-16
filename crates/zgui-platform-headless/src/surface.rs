@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
     CursorStyle, Decorations, FullscreenMode, LayerPatch, Surface, SurfaceAttributes, SurfaceId,
     SurfaceRole, TextInput, Unsupported,
@@ -45,6 +45,9 @@ impl A11yLog {
         }
     }
 }
+
+/// A region a surface was given: rectangles in CSS pixels, or `None` for the whole surface.
+pub type Region = Option<Vec<Rect<CssPx, Css>>>;
 
 /// A surface that is a buffer, with no window behind it.
 ///
@@ -108,6 +111,10 @@ pub struct OffscreenSurface {
     cursor_log: Mutex<Vec<CursorStyle>>,
     /// Every change of shell placement the surface accepted, in order.
     layer_log: Mutex<Vec<LayerPatch>>,
+    /// Every input region the surface was given, in order.
+    input_region_log: Mutex<Vec<Region>>,
+    /// Every opaque region the surface was given, in order.
+    opaque_region_log: Mutex<Vec<Region>>,
     /// Whether the surface has been shown.
     visible: AtomicBool,
     /// Whether the surface was last asked to be maximised.
@@ -142,6 +149,8 @@ impl OffscreenSurface {
             text_input_log: Mutex::new(Vec::new()),
             cursor_log: Mutex::new(Vec::new()),
             layer_log: Mutex::new(Vec::new()),
+            input_region_log: Mutex::new(Vec::new()),
+            opaque_region_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
             maximized: AtomicBool::new(false),
             fullscreen: Mutex::new(None),
@@ -281,6 +290,24 @@ impl OffscreenSurface {
             .clone()
     }
 
+    /// Every input region the surface was given, in the order it was given.
+    ///
+    /// `None` is the whole surface. A headless desktop takes every region it is given.
+    pub fn input_region_log(&self) -> Vec<Region> {
+        self.input_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
+    /// Every opaque region the surface was given, in the order it was given.
+    pub fn opaque_region_log(&self) -> Vec<Region> {
+        self.opaque_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
     /// Whether the surface has been shown.
     pub fn is_visible(&self) -> bool {
         self.visible.load(Ordering::Relaxed)
@@ -406,6 +433,21 @@ impl Surface for OffscreenSurface {
             .expect("the log is not poisoned")
             .push(patch.clone());
         Ok(())
+    }
+
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        self.input_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(region.map(<[_]>::to_vec));
+        Ok(())
+    }
+
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        self.opaque_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(region.map(<[_]>::to_vec));
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {

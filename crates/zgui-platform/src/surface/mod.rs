@@ -30,7 +30,7 @@ pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 
 use crate::error::Unsupported;
 use crate::theme::ColorScheme;
@@ -287,6 +287,31 @@ pub trait Surface: Send + Sync + 'static {
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
         let _ = passthrough;
         Err(Unsupported)
+    }
+
+    /// Sets the part of the surface that takes pointer and touch input, in CSS pixels.
+    ///
+    /// Input on the rest of the surface reaches whatever is behind it. `None` makes the whole
+    /// surface take input, and an empty set of rectangles makes none of it take input. The
+    /// rectangles are in the surface's own coordinates and may overlap. A platform rounds each
+    /// edge outwards to the pixels it measures in, so a rectangle never takes less than it covers.
+    ///
+    /// The change is shown with the next frame, together with the content drawn for it. A platform
+    /// that cannot do this answers with [`Unsupported`]; see
+    /// [`PlatformCapabilities::input_regions`](crate::PlatformCapabilities::input_regions).
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        let _ = region;
+        Err(Unsupported)
+    }
+
+    /// Tells the platform which part of the surface is opaque, in CSS pixels.
+    ///
+    /// A hint, and nothing else: a compositor skips drawing what is behind an opaque part. `None`
+    /// and an empty set of rectangles both say nothing is opaque. A platform rounds each edge
+    /// inwards, so a rectangle never claims a pixel it only partly covers. The change is shown
+    /// with the next frame. Where it means nothing it costs nothing.
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        let _ = region;
     }
 
     /// Tells the platform where text is being typed and what kind, or that none is.

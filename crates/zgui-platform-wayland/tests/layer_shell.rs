@@ -6,6 +6,8 @@
 //!   the space windows get down by 34 pixels.
 //! * **A placement changed at run time reaches the compositor.** The change goes out with the next
 //!   frame, so the reserved room grows once a frame has been drawn.
+//! * **A placement and the regions change in one frame.** The input and opaque regions go out with
+//!   the same commit, rounded to whole pixels, and the compositor accepts them.
 //! * **A remap sends the placement again.** The shell forgets everything about a layer surface
 //!   that is unmapped. A remap that only committed would leave a surface with no anchors and no
 //!   size, which is a protocol error for a bar and ends the connection.
@@ -20,7 +22,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use zgui_geom::{CssPx, Edges};
+use zgui_geom::{CssPx, Edges, Point, Rect, Size};
 use zgui_platform::{
     AppHandler, ExclusiveZone, IdlePolicy, LayerPatch, PlatformCx, SurfaceEvent, SurfaceId,
     WakeReason,
@@ -95,6 +97,15 @@ impl AppHandler for Drive {
                     LayerPatch::new().with_exclusive_zone(ExclusiveZone::Reserve(CssPx(SECOND)));
                 bar.set_layer_placement(&patch)
                     .expect("a shell layer takes a new placement");
+                // Between pixels, as a fractional scale leaves them. The regions ride the same
+                // frame, and a region the compositor refused would end the connection.
+                let card = Rect::new(
+                    Point::new(CssPx(10.4), CssPx(2.6)),
+                    Size::new(CssPx(120.3), CssPx(20.2)),
+                );
+                bar.set_input_region(Some(&[card]))
+                    .expect("every surface takes an input region");
+                bar.set_opaque_region(Some(&[card]));
                 self.step = Step::Changed;
                 self.since = frames;
             }

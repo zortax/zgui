@@ -39,6 +39,8 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     capabilities.absolute_window_position = false;
     // Stacking is what the layer shell is for; an ordinary window cannot ask.
     capabilities.window_levels = false;
+    // An input region is core protocol, on every surface of every role.
+    capabilities.input_regions = true;
     capabilities.decorations = if offered.server_decorations {
         DecorationSource::Platform
     } else {
