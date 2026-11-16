@@ -11,7 +11,7 @@
 //! against is held here beside it: held rather than noted, because the key is an address, and an
 //! address is an identity only while the allocation behind it is alive.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::NodeKey;
 use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
 use zgui_style::{TextPaintUpdate, TextRun};
@@ -319,6 +319,18 @@ pub(crate) fn apply(
         .keys()
         .map(|slot| (*slot, slots.owners_of(*slot)))
         .collect();
+    // The slots an element of this batch moves onto because its new cascade result already
+    // answers to them. Such a slot holds the colour of that result, and the element is drawn
+    // through it from its next shaping on, so the slot is never rewritten in place in this batch.
+    // Read before the loop, because the order of the updates must not decide it.
+    let joined: FxHashSet<PaintSlot> = updates
+        .iter()
+        .filter_map(|update| {
+            let held = slots.get(&(update.node, update.run))?;
+            let owned = table.slot_of(address(&update.paint.key))?;
+            (owned != held.slot).then_some(owned)
+        })
+        .collect();
 
     let recoloured_any = recoloured.iter().any(|moved| *moved);
     let mut split = Vec::new();
@@ -353,7 +365,10 @@ pub(crate) fn apply(
                 establish(table, claimed, slot);
                 slot
             }
-            (Some(held), _) if rewritable_in_place(&covered, &owners_at_start, held.slot) => {
+            (Some(held), _)
+                if !joined.contains(&held.slot)
+                    && rewritable_in_place(&covered, &owners_at_start, held.slot) =>
+            {
                 let slot = held.slot;
                 table.set(slot, paint);
                 // The new cascade result is pointed at the slot everything already shaped still
@@ -796,6 +811,52 @@ mod tests {
         );
         assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.8)));
         assert_eq!(drawn(&slots, &table, 2), TextPaint::new(grey(0.1)));
+    }
+
+    /// An element arrives on a result in the same batch that re-colours the element that claimed
+    /// the result's slot.
+    ///
+    /// The arriving element is drawn through that slot from its next shaping on, so the slot keeps
+    /// the result's colour whatever order the two updates come in. A write through it would leave
+    /// the result answering to a slot that holds another colour.
+    #[test]
+    fn a_slot_an_element_joins_in_a_batch_is_not_rewritten_in_place_in_it() {
+        for joining_first in [true, false] {
+            let mut table = TextPaintTable::new();
+            let mut slots = TextSlots::default();
+            let shared = cascade_result();
+            let own = cascade_result();
+            apply(
+                &mut slots,
+                &mut table,
+                &[
+                    arriving(1, &shared, grey(0.1)),
+                    arriving(2, &own, grey(0.1)),
+                ],
+            );
+
+            let moved = cascade_result();
+            let joining = arriving(2, &shared, grey(0.1));
+            let recolouring = arriving(1, &moved, grey(0.8));
+            let batch = if joining_first {
+                [joining, recolouring]
+            } else {
+                [recolouring, joining]
+            };
+            apply(&mut slots, &mut table, &batch);
+
+            let answers = table
+                .slot_of(super::address(&shared))
+                .expect("the joining element still holds the shared result");
+            assert_eq!(
+                table.get(answers),
+                Some(&TextPaint::new(grey(0.1))),
+                "the shared result answers to a slot of another colour (joining first: \
+                 {joining_first})"
+            );
+            assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.8)));
+            assert_eq!(drawn(&slots, &table, 2), TextPaint::new(grey(0.1)));
+        }
     }
 
     /// The path the divergence guard must not cost anything: a theme flip, where every element
