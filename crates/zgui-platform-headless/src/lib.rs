@@ -77,6 +77,7 @@
 pub mod clipboard;
 pub mod harness;
 pub mod platform;
+mod role;
 pub mod surface;
 pub mod waker;
 

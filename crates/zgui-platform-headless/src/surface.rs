@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, InputSerial, LayerPatch, Surface, SurfaceAttributes,
-    SurfaceId, SurfaceRole, TextInput, Unsupported,
+    CursorStyle, Decorations, FullscreenMode, InputSerial, LayerPatch, LayerPlacement,
+    PopupPlacement, Surface, SurfaceAttributes, SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -185,6 +185,32 @@ impl OffscreenSurface {
             .lock()
             .expect("the attributes are not poisoned")
             .clone()
+    }
+
+    /// What the surface is to the desktop.
+    pub fn role(&self) -> SurfaceRole {
+        self.requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .role
+            .clone()
+    }
+
+    /// Where the shell layer sits now, with every accepted change applied, for a surface made as
+    /// one.
+    pub fn layer_placement(&self) -> Option<LayerPlacement> {
+        match self.role() {
+            SurfaceRole::Layer(placement) => Some(placement),
+            _ => None,
+        }
+    }
+
+    /// Where the pop-up was asked to sit, for a surface made as one.
+    pub fn popup_placement(&self) -> Option<PopupPlacement> {
+        match self.role() {
+            SurfaceRole::Popup(placement) => Some(placement),
+            _ => None,
+        }
     }
 
     /// How many frames have been asked for since this surface was created.

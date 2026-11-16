@@ -21,6 +21,17 @@ const DEFAULT_SIZE: Size<DevicePx, zgui_geom::Device> = Size::new(DevicePx(640.0
 ///
 /// Held by a [`Harness`](crate::Harness), which is what drives an application against it. It is
 /// also usable on its own by anything that wants the contract's answers without a loop.
+///
+/// # Surface roles
+///
+/// Every [`SurfaceRole`](zgui_platform::SurfaceRole) makes an offscreen surface, whatever the
+/// declared capabilities say, so a pop-up, a shell layer and a lock window are testable here. A
+/// pop-up whose parent does not exist is refused with [`PlatformError::NoSuchSurface`]. A shell
+/// layer that names an output the platform does not report is refused with
+/// [`PlatformError::SurfaceCreation`]. A shell layer anchored to two opposite edges is as long as
+/// its output on that axis, less its margins, and a lock window is as large as its output. The
+/// placement is recorded: [`OffscreenSurface::role`], [`OffscreenSurface::layer_placement`] and
+/// [`OffscreenSurface::popup_placement`] read it back.
 pub struct Headless {
     /// The clock, which only moves when it is told to.
     clock: Arc<VirtualClock>,
@@ -268,9 +279,10 @@ impl PlatformCx for Headless {
         &self,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<dyn Surface>, PlatformError> {
-        let size = attributes.size.map_or(DEFAULT_SIZE, |size| {
-            Size::new(DevicePx(size.width.0), DevicePx(size.height.0))
-        });
+        let monitors = self.monitors();
+        let size = crate::role::extent(attributes, &monitors, DEFAULT_SIZE, |parent| {
+            self.offscreen(parent).is_some()
+        })?;
         let id = SurfaceId::new(self.next_surface.fetch_add(1, Ordering::Relaxed));
         let surface = Arc::new(OffscreenSurface::new(id, size));
         surface.set_title(attributes.title.as_str());
@@ -439,6 +451,56 @@ mod tests {
             "a surface is shown by its first frame, not by creation"
         );
         assert_eq!(offscreen.title(), "headless");
+    }
+
+    #[test]
+    fn a_shell_layer_and_its_pop_up_are_plain_surfaces_whose_placement_is_recorded() {
+        use zgui_geom::{Edges, Point, Rect};
+        use zgui_platform::{Layer, LayerPatch, LayerPlacement, PopupPlacement, SurfaceRole};
+
+        let platform = Headless::new();
+        let bar = LayerPlacement::new(Layer::Top).with_anchors(Edges::new(true, true, false, true));
+        let mut attributes =
+            SurfaceAttributes::new("bar").with_size(Size::new(CssPx(0.0), CssPx(34.0)));
+        attributes.role = SurfaceRole::Layer(bar.clone());
+        let surface = platform
+            .create_surface(&attributes)
+            .expect("a plain surface");
+        assert_eq!(
+            surface.size().width.0,
+            640.0,
+            "stretched across the default extent"
+        );
+
+        surface
+            .set_layer_placement(&LayerPatch::new().with_layer(Layer::Overlay))
+            .expect("a layer takes a patch");
+        let offscreen = platform.offscreen(surface.id()).expect("the same surface");
+        let placed = offscreen.layer_placement().expect("a layer");
+        assert_eq!(placed.layer, Layer::Overlay);
+        assert_eq!(placed.anchors, bar.anchors);
+        assert_eq!(offscreen.popup_placement(), None);
+
+        let rect = Rect::new(
+            Point::new(CssPx(4.0), CssPx(0.0)),
+            Size::new(CssPx(20.0), CssPx(34.0)),
+        );
+        let mut menu = SurfaceAttributes::new("menu");
+        menu.role = SurfaceRole::Popup(PopupPlacement::below(surface.id(), rect));
+        let popup = platform.create_surface(&menu).expect("the parent exists");
+        let placed = platform
+            .offscreen(popup.id())
+            .and_then(|popup| popup.popup_placement())
+            .expect("a pop-up");
+        assert_eq!(placed.parent, surface.id());
+        assert_eq!(placed.anchor_rect, rect);
+        assert!(popup.set_layer_placement(&LayerPatch::new()).is_err());
+
+        platform.destroy_surface(surface.id());
+        assert!(
+            platform.create_surface(&menu).is_err(),
+            "a pop-up of a surface that is gone is refused"
+        );
     }
 
     #[test]

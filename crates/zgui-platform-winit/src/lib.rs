@@ -47,6 +47,13 @@
 //! what makes the four properties assertable against a model of the loop *and* against the loop
 //! itself.
 //!
+//! # Surface roles
+//!
+//! The windowing library makes ordinary windows only. A request for a shell layer, a lock window
+//! or a pop-up is refused with
+//! [`PlatformError::Unsupported`](zgui_platform::PlatformError::Unsupported), and the capabilities
+//! report none of the three.
+//!
 //! # What lives where
 //!
 //! | Module | Contents |
