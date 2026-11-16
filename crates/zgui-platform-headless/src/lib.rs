@@ -82,7 +82,7 @@ pub mod waker;
 
 pub use crate::clipboard::MemoryClipboard;
 pub use crate::harness::Harness;
-pub use crate::platform::Headless;
+pub use crate::platform::{Headless, SessionLockState};
 pub use crate::surface::{OffscreenSurface, Region};
 pub use crate::waker::RecordingWaker;
 

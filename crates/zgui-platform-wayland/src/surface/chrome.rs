@@ -24,6 +24,11 @@ pub fn request_size(
     surface: &WaylandSurface,
     size: Size<CssPx, Css>,
 ) -> Option<Size<DevicePx, Device>> {
+    // A lock surface has the extent of its output, and a buffer of any other extent is a
+    // protocol error.
+    if surface.role().lock().is_some() {
+        return None;
+    }
     let layer = surface.role().layer().is_some();
     let refused = |extent: CssPx| extent.0 < 0.0 || (!layer && extent.0 == 0.0);
     if refused(size.width) || refused(size.height) || (size.width.0 == 0.0 && size.height.0 == 0.0)
@@ -114,7 +119,12 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// A hide asked for while the surface draws waits for the end of that delivery, because the frame
 /// being drawn commits its buffer after the request. Until the surface is shown again it commits
 /// nothing: an empty commit on an unmapped surface asks the shell to map it.
+///
+/// A lock surface stays shown. A lock surface with no buffer is a protocol error.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
+    if !visible && surface.role().lock().is_some() {
+        return;
+    }
     if visible {
         let unmapped = {
             let mut shared = surface.shared();

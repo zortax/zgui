@@ -49,6 +49,9 @@ pub use zgui_runtime::monitors::{try_use_monitors, use_monitors};
 /// The keyboard and the pointer, limited to a set of windows until the user presses outside them.
 pub use zgui_runtime::grab::{ClearedGuard, FocusGrab};
 
+/// The session locked behind lock windows the application draws, one per output.
+pub use zgui_runtime::lock::{LockError, LockHandle, SessionLock};
+
 /// What a window can be asked to be, what it answers, and when an application stops.
 ///
 /// The desktop's own light-or-dark preference is deliberately absent: `ColorScheme` is already the

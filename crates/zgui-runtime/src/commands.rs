@@ -180,6 +180,10 @@ pub(crate) enum WindowCommand {
     Close(WindowToken),
     /// Give every focus grab the surfaces of its windows.
     SyncGrabs,
+    /// Ask the desktop to lock the session.
+    Lock(Rc<crate::lock::LockEntry>),
+    /// Unlock the session and close the lock windows.
+    Unlock(Rc<crate::lock::LockEntry>),
     /// Stop the application.
     Quit,
 }
@@ -218,6 +222,8 @@ struct Inner {
     platform: Option<Arc<dyn Waker>>,
     /// Every focus grab that exists.
     grabs: Vec<Rc<crate::grab::GrabEntry>>,
+    /// The session lock, from the request until it is over.
+    lock: Option<Rc<crate::lock::LockEntry>>,
 }
 
 impl WindowCommands {
@@ -294,6 +300,34 @@ impl WindowCommands {
     /// Forgets the focus grabs that `keep` refuses.
     pub(crate) fn retain_grabs(&self, keep: impl FnMut(&Rc<crate::grab::GrabEntry>) -> bool) {
         self.inner.borrow_mut().grabs.retain(keep);
+    }
+
+    /// The session lock that is asked for or held.
+    pub(crate) fn session_lock(&self) -> Option<Rc<crate::lock::LockEntry>> {
+        self.inner
+            .borrow()
+            .lock
+            .as_ref()
+            .filter(|lock| lock.is_live())
+            .map(Rc::clone)
+    }
+
+    /// Records a session lock and asks for it on the next turn.
+    pub(crate) fn request_lock(&self, lock: Rc<crate::lock::LockEntry>) {
+        let mut inner = self.inner.borrow_mut();
+        inner.lock = Some(Rc::clone(&lock));
+        inner.queue.push_back(WindowCommand::Lock(lock));
+        drop(inner);
+        self.ping();
+    }
+
+    /// Asks for the session to be unlocked on the next turn.
+    pub(crate) fn request_unlock(&self, lock: Rc<crate::lock::LockEntry>) {
+        self.inner
+            .borrow_mut()
+            .queue
+            .push_back(WindowCommand::Unlock(lock));
+        self.ping();
     }
 
     /// Asks for the application to stop.

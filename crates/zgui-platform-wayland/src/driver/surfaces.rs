@@ -42,7 +42,12 @@ impl WaylandState {
         }
         let wanted = attributes.size.unwrap_or(DEFAULT_SIZE);
         let bound = match &attributes.role {
-            SurfaceRole::Layer(placement) => self.bound_output(placement)?,
+            SurfaceRole::Layer(placement) => placement
+                .monitor
+                .as_ref()
+                .map(|target| self.output_for(target))
+                .transpose()?,
+            SurfaceRole::Lock(target) => Some(self.output_for(target)?),
             _ => None,
         };
         let wl = self.compositor.create_surface(&self.qh);
@@ -82,8 +87,11 @@ impl WaylandState {
         }
         apply(&surface, attributes);
         // The commit that asks to be configured. Nothing is attached to it, which is what makes it
-        // the initial commit rather than a frame.
-        surface.role().commit();
+        // the initial commit rather than a frame. A lock surface is configured unasked, and a
+        // commit before it acknowledges that configure is a protocol error.
+        if surface.role().lock().is_none() {
+            surface.role().commit();
+        }
         self.live.surfaces.borrow_mut().push(Arc::clone(&surface));
         Ok(surface)
     }
@@ -106,6 +114,22 @@ impl WaylandState {
                 self.make_layer(wl, placement, application, wanted, bound)
             }
             SurfaceRole::Popup(placement) => self.make_popup(id, wl, placement, attributes),
+            SurfaceRole::Lock(_) => {
+                let Some(output) = bound else {
+                    return Err(PlatformError::SurfaceCreation(
+                        "a lock surface needs an output".to_owned(),
+                    ));
+                };
+                self.locks
+                    .surface(wl, output, &self.qh)
+                    .map(|lock| Role::Lock(Box::new(lock)))
+                    .ok_or_else(|| {
+                        PlatformError::SurfaceCreation(
+                            "a lock surface needs the session lock this application holds"
+                                .to_owned(),
+                        )
+                    })
+            }
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
                 &self.xdg,
                 &self.qh,
@@ -199,17 +223,14 @@ impl WaylandState {
         Ok(Role::Layer(Box::new(surface)))
     }
 
-    /// The output a shell layer asks to open on, when it names one.
+    /// The output a shell layer or a lock surface asks to open on.
     ///
     /// # Errors
     ///
-    /// Returns [`PlatformError::SurfaceCreation`] when the placement names an output that is not
+    /// Returns [`PlatformError::SurfaceCreation`] when `target` names an output that is not
     /// connected. The desktop would otherwise choose an output, and a bar opened on the wrong
     /// screen is a second bar on that screen.
-    fn bound_output(&self, placement: &LayerPlacement) -> Result<Option<WlOutput>, PlatformError> {
-        let Some(target) = &placement.monitor else {
-            return Ok(None);
-        };
+    fn output_for(&self, target: &zgui_platform::MonitorTarget) -> Result<WlOutput, PlatformError> {
         self.outputs
             .outputs()
             .find(|output| {
@@ -217,7 +238,6 @@ impl WaylandState {
                     .info(output)
                     .is_some_and(|info| target.matches(&crate::output::describe(&info)))
             })
-            .map(Some)
             .ok_or_else(|| {
                 PlatformError::SurfaceCreation(format!("no connected output matches {target:?}"))
             })

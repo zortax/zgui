@@ -132,12 +132,19 @@ impl OutputHandler for WaylandState {
 
     fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
         // The compositor can remove an output without a leave first. Its rate must stop counting,
-        // and a shell layer that was on it closes because it went.
+        // and a shell layer that was on it closes because it went. A lock surface is told nothing,
+        // so it closes here.
         for surface in self.live.surfaces.borrow().iter() {
             let mut shared = surface.shared();
             let held = shared.outputs.contains(&output) || shared.bound.as_ref() == Some(&output);
             shared.output_lost |= held;
             shared.outputs.retain(|held| held != &output);
+            if shared.bound.as_ref() == Some(&output)
+                && surface.role().lock().is_some()
+                && !self.closing.contains(&surface.id())
+            {
+                self.closing.push(surface.id());
+            }
         }
         // The toolkit calls this before it forgets the output, so the output is left out here.
         self.outputs_changed(Some(&output));
@@ -163,13 +170,22 @@ impl LayerShellHandler for WaylandState {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        let Some(id) = self.identify(layer.wl_surface()) else {
-            return;
-        };
+        if let Some(id) = self.identify(layer.wl_surface()) {
+            self.sized_by_shell(id, configure.new_size);
+        }
+    }
+}
+
+impl WaylandState {
+    /// Applies the extent a shell layer or a lock surface was configured at.
+    ///
+    /// An axis of zero leaves the extent the application asked for along it. The toolkit has
+    /// acknowledged the configure already.
+    pub(crate) fn sized_by_shell(&mut self, id: zgui_platform::SurfaceId, size: (u32, u32)) {
         let Some(surface) = self.live.surface(id) else {
             return;
         };
-        let (width, height) = configure.new_size;
+        let (width, height) = size;
         let (resized, visibility) = {
             let mut shared = surface.shared();
             let wanted = surface.wanted();
@@ -328,7 +344,8 @@ impl WaylandState {
         self.scale_changed(id, |ladder| ladder.outputs(sharpest));
     }
 
-    /// Reports every shell layer the compositor closed during the last dispatch, with its reason.
+    /// Reports every shell layer the compositor closed during the last dispatch, and every lock
+    /// surface whose output went, with its reason.
     ///
     /// Called after the dispatch rather than from it, because the compositor can close a layer
     /// and remove its output in one batch of events, in either order.

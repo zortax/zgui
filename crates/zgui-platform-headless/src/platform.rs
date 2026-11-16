@@ -46,6 +46,21 @@ pub struct Headless {
     grabs: Mutex<Vec<(FocusGrabId, Vec<SurfaceId>)>>,
     /// The next focus grab number, never reused.
     next_grab: AtomicU64,
+    /// Where the session lock is, as the application and a test moved it.
+    lock: Mutex<SessionLockState>,
+}
+
+/// Where the session lock of a [`Headless`] platform is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionLockState {
+    /// No lock was asked for, or the last one ended.
+    #[default]
+    Unlocked,
+    /// The application asked for a lock and the test has not answered.
+    Requested,
+    /// The test confirmed the lock with [`Headless::confirm_lock`].
+    Locked,
 }
 
 impl Default for Headless {
@@ -75,6 +90,7 @@ impl Headless {
             exiting: AtomicBool::new(false),
             grabs: Mutex::new(Vec::new()),
             next_grab: AtomicU64::new(1),
+            lock: Mutex::new(SessionLockState::Unlocked),
         }
     }
 
@@ -190,6 +206,37 @@ impl Headless {
         }
     }
 
+    /// Where the session lock is.
+    pub fn session_lock(&self) -> SessionLockState {
+        *self.lock.lock().expect("the lock state is not poisoned")
+    }
+
+    /// Confirms the lock the application asked for, as a desktop does once it hides everything
+    /// else, and wakes the loop with [`WakeReason::SessionLocked`].
+    ///
+    /// Does nothing unless a lock was asked for.
+    pub fn confirm_lock(&self) {
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock == SessionLockState::Requested {
+            *lock = SessionLockState::Locked;
+            drop(lock);
+            self.waker.wake(WakeReason::SessionLocked);
+        }
+    }
+
+    /// Refuses or ends the lock, as a desktop does, and wakes the loop with
+    /// [`WakeReason::SessionLockFinished`].
+    ///
+    /// Does nothing while no lock is asked for or held.
+    pub fn finish_lock(&self) {
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock != SessionLockState::Unlocked {
+            *lock = SessionLockState::Unlocked;
+            drop(lock);
+            self.waker.wake(WakeReason::SessionLockFinished);
+        }
+    }
+
     /// Takes every wake delivered since the last call.
     pub fn drain_wakes(&self) -> Vec<WakeReason> {
         self.waker.drain()
@@ -290,6 +337,27 @@ impl PlatformCx for Headless {
             .retain(|(held, _)| *held != grab);
     }
 
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        if !self.capabilities.session_lock {
+            return Err(zgui_platform::Unsupported.into());
+        }
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock != SessionLockState::Unlocked {
+            return Err(PlatformError::Backend(
+                "this application holds a session lock already".to_owned(),
+            ));
+        }
+        *lock = SessionLockState::Requested;
+        Ok(())
+    }
+
+    fn unlock_session(&self) {
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock == SessionLockState::Locked {
+            *lock = SessionLockState::Unlocked;
+        }
+    }
+
     fn color_scheme(&self) -> Option<ColorScheme> {
         *self
             .color_scheme
@@ -362,5 +430,43 @@ mod tests {
             .expect("creatable");
         assert_ne!(first.id(), second.id());
         assert_eq!(platform.surfaces().len(), 2);
+    }
+
+    #[test]
+    fn a_session_lock_is_asked_for_confirmed_and_unlocked() {
+        use super::SessionLockState;
+        use zgui_platform::{PlatformCapabilities, WakeReason};
+
+        let platform = Headless::new();
+        assert!(platform.lock_session().is_err(), "no capability, no lock");
+
+        let mut capabilities = PlatformCapabilities::none();
+        capabilities.session_lock = true;
+        let platform = Headless::new().with_capabilities(capabilities);
+        platform.lock_session().expect("the lock is asked for");
+        assert_eq!(platform.session_lock(), SessionLockState::Requested);
+        assert!(platform.lock_session().is_err(), "one lock at a time");
+
+        platform.unlock_session();
+        assert_eq!(
+            platform.session_lock(),
+            SessionLockState::Requested,
+            "an unconfirmed lock cannot be unlocked"
+        );
+        platform.confirm_lock();
+        assert!(matches!(
+            platform.drain_wakes()[..],
+            [WakeReason::SessionLocked]
+        ));
+        platform.unlock_session();
+        assert_eq!(platform.session_lock(), SessionLockState::Unlocked);
+
+        platform.lock_session().expect("a new lock after an unlock");
+        platform.finish_lock();
+        assert_eq!(platform.session_lock(), SessionLockState::Unlocked);
+        assert!(matches!(
+            platform.drain_wakes()[..],
+            [WakeReason::SessionLockFinished]
+        ));
     }
 }

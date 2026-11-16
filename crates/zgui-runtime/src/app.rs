@@ -805,6 +805,16 @@ impl Runtime {
                 .application_id
                 .clone_from(&self.application_id);
         }
+        if matches!(
+            self.live[index].spec.attributes.role,
+            zgui_platform::SurfaceRole::Lock(_)
+        ) && self.commands.session_lock().is_none()
+        {
+            return Err(zgui_platform::PlatformError::SurfaceCreation(
+                "a lock window needs the session lock this application holds".to_owned(),
+            )
+            .into());
+        }
         if let Some(parent) = self.live[index].spec.popup_parent {
             let surface = self
                 .live_index(parent)
@@ -851,11 +861,14 @@ impl Runtime {
         let metrics = (self.metrics)();
         let timers = Rc::clone(&self.timers);
         let handle = self.live[index].handle.clone();
-        // A shell window and a pop-up are given the keyboard by an edge of their own, and one
-        // that takes no keyboard is never given it. Every other window is given it as it opens.
+        // A shell window, a pop-up and a lock window are given the keyboard by an edge of their
+        // own, and one that takes no keyboard is never given it. Every other window is given it
+        // as it opens.
         let starts_focused = !matches!(
             self.live[index].spec.attributes.role,
-            zgui_platform::SurfaceRole::Layer(_) | zgui_platform::SurfaceRole::Popup(_)
+            zgui_platform::SurfaceRole::Layer(_)
+                | zgui_platform::SurfaceRole::Popup(_)
+                | zgui_platform::SurfaceRole::Lock(_)
         );
         handle.set_focused(starts_focused);
         let close = Rc::clone(&self.live[index].spec.close);
@@ -964,14 +977,22 @@ impl Runtime {
                     }
                 }
                 WindowCommand::Close(token) => {
-                    if let Some(index) = self.live_index(token)
-                        && let Some(surface) = self.live[index].surface
-                    {
-                        self.close_window(cx, surface, CloseReason::Application);
-                    } else {
-                        // Asked for before it ever opened: it is simply no longer wanted.
-                        self.commands.note_closed(token);
-                        self.live.retain(|live| live.token != token);
+                    self.close_token(cx, token, CloseReason::Application);
+                    closed_any = true;
+                }
+                WindowCommand::Lock(lock) => {
+                    if let Err(error) = cx.lock_session() {
+                        tracing::warn!(target: "zgui::app", %error, "the session could not be locked");
+                        self.lock_ended(cx, &lock);
+                        closed_any = true;
+                    }
+                }
+                WindowCommand::Unlock(lock) => {
+                    // Unlocked before the lock windows go: a lock window destroyed while the
+                    // session is locked leaves its output blank.
+                    cx.unlock_session();
+                    for window in lock.windows() {
+                        self.close_token(cx, window.id(), CloseReason::Application);
                     }
                     closed_any = true;
                 }
@@ -983,6 +1004,27 @@ impl Runtime {
         self.sync_grabs(cx);
         if closed_any {
             self.apply_exit_policy(cx);
+        }
+    }
+
+    /// Closes the window `token` names, whether it is open or only asked for.
+    fn close_token(&mut self, cx: &dyn PlatformCx, token: WindowToken, reason: CloseReason) {
+        if let Some(index) = self.live_index(token)
+            && let Some(surface) = self.live[index].surface
+        {
+            self.close_window(cx, surface, reason);
+        } else {
+            // Asked for before it ever opened: it is simply no longer wanted.
+            self.commands.note_closed(token);
+            self.live.retain(|live| live.token != token);
+        }
+    }
+
+    /// Records that the session lock is over, and closes its lock windows.
+    fn lock_ended(&mut self, cx: &dyn PlatformCx, lock: &crate::lock::LockEntry) {
+        self.scope.with(|| lock.ended());
+        for window in lock.windows() {
+            self.close_token(cx, window.id(), CloseReason::Desktop);
         }
     }
 
@@ -1436,6 +1478,17 @@ impl AppHandler for Runtime {
             WakeReason::App(event) => self.app_event(cx, event),
             // The effects that read the list run in the next frame's flush, or here when no window
             // is open. One that opens or closes a window queues it like any other caller.
+            WakeReason::SessionLocked => {
+                if let Some(lock) = self.commands.session_lock() {
+                    self.scope.with(|| lock.confirmed());
+                }
+            }
+            WakeReason::SessionLockFinished => {
+                if let Some(lock) = self.commands.session_lock() {
+                    self.lock_ended(cx, &lock);
+                    self.apply_exit_policy(cx);
+                }
+            }
             WakeReason::FocusGrabCleared(grab) => {
                 if let Some(entry) = self
                     .commands

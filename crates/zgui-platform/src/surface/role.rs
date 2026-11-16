@@ -22,8 +22,16 @@ pub enum SurfaceRole {
     Toplevel,
     /// A surface placed against a rectangle of another surface, and dismissed with it.
     Popup(PopupPlacement),
-    /// A part of the desktop shell: a wallpaper, a dock, a notification, a lock screen.
+    /// A part of the desktop shell: a wallpaper, a dock, a notification.
     Layer(LayerPlacement),
+    /// The lock screen on one output, while the application holds the session lock.
+    ///
+    /// The desktop sizes it to cover the whole output, and it takes the keyboard. Only an
+    /// application that asked for the lock with
+    /// [`PlatformCx::lock_session`](crate::PlatformCx::lock_session) can make one, and it makes
+    /// one for each output. The surface cannot be hidden. It closes with
+    /// [`CloseReason::OutputGone`](crate::CloseReason::OutputGone) when its output goes away.
+    Lock(MonitorTarget),
 }
 
 /// Where a pop-up sits relative to the surface that owns it.

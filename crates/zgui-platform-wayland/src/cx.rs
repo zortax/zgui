@@ -92,6 +92,14 @@ impl PlatformCx for WaylandCx<'_> {
         self.state.grabs.destroy(grab);
     }
 
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        self.state.locks.lock(&self.state.qh)
+    }
+
+    fn unlock_session(&self) {
+        self.state.locks.unlock();
+    }
+
     fn color_scheme(&self) -> Option<ColorScheme> {
         *self
             .state

@@ -68,6 +68,12 @@ pub struct PlatformCapabilities {
     /// makes a grab. A pop-over then closes on a press outside it without an input region over
     /// the whole screen.
     pub focus_grab: bool,
+    /// Whether the application can lock the session and draw the lock screen itself.
+    ///
+    /// Where it can, [`PlatformCx::lock_session`](crate::PlatformCx::lock_session) asks the
+    /// desktop to lock, and a surface of role [`SurfaceRole::Lock`](crate::SurfaceRole::Lock)
+    /// covers one output while the session is locked.
+    pub session_lock: bool,
     /// Who draws the title bar and the frame.
     pub decorations: DecorationSource,
     /// Whether the pointer can be confined to a region.
@@ -114,6 +120,7 @@ impl PlatformCapabilities {
             window_levels: false,
             input_regions: false,
             focus_grab: false,
+            session_lock: false,
             decorations: DecorationSource::Platform,
             pointer_confine: false,
             pointer_lock: false,

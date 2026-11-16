@@ -90,6 +90,8 @@ pub struct WaylandState {
     pub(crate) extras: Extras,
     /// The focus grabs, where the compositor offers them.
     pub(crate) grabs: crate::grab::Grabs,
+    /// The session lock, where the compositor offers one.
+    pub(crate) locks: crate::lock::Locks,
     /// The desktop's clipboards.
     pub(crate) clipboard: WaylandClipboard,
     /// What is being dragged over a window, while something is.
@@ -153,6 +155,7 @@ impl WaylandState {
         let layers = LayerShell::bind(globals, &qh).ok();
         let extras = Extras::bind(globals, &qh);
         let grabs = crate::grab::Grabs::bind(globals, &qh);
+        let locks = crate::lock::Locks::bind(globals, &qh);
         let presentation = Presentation::bind(globals, &qh);
         let text_input: Option<ZwpTextInputManagerV3> = globals.bind(&qh, 1..=1, GlobalData).ok();
         let activation = ActivationState::bind(globals, &qh).ok();
@@ -165,6 +168,7 @@ impl WaylandState {
             primary_selection: primary.is_some(),
             text_input: text_input.is_some(),
             focus_grab: grabs.offered(),
+            session_lock: locks.offered(),
             // The toolkit asks for a server-drawn frame per window and the compositor answers per
             // window, so this is what it can do rather than what it did; a window that is told
             // otherwise reports it for itself.
@@ -188,6 +192,7 @@ impl WaylandState {
             presentation,
             extras,
             grabs,
+            locks,
             clipboard: WaylandClipboard::default(),
             drag: Drag::default(),
             ime: Ime::default(),

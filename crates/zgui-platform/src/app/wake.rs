@@ -67,6 +67,14 @@ pub enum WakeReason {
     ///
     /// The grab has no surfaces after this. It stays until it is destroyed.
     FocusGrabCleared(FocusGrabId),
+    /// The desktop confirmed the session lock this application asked for.
+    ///
+    /// Everything except the lock surfaces is hidden from here on, until the application unlocks.
+    SessionLocked,
+    /// The desktop refused the session lock or ended it.
+    ///
+    /// The lock is gone. The application destroys its lock surfaces, and may ask for a new lock.
+    SessionLockFinished,
     /// The desktop changed the maximised or full-screen state of a surface.
     ///
     /// The change can come with no resize, or after the last resize of the change.

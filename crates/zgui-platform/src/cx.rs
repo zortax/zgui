@@ -129,6 +129,31 @@ pub trait PlatformCx {
         let _ = grab;
     }
 
+    /// Asks the desktop to lock the session, with this application drawing the lock screen.
+    ///
+    /// The answer arrives later. [`WakeReason::SessionLocked`](crate::WakeReason::SessionLocked)
+    /// says the desktop hides everything else now.
+    /// [`WakeReason::SessionLockFinished`](crate::WakeReason::SessionLockFinished) says the desktop
+    /// refused the lock or ended it. Make a surface of role
+    /// [`SurfaceRole::Lock`](crate::SurfaceRole::Lock) for each output as soon as this returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Unsupported`] where the desktop has no session lock, which
+    /// [`PlatformCapabilities::session_lock`] says beforehand, and [`PlatformError::Backend`]
+    /// while this application holds a lock already.
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        Err(crate::Unsupported.into())
+    }
+
+    /// Unlocks the session that this application locked.
+    ///
+    /// Does nothing before the desktop confirmed the lock with
+    /// [`WakeReason::SessionLocked`](crate::WakeReason::SessionLocked), and nothing after it
+    /// ended. Destroy the lock surfaces after this call: a lock surface destroyed while the
+    /// session is locked leaves its output blank.
+    fn unlock_session(&self) {}
+
     /// Asks the loop to finish.
     ///
     /// Nothing stops at once: the loop finishes what it is doing, reports that it is shutting

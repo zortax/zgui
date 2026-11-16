@@ -3,6 +3,7 @@
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::SharedString;
 
+use crate::monitor::MonitorTarget;
 use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
 use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
@@ -160,6 +161,18 @@ impl SurfaceAttributes {
             ..Self::new("")
         }
     }
+
+    /// The lock screen on the output `monitor` names.
+    ///
+    /// Undecorated and not resizable: the desktop gives it the extent of the whole output.
+    pub fn lock(monitor: impl Into<MonitorTarget>) -> Self {
+        Self {
+            role: SurfaceRole::Lock(monitor.into()),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -206,6 +219,11 @@ mod tests {
         let layer = SurfaceAttributes::layer(LayerPlacement::default());
         assert!(matches!(layer.role, SurfaceRole::Layer(_)));
         assert_eq!(layer.decorations, Decorations::None);
+
+        let lock = SurfaceAttributes::lock("DP-1");
+        assert_eq!(lock.role, SurfaceRole::Lock("DP-1".into()));
+        assert!(!lock.resizable);
+        assert_eq!(lock.decorations, Decorations::None);
     }
 
     #[test]
