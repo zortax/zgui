@@ -1967,7 +1967,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 // Reported under the element the piece carries semantics for, not under the box's
                 // own source: a run of text is owed by its text node, and a text node is no
                 // accessibility node at all.
-                if self.dirty.is_semantic(node) {
+                if self.states_geometry(node) {
                     self.dirty.moved(node);
                 }
                 if let Some(previous) = &previous {
@@ -1991,7 +1991,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                     || previous.as_ref().is_some_and(|previous| {
                         previous.kind == kind && geometry::only_geometry_differs(previous, next)
                     });
-                let a11y = if resized && self.dirty.is_semantic(node) {
+                let a11y = if resized && self.states_geometry(node) {
                     self.dirty.moved(node);
                     Dirty::empty()
                 } else {
@@ -2122,6 +2122,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             self.device_now(next.ink, next.anchor),
             reach,
         ))
+    }
+
+    /// Whether the accessibility node of `node` states geometry that a move of its piece changes:
+    /// its own rectangle when it declares what it means, or the transform its children are
+    /// measured from when it has element children.
+    fn states_geometry(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        self.dirty.is_semantic(node) || self.dirty.carries_children(node)
     }
 
     /// The accessibility bit a moved fragment owes, which is none unless its node means something.

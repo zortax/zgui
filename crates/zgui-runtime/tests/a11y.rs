@@ -897,3 +897,67 @@ fn a_row_that_moves_rewrites_its_own_node_and_none_of_its_cells() {
     assert_eq!(composed.height(), 10.0, "{composed:?}");
     assert_every_update_resolves(&harness);
 }
+
+/// Where the consumer composes `target` from every update it was sent.
+fn composed_origin(harness: &Harness<Runtime>, target: NodeId) -> (f64, f64) {
+    let tree = support::a11y_tree(harness);
+    let state = tree.state();
+    let composed = state
+        .node_by_tree_local_id(target, TreeId::ROOT)
+        .expect("the node is in the tree")
+        .bounding_box()
+        .expect("the node has a rectangle");
+    (composed.x0, composed.y0)
+}
+
+/// A plain box whose sibling grows moves, and the control inside it changes in the same frame.
+///
+/// The box declares nothing, and its accessibility node carries the transform the control is
+/// measured from. The frame walks the box because its subtree changed, so no rigid move reports
+/// it, and the control alone is measured again inside a transform that still holds the old place.
+#[test]
+fn a_control_in_a_box_that_moves_while_the_control_changes_is_reported_where_it_is() {
+    let wide = RwSignal::new_local(false);
+    let button = NodeRef::new();
+    let mut harness = support::app_with_text(
+        "root { display: flex; flex-direction: row; width: 400px; height: 300px }
+         .lead { display: block; height: 10px }
+         .group { display: flex; flex-direction: row; padding-left: 5px }
+         control { display: flex; height: 24px }
+         .label { display: block }",
+        move |cx: &mut zgui_view::BuildCx<'_>| {
+            Box::new(
+                zgui_elements::row()
+                    .class("root")
+                    .child(
+                        zgui_elements::r#box()
+                            .class("lead")
+                            .style_property("width", move || {
+                                Some(if wide.get() { "90px" } else { "10px" }.to_owned())
+                            }),
+                    )
+                    .child(
+                        zgui_elements::row().class("group").child(
+                            zgui_elements::control()
+                                .node_ref(button)
+                                .a11y(A11yBinding::new(Role::Button).label("Save"))
+                                .child(zgui_elements::text().class("label").child(move || {
+                                    if wide.get() { "longer text" } else { "ab" }.to_owned()
+                                })),
+                        ),
+                    )
+                    .into_view()
+                    .build(cx),
+            )
+        },
+    );
+    harness.settle(8);
+    let target = bound_id(button);
+    assert_eq!(composed_origin(&harness, target).0, 15.0);
+    wide.set(true);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 95.0);
+    wide.set(false);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 15.0);
+}
