@@ -8,6 +8,8 @@ use zgui_platform::{
     Unsupported,
 };
 
+use wayland_client::protocol::wl_output::WlOutput;
+
 use crate::driver::WaylandState;
 use crate::surface::role::{Popup, Role, Toplevel, layer};
 use crate::surface::{Fractional, Links, WaylandSurface};
@@ -39,9 +41,14 @@ impl WaylandState {
                 .get_or_insert_with(|| named.as_str().to_owned());
         }
         let wanted = attributes.size.unwrap_or(DEFAULT_SIZE);
+        let bound = match &attributes.role {
+            SurfaceRole::Layer(placement) => self.bound_output(placement)?,
+            _ => None,
+        };
         let wl = self.compositor.create_surface(&self.qh);
         let fractional = Fractional::attach(&self.extras, &self.qh, &wl, id);
-        let role = self.make_role(id, attributes, wanted, wl)?;
+        let seed = self.seed_scale(bound.as_ref(), fractional.crops());
+        let role = self.make_role(id, attributes, wanted, wl, bound.as_ref())?;
 
         let (placement, parent_extent) = match &attributes.role {
             SurfaceRole::Popup(placement) => (
@@ -66,6 +73,12 @@ impl WaylandState {
             if let SurfaceRole::Layer(placement) = &attributes.role {
                 shared.layer = Some(placement.clone());
             }
+            shared.bound = bound;
+            // The first frame is drawn at the scale of the output the surface opens on. The
+            // compositor states the surface's own scale only after it has shown the surface, so
+            // without this a surface on a 2x output draws its first frame at 1x and then again.
+            shared.ladder.seed(seed);
+            shared.scale = shared.ladder.factor();
         }
         apply(&surface, attributes);
         // The commit that asks to be configured. Nothing is attached to it, which is what makes it
@@ -82,6 +95,7 @@ impl WaylandState {
         attributes: &SurfaceAttributes,
         wanted: Size<CssPx, Css>,
         wl: wayland_client::protocol::wl_surface::WlSurface,
+        bound: Option<&WlOutput>,
     ) -> Result<Role, PlatformError> {
         match &attributes.role {
             SurfaceRole::Layer(placement) => {
@@ -89,7 +103,7 @@ impl WaylandState {
                     .application_id
                     .as_ref()
                     .map(zgui_vocab::SharedString::as_str);
-                self.make_layer(wl, placement, application, wanted)
+                self.make_layer(wl, placement, application, wanted, bound)
             }
             SurfaceRole::Popup(placement) => self.make_popup(id, wl, placement, attributes),
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
@@ -152,27 +166,65 @@ impl WaylandState {
         placement: &LayerPlacement,
         application: Option<&str>,
         wanted: Size<CssPx, Css>,
+        bound: Option<&WlOutput>,
     ) -> Result<Role, PlatformError> {
         let Some(shell) = &self.layers else {
             return Err(PlatformError::Unsupported(Unsupported));
         };
-        let output = placement.monitor.as_ref().and_then(|name| {
-            self.outputs.outputs().find(|output| {
-                self.outputs
-                    .info(output)
-                    .and_then(|info| info.name)
-                    .is_some_and(|found| &found == name)
-            })
-        });
         let surface = shell.create_layer_surface(
             &self.qh,
             wl,
             layer::layer(placement.layer),
             Some(layer::namespace(placement, application)),
-            output.as_ref(),
+            bound,
         );
         layer::apply(&surface, placement, wanted);
         Ok(Role::Layer(Box::new(surface)))
+    }
+
+    /// The output a shell layer asks to open on, when it names one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SurfaceCreation`] when the placement names an output that is not
+    /// connected. The desktop would otherwise choose an output, and a bar opened on the wrong
+    /// screen is a second bar on that screen.
+    fn bound_output(&self, placement: &LayerPlacement) -> Result<Option<WlOutput>, PlatformError> {
+        let Some(target) = &placement.monitor else {
+            return Ok(None);
+        };
+        self.outputs
+            .outputs()
+            .find(|output| {
+                self.outputs
+                    .info(output)
+                    .is_some_and(|info| target.matches(&crate::output::describe(&info)))
+            })
+            .map(Some)
+            .ok_or_else(|| {
+                PlatformError::SurfaceCreation(format!("no connected output matches {target:?}"))
+            })
+    }
+
+    /// The scale a new surface starts at: its bound output's, else the sharpest output's.
+    ///
+    /// A surface with no bound output can open on any output, and the sharpest one is the one
+    /// where drawing at too low a scale shows.
+    fn seed_scale(&self, bound: Option<&WlOutput>, viewport: bool) -> Option<f64> {
+        match bound {
+            Some(output) => self
+                .outputs
+                .info(output)
+                .map(|info| crate::output::mode::seed(&info, viewport)),
+            None => crate::output::mode::sharpest(
+                self.outputs
+                    .outputs()
+                    .filter_map(|output| self.outputs.info(&output))
+                    .collect::<Vec<_>>()
+                    .iter(),
+            )
+            .map(f64::from),
+        }
     }
 
     /// What every surface this loop makes is wired into.

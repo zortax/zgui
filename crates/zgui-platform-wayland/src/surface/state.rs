@@ -141,6 +141,13 @@ pub(crate) struct Shared {
     pub(crate) pending_configure: Option<Pending>,
     /// The outputs the compositor says the surface is on.
     pub(crate) outputs: Vec<WlOutput>,
+    /// The output a shell layer was opened on, when the application named one.
+    pub(crate) bound: Option<WlOutput>,
+    /// Whether an output the surface was bound to or on has gone.
+    ///
+    /// What tells a shell layer closed because its output went away from one the desktop closed
+    /// for a reason of its own.
+    pub(crate) output_lost: bool,
     /// Where the shell layer sits and what it claims, for a surface that is one.
     ///
     /// Kept whole because the shell forgets all of it when the surface is unmapped, and the remap
@@ -190,6 +197,8 @@ impl Shared {
             bounds: (None, None),
             pending_configure: None,
             outputs: Vec::new(),
+            bound: None,
+            output_lost: false,
             layer: None,
             layer_owed: false,
             input_owed: None,

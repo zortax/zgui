@@ -38,6 +38,7 @@
 //! | [`editing`] | the editors a text field's model lives in, keyed by node |
 //! | [`selection`] | the selection each editable node carries, and the one that is focused |
 //! | [`binding`] | the seam a downstream script engine attaches to |
+//! | [`monitors`] | the outputs the desktop has, as a signal |
 //!
 //! ```no_run
 //! use zgui_runtime::App;
@@ -77,6 +78,7 @@ pub mod error;
 pub mod frame_callbacks;
 pub mod host;
 mod images;
+pub mod monitors;
 mod order;
 pub mod parity;
 pub mod probe;
@@ -105,6 +107,7 @@ pub use crate::embed::{
 pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;
 pub use crate::host::RuntimeHost;
+pub use crate::monitors::{try_use_monitors, use_monitors};
 pub use crate::probe::FrameProbe;
 pub use crate::replaced::{IntrinsicTable, ReplacedMux};
 pub use crate::selection::Selections;

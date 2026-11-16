@@ -2,6 +2,7 @@
 
 use zgui_geom::{Css, CssPx, Edges, Rect};
 
+use crate::monitor::MonitorTarget;
 use crate::surface::id::SurfaceId;
 
 /// What a surface is to the desktop.
@@ -157,9 +158,11 @@ pub struct LayerPlacement {
     pub exclusive_zone: ExclusiveZone,
     /// Whether the surface takes the keyboard.
     pub keyboard: KeyboardInteractivity,
-    /// The output to place it on, named as [`MonitorInfo::name`](crate::MonitorInfo::name)
-    /// reports it. Absent lets the desktop choose.
-    pub monitor: Option<String>,
+    /// The output to place it on. Absent lets the desktop choose.
+    ///
+    /// A backend refuses the surface when no connected output matches, because a bar that opens
+    /// on another screen is a second bar on that screen.
+    pub monitor: Option<MonitorTarget>,
     /// What the surface is for, in a word the desktop's rules can match, such as `bar` or
     /// `notifications`.
     ///
@@ -201,8 +204,8 @@ impl LayerPlacement {
         self
     }
 
-    /// The same placement on the output called `monitor`.
-    pub fn with_monitor(mut self, monitor: impl Into<String>) -> Self {
+    /// The same placement on `monitor`: a [`MonitorId`](crate::MonitorId) or an output name.
+    pub fn with_monitor(mut self, monitor: impl Into<MonitorTarget>) -> Self {
         self.monitor = Some(monitor.into());
         self
     }

@@ -2,8 +2,8 @@
 
 use zgui_geom::{Css, CssPx, Edges, Size};
 use zgui_platform::{
-    Decorations, ExclusiveZone, KeyboardInteractivity, Layer, LayerPlacement, SurfaceAttributes,
-    SurfaceRole,
+    Decorations, ExclusiveZone, KeyboardInteractivity, Layer, LayerPlacement, MonitorTarget,
+    SurfaceAttributes, SurfaceRole,
 };
 
 /// Where a shell window sits, how much of the screen it claims, and how large it is.
@@ -110,9 +110,14 @@ impl LayerOptions {
         self
     }
 
-    /// Puts the window on the output that [`MonitorInfo::name`](zgui_platform::MonitorInfo::name)
-    /// calls `monitor`. Without one the desktop chooses.
-    pub fn with_monitor(mut self, monitor: impl Into<String>) -> Self {
+    /// Puts the window on `monitor`: a [`MonitorId`](zgui_platform::MonitorId) from
+    /// [`use_monitors`](crate::monitors::use_monitors), or an output name. Without one the
+    /// desktop chooses.
+    ///
+    /// The window does not open when no connected output matches. It closes with
+    /// [`CloseReason::OutputGone`](zgui_platform::CloseReason::OutputGone) when its output goes
+    /// away.
+    pub fn with_monitor(mut self, monitor: impl Into<MonitorTarget>) -> Self {
         self.placement.monitor = Some(monitor.into());
         self
     }
@@ -153,8 +158,18 @@ mod tests {
     use super::LayerOptions;
     use zgui_geom::{CssPx, Edges, Size};
     use zgui_platform::{
-        Decorations, ExclusiveZone, KeyboardInteractivity, Layer, SurfaceAttributes, SurfaceRole,
+        Decorations, ExclusiveZone, KeyboardInteractivity, Layer, MonitorId, MonitorTarget,
+        SurfaceAttributes, SurfaceRole,
     };
+
+    #[test]
+    fn a_shell_window_opens_on_an_output_named_by_its_identifier() {
+        let options = LayerOptions::top().with_monitor(MonitorId::new(9));
+        assert_eq!(
+            options.placement().monitor,
+            Some(MonitorTarget::Id(MonitorId::new(9)))
+        );
+    }
 
     #[test]
     fn every_option_reaches_the_placement() {
@@ -176,7 +191,7 @@ mod tests {
         assert_eq!(placement.exclusive_zone, ExclusiveZone::Ignore);
         assert_eq!(placement.keyboard, KeyboardInteractivity::OnDemand);
         assert_eq!(placement.namespace.as_deref(), Some("popover"));
-        assert_eq!(placement.monitor.as_deref(), Some("DP-1"));
+        assert_eq!(placement.monitor, Some(MonitorTarget::from("DP-1")));
         assert_eq!(options.size(), Some(Size::new(CssPx(320.0), CssPx(200.0))));
     }
 

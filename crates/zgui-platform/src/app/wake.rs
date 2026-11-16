@@ -56,6 +56,11 @@ pub enum WakeReason {
     ColorSchemeChanged,
     /// The desktop asked something of the application as a whole.
     App(AppEvent),
+    /// An output was connected or disconnected, or what is known about one changed.
+    ///
+    /// [`PlatformCx::monitors`](crate::PlatformCx::monitors) gives the new list. A backend sends
+    /// this once for a batch of changes the desktop announced together.
+    MonitorsChanged,
     /// The desktop changed the maximised or full-screen state of a surface.
     ///
     /// The change can come with no resize, or after the last resize of the change.
@@ -95,6 +100,7 @@ mod tests {
     fn a_global_reason_names_no_surface_at_all() {
         assert!(WakeReason::DeviceLost.surfaces().is_empty());
         assert!(WakeReason::ColorSchemeChanged.surfaces().is_empty());
+        assert!(WakeReason::MonitorsChanged.surfaces().is_empty());
         // Opening a window names no surface because the surface does not exist yet.
         assert!(WakeReason::AppWork.surfaces().is_empty());
     }

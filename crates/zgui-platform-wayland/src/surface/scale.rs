@@ -11,10 +11,13 @@
 /// The **preferred buffer scale** is the compositor's whole-number answer for this surface. It
 /// arrived in version 6 of the surface interface.
 ///
-/// The **outputs** the surface is on are the last resort, and the rule there is the largest rather
-/// than the first: a window straddling a 1× and a 2× monitor drawn at 1× is visibly soft on half
-/// of itself, and drawn at 2× is merely oversampled on the other half.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The **outputs** the surface is on come next, and the rule there is the largest rather than the
+/// first: a window straddling a 1× and a 2× monitor drawn at 1× is visibly soft on half of itself,
+/// and drawn at 2× is merely oversampled on the other half.
+///
+/// The **seed** is the last resort. It is the scale of the output the surface was opened on, and
+/// it gives the first frame its scale before the compositor has said anything about the surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Scale {
     /// The fractional scale in hundred-and-twentieths, when the compositor reports one.
     fractional: Option<u32>,
@@ -22,6 +25,8 @@ pub struct Scale {
     preferred: Option<i32>,
     /// The largest whole-number scale among the outputs the surface is on.
     outputs: Option<i32>,
+    /// The scale of the output the surface is expected on, before it enters one.
+    seed: Option<f64>,
 }
 
 impl Scale {
@@ -40,13 +45,21 @@ impl Scale {
         self.outputs = scale;
     }
 
+    /// The scale of the output the surface is expected on, before it enters one.
+    ///
+    /// A fraction only for a surface that is mapped through a viewport, because a surface without
+    /// one can declare only a whole-number buffer scale.
+    pub const fn seed(&mut self, scale: Option<f64>) {
+        self.seed = scale;
+    }
+
     /// The scale to draw at, never zero and never negative.
     pub fn factor(&self) -> f64 {
         let answer = match (self.fractional, self.preferred, self.outputs) {
             (Some(fractional), _, _) => f64::from(fractional) / 120.0,
             (None, Some(preferred), _) => f64::from(preferred),
             (None, None, Some(outputs)) => f64::from(outputs),
-            (None, None, None) => 1.0,
+            (None, None, None) => self.seed.unwrap_or(1.0),
         };
         if answer > 0.0 { answer } else { 1.0 }
     }
@@ -63,7 +76,11 @@ impl Scale {
 
     /// The whole-number buffer scale to declare, for a surface that is not fractional.
     pub fn buffer_scale(&self) -> i32 {
-        self.preferred.or(self.outputs).unwrap_or(1).max(1)
+        self.preferred
+            .or(self.outputs)
+            .or_else(|| self.seed.map(|seed| seed.round() as i32))
+            .unwrap_or(1)
+            .max(1)
     }
 }
 
@@ -120,12 +137,32 @@ mod tests {
     }
 
     #[test]
+    fn the_seed_gives_the_first_frame_its_scale_until_the_compositor_speaks() {
+        let mut scale = Scale::default();
+        scale.seed(Some(1.5));
+        assert_eq!(scale.factor(), 1.5);
+        scale.outputs(Some(2));
+        assert_eq!(
+            scale.factor(),
+            2.0,
+            "an output the surface entered outranks the seed"
+        );
+        scale.outputs(None);
+        scale.fractional(150);
+        assert_eq!(scale.factor(), 1.25);
+    }
+
+    #[test]
     fn a_scale_of_zero_is_refused_wherever_it_comes_from() {
         // Every conversion out of physical pixels divides by this, and a compositor is allowed to
         // answer with nonsense while a surface is being mapped.
         let mut zero = Scale::default();
         zero.fractional(0);
         assert_eq!(zero.factor(), 1.0);
+
+        let mut seeded = Scale::default();
+        seeded.seed(Some(0.0));
+        assert_eq!(seeded.factor(), 1.0);
 
         let mut negative = Scale::default();
         negative.preferred(-1);

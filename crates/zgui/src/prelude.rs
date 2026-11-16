@@ -41,6 +41,10 @@ pub use zgui_runtime::windows::{
 pub use zgui_platform::ClipboardKind;
 pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 
+/// The outputs the desktop has, as a signal, and how a shell window names the one it opens on.
+pub use zgui_platform::{MonitorId, MonitorInfo, MonitorTarget};
+pub use zgui_runtime::monitors::{try_use_monitors, use_monitors};
+
 /// What a window can be asked to be, what it answers, and when an application stops.
 ///
 /// The desktop's own light-or-dark preference is deliberately absent: `ColorScheme` is already the
@@ -48,8 +52,8 @@ pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 /// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
 /// overrides one window's.
 pub use zgui_platform::{
-    ComposeAhead, CursorStyle, Decorations, ExclusiveZone, FullscreenMode, KeyboardInteractivity,
-    ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
+    CloseReason, ComposeAhead, CursorStyle, Decorations, ExclusiveZone, FullscreenMode,
+    KeyboardInteractivity, ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
 };
 pub use zgui_runtime::{CloseResponse, ExitPolicy};
 

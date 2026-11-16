@@ -50,6 +50,10 @@ pub enum SurfaceEvent {
     PresentReady,
     /// The user asked for the surface to close. Nothing has closed yet.
     CloseRequested,
+    /// The desktop took the surface away, and it cannot be shown again.
+    ///
+    /// The application cannot refuse this. It closes the window and destroys the surface.
+    Closed(CloseReason),
     /// The surface is gone.
     Destroyed,
     /// The surface gained or lost keyboard focus.
@@ -222,6 +226,26 @@ impl SurfaceEvent {
             _ => None,
         }
     }
+}
+
+/// Why a window closed.
+///
+/// A backend reports [`CloseReason::OutputGone`] and [`CloseReason::Desktop`] through
+/// [`SurfaceEvent::Closed`]. The runtime reports all four to the application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CloseReason {
+    /// The application closed it.
+    Application,
+    /// The user asked for it to close, and nothing refused.
+    User,
+    /// The output it was on went away.
+    ///
+    /// A shell window opened on one output closes when that output is unplugged or turned off.
+    /// An application that wants the window back opens a new one when the output returns.
+    OutputGone,
+    /// The desktop took it away for a reason of its own.
+    Desktop,
 }
 
 #[cfg(test)]

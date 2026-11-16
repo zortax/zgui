@@ -66,13 +66,21 @@ impl<A: AppHandler> WaylandApp<A> {
             .map_err(|error| PlatformError::Backend(format!("the wake source: {error}")))?;
 
         let waker = PingWaker::new(ping);
-        let state = WaylandState::new(
+        let mut queue = queue;
+        let mut state = WaylandState::new(
             conn.clone(),
             &globals,
             queue.handle(),
             events.handle(),
             waker,
         )?;
+        // One round trip before the application starts, so that it starts with the outputs known.
+        // The outputs are described only in answer to the binds above, and a shell window that
+        // opens on a named output at start-up has to find that output.
+        queue
+            .roundtrip(&mut state)
+            .map_err(|error| PlatformError::Backend(format!("the first round trip: {error}")))?;
+        state.announce_outputs = true;
         // The adapter owns the read, dispatch and flush cycle for the socket. Doing it by hand is
         // how a client goes to sleep holding events it has read and not dispatched, which from
         // outside is a window that has stopped.
@@ -149,11 +157,12 @@ impl<A: AppHandler> WaylandApp<A> {
 
     /// Hands over everything the compositor said during the last dispatch.
     fn deliver_events(&mut self) {
+        self.state.resolve_closings();
         // Taken as a whole rather than drained in place: delivering one may create or close a
         // surface, and both of those record events of their own.
         let events = std::mem::take(&mut self.state.out);
         for (id, event) in events {
-            let closing = matches!(event, SurfaceEvent::Destroyed);
+            let closing = matches!(event, SurfaceEvent::Destroyed | SurfaceEvent::Closed(_));
             let cx = WaylandCx::new(&self.state);
             self.handler.surface_event(&cx, id, event);
             if closing {

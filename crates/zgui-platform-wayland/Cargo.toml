@@ -104,6 +104,11 @@ name = "layer_shell"
 path = "tests/layer_shell.rs"
 harness = false
 
+[[test]]
+name = "monitors"
+path = "tests/monitors.rs"
+harness = false
+
 # A declined redraw must not wait out the watchdog's grace, which only a wall-clock bound can see.
 # Behind its feature so that an unoptimised run cannot read an unoptimised time as a regression; the
 # gate runs it in release.

@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
-    AppHandler, Clock, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceAttributes,
-    SurfaceEvent, SurfaceId, WakeReason,
+    AppHandler, Clock, CloseReason, IdlePolicy, PlatformCx, PlatformError, Surface,
+    SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
@@ -478,6 +478,8 @@ pub struct Runtime {
     clipboards: crate::clipboard::Clipboards,
     /// The windows as the application holds them.
     windows_api: crate::windows::Windows,
+    /// The outputs, as the application reads them.
+    monitors: crate::monitors::Monitors,
     /// The scope above every window's, where what is shared between them lives.
     scope: zgui_reactive::Mounted,
     /// When the application stops.
@@ -635,6 +637,7 @@ impl Runtime {
         // scope can be mounted under it.
         let scope = zgui_reactive::Mounted::new();
         let windows_api = crate::windows::Windows::new(commands.clone());
+        let monitors = crate::monitors::Monitors::new();
         let shared = app.shared.take();
         let hooks = crate::desktop::AppHooks::new();
         let build_menu = app.menu.take();
@@ -643,6 +646,8 @@ impl Runtime {
             zgui_reactive::provide_local_context(commands.clone());
             // How every window reaches the others, and how any of them opens one.
             zgui_reactive::provide_local_context(windows_api.clone());
+            // The outputs, the same list in every window.
+            zgui_reactive::provide_local_context(monitors.clone());
             // The desktop's clipboards, reachable from every window.
             zgui_reactive::provide_local_context(clipboards.clone());
             // What the application hears from outside its windows.
@@ -686,6 +691,7 @@ impl Runtime {
             commands,
             clipboards,
             windows_api,
+            monitors,
             scope,
             exit: app.exit,
             hooks,
@@ -950,7 +956,7 @@ impl Runtime {
                     if let Some(index) = self.live_index(token)
                         && let Some(surface) = self.live[index].surface
                     {
-                        self.close_window(cx, surface);
+                        self.close_window(cx, surface, CloseReason::Application);
                     } else {
                         // Asked for before it ever opened: it is simply no longer wanted.
                         self.commands.note_closed(token);
@@ -1084,7 +1090,7 @@ impl Runtime {
     ///
     /// The window stops being one the application wants, which is what tells this apart from a
     /// platform taking every surface away: a window closed here does not come back on resume.
-    fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId) {
+    fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, reason: CloseReason) {
         // Looked up before the teardown, which is what clears the surface this names it by.
         let index = self.live_for_surface(surface);
         self.forget_surface(surface);
@@ -1095,6 +1101,7 @@ impl Runtime {
         if let Some(index) = index {
             self.commands.note_closed(self.live[index].token);
             self.live[index].handle.note_closed();
+            self.live[index].handle.set_close_reason(reason);
             self.windows_api.note_closed(self.live[index].token);
             self.live.remove(index);
         }
@@ -1180,6 +1187,8 @@ impl AppHandler for Runtime {
         self.commands.set_platform(cx.waker());
         self.clipboards.set_platform(cx.waker());
         *self.windows_api.capabilities_slot().borrow_mut() = cx.capabilities().clone();
+        // Before any window opens, so a view built for a window reads the outputs there are.
+        let _ = self.monitors.refresh(cx);
 
         // Every window the application wants and has no surface for. At launch that is the window
         // it launched with; after a suspend it is all of them, which is why a specification is kept
@@ -1274,13 +1283,17 @@ impl AppHandler for Runtime {
                     asked == CloseResponse::Veto
                 });
                 if !vetoed {
-                    self.close_window(cx, surface);
+                    self.close_window(cx, surface, CloseReason::User);
                     self.apply_exit_policy(cx);
                 }
             }
             // The platform took it. There is nothing to refuse: the window is already gone.
             SurfaceEvent::Destroyed => {
-                self.close_window(cx, surface);
+                self.close_window(cx, surface, CloseReason::Desktop);
+                self.apply_exit_policy(cx);
+            }
+            SurfaceEvent::Closed(reason) => {
+                self.close_window(cx, surface, reason);
                 self.apply_exit_policy(cx);
             }
             other => {
@@ -1373,6 +1386,14 @@ impl AppHandler for Runtime {
                 self.clipboards.resolve(serial, result);
             }
             WakeReason::App(event) => self.app_event(cx, event),
+            // The effects that read the list run in the next frame's flush, or here when no window
+            // is open. One that opens or closes a window queues it like any other caller.
+            WakeReason::MonitorsChanged if self.monitors.refresh(cx) => {
+                for window in &self.windows {
+                    window.request_frame();
+                }
+                self.flush_without_windows();
+            }
             // The desktop changed the state with no resize, or after the last resize of the
             // change. Read the state again and draw it.
             WakeReason::SurfaceStateChanged(surface) => {

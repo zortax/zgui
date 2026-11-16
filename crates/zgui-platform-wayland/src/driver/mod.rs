@@ -113,6 +113,13 @@ pub struct WaylandState {
     pub(crate) live: Live,
     /// What happened during a dispatch and has not been delivered yet.
     pub(crate) out: Vec<(SurfaceId, SurfaceEvent)>,
+    /// The shell layers the compositor closed during a dispatch, whose reason is not decided yet.
+    pub(crate) closing: Vec<SurfaceId>,
+    /// Whether a change to the outputs wakes the application.
+    ///
+    /// Off for the first round trip: the application reads the outputs when it starts, so the
+    /// outputs it starts with are not a change.
+    pub(crate) announce_outputs: bool,
 }
 
 impl WaylandState {
@@ -187,6 +194,8 @@ impl WaylandState {
             monotonic: Monotonic::anchor(),
             live: Live::new(capabilities::of(offered), Arc::clone(&waker)),
             out: Vec::new(),
+            closing: Vec::new(),
+            announce_outputs: false,
             qh: qh.clone(),
         };
         state.clipboard.selections().attach(

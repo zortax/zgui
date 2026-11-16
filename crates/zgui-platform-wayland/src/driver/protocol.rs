@@ -23,7 +23,7 @@ use smithay_client_toolkit::{
     delegate_shm, registry_handlers,
 };
 use zgui_geom::{CssPx, Size};
-use zgui_platform::{Surface as _, SurfaceEvent};
+use zgui_platform::{CloseReason, Surface as _, SurfaceEvent};
 
 use crate::driver::WaylandState;
 use crate::output;
@@ -123,28 +123,36 @@ impl OutputHandler for WaylandState {
     }
 
     fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
-        self.outputs_changed();
+        self.outputs_changed(None);
     }
 
     fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
-        self.outputs_changed();
+        self.outputs_changed(None);
     }
 
     fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
-        // The compositor can remove an output without a leave first. Its rate must stop counting.
+        // The compositor can remove an output without a leave first. Its rate must stop counting,
+        // and a shell layer that was on it closes because it went.
         for surface in self.live.surfaces.borrow().iter() {
-            surface.shared().outputs.retain(|held| held != &output);
+            let mut shared = surface.shared();
+            let held = shared.outputs.contains(&output) || shared.bound.as_ref() == Some(&output);
+            shared.output_lost |= held;
+            shared.outputs.retain(|held| held != &output);
         }
-        self.outputs_changed();
+        // The toolkit calls this before it forgets the output, so the output is left out here.
+        self.outputs_changed(Some(&output));
     }
 }
 
 impl LayerShellHandler for WaylandState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        let Some(id) = self.identify(layer.wl_surface()) else {
-            return;
-        };
-        self.report(id, SurfaceEvent::CloseRequested);
+        // The reason is decided after the dispatch: the compositor can close the surface before
+        // it says the output has gone, in the same batch of events.
+        if let Some(id) = self.identify(layer.wl_surface())
+            && !self.closing.contains(&id)
+        {
+            self.closing.push(id);
+        }
     }
 
     fn configure(
@@ -255,14 +263,27 @@ impl WaylandState {
     }
 
     /// Rebuilds what is known about the outputs, and re-reads every surface's scale from them.
-    fn outputs_changed(&mut self) {
-        let infos: Vec<_> = self
+    ///
+    /// `gone` is an output the compositor has removed and the toolkit still lists. The
+    /// application is woken only when what it can read changed.
+    fn outputs_changed(&mut self, gone: Option<&WlOutput>) {
+        let monitors: Vec<_> = self
             .outputs
             .outputs()
+            .filter(|output| Some(output) != gone)
             .filter_map(|output| self.outputs.info(&output))
+            .map(|info| output::describe(&info))
             .collect();
-        let sharpest = output::mode::sharpest(infos.iter());
-        *self.live.monitors.borrow_mut() = infos.iter().map(output::describe).collect();
+        let changed = *self.live.monitors.borrow() != monitors;
+        if changed {
+            *self.live.monitors.borrow_mut() = monitors;
+        }
+        if changed && self.announce_outputs {
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::MonitorsChanged,
+            );
+        }
         let ids: Vec<_> = self
             .live
             .surfaces
@@ -271,12 +292,13 @@ impl WaylandState {
             .map(|surface| surface.id())
             .collect();
         for id in ids {
-            self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+            self.rescale_from_outputs(id);
             self.declare_rate(id);
         }
     }
 
-    /// Applies a change to the outputs a surface is on, and declares the rate they run at.
+    /// Applies a change to the outputs a surface is on, and re-reads the scale and the rate they
+    /// give it.
     fn outputs_of(&mut self, surface: &WlSurface, change: impl FnOnce(&mut Vec<WlOutput>)) {
         let Some(id) = self.identify(surface) else {
             return;
@@ -284,7 +306,44 @@ impl WaylandState {
         if let Some(held) = self.live.surface(id) {
             change(&mut held.shared().outputs);
         }
+        self.rescale_from_outputs(id);
         self.declare_rate(id);
+    }
+
+    /// Gives a surface the scale of the outputs it is on.
+    ///
+    /// Only the outputs it is on: a surface on a 1x output beside a 2x one is drawn at 1x. A
+    /// surface on no output yet keeps the scale it was seeded with.
+    fn rescale_from_outputs(&mut self, id: zgui_platform::SurfaceId) {
+        let Some(held) = self.live.surface(id) else {
+            return;
+        };
+        let infos: Vec<_> = held
+            .shared()
+            .outputs
+            .iter()
+            .filter_map(|output| self.outputs.info(output))
+            .collect();
+        let sharpest = output::mode::sharpest(infos.iter());
+        self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+    }
+
+    /// Reports every shell layer the compositor closed during the last dispatch, with its reason.
+    ///
+    /// Called after the dispatch rather than from it, because the compositor can close a layer
+    /// and remove its output in one batch of events, in either order.
+    pub(crate) fn resolve_closings(&mut self) {
+        for id in std::mem::take(&mut self.closing) {
+            let Some(held) = self.live.surface(id) else {
+                continue;
+            };
+            let reason = if held.shared().output_lost {
+                CloseReason::OutputGone
+            } else {
+                CloseReason::Desktop
+            };
+            self.report(id, SurfaceEvent::Closed(reason));
+        }
     }
 
     /// Gives a surface the refresh interval of the outputs it is on.

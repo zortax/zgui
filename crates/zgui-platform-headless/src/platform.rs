@@ -34,7 +34,7 @@ pub struct Headless {
     /// The next surface number, never reused.
     next_surface: AtomicU64,
     /// The outputs this platform reports.
-    monitors: Vec<MonitorInfo>,
+    monitors: Mutex<Vec<MonitorInfo>>,
     /// The desktop's light or dark preference, when one has been declared.
     color_scheme: Mutex<Option<ColorScheme>>,
     /// What this platform says a scroll from its devices means.
@@ -64,7 +64,7 @@ impl Headless {
             waker,
             surfaces: Mutex::new(Vec::new()),
             next_surface: AtomicU64::new(1),
-            monitors: Vec::new(),
+            monitors: Mutex::new(Vec::new()),
             color_scheme: Mutex::new(None),
             scroll: Mutex::new(ScrollSettings::desktop()),
             exiting: AtomicBool::new(false),
@@ -82,9 +82,16 @@ impl Headless {
     }
 
     /// The same platform reporting `monitors`.
-    pub fn with_monitors(mut self, monitors: Vec<MonitorInfo>) -> Self {
-        self.monitors = monitors;
+    pub fn with_monitors(self, monitors: Vec<MonitorInfo>) -> Self {
+        *self.monitors.lock().expect("the outputs are not poisoned") = monitors;
         self
+    }
+
+    /// Replaces the outputs this platform reports, as a hotplug would, and wakes the loop with
+    /// [`WakeReason::MonitorsChanged`].
+    pub fn set_monitors(&self, monitors: Vec<MonitorInfo>) {
+        *self.monitors.lock().expect("the outputs are not poisoned") = monitors;
+        self.waker.wake(WakeReason::MonitorsChanged);
     }
 
     /// The same platform declaring what a scroll from its devices means.
@@ -190,11 +197,18 @@ impl PlatformCx for Headless {
     }
 
     fn monitors(&self) -> Vec<MonitorInfo> {
-        self.monitors.clone()
+        self.monitors
+            .lock()
+            .expect("the outputs are not poisoned")
+            .clone()
     }
 
     fn primary_monitor(&self) -> Option<MonitorInfo> {
-        self.monitors.first().cloned()
+        self.monitors
+            .lock()
+            .expect("the outputs are not poisoned")
+            .first()
+            .cloned()
     }
 
     fn color_scheme(&self) -> Option<ColorScheme> {

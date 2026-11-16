@@ -17,7 +17,7 @@ pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
 pub use crate::surface::drag::DragEvent;
-pub use crate::surface::event::SurfaceEvent;
+pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;

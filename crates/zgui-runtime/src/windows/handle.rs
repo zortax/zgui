@@ -6,8 +6,8 @@ use std::sync::{Arc, Weak};
 
 use zgui_geom::{Css, CssPx, Point, Rect, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, Decorations, FullscreenMode, LayerPatch, PlatformCapabilities,
-    ResizeEdge, Surface, WindowIcon, WindowLevel,
+    CloseReason, ColorScheme, CursorStyle, Decorations, FullscreenMode, LayerPatch,
+    PlatformCapabilities, ResizeEdge, Surface, WindowIcon, WindowLevel,
 };
 use zgui_reactive::prelude::*;
 use zgui_reactive::{ArcRwSignal, Signal};
@@ -74,6 +74,8 @@ pub(crate) struct WindowShared {
     pub(crate) maximized: ArcRwSignal<bool>,
     /// How the window fills the screen, if it does.
     pub(crate) fullscreen: ArcRwSignal<Option<FullscreenMode>>,
+    /// Why the window closed, once it has.
+    pub(crate) close_reason: ArcRwSignal<Option<CloseReason>>,
 }
 
 impl WindowHandle {
@@ -101,6 +103,7 @@ impl WindowHandle {
                 occluded: ArcRwSignal::new(false),
                 maximized: ArcRwSignal::new(false),
                 fullscreen: ArcRwSignal::new(None),
+                close_reason: ArcRwSignal::new(None),
             }),
         }
     }
@@ -134,6 +137,11 @@ impl WindowHandle {
     pub(crate) fn note_closed(&self) {
         self.shared.closed.set(true);
         self.detach();
+    }
+
+    /// Records why the window closed.
+    pub(crate) fn set_close_reason(&self, reason: CloseReason) {
+        self.shared.close_reason.set(Some(reason));
     }
 
     /// Whether a platform-driven drag was begun since this was last asked, clearing the record.
@@ -261,6 +269,15 @@ impl WindowHandle {
     /// How the window fills the screen, if it does.
     pub fn fullscreen(&self) -> Signal<Option<FullscreenMode>> {
         self.shared.fullscreen.clone().into()
+    }
+
+    /// Why the window closed, or nothing while it has not.
+    ///
+    /// A shell window on an output that went away closes with
+    /// [`CloseReason::OutputGone`]. Read it from outside the window: the window's own scope ends
+    /// when it closes.
+    pub fn close_reason(&self) -> Signal<Option<CloseReason>> {
+        self.shared.close_reason.clone().into()
     }
 
     /// The surface, while there is one to act on.
