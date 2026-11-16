@@ -7,6 +7,8 @@ use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{PresentationTiming, SurfaceEvent};
 
 use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
+use crate::surface::role::toplevel;
+use crate::surface::role::xdg::configure::Pending;
 
 /// The smallest and largest extents a window may be dragged to, in that order.
 ///
@@ -47,6 +49,11 @@ pub(crate) struct Shared {
     pub(crate) size: Size<DevicePx, Device>,
     /// The extent the compositor configured, in logical pixels.
     pub(crate) logical: Size<CssPx, Css>,
+    /// The normal extent from before the window became maximised or full screen.
+    ///
+    /// A zero extent means the window opened maximised or full screen. A restore then uses the
+    /// extent the application asked for.
+    restore_size: Option<Size<CssPx, Css>>,
     /// How many physical pixels there are to a logical one.
     pub(crate) scale: f64,
     /// Whether a redraw is owed, and what the compositor owes back.
@@ -123,7 +130,7 @@ pub(crate) struct Shared {
     /// includes the pair that made it unresizable.
     pub(crate) bounds: Bounds,
     /// A configure that has arrived and not yet been applied.
-    pub(crate) pending_configure: Option<crate::surface::role::xdg::configure::Pending>,
+    pub(crate) pending_configure: Option<Pending>,
     /// The outputs the compositor says the surface is on.
     pub(crate) outputs: Vec<WlOutput>,
 }
@@ -134,6 +141,7 @@ impl Shared {
         Self {
             size: Size::new(DevicePx(0.0), DevicePx(0.0)),
             logical: Size::new(CssPx(0.0), CssPx(0.0)),
+            restore_size: None,
             scale: 1.0,
             pacer: Pacer::new(),
             ahead: Ahead::new(zgui_platform::ComposeAhead::Auto),
@@ -159,6 +167,32 @@ impl Shared {
             pending_configure: None,
             outputs: Vec::new(),
         }
+    }
+
+    /// Applies the maximised and full-screen states of a configure.
+    ///
+    /// Returns the extent to draw at, and whether either state changed. An axis the compositor
+    /// leaves unnamed takes the saved normal extent when the window leaves maximised or full
+    /// screen. A second expanded state keeps the extent saved by the first.
+    pub(crate) fn apply_shell_states(
+        &mut self,
+        pending: &Pending,
+        wanted: Size<CssPx, Css>,
+    ) -> (Size<CssPx, Css>, bool) {
+        let flipped = self.maximized != pending.maximized || self.fullscreen != pending.fullscreen;
+        let was_expanded = self.maximized || self.fullscreen;
+        let expanded = pending.maximized || pending.fullscreen;
+        if !was_expanded && expanded {
+            self.restore_size = Some(self.logical);
+        }
+        let fallback = if was_expanded && !expanded {
+            self.restore_size.take().unwrap_or(self.logical)
+        } else {
+            self.logical
+        };
+        self.maximized = pending.maximized;
+        self.fullscreen = pending.fullscreen;
+        (toplevel::extent(pending.size, wanted, fallback), flipped)
     }
 
     /// Records the extent and scale the compositor settled on, and what changed with it.
@@ -420,6 +454,8 @@ impl Shared {
 mod tests {
     use super::{EndOfRedraw, Shared};
     use crate::frame::Ahead;
+    use crate::surface::role::xdg::configure::Pending;
+    use std::num::NonZeroU32;
     use std::time::{Duration, Instant};
     use zgui_geom::{CssPx, DevicePx, Size};
     use zgui_platform::SurfaceEvent;
@@ -521,6 +557,87 @@ mod tests {
             shared.compose_ahead_now(now),
             "the frame that showed the extent ends the wait"
         );
+    }
+
+    fn expanded(full: bool) -> Pending {
+        Pending {
+            maximized: !full,
+            fullscreen: full,
+            ..Pending::default()
+        }
+    }
+
+    #[test]
+    fn restoring_from_maximized_and_fullscreen_recovers_normal_size() {
+        for full in [false, true] {
+            let mut shared = Shared::new();
+            let wanted = logical(800.0, 600.0);
+            let normal = logical(940.0, 700.0);
+            shared.resized(normal, 1.5);
+            shared.apply_shell_states(&expanded(full), wanted);
+            shared.resized(logical(1920.0, 1080.0), 1.5);
+            let (extent, _) = shared.apply_shell_states(&Pending::default(), wanted);
+            assert_eq!(extent, normal);
+        }
+    }
+
+    #[test]
+    fn a_second_expanded_state_keeps_the_first_saved_extent() {
+        let mut shared = Shared::new();
+        let wanted = logical(800.0, 600.0);
+        let normal = logical(940.0, 700.0);
+        shared.resized(normal, 1.0);
+        shared.apply_shell_states(&expanded(false), wanted);
+        shared.resized(logical(1920.0, 1080.0), 1.0);
+        shared.apply_shell_states(&expanded(true), wanted);
+        shared.resized(logical(1920.0, 1200.0), 1.0);
+        shared.apply_shell_states(&expanded(false), wanted);
+        shared.resized(logical(1920.0, 1080.0), 1.0);
+        let (extent, _) = shared.apply_shell_states(&Pending::default(), wanted);
+        assert_eq!(extent, normal);
+    }
+
+    #[test]
+    fn a_window_opened_expanded_restores_to_the_extent_it_asked_for() {
+        for full in [false, true] {
+            let mut shared = Shared::new();
+            let wanted = logical(800.0, 600.0);
+            let named = Pending {
+                size: (NonZeroU32::new(1920), NonZeroU32::new(1080)),
+                ..expanded(full)
+            };
+            let (extent, _) = shared.apply_shell_states(&named, wanted);
+            shared.resized(extent, 1.0);
+            let (extent, _) = shared.apply_shell_states(&Pending::default(), wanted);
+            assert_eq!(extent, wanted);
+        }
+    }
+
+    #[test]
+    fn a_restore_naming_one_axis_takes_the_saved_size_on_the_other() {
+        let mut shared = Shared::new();
+        let wanted = logical(800.0, 600.0);
+        shared.resized(wanted, 1.0);
+        shared.apply_shell_states(&expanded(false), wanted);
+        shared.resized(logical(1920.0, 1080.0), 1.0);
+        let restore = Pending {
+            size: (NonZeroU32::new(1000), None),
+            ..Pending::default()
+        };
+        let (extent, _) = shared.apply_shell_states(&restore, wanted);
+        assert_eq!(extent, logical(1000.0, 600.0));
+    }
+
+    #[test]
+    fn only_a_changed_state_reports_a_flip() {
+        let mut shared = Shared::new();
+        let wanted = logical(800.0, 600.0);
+        shared.resized(wanted, 1.0);
+        assert!(!shared.apply_shell_states(&Pending::default(), wanted).1);
+        assert!(shared.apply_shell_states(&expanded(false), wanted).1);
+        assert!(!shared.apply_shell_states(&expanded(false), wanted).1);
+        assert!(shared.apply_shell_states(&expanded(true), wanted).1);
+        assert!(shared.apply_shell_states(&Pending::default(), wanted).1);
     }
 
     #[test]

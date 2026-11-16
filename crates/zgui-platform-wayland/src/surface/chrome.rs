@@ -13,7 +13,9 @@ use crate::surface::WaylandSurface;
 ///
 /// A Wayland client is not granted a size; it draws at one and the compositor accepts it. So this
 /// takes effect rather than being requested, and the frame that follows is the one that shows it.
-/// A compositor that disagrees says so with the next configure, which wins.
+/// A compositor that disagrees says so with the next configure, which wins. A request made while
+/// the window is maximised or full screen does not survive a restore: the saved normal extent
+/// replaces it.
 pub fn request_size(
     surface: &WaylandSurface,
     size: Size<CssPx, Css>,
