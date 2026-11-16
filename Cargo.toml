@@ -122,6 +122,9 @@ calloop-wayland-source = "0.4.1"
 # The compositor's own extensions, for the layer shell and — under test — for the virtual input
 # device that gives a headless session something to move.
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+# The virtual keyboard, under test only: it sets the lock keys a headless session has no keyboard
+# for.
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
 # The code generator for the protocol descriptions no published crate carries, such as Hyprland's
 # focus grab. The descriptions are vendored beside the code that speaks them.
 wayland-scanner = "0.31.11"

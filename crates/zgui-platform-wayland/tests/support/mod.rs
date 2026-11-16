@@ -16,6 +16,8 @@ pub(crate) mod drag_source;
 pub(crate) mod paste;
 #[path = "seat.rs"]
 pub(crate) mod seat;
+#[path = "virtual_keyboard.rs"]
+pub(crate) mod virtual_keyboard;
 #[path = "virtual_pointer.rs"]
 pub(crate) mod virtual_pointer;
 

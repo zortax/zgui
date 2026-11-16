@@ -10,6 +10,11 @@ use core::ops::{BitAnd, BitOr, BitOrAssign, Not};
 /// on macOS and Windows on Windows — so a shortcut is written against the *modifier* and the
 /// platform decides which key produces it.
 ///
+/// Two more bits are the lock keys: [`Modifiers::CAPS_LOCK`] and [`Modifiers::NUM_LOCK`]. A lock
+/// is a latched state, and no key is held for it. A platform reports the locks only with the
+/// change of the modifier state. An input event carries the four held modifiers alone, so a
+/// shortcut matches whatever the locks are. [`Modifiers::held`] takes the locks off a set.
+///
 /// ```
 /// use zgui_vocab::Modifiers;
 ///
@@ -34,6 +39,14 @@ impl Modifiers {
     pub const ALT: Self = Self(1 << 2);
     /// The platform's command modifier: Super, Command or the Windows key.
     pub const META: Self = Self(1 << 3);
+    /// Caps lock is on.
+    ///
+    /// A latched state. A password field reads it to warn that the letters typed are upper case.
+    pub const CAPS_LOCK: Self = Self(1 << 4);
+    /// Num lock is on.
+    pub const NUM_LOCK: Self = Self(1 << 5);
+    /// Both lock keys.
+    pub const LOCKS: Self = Self(Self::CAPS_LOCK.0 | Self::NUM_LOCK.0);
 
     /// The modifier this platform's shortcuts use: command on macOS, control elsewhere.
     ///
@@ -49,17 +62,20 @@ impl Modifiers {
         Self::CONTROL
     };
 
-    /// Every modifier at once, which is also the mask of the bits that are defined.
+    /// Every held modifier at once: shift, control, alt and meta. The locks are not in it.
     pub const ALL: Self = Self(0b1111);
+
+    /// Every bit that is defined: the held modifiers and the locks.
+    const DEFINED: Self = Self(Self::ALL.0 | Self::LOCKS.0);
 
     /// The raw bits.
     pub const fn bits(self) -> u8 {
         self.0
     }
 
-    /// The set with exactly these bits, ignoring any bit outside [`Modifiers::ALL`].
+    /// The set with exactly these bits, ignoring any bit that is not defined.
     pub const fn from_bits_truncate(bits: u8) -> Self {
-        Self(bits & Self::ALL.0)
+        Self(bits & Self::DEFINED.0)
     }
 
     /// Whether every modifier in `other` is held.
@@ -95,6 +111,26 @@ impl Modifiers {
     /// Whether this platform's shortcut modifier is held.
     pub const fn primary(self) -> bool {
         self.contains(Self::PRIMARY)
+    }
+
+    /// Whether caps lock is on.
+    pub const fn caps_lock(self) -> bool {
+        self.contains(Self::CAPS_LOCK)
+    }
+
+    /// Whether num lock is on.
+    pub const fn num_lock(self) -> bool {
+        self.contains(Self::NUM_LOCK)
+    }
+
+    /// The held modifiers of this set, without the locks.
+    pub const fn held(self) -> Self {
+        Self(self.0 & Self::ALL.0)
+    }
+
+    /// The locks of this set, without the held modifiers.
+    pub const fn locks(self) -> Self {
+        Self(self.0 & Self::LOCKS.0)
     }
 
     /// The same set with `other` added or removed.
@@ -133,7 +169,7 @@ impl Not for Modifiers {
     type Output = Self;
 
     fn not(self) -> Self {
-        Self(!self.0 & Self::ALL.0)
+        Self(!self.0 & Self::DEFINED.0)
     }
 }
 
@@ -144,6 +180,8 @@ impl Debug for Modifiers {
             (Self::ALT, "alt"),
             (Self::SHIFT, "shift"),
             (Self::META, "meta"),
+            (Self::CAPS_LOCK, "caps-lock"),
+            (Self::NUM_LOCK, "num-lock"),
         ];
         formatter.write_str("Modifiers(")?;
         let mut written = false;
@@ -169,8 +207,23 @@ mod tests {
 
     #[test]
     fn undefined_bits_never_enter_the_set() {
-        assert_eq!(Modifiers::from_bits_truncate(0xff), Modifiers::ALL);
-        assert_eq!((!Modifiers::NONE).bits(), Modifiers::ALL.bits());
+        let every = Modifiers::ALL | Modifiers::LOCKS;
+        assert_eq!(Modifiers::from_bits_truncate(0xff), every);
+        assert_eq!((!Modifiers::NONE).bits(), every.bits());
+    }
+
+    #[test]
+    fn the_locks_are_apart_from_the_held_modifiers() {
+        let state = Modifiers::CONTROL | Modifiers::CAPS_LOCK;
+        assert!(state.caps_lock());
+        assert!(!state.num_lock());
+        assert_eq!(state.held(), Modifiers::CONTROL);
+        assert_eq!(state.locks(), Modifiers::CAPS_LOCK);
+        assert!(!Modifiers::ALL.contains(Modifiers::CAPS_LOCK));
+        assert_eq!(
+            format!("{:?}", Modifiers::SHIFT | Modifiers::NUM_LOCK),
+            "Modifiers(shift+num-lock)"
+        );
     }
 
     #[test]

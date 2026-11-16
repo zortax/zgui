@@ -11,6 +11,7 @@ use zgui_platform::{
 };
 use zgui_reactive::prelude::*;
 use zgui_reactive::{ArcRwSignal, Signal};
+use zgui_vocab::Modifiers;
 
 use crate::commands::{WindowCommands, WindowToken};
 
@@ -76,6 +77,8 @@ pub(crate) struct WindowShared {
     pub(crate) fullscreen: ArcRwSignal<Option<FullscreenMode>>,
     /// Why the window closed, once it has.
     pub(crate) close_reason: ArcRwSignal<Option<CloseReason>>,
+    /// Which lock keys are on, as of the last change the window was told about.
+    pub(crate) lock_keys: ArcRwSignal<Modifiers>,
 }
 
 impl WindowHandle {
@@ -104,6 +107,7 @@ impl WindowHandle {
                 maximized: ArcRwSignal::new(false),
                 fullscreen: ArcRwSignal::new(None),
                 close_reason: ArcRwSignal::new(None),
+                lock_keys: ArcRwSignal::new(Modifiers::NONE),
             }),
         }
     }
@@ -180,6 +184,14 @@ impl WindowHandle {
         crate::windows::focus::tell(&self.shared.focus_listeners, focused);
     }
 
+    /// Records which lock keys are on.
+    pub(crate) fn set_lock_keys(&self, locks: Modifiers) {
+        let locks = locks.locks();
+        if self.shared.lock_keys.get_untracked() != locks {
+            self.shared.lock_keys.set(locks);
+        }
+    }
+
     /// Records whether the desktop says nothing of the window is visible.
     pub(crate) fn set_occluded(&self, occluded: bool) {
         self.shared.occluded.set(occluded);
@@ -252,6 +264,23 @@ impl WindowHandle {
     /// matter.
     pub fn on_focus_change(&self, callback: impl FnMut(bool) + 'static) -> crate::FocusGuard {
         crate::windows::focus::listen(&self.shared.focus_listeners, callback)
+    }
+
+    /// Which lock keys are on: [`Modifiers::CAPS_LOCK`] and [`Modifiers::NUM_LOCK`].
+    ///
+    /// The desktop tells the window while it holds the keyboard, and when it gains the keyboard.
+    /// The set holds no other modifier. It stays empty on a desktop that does not report the
+    /// locks.
+    pub fn lock_keys(&self) -> Signal<Modifiers> {
+        self.shared.lock_keys.clone().into()
+    }
+
+    /// Whether caps lock is on, as [`WindowHandle::lock_keys`] reports it.
+    ///
+    /// A password field reads it to warn that the letters typed are upper case.
+    pub fn caps_lock(&self) -> Signal<bool> {
+        let locks = self.shared.lock_keys.clone();
+        Signal::derive(move || locks.get().caps_lock())
     }
 
     /// Whether the desktop says nothing of the window is visible.

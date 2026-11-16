@@ -50,6 +50,8 @@ tracing-subscriber.workspace = true
 # A headless compositor has a seat with no devices on it, so a property about input has to supply
 # one. This is how: a virtual pointer, created by the test over a connection of its own.
 wayland-protocols-wlr.workspace = true
+# A property about the lock keys needs a keyboard, which a headless session lacks as well.
+wayland-protocols-misc.workspace = true
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
@@ -123,6 +125,11 @@ harness = false
 [[test]]
 name = "session_lock"
 path = "tests/session_lock.rs"
+harness = false
+
+[[test]]
+name = "lock_keys"
+path = "tests/lock_keys.rs"
 harness = false
 
 # A declined redraw must not wait out the watchdog's grace, which only a wall-clock bound can see.

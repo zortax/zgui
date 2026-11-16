@@ -117,6 +117,10 @@ pub enum SurfaceEvent {
     /// already held out of the kernel. A modifier state recovered from key events alone is wrong
     /// until the next press in both cases.
     ///
+    /// This event alone also carries the locks, [`Modifiers::CAPS_LOCK`] and
+    /// [`Modifiers::NUM_LOCK`], where the backend knows them. A backend reports it when a lock
+    /// changes, and when the surface gains the keyboard.
+    ///
     /// ```
     /// use zgui_platform::SurfaceEvent;
     /// use zgui_vocab::Modifiers;
