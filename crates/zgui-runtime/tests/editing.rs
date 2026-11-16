@@ -545,3 +545,30 @@ fn an_input_method_is_told_where_the_caret_is_drawn_and_not_where_it_was_measure
     );
     harness.shut_down();
 }
+
+#[test]
+fn a_field_focused_before_its_first_layout_enables_text_input() {
+    // Focus moves while the commands of the first frame run, and layout has not given the field a
+    // box yet. Text input must be enabled once a box exists.
+    let editor = NodeRef::new();
+    let mut harness = support::app_with_text(CSS, move |cx: &mut BuildCx<'_>| {
+        let view = zgui_elements::column()
+            .class("root")
+            .child(zgui_elements::editor().node_ref(editor).child("ab"))
+            .into_view()
+            .build(cx);
+        editor.focus();
+        Box::new(view)
+    });
+    harness.settle(8);
+    let script = Script {
+        harness,
+        editor,
+        clicks: Rc::new(Cell::new(0)),
+    };
+    assert_eq!(script.focused(), script.editor.get_untracked());
+    assert!(
+        matches!(script.text_input(), Some(Some(_))),
+        "text input stayed disabled for a field focused before its first layout"
+    );
+}
