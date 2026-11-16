@@ -46,8 +46,20 @@ use crate::window::Window;
 const POOLED_RESTYLE_MIN_NODES: usize = 64;
 
 /// What one frame did.
+///
+/// Equality compares the wall times too, so two reports of the same work are seldom equal.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FrameReport {
+    /// Wall time from the start of the frame to the probe call.
+    ///
+    /// Does not include the wait before the frame starts.
+    pub elapsed: std::time::Duration,
+    /// Wall time of paint and renderer submission, including a wait for the surface.
+    ///
+    /// Does not include GPU execution, or the present of a held frame in
+    /// [`Window::present_held`].
+    pub paint_elapsed: std::time::Duration,
     /// What the renderer made of it.
     pub outcome: FrameOutcome,
     /// Whether anything asked for another frame from inside this one.
@@ -202,6 +214,13 @@ impl Window {
         }
     }
 
+    /// What the last frame did, or `None` before the first frame.
+    ///
+    /// A probe reads the report of the frame that has just ended.
+    pub fn last_frame_report(&self) -> Option<FrameReport> {
+        self.last_report
+    }
+
     /// Presents the frame the renderer holds, now that the platform is ready for it.
     ///
     /// The frame was composed and its damage retired when it ran. This is only the copy to the
@@ -286,6 +305,7 @@ impl Window {
 
     /// The frame itself, with the window's scope already current.
     fn run_frame(&mut self, clock: &dyn Clock) -> FrameReport {
+        let started = Instant::now();
         use zgui_profile::latency::mark;
         mark("f.begin");
         let now = clock.now();
@@ -500,7 +520,9 @@ impl Window {
 
         self.binding.before_paint(timestamp);
         mark("f.paint");
+        let paint_start = Instant::now();
         let outcome = self.paint_and_draw();
+        let paint_elapsed = paint_start.elapsed();
         mark("f.painted");
         // Immediately after the frame that produced them, and against the output this window is
         // actually on: what the acquisition made this frame wait for is how much earlier than
@@ -640,8 +662,18 @@ impl Window {
         self.show_first_frame(outcome);
 
         // Last, with everything this frame produced still standing: the scene it emitted, the
-        // damage it answered, the layout it computed. The handle is cloned out first because the
-        // probe is handed the window it is stored on.
+        // damage it answered, the layout it computed, and this report. The handle is cloned out
+        // first because the probe is handed the window it is stored on.
+        let report = FrameReport {
+            elapsed: started.elapsed(),
+            paint_elapsed,
+            outcome,
+            needs_another_frame,
+            restyled,
+            timers_fired,
+            animated,
+        };
+        self.last_report = Some(report);
         if let Some(probe) = self.probe.clone() {
             probe.frame_ended(self);
         }
@@ -654,13 +686,7 @@ impl Window {
             )
             .replace('"', "'")
         });
-        FrameReport {
-            outcome,
-            needs_another_frame,
-            restyled,
-            timers_fired,
-            animated,
-        }
+        report
     }
 
     /// When this window next wants to be woken, if it wants to be woken at all.
@@ -1565,6 +1591,18 @@ impl Window {
                 self.scale,
                 &self.host.placements(),
             );
+            // Close rectangles merge before the emit walk, because the walk culls against the
+            // damage: a merge at the renderer would clear the pixels between them and draw nothing
+            // there. The merged region can reach a new read extent, so it is expanded again.
+            if self.damage.coalesce_dense() {
+                zgui_paint::expand(
+                    &layout,
+                    &mut self.damage,
+                    viewport,
+                    self.scale,
+                    &self.host.placements(),
+                );
+            }
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
             // reads any of it, so a document with no effect in it pays three floats.

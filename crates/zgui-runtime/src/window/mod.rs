@@ -530,6 +530,8 @@ pub struct Window {
     binding: Box<dyn HostBinding>,
     /// What to tell about each frame after it has been produced.
     probe: Option<Rc<dyn crate::probe::FrameProbe>>,
+    /// What the last frame did, or `None` before the first frame.
+    last_report: Option<crate::window::frame::FrameReport>,
     /// What the accessibility tree was last told, and what it is owed.
     a11y: zgui_a11y::A11yBuilder,
     /// The elements this frame's fragment pass carried to a new position without changing.
@@ -811,6 +813,7 @@ impl Window {
             timers,
             binding: Box::new(NoBinding),
             probe: options.probe.clone(),
+            last_report: None,
             a11y: zgui_a11y::A11yBuilder::new(),
             a11y_moves: Vec::new(),
             moved_spaces: Vec::new(),

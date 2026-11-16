@@ -1071,3 +1071,113 @@ fn a_subtree_that_left_the_document_damages_the_pixels_it_covered() {
          the {panel:?} it covered on the screen"
     );
 }
+
+/// Three swatches in a row with a fixed column between each pair.
+///
+/// The columns have a colour that nothing else in the document has, so a frame's display list
+/// shows whether it drew them.
+const SPACED_CSS: &str = "root { display: block; width: 400px; height: 300px; padding: 100px }
+                          row { display: flex }
+                          .swatch { display: block; width: 30px; height: 20px; flex-shrink: 0;
+                                    background-color: #101010 }
+                          .swatch.lit { background-color: #f0f0f0 }
+                          .gap { display: block; width: 5px; height: 20px; flex-shrink: 0;
+                                 background-color: #0000ff }
+                          .gap.far { width: 50px }";
+
+/// A window whose three swatches all carry a class the signal decides, with a column of
+/// `gap_class` between each pair.
+fn window_spaced(
+    lit: RwSignal<bool>,
+    gap_class: &'static str,
+    log: &Log,
+) -> zgui_platform_headless::Harness<Runtime> {
+    mount(SPACED_CSS, log, move |cx: &mut BuildCx<'_>| {
+        let swatch = move || {
+            zgui_elements::column()
+                .class("swatch")
+                .class_toggle(zgui_view::ClassName::new("lit"), move || lit.get())
+        };
+        let gap = move || zgui_elements::column().class("gap").class(gap_class);
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(
+                    zgui_elements::row()
+                        .child(swatch())
+                        .child(gap())
+                        .child(swatch())
+                        .child(gap())
+                        .child(swatch()),
+                )
+                .into_view()
+                .build(cx),
+        )
+    })
+}
+
+/// Whether `fill` is the colour of the gap columns.
+fn is_gap_fill(fill: &zgui_color::Color) -> bool {
+    let [red, green, blue] = fill.components();
+    red < 0.1 && green < 0.1 && blue > 0.9
+}
+
+/// Toggles all three swatches of a spaced window and returns the frames that followed.
+fn toggle_spaced(gap_class: &'static str) -> Vec<Drawn> {
+    let lit = RwSignal::new(false);
+    let log = Log::default();
+    let mut app = window_spaced(lit, gap_class, &log);
+    app.settle(8);
+    assert_mounted_fully(&log);
+    log.borrow_mut().clear();
+    lit.set(true);
+    app.settle(8);
+    log.borrow().clone()
+}
+
+/// Close swatches that change together are redrawn as one region, and the pixels between them are
+/// drawn again.
+///
+/// The emit walk culls against the damage, so a region that grew without a new emit would clear
+/// the gaps and draw nothing there.
+#[test]
+fn close_swatches_that_change_together_redraw_as_one_region_with_the_gaps() {
+    let frames = toggle_spaced("near");
+    assert_eq!(frames.len(), 1, "one change drew {frames:?}");
+    let frame = &frames[0];
+    assert!(!frame.full, "three swatches damaged the whole surface");
+    let bounds = frame.bounds.expect("the change damaged something");
+    let bounds_area = i64::from(bounds.size.width) * i64::from(bounds.size.height);
+    assert_eq!(
+        frame.area,
+        Some(bounds_area),
+        "the damage is one rectangle only when it covers all of its bounds"
+    );
+    assert!(
+        bounds_area > 3 * 30 * 20,
+        "the region {bounds:?} does not reach past the swatches"
+    );
+    assert!(
+        frame.fills.iter().any(is_gap_fill),
+        "the region covers the gaps and the display list has no gap fill: {:?}",
+        frame.fills
+    );
+}
+
+/// Swatches far apart are redrawn apart, and the space between them is left alone.
+#[test]
+fn far_swatches_that_change_together_redraw_apart() {
+    let frames = toggle_spaced("far");
+    assert_eq!(frames.len(), 1, "one change drew {frames:?}");
+    let frame = &frames[0];
+    assert_eq!(
+        frame.area,
+        Some(3 * 30 * 20),
+        "three swatches far apart damaged other pixels than the three swatches: {frame:?}"
+    );
+    assert!(
+        !frame.fills.iter().any(is_gap_fill),
+        "the frame drew the space between far swatches: {:?}",
+        frame.fills
+    );
+}

@@ -48,7 +48,7 @@ pub mod interval_set;
 
 mod sync;
 
-pub use crate::damage_set::{DamageSet, MAX_DAMAGE, full_damage_forced};
+pub use crate::damage_set::{COALESCE_WASTE_SHARE, DamageSet, MAX_DAMAGE, full_damage_forced};
 pub use crate::dirty::{Dirty, DirtyCell};
 pub use crate::epoch_bitset::EpochBitset;
 pub use crate::interval_set::IntervalSet;
