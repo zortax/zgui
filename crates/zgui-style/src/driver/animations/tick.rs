@@ -1,8 +1,8 @@
 //! Advancing every running animation one frame, and reporting what that produced.
 //!
-//! The tick is mechanical on purpose. It moves each animation through its states, drops the ones
-//! the cascade cancelled, samples what the survivors currently evaluate to, and writes down every
-//! edge it crossed. It marks nothing, writes into no node and decides no policy: what the caller
+//! The tick is mechanical on purpose. It moves each animation through its states, ends the ones
+//! `display: none` hides, drops the ones the cascade cancelled, samples what the survivors
+//! currently evaluate to, and writes down every edge it crossed. It marks nothing, writes into no node and decides no policy: what the caller
 //! does with an element that is animating a colour is the caller's, and keeping that out of here is
 //! what stops two different answers to the same question existing in two crates.
 //!
@@ -24,6 +24,7 @@ use zgui_dom::side::{AnimOverride, AnimPlacement};
 use zgui_dom::{Document, NodeIndex, NodeKey};
 use zgui_vocab::Pseudo;
 
+use crate::driver::animations::hidden;
 use crate::driver::animations::sample::{self, AnimatedProperties};
 use crate::driver::animations::set::{self, Animations};
 use crate::driver::animations::zero;
@@ -170,6 +171,10 @@ pub(crate) fn advance(
             // The element is gone. Its animations went with it, and nothing can be reported to a
             // node that no longer exists.
             return false;
+        }
+        // An element `display: none` hides has no box, and its animations end with it.
+        if hidden::is_hidden(document, document.node(index)) {
+            set.cancel_all_animations();
         }
         let node = document.store().key_of(index);
         let pseudo = pseudo_of(key);

@@ -22,8 +22,8 @@ use style::selector_parser::SnapshotMap;
 use style::traversal_flags::TraversalFlags;
 use zgui_dom::{Document, NodeIndex};
 
-use crate::driver::animations::tick;
 use crate::driver::animations::{AnimationReport, AnimationTime};
+use crate::driver::animations::{hidden, tick};
 use crate::engine::StyleEngine;
 use crate::engine::guards;
 
@@ -86,8 +86,9 @@ impl StyleEngine {
     ///
     /// An element moved since its mark has flags on the ancestors it left, and one taken out of
     /// the document has none the traversal can follow. The first is reached from its new place;
-    /// the second waits, hint and all, for a restyle that finds it in the document again. Left
-    /// unreached, its hint meets the ordinary traversal, which refuses it.
+    /// the second waits, hint and all, for a restyle that finds it in the document again. An
+    /// element `display: none` hides loses its hint. Left unreached, a hint meets the ordinary
+    /// traversal, which refuses it.
     pub(crate) fn settle_animation_marks(&mut self, document: &Document) -> bool {
         let mut marked = std::mem::take(&mut self.animation_marks);
         marked.append(&mut self.animation_waiting);
@@ -105,6 +106,14 @@ impl StyleEngine {
                 .borrow_data()
                 .is_some_and(|data| data.hint.has_animation_hint());
             if !pending {
+                continue;
+            }
+            // The animation-only traversal stops above an element `display: none` hides. The
+            // ordinary traversal styles it from its rules once it is shown, so the hint goes.
+            if hidden::is_hidden(document, node) {
+                if let Some(mut data) = element.mutate_data() {
+                    data.hint.remove(RestyleHint::for_animations());
+                }
                 continue;
             }
             if descent::top_of(node).is_some_and(|top| Some(top) == root) {
