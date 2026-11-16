@@ -75,7 +75,8 @@ impl Role {
         match self {
             Self::Toplevel(window) => window.ack(serial),
             Self::Popup(popup) => popup.ack(serial),
-            // The toolkit's layer and lock surfaces acknowledge their own.
+            // A layer surface acknowledges in its own dispatch, and the toolkit's lock surface
+            // acknowledges its own.
             Self::Layer(_) | Self::Lock(_) => {}
         }
     }

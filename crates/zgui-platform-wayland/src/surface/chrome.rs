@@ -114,11 +114,13 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// configure sequence and all.
 ///
 /// An unmapped surface is shown again by the same empty commit that asked for its first configure.
-/// The pacer holds the redraw until that configure arrives. A shell layer is a fresh surface to the
-/// shell after an unmap, so its whole placement and extent go out again before that commit.
+/// The pacer holds the redraw until a configure that answers that commit arrives. A shell layer is
+/// a fresh surface to the shell after an unmap, so its whole placement and extent go out again
+/// before that commit.
 ///
-/// A surface hidden before its first buffer is still in its first configure sequence. Hiding it
-/// commits nothing, and showing it again only lets the next frame draw once that configure is in.
+/// A surface hidden before the first buffer of its mapping is still in that mapping's configure
+/// sequence. Hiding it commits nothing, and showing it again only lets the next frame draw once
+/// that configure is in.
 ///
 /// A hide asked for while the surface draws waits for the end of that delivery, because the frame
 /// being drawn commits its buffer after the request. Until the surface is shown again it commits
@@ -134,11 +136,15 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
             let mut shared = surface.shared();
             shared.hide_owed = false;
             let unmapped = std::mem::take(&mut shared.unmapped);
-            if unmapped && !shared.mapped {
+            let remap = unmapped && shared.sequence.needs_initial_commit();
+            if unmapped && !remap {
                 let configured = std::mem::take(&mut shared.configured_unshown);
                 shared.visibility.configured |= configured;
             }
-            unmapped && shared.mapped
+            if remap {
+                shared.sequence.restarted();
+            }
+            remap
         };
         if remap {
             surface.send_layer(true);
@@ -163,17 +169,22 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
 
 /// Commits no buffer, which unmaps the surface, and forgets what the compositor owed it.
 ///
-/// A surface that never showed a buffer is not mapped, so it commits nothing. It keeps the
-/// configure it holds for the show.
+/// A surface that shows no buffer is not mapped, so it commits nothing. It keeps the configure it
+/// holds for the show. A mapped surface sends a barrier right after the commit, and every
+/// configure that arrives before the answer is dropped unacknowledged: the shell sent it for the
+/// mapping that is gone.
 pub(crate) fn unmap(surface: &WaylandSurface) {
-    let shown = surface.shared().mapped;
+    let shown = surface.shared().shown;
     if shown {
         let wl = surface.wl_surface();
         wl.attach(None, 0, 0);
         wl.commit();
+        let serial = surface.shared().sequence.reset();
+        surface.send_barrier(serial);
     }
     let mut shared = surface.shared();
     shared.hide_owed = false;
+    shared.shown = false;
     if !shown {
         shared.configured_unshown |= shared.visibility.configured;
     }
@@ -235,6 +246,7 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
         let mut shared = surface.shared();
         shared.presented = true;
         shared.mapped = true;
+        shared.shown = true;
         shared.committing_frame(size);
         (
             shared.frame_metadata(size, scale),

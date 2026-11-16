@@ -61,6 +61,9 @@ const ANIMATED_CSS: &str = "@keyframes pulse { from { opacity: 1 } to { opacity:
 /// How many frames the application has been given, wherever it is running.
 pub(crate) static FRAMES: AtomicU64 = AtomicU64::new(0);
 
+/// How many buffers the windows of this program committed.
+pub(crate) static PRESENTS: AtomicU64 = AtomicU64::new(0);
+
 /// Whether the machine turned out to have no graphics device the window could be drawn through.
 pub(crate) static NO_DEVICE: AtomicBool = AtomicBool::new(false);
 
@@ -321,6 +324,7 @@ fn renderer(
     };
     let notified = Arc::clone(surface);
     let pre_present: PrePresent = Box::new(move |target| {
+        PRESENTS.fetch_add(1, Ordering::Relaxed);
         notified.pre_present_frame(target.size, f64::from(target.scale.get()));
     });
     graphics

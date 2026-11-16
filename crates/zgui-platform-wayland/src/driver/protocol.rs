@@ -14,13 +14,9 @@ use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 use smithay_client_toolkit::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::SeatState;
-use smithay_client_toolkit::shell::WaylandSurface as _;
-use smithay_client_toolkit::shell::wlr_layer::{
-    LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
-};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_seat,
-    delegate_shm, registry_handlers,
+    delegate_compositor, delegate_output, delegate_registry, delegate_seat, delegate_shm,
+    registry_handlers,
 };
 use zgui_geom::{CssPx, Size};
 use zgui_platform::{CloseReason, Surface as _, SurfaceEvent};
@@ -28,6 +24,7 @@ use zgui_platform::{CloseReason, Surface as _, SurfaceEvent};
 use crate::driver::WaylandState;
 use crate::output;
 use crate::surface::FrameCallback;
+use crate::surface::sequence::Barrier;
 
 impl CompositorHandler for WaylandState {
     fn scale_factor_changed(
@@ -117,6 +114,25 @@ impl Dispatch<WlCallback, FrameCallback> for WaylandState {
     }
 }
 
+impl Dispatch<WlCallback, Barrier> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _callback: &WlCallback,
+        event: wl_callback::Event,
+        barrier: &Barrier,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // Every configure the shell sent before the unmap has arrived by now.
+        let wl_callback::Event::Done { .. } = event else {
+            return;
+        };
+        if let Some(surface) = state.live.surface(barrier.surface) {
+            surface.shared().sequence.answered(barrier.serial);
+        }
+    }
+}
+
 impl OutputHandler for WaylandState {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.outputs
@@ -151,31 +167,6 @@ impl OutputHandler for WaylandState {
     }
 }
 
-impl LayerShellHandler for WaylandState {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        // The reason is decided after the dispatch: the compositor can close the surface before
-        // it says the output has gone, in the same batch of events.
-        if let Some(id) = self.identify(layer.wl_surface())
-            && !self.closing.contains(&id)
-        {
-            self.closing.push(id);
-        }
-    }
-
-    fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        layer: &LayerSurface,
-        configure: LayerSurfaceConfigure,
-        _serial: u32,
-    ) {
-        if let Some(id) = self.identify(layer.wl_surface()) {
-            self.sized_by_shell(id, configure.new_size);
-        }
-    }
-}
-
 impl WaylandState {
     /// Applies the extent a shell layer or a lock surface was configured at.
     ///
@@ -204,7 +195,7 @@ impl WaylandState {
             // A configure that reaches a surface the application hid answers a commit made before
             // the hide. Drawing into it would map the surface again, so it waits for the show.
             shared.visibility.configured |= !shared.unmapped;
-            shared.configured_unshown |= shared.unmapped && !shared.mapped;
+            shared.configured_unshown |= shared.unmapped;
             let scale = shared.ladder.factor();
             let resized = shared.resized(extent, scale);
             // The toolkit acknowledged this configure on arrival, so a lock surface's next commit
@@ -396,4 +387,3 @@ delegate_output!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_registry!(WaylandState);
-delegate_layer!(WaylandState);

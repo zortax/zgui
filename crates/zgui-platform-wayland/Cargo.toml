@@ -113,6 +113,11 @@ path = "tests/hidden_layer.rs"
 harness = false
 
 [[test]]
+name = "layer_toggle"
+path = "tests/layer_toggle.rs"
+harness = false
+
+[[test]]
 name = "fatal_error"
 path = "tests/fatal_error.rs"
 harness = false

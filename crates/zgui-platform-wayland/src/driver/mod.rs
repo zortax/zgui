@@ -5,6 +5,7 @@ mod data;
 mod failure;
 mod ime;
 mod input;
+mod layer;
 pub mod live;
 mod protocol;
 mod shell;

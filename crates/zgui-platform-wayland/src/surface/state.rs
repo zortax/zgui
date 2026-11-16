@@ -85,15 +85,22 @@ pub(crate) struct Shared {
     /// A commit is chained when its work began right after a callback. The callback that answers
     /// it then measures whether the frame made the refresh after that callback.
     pub(crate) chained: Option<Instant>,
-    /// Whether the application unmapped the surface, so that showing it again starts a new
+    /// Whether the application hid the surface.
+    ///
+    /// A hide of a surface that shows a buffer unmaps it, and the show after it starts a new
     /// configure sequence.
     pub(crate) unmapped: bool,
-    /// Whether the shell configured a surface that the application hid before its first buffer.
+    /// Whether the shell configured a surface that the application hid before the first buffer of
+    /// its mapping.
     ///
-    /// The shell keeps the configure sequence of a surface that never showed a buffer. Showing
-    /// such a surface starts no new sequence: the configure it holds counts, and the next frame
-    /// maps the surface.
+    /// The shell keeps the configure sequence of a surface that shows no buffer. Showing such a
+    /// surface starts no new sequence: the configure it holds counts, and the next frame maps the
+    /// surface.
     pub(crate) configured_unshown: bool,
+    /// Whether the current mapping shows a buffer, so that hiding the surface unmaps it.
+    pub(crate) shown: bool,
+    /// Which configures belong to the current mapping.
+    pub(crate) sequence: crate::surface::sequence::Sequence,
     /// Whether the redraw now being delivered was refused without running.
     pub(crate) declined: bool,
     /// Whether a redraw or a held present is being delivered to the application.
@@ -200,6 +207,8 @@ impl Shared {
             chained: None,
             unmapped: false,
             configured_unshown: false,
+            shown: false,
+            sequence: crate::surface::sequence::Sequence::default(),
             declined: false,
             drawing: false,
             hide_owed: false,

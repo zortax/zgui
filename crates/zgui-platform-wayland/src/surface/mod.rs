@@ -8,6 +8,7 @@ pub mod region;
 pub mod role;
 pub mod scale;
 pub mod seat;
+pub(crate) mod sequence;
 pub mod state;
 
 pub use crate::surface::a11y::A11y;
@@ -400,6 +401,18 @@ impl WaylandSurface {
             serial,
         };
         self.wl_surface().frame(&self.qh, callback);
+    }
+
+    /// Asks the compositor to answer once it has taken every request sent so far.
+    ///
+    /// Sent right after the commit that unmaps the surface. The answer arrives after every
+    /// configure the shell sent before that commit, see [`sequence`].
+    pub(crate) fn send_barrier(&self, serial: u64) {
+        let barrier = sequence::Barrier {
+            surface: self.id,
+            serial,
+        };
+        self.conn.display().sync(&self.qh, barrier);
     }
 
     /// Ends a delivered [`SurfaceEvent::PresentReady`].
