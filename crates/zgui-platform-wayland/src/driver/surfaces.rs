@@ -86,9 +86,9 @@ impl WaylandState {
             shared.scale = shared.ladder.factor();
         }
         apply(&surface, attributes);
-        // The commit that asks to be configured. Nothing is attached to it, which is what makes it
-        // the initial commit rather than a frame. A lock surface is configured unasked, and a
-        // commit before it acknowledges that configure is a protocol error.
+        // The commit that asks to be configured. Nothing is attached to it, which makes it the
+        // initial commit. A lock surface is configured unasked, and a commit before it
+        // acknowledges that configure is a protocol error.
         if surface.role().lock().is_none() {
             surface.role().commit();
         }

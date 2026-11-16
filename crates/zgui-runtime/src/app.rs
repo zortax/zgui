@@ -712,7 +712,7 @@ impl Runtime {
                     view,
                 )),
                 surface: None,
-                // The window the application launched with is opened rather than asked for, and
+                // The window the application launched with opens directly, with no request. It
                 // still needs the handle every other window has.
                 handle: crate::windows::WindowHandle::pending(
                     token,

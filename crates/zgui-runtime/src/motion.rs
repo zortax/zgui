@@ -89,8 +89,8 @@ fn resolve(app: Option<bool>, desktop: Option<bool>) -> bool {
 ///
 /// # Panics
 ///
-/// Panics when called outside a running application. Use [`try_use_reduced_motion`] where that
-/// is a possibility rather than a mistake.
+/// Panics when called outside a running application. Use [`try_use_reduced_motion`] where code
+/// can run outside one.
 pub fn use_reduced_motion() -> ReducedMotion {
     try_use_reduced_motion().expect("this code is not running inside an application")
 }

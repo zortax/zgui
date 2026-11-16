@@ -11,9 +11,9 @@
 /// The **preferred buffer scale** is the compositor's whole-number answer for this surface. It
 /// arrived in version 6 of the surface interface.
 ///
-/// The **outputs** the surface is on come next, and the rule there is the largest rather than the
-/// first: a window straddling a 1× and a 2× monitor drawn at 1× is visibly soft on half of itself,
-/// and drawn at 2× is merely oversampled on the other half.
+/// The **outputs** the surface is on come next, and the largest scale of them wins: a window
+/// straddling a 1× and a 2× monitor drawn at 1× is visibly soft on half of itself, and drawn at
+/// 2× is merely oversampled on the other half.
 ///
 /// The **seed** is the last resort. It is the scale of the output the surface was opened on, and
 /// it gives the first frame its scale before the compositor has said anything about the surface.

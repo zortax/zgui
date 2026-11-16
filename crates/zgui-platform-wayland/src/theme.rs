@@ -1,9 +1,9 @@
 //! The desktop's light or dark preference and its reduced-motion preference.
 //!
 //! There is nothing in the Wayland protocol about either, and that is not an oversight: a
-//! compositor composites, and what an application should look like is a setting of the desktop
-//! rather than of the display server. The settings live on the session bus, behind the portal
-//! every sandboxed application already reaches its desktop through, and they are read there —
+//! compositor composites, and what an application should look like is a setting of the desktop.
+//! The settings live on the session bus, behind the portal every sandboxed application already
+//! reaches its desktop through, and they are read there —
 //! which is also the only way they work from inside a sandbox, where the toolkit's own
 //! configuration files are not reachable at all.
 //!

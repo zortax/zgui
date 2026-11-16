@@ -233,8 +233,8 @@ impl WaylandSurface {
             let Some(placement) = shared.layer.clone() else {
                 return;
             };
-            // An axis the application left at zero takes the extent the compositor gave it, so an
-            // axis that stops being stretched keeps its width rather than shrinking to a pixel.
+            // An axis the application left at zero takes the extent the compositor gave it. An axis
+            // that stops being stretched keeps its last width.
             let wanted = self.wanted();
             let extent = Size::new(
                 if wanted.width.0 > 0.0 {

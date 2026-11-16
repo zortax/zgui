@@ -353,8 +353,8 @@ impl WaylandState {
     /// Reports every shell layer the compositor closed during the last dispatch, and every lock
     /// surface whose output went, with its reason.
     ///
-    /// Called after the dispatch rather than from it, because the compositor can close a layer
-    /// and remove its output in one batch of events, in either order.
+    /// Called after the dispatch has finished, because the compositor can close a layer and
+    /// remove its output in one batch of events, in either order.
     pub(crate) fn resolve_closings(&mut self) {
         for id in std::mem::take(&mut self.closing) {
             let Some(held) = self.live.surface(id) else {

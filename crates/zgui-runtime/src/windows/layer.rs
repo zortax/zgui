@@ -9,7 +9,7 @@ use zgui_platform::{
 /// Where a shell window sits, how much of the screen it claims, and how large it is.
 ///
 /// A shell window is a bar, a dock, a notification, a pop-over or a wallpaper: a part of the
-/// desktop rather than an application window. The desktop draws no frame around it, and the user
+/// desktop itself. The desktop draws no frame around it, and the user
 /// cannot move or resize it. Only a desktop that offers shell windows opens one; see
 /// [`PlatformCapabilities::layer_surfaces`](zgui_platform::PlatformCapabilities::layer_surfaces).
 ///

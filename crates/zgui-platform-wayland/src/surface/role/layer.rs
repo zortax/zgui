@@ -56,9 +56,9 @@ pub fn exclusive_zone(zone: ExclusiveZone) -> i32 {
 /// The extent to ask the shell for, in whole logical pixels.
 ///
 /// An axis fastened to both of its edges is sent as zero, which is the shell's word for "as wide
-/// as the edges are apart". The shell centres a surface that states an extent on such an axis
-/// rather than stretching it. Every other axis is sent at least one pixel, because zero on an axis
-/// that is not fastened to both edges is a protocol error.
+/// as the edges are apart". The shell centres a surface that states an extent on such an axis,
+/// at that extent. Every other axis is sent at least one pixel, because zero on an axis that is
+/// not fastened to both edges is a protocol error.
 pub fn size(size: Size<CssPx, Css>, anchors: Edges<bool>) -> (u32, u32) {
     let axis = |extent: CssPx, stretched: bool| {
         if stretched {

@@ -87,8 +87,8 @@ impl Dispatch<ZwpVirtualKeyboardV1, ()> for Silent {
 
 /// States each locked-modifier mask of `steps` in turn, `between` apart, on a thread of its own.
 ///
-/// Answers with whether a device could be made at all. A compositor without the protocol is a
-/// compositor this property cannot be asked about, which is a skip rather than a failure.
+/// Answers with whether a device could be made at all. A compositor without the protocol cannot
+/// answer this property, and the program skips it.
 pub(crate) fn lock_over(steps: Vec<u32>, between: Duration) -> bool {
     let Ok(conn) = Connection::connect_to_env() else {
         return false;

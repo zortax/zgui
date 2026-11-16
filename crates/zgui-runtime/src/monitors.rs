@@ -63,8 +63,8 @@ impl Monitors {
 ///
 /// # Panics
 ///
-/// Panics when called outside a running application. Use [`try_use_monitors`] where that is a
-/// possibility rather than a mistake.
+/// Panics when called outside a running application. Use [`try_use_monitors`] where code can
+/// run outside one.
 pub fn use_monitors() -> Signal<Vec<MonitorInfo>> {
     try_use_monitors().expect("this code is not running inside an application")
 }

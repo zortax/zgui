@@ -1,6 +1,6 @@
 //! A shell layer keeps its placement through a change and through a hide and a show.
 //!
-//! Three properties, each read off the compositor rather than off the backend:
+//! Three properties, each read off the compositor:
 //!
 //! * **The reserved room is the room asked for.** A bar that reserves 34 pixels at the top moves
 //!   the space windows get down by 34 pixels.
