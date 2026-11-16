@@ -73,6 +73,7 @@ impl WaylandState {
             // A configure that reaches a surface the application hid answers a commit made before
             // the hide. Drawing into it would map the surface again, so it waits for the show.
             shared.visibility.configured |= !shared.unmapped;
+            shared.configured_unshown |= shared.unmapped && !shared.mapped;
             // The state this whole shell is bound at version six for, and the only signal on this
             // desktop that reliably says a window is not being seen.
             shared.visibility.suspended = pending.suspended;

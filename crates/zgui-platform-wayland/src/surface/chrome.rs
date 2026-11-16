@@ -117,6 +117,9 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// The pacer holds the redraw until that configure arrives. A shell layer is a fresh surface to the
 /// shell after an unmap, so its whole placement and extent go out again before that commit.
 ///
+/// A surface hidden before its first buffer is still in its first configure sequence. Hiding it
+/// commits nothing, and showing it again only lets the next frame draw once that configure is in.
+///
 /// A hide asked for while the surface draws waits for the end of that delivery, because the frame
 /// being drawn commits its buffer after the request. Until the surface is shown again it commits
 /// nothing: an empty commit on an unmapped surface asks the shell to map it.
@@ -127,12 +130,17 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
         return;
     }
     if visible {
-        let unmapped = {
+        let remap = {
             let mut shared = surface.shared();
             shared.hide_owed = false;
-            std::mem::take(&mut shared.unmapped)
+            let unmapped = std::mem::take(&mut shared.unmapped);
+            if unmapped && !shared.mapped {
+                let configured = std::mem::take(&mut shared.configured_unshown);
+                shared.visibility.configured |= configured;
+            }
+            unmapped && shared.mapped
         };
-        if unmapped {
+        if remap {
             surface.send_layer(true);
             surface.send_regions();
             surface.wl_surface().commit();
@@ -154,12 +162,21 @@ pub fn set_visible(surface: &WaylandSurface, visible: bool) {
 }
 
 /// Commits no buffer, which unmaps the surface, and forgets what the compositor owed it.
+///
+/// A surface that never showed a buffer is not mapped, so it commits nothing. It keeps the
+/// configure it holds for the show.
 pub(crate) fn unmap(surface: &WaylandSurface) {
-    let wl = surface.wl_surface();
-    wl.attach(None, 0, 0);
-    wl.commit();
+    let shown = surface.shared().mapped;
+    if shown {
+        let wl = surface.wl_surface();
+        wl.attach(None, 0, 0);
+        wl.commit();
+    }
     let mut shared = surface.shared();
     shared.hide_owed = false;
+    if !shown {
+        shared.configured_unshown |= shared.visibility.configured;
+    }
     shared.visibility.configured = false;
     shared.unmapped = true;
     // A frame held for the compositor would map the surface again when it is presented.

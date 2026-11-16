@@ -204,6 +204,7 @@ impl WaylandState {
             // A configure that reaches a surface the application hid answers a commit made before
             // the hide. Drawing into it would map the surface again, so it waits for the show.
             shared.visibility.configured |= !shared.unmapped;
+            shared.configured_unshown |= shared.unmapped && !shared.mapped;
             let scale = shared.ladder.factor();
             let resized = shared.resized(extent, scale);
             // The toolkit acknowledged this configure on arrival, so a lock surface's next commit

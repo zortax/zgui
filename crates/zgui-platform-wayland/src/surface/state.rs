@@ -88,6 +88,12 @@ pub(crate) struct Shared {
     /// Whether the application unmapped the surface, so that showing it again starts a new
     /// configure sequence.
     pub(crate) unmapped: bool,
+    /// Whether the shell configured a surface that the application hid before its first buffer.
+    ///
+    /// The shell keeps the configure sequence of a surface that never showed a buffer. Showing
+    /// such a surface starts no new sequence: the configure it holds counts, and the next frame
+    /// maps the surface.
+    pub(crate) configured_unshown: bool,
     /// Whether the redraw now being delivered was refused without running.
     pub(crate) declined: bool,
     /// Whether a redraw or a held present is being delivered to the application.
@@ -193,6 +199,7 @@ impl Shared {
             released: None,
             chained: None,
             unmapped: false,
+            configured_unshown: false,
             declined: false,
             drawing: false,
             hide_owed: false,

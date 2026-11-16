@@ -108,6 +108,11 @@ path = "tests/layer_shell.rs"
 harness = false
 
 [[test]]
+name = "hidden_layer"
+path = "tests/hidden_layer.rs"
+harness = false
+
+[[test]]
 name = "monitors"
 path = "tests/monitors.rs"
 harness = false
