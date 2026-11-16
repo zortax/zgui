@@ -213,15 +213,19 @@ impl WaylandState {
             qh,
             Arc::clone(&waker) as Arc<dyn zgui_platform::Waker>,
         );
-        // The preference lives on the session bus rather than in the protocol, and is watched from
+        // The preferences live on the session bus rather than in the protocol, and are watched from
         // here on so that a person switching their desktop to dark is answered by a redraw rather
         // than by nothing until the next launch.
         let watching = crate::theme::watch(
             Arc::clone(&waker) as Arc<dyn zgui_platform::Waker>,
-            Arc::clone(&state.live.scheme),
+            crate::theme::Settled {
+                scheme: Arc::clone(&state.live.scheme),
+                reduced_motion: Arc::clone(&state.live.reduced_motion),
+            },
         );
         state.live.capabilities = capabilities::of(Offered {
             color_scheme: watching,
+            reduced_motion: watching,
             ..offered
         });
         // The seats that already exist are bound by the toolkit without being announced, so the

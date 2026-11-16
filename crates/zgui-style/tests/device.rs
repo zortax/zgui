@@ -429,3 +429,39 @@ fn a_sheet_inserted_before_another_loses_to_it_at_equal_specificity() {
     harness.frame();
     assert_eq!(color(&harness, harness.root), (3, 3, 3));
 }
+
+#[test]
+fn the_motion_preference_selects_the_reduced_motion_rules_and_restores_them() {
+    let mut harness = Harness::new();
+    let item = harness.append(harness.root, "box");
+    let diagnostics = harness.add_author(
+        "root { color: rgb(1, 1, 1) }\n\
+         box { color: rgb(5, 5, 5) }\n\
+         @media (prefers-reduced-motion: reduce) { root { color: rgb(2, 2, 2) } }\n\
+         @media (prefers-reduced-motion: no-preference) { box { color: rgb(3, 3, 3) } }\n\
+         @media (prefers-reduced-motion) { box { width: 7px } }\n",
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "every query parses: {diagnostics:?}"
+    );
+
+    harness.frame();
+    assert_eq!(color(&harness, harness.root), (1, 1, 1));
+    assert_eq!(color(&harness, item), (3, 3, 3));
+
+    let reduced = harness.engine.viewport().with_reduced_motion(true);
+    let epoch = harness.engine.device_epoch(&mut harness.document, reduced);
+    assert!(epoch.changed);
+    assert!(!epoch.origins.is_empty(), "the author origin re-matches");
+    harness.frame();
+    assert_eq!(color(&harness, harness.root), (2, 2, 2));
+    assert_eq!(color(&harness, item), (5, 5, 5));
+    assert_eq!(width(&harness, item), 7.0);
+
+    let restored = harness.engine.viewport().with_reduced_motion(false);
+    harness.engine.device_epoch(&mut harness.document, restored);
+    harness.frame();
+    assert_eq!(color(&harness, harness.root), (1, 1, 1));
+    assert_eq!(color(&harness, item), (3, 3, 3));
+}

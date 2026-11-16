@@ -2,7 +2,7 @@
 
 use crate::parity::engine::{EngineStatus, status_of};
 use crate::parity::gap::{inherited_svg, scrollbar_gutter, text_decoration};
-use crate::parity::probe::{media_feature_is_accepted, selector_is_accepted};
+use crate::parity::probe::selector_is_accepted;
 use crate::parity::record::Registration;
 
 /// One thing this build cannot do.
@@ -50,7 +50,6 @@ impl Gap {
             GapProbe::LonghandsUnknown(rows) => rows
                 .iter()
                 .all(|row| status_of(&row.css_name()) == EngineStatus::Unknown),
-            GapProbe::MediaFeatureRejected(feature) => !media_feature_is_accepted(feature),
         }
     }
 }
@@ -65,8 +64,8 @@ impl Gap {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum GapStatus {
-    /// Closing it would need a patched or vendored build of the style engine, and there is to be
-    /// none. Accepted as the boundary; not tracked as debt.
+    /// Closing it would need a patched build of the style engine. Accepted as the boundary; not
+    /// tracked as debt.
     OutOfReach,
     /// Closing it is this framework's own work, with the engine exactly as it stands.
     NotYetImplemented,
@@ -101,8 +100,6 @@ pub enum GapProbe {
     SelectorRejected(&'static str),
     /// The parser must still not know the name of any of these longhands.
     LonghandsUnknown(&'static [Registration]),
-    /// The parser must still reject this media feature, taking the whole `@media` rule with it.
-    MediaFeatureRejected(&'static str),
 }
 
 /// The known-unreachable set.
@@ -177,24 +174,6 @@ pub static GAPS: &[Gap] = &[
         owner: "the style engine, then zgui-text-style",
         status: GapStatus::OutOfReach,
         probe: GapProbe::LonghandsUnknown(text_decoration::REGISTERED),
-    },
-    Gap {
-        subject: "prefers-reduced-motion",
-        reason: "the engine's servo build carries a fixed list of media features and this is not \
-                 on it, so the feature name is an error rather than a query that does not match — \
-                 and the `@media` rule it heads is dropped whole, with every rule inside it",
-        instead: "make it a fact about the document rather than about the device. An application \
-                  that has discovered the preference sets an attribute on its root element and \
-                  writes `[reduced-motion] .toast { animation: none }`, which is an ordinary \
-                  attribute selector and works today. The tokens already ship a zero duration for \
-                  exactly this, so a component built on them needs one rule and not one per \
-                  animation",
-        patch: "add the feature to the engine's media-feature list; then discover the preference — \
-                which no windowing library this framework uses reports — from the desktop, and \
-                rebuild the device when it changes",
-        owner: "the style engine, then zgui-platform-winit and zgui-runtime",
-        status: GapStatus::OutOfReachThenWork,
-        probe: GapProbe::MediaFeatureRejected("prefers-reduced-motion: reduce"),
     },
     Gap {
         subject: "scrollbar-gutter",

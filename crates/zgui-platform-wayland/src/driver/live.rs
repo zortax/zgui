@@ -45,6 +45,9 @@ pub struct Live {
     /// Behind a lock rather than a cell, because the portal answers on a thread of its own: the
     /// bus is a socket like any other, and the loop's thread waits on nothing.
     pub(crate) scheme: Arc<std::sync::Mutex<Option<ColorScheme>>>,
+    /// The desktop's reduced-motion preference, where it could be discovered, behind a lock for
+    /// the same reason.
+    pub(crate) reduced_motion: Arc<std::sync::Mutex<Option<bool>>>,
     /// What this compositor turned out to be able to do.
     pub(crate) capabilities: PlatformCapabilities,
     /// Where the time comes from.
@@ -64,6 +67,7 @@ impl Live {
             monitors: RefCell::new(Vec::new()),
             app_id: RefCell::new(None),
             scheme: Arc::default(),
+            reduced_motion: Arc::default(),
             capabilities,
             clock: Arc::new(SystemClock::new()),
             waker,

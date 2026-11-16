@@ -406,6 +406,31 @@ impl App {
         self
     }
 
+    /// Styles every window for reduced motion while `reduce` is `true`.
+    ///
+    /// The value answers the `prefers-reduced-motion` media feature in every window and overrides
+    /// the desktop's preference. Without it the desktop's preference decides, and a desktop that
+    /// cannot be asked states no preference. Every window restyles when the signal changes. Code
+    /// under the application reads and sets the same preference through [`use_reduced_motion`].
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// let reduce = RwSignal::new(true);
+    /// app()
+    ///     .with_reduced_motion(reduce.into())
+    ///     .with_stylesheet("@media (prefers-reduced-motion: reduce) { * { transition: none } }")
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    ///
+    /// [`use_reduced_motion`]: zgui_runtime::motion::use_reduced_motion
+    pub fn with_reduced_motion(mut self, reduce: zgui_reactive::Signal<bool>) -> Self {
+        self.inner = self.inner.with_reduced_motion(reduce);
+        self
+    }
+
     /// Decides when the application stops.
     ///
     /// The default stops it when the last window closes. See

@@ -54,12 +54,14 @@ impl Window {
         // element's box needs the number that converts CSS pixels to device ones, and a surface
         // that moved to another monitor has changed it.
         self.host.set_scale(scale);
-        // The colour scheme is carried across rather than defaulted. It is a property of the
-        // desktop and not of the surface's extent, so a window that is resized, or dragged onto
-        // another monitor, must not be re-styled as though the user had just asked for light.
+        // The colour scheme and the motion preference are carried across rather than defaulted.
+        // They are properties of the desktop and not of the surface's extent, so a window that is
+        // resized, or dragged onto another monitor, must not be re-styled as though the user had
+        // just asked for light.
         self.viewport = Viewport::new(CssPx(width / scale), CssPx(height / scale))
             .at_scale(scale)
-            .in_scheme(self.color_scheme());
+            .in_scheme(self.color_scheme())
+            .with_reduced_motion(self.reduced_motion());
         if moved {
             let marked = zgui_layout::tree::dirty::mark_all_dirty(&mut self.layout.borrow_mut());
             // A scroll offset is a number of *device* pixels, so it is one of the things the new

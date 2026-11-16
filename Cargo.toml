@@ -271,6 +271,10 @@ all = { level = "warn", priority = -1 }
 undocumented_unsafe_blocks = "warn"
 
 # The font collection under the text engine, vendored so that a font query keeps its resolved
-# families and loaded faces from one paragraph to the next (see vendor/README.md for the changes).
+# families and loaded faces from one paragraph to the next. The style engine and its atom table,
+# vendored so that media queries read the reduced-motion preference. See vendor/README.md for the
+# changes.
 [patch.crates-io]
 fontique = { path = "vendor/fontique" }
+stylo = { path = "vendor/stylo" }
+stylo_atoms = { path = "vendor/stylo_atoms" }

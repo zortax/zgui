@@ -110,3 +110,21 @@ impl ParseErrorReporter for Sink {
             .push(format!("{}:{} {error:?}", location.line, location.column));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::media_feature_is_accepted;
+
+    #[test]
+    fn the_reduced_motion_feature_parses_in_every_form() {
+        crate::enable_css_features();
+        assert!(media_feature_is_accepted("prefers-reduced-motion: reduce"));
+        assert!(media_feature_is_accepted(
+            "prefers-reduced-motion: no-preference"
+        ));
+        assert!(media_feature_is_accepted("prefers-reduced-motion"));
+        assert!(!media_feature_is_accepted(
+            "prefers-reduced-motion: sometimes"
+        ));
+    }
+}

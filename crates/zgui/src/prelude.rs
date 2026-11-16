@@ -46,6 +46,9 @@ pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 pub use zgui_platform::{MonitorId, MonitorInfo, MonitorTarget};
 pub use zgui_runtime::monitors::{try_use_monitors, use_monitors};
 
+/// The reduced-motion preference every window's `prefers-reduced-motion` answers.
+pub use zgui_runtime::motion::{ReducedMotion, try_use_reduced_motion, use_reduced_motion};
+
 /// The keyboard and the pointer, limited to a set of windows until the user presses outside them.
 pub use zgui_runtime::grab::{ClearedGuard, FocusGrab};
 

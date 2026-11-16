@@ -26,7 +26,7 @@ const POINTERS: PointerCapabilities = PointerCapabilities::FINE.union(PointerCap
 /// The returned device carries a fresh set of "was this ever read" flags, which is why the flag a
 /// caller cares about has to be read off the device being replaced rather than off this one.
 pub fn build(viewport: Viewport, metrics: &Arc<dyn FontMetricsSource>) -> Device {
-    Device::new(
+    let mut device = Device::new(
         MediaType::screen(),
         QuirksMode::NoQuirks,
         sized(viewport.width.0, viewport.height.0),
@@ -40,7 +40,9 @@ pub fn build(viewport: Viewport, metrics: &Arc<dyn FontMetricsSource>) -> Device
         viewport.scheme.to_engine(),
         POINTERS,
         POINTERS,
-    )
+    );
+    device.set_prefers_reduced_motion(viewport.reduced_motion);
+    device
 }
 
 /// A size in whichever of the engine's two tagged sizes the binding site asks for.
@@ -77,6 +79,14 @@ mod tests {
             device.color_scheme(),
             style::queries::values::PrefersColorScheme::Dark
         );
+    }
+
+    #[test]
+    fn the_device_carries_the_motion_preference() {
+        let metrics: Arc<dyn FontMetricsSource> = Arc::new(FixedMetrics::new());
+        let viewport = Viewport::new(CssPx(800.0), CssPx(600.0));
+        assert!(!build(viewport, &metrics).prefers_reduced_motion());
+        assert!(build(viewport.with_reduced_motion(true), &metrics).prefers_reduced_motion());
     }
 
     #[test]

@@ -69,3 +69,35 @@ with the cache off, on a miss and on a hit, and pins the invalidation on install
 The sample table builds each `Script` with `Script::from_bytes`. Upstream calls
 `from_str_unchecked`, which parlance 0.1.1 deprecates, and every build that compiles this copy as a
 path dependency printed 161 warnings.
+
+## stylo 0.19.0 and stylo_atoms 0.19.0 (crates.io)
+
+The style engine and its static atom table, patched in through `[patch.crates-io]` so that every
+crate of the engine resolves against the same copies. Without the `.cargo_vcs_info.json`,
+`Cargo.lock` and `Cargo.toml.orig` files. Every local change in the source is marked
+`ZGUI-PATCH:`.
+
+An application that depends on zgui from crates.io, or on this tree by path from another
+workspace, must patch both crates the same way, because the style crates call the device methods
+below:
+
+```toml
+[patch.crates-io]
+stylo = { path = "<zgui>/vendor/stylo" }
+stylo_atoms = { path = "<zgui>/vendor/stylo_atoms" }
+```
+
+### The reduced-motion media feature (`servo/media_features.rs`, `device/servo.rs`)
+
+The servo build of the engine has a fixed list of media features, and `prefers-reduced-motion` is
+not on it, so the parser drops every `@media` rule that names it. The patch adds it:
+
+- `Device` holds a reduced-motion flag, `false` at construction, with
+  `Device::set_prefers_reduced_motion` and `Device::prefers_reduced_motion`;
+- the media feature list has `prefers-reduced-motion` with the values `no-preference` and
+  `reduce`; the boolean form `(prefers-reduced-motion)` matches when the flag is set;
+- `stylo_atoms/static_atoms.txt` has the atom `prefers-reduced-motion`, which the feature list
+  names (the file holds one atom per line and takes no comment).
+
+`crates/zgui-css/src/parity/probe.rs` pins the parse and `crates/zgui-style/tests/device.rs`
+(`the_motion_preference_selects_the_reduced_motion_rules_and_restores_them`) pins the match.

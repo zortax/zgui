@@ -27,6 +27,7 @@ use zgui_platform::{
     AppHandler, Clock, CloseReason, IdlePolicy, PlatformCx, PlatformError, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
 };
+use zgui_reactive::prelude::Get;
 use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
 
@@ -156,6 +157,8 @@ pub struct App {
     layout_threads: Option<usize>,
     /// Whether the application opens a window when it starts.
     primary_window: bool,
+    /// The application's own reduced-motion value, when it set one.
+    reduced_motion: Option<zgui_reactive::Signal<bool>>,
 }
 
 impl Default for App {
@@ -182,7 +185,20 @@ impl App {
             style_threads: None,
             layout_threads: None,
             primary_window: true,
+            reduced_motion: None,
         }
+    }
+
+    /// Styles every window for reduced motion while `reduce` is `true`.
+    ///
+    /// The value answers the `prefers-reduced-motion` media feature in every window and overrides
+    /// the desktop's preference. Without it the desktop's preference decides, and a desktop that
+    /// cannot be asked states no preference. Every window restyles when the signal changes. Code
+    /// under the application reads and sets the same preference through
+    /// [`use_reduced_motion`](crate::motion::use_reduced_motion).
+    pub fn with_reduced_motion(mut self, reduce: zgui_reactive::Signal<bool>) -> Self {
+        self.reduced_motion = Some(reduce);
+        self
     }
 
     /// Starts the application with no window open.
@@ -482,6 +498,10 @@ pub struct Runtime {
     monitors: crate::monitors::Monitors,
     /// The scope above every window's, where what is shared between them lives.
     scope: zgui_reactive::Mounted,
+    /// The reduced-motion preference every window is styled with.
+    motion: crate::motion::ReducedMotion,
+    /// The effects that follow the preference, held for the life of the application.
+    _motion_effects: Vec<zgui_reactive::RenderEffect<()>>,
     /// When the application stops.
     exit: ExitPolicy,
     /// What the application asked to hear about outside its windows.
@@ -638,6 +658,8 @@ impl Runtime {
         let scope = zgui_reactive::Mounted::new();
         let windows_api = crate::windows::Windows::new(commands.clone());
         let monitors = crate::monitors::Monitors::new();
+        let motion = crate::motion::ReducedMotion::new();
+        let mut motion_effects = Vec::new();
         let shared = app.shared.take();
         let hooks = crate::desktop::AppHooks::new();
         let build_menu = app.menu.take();
@@ -648,6 +670,21 @@ impl Runtime {
             zgui_reactive::provide_local_context(windows_api.clone());
             // The outputs, the same list in every window.
             zgui_reactive::provide_local_context(monitors.clone());
+            // The reduced-motion preference, the same in every window.
+            zgui_reactive::provide_local_context(motion.clone());
+            if let Some(reduce) = app.reduced_motion.take() {
+                let motion = motion.clone();
+                motion_effects.push(zgui_reactive::RenderEffect::new(move |_| {
+                    motion.set(Some(reduce.get()));
+                }));
+            }
+            // Every move of the answer reaches the windows on the next turn of the loop.
+            let reduced = motion.reduced();
+            let sync = commands.clone();
+            motion_effects.push(zgui_reactive::RenderEffect::new(move |_| {
+                let _ = reduced.get();
+                sync.sync_motion();
+            }));
             // The desktop's clipboards, reachable from every window.
             zgui_reactive::provide_local_context(clipboards.clone());
             // What the application hears from outside its windows.
@@ -693,6 +730,8 @@ impl Runtime {
             windows_api,
             monitors,
             scope,
+            motion,
+            _motion_effects: motion_effects,
             exit: app.exit,
             hooks,
             menu,
@@ -899,6 +938,9 @@ impl Runtime {
         if let Some(scheme) = cx.color_scheme() {
             window.set_platform_color_scheme(scheme);
         }
+        // The motion preference reaches the first frame for the same reason.
+        let _ = self.motion.note_desktop(cx.reduced_motion());
+        window.set_reduced_motion(self.motion.current());
         // What a detent of a wheel means here, asked of the backend rather than assumed: how far
         // one travels and which way it points are both properties of the desktop, and a constant
         // above this line is a wheel that is wrong on every machine but the one it was written on.
@@ -998,12 +1040,23 @@ impl Runtime {
                 }
                 // Carried out below, once every window this drain opens or closes has.
                 WindowCommand::SyncGrabs => {}
+                WindowCommand::SyncMotion => self.apply_motion(),
                 WindowCommand::Quit => cx.request_exit(),
             }
         }
         self.sync_grabs(cx);
         if closed_any {
             self.apply_exit_policy(cx);
+        }
+    }
+
+    /// Gives every window the reduced-motion preference, and asks a frame of each it moved.
+    fn apply_motion(&mut self) {
+        let reduce = self.motion.current();
+        for window in &mut self.windows {
+            if window.set_reduced_motion(reduce) {
+                window.request_frame();
+            }
         }
     }
 
@@ -1445,6 +1498,9 @@ impl AppHandler for Runtime {
                     }
                     window.request_frame();
                 }
+            }
+            WakeReason::ReducedMotionChanged if self.motion.note_desktop(cx.reduced_motion()) => {
+                self.apply_motion();
             }
             WakeReason::DeviceLost => {
                 for window in &self.windows {

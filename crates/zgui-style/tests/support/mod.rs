@@ -27,6 +27,7 @@ pub(crate) const START: Viewport = Viewport {
     height: CssPx(800.0),
     scale: 1.0,
     scheme: zgui_style::ColorScheme::Light,
+    reduced_motion: false,
 };
 
 /// A document with a style engine over it.
