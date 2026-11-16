@@ -33,7 +33,7 @@ use zgui_scene::{
     ClipId, ClipLink, ColorSprite, Decoration, MonoSprite, Paint, PaintRef, PaintSlot, Resource,
     Scene, SpatialId, SubpixelSprite, VectorId, VectorItem,
 };
-use zgui_text::{GlyphFormat, RunSurface};
+use zgui_text::{GlyphFormat, RunSurface, RunTransform};
 
 use crate::content::glyphs::OutlineGlyph;
 
@@ -366,7 +366,7 @@ impl TextPlacement {
     /// What the surface does to a run drawn through this placement with `brush`.
     fn surface(&self, scene: &Scene, brush: &RunBrush) -> RunSurface {
         RunSurface {
-            translated_only: self.affine(scene).is_translation(),
+            transform: RunTransform::of(self.affine(scene)),
             solid_brush: matches!(brush, RunBrush::Solid),
             scale: self.scale,
         }
@@ -1198,6 +1198,37 @@ mod tests {
                 "a resampled sprite smears the per-channel stripes into coloured fringes: {local:?}"
             );
         }
+    }
+
+    /// A card that opens from 96 % keeps its text in tiles, so no frame of the opening fills
+    /// outlines. A large scale and a turn fill them.
+    #[test]
+    fn a_run_under_a_slight_scale_draws_tiles_and_a_large_scale_or_a_turn_draws_curves() {
+        use zgui_geom::Matrix4;
+        use zgui_text::{RasterPath, RunProfile};
+
+        let path = |local: Matrix4| {
+            let (scene, space) = under(local);
+            let placed = TextPlacement {
+                transform: space,
+                ..placement()
+            };
+            let surface = placed.surface(&scene, &super::RunBrush::Solid);
+            RasterPath::of(&RunProfile {
+                surface,
+                ..RunProfile::BODY_TEXT
+            })
+        };
+        assert_eq!(path(Matrix4::scale(0.96, 0.96, 1.0)), RasterPath::Atlas);
+        assert_eq!(
+            path(Matrix4::translation(12.0, 34.0, 0.0).then(&Matrix4::scale(0.96, 0.96, 1.0))),
+            RasterPath::Atlas
+        );
+        assert_eq!(path(Matrix4::scale(2.0, 2.0, 1.0)), RasterPath::Vector);
+        assert_eq!(
+            path(zgui_geom::Affine2::rotation(0.2).to_matrix4()),
+            RasterPath::Vector
+        );
     }
 
     /// A source of one glyph of a chosen format.

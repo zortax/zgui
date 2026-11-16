@@ -5,13 +5,15 @@
 //! Both paths draw the same glyphs and neither is a fallback for the other. The atlas rasterises
 //! once on the processor and draws a quad per glyph, which is what makes a page of body text cost
 //! almost nothing and is the only path that can be hinted; outlines are filled by the frame's path
-//! rasteriser, which costs more per glyph and is the only path that survives a rotation, a size no
-//! cache should hold, or a brush that is not one colour.
+//! rasteriser, which costs more per glyph and is the only path that survives a rotation, a large
+//! scale, a size no cache should hold, or a brush that is not one colour.
 //!
 //! So the choice is a property of *the run and the surface it lands on*, decided once where both
 //! are known, and carried with the run. A renderer that decided it for itself would decide it
 //! differently from the stage that measured the ink, and the two disagreeing is a run drawn twice
 //! or not at all.
+
+use zgui_geom::Affine2;
 
 use crate::glyph::run::ShapedRun;
 
@@ -40,6 +42,73 @@ fn atlas_max_size(scale: f32) -> f32 {
     (ATLAS_MAX_CSS_SIZE * scale.max(1.0)).min(ATLAS_MAX_SIZE)
 }
 
+/// The most an upright scale may stretch or shrink a cached tile, on each axis.
+///
+/// A tile resampled by a factor between four fifths and five quarters stays within a texel of the
+/// exact raster. That covers the scale a card, a dialog or a pressed control animates through, so
+/// such an animation draws from tiles that stay in the atlas. Past it, a resampled tile is visibly
+/// soft or aliased, and the outlines are filled at the scale instead.
+pub const ATLAS_MAX_STRETCH: f32 = 1.25;
+
+/// What the transform in force does to a run's glyphs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RunTransform {
+    /// A translation. It moves a cached tile and changes no texel.
+    Translation,
+    /// A positive scale on each axis and a translation. The run stays upright, and a cached tile
+    /// is resampled by the two factors.
+    Upright {
+        /// The factor along the x axis.
+        x: f32,
+        /// The factor along the y axis.
+        y: f32,
+    },
+    /// A turn, a skew, a flip or a projection.
+    Other,
+}
+
+impl RunTransform {
+    /// What `affine` does to a run.
+    ///
+    /// ```
+    /// use zgui_geom::Affine2;
+    /// use zgui_text::RunTransform;
+    ///
+    /// assert_eq!(RunTransform::of(Affine2::translation(3.5, 0.0)), RunTransform::Translation);
+    /// assert_eq!(
+    ///     RunTransform::of(Affine2::scale(0.96, 0.96)),
+    ///     RunTransform::Upright { x: 0.96, y: 0.96 }
+    /// );
+    /// assert_eq!(RunTransform::of(Affine2::rotation(0.1)), RunTransform::Other);
+    /// assert_eq!(RunTransform::of(Affine2::scale(-1.0, 1.0)), RunTransform::Other);
+    /// ```
+    pub fn of(affine: Affine2) -> Self {
+        if affine.is_translation() {
+            Self::Translation
+        } else if affine.b == 0.0 && affine.c == 0.0 && affine.a > 0.0 && affine.d > 0.0 {
+            Self::Upright {
+                x: affine.a,
+                y: affine.d,
+            }
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Whether a cached tile drawn through this transform stays close to the exact raster.
+    ///
+    /// True for a translation, and for an upright scale whose factors are both within
+    /// [`ATLAS_MAX_STRETCH`] of one.
+    pub fn keeps_tiles(self) -> bool {
+        let near = |factor: f32| (1.0 / ATLAS_MAX_STRETCH..=ATLAS_MAX_STRETCH).contains(&factor);
+        match self {
+            Self::Translation => true,
+            Self::Upright { x, y } => near(x) && near(y),
+            Self::Other => false,
+        }
+    }
+}
+
 /// What the surface a run lands on does to it.
 ///
 /// Both fields are things the run cannot know and whoever is drawing it cannot avoid knowing: the
@@ -50,11 +119,12 @@ fn atlas_max_size(scale: f32) -> f32 {
 /// and a quad reading a coverage tile is cut by one exactly as well as a filled curve is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RunSurface {
-    /// Whether the transform in force is a pure translation.
+    /// What the transform in force does to the run.
     ///
-    /// A translation moves already rasterised pixels and everything else resamples them, so this
-    /// is the whole of the question a cached tile has to answer.
-    pub translated_only: bool,
+    /// A translation moves already rasterised pixels, and everything else resamples them. A
+    /// cached tile survives a small upright resample and nothing more; see
+    /// [`RunTransform::keeps_tiles`].
+    pub transform: RunTransform,
     /// Whether the run's brush is a single colour rather than a gradient or an image.
     ///
     /// A coverage tile carries no colour of its own: it is multiplied by one, so a brush that
@@ -70,7 +140,7 @@ pub struct RunSurface {
 impl RunSurface {
     /// An upright run of one colour at one device pixel per CSS pixel — what nearly every run is.
     pub const PLAIN: Self = Self {
-        translated_only: true,
+        transform: RunTransform::Translation,
         solid_brush: true,
         scale: 1.0,
     };
@@ -107,7 +177,7 @@ pub enum RasterPath {
     /// Filled as outlines in the frame's vector scene.
     ///
     /// What everything the atlas cannot serve takes: sizes too large to cache, transforms that
-    /// would need a re-raster per frame, and brushes that are not one colour.
+    /// turn the run or scale it past [`ATLAS_MAX_STRETCH`], and brushes that are not one colour.
     Vector,
 }
 
@@ -120,7 +190,7 @@ impl RasterPath {
     /// text colour, which is a worse picture than a resampled one.
     ///
     /// ```
-    /// use zgui_text::{RasterPath, RunProfile, RunSurface};
+    /// use zgui_text::{RasterPath, RunProfile, RunSurface, RunTransform};
     ///
     /// assert_eq!(RasterPath::of(&RunProfile::BODY_TEXT), RasterPath::Atlas);
     ///
@@ -136,8 +206,18 @@ impl RasterPath {
     /// };
     /// assert_eq!(RasterPath::of(&dense), RasterPath::Atlas);
     ///
+    /// // A card that opens from 96 % draws its text from the same tiles at every step.
+    /// let opening = RunProfile {
+    ///     surface: RunSurface {
+    ///         transform: RunTransform::Upright { x: 0.96, y: 0.96 },
+    ///         ..RunSurface::PLAIN
+    ///     },
+    ///     ..RunProfile::BODY_TEXT
+    /// };
+    /// assert_eq!(RasterPath::of(&opening), RasterPath::Atlas);
+    ///
     /// let turned = RunProfile {
-    ///     surface: RunSurface { translated_only: false, ..RunSurface::PLAIN },
+    ///     surface: RunSurface { transform: RunTransform::Other, ..RunSurface::PLAIN },
     ///     ..RunProfile::BODY_TEXT
     /// };
     /// assert_eq!(RasterPath::of(&turned), RasterPath::Vector);
@@ -152,7 +232,7 @@ impl RasterPath {
         }
         let surface = profile.surface;
         let cacheable = profile.size <= atlas_max_size(surface.scale)
-            && surface.translated_only
+            && surface.transform.keeps_tiles()
             && surface.solid_brush;
         if cacheable { Self::Atlas } else { Self::Vector }
     }
@@ -195,7 +275,8 @@ impl ShapedRun<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ATLAS_MAX_CSS_SIZE, ATLAS_MAX_SIZE, RasterPath, RunProfile, RunSurface, atlas_max_size,
+        ATLAS_MAX_CSS_SIZE, ATLAS_MAX_SIZE, ATLAS_MAX_STRETCH, RasterPath, RunProfile, RunSurface,
+        RunTransform, atlas_max_size,
     };
 
     #[test]
@@ -217,7 +298,7 @@ mod tests {
             },
             RunProfile {
                 surface: RunSurface {
-                    translated_only: false,
+                    transform: RunTransform::Other,
                     ..RunSurface::PLAIN
                 },
                 ..RunProfile::BODY_TEXT
@@ -273,6 +354,56 @@ mod tests {
         assert_eq!(atlas_max_size(0.5), ATLAS_MAX_CSS_SIZE, "never below one");
     }
 
+    /// An opening card animates its scale through every frame. Tiles stretched by a few percent
+    /// keep its text off the path rasteriser, and a large scale fills the outlines at that scale.
+    #[test]
+    fn a_slight_upright_scale_keeps_the_atlas_and_a_large_one_leaves_it() {
+        let under = |x: f32, y: f32| {
+            RasterPath::of(&RunProfile {
+                surface: RunSurface {
+                    transform: RunTransform::Upright { x, y },
+                    ..RunSurface::PLAIN
+                },
+                ..RunProfile::BODY_TEXT
+            })
+        };
+        for factor in [0.8, 0.94, 0.96, 1.0, 1.05, ATLAS_MAX_STRETCH] {
+            assert_eq!(under(factor, factor), RasterPath::Atlas, "{factor}");
+        }
+        assert_eq!(under(0.96, 1.0), RasterPath::Atlas);
+        for factor in [0.5, 0.79, 1.26, 2.0] {
+            assert_eq!(under(factor, factor), RasterPath::Vector, "{factor}");
+        }
+        assert_eq!(
+            under(1.0, 2.0),
+            RasterPath::Vector,
+            "one axis past the limit is enough"
+        );
+    }
+
+    #[test]
+    fn a_transform_is_read_as_a_move_an_upright_scale_or_anything_else() {
+        use zgui_geom::Affine2;
+
+        assert_eq!(
+            RunTransform::of(Affine2::IDENTITY),
+            RunTransform::Translation
+        );
+        assert_eq!(
+            RunTransform::of(Affine2::scale(0.96, 0.96).then(Affine2::translation(4.0, -8.0))),
+            RunTransform::Upright { x: 0.96, y: 0.96 }
+        );
+        for other in [
+            Affine2::rotation(0.01),
+            Affine2::skew(0.1, 0.0),
+            Affine2::scale(1.0, -1.0),
+            Affine2::scale(0.0, 1.0),
+        ] {
+            assert_eq!(RunTransform::of(other), RunTransform::Other, "{other:?}");
+            assert!(!RunTransform::of(other).keeps_tiles());
+        }
+    }
+
     /// A picture has no outline to fill, so nothing about the surface promotes one.
     #[test]
     fn a_colour_run_stays_on_the_atlas_under_every_condition_that_promotes_another() {
@@ -285,7 +416,7 @@ mod tests {
             RunProfile {
                 color_glyphs: true,
                 surface: RunSurface {
-                    translated_only: false,
+                    transform: RunTransform::Other,
                     solid_brush: false,
                     ..RunSurface::PLAIN
                 },

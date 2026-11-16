@@ -6,8 +6,8 @@
 //! vector drawings — a select's chevron, an alert's triangle — did the opposite, there while the
 //! animation ran and gone the frame it settled; and the scrim vanished for good when the window was
 //! resized under an open dialog. What was under them: while the surface's transform is animating,
-//! its text is promoted to outline glyphs, and the vector pipeline resolved residual clips and the
-//! draw order in a different coordinate space from every other primitive
+//! its text can be promoted to outline glyphs, and the vector pipeline resolved residual clips and
+//! the draw order in a different coordinate space from every other primitive
 //! (`zgui-render-vector-vello`'s residual placement, and [`VectorItem::local_ink`]); and an element
 //! whose finished animation the engine dropped on an unrelated recascade painted from the first
 //! keyframe that cascade had captured, because nothing re-settled its style
