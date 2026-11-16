@@ -113,6 +113,16 @@ path = "tests/hidden_layer.rs"
 harness = false
 
 [[test]]
+name = "fatal_error"
+path = "tests/fatal_error.rs"
+harness = false
+
+[[test]]
+name = "connection_lost"
+path = "tests/connection_lost.rs"
+harness = false
+
+[[test]]
 name = "monitors"
 path = "tests/monitors.rs"
 harness = false

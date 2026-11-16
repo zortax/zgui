@@ -2,6 +2,7 @@
 
 mod activation;
 mod data;
+mod failure;
 mod ime;
 mod input;
 pub mod live;
@@ -286,22 +287,6 @@ impl WaylandState {
         };
         if let Some((id, event)) = self.drag.read_finished(paths) {
             self.report(id, zgui_platform::SurfaceEvent::Drag(event));
-        }
-    }
-
-    /// Why the loop stopped, in the compositor's words where it left any.
-    ///
-    /// A loop that fails reports an input-output error and nothing else, because by the time the
-    /// socket breaks the reason has already been sent down it. The connection keeps that reason,
-    /// and it is the difference between "something went wrong" and the interface, the request and
-    /// the rule that was broken — which is the whole of what is needed to fix a protocol defect.
-    pub(crate) fn explain(&self, error: &calloop::Error) -> PlatformError {
-        match self.conn.protocol_error() {
-            Some(protocol) => PlatformError::Backend(format!(
-                "the compositor refused a request on {}#{} (error {}): {}",
-                protocol.object_interface, protocol.object_id, protocol.code, protocol.message
-            )),
-            None => PlatformError::Backend(format!("the wayland loop: {error}")),
         }
     }
 

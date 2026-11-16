@@ -18,7 +18,8 @@ use crate::waker::PingWaker;
 /// # Errors
 ///
 /// Returns [`PlatformError::Backend`] when there is no compositor to connect to — which is how a
-/// caller learns to fall back to a portable backend — or when the connection failed later.
+/// caller learns to fall back to a portable backend — or when the connection failed later. A
+/// protocol error or a lost connection ends the loop at the dispatch that finds it.
 pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
     let mut app = WaylandApp::new(handler)?;
     zgui_profile::latency::start_epoch();
@@ -105,6 +106,14 @@ impl<A: AppHandler> WaylandApp<A> {
     /// How the loop is parked, and how many deadline arrivals it has reported.
     pub const fn park(&self) -> &Park {
         &self.park
+    }
+
+    /// The connection the loop runs on.
+    ///
+    /// A program that speaks to the compositor beside the loop makes its own objects on it, on an
+    /// event queue of its own.
+    pub const fn connection(&self) -> &smithay_client_toolkit::reexports::client::Connection {
+        &self.state.conn
     }
 
     /// How many turns have started.
@@ -305,7 +314,13 @@ impl<A: AppHandler> WaylandApp<A> {
             _ => None,
         };
         if let Err(error) = self.events.dispatch(timeout, &mut self.state) {
-            return Err(self.state.explain(&error));
+            return Err(stopped(self.state.explain(&error)));
+        }
+        // The socket adapter passes over a protocol error found by a read or a flush, and the
+        // graphics driver can find one on the same connection. Asked here, the first one stops the
+        // loop before it turns on a dead socket.
+        if let Some(error) = self.state.connection_failure() {
+            return Err(stopped(error));
         }
 
         // Calloop reports that it woke, never why. The deadline edge is therefore taken from the
@@ -325,6 +340,12 @@ impl<A: AppHandler> WaylandApp<A> {
         }
         Ok(())
     }
+}
+
+/// Logs the failure that stops the loop, once, and hands it on.
+fn stopped(error: PlatformError) -> PlatformError {
+    tracing::error!(%error, "the connection to the compositor failed; the loop stops");
+    error
 }
 
 /// The moment this turn started, for the parts that need one reading rather than several.
