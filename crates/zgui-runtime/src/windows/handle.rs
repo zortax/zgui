@@ -223,7 +223,8 @@ impl WindowHandle {
     ///
     /// For an application that would rather hide an affordance than offer one that does nothing —
     /// a "move window here" menu item on a desktop that does not let a window place itself. Every
-    /// operation is safe to call whatever this says.
+    /// operation is safe to call whatever this says. Before the platform's surfaces become
+    /// available, this answers [`PlatformCapabilities::default`].
     pub fn capabilities(&self) -> PlatformCapabilities {
         self.shared.capabilities.borrow().clone()
     }

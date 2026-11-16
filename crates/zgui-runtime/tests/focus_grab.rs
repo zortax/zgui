@@ -2,11 +2,12 @@
 //!
 //! A grab gives the platform the surfaces of its open windows, follows the set as windows are
 //! added, removed and closed, and tells the application when the desktop clears it. Dropping it
-//! destroys the platform's grab. A desktop that cannot grab makes no grab.
+//! destroys the platform's grab. A grab made during setup starts once the platform is there. On a
+//! desktop that cannot grab, a grab exists and stays inactive.
 
 mod support;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use zgui_platform::{PlatformCapabilities, SurfaceId};
@@ -63,11 +64,49 @@ fn grab(harness: &Harness<Runtime>, windows: &[&WindowHandle]) -> Option<FocusGr
 }
 
 #[test]
-fn a_desktop_that_cannot_grab_makes_no_grab() {
+fn a_desktop_that_cannot_grab_keeps_the_grab_inactive() {
     let (mut harness, _bar, first, _second) = shell(false);
-    assert!(grab(&harness, &[&first]).is_none());
+    let held = grab(&harness, &[&first]).expect("a running application makes a grab");
     harness.settle(8);
     assert!(harness.platform().focus_grabs().is_empty());
+    assert!(!held.active().get_untracked());
+    harness.shut_down();
+}
+
+#[test]
+fn a_grab_made_during_setup_starts_once_the_platform_is_there() {
+    let kept: Rc<RefCell<Option<(WindowHandle, FocusGrab)>>> = Rc::default();
+    let setup = Rc::clone(&kept);
+    let handler = App::new()
+        .with_layer(LayerOptions::top().with_size(0.0, 34.0))
+        .with_renderer(Box::new(support::capture))
+        .with_context(move || {
+            let popover = zgui_runtime::use_windows().open(
+                WindowOptions::layer(LayerOptions::top().with_size(320.0, 200.0)),
+                zgui_elements::column,
+            );
+            let grab = FocusGrab::new(&[&popover]).expect("setup runs in the application");
+            *setup.borrow_mut() = Some((popover, grab));
+        })
+        .into_handler(|cx: &mut BuildCx<'_>| {
+            Box::new(zgui_elements::column().into_view().build(cx))
+        })
+        .expect("the reactive runtime installs");
+    let mut capabilities = PlatformCapabilities::none();
+    capabilities.focus_grab = true;
+    let mut harness = Harness::over(Headless::new().with_capabilities(capabilities), handler);
+    harness.settle(8);
+
+    let (popover, held) = kept.borrow_mut().take().expect("setup made the grab");
+    let [platform] = harness.platform().focus_grabs()[..] else {
+        panic!("one grab was made");
+    };
+    assert_eq!(
+        harness.platform().focus_grab(platform),
+        Some(vec![surface_of(&harness, &popover)])
+    );
+    assert!(held.active().get_untracked());
+    drop(held);
     harness.shut_down();
 }
 

@@ -3,7 +3,7 @@
 //! Two properties:
 //!
 //! * **The capability is the global.** A compositor without `hyprland_focus_grab_manager_v1`
-//!   declares no focus grab, and `FocusGrab::new` answers with nothing.
+//!   declares no focus grab. A grab made there stays inactive.
 //! * **A grab's requests are accepted.** Where the global exists, a grab over a pop-over starts,
 //!   takes a second window, lets go of it, and is destroyed, with no protocol error. A second grab
 //!   then starts over the bar. A compositor may clear the first grab when that happens, and the
@@ -117,9 +117,10 @@ impl AppHandler for Drive {
         self.inner.surfaces_available(cx);
         self.offered = cx.capabilities().focus_grab;
         if !self.offered {
-            let made = self.inner.scope().with(|| FocusGrab::new(&[])).is_some();
-            assert!(!made, "a desktop without the global made a grab");
-            self.finish(cx);
+            let scope = self.inner.scope();
+            let bar = scope.with(|| zgui_runtime::use_windows().all())[0].clone();
+            self.first = scope.with(|| FocusGrab::new(&[&bar]));
+            assert!(self.first.is_some(), "a running application made no grab");
             return;
         }
         let open = |inner: &Runtime, namespace: &'static str| {
@@ -145,10 +146,22 @@ impl AppHandler for Drive {
     fn surface_event(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, event: SurfaceEvent) {
         let drawn = matches!(event, SurfaceEvent::RedrawRequested);
         self.inner.surface_event(cx, surface, event);
-        if !drawn || !self.offered || cx.is_exiting() {
+        if !drawn || cx.is_exiting() {
             return;
         }
-        self.step(cx);
+        if self.offered {
+            self.step(cx);
+        } else {
+            // A few frames give the runtime the turns it starts a grab on.
+            self.frames += 1;
+            self.activated |= self
+                .first
+                .as_ref()
+                .is_some_and(|grab| grab.active().get_untracked());
+            if self.frames >= 4 {
+                self.finish(cx);
+            }
+        }
         // A still document asks for one frame, so each frame asks for the next.
         if !cx.is_exiting()
             && let Some(held) = cx.surface(surface)
@@ -233,7 +246,8 @@ fn main() {
         .expect("the record is not poisoned")
         .expect("the program reached its last step");
     if !offered {
-        support::passed(PROPERTY, "no global, so no capability and no grab");
+        assert!(!activated, "a grab became active without the global");
+        support::passed(PROPERTY, "no global, so no capability and an inactive grab");
         return;
     }
     if support::NO_DEVICE.load(Ordering::Relaxed) {

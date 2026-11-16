@@ -8,6 +8,7 @@
 //! // A pop-over that closes when the user presses anywhere outside it.
 //! let popover = use_window();
 //! if let Some(grab) = FocusGrab::new(&[&popover]) {
+//!     // Where the desktop cannot limit focus, `active` stays false. Close on focus loss there.
 //!     let closing = popover.clone();
 //!     let _guard = grab.on_cleared(move || closing.set_visible(false));
 //!     # let _ = grab;
@@ -36,8 +37,9 @@ type Callback = Rc<RefCell<dyn FnMut()>>;
 /// grab has no windows, and [`FocusGrab::add`] starts it again.
 ///
 /// Only some desktops offer a grab; see
-/// [`PlatformCapabilities::focus_grab`](zgui_platform::PlatformCapabilities::focus_grab).
-/// Dropping the grab stops it.
+/// [`PlatformCapabilities::focus_grab`](zgui_platform::PlatformCapabilities::focus_grab). On a
+/// desktop without it the grab exists and does nothing: [`FocusGrab::active`] stays false and no
+/// clear is reported. Dropping the grab stops it.
 pub struct FocusGrab {
     /// What the runtime reads.
     entry: Rc<GrabEntry>,
@@ -73,14 +75,14 @@ struct ClearedListeners {
 impl FocusGrab {
     /// A grab over `windows`.
     ///
-    /// Nothing when the desktop cannot limit focus, or outside a running application. The grab
-    /// starts on the next turn of the loop, and a window of the set that is not open yet joins it
-    /// when it opens.
+    /// Nothing outside a running application. The grab starts on the next turn of the loop, and a
+    /// window of the set that is not open yet joins it when it opens.
+    ///
+    /// The desktop's capabilities are read when the grab starts, so a grab made during the
+    /// application's setup works too. Where the desktop cannot limit focus,
+    /// [`FocusGrab::active`] stays false.
     pub fn new(windows: &[&WindowHandle]) -> Option<Self> {
         let api = crate::windows::try_use_windows()?;
-        if !api.capabilities().focus_grab {
-            return None;
-        }
         let entry = Rc::new(GrabEntry {
             windows: RefCell::new(windows.iter().map(|window| window.id()).collect()),
             platform: Cell::new(None),
@@ -123,7 +125,7 @@ impl FocusGrab {
     /// Whether the grab limits focus now.
     ///
     /// True once the desktop has been given a window of the set that is open. False after a
-    /// clear, and while the set holds no open window.
+    /// clear, while the set holds no open window, and on a desktop that cannot limit focus.
     pub fn active(&self) -> Signal<bool> {
         self.entry.active.clone().into()
     }

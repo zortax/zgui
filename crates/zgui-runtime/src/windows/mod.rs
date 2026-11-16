@@ -135,6 +135,9 @@ impl Windows {
     }
 
     /// What this desktop can do.
+    ///
+    /// The platform states its capabilities when its surfaces become available. Before that,
+    /// during the application's setup, this answers [`PlatformCapabilities::default`].
     pub fn capabilities(&self) -> PlatformCapabilities {
         self.capabilities.borrow().clone()
     }
