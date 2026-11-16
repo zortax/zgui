@@ -16,7 +16,6 @@ mod cursor;
 mod drag;
 pub mod frame;
 pub mod input;
-pub mod motion;
 pub mod observe;
 pub mod pointer_text;
 pub mod present;

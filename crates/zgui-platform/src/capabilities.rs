@@ -87,10 +87,6 @@ pub struct PlatformCapabilities {
     pub native_gestures: bool,
     /// Whether the desktop's light or dark preference can be discovered.
     pub system_color_scheme: bool,
-    /// Whether the desktop's reduced-motion preference can be discovered.
-    ///
-    /// Where it can, [`PlatformCx::reduced_motion`](crate::PlatformCx::reduced_motion) reports it.
-    pub system_reduced_motion: bool,
     /// Whether the desktop shows an application menu outside the windows.
     ///
     /// Where it does, [`PlatformCx::set_app_menu`](crate::PlatformCx::set_app_menu) fills it, and
@@ -130,7 +126,6 @@ impl PlatformCapabilities {
             pointer_lock: false,
             native_gestures: false,
             system_color_scheme: false,
-            system_reduced_motion: false,
             app_menu: false,
             reopen: false,
         }
@@ -178,7 +173,6 @@ mod tests {
         assert!(!capabilities.accepts_drops());
         assert!(!capabilities.ime);
         assert!(!capabilities.system_color_scheme);
-        assert!(!capabilities.system_reduced_motion);
         assert_eq!(capabilities.decorations, DecorationSource::Platform);
         assert_eq!(capabilities.clipboard_formats, [ClipboardFormat::Text]);
     }

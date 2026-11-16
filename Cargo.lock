@@ -3927,6 +3927,8 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "049fb023adcc72e8814fed99d225a45faa95b0e54b7f433eabb6e88c66c90ded"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -3982,6 +3984,8 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55651489a0c27f66d08e7c9cf8ee449328c0de291e37227fc1bbcffb2d7e681e"
 dependencies = [
  "string_cache",
  "string_cache_codegen",

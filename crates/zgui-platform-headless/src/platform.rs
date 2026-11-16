@@ -49,8 +49,6 @@ pub struct Headless {
     monitors: Mutex<Vec<MonitorInfo>>,
     /// The desktop's light or dark preference, when one has been declared.
     color_scheme: Mutex<Option<ColorScheme>>,
-    /// The desktop's reduced-motion preference, when one has been declared.
-    reduced_motion: Mutex<Option<bool>>,
     /// What this platform says a scroll from its devices means.
     scroll: Mutex<ScrollSettings>,
     /// Whether the loop has been asked to finish.
@@ -99,7 +97,6 @@ impl Headless {
             next_surface: AtomicU64::new(1),
             monitors: Mutex::new(Vec::new()),
             color_scheme: Mutex::new(None),
-            reduced_motion: Mutex::new(None),
             scroll: Mutex::new(ScrollSettings::desktop()),
             exiting: AtomicBool::new(false),
             grabs: Mutex::new(Vec::new()),
@@ -154,18 +151,6 @@ impl Headless {
             .color_scheme
             .lock()
             .expect("the preference is not poisoned") = scheme;
-    }
-
-    /// Declares the desktop's reduced-motion preference, and wakes the loop with
-    /// [`WakeReason::ReducedMotionChanged`].
-    ///
-    /// `None` is a desktop that cannot be asked.
-    pub fn set_reduced_motion(&self, reduce: Option<bool>) {
-        *self
-            .reduced_motion
-            .lock()
-            .expect("the preference is not poisoned") = reduce;
-        self.waker.wake(WakeReason::ReducedMotionChanged);
     }
 
     /// The clock, as itself rather than as the contract's view of it.
@@ -388,13 +373,6 @@ impl PlatformCx for Headless {
     fn color_scheme(&self) -> Option<ColorScheme> {
         *self
             .color_scheme
-            .lock()
-            .expect("the preference is not poisoned")
-    }
-
-    fn reduced_motion(&self) -> Option<bool> {
-        *self
-            .reduced_motion
             .lock()
             .expect("the preference is not poisoned")
     }

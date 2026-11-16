@@ -37,7 +37,7 @@
 //! | `lock` | the session lock and its lock surfaces |
 //! | `clock` | the monotonic clock, and the compositor's placed on it |
 //! | `waker` | how another thread reaches a parked loop |
-//! | `theme` | the desktop's light or dark and reduced-motion preferences |
+//! | `theme` | the desktop's light or dark preference |
 //! | `capabilities` | what this desktop turned out to be able to do |
 //!
 //! [`zgui-platform-winit`]: https://docs.rs/zgui-platform-winit

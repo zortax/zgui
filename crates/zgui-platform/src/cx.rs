@@ -65,16 +65,6 @@ pub trait PlatformCx {
     /// than a guess, because guessing wrong shows every user who chose dark a white flash.
     fn color_scheme(&self) -> Option<ColorScheme>;
 
-    /// Whether the desktop asks for reduced motion, when it can be discovered.
-    ///
-    /// `Some(true)` asks for reduced motion and `Some(false)` states no preference. Absent means
-    /// unknown. The default is a platform that cannot be asked. A backend that answers sends
-    /// [`WakeReason::ReducedMotionChanged`](crate::WakeReason::ReducedMotionChanged) when the
-    /// answer changes.
-    fn reduced_motion(&self) -> Option<bool> {
-        None
-    }
-
     /// The clipboards.
     fn clipboard(&self) -> &dyn Clipboard;
 

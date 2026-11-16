@@ -58,7 +58,6 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     // of the tree is written against and the two must not both run.
     capabilities.native_gestures = false;
     capabilities.system_color_scheme = offered.color_scheme;
-    capabilities.system_reduced_motion = offered.reduced_motion;
     capabilities
 }
 
@@ -84,8 +83,6 @@ pub struct Offered {
     pub text_input: bool,
     /// A settings portal that answers the light-or-dark question.
     pub color_scheme: bool,
-    /// A settings portal that answers the reduced-motion question.
-    pub reduced_motion: bool,
     /// `hyprland_focus_grab_manager_v1`.
     pub focus_grab: bool,
     /// `ext_session_lock_manager_v1`.
@@ -141,7 +138,6 @@ mod tests {
             primary_selection: true,
             text_input: true,
             color_scheme: true,
-            reduced_motion: true,
             focus_grab: true,
             session_lock: true,
         });

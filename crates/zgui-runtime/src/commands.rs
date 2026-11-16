@@ -180,8 +180,6 @@ pub(crate) enum WindowCommand {
     Close(WindowToken),
     /// Give every focus grab the surfaces of its windows.
     SyncGrabs,
-    /// Give every window the reduced-motion preference.
-    SyncMotion,
     /// Ask the desktop to lock the session.
     Lock(Rc<crate::lock::LockEntry>),
     /// Unlock the session and close the lock windows.
@@ -284,22 +282,6 @@ impl WindowCommands {
             return;
         }
         inner.queue.push_back(WindowCommand::SyncGrabs);
-        drop(inner);
-        self.ping();
-    }
-
-    /// Asks for every window to be given the reduced-motion preference.
-    pub(crate) fn sync_motion(&self) {
-        let mut inner = self.inner.borrow_mut();
-        // One is enough: the sync reads the preference as it is when the queue is drained.
-        if inner
-            .queue
-            .iter()
-            .any(|command| matches!(command, WindowCommand::SyncMotion))
-        {
-            return;
-        }
-        inner.queue.push_back(WindowCommand::SyncMotion);
         drop(inner);
         self.ping();
     }

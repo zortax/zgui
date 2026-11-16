@@ -13,8 +13,8 @@ use crate::device::color_scheme::ColorScheme;
 
 /// The surface a document is being styled against.
 ///
-/// Media queries read every field, viewport units read the size, and device-pixel rounding reads
-/// the ratio.
+/// Three quantities, because three different things in a stylesheet read them: media queries read
+/// all of them, viewport units read the size, and device-pixel rounding reads the ratio.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct Viewport {
     /// Width of the surface, in CSS pixels.
@@ -25,20 +25,16 @@ pub struct Viewport {
     pub scale: f32,
     /// The colour scheme the surface is presented in.
     pub scheme: ColorScheme,
-    /// Whether `prefers-reduced-motion` answers `reduce`.
-    pub reduced_motion: bool,
 }
 
 impl Viewport {
-    /// A `width` by `height` surface at one device pixel per CSS pixel, in the light scheme, with
-    /// no motion preference.
+    /// A `width` by `height` surface at one device pixel per CSS pixel, in the light scheme.
     pub fn new(width: CssPx, height: CssPx) -> Self {
         Self {
             width,
             height,
             scale: 1.0,
             scheme: ColorScheme::Light,
-            reduced_motion: false,
         }
     }
 
@@ -54,31 +50,21 @@ impl Viewport {
         Self { scheme, ..self }
     }
 
-    /// The same surface with `prefers-reduced-motion` answering `reduce` when `reduce` is set.
-    #[must_use]
-    pub fn with_reduced_motion(self, reduce: bool) -> Self {
-        Self {
-            reduced_motion: reduce,
-            ..self
-        }
-    }
-
     /// What changed between `self` and `next`.
     pub(crate) fn changes_to(self, next: Self) -> ViewportChange {
         ViewportChange {
             size: self.width != next.width || self.height != next.height,
             scale: self.scale != next.scale,
             scheme: self.scheme != next.scheme,
-            motion: self.reduced_motion != next.reduced_motion,
         }
     }
 }
 
-/// Which of a surface's quantities moved between two frames.
+/// Which of a surface's three quantities moved between two frames.
 ///
 /// They are kept apart because each invalidates something different: a size change relays the
 /// document out, a scale change relays it out *and* re-rounds every box to the new device pixel
-/// grid, and a scheme or motion change changes only which rules match.
+/// grid, and a scheme change changes only which rules match.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub(crate) struct ViewportChange {
     /// The CSS-pixel size moved.
@@ -87,14 +73,12 @@ pub(crate) struct ViewportChange {
     pub(crate) scale: bool,
     /// The colour scheme moved.
     pub(crate) scheme: bool,
-    /// The motion preference moved.
-    pub(crate) motion: bool,
 }
 
 impl ViewportChange {
     /// Whether anything moved at all.
     pub(crate) fn any(self) -> bool {
-        self.size || self.scale || self.scheme || self.motion
+        self.size || self.scale || self.scheme
     }
 }
 
@@ -267,11 +251,6 @@ mod tests {
         let dark = base.in_scheme(ColorScheme::Dark);
         assert!(base.changes_to(dark).scheme);
         assert!(!base.changes_to(dark).size);
-
-        let still = base.with_reduced_motion(true);
-        assert!(base.changes_to(still).motion);
-        assert!(!base.changes_to(still).scheme);
-        assert!(base.changes_to(still).any());
 
         assert!(!base.changes_to(base).any());
     }

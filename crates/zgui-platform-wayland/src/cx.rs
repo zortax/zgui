@@ -109,15 +109,6 @@ impl PlatformCx for WaylandCx<'_> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn reduced_motion(&self) -> Option<bool> {
-        *self
-            .state
-            .live
-            .reduced_motion
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     fn clipboard(&self) -> &dyn Clipboard {
         &self.state.clipboard
     }

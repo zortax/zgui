@@ -442,19 +442,6 @@ patched copy, add this to your application's `Cargo.toml`:
 fontique = { git = "https://github.com/zortax/zgui", tag = "v0.1.0" }
 ```
 
-The zgui repository also patches stylo and stylo_atoms, the style engine and its atom table, so
-that media queries read the reduced-motion preference. The style crates call the patched device
-methods, so an application that builds against this tree must patch both crates the same way, or
-it does not compile:
-
-```toml
-[patch.crates-io]
-stylo = { path = "<zgui>/vendor/stylo" }
-stylo_atoms = { path = "<zgui>/vendor/stylo_atoms" }
-```
-
-`vendor/README.md` lists every change to the vendored crates.
-
 To run the examples, clone the repository. Some examples to try:
 
 ```console

@@ -55,10 +55,6 @@ pub enum WakeReason {
     DeviceLost,
     /// The desktop's light or dark preference changed.
     ColorSchemeChanged,
-    /// The desktop's reduced-motion preference changed.
-    ///
-    /// [`PlatformCx::reduced_motion`](crate::PlatformCx::reduced_motion) gives the new value.
-    ReducedMotionChanged,
     /// The desktop asked something of the application as a whole.
     App(AppEvent),
     /// An output was connected or disconnected, or what is known about one changed.
