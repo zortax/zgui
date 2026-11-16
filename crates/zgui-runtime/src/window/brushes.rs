@@ -277,6 +277,7 @@ pub(crate) fn apply(
     table: &mut TextPaintTable,
     updates: &[TextPaintUpdate],
 ) -> Applied {
+    let updates = &*latest(updates);
     // Whether each update is drawn in a colour the slot it is already using does not hold. Taken
     // before anything is written, because the loop below rewrites slots and a comparison made
     // half way through it would be a comparison against this batch's own work.
@@ -414,6 +415,40 @@ pub(crate) fn apply(
         split,
         recoloured: recoloured_any,
     }
+}
+
+/// The updates of a batch with one report per element run.
+///
+/// An element whose colour transition ticks more than once before a batch is applied is reported
+/// once per tick. Each report would count as one more element re-coloured in the batch, so two
+/// reports of one element stand in for a second element that shares its slot and is not in the
+/// batch, and the slot is rewritten under that element. The last report is what the element is
+/// drawn in now. It keeps the `restyled` mark of the first report, because the earlier reports of
+/// the same batch were not lost.
+fn latest(updates: &[TextPaintUpdate]) -> std::borrow::Cow<'_, [TextPaintUpdate]> {
+    let mut last: FxHashMap<SlotKey, usize> = FxHashMap::default();
+    let mut first: FxHashMap<SlotKey, bool> = FxHashMap::default();
+    for (index, update) in updates.iter().enumerate() {
+        let key = (update.node, update.run);
+        last.insert(key, index);
+        first.entry(key).or_insert(update.restyled);
+    }
+    if last.len() == updates.len() {
+        return std::borrow::Cow::Borrowed(updates);
+    }
+    let merged = updates
+        .iter()
+        .enumerate()
+        .filter(|(index, update)| last.get(&(update.node, update.run)) == Some(index))
+        .map(|(_, update)| {
+            let mut update = update.clone();
+            if let Some(restyled) = first.get(&(update.node, update.run)) {
+                update.restyled = *restyled;
+            }
+            update
+        })
+        .collect();
+    std::borrow::Cow::Owned(merged)
 }
 
 /// Points a cascade result at `slot`, unless it already resolves to one of its own.
@@ -603,6 +638,28 @@ mod tests {
             vec![1, 2],
             "an element moved off the slot its glyphs name has to be shaped again"
         );
+    }
+
+    /// One element reported twice in a batch counts once.
+    ///
+    /// Counted per report, the two reports of the first element stand in for the second element,
+    /// which shares the slot and is not in the batch, and the slot is rewritten under it.
+    #[test]
+    fn an_element_reported_twice_in_a_batch_counts_once() {
+        let (mut slots, mut table, _shared) = sharing_one_slot(grey(0.1));
+
+        apply(
+            &mut slots,
+            &mut table,
+            &[update(1, grey(0.4)), update(1, grey(0.4))],
+        );
+
+        assert_eq!(
+            drawn(&slots, &table, 2),
+            TextPaint::new(grey(0.1)),
+            "the element outside the batch keeps its colour"
+        );
+        assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.4)));
     }
 
     /// A cascade result that already has a slot keeps it, however the element arriving on it is
