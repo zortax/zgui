@@ -90,6 +90,14 @@ pub(crate) struct Shared {
     pub(crate) unmapped: bool,
     /// Whether the redraw now being delivered was refused without running.
     pub(crate) declined: bool,
+    /// Whether a redraw or a held present is being delivered to the application.
+    pub(crate) drawing: bool,
+    /// Whether the application asked to hide the surface while it was drawing.
+    ///
+    /// The frame being drawn commits a buffer after the request. Hidden at once, that buffer
+    /// would map the surface again with no configure, which the shell refuses. The hide is
+    /// carried out when the delivery ends instead.
+    pub(crate) hide_owed: bool,
     /// Whether the compositor configured an extent or a scale that no presented frame shows yet.
     ///
     /// A frame for a new extent is never composed ahead, because the next configure would make a
@@ -133,6 +141,16 @@ pub(crate) struct Shared {
     pub(crate) pending_configure: Option<Pending>,
     /// The outputs the compositor says the surface is on.
     pub(crate) outputs: Vec<WlOutput>,
+    /// Where the shell layer sits and what it claims, for a surface that is one.
+    ///
+    /// Kept whole because the shell forgets all of it when the surface is unmapped, and the remap
+    /// has to send all of it again.
+    pub(crate) layer: Option<zgui_platform::LayerPlacement>,
+    /// Whether the placement or the extent of the shell layer changed since it was last sent.
+    ///
+    /// The change goes out with the next commit that carries a frame, so the placement and the
+    /// content drawn for it are shown together.
+    pub(crate) layer_owed: bool,
 }
 
 impl Shared {
@@ -154,6 +172,8 @@ impl Shared {
             chained: None,
             unmapped: false,
             declined: false,
+            drawing: false,
+            hide_owed: false,
             resize_owed: false,
             answering_resize: false,
             mapped: false,
@@ -166,6 +186,8 @@ impl Shared {
             bounds: (None, None),
             pending_configure: None,
             outputs: Vec::new(),
+            layer: None,
+            layer_owed: false,
         }
     }
 
@@ -287,6 +309,7 @@ impl Shared {
     /// Records that a redraw is about to be delivered.
     pub(crate) fn redraw_taken(&mut self) {
         self.answering_resize = self.resize_owed;
+        self.drawing = true;
     }
 
     /// Closes out a delivered redraw: [`Shared::end_of_redraw`], and the redraw's cost for

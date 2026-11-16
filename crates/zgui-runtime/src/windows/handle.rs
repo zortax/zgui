@@ -6,8 +6,8 @@ use std::sync::{Arc, Weak};
 
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, Decorations, FullscreenMode, PlatformCapabilities, ResizeEdge,
-    Surface, WindowIcon, WindowLevel,
+    ColorScheme, CursorStyle, Decorations, FullscreenMode, LayerPatch, PlatformCapabilities,
+    ResizeEdge, Surface, WindowIcon, WindowLevel,
 };
 use zgui_reactive::prelude::*;
 use zgui_reactive::{ArcRwSignal, Signal};
@@ -356,6 +356,19 @@ impl WindowHandle {
     /// costs one frame.
     pub fn set_visible(&self, visible: bool) {
         self.act(|surface| surface.set_visible(visible));
+    }
+
+    /// Changes where a shell window sits and what it claims.
+    ///
+    /// The change reaches the screen with the next frame, together with the content drawn for
+    /// it, so a bar that grows and the room it reserves change at once. What `patch` leaves
+    /// absent stays as it is. Does nothing for a window that is not a shell window.
+    ///
+    /// A shell window that is hidden and shown again keeps its placement, changes included.
+    pub fn set_layer_placement(&self, patch: LayerPatch) {
+        self.act(|surface| {
+            let _ = surface.set_layer_placement(&patch);
+        });
     }
 
     /// Sets the picture the desktop shows for this window.

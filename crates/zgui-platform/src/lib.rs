@@ -93,7 +93,7 @@ pub use crate::monitor::{MonitorInfo, refresh_interval};
 pub use crate::scroll::ScrollSettings;
 pub use crate::surface::{
     Anchor, BadIcon, ComposeAhead, Constrain, CursorStyle, DecorationSource, Decorations,
-    DragEvent, ExclusiveZone, FullscreenMode, GpuSurface, KeyboardInteractivity, Layer,
+    DragEvent, ExclusiveZone, FullscreenMode, GpuSurface, KeyboardInteractivity, Layer, LayerPatch,
     LayerPlacement, PopupPlacement, PresentPacing, PresentationTiming, ResizeEdge, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, SurfaceRole, TextInput, TextInputPurpose,
     TitleButtons, Watchdog, WindowIcon, WindowLevel,

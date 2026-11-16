@@ -22,8 +22,8 @@ pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
 pub use crate::surface::role::{
-    Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement,
-    SurfaceRole,
+    Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
+    PopupPlacement, SurfaceRole,
 };
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
@@ -271,6 +271,17 @@ pub trait Surface: Send + Sync + 'static {
 
     /// Sets what the pointer looks like over this surface.
     fn set_cursor(&self, cursor: CursorStyle);
+
+    /// Changes where a shell layer sits and what it claims, for a surface that is one.
+    ///
+    /// The change is shown with the next frame: the platform sends it together with that frame,
+    /// so the new placement and the content drawn for it reach the screen at once. Every field the
+    /// patch leaves absent stays as it is. A surface that is not a shell layer answers with
+    /// [`Unsupported`], and so does a platform that has none.
+    fn set_layer_placement(&self, patch: &LayerPatch) -> Result<(), Unsupported> {
+        let _ = patch;
+        Err(Unsupported)
+    }
 
     /// Makes the surface transparent to the pointer, so presses reach whatever is behind it.
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {

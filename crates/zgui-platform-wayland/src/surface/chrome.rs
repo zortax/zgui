@@ -16,25 +16,41 @@ use crate::surface::WaylandSurface;
 /// A compositor that disagrees says so with the next configure, which wins. A request made while
 /// the window is maximised or full screen does not survive a restore: the saved normal extent
 /// replaces it.
+///
+/// A shell layer may name zero along an axis, which leaves that axis to the compositor: a bar
+/// across the screen changes its height alone this way. It is drawn at its current extent along
+/// that axis until the compositor answers.
 pub fn request_size(
     surface: &WaylandSurface,
     size: Size<CssPx, Css>,
 ) -> Option<Size<DevicePx, Device>> {
-    if size.width.0 <= 0.0 || size.height.0 <= 0.0 {
+    let layer = surface.role().layer().is_some();
+    let refused = |extent: CssPx| extent.0 < 0.0 || (!layer && extent.0 == 0.0);
+    if refused(size.width) || refused(size.height) || (size.width.0 == 0.0 && size.height.0 == 0.0)
+    {
         return None;
     }
-    let scale = {
+    surface.set_wanted(size);
+    let (scale, size) = {
         let mut shared = surface.shared();
         let scale = shared.scale;
-        shared.resized(size, scale);
-        scale
-    };
-    if let Some(layer) = surface.role().layer() {
-        layer.set_size(
-            size.width.0.round().max(1.0) as u32,
-            size.height.0.round().max(1.0) as u32,
+        let size = Size::new(
+            if size.width.0 > 0.0 {
+                size.width
+            } else {
+                shared.logical.width
+            },
+            if size.height.0 > 0.0 {
+                size.height
+            } else {
+                shared.logical.height
+            },
         );
-    }
+        shared.resized(size, scale);
+        // A shell layer states its extent with the frame drawn at it, so the two change together.
+        shared.layer_owed |= shared.layer.is_some();
+        (scale, size)
+    };
     // A pop-up is placed rather than sized: growing one means asking the compositor to work out
     // where a rectangle of the new extent fits, which is the same question it answered when the
     // pop-up opened. Moving it is what keeps a menu that grew an item from flickering shut and
@@ -92,20 +108,46 @@ pub fn set_resizable(surface: &WaylandSurface, resizable: bool) {
 /// configure sequence and all.
 ///
 /// An unmapped surface is shown again by the same empty commit that asked for its first configure.
-/// The pacer holds the redraw until that configure arrives.
+/// The pacer holds the redraw until that configure arrives. A shell layer is a fresh surface to the
+/// shell after an unmap, so its whole placement and extent go out again before that commit.
+///
+/// A hide asked for while the surface draws waits for the end of that delivery, because the frame
+/// being drawn commits its buffer after the request. Until the surface is shown again it commits
+/// nothing: an empty commit on an unmapped surface asks the shell to map it.
 pub fn set_visible(surface: &WaylandSurface, visible: bool) {
     if visible {
-        let unmapped = std::mem::take(&mut surface.shared().unmapped);
+        let unmapped = {
+            let mut shared = surface.shared();
+            shared.hide_owed = false;
+            std::mem::take(&mut shared.unmapped)
+        };
         if unmapped {
+            surface.send_layer(true);
             surface.wl_surface().commit();
         }
         zgui_platform::Surface::request_redraw(surface);
         return;
     }
+    {
+        let mut shared = surface.shared();
+        if shared.unmapped {
+            return;
+        }
+        if shared.drawing {
+            shared.hide_owed = true;
+            return;
+        }
+    }
+    unmap(surface);
+}
+
+/// Commits no buffer, which unmaps the surface, and forgets what the compositor owed it.
+pub(crate) fn unmap(surface: &WaylandSurface) {
     let wl = surface.wl_surface();
     wl.attach(None, 0, 0);
     wl.commit();
     let mut shared = surface.shared();
+    shared.hide_owed = false;
     shared.visibility.configured = false;
     shared.unmapped = true;
     shared.cancel_callbacks();
@@ -168,6 +210,7 @@ pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64
             window.set_geometry(logical);
         }
     }
+    surface.send_layer(false);
     surface.ask_for_callback();
     surface.ask_for_feedback();
     // Counted where it becomes a statement about visibility: a compositor that is not compositing

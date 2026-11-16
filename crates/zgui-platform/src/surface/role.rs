@@ -237,6 +237,107 @@ pub enum ExclusiveZone {
     Ignore,
 }
 
+/// The parts of a [`LayerPlacement`] that can change after the surface is made.
+///
+/// Each field is a change when present and is left as it is when absent. The output and the
+/// namespace are fixed when the surface is made, so they are not here.
+///
+/// ```
+/// use zgui_geom::{CssPx, Edges};
+/// use zgui_platform::{ExclusiveZone, LayerPatch, LayerPlacement};
+///
+/// let mut placement = LayerPlacement::default();
+/// LayerPatch::new()
+///     .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(40.0)))
+///     .apply_to(&mut placement);
+/// assert_eq!(placement.exclusive_zone, ExclusiveZone::Reserve(CssPx(40.0)));
+/// assert_eq!(placement.anchors, Edges::default(), "an absent field changes nothing");
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct LayerPatch {
+    /// A new layer.
+    pub layer: Option<Layer>,
+    /// New edges to fasten the surface to.
+    pub anchors: Option<Edges<bool>>,
+    /// New margins.
+    pub margin: Option<Edges<CssPx>>,
+    /// A new exclusive zone.
+    pub exclusive_zone: Option<ExclusiveZone>,
+    /// A new keyboard interactivity.
+    pub keyboard: Option<KeyboardInteractivity>,
+}
+
+impl LayerPatch {
+    /// A patch that changes nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The same patch, moving the surface to `layer`.
+    pub fn with_layer(mut self, layer: Layer) -> Self {
+        self.layer = Some(layer);
+        self
+    }
+
+    /// The same patch, fastening the surface to `anchors`.
+    pub fn with_anchors(mut self, anchors: Edges<bool>) -> Self {
+        self.anchors = Some(anchors);
+        self
+    }
+
+    /// The same patch, with `margin` in from each anchored edge.
+    pub fn with_margin(mut self, margin: Edges<CssPx>) -> Self {
+        self.margin = Some(margin);
+        self
+    }
+
+    /// The same patch, with `zone` as the exclusive zone.
+    pub fn with_exclusive_zone(mut self, zone: ExclusiveZone) -> Self {
+        self.exclusive_zone = Some(zone);
+        self
+    }
+
+    /// The same patch, taking the keyboard as `keyboard` says.
+    pub fn with_keyboard(mut self, keyboard: KeyboardInteractivity) -> Self {
+        self.keyboard = Some(keyboard);
+        self
+    }
+
+    /// Whether the patch changes nothing.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Writes every present field into `placement`.
+    pub fn apply_to(&self, placement: &mut LayerPlacement) {
+        if let Some(layer) = self.layer {
+            placement.layer = layer;
+        }
+        if let Some(anchors) = self.anchors {
+            placement.anchors = anchors;
+        }
+        if let Some(margin) = self.margin {
+            placement.margin = margin;
+        }
+        if let Some(zone) = self.exclusive_zone {
+            placement.exclusive_zone = zone;
+        }
+        if let Some(keyboard) = self.keyboard {
+            placement.keyboard = keyboard;
+        }
+    }
+
+    /// Adds the changes of `later` to this patch. A field present in both takes the later value.
+    pub fn merge(&mut self, later: &Self) {
+        self.layer = later.layer.or(self.layer);
+        self.anchors = later.anchors.or(self.anchors);
+        self.margin = later.margin.or(self.margin);
+        self.exclusive_zone = later.exclusive_zone.or(self.exclusive_zone);
+        self.keyboard = later.keyboard.or(self.keyboard);
+    }
+}
+
 /// Which layer of the desktop a shell surface belongs to.
 ///
 /// The order is the stacking order, bottom first. Ordinary windows sit between
@@ -271,11 +372,11 @@ pub enum KeyboardInteractivity {
 #[cfg(test)]
 mod tests {
     use super::{
-        Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPlacement,
+        Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
         PopupPlacement, SurfaceRole,
     };
     use crate::surface::id::SurfaceId;
-    use zgui_geom::{CssPx, Point, Rect, Size};
+    use zgui_geom::{CssPx, Edges, Point, Rect, Size};
 
     #[test]
     fn a_surface_that_names_no_role_is_an_ordinary_window() {
@@ -325,5 +426,31 @@ mod tests {
             LayerPlacement::default().exclusive_zone,
             ExclusiveZone::Avoid
         );
+    }
+
+    #[test]
+    fn a_patch_changes_only_what_it_names() {
+        let mut placement = LayerPlacement::new(Layer::Overlay)
+            .with_anchors(Edges::new(true, false, false, false))
+            .with_namespace("popover");
+        LayerPatch::new()
+            .with_keyboard(KeyboardInteractivity::OnDemand)
+            .apply_to(&mut placement);
+        assert_eq!(placement.keyboard, KeyboardInteractivity::OnDemand);
+        assert_eq!(placement.layer, Layer::Overlay);
+        assert_eq!(placement.anchors, Edges::new(true, false, false, false));
+        assert_eq!(placement.namespace.as_deref(), Some("popover"));
+    }
+
+    #[test]
+    fn a_later_patch_wins_where_both_name_a_field() {
+        let mut first = LayerPatch::new()
+            .with_layer(Layer::Top)
+            .with_exclusive_zone(ExclusiveZone::Ignore);
+        first.merge(&LayerPatch::new().with_layer(Layer::Overlay));
+        assert_eq!(first.layer, Some(Layer::Overlay));
+        assert_eq!(first.exclusive_zone, Some(ExclusiveZone::Ignore));
+        assert!(!first.is_empty());
+        assert!(LayerPatch::new().is_empty());
     }
 }

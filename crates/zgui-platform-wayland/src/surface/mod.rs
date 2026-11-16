@@ -186,6 +186,72 @@ impl WaylandSurface {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Records `size` as the extent the application asked for.
+    ///
+    /// A shell layer's configure names zero along an axis it leaves to the client, and this is
+    /// the extent the surface then takes.
+    pub(crate) fn set_wanted(&self, size: Size<CssPx, Css>) {
+        *self
+            .wanted
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = size;
+    }
+
+    /// Changes the placement of this shell layer, to be sent with the next frame.
+    pub(crate) fn patch_layer(&self, patch: &zgui_platform::LayerPatch) -> Result<(), Unsupported> {
+        if self.role.layer().is_none() {
+            return Err(Unsupported);
+        }
+        {
+            let mut shared = self.shared();
+            let Some(placement) = shared.layer.as_mut() else {
+                return Err(Unsupported);
+            };
+            patch.apply_to(placement);
+            shared.layer_owed = true;
+        }
+        Surface::request_redraw(self);
+        Ok(())
+    }
+
+    /// Sends what this shell layer owes the compositor, right before a commit.
+    ///
+    /// With `all`, everything is sent whether it changed or not, which is what a remap needs: the
+    /// shell forgets the placement and the extent of an unmapped surface. Otherwise only a change
+    /// made since the last send goes out. Nothing is committed here.
+    pub(crate) fn send_layer(&self, all: bool) {
+        let Some(layer) = self.role.layer() else {
+            return;
+        };
+        let (placement, extent) = {
+            let mut shared = self.shared();
+            if !all && !shared.layer_owed {
+                return;
+            }
+            shared.layer_owed = false;
+            let Some(placement) = shared.layer.clone() else {
+                return;
+            };
+            // An axis the application left at zero takes the extent the compositor gave it, so an
+            // axis that stops being stretched keeps its width rather than shrinking to a pixel.
+            let wanted = self.wanted();
+            let extent = Size::new(
+                if wanted.width.0 > 0.0 {
+                    wanted.width
+                } else {
+                    shared.logical.width
+                },
+                if wanted.height.0 > 0.0 {
+                    wanted.height
+                } else {
+                    shared.logical.height
+                },
+            );
+            (placement, extent)
+        };
+        crate::surface::role::layer::apply(layer, &placement, extent);
+    }
+
     /// Fractional scaling's objects, for the commit that carries a new extent.
     pub(crate) const fn fractional(&self) -> &Fractional {
         &self.fractional
@@ -294,6 +360,24 @@ impl WaylandSurface {
     /// `began` is when the present began.
     pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
         self.shared().end_of_present(began, now);
+        self.end_drawing();
+    }
+
+    /// Records that a present held for the compositor is about to be delivered.
+    pub(crate) fn begin_present(&self) {
+        self.shared().drawing = true;
+    }
+
+    /// Ends a delivery to the application, carrying out a hide it asked for while it drew.
+    fn end_drawing(&self) {
+        let hide = {
+            let mut shared = self.shared();
+            shared.drawing = false;
+            shared.hide_owed
+        };
+        if hide {
+            chrome::unmap(self);
+        }
     }
 
     /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
@@ -312,11 +396,22 @@ impl WaylandSurface {
     /// chain alive, and a held frame is committed when it arrives.
     /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
     pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
-        let end = self.shared().redrawn(began, now);
-        if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
+        let (end, unmapped) = {
+            let mut shared = self.shared();
+            (
+                shared.redrawn(began, now),
+                shared.unmapped || shared.hide_owed,
+            )
+        };
+        // A surface that is hidden, or about to be, owes the compositor nothing: an empty commit
+        // would ask the shell to map it again.
+        if end == crate::surface::state::EndOfRedraw::KeepChainAlive && !unmapped {
+            // A change asked for with no new content to draw still goes out, with this commit.
+            self.send_layer(false);
             self.ask_for_callback();
             self.role.commit();
         }
+        self.end_drawing();
     }
 }
 
@@ -501,6 +596,10 @@ impl Surface for WaylandSurface {
         // request is refused unless the pointer is actually there — otherwise a background window
         // changing its cursor would change it under the window the person is using.
         self.seat.set_cursor(self.id, cursor);
+    }
+
+    fn set_layer_placement(&self, patch: &zgui_platform::LayerPatch) -> Result<(), Unsupported> {
+        self.patch_layer(patch)
     }
 
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {

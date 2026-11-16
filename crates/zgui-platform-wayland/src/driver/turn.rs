@@ -206,6 +206,7 @@ impl<A: AppHandler> WaylandApp<A> {
             // answers for it.
             if present {
                 let began = self.state.live.clock.now();
+                surface.begin_present();
                 {
                     let cx = WaylandCx::new(&self.state);
                     self.handler
