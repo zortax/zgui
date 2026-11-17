@@ -14,7 +14,9 @@ use style::context::SharedStyleContext;
 use style::properties::ComputedValues;
 use style::properties::longhands::animation_direction::computed_value::single_value::T as Direction;
 use style::values::generics::easing::TimingFunction;
-use zgui_dom::Node;
+use zgui_dom::{Document, Node, NodeIndex};
+
+use crate::driver::animations::set::{self, Animations};
 
 /// The most steps one segment may have for the search to run. A larger count is close enough to a
 /// continuous motion that the element ticks at every refresh.
@@ -86,6 +88,52 @@ pub(crate) fn until(
         earliest = Some(earliest.map_or(at, |it| it.min(at)));
     }
     earliest
+}
+
+/// The elements of `held` whose animations no longer hold still until the moment recorded for
+/// them. `held` pairs each element with that moment, and is sorted by element.
+///
+/// The cascade runs after the tick, and it can end or replace an animation the tick found
+/// holding. Such an element owes a tick on the next frame: the tick drops the value the element
+/// was drawn with, or samples the animation that replaced it.
+pub(crate) fn lapsed(
+    animations: &Animations,
+    document: &Document,
+    context: &SharedStyleContext<'_>,
+    held: &[(NodeIndex, f64)],
+    now: f64,
+) -> Vec<NodeIndex> {
+    // The earliest boundary of each element's sets, or an error once one of them moves at every
+    // refresh.
+    let mut found: Vec<Result<Option<f64>, ()>> = vec![Ok(None); held.len()];
+    let sets = animations.document_set().sets.read();
+    for (key, animated) in sets.iter() {
+        let index = set::node_of(key);
+        let Ok(position) = held.binary_search_by_key(&index, |(element, _)| *element) else {
+            continue;
+        };
+        if animated.running_animation_and_transition_count() == 0 {
+            continue;
+        }
+        let until = if key.pseudo_element.is_some() || document.store().try_core(index).is_none() {
+            None
+        } else {
+            let node = document.node(index);
+            node.primary_style()
+                .and_then(|style| until(animated, context, node, &style, now))
+        };
+        found[position] = match (found[position], until) {
+            (Ok(was), Some(at)) => Ok(Some(was.map_or(at, |was| was.min(at)))),
+            _ => Err(()),
+        };
+    }
+    held.iter()
+        .zip(found)
+        .filter(|((index, at), found)| {
+            *found != Ok(Some(*at)) && document.store().try_core(*index).is_some()
+        })
+        .map(|((index, _), _)| *index)
+        .collect()
 }
 
 /// The first progress after `progress` at which an animation over the keyframe `offsets`, with

@@ -129,6 +129,7 @@ impl Window {
     /// An animation whose keyframes the cascade gave new values is marked as well, so a tick
     /// samples them. A finished animation that fills forwards is otherwise not ticked again.
     pub(crate) fn note_started_animations(&mut self) {
+        self.note_lapsed_holds();
         let mut running = self.engine.animations().running_elements();
         running.extend_from_slice(self.engine.refreshed_animations());
         if running.is_empty() {
@@ -136,6 +137,25 @@ impl Window {
         }
         let mut document = self.document.borrow_mut();
         self.animator.note_started(&mut document, &running);
+    }
+
+    /// Marks the held elements whose animations this frame's cascade ended or replaced.
+    ///
+    /// A stepped animation that holds its values asks for no frame until its next step boundary.
+    /// When the cascade ends it sooner, this mark gets the frame that drops the held value.
+    fn note_lapsed_holds(&mut self) {
+        if self.animator.held().is_empty() {
+            return;
+        }
+        let lapsed = {
+            let document = self.document.borrow();
+            self.engine.lapsed_holds(&document, self.animator.held())
+        };
+        if lapsed.is_empty() {
+            return;
+        }
+        let mut document = self.document.borrow_mut();
+        self.animator.note_lapsed(&mut document, &lapsed);
     }
 
     /// Publishes how many animations each element is running, for views to read.

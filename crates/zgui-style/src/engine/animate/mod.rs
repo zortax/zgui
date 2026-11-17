@@ -23,7 +23,7 @@ use style::traversal_flags::TraversalFlags;
 use zgui_dom::{Document, NodeIndex};
 
 use crate::driver::animations::{AnimationReport, AnimationTime};
-use crate::driver::animations::{hidden, tick};
+use crate::driver::animations::{hidden, hold, tick};
 use crate::engine::StyleEngine;
 use crate::engine::guards;
 
@@ -48,6 +48,30 @@ impl StyleEngine {
             TraversalFlags::empty(),
         );
         tick::advance(&mut self.animations, document, &context, now.0)
+    }
+
+    /// The elements of `held` whose stepped animations no longer hold still until the moment the
+    /// last tick reported for them.
+    ///
+    /// `held` pairs each element with [`ElementAnimation::hold`](crate::ElementAnimation::hold),
+    /// and is sorted by element. Ask after the cascade, which can end or replace an animation.
+    /// Each element returned owes a tick on the next frame.
+    pub fn lapsed_holds(&self, document: &Document, held: &[(NodeIndex, f64)]) -> Vec<NodeIndex> {
+        if held.is_empty() {
+            return Vec::new();
+        }
+        let now = self.animations.now();
+        let snapshots = SnapshotMap::new();
+        let read = self.lock.read();
+        let context = crate::driver::context::build(
+            &self.stylist,
+            guards::guards(&read),
+            &snapshots,
+            self.animations.shared(),
+            now,
+            TraversalFlags::empty(),
+        );
+        hold::lapsed(&self.animations, document, &context, held, now.0)
     }
 
     /// Asks for one element's cascade to be run again for its animations.
