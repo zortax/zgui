@@ -313,9 +313,11 @@ impl Shared {
     /// pacer is left as it was, so the runtime's own deadline is answered the moment it asks.
     ///
     /// A redraw that ran and presented nothing is **settled** when `again` says no other redraw
-    /// was asked for and the surface owes the compositor no change of its own. There is no chain
-    /// to keep alive then, so nothing is committed and nothing is owed. The next request is
-    /// answered the moment it is made.
+    /// was asked for, the surface owes the compositor no change of its own, and the redraw did not
+    /// answer input. There is no chain to keep alive then, so nothing is committed and nothing is
+    /// owed. The next request is answered the moment it is made. A redraw that answered input
+    /// keeps the chain alive, so input that arrives faster than the display refreshes is paced by
+    /// the callback, see the pacer.
     pub(crate) fn end_of_redraw(
         &mut self,
         began: Instant,
@@ -340,7 +342,11 @@ impl Shared {
             EndOfRedraw::Held
         } else if self.pacer.owes_callback() {
             EndOfRedraw::Waiting
-        } else if !again && !self.pacer.wanted() && !self.owes_surface_change() {
+        } else if !again
+            && !self.pacer.wanted()
+            && !self.pacer.drew_for_input()
+            && !self.owes_surface_change()
+        {
             self.chained = None;
             EndOfRedraw::Settled
         } else {
@@ -1041,6 +1047,35 @@ mod tests {
         assert_eq!(
             shared.end_of_redraw(now, now, false),
             EndOfRedraw::KeepChainAlive
+        );
+    }
+
+    #[test]
+    fn input_over_a_still_surface_is_paced_by_the_callback() {
+        let mut shared = Shared::new();
+        shared.visibility.configured = true;
+        let now = Instant::now();
+        let mut visibility = shared.visibility;
+        let mut redraw_for_input = |shared: &mut Shared| {
+            shared.pacer.input();
+            shared.pacer.request();
+            shared
+                .pacer
+                .take(&mut visibility, now)
+                .then(|| shared.end_of_redraw(now, now, false))
+        };
+        // The first redraw draws nothing, and its commit asks for a callback.
+        assert_eq!(
+            redraw_for_input(&mut shared),
+            Some(EndOfRedraw::KeepChainAlive)
+        );
+        // One more redraw runs ahead of that callback, and the next ones wait for it.
+        assert_eq!(redraw_for_input(&mut shared), Some(EndOfRedraw::Waiting));
+        assert_eq!(redraw_for_input(&mut shared), None);
+        shared.pacer.callback();
+        assert_eq!(
+            redraw_for_input(&mut shared),
+            Some(EndOfRedraw::KeepChainAlive)
         );
     }
 

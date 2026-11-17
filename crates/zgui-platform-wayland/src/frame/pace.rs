@@ -124,6 +124,8 @@ pub struct Pacer {
     input: bool,
     /// Whether a press arrived since the last redraw was delivered.
     press: bool,
+    /// Whether the last redraw delivered answered input.
+    for_input: bool,
     /// Whether the next redraw answers a new extent, so it neither waits for nor is held behind an
     /// owed callback.
     resizing: bool,
@@ -141,6 +143,7 @@ impl Pacer {
             ahead: false,
             input: false,
             press: false,
+            for_input: false,
             resizing: false,
         }
     }
@@ -165,6 +168,14 @@ impl Pacer {
     pub const fn press(&mut self) {
         self.input = true;
         self.press = true;
+    }
+
+    /// Whether the last redraw delivered answered input.
+    ///
+    /// Such a redraw that draws nothing still commits and asks for a callback, so a stream of
+    /// input over a still surface is paced by the display.
+    pub const fn drew_for_input(&self) -> bool {
+        self.for_input
     }
 
     /// Whether a redraw is waiting to be delivered.
@@ -202,6 +213,7 @@ impl Pacer {
             self.owed = Owed::Spent(since);
         }
         self.wanted = false;
+        self.for_input = self.input;
         self.input = false;
         self.press = false;
         true
