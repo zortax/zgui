@@ -119,10 +119,10 @@ const SWEEP_FLOOR: usize = 1024;
 /// Each frame of an animated colour or opacity is a lowering of its own, and the lowerings stay
 /// after their styles go. Past this count, and past several lowerings per live identity, the sweep
 /// empties the cache, and the styles still in use lower again on the frames that need them.
-const LOWERED_CEILING: usize = 1024;
+const LOWERED_CEILING: usize = 256;
 
 /// How many lowerings per identity entry a cache holds before a sweep may empty it.
-const LOWERED_PER_IDENTITY: usize = 4;
+const LOWERED_PER_IDENTITY: usize = 2;
 
 impl Default for PaintStyleCache {
     fn default() -> Self {
