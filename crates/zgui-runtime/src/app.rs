@@ -752,8 +752,16 @@ impl Runtime {
     ///
     /// See [`documents`](crate::documents) for when an identity comes back and why a stale node
     /// handle never resolves in the document that takes it over.
+    ///
+    /// The timers of the identity are forgotten here. Whatever kept a closed document alive could
+    /// set a timer after its window closed, and that timer must not fire in the window that takes
+    /// the identity over.
     fn allocate_document(&mut self) -> Result<zgui_dom::Document, AppError> {
-        self.documents.allocate()
+        let document = self.documents.allocate()?;
+        if let Some(id) = zgui_view::DocumentId::new(document.store().document().get()) {
+            self.timers.borrow_mut().forget(id);
+        }
+        Ok(document)
     }
 
     /// The window `token` names, if it is one the application still wants.
