@@ -135,6 +135,22 @@ mod tests {
     }
 
     #[test]
+    fn a_first_slot_past_a_block_of_retired_slots_gets_its_block() {
+        use crate::chunk::block::BLOCK_LEN;
+        use crate::chunk::succession::Succession;
+
+        let mut generations = vec![None; BLOCK_LEN];
+        generations.push(Some(Generation::FIRST));
+        let succession = Succession {
+            generations: generations.into_boxed_slice(),
+        };
+        let mut arena: ChunkArena<u32> = ChunkArena::succeeding(DomainId::FIRST, &succession);
+        let key = arena.insert(7);
+        assert_eq!(key.index() as usize, BLOCK_LEN);
+        assert_eq!(arena.get(key), Some(&7));
+    }
+
+    #[test]
     fn an_empty_succession_is_a_new_arena() {
         let succession = ChunkArena::<u32>::new(DomainId::FIRST).succession();
         assert!(succession.is_empty());
