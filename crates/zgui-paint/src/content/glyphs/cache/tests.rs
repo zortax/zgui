@@ -122,6 +122,7 @@ fn a_glyph_with_no_pixels_is_not_rasterised_again_either() {
 
 #[test]
 fn an_evicted_tile_is_made_again_rather_than_reported_as_missing() {
+    let _turn = zgui_profile::counter::exclusive();
     // The remembered atlas key outlives the tile it names. Serving it without checking would draw
     // whatever texels took its place, and treating it as an absence would silently delete the
     // glyph; the entry has to fall back to rasterising.
