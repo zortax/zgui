@@ -431,9 +431,22 @@ fn step(
     // that concludes the transition compares that against the destination, finds them different,
     // and starts a fresh transition over the last fraction of the distance — for ever, a few
     // hundredths at a time — unless the completed one is still there to say the destination has
-    // already been reached. So it survives exactly the one tick that cascade runs in.
-    set.transitions
-        .retain(|transition| transition.state != AnimationState::Finished);
+    // already been reached. So it survives the tick that cascade runs in. While another animation
+    // of the element still moves, that cascade has not run yet: an element on a private override
+    // is cascaded only once all of its animations end. The completed transition then stays until
+    // they do, or the concluding cascade starts the finished transition again from its start.
+    let moving = set
+        .transitions
+        .iter()
+        .any(|transition| ticking(&transition.state))
+        || set
+            .animations
+            .iter()
+            .any(|animation| ticking(&animation.state));
+    if !moving {
+        set.transitions
+            .retain(|transition| transition.state != AnimationState::Finished);
+    }
     let before = report.edges.len();
     for animation in &mut set.animations {
         let name = animation.name.to_string();
@@ -587,4 +600,9 @@ fn property_name(transition: &style::animation::Transition) -> String {
         .property_id()
         .name()
         .to_string()
+}
+
+/// Whether `state` is one an animation advances in.
+fn ticking(state: &AnimationState) -> bool {
+    matches!(state, AnimationState::Running | AnimationState::Pending)
 }

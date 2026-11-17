@@ -84,6 +84,12 @@ pub fn element(
             {
                 bits |= Dirty::REPAINT | Dirty::REHIT;
             }
+            // A transition that moved the box ended while a colour goes on: its end value is still
+            // a placement, and a box that could not be moved by a written coordinate system is
+            // composed again, as on the placement path.
+            if placed == Placed::Recomposed {
+                bits |= Dirty::REFRAGMENT | Dirty::REHIT;
+            }
             // `ANIMATING` because nothing else will ask for the frame after this one. An element
             // whose values hold still until a later moment owes no frame before it, and the caller
             // wakes the loop at that moment instead.
