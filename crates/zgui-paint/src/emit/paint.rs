@@ -398,7 +398,6 @@ mod tests {
         assert_eq!(from_angle, 0.5);
     }
 
-    /// A 200 by 100 box at the origin.
     #[test]
     fn a_repeating_ramp_runs_over_its_stop_span() {
         use smallvec::smallvec;
@@ -423,6 +422,7 @@ mod tests {
         assert_eq!(offsets, [0.0, 0.5, 1.0]);
     }
 
+    /// A 200 by 100 box at the origin.
     fn bounds() -> Rect<DevicePx, Device> {
         Rect::new(
             Point::new(DevicePx(0.0), DevicePx(0.0)),

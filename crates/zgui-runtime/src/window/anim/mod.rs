@@ -24,10 +24,10 @@ use zgui_style::AnimationTime;
 use zgui_vocab::Timestamp;
 
 use crate::dispatch::{self, HostSink};
+use crate::window::Window;
 
 /// How long after a step boundary the loop wakes for it.
 const HOLD_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
-use crate::window::Window;
 
 impl Window {
     /// Advances every running animation and applies what that produced.

@@ -38,8 +38,8 @@ use crate::tier::Tier;
 /// What the frame did with an element's interpolated placement.
 ///
 /// Answered by the caller, because the caller is what holds the previous frame's table and the
-/// coordinate systems the boxes established. Read on the placement path and ignored on the other
-/// two.
+/// coordinate systems the boxes established. Read on the placement path, and on the cheap path
+/// for a box that has to be composed again. The cascade path ignores it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placed {
     /// The interpolation arrived back where the standing fragments were already composed.

@@ -158,15 +158,15 @@ impl Window {
                 self.handle.set_focused(*focused);
                 moved
             }
-            // A drag edge, where a desktop reports one. The release with a reconfiguration still
-            // owed is the one edge that buys a frame of its own: the level the window holds is
-            // the level it stays at, so the pacing has nothing left to save by waiting out its
-            // interval, and the settled window is on the screen a whole interval sooner.
             // The locks are a level the window reports; the change also travels with the input.
             zgui_platform::SurfaceEvent::ModifiersChanged(modifiers) => {
                 self.handle.set_lock_keys(*modifiers);
                 true
             }
+            // A drag edge, where a desktop reports one. The release with a reconfiguration still
+            // owed is the one edge that buys a frame of its own: the level the window holds is
+            // the level it stays at, so the pacing has nothing left to save by waiting out its
+            // interval, and the settled window is on the screen a whole interval sooner.
             zgui_platform::SurfaceEvent::ResizingChanged(live) => {
                 self.resizing = *live;
                 let settles = !*live && self.reconfigure;

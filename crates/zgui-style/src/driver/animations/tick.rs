@@ -2,9 +2,10 @@
 //!
 //! The tick is mechanical on purpose. It moves each animation through its states, ends the ones
 //! `display: none` hides, drops the ones the cascade cancelled, samples what the survivors
-//! currently evaluate to, and writes down every edge it crossed. It marks nothing, writes into no node and decides no policy: what the caller
-//! does with an element that is animating a colour is the caller's, and keeping that out of here is
-//! what stops two different answers to the same question existing in two crates.
+//! currently evaluate to, and writes down every edge it crossed. It marks nothing, writes into no
+//! node and decides no policy: what the caller does with an element that is animating a colour is
+//! the caller's, and keeping that out of here is what stops two different answers to the same
+//! question existing in two crates.
 //!
 //! # Why the edges are collected rather than looked for afterwards
 //!
