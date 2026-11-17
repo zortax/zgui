@@ -475,9 +475,14 @@ impl WaylandSurface {
             self.send_regions();
             self.ask_for_callback();
             self.role.commit();
-        } else if keep_alive && exact_owed {
-            // A lock surface that still owes a buffer at its new extent draws again next turn.
-            zgui_platform::Surface::request_redraw(self);
+        } else if keep_alive {
+            // Nothing was committed, so no callback is on its way.
+            self.shared().pacer.commit_withheld();
+            if exact_owed {
+                // A lock surface that still owes a buffer at its new extent draws again next
+                // turn.
+                zgui_platform::Surface::request_redraw(self);
+            }
         }
         self.end_drawing();
     }

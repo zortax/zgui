@@ -308,6 +308,13 @@ impl Pacer {
         self.owed = Owed::Bare(now);
     }
 
+    /// Records that the commit a redraw was closed out for did not go out.
+    ///
+    /// No callback was asked for, so none is owed.
+    pub const fn commit_withheld(&mut self) {
+        self.owed = Owed::Nothing;
+    }
+
     /// Records the compositor answering with a frame callback.
     pub const fn callback(&mut self) {
         self.owed = Owed::Nothing;
@@ -445,6 +452,20 @@ mod tests {
         assert!(
             !pacer.take(&mut shown(), now),
             "the frame after a buffer waits for the callback"
+        );
+    }
+
+    #[test]
+    fn a_withheld_commit_owes_no_callback() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        pacer.committed_bare(now);
+        pacer.commit_withheld();
+        assert!(!pacer.owes_callback());
+        pacer.request();
+        assert!(
+            pacer.take(&mut shown(), now),
+            "the next redraw does not wait for a callback nobody asked for"
         );
     }
 
