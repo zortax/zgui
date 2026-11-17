@@ -1061,3 +1061,99 @@ fn a_control_that_stays_while_its_box_loses_a_sibling_is_reported_where_it_is() 
     assert_eq!(composed_origin(&harness, target).0, 370.0);
     assert_every_update_resolves(&harness);
 }
+
+/// A scrolled list keeps every row in the tree, at the place the scroll put it.
+///
+/// The rows sit in a dialog that clips, below a button, and each row holds an empty box before a
+/// button with a child, as an app group's head in a notification list does. A consumer leaves out
+/// a node that a clipping ancestor cuts off, and its walk over the children of a node stops early
+/// after such a button. So a clip declared on the dialog would take the rows scrolled out of the
+/// port from the reader, and the rows the port shows with them.
+#[test]
+fn a_scrolled_list_keeps_its_rows_where_the_scroll_put_them() {
+    const GROUPS: usize = 15;
+    let port = NodeRef::new();
+    let mut harness = support::app_with_text(
+        "root { display: block; width: 400px; height: 300px }
+         .dialog { display: block; width: 400px; height: 230px; overflow: hidden }
+         .port { display: flex; flex-direction: column; width: 400px; height: 200px; overflow: auto }
+         .group { display: flex; flex-direction: row; flex-shrink: 0; height: 30px }
+         .fill { display: block; width: 10px; height: 1px }
+         .mark { display: block; width: 4px; height: 4px }
+         control { display: block; width: 120px; height: 24px }",
+        move |cx: &mut zgui_view::BuildCx<'_>| {
+            let mut list = zgui_elements::column().class("port").node_ref(port);
+            for index in 0..GROUPS {
+                list = list.child(
+                    zgui_elements::row()
+                        .class("group")
+                        .child(
+                            zgui_elements::control()
+                                .a11y(A11yBinding::new(Role::Button).label(format!("Group {index}"))),
+                        )
+                        .child(zgui_elements::r#box().class("fill"))
+                        .child(
+                            zgui_elements::control()
+                                .a11y(A11yBinding::new(Role::Button).label(format!("Dismiss {index}")))
+                                .child(zgui_elements::r#box().class("mark")),
+                        ),
+                );
+            }
+            Box::new(
+                zgui_elements::column()
+                    .class("root")
+                    .child(
+                        zgui_elements::column()
+                            .class("dialog")
+                            .a11y(A11yBinding::new(Role::Dialog).label("List"))
+                            .child(
+                                zgui_elements::control()
+                                    .class("head")
+                                    .a11y(A11yBinding::new(Role::Button).label("Clear all")),
+                            )
+                            .child(list),
+                    )
+                    .into_view()
+                    .build(cx),
+            )
+        },
+    );
+    harness.settle(8);
+    let key = port.get_untracked().expect("the port is bound");
+    harness
+        .platform()
+        .waker()
+        .wake(WakeReason::A11yAction(ActionRequest {
+            action: Action::SetScrollOffset,
+            target_tree: TreeId::ROOT,
+            target_node: NodeId(key.as_u64()),
+            data: Some(zgui_a11y::ActionData::SetScrollOffset(
+                zgui_a11y::Point::new(0.0, 150.0),
+            )),
+        }));
+    harness.settle(8);
+
+    /// Every node a reader reaches from `node`, as `(label, top)`.
+    fn reached(node: &accesskit_consumer::Node<'_>, into: &mut Vec<(String, f64)>) {
+        for child in node.filtered_children(&accesskit_consumer::common_filter) {
+            if let (Some(label), Some(drawn)) = (child.label(), child.bounding_box()) {
+                into.push((label, drawn.y0));
+            }
+            reached(&child, into);
+        }
+    }
+    let tree = support::a11y_tree(&harness);
+    let mut seen = Vec::new();
+    reached(&tree.state().root(), &mut seen);
+    for index in 0..GROUPS {
+        #[allow(clippy::cast_precision_loss)]
+        let top = 24.0 + index as f64 * 30.0 - 150.0;
+        for label in [format!("Group {index}"), format!("Dismiss {index}")] {
+            assert!(
+                seen.iter().any(|(it, at)| *it == label && *at == top),
+                "{label} at {top} does not reach the reader: {seen:?}"
+            );
+        }
+    }
+    assert_every_update_resolves(&harness);
+}

@@ -19,7 +19,6 @@
 
 use accesskit::{Affine, Node, Rect};
 use zgui_dom::{NodeKey, NodeKind};
-use zgui_layout::fragment::FragmentFlags;
 use zgui_scene::SpatialId;
 
 use crate::world::World;
@@ -196,25 +195,15 @@ pub fn spaces_of<'a>(world: &'a World<'_>, node: NodeKey) -> impl Iterator<Item 
         .filter_map(|fragment| fragment.transform)
 }
 
-/// Whether any of `node`'s fragments clips what is inside it.
-///
-/// A consumer reads this to decide it may skip the children that are scrolled out of sight, so a
-/// scrolling region that fails to declare it is one whose whole content is walked on every query.
-pub fn clips_children(world: &World<'_>, node: NodeKey) -> bool {
-    world.layout.fragments_of(node).iter().any(|key| {
-        world
-            .layout
-            .fragment(*key)
-            .is_some_and(|fragment| fragment.flags.contains(FragmentFlags::CLIPS_CHILDREN))
-    })
-}
-
 /// Writes the geometry of `node` onto `into`.
+///
+/// No node states that it clips its children, whatever its box does. A consumer leaves out each
+/// child that a clipping node cuts off, and its walk over the children of a node then stops at
+/// the first such child that has children of its own and follows an empty sibling. That takes
+/// the rows a scroll moved out of a port from the reader, and the rows the port shows with them.
+/// A reader tells a row out of sight from its rectangle, which is where the scroll put it.
 pub fn apply(world: &World<'_>, node: NodeKey, into: &mut Node) {
     measure(world, node).apply(into);
-    if clips_children(world, node) {
-        into.set_clips_children();
-    }
 }
 
 /// The transform the root node carries.
