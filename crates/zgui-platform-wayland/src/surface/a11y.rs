@@ -27,14 +27,21 @@
 //! build alone. The worker applies the updates in the order they were built, focus changes with
 //! them. The handlers tell the loop whether anything is listening, so a frame still builds nothing
 //! while nothing is.
+//!
+//! A frame takes no lock the worker holds, so it does not wait for the update before it. Only a
+//! surface whose updates queue up faster than the worker applies them waits, so the queue stays
+//! short.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use accesskit::{ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, TreeUpdate};
 use accesskit_unix::Adapter;
 use zgui_platform::{SurfaceId, WakeReason, Waker};
+
+/// The most updates of one surface that may wait for the worker before a frame waits with them.
+const MAX_QUEUED: usize = 4;
 
 /// The adapter of a surface, shared with the worker.
 type Shared = Arc<Mutex<Option<Adapter>>>;
@@ -48,6 +55,8 @@ pub struct A11y {
     listening: Arc<AtomicBool>,
     /// Whether the adapter waits for a whole tree, after something attached.
     fresh: Arc<AtomicBool>,
+    /// How many updates the worker has not started on.
+    queued: Arc<AtomicUsize>,
 }
 
 impl A11y {
@@ -73,20 +82,29 @@ impl A11y {
             adapter: Arc::new(Mutex::new(Some(adapter))),
             listening,
             fresh,
+            queued: Arc::default(),
         }
     }
 
     /// Publishes an update, building it only if something is listening.
     ///
-    /// The update is built here and applied on the worker.
+    /// The update is built here and applied on the worker. Nothing listens to a channel that was
+    /// never opened or is closed, so neither builds anything.
     pub fn publish(&self, build: &mut dyn FnMut() -> TreeUpdate) {
-        if !self.listening.load(Ordering::Acquire) || lock(&self.adapter).is_none() {
+        if !self.listening.load(Ordering::Acquire) {
             return;
+        }
+        if self.queued.load(Ordering::Acquire) >= MAX_QUEUED {
+            // The worker is behind. Waiting for the update it is applying bounds the queue.
+            drop(lock(&self.adapter));
         }
         let update = build();
         let adapter = Arc::clone(&self.adapter);
         let fresh = Arc::clone(&self.fresh);
+        let queued = Arc::clone(&self.queued);
+        queued.fetch_add(1, Ordering::AcqRel);
         apply(move || {
+            queued.fetch_sub(1, Ordering::AcqRel);
             if admits(&fresh, &update)
                 && let Some(adapter) = lock(&adapter).as_mut()
             {
