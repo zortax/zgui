@@ -961,3 +961,51 @@ fn a_control_in_a_box_that_moves_while_the_control_changes_is_reported_where_it_
     harness.settle(8);
     assert_eq!(composed_origin(&harness, target).0, 15.0);
 }
+
+/// A control that stays where it is while the box around it moves, as the last chip of a group
+/// that grows to the left does.
+///
+/// The control's own rectangle on the page never changes, so no move reports it, but it is
+/// measured from the box, which moved. Without a new measurement the consumer composes it as far
+/// from its place as the box moved.
+#[test]
+fn a_control_that_stays_while_its_box_moves_is_reported_where_it_is() {
+    let wide = RwSignal::new_local(false);
+    let button = NodeRef::new();
+    let mut harness = support::app_with_text(
+        "root { display: flex; flex-direction: row; justify-content: flex-end; width: 400px; height: 300px }
+         .group { display: flex; flex-direction: row; padding-left: 5px }
+         .lead { display: block; height: 10px }
+         control { display: flex; width: 30px; height: 24px }",
+        move |cx: &mut zgui_view::BuildCx<'_>| {
+            Box::new(
+                zgui_elements::row()
+                    .class("root")
+                    .child(
+                        zgui_elements::row()
+                            .class("group")
+                            .child(zgui_elements::r#box().class("lead").style_property(
+                                "width",
+                                move || Some(if wide.get() { "90px" } else { "10px" }.to_owned()),
+                            ))
+                            .child(
+                                zgui_elements::control()
+                                    .node_ref(button)
+                                    .a11y(A11yBinding::new(Role::Button).label("Last")),
+                            ),
+                    )
+                    .into_view()
+                    .build(cx),
+            )
+        },
+    );
+    harness.settle(8);
+    let target = bound_id(button);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    wide.set(true);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    wide.set(false);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+}

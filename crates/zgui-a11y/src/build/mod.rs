@@ -152,6 +152,13 @@ impl A11yBuilder {
         for node in owed.moved() {
             if self.held.holds(node) {
                 remeasured.push(node);
+                // The children are measured from this node's origin, so one that stayed where it
+                // was on the page now sits somewhere else relative to it.
+                remeasured.extend(
+                    project::children::element_keys(world, node)
+                        .into_iter()
+                        .filter(|child| self.held.holds(*child)),
+                );
                 continue;
             }
             targets.insert(node);
@@ -172,6 +179,8 @@ impl A11yBuilder {
         }
         // After the projections, and skipping anything they already covered: a node the departure
         // pass pulled in has been projected whole, which answers where it is as well.
+        remeasured.sort_unstable();
+        remeasured.dedup();
         for key in remeasured {
             if targets.contains(&key) {
                 continue;
