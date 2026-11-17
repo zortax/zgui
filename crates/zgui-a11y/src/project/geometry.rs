@@ -202,6 +202,9 @@ pub fn spaces_of<'a>(world: &'a World<'_>, node: NodeKey) -> impl Iterator<Item 
 /// the first such child that has children of its own and follows an empty sibling. That takes
 /// the rows a scroll moved out of a port from the reader, and the rows the port shows with them.
 /// A reader tells a row out of sight from its rectangle, which is where the scroll put it.
+///
+/// The cost is in a consumer's hit test, which also goes into each child a clip would cut off.
+/// It can answer a point outside a scroll port with a row scrolled out of that port.
 pub fn apply(world: &World<'_>, node: NodeKey, into: &mut Node) {
     measure(world, node).apply(into);
 }

@@ -1010,6 +1010,55 @@ fn a_control_that_stays_while_its_box_moves_is_reported_where_it_is() {
     assert_eq!(composed_origin(&harness, target).0, 370.0);
 }
 
+/// The same control, with a box that generates no box of its own between it and the group.
+///
+/// The control is measured from the group, past the wrapper. The measurement of the group's
+/// children goes through the wrapper to reach it.
+#[test]
+fn a_control_that_stays_below_a_boxless_wrapper_while_its_box_moves_is_reported_where_it_is() {
+    let wide = RwSignal::new_local(false);
+    let button = NodeRef::new();
+    let mut harness = support::app_with_text(
+        "root { display: flex; flex-direction: row; justify-content: flex-end; width: 400px; height: 300px }
+         .group { display: flex; flex-direction: row; padding-left: 5px }
+         .lead { display: block; height: 10px }
+         .wrapper { display: contents }
+         control { display: flex; width: 30px; height: 24px }",
+        move |cx: &mut zgui_view::BuildCx<'_>| {
+            Box::new(
+                zgui_elements::row()
+                    .class("root")
+                    .child(
+                        zgui_elements::row()
+                            .class("group")
+                            .child(zgui_elements::r#box().class("lead").style_property(
+                                "width",
+                                move || Some(if wide.get() { "90px" } else { "10px" }.to_owned()),
+                            ))
+                            .child(
+                                zgui_elements::r#box().class("wrapper").child(
+                                    zgui_elements::control()
+                                        .node_ref(button)
+                                        .a11y(A11yBinding::new(Role::Button).label("Last")),
+                                ),
+                            ),
+                    )
+                    .into_view()
+                    .build(cx),
+            )
+        },
+    );
+    harness.settle(8);
+    let target = bound_id(button);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    wide.set(true);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    wide.set(false);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+}
+
 /// A control that stays where it is while its box loses a sibling on the other side, as the last
 /// chip of a group that shrinks from the left does when the first chip leaves.
 ///
@@ -1155,5 +1204,19 @@ fn a_scrolled_list_keeps_its_rows_where_the_scroll_put_them() {
             );
         }
     }
+
+    // The known cost of declaring no clip. The rectangle of a row scrolled out of the port lies
+    // over the head, and the port follows the head in the tree, so a consumer's hit test answers
+    // a point on the head with that row. Change this when the consumer keeps the rows it reads
+    // under a declared clip, and the clip is declared again.
+    let state = tree.state();
+    let hit = state
+        .root()
+        .node_at_point(
+            zgui_a11y::Point::new(60.0, 12.0),
+            &accesskit_consumer::common_filter,
+        )
+        .and_then(|node| node.label());
+    assert_eq!(hit.as_deref(), Some("Group 4"));
     assert_every_update_resolves(&harness);
 }

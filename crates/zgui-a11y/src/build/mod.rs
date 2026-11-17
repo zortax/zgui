@@ -314,6 +314,9 @@ impl A11yBuilder {
     /// parent, and a child that stayed where it was, end the walk: in the first, nothing below it
     /// moved relative to it, and in the second, its origin stayed. A node projected in this update
     /// already carries its own rectangle and is skipped.
+    ///
+    /// A child that generated no box has no origin, and what is below it is measured from the
+    /// anchor. The walk goes on below such a child whatever is held for it.
     fn remeasure_children(
         &mut self,
         world: &World<'_>,
@@ -324,12 +327,14 @@ impl A11yBuilder {
         let mut measured: HashSet<NodeKey> = HashSet::new();
         while let Some(anchor) = anchors.pop() {
             for child in project::children::element_keys(world, anchor) {
-                if !self.held.holds(child) || projected.contains(&child) || !measured.insert(child)
-                {
+                if !measured.insert(child) {
                     continue;
                 }
-                let (resent, moved) = self.remeasure_and_tell(world, child, nodes);
-                if resent && moved {
+                let moved = self.held.holds(child) && !projected.contains(&child) && {
+                    let (resent, moved) = self.remeasure_and_tell(world, child, nodes);
+                    resent && moved
+                };
+                if moved || project::geometry::origin(world, child).is_none() {
                     anchors.push(child);
                 }
             }
