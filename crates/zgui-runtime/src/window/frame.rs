@@ -1201,6 +1201,9 @@ impl Window {
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
         super::brushes::publish(&self.text_slots, self.text.text_paints());
         self.brushes_moved |= applied.recoloured;
+        if !applied.rewritten.is_empty() {
+            self.redraw_inline_text(&applied.rewritten);
+        }
         let split = applied.split;
         if split.is_empty() {
             return;

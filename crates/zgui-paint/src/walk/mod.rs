@@ -482,6 +482,17 @@ impl Painter {
         self.cache.evict(&picked, scene, owner)
     }
 
+    /// Drops the records of `fragments`, so the next frame whose damage reaches them encodes them
+    /// again, and reports how many went.
+    pub fn evict_records(
+        &mut self,
+        fragments: &[FragKey],
+        scene: &mut Scene,
+        owner: &dyn ResourceOwner,
+    ) -> usize {
+        self.cache.evict(fragments, scene, owner)
+    }
+
     /// Drops every record, releasing everything each one held into caches that survive.
     pub fn clear_records(&mut self, scene: &mut Scene, owner: &dyn ResourceOwner) {
         self.cache.clear_releasing(scene, owner);

@@ -13,9 +13,14 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::NodeKey;
+use zgui_dom::side::BoxKey;
+use zgui_layout::fragment::diff::pixels;
+use zgui_layout::tree::store::LayoutStore;
 use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
 use zgui_style::{TextPaintUpdate, TextRun};
 use zgui_text_style::TextPaintKey;
+
+use crate::window::Window;
 
 /// Which of an element's runs a remembered slot belongs to.
 ///
@@ -270,6 +275,9 @@ pub(crate) struct Applied {
     /// colour — a font change, a theme flip that left the text colour alone — which then rewrites
     /// no brush and owes the display list no copy of the table.
     pub(crate) recoloured: bool,
+    /// The elements whose slot took the new colour where it stands. Their glyphs are drawn again
+    /// from the frame's damage only, so the frame owes the lines their text is on.
+    pub(crate) rewritten: Vec<NodeKey>,
 }
 
 pub(crate) fn apply(
@@ -335,6 +343,7 @@ pub(crate) fn apply(
 
     let recoloured_any = recoloured.iter().any(|moved| *moved);
     let mut split = Vec::new();
+    let mut rewritten = Vec::new();
     let mut emptied = Vec::new();
     for (update, moved) in updates.iter().zip(&recoloured) {
         let paint = TextPaint::new(update.paint.color);
@@ -372,6 +381,7 @@ pub(crate) fn apply(
             {
                 let slot = held.slot;
                 table.set(slot, paint);
+                rewritten.push(update.node);
                 // The new cascade result is pointed at the slot everything already shaped still
                 // names, so that the next paragraph flattened under the new colour does not claim
                 // a second one and draw the two halves of one element in two colours. The arm
@@ -414,6 +424,65 @@ pub(crate) fn apply(
     Applied {
         split,
         recoloured: recoloured_any,
+        rewritten,
+    }
+}
+
+/// The boxes whose lines draw the text of `nodes` for them.
+///
+/// A nested inline box has no rectangle of its own size, so its colour is in no paint record of
+/// its own. The lines of the box that holds it paint its glyphs, with the colour of the slot as the
+/// record encoded it. A box with a rectangle of its own needs nothing here: its own record misses
+/// when its style moves.
+fn inline_text_holders(nodes: &[NodeKey], layout: &LayoutStore) -> FxHashSet<BoxKey> {
+    let mut holders = FxHashSet::default();
+    for node in nodes {
+        for key in layout.boxes_of(*node) {
+            let mut at = *key;
+            while let Some(box_) = layout.get(at)
+                && box_.is_nested_inline()
+                && let Some(parent) = box_.parent
+            {
+                at = parent;
+            }
+            if at != *key {
+                holders.insert(at);
+            }
+        }
+    }
+    holders
+}
+
+impl Window {
+    /// Draws the lines that hold the text of `nodes` again, after their slots took a new colour
+    /// in place: their records go and their ink is damaged.
+    pub(super) fn redraw_inline_text(&mut self, nodes: &[NodeKey]) {
+        let layout = self.layout.borrow();
+        let holders = inline_text_holders(nodes, &layout);
+        if holders.is_empty() {
+            return;
+        }
+        let scene = &self.scene;
+        let resolve = |id| scene.spatial.resolve(id);
+        let mut fragments = Vec::new();
+        for key in holders {
+            for frag in layout.fragments_of_box(key) {
+                let Some(fragment) = layout.fragment(*frag) else {
+                    continue;
+                };
+                fragments.push(*frag);
+                let ink = fragment.on_device_in(fragment.ink, &scene.spatial);
+                let admitted = scene.clips.bounds_placed(fragment.clip, &resolve);
+                if let Some(rect) = ink.intersection(admitted)
+                    && !rect.is_empty()
+                {
+                    self.damage.absorb(pixels(rect));
+                }
+            }
+        }
+        drop(layout);
+        self.painter
+            .evict_records(&fragments, &mut self.scene, &self.content.tile_owner());
     }
 }
 
