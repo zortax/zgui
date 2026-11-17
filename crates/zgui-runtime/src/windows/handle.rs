@@ -551,6 +551,16 @@ impl WindowHandle {
         self.surface().and_then(|surface| surface.input_serial())
     }
 
+    /// When the window's frames reach the screen, as far as the desktop says.
+    ///
+    /// A caller that plans work around the window's frames reads the next refresh from it with
+    /// [`PresentationTiming::refresh_after`](zgui_platform::PresentationTiming::refresh_after).
+    /// `None` while the window is not open and on a desktop that reports no timing.
+    pub fn presentation_timing(&self) -> Option<zgui_platform::PresentationTiming> {
+        self.surface()
+            .and_then(|surface| surface.presentation_timing())
+    }
+
     /// Asks the desktop to draw attention to this window, or stops asking.
     pub fn request_attention(&self, urgent: bool) {
         self.act(|surface| surface.request_attention(urgent));
