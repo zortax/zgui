@@ -1,5 +1,6 @@
 //! One turn of the loop: dispatch, deliver, park.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use calloop::EventLoop;
@@ -11,6 +12,7 @@ use zgui_vocab::{KeyState, PointerAction};
 
 use crate::cx::WaylandCx;
 use crate::driver::WaylandState;
+use crate::surface::WaylandSurface;
 use crate::waker::PingWaker;
 
 /// Runs `handler` against this machine's compositor until the last surface closes, then writes
@@ -205,7 +207,11 @@ impl<A: AppHandler> WaylandApp<A> {
 
     /// Gives a frame to every surface that asked for one and is allowed one.
     ///
-    /// The three steps per surface are one sequence: ask the compositor for the next callback,
+    /// Every held frame is presented before any surface redraws. A held frame is ready, and its
+    /// present is a copy and a commit, so it reaches the compositor before its deadline even when
+    /// other surfaces compose whole frames in the same turn.
+    ///
+    /// The three steps of a redraw are one sequence: ask the compositor for the next callback,
     /// let the application draw, then close the redraw out. A redraw that *ran* ends in a commit
     /// whether or not it presented — a callback rides a commit, and a turn that ends without one
     /// ends the chain, after which the compositor never speaks about that surface again. A redraw
@@ -213,69 +219,83 @@ impl<A: AppHandler> WaylandApp<A> {
     /// deadline must not wait behind the answer to an empty commit.
     fn deliver_frames(&mut self) {
         let now = self.state.live.clock.now();
-        for surface in self.state.live.all() {
-            // The pacer is handed the visibility to *write* as well as to read: a frame callback
-            // given up on is the evidence that the compositor has stopped drawing this surface,
-            // and a run of them is the only occlusion signal that needs no protocol version and no
-            // cooperation. So the edge it produces is taken here, before anything is drawn.
-            let (present, hidden) = {
-                let mut shared = surface.shared();
-                if surface.take_request() {
-                    shared.pacer.request();
-                }
-                let mut visibility = shared.visibility;
-                let present = shared.pacer.take_present(&mut visibility, now);
-                shared.visibility = visibility;
-                (present, shared.visibility_edge())
-            };
-            let id = surface.id();
-            if let Some(event) = hidden {
-                let cx = WaylandCx::new(&self.state);
-                self.handler.surface_event(&cx, id, event);
+        let surfaces = self.state.live.all();
+        for surface in &surfaces {
+            self.deliver_held(surface, now);
+        }
+        for surface in &surfaces {
+            self.deliver_redraw(surface, now);
+        }
+    }
+
+    /// Presents the frame `surface` holds, if the compositor is ready for it.
+    fn deliver_held(&mut self, surface: &Arc<WaylandSurface>, now: Instant) {
+        // The pacer is handed the visibility to *write* as well as to read: a frame callback
+        // given up on is the evidence that the compositor has stopped drawing this surface,
+        // and a run of them is the only occlusion signal that needs no protocol version and no
+        // cooperation. So the edge it produces is taken here, before anything is drawn.
+        let (present, hidden) = {
+            let mut shared = surface.shared();
+            if surface.take_request() {
+                shared.pacer.request();
             }
-            // The held frame first, so that the frame after it is composed while the compositor
-            // answers for it.
-            if present {
-                let began = self.state.live.clock.now();
-                surface.begin_present();
-                {
-                    let cx = WaylandCx::new(&self.state);
-                    self.handler
-                        .surface_event(&cx, id, SurfaceEvent::PresentReady);
-                }
-                surface.finish_present(began, self.state.live.clock.now());
-            }
-            // A resize the application asked for reaches the runtime before the frame drawn at it.
-            let unreported = surface.shared().unreported.take();
-            if let Some(event) = unreported {
-                let cx = WaylandCx::new(&self.state);
-                self.handler.surface_event(&cx, id, event);
-            }
-            let due = {
-                let mut shared = surface.shared();
-                let ahead = shared.compose_ahead_now(now);
-                shared.pacer.compose_ahead(ahead);
-                let resizing = shared.resize_owed;
-                shared.pacer.answer_resize(resizing);
-                let mut visibility = shared.visibility;
-                let due = shared.pacer.take(&mut visibility, now);
-                shared.visibility = visibility;
-                if due {
-                    shared.redraw_taken();
-                }
-                due
-            };
-            if !due {
-                continue;
-            }
+            let mut visibility = shared.visibility;
+            let present = shared.pacer.take_present(&mut visibility, now);
+            shared.visibility = visibility;
+            (present, shared.visibility_edge())
+        };
+        let id = surface.id();
+        if let Some(event) = hidden {
+            let cx = WaylandCx::new(&self.state);
+            self.handler.surface_event(&cx, id, event);
+        }
+        // The held frame before the next redraw, so that the frame after it is composed while
+        // the compositor answers for it.
+        if present {
             let began = self.state.live.clock.now();
+            surface.begin_present();
             {
                 let cx = WaylandCx::new(&self.state);
                 self.handler
-                    .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
+                    .surface_event(&cx, id, SurfaceEvent::PresentReady);
             }
-            surface.finish_redraw(began, self.state.live.clock.now());
+            surface.finish_present(began, self.state.live.clock.now());
         }
+    }
+
+    /// Lets `surface` draw, if it asked for a frame and is allowed one.
+    fn deliver_redraw(&mut self, surface: &Arc<WaylandSurface>, now: Instant) {
+        let id = surface.id();
+        // A resize the application asked for reaches the runtime before the frame drawn at it.
+        let unreported = surface.shared().unreported.take();
+        if let Some(event) = unreported {
+            let cx = WaylandCx::new(&self.state);
+            self.handler.surface_event(&cx, id, event);
+        }
+        let due = {
+            let mut shared = surface.shared();
+            let ahead = shared.compose_ahead_now(now);
+            shared.pacer.compose_ahead(ahead);
+            let resizing = shared.resize_owed;
+            shared.pacer.answer_resize(resizing);
+            let mut visibility = shared.visibility;
+            let due = shared.pacer.take(&mut visibility, now);
+            shared.visibility = visibility;
+            if due {
+                shared.redraw_taken();
+            }
+            due
+        };
+        if !due {
+            return;
+        }
+        let began = self.state.live.clock.now();
+        {
+            let cx = WaylandCx::new(&self.state);
+            self.handler
+                .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
+        }
+        surface.finish_redraw(began, self.state.live.clock.now());
     }
 
     /// Asks the application how to park, installs it, and waits.
