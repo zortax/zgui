@@ -92,9 +92,9 @@ pub use zgui_elements::Focus;
 /// Drawing into a `canvas` element: the retained handle, and what a draw closure receives.
 pub use zgui_elements::{CanvasHandle, DrawCx};
 
-/// Filling a `surface` element: the binding methods, the producer handle, and the on-demand
-/// renderer contract.
-pub use zgui_wgpu::{SurfaceElementExt, SurfaceHandle, SurfaceRenderer};
+/// Filling a `surface` element: the binding methods, the producer handle, the on-demand
+/// renderer contract, and the handle that asks that renderer to render again.
+pub use zgui_wgpu::{SurfaceElementExt, SurfaceHandle, SurfaceInvalidator, SurfaceRenderer};
 
 /// Implementing an element rather than composing one: the trait, its contexts, and the handle
 /// that reaches a mounted one.
