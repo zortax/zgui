@@ -367,6 +367,7 @@ impl TextPlacement {
     fn surface(&self, scene: &Scene, brush: &RunBrush) -> RunSurface {
         RunSurface {
             transform: RunTransform::of(self.affine(scene)),
+            moving: scene.travels(self.transform),
             solid_brush: matches!(brush, RunBrush::Solid),
             scale: self.scale,
         }
@@ -1201,14 +1202,18 @@ mod tests {
     }
 
     /// A card that opens from 96 % keeps its text in tiles, so no frame of the opening fills
-    /// outlines. A large scale and a turn fill them.
+    /// outlines. A large scale and a turn fill them, and so does a slight scale at rest, where a
+    /// resampled tile shows as soft text.
     #[test]
-    fn a_run_under_a_slight_scale_draws_tiles_and_a_large_scale_or_a_turn_draws_curves() {
+    fn a_run_under_a_slight_scale_draws_tiles_only_while_an_animation_moves_it() {
         use zgui_geom::Matrix4;
         use zgui_text::{RasterPath, RunProfile};
 
-        let path = |local: Matrix4| {
-            let (scene, space) = under(local);
+        let path = |local: Matrix4, animated: bool| {
+            let (mut scene, space) = under(local);
+            if animated {
+                scene.declare_travel(space, zgui_scene::Travel::over([placement().line]));
+            }
             let placed = TextPlacement {
                 transform: space,
                 ..placement()
@@ -1219,14 +1224,24 @@ mod tests {
                 ..RunProfile::BODY_TEXT
             })
         };
-        assert_eq!(path(Matrix4::scale(0.96, 0.96, 1.0)), RasterPath::Atlas);
+        let slight = Matrix4::scale(0.96, 0.96, 1.0);
+        assert_eq!(path(slight, true), RasterPath::Atlas);
         assert_eq!(
-            path(Matrix4::translation(12.0, 34.0, 0.0).then(&Matrix4::scale(0.96, 0.96, 1.0))),
+            path(Matrix4::translation(12.0, 34.0, 0.0).then(&slight), true),
             RasterPath::Atlas
         );
-        assert_eq!(path(Matrix4::scale(2.0, 2.0, 1.0)), RasterPath::Vector);
+        assert_eq!(path(slight, false), RasterPath::Vector);
         assert_eq!(
-            path(zgui_geom::Affine2::rotation(0.2).to_matrix4()),
+            path(Matrix4::translation(12.0, 34.0, 0.0), false),
+            RasterPath::Atlas,
+            "a move at rest changes no texel"
+        );
+        assert_eq!(
+            path(Matrix4::scale(2.0, 2.0, 1.0), true),
+            RasterPath::Vector
+        );
+        assert_eq!(
+            path(zgui_geom::Affine2::rotation(0.2).to_matrix4(), true),
             RasterPath::Vector
         );
     }

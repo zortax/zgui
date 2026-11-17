@@ -48,6 +48,10 @@ fn atlas_max_size(scale: f32) -> f32 {
 /// exact raster. That covers the scale a card, a dialog or a pressed control animates through, so
 /// such an animation draws from tiles that stay in the atlas. Past it, a resampled tile is visibly
 /// soft or aliased, and the outlines are filled at the scale instead.
+///
+/// A resampled tile is softer and lighter than the exact raster at every factor. That passes
+/// unseen while the scale moves and shows once it rests, so only a run whose transform an
+/// animation moves draws from resampled tiles; see [`RunSurface::moving`].
 pub const ATLAS_MAX_STRETCH: f32 = 1.25;
 
 /// What the transform in force does to a run's glyphs.
@@ -98,7 +102,8 @@ impl RunTransform {
     /// Whether a cached tile drawn through this transform stays close to the exact raster.
     ///
     /// True for a translation, and for an upright scale whose factors are both within
-    /// [`ATLAS_MAX_STRETCH`] of one.
+    /// [`ATLAS_MAX_STRETCH`] of one. See [`RunSurface::keeps_tiles`] for whether a run draws from
+    /// tiles, which also asks whether the transform moves.
     pub fn keeps_tiles(self) -> bool {
         let near = |factor: f32| (1.0 / ATLAS_MAX_STRETCH..=ATLAS_MAX_STRETCH).contains(&factor);
         match self {
@@ -125,6 +130,11 @@ pub struct RunSurface {
     /// cached tile survives a small upright resample and nothing more; see
     /// [`RunTransform::keeps_tiles`].
     pub transform: RunTransform,
+    /// Whether an animation moves the transform in force.
+    ///
+    /// A run under a slight scale draws from cached tiles only while this is true. At rest its
+    /// outlines are filled at the scale, which is the exact raster.
+    pub moving: bool,
     /// Whether the run's brush is a single colour rather than a gradient or an image.
     ///
     /// A coverage tile carries no colour of its own: it is multiplied by one, so a brush that
@@ -141,9 +151,33 @@ impl RunSurface {
     /// An upright run of one colour at one device pixel per CSS pixel — what nearly every run is.
     pub const PLAIN: Self = Self {
         transform: RunTransform::Translation,
+        moving: false,
         solid_brush: true,
         scale: 1.0,
     };
+
+    /// Whether a run on this surface draws from cached tiles as far as its transform decides.
+    ///
+    /// True under a translation. True under a slight upright scale only while an animation moves
+    /// the transform.
+    ///
+    /// ```
+    /// use zgui_text::{RunSurface, RunTransform};
+    ///
+    /// let scaled = RunSurface {
+    ///     transform: RunTransform::Upright { x: 0.96, y: 0.96 },
+    ///     ..RunSurface::PLAIN
+    /// };
+    /// assert!(!scaled.keeps_tiles(), "a scale at rest is filled from outlines");
+    /// assert!(RunSurface { moving: true, ..scaled }.keeps_tiles());
+    /// assert!(RunSurface::PLAIN.keeps_tiles());
+    /// ```
+    pub fn keeps_tiles(&self) -> bool {
+        match self.transform {
+            RunTransform::Translation => true,
+            transform => self.moving && transform.keeps_tiles(),
+        }
+    }
 }
 
 /// What a run of glyphs is about to be drawn with.
@@ -210,11 +244,19 @@ impl RasterPath {
     /// let opening = RunProfile {
     ///     surface: RunSurface {
     ///         transform: RunTransform::Upright { x: 0.96, y: 0.96 },
+    ///         moving: true,
     ///         ..RunSurface::PLAIN
     ///     },
     ///     ..RunProfile::BODY_TEXT
     /// };
     /// assert_eq!(RasterPath::of(&opening), RasterPath::Atlas);
+    ///
+    /// // A card that rests at 96 % has its text filled at that scale.
+    /// let resting = RunProfile {
+    ///     surface: RunSurface { moving: false, ..opening.surface },
+    ///     ..opening
+    /// };
+    /// assert_eq!(RasterPath::of(&resting), RasterPath::Vector);
     ///
     /// let turned = RunProfile {
     ///     surface: RunSurface { transform: RunTransform::Other, ..RunSurface::PLAIN },
@@ -232,7 +274,7 @@ impl RasterPath {
         }
         let surface = profile.surface;
         let cacheable = profile.size <= atlas_max_size(surface.scale)
-            && surface.transform.keeps_tiles()
+            && surface.keeps_tiles()
             && surface.solid_brush;
         if cacheable { Self::Atlas } else { Self::Vector }
     }
@@ -357,16 +399,22 @@ mod tests {
     /// An opening card animates its scale through every frame. Tiles stretched by a few percent
     /// keep its text off the path rasteriser, and a large scale fills the outlines at that scale.
     #[test]
-    fn a_slight_upright_scale_keeps_the_atlas_and_a_large_one_leaves_it() {
-        let under = |x: f32, y: f32| {
+    fn a_slight_upright_scale_in_motion_keeps_the_atlas_and_a_large_one_leaves_it() {
+        let path = |x: f32, y: f32, moving: bool| {
             RasterPath::of(&RunProfile {
                 surface: RunSurface {
                     transform: RunTransform::Upright { x, y },
+                    moving,
                     ..RunSurface::PLAIN
                 },
                 ..RunProfile::BODY_TEXT
             })
         };
+        let under = |x: f32, y: f32| path(x, y, true);
+        // A resampled tile is soft, which shows once the scale rests.
+        for factor in [0.8, 0.96, 1.05, ATLAS_MAX_STRETCH] {
+            assert_eq!(path(factor, factor, false), RasterPath::Vector, "{factor}");
+        }
         for factor in [0.8, 0.94, 0.96, 1.0, 1.05, ATLAS_MAX_STRETCH] {
             assert_eq!(under(factor, factor), RasterPath::Atlas, "{factor}");
         }

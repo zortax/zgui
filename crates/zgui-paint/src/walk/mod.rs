@@ -53,6 +53,9 @@ use crate::walk::order::{Emission, NoReplaced, ReplacedSource};
 use crate::walk::replay::hold::{NoResources, ResourceOwner};
 use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Painted, Reuse};
 
+/// What the shape of a coordinate system is mixed with while an animation moves it.
+const IN_MOTION: u64 = 0x9e37_79b9_7f4a_7c15;
+
 pub use crate::walk::order::{NoReplaced as NoReplacedContent, ReplacedSource as ReplacedContent};
 
 /// Everything one emit walk reads.
@@ -563,7 +566,14 @@ impl Pass<'_, '_> {
         matrix.columns[3][0] = 0.0;
         matrix.columns[3][1] = 0.0;
         matrix.columns[3][2] = 0.0;
-        let hash = matrix.content_hash();
+        let mut hash = matrix.content_hash();
+        // A run of text under a slight scale is drawn from cached tiles while an animation moves
+        // the scale and from its outlines at rest. So a recording under a matrix that does more
+        // than move depends on whether an animation moves it, and one made in motion is not
+        // replayed at rest when the animation ends on the shape it started from.
+        if matrix != zgui_geom::Matrix4::IDENTITY && self.scene.travels(space) {
+            hash ^= IN_MOTION;
+        }
         self.shapes.insert(space, hash);
         hash
     }
