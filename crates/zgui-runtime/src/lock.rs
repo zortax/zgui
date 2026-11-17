@@ -190,6 +190,12 @@ impl LockHandle {
     ///
     /// Only a lock the desktop confirmed can be unlocked. Answers whether the unlock was asked
     /// for: false before [`LockHandle::locked`] turns true, and after the lock is over.
+    ///
+    /// A lock that waits for its answer cannot be cancelled. The desktop can confirm it at any
+    /// moment, and a lock destroyed after the confirmation is a protocol error. Wait for
+    /// [`LockHandle::locked`] or [`LockHandle::finished`], and unlock then.
+    ///
+    /// The session stays locked after every handle is dropped. Keep a handle to unlock with.
     pub fn unlock(&self) -> bool {
         if self.entry.phase.get() != Phase::Locked {
             return false;

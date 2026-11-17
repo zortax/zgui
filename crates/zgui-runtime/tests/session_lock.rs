@@ -8,7 +8,8 @@ mod support;
 
 use zgui_geom::{DevicePx, Point, Size};
 use zgui_platform::{
-    CloseReason, MonitorId, MonitorInfo, MonitorTarget, PlatformCapabilities, SurfaceRole,
+    CloseReason, MonitorId, MonitorInfo, MonitorTarget, PlatformCapabilities, PlatformCx,
+    SurfaceRole,
 };
 use zgui_platform_headless::{Harness, Headless, SessionLockState};
 use zgui_reactive::prelude::*;
@@ -181,7 +182,36 @@ fn a_lock_window_opened_after_the_lock_is_over_does_not_open() {
         .with(|| lock.open_surface(MonitorId::new(1), zgui_elements::column));
     harness.settle(4);
     assert!(!late.is_open());
+    assert_eq!(
+        late.close_reason().get_untracked(),
+        Some(CloseReason::Desktop),
+        "the handle of a window that could not open hears that it closed"
+    );
     assert!(harness.platform().offscreens().is_empty());
+}
+
+#[test]
+fn a_refused_lock_with_no_window_leaves_the_application_running() {
+    // The default policy ends the application when its last window closes. A refused lock that
+    // had no window closes none, so the application hears of the refusal.
+    let handler = App::new()
+        .without_primary_window()
+        .with_renderer(Box::new(support::capture))
+        .into_handler(|_cx: &mut zgui_view::BuildCx<'_>| unreachable!("there is no primary window"))
+        .expect("the reactive runtime installs");
+    let mut harness = Harness::over(
+        Headless::new().with_capabilities(PlatformCapabilities::none()),
+        handler,
+    );
+    harness.settle(4);
+    let lock = harness
+        .app()
+        .scope()
+        .with(SessionLock::lock)
+        .expect("the lock is asked for");
+    harness.settle(4);
+    assert!(lock.finished().get_untracked());
+    assert!(!harness.platform().is_exiting());
 }
 
 #[test]

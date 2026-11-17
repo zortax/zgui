@@ -982,8 +982,7 @@ impl Runtime {
                         // One window failing to open is not the application failing: the window
                         // that asked for it is still running and still has something to say.
                         tracing::error!(target: "zgui::app", %error, "the window could not be opened");
-                        self.commands.note_closed(token);
-                        self.live.retain(|live| live.token != token);
+                        self.forget_unopened(token, CloseReason::Desktop);
                     }
                 }
                 WindowCommand::Close(token) => {
@@ -993,8 +992,9 @@ impl Runtime {
                 WindowCommand::Lock(lock) => {
                     if let Err(error) = cx.lock_session() {
                         tracing::warn!(target: "zgui::app", %error, "the session could not be locked");
-                        self.lock_ended(cx, &lock);
-                        closed_any = true;
+                        // A refused lock that had no window yet closes nothing, so an
+                        // application with no window lives on to hear of the refusal.
+                        closed_any |= self.lock_ended(cx, &lock);
                     }
                 }
                 WindowCommand::Unlock(lock) => {
@@ -1025,17 +1025,34 @@ impl Runtime {
             self.close_window(cx, surface, reason);
         } else {
             // Asked for before it ever opened: it is simply no longer wanted.
-            self.commands.note_closed(token);
-            self.live.retain(|live| live.token != token);
+            self.forget_unopened(token, reason);
         }
     }
 
-    /// Records that the session lock is over, and closes its lock windows.
-    fn lock_ended(&mut self, cx: &dyn PlatformCx, lock: &crate::lock::LockEntry) {
+    /// Forgets a window that has no surface, and tells its handle that it closed and why.
+    ///
+    /// The window was closed before it opened, or it could not be opened. Its handle hears of the
+    /// close as the handle of an open window does, so code that waits for
+    /// [`WindowHandle::close_reason`](crate::windows::WindowHandle::close_reason) is answered.
+    fn forget_unopened(&mut self, token: WindowToken, reason: CloseReason) {
+        self.commands.note_closed(token);
+        if let Some(index) = self.live_index(token) {
+            self.live[index].handle.note_closed();
+            self.live[index].handle.set_close_reason(reason);
+            self.windows_api.note_closed(token);
+            self.live.remove(index);
+        }
+    }
+
+    /// Records that the session lock is over, and closes its lock windows. Answers whether the
+    /// lock had a window to close.
+    fn lock_ended(&mut self, cx: &dyn PlatformCx, lock: &crate::lock::LockEntry) -> bool {
         self.scope.with(|| lock.ended());
-        for window in lock.windows() {
+        let windows = lock.windows();
+        for window in &windows {
             self.close_token(cx, window.id(), CloseReason::Desktop);
         }
+        !windows.is_empty()
     }
 
     /// Gives every focus grab the surfaces of its windows that are open, and forgets the grabs
@@ -1498,8 +1515,9 @@ impl AppHandler for Runtime {
                 }
             }
             WakeReason::SessionLockFinished => {
-                if let Some(lock) = self.commands.session_lock() {
-                    self.lock_ended(cx, &lock);
+                if let Some(lock) = self.commands.session_lock()
+                    && self.lock_ended(cx, &lock)
+                {
                     self.apply_exit_policy(cx);
                 }
             }
