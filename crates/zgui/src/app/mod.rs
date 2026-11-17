@@ -348,6 +348,64 @@ impl App {
         self
     }
 
+    /// Makes the window the application starts with a shell window, such as a bar or a dock.
+    ///
+    /// The desktop draws no frame around it and the user cannot move or resize it. A desktop that
+    /// has no shell windows refuses to open it, and the application stops with that error; see
+    /// [`PlatformCapabilities::layer_surfaces`](zgui_platform::PlatformCapabilities::layer_surfaces).
+    ///
+    /// ```no_run
+    /// use zgui::geom::{CssPx, Edges};
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_layer(
+    ///         LayerOptions::top()
+    ///             .with_anchors(Edges::new(true, true, false, true))
+    ///             .with_size(0.0, 34.0)
+    ///             .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(34.0))),
+    ///     )
+    ///     .run(|| view! { row() })
+    /// # }
+    /// ```
+    pub fn with_layer(mut self, layer: zgui_runtime::LayerOptions) -> Self {
+        self.inner = self.inner.with_layer(layer);
+        self
+    }
+
+    /// Starts the application with no window open.
+    ///
+    /// The view that [`App::run`] takes is then not built, and the window settings on this builder
+    /// are not used. The application opens every window itself, from [`App::with_context`] or
+    /// from anything that runs under it, through [`use_windows`](zgui_runtime::use_windows). A
+    /// desktop shell starts this way: it opens one bar for each monitor and a pop-over on demand.
+    ///
+    /// Pair it with [`ExitPolicy::Explicit`](zgui_runtime::ExitPolicy::Explicit) when the
+    /// application must keep running while no window is open, and stop it with
+    /// [`Windows::quit`](zgui_runtime::Windows::quit).
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .without_primary_window()
+    ///     .with_exit_policy(ExitPolicy::Explicit)
+    ///     .with_context(|| {
+    ///         use_windows().open(
+    ///             WindowOptions::layer(LayerOptions::top().with_size(0.0, 34.0)),
+    ///             || view! { row() },
+    ///         );
+    ///     })
+    ///     .run(|| ())
+    /// # }
+    /// ```
+    pub fn without_primary_window(mut self) -> Self {
+        self.inner = self.inner.without_primary_window();
+        self
+    }
+
     /// Decides when the application stops.
     ///
     /// The default stops it when the last window closes. See

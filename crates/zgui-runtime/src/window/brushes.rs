@@ -11,11 +11,16 @@
 //! against is held here beside it: held rather than noted, because the key is an address, and an
 //! address is an identity only while the allocation behind it is alive.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::NodeKey;
+use zgui_dom::side::BoxKey;
+use zgui_layout::fragment::diff::pixels;
+use zgui_layout::tree::store::LayoutStore;
 use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
 use zgui_style::{TextPaintUpdate, TextRun};
 use zgui_text_style::TextPaintKey;
+
+use crate::window::Window;
 
 /// Which of an element's runs a remembered slot belongs to.
 ///
@@ -270,6 +275,9 @@ pub(crate) struct Applied {
     /// colour — a font change, a theme flip that left the text colour alone — which then rewrites
     /// no brush and owes the display list no copy of the table.
     pub(crate) recoloured: bool,
+    /// The elements whose slot took the new colour where it stands. Their glyphs are drawn again
+    /// from the frame's damage only, so the frame owes the lines their text is on.
+    pub(crate) rewritten: Vec<NodeKey>,
 }
 
 pub(crate) fn apply(
@@ -277,6 +285,7 @@ pub(crate) fn apply(
     table: &mut TextPaintTable,
     updates: &[TextPaintUpdate],
 ) -> Applied {
+    let updates = &*latest(updates);
     // Whether each update is drawn in a colour the slot it is already using does not hold. Taken
     // before anything is written, because the loop below rewrites slots and a comparison made
     // half way through it would be a comparison against this batch's own work.
@@ -319,9 +328,22 @@ pub(crate) fn apply(
         .keys()
         .map(|slot| (*slot, slots.owners_of(*slot)))
         .collect();
+    // The slots an element of this batch moves onto because its new cascade result already
+    // answers to them. Such a slot holds the colour of that result, and the element is drawn
+    // through it from its next shaping on, so the slot is never rewritten in place in this batch.
+    // Read before the loop, because the order of the updates must not decide it.
+    let joined: FxHashSet<PaintSlot> = updates
+        .iter()
+        .filter_map(|update| {
+            let held = slots.get(&(update.node, update.run))?;
+            let owned = table.slot_of(address(&update.paint.key))?;
+            (owned != held.slot).then_some(owned)
+        })
+        .collect();
 
     let recoloured_any = recoloured.iter().any(|moved| *moved);
     let mut split = Vec::new();
+    let mut rewritten = Vec::new();
     let mut emptied = Vec::new();
     for (update, moved) in updates.iter().zip(&recoloured) {
         let paint = TextPaint::new(update.paint.color);
@@ -353,9 +375,13 @@ pub(crate) fn apply(
                 establish(table, claimed, slot);
                 slot
             }
-            (Some(held), _) if rewritable_in_place(&covered, &owners_at_start, held.slot) => {
+            (Some(held), _)
+                if !joined.contains(&held.slot)
+                    && rewritable_in_place(&covered, &owners_at_start, held.slot) =>
+            {
                 let slot = held.slot;
                 table.set(slot, paint);
+                rewritten.push(update.node);
                 // The new cascade result is pointed at the slot everything already shaped still
                 // names, so that the next paragraph flattened under the new colour does not claim
                 // a second one and draw the two halves of one element in two colours. The arm
@@ -398,7 +424,100 @@ pub(crate) fn apply(
     Applied {
         split,
         recoloured: recoloured_any,
+        rewritten,
     }
+}
+
+/// The boxes whose lines draw the text of `nodes` for them.
+///
+/// A nested inline box has no rectangle of its own size, so its colour is in no paint record of
+/// its own. The lines of the box that holds it paint its glyphs, with the colour of the slot as the
+/// record encoded it. A box with a rectangle of its own needs nothing here: its own record misses
+/// when its style moves.
+fn inline_text_holders(nodes: &[NodeKey], layout: &LayoutStore) -> FxHashSet<BoxKey> {
+    let mut holders = FxHashSet::default();
+    for node in nodes {
+        for key in layout.boxes_of(*node) {
+            let mut at = *key;
+            while let Some(box_) = layout.get(at)
+                && box_.is_nested_inline()
+                && let Some(parent) = box_.parent
+            {
+                at = parent;
+            }
+            if at != *key {
+                holders.insert(at);
+            }
+        }
+    }
+    holders
+}
+
+impl Window {
+    /// Draws the lines that hold the text of `nodes` again, after their slots took a new colour
+    /// in place: their records go and their ink is damaged.
+    pub(super) fn redraw_inline_text(&mut self, nodes: &[NodeKey]) {
+        let layout = self.layout.borrow();
+        let holders = inline_text_holders(nodes, &layout);
+        if holders.is_empty() {
+            return;
+        }
+        let scene = &self.scene;
+        let resolve = |id| scene.spatial.resolve(id);
+        let mut fragments = Vec::new();
+        for key in holders {
+            for frag in layout.fragments_of_box(key) {
+                let Some(fragment) = layout.fragment(*frag) else {
+                    continue;
+                };
+                fragments.push(*frag);
+                let ink = fragment.on_device_in(fragment.ink, &scene.spatial);
+                let admitted = scene.clips.bounds_placed(fragment.clip, &resolve);
+                if let Some(rect) = ink.intersection(admitted)
+                    && !rect.is_empty()
+                {
+                    self.damage.absorb(pixels(rect));
+                }
+            }
+        }
+        drop(layout);
+        self.painter
+            .evict_records(&fragments, &mut self.scene, &self.content.tile_owner());
+    }
+}
+
+/// The updates of a batch with one report per element run.
+///
+/// An element whose colour transition ticks more than once before a batch is applied is reported
+/// once per tick. Each report would count as one more element re-coloured in the batch, so two
+/// reports of one element stand in for a second element that shares its slot and is not in the
+/// batch, and the slot is rewritten under that element. The last report is what the element is
+/// drawn in now. It keeps the `restyled` mark of the first report, because the earlier reports of
+/// the same batch were not lost.
+fn latest(updates: &[TextPaintUpdate]) -> std::borrow::Cow<'_, [TextPaintUpdate]> {
+    let mut last: FxHashMap<SlotKey, usize> = FxHashMap::default();
+    let mut first: FxHashMap<SlotKey, bool> = FxHashMap::default();
+    for (index, update) in updates.iter().enumerate() {
+        let key = (update.node, update.run);
+        last.insert(key, index);
+        first.entry(key).or_insert(update.restyled);
+    }
+    if last.len() == updates.len() {
+        return std::borrow::Cow::Borrowed(updates);
+    }
+    let merged = updates
+        .iter()
+        .enumerate()
+        .filter(|(index, update)| last.get(&(update.node, update.run)) == Some(index))
+        .map(|(_, update)| {
+            let mut update = update.clone();
+            if let Some(restyled) = first.get(&(update.node, update.run)) {
+                update.restyled = *restyled;
+            }
+            update
+        })
+        .collect();
+    std::borrow::Cow::Owned(merged)
 }
 
 /// Points a cascade result at `slot`, unless it already resolves to one of its own.
@@ -588,6 +707,28 @@ mod tests {
             vec![1, 2],
             "an element moved off the slot its glyphs name has to be shaped again"
         );
+    }
+
+    /// One element reported twice in a batch counts once.
+    ///
+    /// Counted per report, the two reports of the first element stand in for the second element,
+    /// which shares the slot and is not in the batch, and the slot is rewritten under it.
+    #[test]
+    fn an_element_reported_twice_in_a_batch_counts_once() {
+        let (mut slots, mut table, _shared) = sharing_one_slot(grey(0.1));
+
+        apply(
+            &mut slots,
+            &mut table,
+            &[update(1, grey(0.4)), update(1, grey(0.4))],
+        );
+
+        assert_eq!(
+            drawn(&slots, &table, 2),
+            TextPaint::new(grey(0.1)),
+            "the element outside the batch keeps its colour"
+        );
+        assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.4)));
     }
 
     /// A cascade result that already has a slot keeps it, however the element arriving on it is
@@ -796,6 +937,52 @@ mod tests {
         );
         assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.8)));
         assert_eq!(drawn(&slots, &table, 2), TextPaint::new(grey(0.1)));
+    }
+
+    /// An element arrives on a result in the same batch that re-colours the element that claimed
+    /// the result's slot.
+    ///
+    /// The arriving element is drawn through that slot from its next shaping on, so the slot keeps
+    /// the result's colour whatever order the two updates come in. A write through it would leave
+    /// the result answering to a slot that holds another colour.
+    #[test]
+    fn a_slot_an_element_joins_in_a_batch_is_not_rewritten_in_place_in_it() {
+        for joining_first in [true, false] {
+            let mut table = TextPaintTable::new();
+            let mut slots = TextSlots::default();
+            let shared = cascade_result();
+            let own = cascade_result();
+            apply(
+                &mut slots,
+                &mut table,
+                &[
+                    arriving(1, &shared, grey(0.1)),
+                    arriving(2, &own, grey(0.1)),
+                ],
+            );
+
+            let moved = cascade_result();
+            let joining = arriving(2, &shared, grey(0.1));
+            let recolouring = arriving(1, &moved, grey(0.8));
+            let batch = if joining_first {
+                [joining, recolouring]
+            } else {
+                [recolouring, joining]
+            };
+            apply(&mut slots, &mut table, &batch);
+
+            let answers = table
+                .slot_of(super::address(&shared))
+                .expect("the joining element still holds the shared result");
+            assert_eq!(
+                table.get(answers),
+                Some(&TextPaint::new(grey(0.1))),
+                "the shared result answers to a slot of another colour (joining first: \
+                 {joining_first})"
+            );
+            assert_eq!(drawn(&slots, &table, 1), TextPaint::new(grey(0.8)));
+            assert_eq!(drawn(&slots, &table, 2), TextPaint::new(grey(0.1)));
+        }
     }
 
     /// The path the divergence guard must not cost anything: a theme flip, where every element

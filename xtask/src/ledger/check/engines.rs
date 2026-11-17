@@ -92,6 +92,7 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("wayland-backend", &["zgui-platform-wayland"]),
     ("wayland-protocols", &["zgui-platform-wayland"]),
     ("wayland-protocols-wlr", &["zgui-platform-wayland"]),
+    ("wayland-scanner", &["zgui-platform-wayland"]),
     ("calloop", &["zgui-platform-wayland"]),
     ("calloop-wayland-source", &["zgui-platform-wayland"]),
     ("accesskit_unix", &["zgui-platform-wayland"]),

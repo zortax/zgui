@@ -48,8 +48,17 @@ pub enum SurfaceEvent {
     /// This arrives only after a surface answered [`Surface::present_now`](crate::Surface::present_now)
     /// with `false`. It asks for the held frame to be presented, and for nothing to be drawn.
     PresentReady,
+    /// A frame of the surface reached the screen for the first time.
+    ///
+    /// A platform sends it once per surface, and only when
+    /// [`Surface::reports_presentation`](crate::Surface::reports_presentation) answers true.
+    Presented,
     /// The user asked for the surface to close. Nothing has closed yet.
     CloseRequested,
+    /// The desktop took the surface away, and it cannot be shown again.
+    ///
+    /// The application cannot refuse this. It closes the window and destroys the surface.
+    Closed(CloseReason),
     /// The surface is gone.
     Destroyed,
     /// The surface gained or lost keyboard focus.
@@ -112,6 +121,10 @@ pub enum SurfaceEvent {
     /// surface does not have the keyboard, and when a backend takes a device and reads the keys
     /// already held out of the kernel. A modifier state recovered from key events alone is wrong
     /// until the next press in both cases.
+    ///
+    /// This event alone also carries the locks, [`Modifiers::CAPS_LOCK`] and
+    /// [`Modifiers::NUM_LOCK`], where the backend knows them. A backend reports it when a lock
+    /// changes, and when the surface gains the keyboard.
     ///
     /// ```
     /// use zgui_platform::SurfaceEvent;
@@ -222,6 +235,32 @@ impl SurfaceEvent {
             _ => None,
         }
     }
+}
+
+/// Why a window closed.
+///
+/// A backend reports [`CloseReason::OutputGone`], [`CloseReason::Dismissed`] and
+/// [`CloseReason::Desktop`] through [`SurfaceEvent::Closed`]. The runtime reports all of them to
+/// the application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CloseReason {
+    /// The application closed it.
+    Application,
+    /// The user asked for it to close, and nothing refused.
+    User,
+    /// The output it was on went away.
+    ///
+    /// A shell window opened on one output closes when that output is unplugged or turned off.
+    /// An application that wants the window back opens a new one when the output returns.
+    OutputGone,
+    /// The desktop took it away for a reason of its own.
+    Desktop,
+    /// The desktop dismissed a pop-up.
+    ///
+    /// A grabbing pop-up is dismissed when the user presses outside it. A pop-up also closes with
+    /// this reason when its parent closes first.
+    Dismissed,
 }
 
 #[cfg(test)]

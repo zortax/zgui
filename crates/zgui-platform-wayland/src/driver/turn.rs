@@ -1,5 +1,6 @@
 //! One turn of the loop: dispatch, deliver, park.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use calloop::EventLoop;
@@ -7,9 +8,11 @@ use calloop_wayland_source::WaylandSource;
 use zgui_platform::{
     AppHandler, Clock, IdlePolicy, Install, Park, Parked, PlatformError, Surface as _, SurfaceEvent,
 };
+use zgui_vocab::{KeyState, PointerAction};
 
 use crate::cx::WaylandCx;
 use crate::driver::WaylandState;
+use crate::surface::WaylandSurface;
 use crate::waker::PingWaker;
 
 /// Runs `handler` against this machine's compositor until the last surface closes, then writes
@@ -18,7 +21,8 @@ use crate::waker::PingWaker;
 /// # Errors
 ///
 /// Returns [`PlatformError::Backend`] when there is no compositor to connect to — which is how a
-/// caller learns to fall back to a portable backend — or when the connection failed later.
+/// caller learns to fall back to a portable backend — or when the connection failed later. A
+/// protocol error or a lost connection ends the loop at the dispatch that finds it.
 pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
     let mut app = WaylandApp::new(handler)?;
     zgui_profile::latency::start_epoch();
@@ -66,13 +70,21 @@ impl<A: AppHandler> WaylandApp<A> {
             .map_err(|error| PlatformError::Backend(format!("the wake source: {error}")))?;
 
         let waker = PingWaker::new(ping);
-        let state = WaylandState::new(
+        let mut queue = queue;
+        let mut state = WaylandState::new(
             conn.clone(),
             &globals,
             queue.handle(),
             events.handle(),
             waker,
         )?;
+        // One round trip before the application starts, so that it starts with the outputs known.
+        // The outputs are described only in answer to the binds above, and a shell window that
+        // opens on a named output at start-up has to find that output.
+        queue
+            .roundtrip(&mut state)
+            .map_err(|error| PlatformError::Backend(format!("the first round trip: {error}")))?;
+        state.announce_outputs = true;
         // The adapter owns the read, dispatch and flush cycle for the socket. Doing it by hand is
         // how a client goes to sleep holding events it has read and not dispatched, which from
         // outside is a window that has stopped.
@@ -97,6 +109,14 @@ impl<A: AppHandler> WaylandApp<A> {
     /// How the loop is parked, and how many deadline arrivals it has reported.
     pub const fn park(&self) -> &Park {
         &self.park
+    }
+
+    /// The connection the loop runs on.
+    ///
+    /// A program that speaks to the compositor beside the loop makes its own objects on it, on an
+    /// event queue of its own.
+    pub const fn connection(&self) -> &smithay_client_toolkit::reexports::client::Connection {
+        &self.state.conn
     }
 
     /// How many turns have started.
@@ -149,11 +169,24 @@ impl<A: AppHandler> WaylandApp<A> {
 
     /// Hands over everything the compositor said during the last dispatch.
     fn deliver_events(&mut self) {
+        self.state.resolve_closings();
         // Taken as a whole rather than drained in place: delivering one may create or close a
         // surface, and both of those record events of their own.
         let events = std::mem::take(&mut self.state.out);
         for (id, event) in events {
-            let closing = matches!(event, SurfaceEvent::Destroyed);
+            // Input lets the redraw it asks for through a callback that only keeps the chain alive,
+            // and a press composes ahead of a callback owed for a buffer.
+            if event.is_input()
+                && let Some(surface) = self.state.live.surface(id)
+            {
+                let mut shared = surface.shared();
+                if is_press(&event) {
+                    shared.pacer.press();
+                } else {
+                    shared.pacer.input();
+                }
+            }
+            let closing = matches!(event, SurfaceEvent::Destroyed | SurfaceEvent::Closed(_));
             let cx = WaylandCx::new(&self.state);
             self.handler.surface_event(&cx, id, event);
             if closing {
@@ -174,7 +207,11 @@ impl<A: AppHandler> WaylandApp<A> {
 
     /// Gives a frame to every surface that asked for one and is allowed one.
     ///
-    /// The three steps per surface are one sequence: ask the compositor for the next callback,
+    /// Every held frame is presented before any surface redraws. A held frame is ready, and its
+    /// present is a copy and a commit, so it reaches the compositor before its deadline even when
+    /// other surfaces compose whole frames in the same turn.
+    ///
+    /// The three steps of a redraw are one sequence: ask the compositor for the next callback,
     /// let the application draw, then close the redraw out. A redraw that *ran* ends in a commit
     /// whether or not it presented — a callback rides a commit, and a turn that ends without one
     /// ends the chain, after which the compositor never speaks about that surface again. A redraw
@@ -182,62 +219,83 @@ impl<A: AppHandler> WaylandApp<A> {
     /// deadline must not wait behind the answer to an empty commit.
     fn deliver_frames(&mut self) {
         let now = self.state.live.clock.now();
-        for surface in self.state.live.all() {
-            // The pacer is handed the visibility to *write* as well as to read: a frame callback
-            // given up on is the evidence that the compositor has stopped drawing this surface,
-            // and a run of them is the only occlusion signal that needs no protocol version and no
-            // cooperation. So the edge it produces is taken here, before anything is drawn.
-            let (present, hidden) = {
-                let mut shared = surface.shared();
-                if surface.take_request() {
-                    shared.pacer.request();
-                }
-                let mut visibility = shared.visibility;
-                let present = shared.pacer.take_present(&mut visibility, now);
-                shared.visibility = visibility;
-                (present, shared.visibility_edge())
-            };
-            let id = surface.id();
-            if let Some(event) = hidden {
-                let cx = WaylandCx::new(&self.state);
-                self.handler.surface_event(&cx, id, event);
+        let surfaces = self.state.live.all();
+        for surface in &surfaces {
+            self.deliver_held(surface, now);
+        }
+        for surface in &surfaces {
+            self.deliver_redraw(surface, now);
+        }
+    }
+
+    /// Presents the frame `surface` holds, if the compositor is ready for it.
+    fn deliver_held(&mut self, surface: &Arc<WaylandSurface>, now: Instant) {
+        // The pacer is handed the visibility to *write* as well as to read: a frame callback
+        // given up on is the evidence that the compositor has stopped drawing this surface,
+        // and a run of them is the only occlusion signal that needs no protocol version and no
+        // cooperation. So the edge it produces is taken here, before anything is drawn.
+        let (present, hidden) = {
+            let mut shared = surface.shared();
+            if surface.take_request() {
+                shared.pacer.request();
             }
-            // The held frame first, so that the frame after it is composed while the compositor
-            // answers for it.
-            if present {
-                let began = self.state.live.clock.now();
-                {
-                    let cx = WaylandCx::new(&self.state);
-                    self.handler
-                        .surface_event(&cx, id, SurfaceEvent::PresentReady);
-                }
-                surface.finish_present(began, self.state.live.clock.now());
-            }
-            let due = {
-                let mut shared = surface.shared();
-                let ahead = shared.compose_ahead_now(now);
-                shared.pacer.compose_ahead(ahead);
-                let resizing = shared.resize_owed;
-                shared.pacer.answer_resize(resizing);
-                let mut visibility = shared.visibility;
-                let due = shared.pacer.take(&mut visibility, now);
-                shared.visibility = visibility;
-                if due {
-                    shared.redraw_taken();
-                }
-                due
-            };
-            if !due {
-                continue;
-            }
+            let mut visibility = shared.visibility;
+            let present = shared.pacer.take_present(&mut visibility, now);
+            shared.visibility = visibility;
+            (present, shared.visibility_edge())
+        };
+        let id = surface.id();
+        if let Some(event) = hidden {
+            let cx = WaylandCx::new(&self.state);
+            self.handler.surface_event(&cx, id, event);
+        }
+        // The held frame before the next redraw, so that the frame after it is composed while
+        // the compositor answers for it.
+        if present {
             let began = self.state.live.clock.now();
+            surface.begin_present();
             {
                 let cx = WaylandCx::new(&self.state);
                 self.handler
-                    .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
+                    .surface_event(&cx, id, SurfaceEvent::PresentReady);
             }
-            surface.finish_redraw(began, self.state.live.clock.now());
+            surface.finish_present(began, self.state.live.clock.now());
         }
+    }
+
+    /// Lets `surface` draw, if it asked for a frame and is allowed one.
+    fn deliver_redraw(&mut self, surface: &Arc<WaylandSurface>, now: Instant) {
+        let id = surface.id();
+        // A resize the application asked for reaches the runtime before the frame drawn at it.
+        let unreported = surface.shared().unreported.take();
+        if let Some(event) = unreported {
+            let cx = WaylandCx::new(&self.state);
+            self.handler.surface_event(&cx, id, event);
+        }
+        let due = {
+            let mut shared = surface.shared();
+            let ahead = shared.compose_ahead_now(now);
+            shared.pacer.compose_ahead(ahead);
+            let resizing = shared.resize_owed;
+            shared.pacer.answer_resize(resizing);
+            let mut visibility = shared.visibility;
+            let due = shared.pacer.take(&mut visibility, now);
+            shared.visibility = visibility;
+            if due {
+                shared.redraw_taken();
+            }
+            due
+        };
+        if !due {
+            return;
+        }
+        let began = self.state.live.clock.now();
+        {
+            let cx = WaylandCx::new(&self.state);
+            self.handler
+                .surface_event(&cx, id, SurfaceEvent::RedrawRequested);
+        }
+        surface.finish_redraw(began, self.state.live.clock.now());
     }
 
     /// Asks the application how to park, installs it, and waits.
@@ -289,7 +347,13 @@ impl<A: AppHandler> WaylandApp<A> {
             _ => None,
         };
         if let Err(error) = self.events.dispatch(timeout, &mut self.state) {
-            return Err(self.state.explain(&error));
+            return Err(stopped(self.state.explain(&error)));
+        }
+        // The socket adapter passes over a protocol error found by a read or a flush, and the
+        // graphics driver can find one on the same connection. Asked here, the first one stops the
+        // loop before it turns on a dead socket.
+        if let Some(error) = self.state.connection_failure() {
+            return Err(stopped(error));
         }
 
         // Calloop reports that it woke, never why. The deadline edge is therefore taken from the
@@ -309,6 +373,26 @@ impl<A: AppHandler> WaylandApp<A> {
         }
         Ok(())
     }
+}
+
+/// Whether `event` is a button or a key going down.
+const fn is_press(event: &SurfaceEvent) -> bool {
+    matches!(
+        event,
+        SurfaceEvent::Pointer {
+            action: PointerAction::Pressed,
+            ..
+        } | SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            ..
+        }
+    )
+}
+
+/// Logs the failure that stops the loop, once, and hands it on.
+fn stopped(error: PlatformError) -> PlatformError {
+    tracing::error!(%error, "the connection to the compositor failed; the loop stops");
+    error
 }
 
 /// The moment this turn started, for the parts that need one reading rather than several.

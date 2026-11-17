@@ -38,8 +38,8 @@ use crate::tier::Tier;
 /// What the frame did with an element's interpolated placement.
 ///
 /// Answered by the caller, because the caller is what holds the previous frame's table and the
-/// coordinate systems the boxes established. Read on the placement path and ignored on the other
-/// two.
+/// coordinate systems the boxes established. Read on the placement path, and on the cheap path
+/// for a box that has to be composed again. The cascade path ignores it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placed {
     /// The interpolation arrived back where the standing fragments were already composed.
@@ -84,9 +84,19 @@ pub fn element(
             {
                 bits |= Dirty::REPAINT | Dirty::REHIT;
             }
-            // `ANIMATING` because nothing else will ask for the frame after this one.
+            // A transition that moved the box ended while a colour goes on: its end value is still
+            // a placement, and a box that could not be moved by a written coordinate system is
+            // composed again, as on the placement path.
+            if placed == Placed::Recomposed {
+                bits |= Dirty::REFRAGMENT | Dirty::REHIT;
+            }
+            // `ANIMATING` because nothing else will ask for the frame after this one. An element
+            // whose values hold still until a later moment owes no frame before it, and the caller
+            // wakes the loop at that moment instead.
             if animation.advancing {
-                bits |= Dirty::ANIMATING;
+                if animation.hold.is_none() {
+                    bits |= Dirty::ANIMATING;
+                }
                 counter::bump(Counter::TierBTransitions);
             }
             if !bits.is_empty() {
@@ -245,6 +255,7 @@ mod tests {
                 },
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -281,6 +292,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -307,6 +319,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Recomposed,
@@ -342,6 +355,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Written,
@@ -376,6 +390,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: false,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -402,6 +417,7 @@ mod tests {
                 },
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Recomposed,
@@ -441,6 +457,7 @@ mod tests {
             },
             placement: None,
             advancing: false,
+            hold: None,
             crossed: false,
         };
         element(&mut document, &held, Placed::Held, &mut Recomposing);
@@ -481,6 +498,7 @@ mod tests {
             },
             placement: None,
             advancing: false,
+            hold: None,
             crossed: false,
         };
         element(&mut document, &held, Placed::Held, &mut Recomposing);
@@ -511,6 +529,7 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: false,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
@@ -538,6 +557,7 @@ mod tests {
             },
             placement: None,
             advancing: true,
+            hold: None,
             crossed: false,
         };
         element(&mut document, &fading, Placed::Held, &mut Recomposing);

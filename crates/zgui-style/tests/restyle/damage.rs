@@ -374,6 +374,36 @@ fn a_hover_that_changes_transitions_and_the_display_still_rebuilds() {
 }
 
 #[test]
+fn a_hover_that_starts_or_stops_an_animation_rebuilds_no_box() {
+    let mut harness = Harness::new();
+    let row = harness.append(harness.root, "control");
+    harness.set_classes(row, &["row"]);
+    let text = harness.append_text(row, "a row");
+    harness.add_author(
+        "@keyframes fade { from { opacity: 0.5 } }\n\
+         .row { padding: 2px; background-color: rgb(1, 0, 0) }\n\
+         .row:hover { animation: fade 90ms linear }",
+    );
+    harness.frame();
+    harness.retire_all();
+    let built = Dirty::REBUILD_BOX | Dirty::RELAYOUT | Dirty::RESHAPE | Dirty::REBREAK;
+    for hovered in [true, false] {
+        harness.set_state(row, UiState::HOVER, hovered);
+        let pass = harness.frame();
+        assert!(
+            pass.records.iter().any(|record| record.index == row),
+            "the hover has to restyle the row, or this tests an idle frame"
+        );
+        let owed = harness.owed(row) | harness.owed_below(row) | harness.owed(text);
+        assert!(
+            !owed.intersects(built),
+            "an animation of the opacity lays nothing out (hovered: {hovered}): {owed:?}"
+        );
+        harness.retire_all();
+    }
+}
+
+#[test]
 fn a_hover_that_declares_the_values_already_there_owes_nothing() {
     // The cascade gives the row new background, box and position groups, with the same values.
     let (harness, row, text) = hovered_row("background-color: rgb(1, 0, 0)");

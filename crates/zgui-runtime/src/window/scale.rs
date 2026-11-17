@@ -54,9 +54,8 @@ impl Window {
         // element's box needs the number that converts CSS pixels to device ones, and a surface
         // that moved to another monitor has changed it.
         self.host.set_scale(scale);
-        // The colour scheme is carried across rather than defaulted. It is a property of the
-        // desktop and not of the surface's extent, so a window that is resized, or dragged onto
-        // another monitor, must not be re-styled as though the user had just asked for light.
+        // The colour scheme is carried across. It is a property of the desktop, so a window that is
+        // resized or dragged onto another monitor keeps it.
         self.viewport = Viewport::new(CssPx(width / scale), CssPx(height / scale))
             .at_scale(scale)
             .in_scheme(self.color_scheme());

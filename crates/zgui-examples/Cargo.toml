@@ -104,6 +104,10 @@ path = "../../examples/csd.rs"
 name = "images"
 path = "../../examples/images.rs"
 
+[[example]]
+name = "layer_shell"
+path = "../../examples/layer_shell.rs"
+
 # The console example, which runs on the kernel's display interface rather than on a desktop. It
 # names `run_drm`, so it does not compile without the backend that defines it. `required-features`
 # leaves it out of `cargo build --examples` on a machine that never asked for the feature.

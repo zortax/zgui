@@ -201,6 +201,15 @@ pub struct Window {
     /// deadline recomputed from the present moment is pushed forward by every wake the window has
     /// for any other reason. See [`AnimationCadence`](crate::AnimationCadence).
     animation: crate::window::anim::cadence::AnimationCadence,
+    /// How long after the start of the last frame the stepped animations, whose values hold still,
+    /// owe their next tick. Set by the animation stage and turned into `hold_due` when
+    /// the frame paces its animations.
+    hold_after: Option<std::time::Duration>,
+    /// The moment the stepped animations owe their next tick at.
+    ///
+    /// They ask for no frame at every refresh, so this moment is the only thing that wakes the
+    /// loop for them.
+    hold_due: Option<Instant>,
     /// The display list.
     scene: Scene,
     /// The paint stage's state between frames.
@@ -451,7 +460,8 @@ pub struct Window {
     ///
     /// A window that has just been opened is treated as focused. Every backend reports focus
     /// arriving rather than being held, so the alternative is a window that answers its first real
-    /// report by doing the work of losing focus it never had.
+    /// report by doing the work of losing focus it never had. A shell window is treated as not
+    /// focused, because the desktop gives it the keyboard with an edge of its own, if at all.
     surface_focused: bool,
     /// The shortcuts of the application menu's actions, shared by every window.
     menu_keys: crate::desktop::MenuKeys,
@@ -573,7 +583,9 @@ pub struct Window {
 }
 
 impl Window {
-    /// Opens a window over `surface`, drawn by `renderer`, and builds `view` into it.
+    /// Opens a window over `surface`, drawn by `renderer`, and builds `view` into `document`.
+    ///
+    /// `document` is empty and carries the identity the runtime gave this window.
     ///
     /// # Errors
     ///
@@ -583,7 +595,7 @@ impl Window {
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         surface: Arc<dyn Surface>,
-        document: zgui_dom::DocumentId,
+        document: Document,
         renderer: Box<dyn Renderer>,
         text: Box<dyn TextEngine>,
         raster: Arc<dyn zgui_text::GlyphRaster>,
@@ -596,9 +608,10 @@ impl Window {
         close: Rc<RefCell<crate::commands::CloseCallbacks>>,
         view: impl FnOnce(&mut zgui_view::BuildCx<'_>) -> Box<dyn Anchor>,
     ) -> Self {
-        // The identity the runtime minted for this window. Every node handle carries it, which is
-        // what stops one window's handle resolving inside another window's tree.
-        let document = Rc::new(RefCell::new(Document::with_id(document)));
+        // The document carries the identity the runtime gave this window. Every node handle
+        // carries it, which is what stops one window's handle resolving inside another window's
+        // tree.
+        let document = Rc::new(RefCell::new(document));
         let replaced_images = crate::replaced::IntrinsicTable::new();
         let replaced_surfaces = crate::replaced::IntrinsicTable::new();
         document.borrow_mut().install_replaced_content(Arc::new(
@@ -726,6 +739,8 @@ impl Window {
             frame_clock: zgui_scene::FrameClock::default(),
             animator: zgui_anim::Animator::new(),
             animation: crate::window::anim::cadence::AnimationCadence::parked(),
+            hold_after: None,
+            hold_due: None,
             scene: Scene::new(),
             painter: Painter::new(),
             verify_replays: zgui_layout::invariants::enabled(),

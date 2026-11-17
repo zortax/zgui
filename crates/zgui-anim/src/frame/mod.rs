@@ -38,6 +38,12 @@ pub struct Tick {
     pub placed: usize,
     /// Every lifecycle edge crossed, ready to be dispatched.
     pub edges: Vec<Edge>,
+    /// The earliest moment, on the animation clock, at which a repaint-only element whose values
+    /// hold still owes its next tick.
+    ///
+    /// Such an element asks for no frame at every refresh, so the caller wakes the loop at this
+    /// moment. `None` when no element holds.
+    pub wake: Option<f64>,
 }
 
 impl Tick {
@@ -86,6 +92,12 @@ pub struct Animator {
     ///
     /// Sorted by element, so the pass answers a lookup with a search rather than a scan.
     placements: Vec<(NodeKey, AnimPlacement)>,
+    /// The elements the last tick found holding still, each with the moment its values next
+    /// change.
+    ///
+    /// Such an element asks for no frame before that moment. The cascade can end or replace its
+    /// animation sooner, and [`Animator::note_lapsed`] then asks for the frame. Sorted by element.
+    held: Vec<(NodeIndex, f64)>,
     /// How many elements were animating on the last tick, all paths together.
     animating: usize,
 }
@@ -136,6 +148,7 @@ impl Animator {
             ..Tick::default()
         };
         let mut still_overridden = Vec::with_capacity(self.overridden.len());
+        let mut held = Vec::new();
         let mut placements: Vec<(NodeKey, AnimPlacement)> =
             Vec::with_capacity(self.placements.len());
         for element in &report.elements {
@@ -163,6 +176,10 @@ impl Animator {
                 if element.advancing {
                     if tier.is_cheap() {
                         tick.cheap += 1;
+                        if let Some(at) = element.hold {
+                            tick.wake = Some(tick.wake.map_or(at, |was: f64| was.min(at)));
+                            held.push((element.index, at));
+                        }
                     } else {
                         tick.placed += 1;
                     }
@@ -232,6 +249,8 @@ impl Animator {
                 }
             }
         }
+        held.sort_unstable_by_key(|(index, _)| *index);
+        self.held = held;
         self.overridden = still_overridden;
         self.placements = placements;
         self.reported = report
@@ -289,11 +308,101 @@ impl Animator {
         added
     }
 
+    /// The elements the last tick found holding still, each with the moment its values next
+    /// change. Sorted by element.
+    pub fn held(&self) -> &[(NodeIndex, f64)] {
+        &self.held
+    }
+
+    /// Marks every element in `lapsed` as animating, and reports how many that added.
+    ///
+    /// `lapsed` holds the elements of [`Animator::held`] whose animations the cascade ended or
+    /// replaced. A held element asks for no frame, so without the mark the loop sleeps until the
+    /// moment the hold was to end, and the element keeps the value its animation last drew until
+    /// then. The mark gets the next frame, whose tick drops that value.
+    pub fn note_lapsed(&mut self, document: &mut Document, lapsed: &[NodeIndex]) -> usize {
+        let mut added = 0;
+        for index in lapsed {
+            let Some(core) = document.store().try_core(*index) else {
+                continue;
+            };
+            if core.dirty().own().contains(zgui_bits::Dirty::ANIMATING) {
+                continue;
+            }
+            zgui_dom::dirty::propagate::mark(
+                document.store_mut(),
+                *index,
+                zgui_bits::Dirty::ANIMATING,
+            );
+            added += 1;
+        }
+        self.held
+            .retain(|(index, _)| lapsed.binary_search(index).is_err());
+        self.animating += added;
+        added
+    }
+
     /// Drops everything, for a document being torn down or rebuilt from nothing.
     pub fn clear(&mut self) {
+        self.held.clear();
         self.overridden.clear();
         self.reported.clear();
         self.placements.clear();
         self.animating = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_bits::Dirty;
+    use zgui_dom::side::AnimOverride;
+    use zgui_dom::{Document, NodeKind};
+    use zgui_interned::ElementName;
+    use zgui_style::{AnimatedProperties, AnimationReport, ElementAnimation};
+
+    use super::{Animator, Recomposing};
+
+    #[test]
+    fn a_held_element_whose_animation_the_cascade_ended_gets_the_next_frame() {
+        let mut document = Document::new();
+        let index = document.append(
+            document.document_index(),
+            NodeKind::Element,
+            ElementName::new("box"),
+        );
+        let report = AnimationReport {
+            elements: vec![ElementAnimation {
+                node: document.store().key_of(index),
+                index,
+                properties: AnimatedProperties::OPACITY,
+                values: AnimOverride {
+                    opacity: Some(0.5),
+                    ..AnimOverride::new()
+                },
+                placement: None,
+                advancing: true,
+                hold: Some(2.0),
+                crossed: false,
+            }],
+            edges: Vec::new(),
+        };
+        let mut animator = Animator::new();
+        let tick = animator.tick(&mut document, &report, &mut Recomposing);
+        assert_eq!(tick.wake, Some(2.0));
+        assert_eq!(animator.held(), [(index, 2.0)]);
+        let animating = |document: &Document| {
+            let dirty = document.store().try_core(index).expect("the box").dirty();
+            dirty.own().contains(Dirty::ANIMATING)
+        };
+        assert!(!animating(&document), "a held element asks for no frame");
+
+        assert_eq!(animator.note_lapsed(&mut document, &[index]), 1);
+        assert!(animating(&document));
+        assert!(animator.held().is_empty());
+        assert_eq!(
+            animator.note_lapsed(&mut document, &[index]),
+            0,
+            "the mark is made once"
+        );
     }
 }

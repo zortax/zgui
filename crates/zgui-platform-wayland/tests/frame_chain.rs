@@ -32,6 +32,10 @@ const FRAMES: u64 = 8;
 fn main() {
     const PROPERTY: &str = "every redraw ends in a commit, and every commit is answered";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

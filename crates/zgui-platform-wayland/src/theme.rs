@@ -1,11 +1,10 @@
 //! The desktop's light or dark preference.
 //!
 //! There is nothing in the Wayland protocol about it, and that is not an oversight: a compositor
-//! composites, and what an application should look like is a setting of the desktop rather than of
-//! the display server. The setting lives on the session bus, behind the portal every sandboxed
-//! application already reaches its desktop through, and it is read there — which is also the only
-//! way it works from inside a sandbox, where the toolkit's own configuration files are not
-//! reachable at all.
+//! composites, and what an application should look like is a setting of the desktop. The setting
+//! lives on the session bus, behind the portal every sandboxed application already reaches its
+//! desktop through, and it is read there — which is also the only way it works from inside a
+//! sandbox, where the toolkit's own configuration files are not reachable at all.
 //!
 //! It is read and watched on a thread of its own. The bus is a socket like any other, an answer
 //! from it takes as long as the portal takes, and the loop's own thread waits on nothing.
@@ -51,27 +50,52 @@ pub fn watch(waker: Arc<dyn Waker>, settled: Arc<std::sync::Mutex<Option<ColorSc
 }
 
 /// Reads the setting, then stays on the bus reporting every change to it.
+///
+/// The connection runs on this thread alone. It drives its own executor, so zbus starts no driver
+/// thread and no runtime of its own for it.
 fn follow(waker: &Arc<dyn Waker>, settled: &Arc<std::sync::Mutex<Option<ColorScheme>>>) {
-    let Ok(connection) = zbus::blocking::Connection::session() else {
-        tracing::debug!("no session bus, so this desktop's light or dark preference is unknown");
-        return;
-    };
-    let proxy = zbus::blocking::Proxy::new(&connection, PORTAL, PATH, SETTINGS);
-    let Ok(proxy) = proxy else {
+    futures::executor::block_on(async {
+        let connection = match zbus::connection::Builder::session() {
+            Ok(builder) => builder.internal_executor(false).build().await,
+            Err(error) => Err(error),
+        };
+        let Ok(connection) = connection else {
+            tracing::debug!(
+                "no session bus, so this desktop's light or dark preference is unknown"
+            );
+            return;
+        };
+        let ticking = std::pin::pin!(async {
+            loop {
+                connection.executor().tick().await;
+            }
+        });
+        let watching = std::pin::pin!(watch_portal(&connection, waker, settled));
+        futures::future::select(ticking, watching).await;
+    });
+}
+
+/// Reads the setting on `connection` and reports every change to it.
+async fn watch_portal(
+    connection: &zbus::Connection,
+    waker: &Arc<dyn Waker>,
+    settled: &Arc<std::sync::Mutex<Option<ColorScheme>>>,
+) {
+    let Ok(proxy) = zbus::Proxy::new(connection, PORTAL, PATH, SETTINGS).await else {
         return;
     };
 
-    if let Some(found) = read(&proxy) {
+    if let Some(found) = read(&proxy).await {
         publish(waker, settled, found);
     }
 
     // The portal reports a change as a signal naming the namespace and the key, so everything else
     // on the interface is ignored rather than filtered by the bus — the traffic is a handful of
     // messages a session.
-    let Ok(signals) = proxy.receive_signal("SettingChanged") else {
+    let Ok(mut signals) = proxy.receive_signal("SettingChanged").await else {
         return;
     };
-    for message in signals {
+    while let Some(message) = futures::StreamExt::next(&mut signals).await {
         let body = message.body();
         let Ok((namespace, key, value)) =
             body.deserialize::<(String, String, zbus::zvariant::OwnedValue)>()
@@ -88,18 +112,20 @@ fn follow(waker: &Arc<dyn Waker>, settled: &Arc<std::sync::Mutex<Option<ColorSch
 }
 
 /// Asks the portal what the preference is now.
-fn read(proxy: &zbus::blocking::Proxy<'_>) -> Option<ColorScheme> {
+async fn read(proxy: &zbus::Proxy<'_>) -> Option<ColorScheme> {
     // `ReadOne` is the newer call and answers with the value itself; `Read` is what older portals
     // have and wraps it twice. Both are tried, because a desktop that only has the second is a
     // desktop this would otherwise report as having no preference at all.
-    let one: Option<zbus::zvariant::OwnedValue> = proxy.call("ReadOne", &(APPEARANCE, SCHEME)).ok();
+    let one: Option<zbus::zvariant::OwnedValue> =
+        proxy.call("ReadOne", &(APPEARANCE, SCHEME)).await.ok();
     if let Some(found) = one
         .and_then(|value| u32::try_from(value).ok())
         .and_then(scheme)
     {
         return Some(found);
     }
-    let nested: zbus::zvariant::OwnedValue = proxy.call("Read", &(APPEARANCE, SCHEME)).ok()?;
+    let nested: zbus::zvariant::OwnedValue =
+        proxy.call("Read", &(APPEARANCE, SCHEME)).await.ok()?;
     unwrap_twice(nested).and_then(scheme)
 }
 

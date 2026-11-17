@@ -85,10 +85,10 @@ pub use crate::cluster::{ClusterRun, ShapedClusters};
 pub use crate::font::{FaceId, FaceRecord, FontData, FontError, FontSource};
 pub use crate::geometry::{LineGeometry, StrutMetrics, TextGeometry};
 pub use crate::glyph::{
-    ATLAS_MAX_SIZE, AtlasGlyph, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline, GlyphRaster,
-    NoRaster, OutlineKey, PenPosition, RasterPath, RasterStyle, RunProfile, RunSurface,
-    SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun, ShapedRunOwned, SubpixelOffset,
-    VariationInstance,
+    ATLAS_MAX_SIZE, ATLAS_MAX_STRETCH, AtlasGlyph, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline,
+    GlyphRaster, NoRaster, OutlineKey, PenPosition, RasterPath, RasterStyle, RunProfile,
+    RunSurface, RunTransform, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun,
+    ShapedRunOwned, SubpixelOffset, VariationInstance,
 };
 pub use crate::map::{Segment, SourcePos, TextMap};
 pub use crate::metrics::{FaceMetrics, FaceQuery, FixedMetrics, FontMetricsSource};

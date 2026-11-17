@@ -14,20 +14,17 @@ use smithay_client_toolkit::reexports::client::protocol::wl_surface::WlSurface;
 use smithay_client_toolkit::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::SeatState;
-use smithay_client_toolkit::shell::WaylandSurface as _;
-use smithay_client_toolkit::shell::wlr_layer::{
-    LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
-};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry, delegate_seat,
-    delegate_shm, registry_handlers,
+    delegate_compositor, delegate_output, delegate_registry, delegate_seat, delegate_shm,
+    registry_handlers,
 };
 use zgui_geom::{CssPx, Size};
-use zgui_platform::{Surface as _, SurfaceEvent};
+use zgui_platform::{CloseReason, Surface as _, SurfaceEvent};
 
 use crate::driver::WaylandState;
 use crate::output;
 use crate::surface::FrameCallback;
+use crate::surface::sequence::Barrier;
 
 impl CompositorHandler for WaylandState {
     fn scale_factor_changed(
@@ -103,16 +100,41 @@ impl Dispatch<WlCallback, FrameCallback> for WaylandState {
         let wl_callback::Event::Done { .. } = event else {
             return;
         };
-        let event = state.live.surface(frame.surface).and_then(|surface| {
+        // Without presentation feedback, the answer for a committed buffer is the best sign that
+        // the compositor showed it.
+        let unreported = !state.presentation.reports();
+        let events = state.live.surface(frame.surface).map(|surface| {
             let mut shared = surface.shared();
             shared.frame_callback(
                 frame.serial,
                 zgui_platform::Clock::now(state.live.clock.as_ref()),
             );
-            shared.visibility_edge()
+            [
+                shared.visibility_edge(),
+                shared.presentation_edge(unreported),
+            ]
         });
-        if let Some(event) = event {
+        for event in events.into_iter().flatten().flatten() {
             state.report(frame.surface, event);
+        }
+    }
+}
+
+impl Dispatch<WlCallback, Barrier> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _callback: &WlCallback,
+        event: wl_callback::Event,
+        barrier: &Barrier,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        // Every configure the shell sent before the unmap has arrived by now.
+        let wl_callback::Event::Done { .. } = event else {
+            return;
+        };
+        if let Some(surface) = state.live.surface(barrier.surface) {
+            surface.shared().sequence.answered(barrier.serial);
         }
     }
 }
@@ -123,45 +145,44 @@ impl OutputHandler for WaylandState {
     }
 
     fn new_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
-        self.outputs_changed();
+        self.outputs_changed(None);
     }
 
     fn update_output(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: WlOutput) {
-        self.outputs_changed();
+        self.outputs_changed(None);
     }
 
     fn output_destroyed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, output: WlOutput) {
-        // The compositor can remove an output without a leave first. Its rate must stop counting.
+        // The compositor can remove an output without a leave first. Its rate must stop counting,
+        // and a shell layer that was on it closes because it went. A lock surface is told nothing,
+        // so it closes here.
         for surface in self.live.surfaces.borrow().iter() {
-            surface.shared().outputs.retain(|held| held != &output);
+            let mut shared = surface.shared();
+            let held = shared.outputs.contains(&output) || shared.bound.as_ref() == Some(&output);
+            shared.output_lost |= held;
+            shared.outputs.retain(|held| held != &output);
+            if shared.bound.as_ref() == Some(&output)
+                && surface.role().lock().is_some()
+                && !self.closing.contains(&surface.id())
+            {
+                self.closing.push(surface.id());
+            }
         }
-        self.outputs_changed();
+        // The toolkit calls this before it forgets the output, so the output is left out here.
+        self.outputs_changed(Some(&output));
     }
 }
 
-impl LayerShellHandler for WaylandState {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        let Some(id) = self.identify(layer.wl_surface()) else {
-            return;
-        };
-        self.report(id, SurfaceEvent::CloseRequested);
-    }
-
-    fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        layer: &LayerSurface,
-        configure: LayerSurfaceConfigure,
-        _serial: u32,
-    ) {
-        let Some(id) = self.identify(layer.wl_surface()) else {
-            return;
-        };
+impl WaylandState {
+    /// Applies the extent a shell layer or a lock surface was configured at.
+    ///
+    /// An axis of zero leaves the extent the application asked for along it. The toolkit has
+    /// acknowledged the configure already.
+    pub(crate) fn sized_by_shell(&mut self, id: zgui_platform::SurfaceId, size: (u32, u32)) {
         let Some(surface) = self.live.surface(id) else {
             return;
         };
-        let (width, height) = configure.new_size;
+        let (width, height) = size;
         let (resized, visibility) = {
             let mut shared = surface.shared();
             let wanted = surface.wanted();
@@ -177,9 +198,18 @@ impl LayerShellHandler for WaylandState {
                     CssPx(height as f32)
                 },
             );
-            shared.visibility.configured = true;
+            // A configure that reaches a surface the application hid answers a commit made before
+            // the hide. Drawing into it would map the surface again, so it waits for the show.
+            shared.visibility.configured |= !shared.unmapped;
+            shared.configured_unshown |= shared.unmapped;
             let scale = shared.ladder.factor();
-            (shared.resized(extent, scale), shared.visibility_edge())
+            let resized = shared.resized(extent, scale);
+            // The toolkit acknowledged this configure on arrival, so a lock surface's next commit
+            // has to carry a buffer at the new extent. The first configure owes the first buffer.
+            if surface.role().lock().is_some() && (resized.is_some() || !shared.mapped) {
+                shared.owe_exact_extent();
+            }
+            (resized, shared.visibility_edge())
         };
         if let Some(event) = visibility {
             self.report(id, event);
@@ -253,14 +283,27 @@ impl WaylandState {
     }
 
     /// Rebuilds what is known about the outputs, and re-reads every surface's scale from them.
-    fn outputs_changed(&mut self) {
-        let infos: Vec<_> = self
+    ///
+    /// `gone` is an output the compositor has removed and the toolkit still lists. The
+    /// application is woken only when what it can read changed.
+    fn outputs_changed(&mut self, gone: Option<&WlOutput>) {
+        let monitors: Vec<_> = self
             .outputs
             .outputs()
+            .filter(|output| Some(output) != gone)
             .filter_map(|output| self.outputs.info(&output))
+            .map(|info| output::describe(&info))
             .collect();
-        let sharpest = output::mode::sharpest(infos.iter());
-        *self.live.monitors.borrow_mut() = infos.iter().map(output::describe).collect();
+        let changed = *self.live.monitors.borrow() != monitors;
+        if changed {
+            *self.live.monitors.borrow_mut() = monitors;
+        }
+        if changed && self.announce_outputs {
+            zgui_platform::Waker::wake(
+                self.live.waker.as_ref(),
+                zgui_platform::WakeReason::MonitorsChanged,
+            );
+        }
         let ids: Vec<_> = self
             .live
             .surfaces
@@ -269,12 +312,13 @@ impl WaylandState {
             .map(|surface| surface.id())
             .collect();
         for id in ids {
-            self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+            self.rescale_from_outputs(id);
             self.declare_rate(id);
         }
     }
 
-    /// Applies a change to the outputs a surface is on, and declares the rate they run at.
+    /// Applies a change to the outputs a surface is on, and re-reads the scale and the rate they
+    /// give it.
     fn outputs_of(&mut self, surface: &WlSurface, change: impl FnOnce(&mut Vec<WlOutput>)) {
         let Some(id) = self.identify(surface) else {
             return;
@@ -282,7 +326,45 @@ impl WaylandState {
         if let Some(held) = self.live.surface(id) {
             change(&mut held.shared().outputs);
         }
+        self.rescale_from_outputs(id);
         self.declare_rate(id);
+    }
+
+    /// Gives a surface the scale of the outputs it is on.
+    ///
+    /// Only the outputs it is on: a surface on a 1x output beside a 2x one is drawn at 1x. A
+    /// surface on no output yet keeps the scale it was seeded with.
+    fn rescale_from_outputs(&mut self, id: zgui_platform::SurfaceId) {
+        let Some(held) = self.live.surface(id) else {
+            return;
+        };
+        let infos: Vec<_> = held
+            .shared()
+            .outputs
+            .iter()
+            .filter_map(|output| self.outputs.info(output))
+            .collect();
+        let sharpest = output::mode::sharpest(infos.iter());
+        self.scale_changed(id, |ladder| ladder.outputs(sharpest));
+    }
+
+    /// Reports every shell layer the compositor closed during the last dispatch, and every lock
+    /// surface whose output went, with its reason.
+    ///
+    /// Called after the dispatch has finished, because the compositor can close a layer and
+    /// remove its output in one batch of events, in either order.
+    pub(crate) fn resolve_closings(&mut self) {
+        for id in std::mem::take(&mut self.closing) {
+            let Some(held) = self.live.surface(id) else {
+                continue;
+            };
+            let reason = if held.shared().output_lost {
+                CloseReason::OutputGone
+            } else {
+                CloseReason::Desktop
+            };
+            self.report(id, SurfaceEvent::Closed(reason));
+        }
     }
 
     /// Gives a surface the refresh interval of the outputs it is on.
@@ -311,4 +393,3 @@ delegate_output!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_registry!(WaylandState);
-delegate_layer!(WaylandState);

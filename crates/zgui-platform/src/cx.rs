@@ -6,6 +6,7 @@ use crate::capabilities::PlatformCapabilities;
 use crate::clipboard::Clipboard;
 use crate::clock::Clock;
 use crate::error::PlatformError;
+use crate::grab::FocusGrabId;
 use crate::menu::AppMenu;
 use crate::monitor::MonitorInfo;
 use crate::scroll::ScrollSettings;
@@ -103,6 +104,55 @@ pub trait PlatformCx {
     fn set_app_menu(&self, menu: &AppMenu) {
         let _ = menu;
     }
+
+    /// Makes a focus grab with no surfaces, which limits nothing until surfaces are given to it.
+    ///
+    /// Nothing where the desktop cannot limit focus, which
+    /// [`PlatformCapabilities::focus_grab`] says beforehand. The default is a desktop that cannot.
+    fn create_focus_grab(&self) -> Option<FocusGrabId> {
+        None
+    }
+
+    /// Limits the keyboard and the pointer to `surfaces` while `grab` exists.
+    ///
+    /// The set replaces the one given before. A set with surfaces in it starts the grab, and an
+    /// empty set stops it. After the desktop clears a grab its set is empty, so the next set
+    /// with surfaces in it starts the grab again. A surface that has gone is left out.
+    fn set_focus_grab(&self, grab: FocusGrabId, surfaces: &[SurfaceId]) {
+        let _ = (grab, surfaces);
+    }
+
+    /// Destroys `grab`, which stops it.
+    ///
+    /// Destroying a grab that has already gone does nothing.
+    fn destroy_focus_grab(&self, grab: FocusGrabId) {
+        let _ = grab;
+    }
+
+    /// Asks the desktop to lock the session, with this application drawing the lock screen.
+    ///
+    /// The answer arrives later. [`WakeReason::SessionLocked`](crate::WakeReason::SessionLocked)
+    /// says the desktop hides everything else now.
+    /// [`WakeReason::SessionLockFinished`](crate::WakeReason::SessionLockFinished) says the desktop
+    /// refused the lock or ended it. Make a surface of role
+    /// [`SurfaceRole::Lock`](crate::SurfaceRole::Lock) for each output as soon as this returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::Unsupported`] where the desktop has no session lock, which
+    /// [`PlatformCapabilities::session_lock`] says beforehand, and [`PlatformError::Backend`]
+    /// while this application holds a lock already.
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        Err(crate::Unsupported.into())
+    }
+
+    /// Unlocks the session that this application locked.
+    ///
+    /// Does nothing before the desktop confirmed the lock with
+    /// [`WakeReason::SessionLocked`](crate::WakeReason::SessionLocked), and nothing after it
+    /// ended. Destroy the lock surfaces after this call: a lock surface destroyed while the
+    /// session is locked leaves its output blank.
+    fn unlock_session(&self) {}
 
     /// Asks the loop to finish.
     ///

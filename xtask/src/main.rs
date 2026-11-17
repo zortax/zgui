@@ -22,6 +22,7 @@
 //! stored and fails on any duration published without its distribution; both are also steps of
 //! `ci`. `cargo xtask perf pacing` measures a scripted scroll's frame intervals and is deliberately
 //! not one, because it measures on the real output or it does not measure.
+//! `cargo xtask wayland` runs the Wayland backend's compositor tests on a nested headless sway.
 //! `cargo xtask ledger` runs the mechanical ledgers on their own; `cargo xtask tsan` runs the
 //! thread sanitiser over the threaded targets together with the control that proves it was
 //! watching; `cargo xtask new-crate` stamps out a member that already satisfies the ledgers.
@@ -50,6 +51,7 @@ mod tails;
 mod tsan;
 mod verify;
 mod wall_clock;
+mod wayland;
 mod workloads;
 
 use std::process::ExitCode;
@@ -94,6 +96,7 @@ fn main() -> ExitCode {
         Command::Release => release::run(&root, release::Packaging::Built),
         Command::Ledger { only } => ledger::run(&root, only.as_deref()),
         Command::LedgerSelfTest => ledger::self_test::run(&root),
+        Command::Wayland { args } => wayland::run(&root, &args),
         Command::Tsan => tsan::run(&root),
         Command::NewCrate { name, layer } => new_crate::run(&root, &name, layer),
         Command::Help => {

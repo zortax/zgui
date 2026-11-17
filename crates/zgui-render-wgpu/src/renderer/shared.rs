@@ -10,6 +10,11 @@
 //! opened by the *first* surface rather than at construction, because whether an adapter is usable
 //! is only known against something to present to.
 //!
+//! The instances live as long as the graphics. A window that closes destroys its swap chain and
+//! its surface, and never an instance that another window presents through. Some drivers need
+//! this: on the NVIDIA Vulkan driver 610.43 under Wayland, the destruction of one instance breaks
+//! the swap chains of every other instance on the same display.
+//!
 //! # What is shared, and what is not
 //!
 //! Shared: the device, queue and adapter ([`Gpu`]), and the pipelines. Pipelines are keyed by

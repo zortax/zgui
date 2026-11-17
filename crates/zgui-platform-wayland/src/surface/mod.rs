@@ -4,9 +4,11 @@ pub mod a11y;
 pub mod chrome;
 pub mod fractional;
 mod handles;
+pub mod region;
 pub mod role;
 pub mod scale;
 pub mod seat;
+pub(crate) mod sequence;
 pub mod state;
 
 pub use crate::surface::a11y::A11y;
@@ -24,7 +26,7 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
     CursorStyle, Decorations, FullscreenMode, GpuSurface, PresentPacing, PresentationTiming,
     Surface, SurfaceId, TextInput, Unsupported,
@@ -186,6 +188,117 @@ impl WaylandSurface {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Records `size` as the extent the application asked for.
+    ///
+    /// A shell layer's configure names zero along an axis it leaves to the client, and this is
+    /// the extent the surface then takes.
+    pub(crate) fn set_wanted(&self, size: Size<CssPx, Css>) {
+        *self
+            .wanted
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = size;
+    }
+
+    /// Changes the placement of this shell layer, to be sent with the next frame.
+    pub(crate) fn patch_layer(&self, patch: &zgui_platform::LayerPatch) -> Result<(), Unsupported> {
+        if self.role.layer().is_none() {
+            return Err(Unsupported);
+        }
+        {
+            let mut shared = self.shared();
+            let Some(placement) = shared.layer.as_mut() else {
+                return Err(Unsupported);
+            };
+            patch.apply_to(placement);
+            shared.layer_owed = true;
+        }
+        Surface::request_redraw(self);
+        Ok(())
+    }
+
+    /// Sends what this shell layer owes the compositor, right before a commit.
+    ///
+    /// With `all`, everything is sent whether it changed or not, which is what a remap needs: the
+    /// shell forgets the placement and the extent of an unmapped surface. Otherwise only a change
+    /// made since the last send goes out. Nothing is committed here.
+    pub(crate) fn send_layer(&self, all: bool) {
+        let Some(layer) = self.role.layer() else {
+            return;
+        };
+        let (placement, extent) = {
+            let mut shared = self.shared();
+            if !all && !shared.layer_owed {
+                return;
+            }
+            shared.layer_owed = false;
+            let Some(placement) = shared.layer.clone() else {
+                return;
+            };
+            // An axis the application left at zero takes the extent the compositor gave it. An axis
+            // that stops being stretched keeps its last width.
+            let wanted = self.wanted();
+            let extent = Size::new(
+                if wanted.width.0 > 0.0 {
+                    wanted.width
+                } else {
+                    shared.logical.width
+                },
+                if wanted.height.0 > 0.0 {
+                    wanted.height
+                } else {
+                    shared.logical.height
+                },
+            );
+            (placement, extent)
+        };
+        crate::surface::role::layer::apply(layer, &placement, extent);
+    }
+
+    /// Sends the input and opaque regions asked for since the last send, right before a commit.
+    ///
+    /// Nothing is committed here: both regions are state of the surface that the next commit
+    /// applies, and that commit carries the frame drawn for them.
+    pub(crate) fn send_regions(&self) {
+        let (input, opaque) = {
+            let mut shared = self.shared();
+            (shared.input_owed.take(), shared.opaque_owed.take())
+        };
+        let wl = self.wl_surface();
+        if let Some(input) = input {
+            match input {
+                None => wl.set_input_region(None),
+                Some(rects) => {
+                    let region = self.region_of(&rects, region::outward);
+                    wl.set_input_region(Some(&region));
+                    region.destroy();
+                }
+            }
+        }
+        if let Some(opaque) = opaque {
+            match opaque {
+                Some(rects) if !rects.is_empty() => {
+                    let region = self.region_of(&rects, region::inward);
+                    wl.set_opaque_region(Some(&region));
+                    region.destroy();
+                }
+                _ => wl.set_opaque_region(None),
+            }
+        }
+    }
+
+    /// A region holding `rects`, each rounded to whole pixels by `round`.
+    fn region_of(
+        &self,
+        rects: &[Rect<CssPx, Css>],
+        round: fn(Rect<CssPx, Css>) -> Option<region::Whole>,
+    ) -> WlRegion {
+        let region = self.empty_region();
+        for (x, y, width, height) in rects.iter().copied().filter_map(round) {
+            region.add(x, y, width, height);
+        }
+        region
+    }
+
     /// Fractional scaling's objects, for the commit that carries a new extent.
     pub(crate) const fn fractional(&self) -> &Fractional {
         &self.fractional
@@ -290,10 +403,40 @@ impl WaylandSurface {
         self.wl_surface().frame(&self.qh, callback);
     }
 
+    /// Asks the compositor to answer once it has taken every request sent so far.
+    ///
+    /// Sent right after the commit that unmaps the surface. The answer arrives after every
+    /// configure the shell sent before that commit, see [`sequence`].
+    pub(crate) fn send_barrier(&self, serial: u64) {
+        let barrier = sequence::Barrier {
+            surface: self.id,
+            serial,
+        };
+        self.conn.display().sync(&self.qh, barrier);
+    }
+
     /// Ends a delivered [`SurfaceEvent::PresentReady`].
     /// `began` is when the present began.
     pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
         self.shared().end_of_present(began, now);
+        self.end_drawing();
+    }
+
+    /// Records that a present held for the compositor is about to be delivered.
+    pub(crate) fn begin_present(&self) {
+        self.shared().drawing = true;
+    }
+
+    /// Ends a delivery to the application, carrying out a hide it asked for while it drew.
+    fn end_drawing(&self) {
+        let hide = {
+            let mut shared = self.shared();
+            shared.drawing = false;
+            shared.hide_owed
+        };
+        if hide {
+            chrome::unmap(self);
+        }
     }
 
     /// Ends a delivered redraw, keeping the frame chain alive wherever a frame actually ran.
@@ -309,14 +452,39 @@ impl WaylandSurface {
     /// A bufferless commit here would put that deadline behind a compositor round trip.
     ///
     /// A redraw that ran while a callback is owed commits nothing either: that callback keeps the
-    /// chain alive, and a held frame is committed when it arrives.
+    /// chain alive, and a held frame is committed when it arrives. Nor does a redraw that ran,
+    /// presented nothing and left nothing asked for: no chain needs to stay alive.
     /// `began` is when the redraw began. Its cost decides whether the next one composes ahead.
     pub(crate) fn finish_redraw(&self, began: Instant, now: Instant) {
-        let end = self.shared().redrawn(began, now);
-        if end == crate::surface::state::EndOfRedraw::KeepChainAlive {
+        // A redraw asked for while this one ran is pulled into the pacer on the next turn.
+        let again = self.asked.load(Ordering::Acquire);
+        let (end, bare, exact_owed) = {
+            let mut shared = self.shared();
+            (
+                shared.redrawn(began, now, again),
+                shared.may_commit_bare(),
+                shared.exact_owed,
+            )
+        };
+        let keep_alive = end == crate::surface::state::EndOfRedraw::KeepChainAlive;
+        // A surface that is hidden, or about to be, owes the compositor nothing: an empty commit
+        // would ask the shell to map it again.
+        if keep_alive && bare {
+            // A change asked for with no new content to draw still goes out, with this commit.
+            self.send_layer(false);
+            self.send_regions();
             self.ask_for_callback();
             self.role.commit();
+        } else if keep_alive {
+            // Nothing was committed, so no callback is on its way.
+            self.shared().pacer.commit_withheld();
+            if exact_owed {
+                // A lock surface that still owes a buffer at its new extent draws again next
+                // turn.
+                zgui_platform::Surface::request_redraw(self);
+            }
         }
+        self.end_drawing();
     }
 }
 
@@ -383,6 +551,10 @@ impl Surface for WaylandSurface {
 
     fn presentation_timing(&self) -> Option<PresentationTiming> {
         Some(self.shared().snapshot())
+    }
+
+    fn reports_presentation(&self) -> bool {
+        true
     }
 
     fn request_size(&self, size: Size<CssPx, Css>) -> Option<Size<DevicePx, Device>> {
@@ -487,6 +659,12 @@ impl Surface for WaylandSurface {
         self.seat.activate(self.id, true);
     }
 
+    fn input_serial(&self) -> Option<zgui_platform::InputSerial> {
+        self.seat
+            .press_serial()
+            .map(zgui_platform::InputSerial::new)
+    }
+
     fn request_attention(&self, urgent: bool) {
         // Turning it off is not a request this protocol has: a desktop stops drawing attention when
         // the person looks at the window, which is its decision and not the application's.
@@ -503,8 +681,23 @@ impl Surface for WaylandSurface {
         self.seat.set_cursor(self.id, cursor);
     }
 
+    fn set_layer_placement(&self, patch: &zgui_platform::LayerPatch) -> Result<(), Unsupported> {
+        self.patch_layer(patch)
+    }
+
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
         chrome::set_pointer_passthrough(self, passthrough)
+    }
+
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        self.shared().input_owed = Some(region.map(<[_]>::to_vec));
+        self.request_redraw();
+        Ok(())
+    }
+
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        self.shared().opaque_owed = Some(region.map(<[_]>::to_vec));
+        self.request_redraw();
     }
 
     fn begin_move_drag(&self) -> Result<(), Unsupported> {

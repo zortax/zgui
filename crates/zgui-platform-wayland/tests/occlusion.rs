@@ -148,6 +148,10 @@ fn give_up_after(waker: std::sync::Arc<dyn zgui_platform::Waker>) {
 fn main() {
     const PROPERTY: &str = "a surface the compositor stops showing says so, and the loop runs on";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

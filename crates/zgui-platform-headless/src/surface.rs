@@ -5,9 +5,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, Surface, SurfaceAttributes, SurfaceId, TextInput,
+    CursorStyle, Decorations, FullscreenMode, InputSerial, LayerPatch, LayerPlacement,
+    PopupPlacement, Surface, SurfaceAttributes, SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -44,6 +45,9 @@ impl A11yLog {
         }
     }
 }
+
+/// A region a surface was given: rectangles in CSS pixels, or `None` for the whole surface.
+pub type Region = Option<Vec<Rect<CssPx, Css>>>;
 
 /// A surface that is a buffer, with no window behind it.
 ///
@@ -105,6 +109,12 @@ pub struct OffscreenSurface {
     /// cannot read what was said cannot tell a window that honours `cursor` from one that ignores
     /// it.
     cursor_log: Mutex<Vec<CursorStyle>>,
+    /// Every change of shell placement the surface accepted, in order.
+    layer_log: Mutex<Vec<LayerPatch>>,
+    /// Every input region the surface was given, in order.
+    input_region_log: Mutex<Vec<Region>>,
+    /// Every opaque region the surface was given, in order.
+    opaque_region_log: Mutex<Vec<Region>>,
     /// Whether the surface has been shown.
     visible: AtomicBool,
     /// Whether the surface was last asked to be maximised.
@@ -121,6 +131,8 @@ pub struct OffscreenSurface {
     /// can otherwise check about an application identifier, a window level or an icon is nothing at
     /// all, and an attribute nothing reads is an attribute that silently stops being sent.
     requested_attributes: Mutex<SurfaceAttributes>,
+    /// The token of the latest press, as a test sets it.
+    input_serial: Mutex<Option<InputSerial>>,
 }
 
 impl OffscreenSurface {
@@ -138,12 +150,24 @@ impl OffscreenSurface {
             a11y_listener: AtomicBool::new(true),
             text_input_log: Mutex::new(Vec::new()),
             cursor_log: Mutex::new(Vec::new()),
+            layer_log: Mutex::new(Vec::new()),
+            input_region_log: Mutex::new(Vec::new()),
+            opaque_region_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
             maximized: AtomicBool::new(false),
             fullscreen: Mutex::new(None),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
+            input_serial: Mutex::new(None),
         }
+    }
+
+    /// Sets the token [`Surface::input_serial`] answers with, as a press on a real desktop would.
+    pub fn set_input_serial(&self, serial: Option<InputSerial>) {
+        *self
+            .input_serial
+            .lock()
+            .expect("the serial is not poisoned") = serial;
     }
 
     /// Records what the surface was asked to be.
@@ -154,12 +178,39 @@ impl OffscreenSurface {
             .expect("the attributes are not poisoned") = attributes.clone();
     }
 
-    /// What the surface was asked to be when it was created.
+    /// What the surface was asked to be when it was created, with every accepted change of shell
+    /// placement applied.
     pub fn requested_attributes(&self) -> SurfaceAttributes {
         self.requested_attributes
             .lock()
             .expect("the attributes are not poisoned")
             .clone()
+    }
+
+    /// What the surface is to the desktop.
+    pub fn role(&self) -> SurfaceRole {
+        self.requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .role
+            .clone()
+    }
+
+    /// Where the shell layer sits now, with every accepted change applied, for a surface made as
+    /// one.
+    pub fn layer_placement(&self) -> Option<LayerPlacement> {
+        match self.role() {
+            SurfaceRole::Layer(placement) => Some(placement),
+            _ => None,
+        }
+    }
+
+    /// Where the pop-up was asked to sit, for a surface made as one.
+    pub fn popup_placement(&self) -> Option<PopupPlacement> {
+        match self.role() {
+            SurfaceRole::Popup(placement) => Some(placement),
+            _ => None,
+        }
     }
 
     /// How many frames have been asked for since this surface was created.
@@ -266,6 +317,34 @@ impl OffscreenSurface {
             .copied()
     }
 
+    /// Every change of shell placement the surface accepted, in the order it was asked for.
+    ///
+    /// Only a surface made as a shell layer accepts one.
+    pub fn layer_log(&self) -> Vec<LayerPatch> {
+        self.layer_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
+    /// Every input region the surface was given, in the order it was given.
+    ///
+    /// `None` is the whole surface. A headless desktop takes every region it is given.
+    pub fn input_region_log(&self) -> Vec<Region> {
+        self.input_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
+    /// Every opaque region the surface was given, in the order it was given.
+    pub fn opaque_region_log(&self) -> Vec<Region> {
+        self.opaque_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
     /// Whether the surface has been shown.
     pub fn is_visible(&self) -> bool {
         self.visible.load(Ordering::Relaxed)
@@ -370,11 +449,49 @@ impl Surface for OffscreenSurface {
         *self.fullscreen.lock().expect("the state is not poisoned")
     }
 
+    fn input_serial(&self) -> Option<InputSerial> {
+        *self
+            .input_serial
+            .lock()
+            .expect("the serial is not poisoned")
+    }
+
     fn set_cursor(&self, cursor: CursorStyle) {
         self.cursor_log
             .lock()
             .expect("the log is not poisoned")
             .push(cursor);
+    }
+
+    fn set_layer_placement(&self, patch: &LayerPatch) -> Result<(), Unsupported> {
+        let mut attributes = self
+            .requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned");
+        let SurfaceRole::Layer(placement) = &mut attributes.role else {
+            return Err(Unsupported);
+        };
+        patch.apply_to(placement);
+        self.layer_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(patch.clone());
+        Ok(())
+    }
+
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        self.input_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(region.map(<[_]>::to_vec));
+        Ok(())
+    }
+
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        self.opaque_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(region.map(<[_]>::to_vec));
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {

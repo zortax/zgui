@@ -59,6 +59,8 @@ usage:
                                       engines, unsafe, attribution, versions, pinned,
                                       counters, skips, clock, mutation, inert, tag-syntax
   cargo xtask ledger --self-test      prove every check fails on its planted fixture
+  cargo xtask wayland [args]          run the Wayland backend's compositor tests on a
+                                      nested headless sway; `args` go to `cargo test`
   cargo xtask tsan                    run the thread sanitiser over the threaded targets,
                                       and its positive control, which must fire
   cargo xtask new-crate <name> --layer <L0..L8>
@@ -117,6 +119,11 @@ pub(crate) enum Command {
     },
     /// Run the ledger checks against their planted-violation fixtures.
     LedgerSelfTest,
+    /// Run the Wayland backend's compositor tests on a nested headless sway.
+    Wayland {
+        /// The arguments passed on to `cargo test`.
+        args: Vec<String>,
+    },
     /// Run the thread sanitiser over the threaded targets and its positive control.
     Tsan,
     /// Create a new workspace member from the template.
@@ -176,6 +183,9 @@ impl Command {
                 }),
                 Some(other) => Err(format!("unknown ledger option `{other}`")),
             },
+            Some("wayland") => Ok(Self::Wayland {
+                args: args.map(str::to_owned).collect(),
+            }),
             Some("tsan") => Ok(Self::Tsan),
             Some("new-crate") => parse_new_crate(args),
             Some(other) => Err(format!("unknown command `{other}`")),
@@ -257,6 +267,13 @@ mod tests {
         );
         assert_eq!(parse("ledger --self-test"), Ok(Command::LedgerSelfTest));
         assert_eq!(parse("tsan"), Ok(Command::Tsan));
+        assert_eq!(parse("wayland"), Ok(Command::Wayland { args: Vec::new() }));
+        assert_eq!(
+            parse("wayland --test session_lock"),
+            Ok(Command::Wayland {
+                args: vec!["--test".to_owned(), "session_lock".to_owned()]
+            })
+        );
         assert_eq!(
             parse("new-crate zgui-paint --layer L4"),
             Ok(Command::NewCrate {

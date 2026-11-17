@@ -143,6 +143,11 @@ impl Window {
             zgui_platform::SurfaceEvent::ColorSchemeChanged(scheme) => {
                 self.set_platform_color_scheme(*scheme)
             }
+            // The first frame reached the screen. Nothing changes in what the window draws.
+            zgui_platform::SurfaceEvent::Presented => {
+                self.handle.set_presented();
+                false
+            }
             // Keyboard focus is a level as well, and it is one whose *edges* do work that must not
             // be done twice: losing it settles the field being typed into, which is the event a
             // form validates on, and a window system that re-states the focus it already reported
@@ -152,6 +157,11 @@ impl Window {
                 self.surface_focused = *focused;
                 self.handle.set_focused(*focused);
                 moved
+            }
+            // The locks are a level the window reports; the change also travels with the input.
+            zgui_platform::SurfaceEvent::ModifiersChanged(modifiers) => {
+                self.handle.set_lock_keys(*modifiers);
+                true
             }
             // A drag edge, where a desktop reports one. The release with a reconfiguration still
             // owed is the one edge that buys a frame of its own: the level the window holds is
@@ -261,8 +271,17 @@ impl Window {
         }
     }
 
-    /// Shows the surface once its first frame has reached it.
+    /// Leaves the surface hidden after its first frame, for a window the application shows itself.
+    pub(crate) fn keep_hidden(&mut self) {
+        self.first_frame = false;
+    }
+
+    /// Shows the surface once its first frame has reached it. Where the platform reports no
+    /// presentation, that frame also counts as shown.
     fn show_first_frame(&mut self, outcome: FrameOutcome) {
+        if matches!(outcome, FrameOutcome::Presented(_)) && !self.surface.reports_presentation() {
+            self.handle.set_presented();
+        }
         if self.first_frame && matches!(outcome, FrameOutcome::Presented(_)) {
             // A surface is shown by its first frame, never before it: showing an unpainted one is
             // what produces a flash of empty window at launch.
@@ -742,6 +761,9 @@ impl Window {
         let blink = (!(self.occluded || self.starved))
             .then(|| self.carets.next_flip(now))
             .flatten();
+        // The next step boundary of the stepped animations, excluded on a hidden or starved
+        // surface for the reason the blink is.
+        let hold = self.hold_due.filter(|_| !(self.occluded || self.starved));
         // A frame being held back owes a moment of its own, and it is the only source that owes one
         // for a frame that has already been asked for. Without it a window whose whole reason to
         // draw is the input it has already queued is held and never woken again.
@@ -758,6 +780,7 @@ impl Window {
             self.gesture_deadline(),
             resize,
             blink,
+            hold,
             held,
             retry,
         ]
@@ -1178,6 +1201,9 @@ impl Window {
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
         super::brushes::publish(&self.text_slots, self.text.text_paints());
         self.brushes_moved |= applied.recoloured;
+        if !applied.rewritten.is_empty() {
+            self.redraw_inline_text(&applied.rewritten);
+        }
         let split = applied.split;
         if split.is_empty() {
             return;

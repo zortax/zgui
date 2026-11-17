@@ -77,13 +77,14 @@
 pub mod clipboard;
 pub mod harness;
 pub mod platform;
+mod role;
 pub mod surface;
 pub mod waker;
 
 pub use crate::clipboard::MemoryClipboard;
 pub use crate::harness::Harness;
-pub use crate::platform::Headless;
-pub use crate::surface::OffscreenSurface;
+pub use crate::platform::{Headless, SessionLockState};
+pub use crate::surface::{OffscreenSurface, Region};
 pub use crate::waker::RecordingWaker;
 
 /// The clock a caller moves by hand, re-exported.

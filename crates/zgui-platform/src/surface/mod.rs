@@ -8,6 +8,7 @@ mod gpu;
 mod icon;
 mod id;
 mod role;
+mod serial;
 mod text_input;
 mod timing;
 mod watchdog;
@@ -17,19 +18,21 @@ pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
 pub use crate::surface::drag::DragEvent;
-pub use crate::surface::event::SurfaceEvent;
+pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
 pub use crate::surface::role::{
-    Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
+    Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
+    PopupPlacement, SurfaceRole,
 };
+pub use crate::surface::serial::InputSerial;
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 
 use crate::error::Unsupported;
 use crate::theme::ColorScheme;
@@ -98,6 +101,13 @@ pub trait Surface: Send + Sync + 'static {
     /// rather than a borrow of whatever the backend keeps.
     fn presentation_timing(&self) -> Option<PresentationTiming> {
         None
+    }
+
+    /// Whether the platform sends [`SurfaceEvent::Presented`] for this surface.
+    ///
+    /// Without it, a caller counts the first frame handed to the surface as shown.
+    fn reports_presentation(&self) -> bool {
+        false
     }
 
     /// Asks for a different content size, and reports the size actually taken.
@@ -237,6 +247,15 @@ pub trait Surface: Send + Sync + 'static {
     /// behaviour focus-stealing prevention exists to stop.
     fn focus(&self) {}
 
+    /// The token of the latest press the user made on this surface's seat.
+    ///
+    /// A request that the desktop grants only against a press quotes it: a pop-up's grab, read in
+    /// the handler of the press that opens the pop-up. `None` before the first press, and on a
+    /// desktop that needs no token.
+    fn input_serial(&self) -> Option<InputSerial> {
+        None
+    }
+
     /// Asks the desktop to draw attention to this surface, or stops asking.
     ///
     /// What that looks like is the desktop's business — a bouncing icon, a flashing task-bar
@@ -271,10 +290,46 @@ pub trait Surface: Send + Sync + 'static {
     /// Sets what the pointer looks like over this surface.
     fn set_cursor(&self, cursor: CursorStyle);
 
+    /// Changes where a shell layer sits and what it claims, for a surface that is one.
+    ///
+    /// The change is shown with the next frame: the platform sends it together with that frame,
+    /// so the new placement and the content drawn for it reach the screen at once. Every field the
+    /// patch leaves absent stays as it is. A surface that is not a shell layer answers with
+    /// [`Unsupported`], and so does a platform that has none.
+    fn set_layer_placement(&self, patch: &LayerPatch) -> Result<(), Unsupported> {
+        let _ = patch;
+        Err(Unsupported)
+    }
+
     /// Makes the surface transparent to the pointer, so presses reach whatever is behind it.
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
         let _ = passthrough;
         Err(Unsupported)
+    }
+
+    /// Sets the part of the surface that takes pointer and touch input, in CSS pixels.
+    ///
+    /// Input on the rest of the surface reaches whatever is behind it. `None` makes the whole
+    /// surface take input, and an empty set of rectangles makes none of it take input. The
+    /// rectangles are in the surface's own coordinates and may overlap. A platform rounds each
+    /// edge outwards to the pixels it measures in, so a rectangle never takes less than it covers.
+    ///
+    /// The change is shown with the next frame, together with the content drawn for it. A platform
+    /// that cannot do this answers with [`Unsupported`]; see
+    /// [`PlatformCapabilities::input_regions`](crate::PlatformCapabilities::input_regions).
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        let _ = region;
+        Err(Unsupported)
+    }
+
+    /// Tells the platform which part of the surface is opaque, in CSS pixels.
+    ///
+    /// A hint, and nothing else: a compositor skips drawing what is behind an opaque part. `None`
+    /// and an empty set of rectangles both say nothing is opaque. A platform rounds each edge
+    /// inwards, so a rectangle never claims a pixel it only partly covers. The change is shown
+    /// with the next frame. Where it means nothing it costs nothing.
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        let _ = region;
     }
 
     /// Tells the platform where text is being typed and what kind, or that none is.

@@ -56,6 +56,24 @@ pub struct PlatformCapabilities {
     pub absolute_window_position: bool,
     /// Whether a window can be asked to stay above or below others.
     pub window_levels: bool,
+    /// Whether a surface can take input on a part of itself and let the rest through.
+    ///
+    /// Where it can, [`Surface::set_input_region`](crate::Surface::set_input_region) makes only a
+    /// card or a stack of notifications clickable on a surface that covers more of the screen.
+    pub input_regions: bool,
+    /// Whether the keyboard and the pointer can be limited to a set of this application's
+    /// surfaces until the user presses outside them.
+    ///
+    /// Where it can, [`PlatformCx::create_focus_grab`](crate::PlatformCx::create_focus_grab)
+    /// makes a grab. A pop-over then closes on a press outside it without an input region over
+    /// the whole screen.
+    pub focus_grab: bool,
+    /// Whether the application can lock the session and draw the lock screen itself.
+    ///
+    /// Where it can, [`PlatformCx::lock_session`](crate::PlatformCx::lock_session) asks the
+    /// desktop to lock, and a surface of role [`SurfaceRole::Lock`](crate::SurfaceRole::Lock)
+    /// covers one output while the session is locked.
+    pub session_lock: bool,
     /// Who draws the title bar and the frame.
     pub decorations: DecorationSource,
     /// Whether the pointer can be confined to a region.
@@ -100,6 +118,9 @@ impl PlatformCapabilities {
             ime_purpose_hints: false,
             absolute_window_position: false,
             window_levels: false,
+            input_regions: false,
+            focus_grab: false,
+            session_lock: false,
             decorations: DecorationSource::Platform,
             pointer_confine: false,
             pointer_lock: false,
@@ -146,6 +167,8 @@ mod tests {
         let capabilities = PlatformCapabilities::none();
         assert!(!capabilities.native_popup_surfaces);
         assert!(!capabilities.layer_surfaces);
+        assert!(!capabilities.input_regions);
+        assert!(!capabilities.focus_grab);
         assert!(!capabilities.drag_source);
         assert!(!capabilities.accepts_drops());
         assert!(!capabilities.ime);

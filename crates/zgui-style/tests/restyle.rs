@@ -11,6 +11,7 @@
 //! | `settling` | where a transition leaves the element's own style once it has finished |
 //! | `sharing` | equal cascade results under different parents taking one style's groups |
 //! | `fill` | what a finished animation that fills forwards holds through a later restyle |
+//! | `hidden` | a subtree hidden with `display: none` while its animations run |
 //! | `keyframe_vars` | keyframe values that read a custom property, as the property moves |
 //! | `damage` | what each damage level the engine produces makes the frame owe |
 //! | `pass` | the shape of one pass: what it collects, how wide it runs, what it retires |
@@ -28,6 +29,8 @@ mod custom_reader;
 mod damage;
 #[path = "restyle/fill.rs"]
 mod fill;
+#[path = "restyle/hidden.rs"]
+mod hidden;
 #[path = "restyle/keyframe_vars.rs"]
 mod keyframe_vars;
 #[path = "restyle/memo.rs"]

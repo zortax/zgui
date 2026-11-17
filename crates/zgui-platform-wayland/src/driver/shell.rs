@@ -58,7 +58,15 @@ impl WaylandState {
         let Some(surface) = self.live.surface(id) else {
             return;
         };
-        let pending = surface.shared().pending_configure.take();
+        let (pending, current) = {
+            let mut shared = surface.shared();
+            (shared.pending_configure.take(), shared.sequence.accepts())
+        };
+        // A configure for a mapping the surface left is dropped unacknowledged, see `sequence`.
+        if !current {
+            tracing::debug!(?id, serial, "dropped a configure sent before the unmap");
+            return;
+        }
         let Some(pending) = pending else {
             // A surface acknowledging a description it never received would be acknowledging
             // nothing; the compositor sends the two halves together.
@@ -70,7 +78,10 @@ impl WaylandState {
             let mut shared = surface.shared();
             let (extent, state_flip) = shared.apply_shell_states(&pending, surface.wanted());
             shared.resizing = pending.resizing;
-            shared.visibility.configured = true;
+            // A configure that reaches a surface the application hid answers a commit made before
+            // the hide. Drawing into it would map the surface again, so it waits for the show.
+            shared.visibility.configured |= !shared.unmapped;
+            shared.configured_unshown |= shared.unmapped;
             // The state this whole shell is bound at version six for, and the only signal on this
             // desktop that reliably says a window is not being seen.
             shared.visibility.suspended = pending.suspended;

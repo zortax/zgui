@@ -73,6 +73,10 @@ impl AppHandler for Probe {
 fn main() {
     const PROPERTY: &str = "a signal written from outside any input event still produces a frame";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::watchdog(PROPERTY);
     let Some(mut app) = support::loop_for(PROPERTY, Probe::default()) else {
         return;

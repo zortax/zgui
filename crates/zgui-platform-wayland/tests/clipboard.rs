@@ -136,6 +136,10 @@ fn paste_from_elsewhere(waker: std::sync::Arc<dyn zgui_platform::Waker>) {
 fn main() {
     const PROPERTY: &str = "a selection this application wrote is read back through the compositor";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

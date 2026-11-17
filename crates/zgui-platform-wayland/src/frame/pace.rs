@@ -10,8 +10,23 @@ use zgui_platform::Watchdog;
 enum Owed {
     /// Nothing. The surface has committed nothing the compositor has yet to answer.
     Nothing,
-    /// A frame callback, asked for at this moment and not yet arrived.
+    /// A frame callback, asked for at this moment with a commit that carried a buffer.
     Callback(Instant),
+    /// A frame callback, asked for at this moment with a commit that carried no buffer. The
+    /// first redraw that input asks for after it does not wait.
+    Bare(Instant),
+    /// A [`Owed::Bare`] callback whose redraw for input was taken. Further redraws wait for it.
+    Spent(Instant),
+}
+
+impl Owed {
+    /// When the callback owed was asked for, if one is owed.
+    const fn since(self) -> Option<Instant> {
+        match self {
+            Self::Nothing => None,
+            Self::Callback(since) | Self::Bare(since) | Self::Spent(since) => Some(since),
+        }
+    }
 }
 
 /// Whether a surface may be drawn now, and what the loop should wait for if not.
@@ -37,6 +52,24 @@ enum Owed {
 /// of intervals. Such a window composes its next frame while the callback is owed, and the frame
 /// is *held*: it is presented when the callback arrives, so there is still one commit per callback,
 /// and nothing more is composed until it is presented.
+///
+/// # Input after a frame that drew nothing does not wait
+///
+/// A redraw that ran and drew nothing commits no buffer, and the callback it asks for only keeps
+/// the chain alive. The compositor has no new buffer from this surface for the coming refresh, so
+/// a frame drawn now is still one buffer per refresh. A pointer motion and the press after it
+/// often arrive in two reads: the motion's redraw draws nothing, and a press that waited for its
+/// callback would show its frame one refresh late. So the first redraw that input asks for after
+/// such a commit is delivered at once, and presented at once. Later redraws wait for the callback,
+/// so a stream of input over a still surface draws once per refresh, as before.
+///
+/// # A press composes ahead
+///
+/// A press over a surface that animates finds a callback owed for a buffer. A press that waits
+/// for that callback opens what it opens one refresh late, and a second surface the press shows
+/// waits behind the first. So the first redraw a press asks for is composed at once and held: it
+/// is presented when the callback arrives, so there is still one commit per callback. Motion does
+/// not compose ahead, so an animation keeps its pace under a moving pointer.
 ///
 /// # A new extent does not wait
 ///
@@ -87,6 +120,12 @@ pub struct Pacer {
     held: bool,
     /// Whether a frame may be composed while a callback is owed.
     ahead: bool,
+    /// Whether input arrived since the last redraw was delivered.
+    input: bool,
+    /// Whether a press arrived since the last redraw was delivered.
+    press: bool,
+    /// Whether the last redraw delivered answered input.
+    for_input: bool,
     /// Whether the next redraw answers a new extent, so it neither waits for nor is held behind an
     /// owed callback.
     resizing: bool,
@@ -102,6 +141,9 @@ impl Pacer {
             abandoned: 0,
             held: false,
             ahead: false,
+            input: false,
+            press: false,
+            for_input: false,
             resizing: false,
         }
     }
@@ -114,6 +156,26 @@ impl Pacer {
     /// Records that something asked for a frame.
     pub const fn request(&mut self) {
         self.wanted = true;
+    }
+
+    /// Records that input arrived for this surface, see "Input after a frame that drew nothing
+    /// does not wait".
+    pub const fn input(&mut self) {
+        self.input = true;
+    }
+
+    /// Records that a press arrived for this surface, see "A press composes ahead".
+    pub const fn press(&mut self) {
+        self.input = true;
+        self.press = true;
+    }
+
+    /// Whether the last redraw delivered answered input.
+    ///
+    /// Such a redraw that draws nothing still commits and asks for a callback, so a stream of
+    /// input over a still surface is paced by the display.
+    pub const fn drew_for_input(&self) -> bool {
+        self.for_input
     }
 
     /// Whether a redraw is waiting to be delivered.
@@ -135,19 +197,34 @@ impl Pacer {
         //
         // A held frame is the one frame allowed ahead of the compositor, so nothing more is
         // composed until it is presented.
-        let waiting = matches!(self.owed, Owed::Callback(_)) && !self.ahead && !self.resizing;
+        let owed = match self.owed {
+            Owed::Nothing => false,
+            Owed::Bare(_) => !self.input,
+            Owed::Callback(_) => !self.press,
+            Owed::Spent(_) => true,
+        };
+        let waiting = owed && !self.ahead && !self.resizing;
         if !self.wanted || !visibility.configured || self.held || waiting {
             return false;
         }
+        if let Owed::Bare(since) = self.owed
+            && self.input
+        {
+            self.owed = Owed::Spent(since);
+        }
         self.wanted = false;
+        self.for_input = self.input;
+        self.input = false;
+        self.press = false;
         true
     }
 
     /// Whether a frame that has just been composed may be presented now.
     ///
-    /// Not while a callback is owed: two commits with no callback between them is a client racing
-    /// ahead of the display, and only the second of them is ever shown. The frame is held instead,
-    /// and [`Pacer::take_present`] hands it over when the callback arrives or is given up on.
+    /// Not while a callback for a buffer is owed: two buffers with no callback between them is a
+    /// client racing ahead of the display, and only the second of them is ever shown. The frame
+    /// is held instead, and [`Pacer::take_present`] hands it over when the callback arrives or is
+    /// given up on. A callback asked for with no buffer does not hold a frame.
     pub fn present_now(&mut self, now: Instant) -> bool {
         let owed = !self.resizing
             && matches!(self.owed, Owed::Callback(since) if !self.watchdog.expired(since, now));
@@ -161,7 +238,7 @@ impl Pacer {
     /// the frame after it is composed while the compositor answers for it.
     pub fn take_present(&mut self, visibility: &mut Visibility, now: Instant) -> bool {
         self.expire(visibility, now);
-        if !self.held || matches!(self.owed, Owed::Callback(_)) {
+        if !self.held || self.owes_callback() {
             return false;
         }
         self.held = false;
@@ -175,7 +252,7 @@ impl Pacer {
 
     /// Whether a frame callback is owed.
     pub const fn owes_callback(&self) -> bool {
-        matches!(self.owed, Owed::Callback(_))
+        self.owed.since().is_some()
     }
 
     /// Whether a composed frame is waiting to be presented.
@@ -200,7 +277,7 @@ impl Pacer {
 
     /// Gives up on a callback that has been owed for too long.
     fn expire(&mut self, visibility: &mut Visibility, now: Instant) {
-        if let Owed::Callback(since) = self.owed
+        if let Some(since) = self.owed.since()
             && self.watchdog.expired(since, now)
         {
             // The compositor was asked for a callback and has not answered in long enough that it
@@ -226,6 +303,18 @@ impl Pacer {
         self.owed = Owed::Callback(now);
     }
 
+    /// Records that a commit with no buffer went out and a callback was asked for with it.
+    pub const fn committed_bare(&mut self, now: Instant) {
+        self.owed = Owed::Bare(now);
+    }
+
+    /// Records that the commit a redraw was closed out for did not go out.
+    ///
+    /// No callback was asked for, so none is owed.
+    pub const fn commit_withheld(&mut self) {
+        self.owed = Owed::Nothing;
+    }
+
     /// Records the compositor answering with a frame callback.
     pub const fn callback(&mut self) {
         self.owed = Owed::Nothing;
@@ -236,7 +325,9 @@ impl Pacer {
     /// Read by the loop when it has to decide about a surface it is not going to draw — a hidden
     /// one — because the run of unanswered frames is what eventually decides it is visible again.
     pub fn is_overdue(&self, now: Instant) -> bool {
-        matches!(self.owed, Owed::Callback(since) if self.watchdog.expired(since, now))
+        self.owed
+            .since()
+            .is_some_and(|since| self.watchdog.expired(since, now))
     }
 
     /// Records the surface becoming hidden or visible.
@@ -262,8 +353,8 @@ impl Pacer {
     /// is the cost the whole frame loop is built to avoid.
     pub fn deadline(&self, visibility: Visibility, now: Instant) -> Option<Instant> {
         let _ = (visibility, now);
-        match self.owed {
-            Owed::Callback(since) if self.wanted || self.held => Some(self.watchdog.expiry(since)),
+        match self.owed.since() {
+            Some(since) if self.wanted || self.held => Some(self.watchdog.expiry(since)),
             _ => None,
         }
     }
@@ -339,6 +430,109 @@ mod tests {
         assert!(!pacer.take(&mut shown(), now + Duration::from_millis(1)));
         pacer.callback();
         assert!(pacer.take(&mut shown(), now + Duration::from_millis(2)));
+    }
+
+    #[test]
+    fn input_after_a_frame_that_drew_nothing_draws_and_presents_at_once() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        pacer.committed_bare(now);
+        pacer.request();
+        assert!(
+            !pacer.take(&mut shown(), now),
+            "a redraw nobody pressed for waits"
+        );
+        pacer.input();
+        assert!(pacer.take(&mut shown(), now), "the press draws at once");
+        assert!(pacer.present_now(now), "and its frame goes out at once");
+        assert!(!pacer.held());
+        pacer.committed(now);
+        pacer.input();
+        pacer.request();
+        assert!(
+            !pacer.take(&mut shown(), now),
+            "the frame after a buffer waits for the callback"
+        );
+    }
+
+    #[test]
+    fn a_withheld_commit_owes_no_callback() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        pacer.committed_bare(now);
+        pacer.commit_withheld();
+        assert!(!pacer.owes_callback());
+        pacer.request();
+        assert!(
+            pacer.take(&mut shown(), now),
+            "the next redraw does not wait for a callback nobody asked for"
+        );
+    }
+
+    #[test]
+    fn input_over_a_still_surface_draws_once_per_callback() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        pacer.committed_bare(now);
+        pacer.input();
+        pacer.request();
+        assert!(pacer.take(&mut shown(), now));
+        // That frame drew nothing either, and committed nothing.
+        pacer.input();
+        pacer.request();
+        assert!(
+            !pacer.take(&mut shown(), now),
+            "a second redraw for input waits for the callback"
+        );
+        assert!(pacer.owes_callback());
+        pacer.callback();
+        assert!(pacer.take(&mut shown(), now));
+    }
+
+    #[test]
+    fn a_press_over_an_animating_surface_composes_ahead_and_is_held() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        let mut visibility = shown();
+        pacer.committed(now);
+        pacer.input();
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "motion waits for the callback"
+        );
+        pacer.press();
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the press composes at once"
+        );
+        assert!(
+            !pacer.present_now(now),
+            "and its frame waits for the callback"
+        );
+        pacer.press();
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "nothing is composed over the held frame"
+        );
+        pacer.callback();
+        assert!(pacer.take_present(&mut visibility, now));
+        pacer.committed(now);
+        pacer.request();
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the press that waited behind the held frame composes ahead"
+        );
+        assert!(!pacer.present_now(now));
+        pacer.callback();
+        assert!(pacer.take_present(&mut visibility, now));
+        pacer.committed(now);
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "the next frame waits for its callback"
+        );
     }
 
     #[test]
