@@ -81,6 +81,36 @@ fn sample_atlas(texel: vec2<f32>, tile: Tile, lod: f32) -> vec4<f32> {
     );
 }
 
+// How far from one a sprite's texel step may be before its tile is resampled.
+const RESAMPLE_SLACK: f32 = 0.01;
+
+// The atlas at a position given in texels, for a sprite whose texels advance by `step` per pixel.
+//
+// A sprite drawn at the size of its tile reads one texel for each pixel, and the nearest texel is
+// that texel. A sprite a transform stretches or shrinks reads between texels. The nearest texel
+// would then double or drop whole rows and columns, so the four texels around the position are
+// weighted by their distance from it. Each of the four is read at its centre, so the answer is
+// the same under a nearest and a filtering sampler, and each is clamped to the tile.
+fn sample_atlas_stepped(texel: vec2<f32>, tile: Tile, step: vec2<f32>) -> vec4<f32> {
+    if all(abs(step - vec2<f32>(1.0)) <= vec2<f32>(RESAMPLE_SLACK)) {
+        return sample_atlas(texel, tile, 0.0);
+    }
+    let at = texel - vec2<f32>(0.5);
+    let base = floor(at) + vec2<f32>(0.5);
+    let weight = at - floor(at);
+    let low = mix(
+        sample_atlas(base, tile, 0.0),
+        sample_atlas(base + vec2<f32>(1.0, 0.0), tile, 0.0),
+        weight.x,
+    );
+    let high = mix(
+        sample_atlas(base + vec2<f32>(0.0, 1.0), tile, 0.0),
+        sample_atlas(base + vec2<f32>(1.0, 1.0), tile, 0.0),
+        weight.x,
+    );
+    return mix(low, high, weight.y);
+}
+
 // The straight colour a premultiplied tint stands for, which is what a glyph's contrast is judged
 // against.
 fn straight_rgb(color: vec4<f32>) -> vec3<f32> {

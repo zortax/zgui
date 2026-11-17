@@ -35,13 +35,15 @@ fn vs_mono_sprite(
 
 @fragment
 fn fs_mono_sprite(in: SpriteVarying) -> @location(0) vec4<f32> {
+    // Taken before the clip branches: a derivative is defined only in uniform control flow.
+    let step = fwidth(in.texel);
     let sprite = sprites[in.instance];
     let clip = clip_coverage(device_position(in.position.xy), sprite.clip);
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
     let color = rgba_of(sprite.color);
-    let sample = sample_atlas(in.texel, sprite.tile, 0.0).r;
+    let sample = sample_atlas_stepped(in.texel, sprite.tile, step).r;
     let coverage = correct_coverage(sample, straight_rgb(color), globals.text.x);
     return color * coverage * clip;
 }

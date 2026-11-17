@@ -171,6 +171,29 @@ fn the_words_are_inked_while_the_dialog_is_arriving() {
     }
 }
 
+/// The words are inked while the dialog arrives from a scale too small for cached glyph tiles.
+///
+/// The default entrance starts at 95 %, and text under so slight a scale is drawn from the tiles
+/// of the glyph atlas. From 20 % the text is filled from its outlines while the scale is small,
+/// which is the path the report was about.
+#[test]
+fn the_words_are_inked_while_the_dialog_arrives_from_a_small_scale() {
+    let sheet = format!("{SHEET}\n:root {{ --zui-surface-enter-scale: 0.2 }}");
+    let Some(mut stage) = Stage::open(&sheet, rename_dialog) else {
+        eprintln!("skipped: no usable graphics device");
+        return;
+    };
+    stage.wait(SETTLED);
+    let at = aim(&stage, "Open dialog");
+    stage.click(at);
+    // Early in the entrance, while the scale is far below the least a tile is drawn at.
+    stage.wait_quietly(Duration::from_millis(40));
+    stage.capture("dialog-small-scale");
+    for words in ["Rename project", "Cancel", "Rename"] {
+        assert_inked(&stage, words, "early in a small-scale entrance");
+    }
+}
+
 /// And they are still inked once it has settled, which the earlier suite already holds.
 #[test]
 fn the_words_are_inked_after_the_dialog_settles() {
