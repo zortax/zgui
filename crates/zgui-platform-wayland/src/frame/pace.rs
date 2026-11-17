@@ -63,6 +63,14 @@ impl Owed {
 /// such a commit is delivered at once, and presented at once. Later redraws wait for the callback,
 /// so a stream of input over a still surface draws once per refresh, as before.
 ///
+/// # A press composes ahead
+///
+/// A press over a surface that animates finds a callback owed for a buffer. A press that waits
+/// for that callback opens what it opens one refresh late, and a second surface the press shows
+/// waits behind the first. So the first redraw a press asks for is composed at once and held: it
+/// is presented when the callback arrives, so there is still one commit per callback. Motion does
+/// not compose ahead, so an animation keeps its pace under a moving pointer.
+///
 /// # A new extent does not wait
 ///
 /// A frame for an extent the compositor has just configured is drawn and presented at once, even
@@ -114,6 +122,8 @@ pub struct Pacer {
     ahead: bool,
     /// Whether input arrived since the last redraw was delivered.
     input: bool,
+    /// Whether a press arrived since the last redraw was delivered.
+    press: bool,
     /// Whether the next redraw answers a new extent, so it neither waits for nor is held behind an
     /// owed callback.
     resizing: bool,
@@ -130,6 +140,7 @@ impl Pacer {
             held: false,
             ahead: false,
             input: false,
+            press: false,
             resizing: false,
         }
     }
@@ -148,6 +159,12 @@ impl Pacer {
     /// does not wait".
     pub const fn input(&mut self) {
         self.input = true;
+    }
+
+    /// Records that a press arrived for this surface, see "A press composes ahead".
+    pub const fn press(&mut self) {
+        self.input = true;
+        self.press = true;
     }
 
     /// Whether a redraw is waiting to be delivered.
@@ -172,7 +189,8 @@ impl Pacer {
         let owed = match self.owed {
             Owed::Nothing => false,
             Owed::Bare(_) => !self.input,
-            Owed::Callback(_) | Owed::Spent(_) => true,
+            Owed::Callback(_) => !self.press,
+            Owed::Spent(_) => true,
         };
         let waiting = owed && !self.ahead && !self.resizing;
         if !self.wanted || !visibility.configured || self.held || waiting {
@@ -185,6 +203,7 @@ impl Pacer {
         }
         self.wanted = false;
         self.input = false;
+        self.press = false;
         true
     }
 
@@ -435,6 +454,52 @@ mod tests {
         assert!(pacer.owes_callback());
         pacer.callback();
         assert!(pacer.take(&mut shown(), now));
+    }
+
+    #[test]
+    fn a_press_over_an_animating_surface_composes_ahead_and_is_held() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        let mut visibility = shown();
+        pacer.committed(now);
+        pacer.input();
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "motion waits for the callback"
+        );
+        pacer.press();
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the press composes at once"
+        );
+        assert!(
+            !pacer.present_now(now),
+            "and its frame waits for the callback"
+        );
+        pacer.press();
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "nothing is composed over the held frame"
+        );
+        pacer.callback();
+        assert!(pacer.take_present(&mut visibility, now));
+        pacer.committed(now);
+        pacer.request();
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the press that waited behind the held frame composes ahead"
+        );
+        assert!(!pacer.present_now(now));
+        pacer.callback();
+        assert!(pacer.take_present(&mut visibility, now));
+        pacer.committed(now);
+        pacer.request();
+        assert!(
+            !pacer.take(&mut visibility, now),
+            "the next frame waits for its callback"
+        );
     }
 
     #[test]

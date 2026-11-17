@@ -7,6 +7,7 @@ use calloop_wayland_source::WaylandSource;
 use zgui_platform::{
     AppHandler, Clock, IdlePolicy, Install, Park, Parked, PlatformError, Surface as _, SurfaceEvent,
 };
+use zgui_vocab::{KeyState, PointerAction};
 
 use crate::cx::WaylandCx;
 use crate::driver::WaylandState;
@@ -171,11 +172,17 @@ impl<A: AppHandler> WaylandApp<A> {
         // surface, and both of those record events of their own.
         let events = std::mem::take(&mut self.state.out);
         for (id, event) in events {
-            // Input lets the redraw it asks for through a callback that only keeps the chain alive.
+            // Input lets the redraw it asks for through a callback that only keeps the chain alive,
+            // and a press composes ahead of a callback owed for a buffer.
             if event.is_input()
                 && let Some(surface) = self.state.live.surface(id)
             {
-                surface.shared().pacer.input();
+                let mut shared = surface.shared();
+                if is_press(&event) {
+                    shared.pacer.press();
+                } else {
+                    shared.pacer.input();
+                }
             }
             let closing = matches!(event, SurfaceEvent::Destroyed | SurfaceEvent::Closed(_));
             let cx = WaylandCx::new(&self.state);
@@ -346,6 +353,20 @@ impl<A: AppHandler> WaylandApp<A> {
         }
         Ok(())
     }
+}
+
+/// Whether `event` is a button or a key going down.
+const fn is_press(event: &SurfaceEvent) -> bool {
+    matches!(
+        event,
+        SurfaceEvent::Pointer {
+            action: PointerAction::Pressed,
+            ..
+        } | SurfaceEvent::Key {
+            state: KeyState::Pressed,
+            ..
+        }
+    )
 }
 
 /// Logs the failure that stops the loop, once, and hands it on.
