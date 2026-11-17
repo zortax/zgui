@@ -119,7 +119,7 @@ const SWEEP_FLOOR: usize = 1024;
 /// Each frame of an animated colour or opacity is a lowering of its own, and the lowerings stay
 /// after their styles go. Past this count, and past several lowerings per live identity, the sweep
 /// empties the cache, and the styles still in use lower again on the frames that need them.
-const LOWERED_CEILING: usize = 4096;
+const LOWERED_CEILING: usize = 1024;
 
 /// How many lowerings per identity entry a cache holds before a sweep may empty it.
 const LOWERED_PER_IDENTITY: usize = 4;
@@ -174,11 +174,13 @@ impl PaintStyleCache {
     ///
     /// Every length in a lowering is in device pixels, so a change of device scale makes every
     /// entry wrong. It is a whole-cache event because it is a whole-document event.
+    ///
+    /// The cache gives its memory back as well, since a cache that outgrew its use is emptied too.
     pub fn clear(&mut self) {
-        self.lowered.clear();
-        self.by_identity.clear();
+        self.lowered = Vec::new();
+        self.by_identity = FxHashMap::default();
         self.swept_to = 0;
-        self.by_content.clear();
+        self.by_content = FxHashMap::default();
         // Every reference handed out before now indexes a list that is about to stop existing, and
         // the indices are handed out again from zero. This is what stops one of them comparing equal
         // to a reference issued afterwards — see [`PaintStyleRef`].
