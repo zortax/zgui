@@ -241,7 +241,7 @@ impl PaintStyleCache {
     /// sweep left it: each sweep is then paid for by at least as many insertions as it examines,
     /// while what a churning document holds stays within a factor of two of what it uses.
     ///
-    /// The lowerings stay until they outgrow [`LOWERED_CEILING`] and the live identities. Then the
+    /// The lowerings stay until they outgrow `LOWERED_CEILING` and the live identities. Then the
     /// sweep empties the cache as a change of scale does, so the values of an animation do not
     /// pile up for the life of the document.
     pub fn sweep(&mut self) -> usize {
