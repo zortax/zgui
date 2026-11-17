@@ -163,6 +163,9 @@ impl ConfiguredSurface {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: formats.surface,
+            // `Auto` keeps sRGB, or extended linear sRGB for an fp16 format, which is what the
+            // compositing shaders encode for.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: setup.size.width.max(1) as u32,
             height: setup.size.height.max(1) as u32,
             present_mode: mode,

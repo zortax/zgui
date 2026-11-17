@@ -144,6 +144,7 @@ impl UploadBelt {
             .active
             .iter()
             .position(|chunk| chunk.allocation(size, wgpu::MAP_ALIGNMENT).is_some());
+        let mut fresh = false;
         let mut chunk = if let Some(index) = active {
             self.active.swap_remove(index)
         } else if let Some(index) = self
@@ -153,6 +154,7 @@ impl UploadBelt {
         {
             self.free.swap_remove(index)
         } else {
+            fresh = true;
             self.allocate_chunk(gpu, size, "zgui.upload.chunk")
         };
         let offset = chunk
@@ -164,8 +166,14 @@ impl UploadBelt {
 
         let chunk = self.active.last().expect("the selected chunk was retained");
         let slice = chunk.buffer.slice(offset..offset + size);
+        match slice.get_mapped_range_mut() {
+            Ok(mut mapped) => mapped.copy_from_slice(bytes),
+            Err(error) => {
+                self.abandon(gpu, fresh, &error);
+                return 0;
+            }
+        }
         encoder.copy_buffer_to_buffer(&chunk.buffer, offset, target, target_offset, size);
-        slice.get_mapped_range_mut().copy_from_slice(bytes);
 
         zgui_profile::counter::add(zgui_profile::Counter::BytesUploaded, size);
         size
@@ -199,6 +207,7 @@ impl UploadBelt {
             .active
             .iter()
             .position(|chunk| chunk.allocation(size, alignment).is_some());
+        let mut fresh = false;
         let mut chunk = if let Some(index) = active {
             self.active.swap_remove(index)
         } else if let Some(index) = self
@@ -208,6 +217,7 @@ impl UploadBelt {
         {
             self.free.swap_remove(index)
         } else {
+            fresh = true;
             self.allocate_chunk(gpu, size, "zgui.texture-upload.chunk")
         };
         let offset = chunk
@@ -220,7 +230,13 @@ impl UploadBelt {
         let chunk = self.active.last().expect("the selected chunk was retained");
         let slice = chunk.buffer.slice(offset..offset + size);
         {
-            let mut mapped = slice.get_mapped_range_mut();
+            let mut mapped = match slice.get_mapped_range_mut() {
+                Ok(mapped) => mapped,
+                Err(error) => {
+                    self.abandon(gpu, fresh, &error);
+                    return 0;
+                }
+            };
             for y in 0..height as usize {
                 let source = y * row as usize;
                 let target = y * padded as usize;
@@ -373,6 +389,32 @@ impl UploadBelt {
             offset: 0,
             last_used: self.frame,
             one_shot,
+        }
+    }
+
+    /// Drops the chunk just selected after wgpu refused to map it, and reports the device lost.
+    ///
+    /// A chunk is mapped by construction and its ranges are aligned and disjoint. A chunk that was
+    /// mapped before a loss stays readable, so only a `fresh` chunk can be refused: wgpu does not
+    /// hold a buffer created on a lost device. A refusal on a reused chunk is a defect in the belt,
+    /// and a debug build stops on it.
+    ///
+    /// The frame's uploads are moot then, and the report is what makes the next frame rebuild. The
+    /// chunk is not left for `finish`, because unmapping a buffer wgpu no longer holds is itself a
+    /// validation error.
+    fn abandon(&mut self, gpu: &Gpu, fresh: bool, error: &wgpu::MapRangeError) {
+        debug_assert!(
+            fresh,
+            "wgpu refused a range of a mapped upload chunk: {error}"
+        );
+        let chunk = self.active.pop().expect("the selected chunk was retained");
+        if chunk.one_shot {
+            self.oneshot_bytes = self.oneshot_bytes.saturating_sub(chunk.size);
+        }
+        // One report for each loss: every later upload of the frame is refused the same way.
+        if !gpu.loss().is_lost() {
+            gpu.loss()
+                .report(wgpu::DeviceLostReason::Unknown, &error.to_string());
         }
     }
 }
