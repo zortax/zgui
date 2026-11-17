@@ -123,6 +123,16 @@ fn anchor_origin(world: &World<'_>, node: NodeKey) -> (f64, f64) {
     (0.0, 0.0)
 }
 
+/// Where on the page the box of `node` starts, in CSS pixels, or nothing if it generated no box.
+///
+/// Its children are measured from this origin less the scroll. A scroll carries the children
+/// along with it, so only this origin tells that a child may now sit somewhere else relative to
+/// its parent.
+pub fn origin(world: &World<'_>, node: NodeKey) -> Option<(f64, f64)> {
+    let bounds = bounds_of(world, node)?;
+    Some((bounds.x0, bounds.y0))
+}
+
 /// Whether `node` has an element among its children, which is what makes it carry a transform.
 fn has_element_child(world: &World<'_>, node: NodeKey) -> bool {
     let store = world.document.store();

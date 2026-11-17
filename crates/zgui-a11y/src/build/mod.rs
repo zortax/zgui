@@ -152,13 +152,6 @@ impl A11yBuilder {
         for node in owed.moved() {
             if self.held.holds(node) {
                 remeasured.push(node);
-                // The children are measured from this node's origin, so one that stayed where it
-                // was on the page now sits somewhere else relative to it.
-                remeasured.extend(
-                    project::children::element_keys(world, node)
-                        .into_iter()
-                        .filter(|child| self.held.holds(*child)),
-                );
                 continue;
             }
             targets.insert(node);
@@ -174,8 +167,13 @@ impl A11yBuilder {
         self.retire_departures(world, &mut targets);
 
         let mut nodes = Vec::new();
+        // The nodes whose origin moved on the page. Their children are measured from that origin,
+        // so a child that stayed where it was on the page now sits somewhere else relative to it.
+        let mut anchors: Vec<NodeKey> = Vec::new();
         for key in &targets {
-            self.reproject(world, *key, &mut nodes);
+            if self.reproject(world, *key, &mut nodes) {
+                anchors.push(*key);
+            }
         }
         // After the projections, and skipping anything they already covered: a node the departure
         // pass pulled in has been projected whole, which answers where it is as well.
@@ -185,8 +183,12 @@ impl A11yBuilder {
             if targets.contains(&key) {
                 continue;
             }
-            self.remeasure(world, key, &mut nodes);
+            // A move says that the node's origin moved, whatever was last recorded for it: a box
+            // carried along with an ancestor has an origin on record from before the carry.
+            self.remeasure_and_tell(world, key, &mut nodes);
+            anchors.push(key);
         }
+        self.remeasure_children(world, anchors, &targets, &mut nodes);
         TreeUpdate {
             nodes,
             tree: None,
@@ -304,6 +306,36 @@ impl A11yBuilder {
         }
     }
 
+    /// Measures again the held children of every node in `anchors`, the nodes whose origin moved
+    /// on the page.
+    ///
+    /// A child that moved on the page by another distance than its parent moved its own origin
+    /// relative to its children, so the walk goes on below it. A child carried along with its
+    /// parent, and a child that stayed where it was, end the walk: in the first, nothing below it
+    /// moved relative to it, and in the second, its origin stayed. A node projected in this update
+    /// already carries its own rectangle and is skipped.
+    fn remeasure_children(
+        &mut self,
+        world: &World<'_>,
+        mut anchors: Vec<NodeKey>,
+        projected: &BTreeSet<NodeKey>,
+        nodes: &mut Vec<(NodeId, Node)>,
+    ) {
+        let mut measured: HashSet<NodeKey> = HashSet::new();
+        while let Some(anchor) = anchors.pop() {
+            for child in project::children::element_keys(world, anchor) {
+                if !self.held.holds(child) || projected.contains(&child) || !measured.insert(child)
+                {
+                    continue;
+                }
+                let (resent, moved) = self.remeasure_and_tell(world, child, nodes);
+                if resent && moved {
+                    anchors.push(child);
+                }
+            }
+        }
+    }
+
     /// Answers a node that was carried somewhere else: its rectangle, and nothing else.
     ///
     /// The claim this rests on is stated where a move is recorded — see
@@ -312,18 +344,28 @@ impl A11yBuilder {
     /// what the consumer is already holding. What is left is the rectangle, and it is *measured*
     /// rather than translated, so the value sent is the value a full projection would have
     /// computed rather than an accumulation of offsets.
-    fn remeasure(&mut self, world: &World<'_>, key: NodeKey, nodes: &mut Vec<(NodeId, Node)>) {
+    ///
+    /// Answers whether the rectangle was sent, and whether the node's origin moved on the page.
+    fn remeasure_and_tell(
+        &mut self,
+        world: &World<'_>,
+        key: NodeKey,
+        nodes: &mut Vec<(NodeId, Node)>,
+    ) -> (bool, bool) {
         if !world.is_projected(key) {
             // Gone since the move was recorded, and already retired along with everything below it.
-            return;
+            return (false, false);
         }
         zgui_profile::counter::bump(Counter::A11yRemeasured);
         let geometry = project::geometry::measure(world, key);
         let sent = self.held.remeasure(key, &geometry);
         self.file_by_space(world, key);
+        let moved = self.held.place(key, project::geometry::origin(world, key));
+        let resent = sent.is_some();
         if let Some(node) = sent {
             nodes.push((to_a11y(key), node));
         }
+        (resent, moved)
     }
 
     /// Files a held node under the coordinate systems its rectangle was measured through.
@@ -342,17 +384,26 @@ impl A11yBuilder {
     }
 
     /// Projects one node, putting it in `nodes` only if the consumer would see a difference.
-    fn reproject(&mut self, world: &World<'_>, key: NodeKey, nodes: &mut Vec<(NodeId, Node)>) {
+    ///
+    /// Answers whether the node's origin moved on the page.
+    fn reproject(
+        &mut self,
+        world: &World<'_>,
+        key: NodeKey,
+        nodes: &mut Vec<(NodeId, Node)>,
+    ) -> bool {
         let Some(projected) = project::node(world, key) else {
             // Gone, and already retired along with everything below it.
-            return;
+            return false;
         };
         zgui_profile::counter::bump(Counter::A11yProjected);
         let changed = self.held.record(key, &projected);
         self.file_by_space(world, key);
+        let moved = self.held.place(key, project::geometry::origin(world, key));
         if changed {
             nodes.push((to_a11y(key), projected));
         }
+        moved
     }
 
     /// Projects `key` and everything below it, in document order.
@@ -374,6 +425,7 @@ impl A11yBuilder {
             let children = projected.children().to_vec();
             self.held.record(key, &projected);
             self.file_by_space(world, key);
+            self.held.place(key, project::geometry::origin(world, key));
             nodes.push((to_a11y(key), projected));
             // Reversed, so that popping visits the children in document order.
             for child in children.into_iter().rev() {

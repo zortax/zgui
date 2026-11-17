@@ -1009,3 +1009,55 @@ fn a_control_that_stays_while_its_box_moves_is_reported_where_it_is() {
     harness.settle(8);
     assert_eq!(composed_origin(&harness, target).0, 370.0);
 }
+
+/// A control that stays where it is while its box loses a sibling on the other side, as the last
+/// chip of a group that shrinks from the left does when the first chip leaves.
+///
+/// The box is projected again, because its child list changed, and its origin moves with it. The
+/// control's own rectangle on the page stays, so nothing else reports it, but it is measured from
+/// the box. Without a new measurement the consumer composes it as far from its place as the box
+/// moved.
+#[test]
+fn a_control_that_stays_while_its_box_loses_a_sibling_is_reported_where_it_is() {
+    let present = RwSignal::new_local(true);
+    let button = NodeRef::new();
+    let mut harness = support::app_with_text(
+        "root { display: flex; flex-direction: row; justify-content: flex-end; width: 400px; height: 300px }
+         .group { display: flex; flex-direction: row; padding-left: 5px }
+         control { display: flex; width: 30px; height: 24px }",
+        move |cx: &mut zgui_view::BuildCx<'_>| {
+            let first = zgui_view::flow::Dynamic::new(move || {
+                if present.get() {
+                    zgui_view::AnyView::new(
+                        zgui_elements::control().a11y(A11yBinding::new(Role::Button).label("First")),
+                    )
+                } else {
+                    zgui_view::AnyView::new(())
+                }
+            });
+            Box::new(
+                zgui_elements::row()
+                    .class("root")
+                    .child(
+                        zgui_elements::row().class("group").child(first).child(
+                            zgui_elements::control()
+                                .node_ref(button)
+                                .a11y(A11yBinding::new(Role::Button).label("Last")),
+                        ),
+                    )
+                    .into_view()
+                    .build(cx),
+            )
+        },
+    );
+    harness.settle(8);
+    let target = bound_id(button);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    present.set(false);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    present.set(true);
+    harness.settle(8);
+    assert_eq!(composed_origin(&harness, target).0, 370.0);
+    assert_every_update_resolves(&harness);
+}
