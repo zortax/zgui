@@ -91,8 +91,8 @@ impl Node<'_> {
     /// Four answers, and each is the narrowest one that is still true. A change this pipeline lays
     /// nothing out for — a border colour is the ordinary case — costs nothing here, and the
     /// paint-key comparison that runs over every restyle is what draws it again. A change to the
-    /// `transition-*` properties alone also costs nothing, because nothing reads them until a
-    /// later change starts a transition. A change that moves the element's ink without moving
+    /// `animation-*` and `transition-*` properties alone also costs nothing, because the values
+    /// they animate carry their own damage. A change that moves the element's ink without moving
     /// anything's geometry costs [`RECALCULATE_INK`]. A change to an extent, a margin, an inset, an alignment or the face text is set in moves
     /// geometry inside a box tree that is still correct, and costs [`RELAYOUT_BOX`] together with
     /// the two text bits — which the stage that reads them narrows again against the element's own
