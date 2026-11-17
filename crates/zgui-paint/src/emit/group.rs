@@ -28,6 +28,10 @@ use zgui_scene::{BackdropFilter, ClipId, ClipLink, GroupBoundary, Scene, Spatial
 
 use crate::lower::PaintStyle;
 
+/// The highest opacity that draws nothing a display shows: it moves no 8-bit channel by half a
+/// step, so every pixel under it rounds to the value it had. A group at or below it folds to zero.
+pub const INVISIBLE_OPACITY: f32 = 0.5 / 255.0;
+
 /// What a fragment's group properties come to once its subtree has been taken into account.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Isolation {
@@ -91,8 +95,9 @@ pub fn isolation(style: &PaintStyle, fragment: &Fragment) -> Isolation {
     // Nothing times anything is nothing. A group at zero contributes no pixel however its subtree
     // is arranged, so neither overlapping children nor a blending one can make a target tell a
     // different story from the fold — and the fold is what lets the emitter recognise a subtree
-    // that has vanished and stop pushing primitives for it.
-    if style.group.opacity <= 0.0 {
+    // that has vanished and stop pushing primitives for it. A group too faint to move a channel by
+    // half a step shows the same nothing.
+    if style.group.opacity <= INVISIBLE_OPACITY {
         return Isolation::Folded(0.0);
     }
     if fragment.subtree_disjoint && !blending_below {
@@ -314,6 +319,20 @@ mod tests {
         assert_eq!(
             isolation(&translucent(0.5), &fragment(true, true)),
             Isolation::Target
+        );
+    }
+
+    /// A fade that rests just above zero: it moves no channel, so it draws nothing either.
+    #[test]
+    fn a_group_too_faint_to_move_a_channel_folds_to_nothing() {
+        assert_eq!(
+            isolation(&translucent(0.001), &fragment(false, false)),
+            Isolation::Folded(0.0)
+        );
+        assert_eq!(
+            isolation(&translucent(0.01), &fragment(false, false)),
+            Isolation::Target,
+            "an opacity of 0.01 moves a white channel over black by two and a half steps"
         );
     }
 

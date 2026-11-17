@@ -190,9 +190,10 @@ pub fn outline(scene: &mut Scene, emission: &Emission<'_>) -> usize {
 /// whole rasterisation pass.
 ///
 /// This is what makes a control that carries several marks and reveals one cost what the one it
-/// shows costs, rather than what all of them cost.
+/// shows costs, rather than what all of them cost. An alpha too faint to move a channel by half a
+/// step has taken everything to nothing as well.
 fn vanished(alpha: f32) -> bool {
-    alpha <= 0.0
+    alpha <= crate::emit::group::INVISIBLE_OPACITY
 }
 
 fn content_tracked(
