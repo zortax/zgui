@@ -40,9 +40,17 @@ where
     V: IntoView,
 {
     let canvas = zgui_platform_web::canvas(&mount)?;
+    let mut recovery = None;
     if app.renderer.is_none() {
-        let graphics = SharedGraphics::open_async(backends(), Canvas(canvas.clone())).await?;
+        let backends = backends();
+        let graphics = SharedGraphics::open_async(backends, Canvas(canvas.clone())).await?;
         let precision = app.group_precision.unwrap_or_default();
+        recovery = Some(Recovery {
+            graphics: graphics.clone(),
+            canvas: canvas.clone(),
+            backends,
+            running: false,
+        });
         app.renderer = Some(factory(graphics, precision));
     }
     install_tasks();
@@ -56,6 +64,17 @@ where
             zgui_platform_web::report(&format!("zgui: {error}"));
         }
     })?;
+    if let Some(recovery) = recovery {
+        watch(&recovery.graphics);
+        RECOVERY.with(|held| *held.borrow_mut() = Some(recovery));
+        zgui_platform_web::on_context_change(|restored| {
+            if restored {
+                zgui_platform_web::spawn_local(recover());
+            } else {
+                zgui_platform_web::suspend();
+            }
+        });
+    }
     Ok(Mounted(()))
 }
 
@@ -68,6 +87,71 @@ where
     zgui_platform_web::spawn_local(async move {
         if let Err(error) = mount(app, Mount::Viewport, view).await {
             zgui_platform_web::report(&format!("zgui: {error}"));
+        }
+    });
+}
+
+/// What a page needs to open a new graphics device after it lost one.
+struct Recovery {
+    /// The graphics every renderer of the page is made on.
+    graphics: SharedGraphics,
+    /// The canvas.
+    canvas: zgui_platform_web::HtmlCanvasElement,
+    /// The graphics interfaces to try.
+    backends: zgui_render_wgpu::wgpu::Backends,
+    /// Whether a recovery is under way.
+    running: bool,
+}
+
+thread_local! {
+    /// The recovery state of this page's application.
+    static RECOVERY: std::cell::RefCell<Option<Recovery>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Starts a recovery when the device of `graphics` is reported lost.
+fn watch(graphics: &SharedGraphics) {
+    if let Some(gpu) = graphics.gpu() {
+        gpu.loss()
+            .watch(|| zgui_platform_web::spawn_local(recover()));
+    }
+}
+
+/// Replaces a lost graphics device.
+///
+/// A browser loses a device when its graphics process restarts, and some phones take it from a
+/// page in the background. The application gives up its surfaces, a new device opens, and the
+/// application opens its surfaces again on the same canvas. Each window is built again from its
+/// view, as after a suspension on a phone.
+async fn recover() {
+    let taken = RECOVERY.with(|held| {
+        let mut held = held.borrow_mut();
+        let recovery = held.as_mut().filter(|recovery| !recovery.running)?;
+        recovery.running = true;
+        Some((
+            recovery.graphics.clone(),
+            recovery.canvas.clone(),
+            recovery.backends,
+        ))
+    });
+    let Some((graphics, canvas, backends)) = taken else {
+        return;
+    };
+    zgui_platform_web::suspend();
+    match SharedGraphics::open_async(backends, Canvas(canvas)).await {
+        Ok(fresh) => {
+            if let Some(gpu) = fresh.gpu() {
+                graphics.adopt(gpu);
+                watch(&graphics);
+            }
+            zgui_platform_web::resume();
+        }
+        Err(error) => {
+            zgui_platform_web::report(&format!("zgui: the graphics device was lost: {error}"));
+        }
+    }
+    RECOVERY.with(|held| {
+        if let Some(recovery) = held.borrow_mut().as_mut() {
+            recovery.running = false;
         }
     });
 }

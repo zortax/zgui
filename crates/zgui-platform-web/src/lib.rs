@@ -29,6 +29,8 @@ pub mod clipboard;
 #[cfg(target_arch = "wasm32")]
 pub mod clock;
 #[cfg(target_arch = "wasm32")]
+mod console;
+#[cfg(target_arch = "wasm32")]
 mod cx;
 #[cfg(target_arch = "wasm32")]
 pub mod driver;
@@ -55,7 +57,7 @@ mod text_input;
 mod waker;
 
 #[cfg(target_arch = "wasm32")]
-pub use crate::driver::{canvas_of, run, stop};
+pub use crate::driver::{canvas_of, on_context_change, resume, run, stop, suspend};
 #[cfg(target_arch = "wasm32")]
 pub use crate::fetch::{fetch, page_fonts};
 #[cfg(target_arch = "wasm32")]

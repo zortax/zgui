@@ -217,6 +217,9 @@ web-time = "1.1.0"
 # The browser, spoken to directly. A canvas, its events, the animation frame and the clipboard are
 # each one browser interface, and a windowing library between them and the frame loop would hide
 # the frame callback, the wheel's units and the text input element this backend needs.
+# What wgpu and its dependencies report through. The browser backend prints it in the console,
+# where a page has no standard error stream to print to.
+log = "0.4.29"
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
 js-sys = "0.3.77"

@@ -81,6 +81,7 @@ pub fn run(
             "this page already runs an application".to_owned(),
         ));
     }
+    crate::console::install();
     let driver = Driver::new(handler, canvas, owns_page, Box::new(on_exit))?;
     DRIVER.with(|installed| *installed.borrow_mut() = Some(Rc::clone(&driver)));
     driver.incoming.borrow_mut().push_back(Incoming::Start);
@@ -93,10 +94,34 @@ pub fn stop() {
     with(Driver::request_exit);
 }
 
+/// Takes every surface away from the application, and keeps the canvas for the next start.
+///
+/// For the loss of the graphics device: the application drops everything it drew through, and
+/// [`resume`] lets it open its surfaces again when a new device is ready.
+pub fn suspend() {
+    with(|driver| driver.deliver(Incoming::Lost));
+}
+
+/// Lets the application open its surfaces again after [`suspend`].
+pub fn resume() {
+    with(|driver| driver.deliver(Incoming::Start));
+}
+
+/// Asks to be told when the canvas loses its WebGL context (`false`) and when the browser
+/// restores it (`true`).
+///
+/// A WebGPU canvas never calls it: a lost WebGPU device reports its loss itself.
+pub fn on_context_change(told: impl Fn(bool) + 'static) {
+    with(|driver| *driver.context_watcher.borrow_mut() = Some(Rc::new(told)));
+}
+
 /// The canvas behind a surface of this page.
 pub fn canvas_of(id: SurfaceId) -> Option<HtmlCanvasElement> {
     with(|driver| driver.entry(id).map(|entry| entry.canvas.clone())).flatten()
 }
+
+/// What is told when a canvas loses or regains its WebGL context.
+type ContextWatcher = Rc<dyn Fn(bool)>;
 
 /// The callback of a size observer.
 type SizeCallback = Closure<dyn FnMut(js_sys::Array)>;
@@ -119,6 +144,8 @@ enum Incoming {
     Frame,
     /// A deadline was reached.
     Deadline,
+    /// Every surface is gone: the graphics device was lost.
+    Lost,
     /// A surface was destroyed and is forgotten after the application heard of it.
     Forget(SurfaceId),
 }
@@ -224,6 +251,8 @@ pub(crate) struct Driver {
     page_listeners: RefCell<Vec<Listener>>,
     /// Runs after the application shut down.
     on_exit: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// What is told when the canvas loses or regains its WebGL context.
+    context_watcher: RefCell<Option<ContextWatcher>>,
 }
 
 impl Driver {
@@ -276,6 +305,7 @@ impl Driver {
             turn_posted: Cell::new(false),
             page_listeners: RefCell::new(Vec::new()),
             on_exit: RefCell::new(Some(on_exit)),
+            context_watcher: RefCell::new(None),
         });
         driver.install_callbacks(&window, dark.as_ref());
         Ok(driver)
@@ -332,6 +362,23 @@ impl Driver {
                     driver.deliver_all(|| SurfaceEvent::Occluded(hidden));
                 }
             }));
+        }
+        // On the canvas itself and not on a surface's entry: the context comes back after the
+        // surface that lost it is gone.
+        if let Some(canvas) = self.canvas.borrow().as_ref() {
+            for (kind, restored) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
+                let this = self.this.clone();
+                listeners.push(Listener::new(canvas, kind, move |event| {
+                    // Without this the browser never restores the context.
+                    event.prevent_default();
+                    let watcher = this
+                        .upgrade()
+                        .and_then(|driver| driver.context_watcher.borrow().clone());
+                    if let Some(watcher) = watcher {
+                        watcher(restored);
+                    }
+                }));
+            }
         }
         // A browser without device-pixel observation reports a zoom change only here.
         let this = self.this.clone();
@@ -467,6 +514,14 @@ impl Driver {
                     }
                 }
                 Incoming::Deadline => handler.deadline_reached(cx),
+                Incoming::Lost => {
+                    handler.surfaces_lost(cx);
+                    // The canvas outlives the surface, and the next start opens on it again.
+                    let entries = std::mem::take(&mut *self.entries.borrow_mut());
+                    if let Some(entry) = entries.first() {
+                        *self.canvas.borrow_mut() = Some(entry.canvas.clone());
+                    }
+                }
                 Incoming::Forget(id) => {
                     handler.surface_event(cx, id, SurfaceEvent::Destroyed);
                     self.entries

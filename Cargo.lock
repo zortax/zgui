@@ -6109,6 +6109,7 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "js-sys",
+ "log",
  "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures",

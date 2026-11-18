@@ -26,7 +26,9 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 accesskit.workspace = true
 js-sys.workspace = true
-tracing.workspace = true
+log.workspace = true
+# With no subscriber installed, an event becomes a log record, and the console shows it.
+tracing = { workspace = true, features = ["log"] }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 web-sys.workspace = true
