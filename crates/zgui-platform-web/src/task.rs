@@ -33,3 +33,11 @@ pub fn defer(work: impl FnOnce() + 'static) {
 pub fn report(message: &str) {
     web_sys::console::error_1(&message.into());
 }
+
+/// Prints warnings, errors and panics in the page's console from now on.
+///
+/// [`run`](crate::run) does this too. An application start that can fail before it reaches
+/// `run` calls it first.
+pub fn report_panics() {
+    crate::console::install();
+}

@@ -39,6 +39,8 @@ where
     F: FnMut() -> V + 'static,
     V: IntoView,
 {
+    // Before anything that can fail: a failure with no message is the hardest one to find.
+    zgui_platform_web::report_panics();
     let canvas = zgui_platform_web::canvas(&mount)?;
     let mut recovery = None;
     if app.renderer.is_none() {

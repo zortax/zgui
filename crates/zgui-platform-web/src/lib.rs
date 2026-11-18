@@ -80,7 +80,7 @@ pub use crate::image::{image_pixels, image_size};
 #[cfg(target_arch = "wasm32")]
 pub use crate::mount::{Mount, canvas, query, subpixel_text_suits};
 #[cfg(target_arch = "wasm32")]
-pub use crate::task::{defer, report, spawn_local};
+pub use crate::task::{defer, report, report_panics, spawn_local};
 /// The canvas element type, for a crate that draws into one without naming the browser's
 /// interfaces itself.
 #[cfg(target_arch = "wasm32")]

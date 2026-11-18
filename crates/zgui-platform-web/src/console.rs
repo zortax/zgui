@@ -30,9 +30,22 @@ impl Log for Console {
     fn flush(&self) {}
 }
 
-/// Installs the console logger, unless the application installed a logger of its own.
+/// Installs the console logger, unless the application installed a logger of its own, and
+/// prints a panic to the console.
+///
+/// A panic in a page is a trap with no message: the default hook writes to a standard error
+/// stream the page does not have. The message is printed first, and the hook that was installed
+/// before still runs.
 pub(crate) fn install() {
     if log::set_logger(&Console).is_ok() {
         log::set_max_level(LevelFilter::Warn);
     }
+    static HOOKED: std::sync::Once = std::sync::Once::new();
+    HOOKED.call_once(|| {
+        let earlier = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic| {
+            web_sys::console::error_1(&format!("zgui: {panic}").into());
+            earlier(panic);
+        }));
+    });
 }
