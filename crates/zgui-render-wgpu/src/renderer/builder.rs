@@ -251,7 +251,10 @@ pub(crate) fn open_device(
         for (grants, candidate) in candidates {
             let info = candidate.get_info();
             let name = adapter::describe(&info);
-            if adapter::is_software(&info) {
+            // An adapter named by `ZGUI_DEVICE_ID` is tried in its tier. The name is how a
+            // software adapter is selected on a machine that also has a card.
+            let named = adapter::preferred_device_id() == Some(info.device);
+            if adapter::is_software(&info) && !named {
                 // Held back rather than rejected: it is what a machine with no graphics driver at
                 // all runs on, and it opens once every tier has been walked.
                 software.push((instance.clone(), candidate));
