@@ -16,6 +16,7 @@
 //! | [`clock`] | the page's monotonic clock |
 //! | [`mount`] | where the canvas comes from |
 //! | [`fetch`] | bytes from a URL, and the fonts a page declares |
+//! | [`image`] | images, decoded by the browser |
 //! | [`task`] | local futures and deferred work |
 //!
 //! On a target other than `wasm32` the crate holds only the translation that needs no browser:
@@ -40,6 +41,14 @@ mod cx;
 pub mod driver;
 #[cfg(target_arch = "wasm32")]
 pub mod fetch;
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(
+        dead_code,
+        reason = "only the browser build calls what its tests check"
+    )
+)]
+pub mod image;
 pub mod input;
 #[cfg(target_arch = "wasm32")]
 mod listen;
@@ -66,6 +75,8 @@ pub use crate::driver::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use crate::fetch::{fetch, page_fonts};
+#[cfg(target_arch = "wasm32")]
+pub use crate::image::{image_pixels, image_size};
 #[cfg(target_arch = "wasm32")]
 pub use crate::mount::{Mount, canvas, query, subpixel_text_suits};
 #[cfg(target_arch = "wasm32")]

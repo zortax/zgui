@@ -54,36 +54,53 @@ use zgui_paint::ContentCache;
 
 use crate::replaced::IntrinsicTable;
 
-/// Reads the bytes a `src` names, where a file system cannot.
+/// Loads the image a `src` names, where a file system cannot.
 ///
-/// The reader answers later, on the UI thread: a page reads a URL through a promise.
-pub type SourceReader = Rc<dyn Fn(String) -> SourceRead>;
+/// Without a loader a `src` is a path on disk, read and decoded on the blocking pool. A platform
+/// with no file system sets one: in a browser a `src` is a URL, and the browser reads and decodes
+/// it off the thread the interface runs on. Both answers arrive later, on the UI thread.
+pub trait SourceLoader {
+    /// The pixel extent of the image `src` names, as width and height.
+    fn size(&self, src: String) -> Loading<(u32, u32)>;
 
-/// One read of a `src` in flight: the bytes, or why they could not be read.
-pub type SourceRead = Pin<Box<dyn Future<Output = Result<Vec<u8>, String>>>>;
+    /// The image `src` names, scaled down until its long edge fits `long_edge`.
+    fn pixels(&self, src: String, long_edge: u32) -> Loading<LoadedPixels>;
+}
+
+/// One answer of a [`SourceLoader`] in flight: the result, or why there is none.
+pub type Loading<T> = Pin<Box<dyn Future<Output = Result<T, String>>>>;
+
+/// A decoded image from a [`SourceLoader`].
+#[derive(Clone, Debug)]
+pub struct LoadedPixels {
+    /// The width in pixels.
+    pub width: u32,
+    /// The height in pixels.
+    pub height: u32,
+    /// The texels: premultiplied, gamma-encoded sRGB, RGBA, four bytes per texel, tightly
+    /// packed, top row first.
+    pub texels: Vec<u8>,
+}
 
 thread_local! {
-    /// The reader every window of this thread loads an image `src` through, once one is set.
-    static READER: RefCell<Option<SourceReader>> = const { RefCell::new(None) };
+    /// The loader every window of this thread loads an image `src` through, once one is set.
+    static LOADER: RefCell<Option<Rc<dyn SourceLoader>>> = const { RefCell::new(None) };
 }
 
-/// Routes every image `src` that is not registered bytes through `reader`.
+/// Routes every image `src` that is not registered bytes through `loader`.
 ///
-/// Without a reader a `src` is a path on disk. A platform with no file system sets one: in a
-/// browser a `src` is a URL, and the reader fetches it. The reader serves every window made on
-/// this thread afterwards.
-pub fn set_source_reader(reader: SourceReader) {
-    READER.with(|held| *held.borrow_mut() = Some(reader));
+/// The loader serves every window made on this thread afterwards.
+pub fn set_source_loader(loader: Rc<dyn SourceLoader>) {
+    LOADER.with(|held| *held.borrow_mut() = Some(loader));
 }
 
-/// The bytes `src` names, read through the reader that is set, if one is.
-fn read_source(src: &str) -> Option<SourceRead> {
-    let reader = READER.with(|held| held.borrow().clone())?;
-    Some(reader(src.to_owned()))
+/// The loader that is set, if one is.
+fn source_loader() -> Option<Rc<dyn SourceLoader>> {
+    LOADER.with(|held| held.borrow().clone())
 }
 
-/// The error of a reader that could not produce the bytes.
-fn unread(reason: String) -> zgui_image::DecodeError {
+/// The error of a loader that could not produce the image.
+fn unloaded(reason: String) -> zgui_image::DecodeError {
     zgui_image::DecodeError::Io(std::io::Error::other(reason))
 }
 
@@ -1011,12 +1028,14 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// apply the result.
 fn kick_probe(key: SourceKey, completed: DecodeQueue) {
     if let SourceKey::Path(src) = &key
-        && let Some(read) = read_source(src)
+        && let Some(loader) = source_loader()
     {
+        let measuring = loader.size(src.clone());
         zgui_reactive::spawn_local(async move {
-            let result = match read.await {
-                Ok(bytes) => zgui_reactive::blocking(move || zgui_image::probe(&bytes)).await,
-                Err(reason) => Err(unread(reason)),
+            let result = match measuring.await {
+                Ok((0, _) | (_, 0)) => Err(zgui_image::DecodeError::Empty),
+                Ok((width, height)) => Ok(Size::new(width, height)),
+                Err(reason) => Err(unloaded(reason)),
             };
             completed.borrow_mut().push((key, Arrival::Probe(result)));
         });
@@ -1055,17 +1074,23 @@ fn kick_decode(key: SourceKey, class: Class, completed: DecodeQueue, limits: zgu
         DecodedVariant { decoded, mips }
     };
     if let SourceKey::Path(src) = &key
-        && let Some(read) = read_source(src)
+        && let Some(loader) = source_loader()
     {
+        let loading = loader.pixels(src.clone(), class.min(limits.max_dimension));
         zgui_reactive::spawn_local(async move {
-            let result = match read.await {
-                Ok(bytes) => {
-                    zgui_reactive::blocking(move || {
-                        zgui_image::decode_scaled(&bytes, class, limits).map(with_levels)
-                    })
-                    .await
+            let result = match loading.await {
+                Ok(loaded) if loaded.width == 0 || loaded.height == 0 => {
+                    Err(zgui_image::DecodeError::Empty)
                 }
-                Err(reason) => Err(unread(reason)),
+                Ok(loaded) => {
+                    let decoded = zgui_image::Decoded {
+                        size: Size::new(loaded.width, loaded.height),
+                        texels: Arc::new(loaded.texels),
+                    };
+                    // The levels of detail are the one part still filtered here.
+                    Ok(zgui_reactive::blocking(move || with_levels(decoded)).await)
+                }
+                Err(reason) => Err(unloaded(reason)),
             };
             completed
                 .borrow_mut()

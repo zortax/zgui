@@ -60,9 +60,7 @@ where
     }
     install_tasks();
     // A page has no file system, so the `src` of an image is a URL there.
-    zgui_runtime::set_source_reader(std::rc::Rc::new(|url: String| {
-        Box::pin(async move { zgui_platform_web::fetch(&url).await })
-    }));
+    zgui_runtime::set_source_loader(std::rc::Rc::new(PageImages));
     let named_fonts = app.fonts.get().is_some();
     if load_page_fonts(&app).await == 0 && !named_fonts {
         zgui_platform_web::report(
@@ -223,6 +221,30 @@ fn factory(graphics: SharedGraphics, precision: GroupPrecision) -> RendererFacto
         zgui_render_vector_vello::attach(&mut renderer, target.size);
         Ok(Box::new(renderer) as Box<dyn Renderer>)
     })
+}
+
+/// The images of a page: the browser loads, decodes and scales each one.
+struct PageImages;
+
+impl zgui_runtime::SourceLoader for PageImages {
+    fn size(&self, src: String) -> zgui_runtime::Loading<(u32, u32)> {
+        Box::pin(async move { zgui_platform_web::image_size(&src).await })
+    }
+
+    fn pixels(
+        &self,
+        src: String,
+        long_edge: u32,
+    ) -> zgui_runtime::Loading<zgui_runtime::LoadedPixels> {
+        Box::pin(async move {
+            let (width, height, texels) = zgui_platform_web::image_pixels(&src, long_edge).await?;
+            Ok(zgui_runtime::LoadedPixels {
+                width,
+                height,
+                texels,
+            })
+        })
+    }
 }
 
 /// Where background work runs in a page that has one thread.
