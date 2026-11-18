@@ -176,6 +176,14 @@ pub trait Surface: Send + Sync + 'static {
     /// unpainted surface is what produces a flash of empty window at launch.
     fn set_visible(&self, visible: bool);
 
+    /// Whether showing the surface guarantees preservation of a frame presented while hidden.
+    ///
+    /// If false, the caller must draw again after showing the surface. The default preserves
+    /// the hidden frame, as on platforms where presenting the first buffer maps the surface.
+    fn contents_survive_show(&self) -> bool {
+        true
+    }
+
     /// Asks the platform for a frame.
     ///
     /// macOS settles whether a frame carries a title bar when the surface is created, so

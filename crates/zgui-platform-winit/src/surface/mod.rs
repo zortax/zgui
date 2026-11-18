@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::TreeUpdate;
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::window::Window;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
@@ -169,6 +170,14 @@ impl Surface for WinitSurface {
             self.shown.store(true, Ordering::Relaxed);
         }
         self.window.set_visible(visible);
+    }
+
+    fn contents_survive_show(&self) -> bool {
+        // X11 can discard a presentation made before the window is mapped.
+        !matches!(
+            self.window.window_handle().map(|handle| handle.as_raw()),
+            Ok(RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_))
+        )
     }
 
     fn set_decorations(&self, decorations: Decorations) {
