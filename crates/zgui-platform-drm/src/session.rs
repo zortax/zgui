@@ -840,6 +840,11 @@ fn seated_card(
                 target: "zgui::platform",
                 "the session daemon opened {}", path.display()
             );
+            // A dark card kept as the fallback is not used now. It goes back through the seat,
+            // because a drop leaves the daemon's record of it open.
+            if let Some((_, unused, _)) = dark.take() {
+                give_back(seat, unused);
+            }
             held.push(device);
             return Ok(card);
         }

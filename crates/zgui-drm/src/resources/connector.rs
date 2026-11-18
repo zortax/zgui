@@ -204,17 +204,19 @@ impl Device {
     ///
     /// Reading a connector needs no DRM master, so this can be asked before a card is taken.
     ///
+    /// A connector that cannot be read is skipped. A connector can go away between the two
+    /// requests, for example when a dock is unplugged, and the other connectors still answer.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses, and
-    /// [`Error::Unusable`](crate::Error::Unusable) when the counts kept moving.
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the list of
+    /// connectors, and [`Error::Unusable`](crate::Error::Unusable) when the counts kept moving.
     pub fn has_a_display(&self) -> Result<bool> {
-        for id in self.resources()?.connectors {
-            if self.connector(id)?.is_connected() {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
+        Ok(self
+            .resources()?
+            .connectors
+            .into_iter()
+            .filter_map(|id| self.connector(id).ok())
+            .any(|connector| connector.is_connected()))
     }
 }
