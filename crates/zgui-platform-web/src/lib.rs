@@ -11,6 +11,7 @@
 //! | [`driver`] | the turn: events in, wakes, the idle policy, the next callback |
 //! | [`surface`] | the canvas as a [`zgui_platform::Surface`] |
 //! | [`input`] | pointer, keyboard and wheel events in the framework's vocabulary |
+//! | [`aria`] | an accessibility node in the vocabulary of a page |
 //! | [`clipboard`] | the page's asynchronous clipboard |
 //! | [`clock`] | the page's monotonic clock |
 //! | [`mount`] | where the canvas comes from |
@@ -24,6 +25,9 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+#[cfg(target_arch = "wasm32")]
+mod a11y;
+pub mod aria;
 #[cfg(target_arch = "wasm32")]
 pub mod clipboard;
 #[cfg(target_arch = "wasm32")]
@@ -57,7 +61,9 @@ mod text_input;
 mod waker;
 
 #[cfg(target_arch = "wasm32")]
-pub use crate::driver::{canvas_of, on_context_change, resume, run, stop, suspend};
+pub use crate::driver::{
+    canvas_of, enable_accessibility, on_context_change, resume, run, stop, suspend,
+};
 #[cfg(target_arch = "wasm32")]
 pub use crate::fetch::{fetch, page_fonts};
 #[cfg(target_arch = "wasm32")]

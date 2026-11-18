@@ -35,6 +35,7 @@ use zgui_vocab::{
     PointerKind, WheelEvent,
 };
 
+use crate::a11y::Mirror;
 use crate::clipboard::PageClipboard;
 use crate::clock::PageClock;
 use crate::cx::PageCx;
@@ -115,6 +116,19 @@ pub fn on_context_change(told: impl Fn(bool) + 'static) {
     with(|driver| *driver.context_watcher.borrow_mut() = Some(Rc::new(told)));
 }
 
+/// Builds the accessibility tree of every surface as elements of the page.
+///
+/// A person with a screen reader asks for it with the button each surface holds. An application
+/// that knows a screen reader is running, or a test, asks for it here.
+pub fn enable_accessibility() {
+    with(|driver| {
+        let entries: Vec<Rc<Entry>> = driver.entries.borrow().clone();
+        for entry in entries {
+            driver.activate_a11y(&entry);
+        }
+    });
+}
+
 /// The canvas behind a surface of this page.
 pub fn canvas_of(id: SurfaceId) -> Option<HtmlCanvasElement> {
     with(|driver| driver.entry(id).map(|entry| entry.canvas.clone())).flatten()
@@ -168,6 +182,10 @@ struct Entry {
     typing: Cell<bool>,
     /// Whether an input method is composing in the text area.
     composing: Cell<bool>,
+    /// The elements that stand for the accessibility tree.
+    mirror: RefCell<Option<Mirror>>,
+    /// The listeners on the mirror.
+    mirror_listeners: RefCell<Vec<Listener>>,
     /// The size observer and its callback.
     observer: RefCell<Option<(web_sys::ResizeObserver, SizeCallback)>>,
 }
@@ -175,6 +193,8 @@ struct Entry {
 impl Drop for Entry {
     fn drop(&mut self) {
         self.area_listeners.borrow_mut().clear();
+        self.mirror_listeners.borrow_mut().clear();
+        self.mirror.borrow_mut().take();
         if let Some(area) = self.area.borrow_mut().take() {
             area.remove();
         }
@@ -726,8 +746,12 @@ impl Driver {
             area_listeners: RefCell::new(Vec::new()),
             typing: Cell::new(false),
             composing: Cell::new(false),
+            mirror: RefCell::new(None),
+            mirror_listeners: RefCell::new(Vec::new()),
             observer: RefCell::new(None),
         });
+        *entry.mirror.borrow_mut() = Mirror::new(&entry.canvas);
+        self.listen_to_mirror(&entry);
         self.listen(&entry);
         self.observe(&entry);
         self.entries.borrow_mut().push(entry);
@@ -925,6 +949,9 @@ impl Driver {
         if size == surface.extent() && scale == surface.scale_factor() {
             return;
         }
+        if let Some(mirror) = entry.mirror.borrow().as_ref() {
+            mirror.cover(&entry.canvas);
+        }
         let rescaled = surface.resize(size, scale);
         let event = if rescaled {
             SurfaceEvent::ScaleFactorChanged {
@@ -984,6 +1011,136 @@ impl Driver {
         // The application opens its own context menus.
         on("contextmenu", |_, _, event| event.prevent_default());
         *entry.listeners.borrow_mut() = listeners;
+    }
+
+    /// Listens to the elements that stand for the accessibility tree of a surface.
+    ///
+    /// An event on one of them bubbles to the element that holds them, so one listener of each
+    /// kind serves the whole tree.
+    fn listen_to_mirror(&self, entry: &Rc<Entry>) {
+        let container = entry
+            .mirror
+            .borrow()
+            .as_ref()
+            .map(|mirror| mirror.container().clone());
+        let Some(container) = container else { return };
+        let mut listeners = Vec::new();
+        let mut on = |kind: &'static str, handle: fn(&Driver, &Rc<Entry>, Event)| {
+            let this = self.this.clone();
+            let listened = Rc::downgrade(entry);
+            listeners.push(Listener::new(&container, kind, move |event| {
+                if let (Some(driver), Some(entry)) = (this.upgrade(), listened.upgrade()) {
+                    handle(&driver, &entry, event);
+                }
+            }));
+        };
+        on("click", |driver, entry, event| {
+            let Some(target) = event.target() else { return };
+            let placeholder = entry
+                .mirror
+                .borrow()
+                .as_ref()
+                .is_some_and(|mirror| mirror.is_placeholder(&target));
+            if placeholder {
+                driver.activate_a11y(entry);
+            } else {
+                driver.request_a11y_action(entry, &target, accesskit::Action::Click);
+            }
+        });
+        on("focusin", |driver, entry, event| {
+            // A screen reader moved the keyboard to an element. The application moves its own
+            // focus to the node, unless that is where its focus is.
+            if let Some(target) = event.target() {
+                let node = entry.mirror.borrow().as_ref().and_then(|mirror| {
+                    mirror
+                        .node_of(&target)
+                        .filter(|node| mirror.focus() != Some(*node))
+                });
+                if node.is_some() {
+                    driver.request_a11y_action(entry, &target, accesskit::Action::Focus);
+                }
+            }
+            driver.on_focus(entry, &event, true);
+        });
+        on("focusout", |driver, entry, event| {
+            driver.on_focus(entry, &event, false)
+        });
+        on("keydown", |driver, entry, event| {
+            driver.on_key(entry, event, KeyState::Pressed);
+        });
+        on("keyup", |driver, entry, event| {
+            driver.on_key(entry, event, KeyState::Released);
+        });
+        *entry.mirror_listeners.borrow_mut() = listeners;
+    }
+
+    /// Starts building the accessibility tree of a surface.
+    fn activate_a11y(&self, entry: &Rc<Entry>) {
+        let activated = entry
+            .mirror
+            .borrow_mut()
+            .as_mut()
+            .is_some_and(Mirror::activate);
+        if activated {
+            self.waker
+                .wake(zgui_platform::WakeReason::A11yTreeRequested(
+                    entry.surface.id(),
+                ));
+        }
+    }
+
+    /// Asks the application to act on the node an element stands for.
+    fn request_a11y_action(
+        &self,
+        entry: &Rc<Entry>,
+        target: &web_sys::EventTarget,
+        action: accesskit::Action,
+    ) {
+        let node = entry
+            .mirror
+            .borrow()
+            .as_ref()
+            .and_then(|mirror| mirror.node_of(target));
+        if let Some(target_node) = node {
+            self.waker.wake(zgui_platform::WakeReason::A11yAction(
+                accesskit::ActionRequest {
+                    action,
+                    target_tree: accesskit::TreeId::ROOT,
+                    target_node,
+                    data: None,
+                },
+            ));
+        }
+    }
+
+    /// Applies an update of a surface's accessibility tree, where the page asked for the tree.
+    pub(crate) fn update_a11y(
+        &self,
+        id: SurfaceId,
+        build: &mut dyn FnMut() -> accesskit::TreeUpdate,
+    ) {
+        let Some(entry) = self.entry(id) else { return };
+        let moved = {
+            let mut mirror = entry.mirror.borrow_mut();
+            let Some(mirror) = mirror.as_mut().filter(|mirror| mirror.is_active()) else {
+                return;
+            };
+            let before = mirror.focus();
+            mirror.cover(&entry.canvas);
+            mirror.apply(build());
+            // The keyboard follows the application's focus, so that a screen reader announces
+            // the node. A field that is typed into keeps the keyboard in its text area.
+            let follows =
+                mirror.focus() != before && !entry.typing.get() && entry.holds_focus_with(mirror);
+            follows.then(|| mirror.focus_target())
+        };
+        // After the mirror is released: moving the keyboard runs the focus listeners at once,
+        // and they read the mirror.
+        match moved {
+            Some(Some(element)) => text_input::focus(&element),
+            Some(None) => text_input::focus(&entry.canvas),
+            None => {}
+        }
     }
 
     /// Listens to the hidden text area of a surface.
@@ -1265,13 +1422,34 @@ impl Driver {
 }
 
 impl Entry {
-    /// Whether `target` is the canvas or the text area of this surface.
+    /// Whether `target` is the canvas, the text area or an accessibility element of this
+    /// surface.
     fn owns(&self, target: &web_sys::EventTarget) -> bool {
+        self.owns_apart_from_mirror(target)
+            || self
+                .mirror
+                .try_borrow()
+                .is_ok_and(|mirror| mirror.as_ref().is_some_and(|mirror| mirror.owns(target)))
+    }
+
+    /// Whether `target` is the canvas or the text area of this surface.
+    fn owns_apart_from_mirror(&self, target: &web_sys::EventTarget) -> bool {
         let canvas: &web_sys::EventTarget = self.canvas.as_ref();
         target == canvas
             || self.area.borrow().as_ref().is_some_and(|area| {
                 let area: &web_sys::EventTarget = area.as_ref();
                 target == area
+            })
+    }
+
+    /// Whether an element of this surface has the keyboard, for a caller that holds `mirror`.
+    fn holds_focus_with(&self, mirror: &Mirror) -> bool {
+        self.canvas
+            .owner_document()
+            .and_then(|document| document.active_element())
+            .is_some_and(|active| {
+                let active: &web_sys::EventTarget = active.as_ref();
+                self.owns_apart_from_mirror(active) || mirror.owns(active)
             })
     }
 

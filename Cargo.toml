@@ -238,6 +238,7 @@ web-sys = { version = "0.3.77", features = [
     "FocusEvent",
     "FocusOptions",
     "HtmlCanvasElement",
+    "HtmlCollection",
     "HtmlElement",
     "HtmlTextAreaElement",
     "InputEvent",

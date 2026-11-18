@@ -19,12 +19,12 @@ include.workspace = true
 # The browser's interfaces are gated on wasm32. A native build of the workspace compiles only the
 # translation that needs no browser, which is the part its tests run.
 [dependencies]
+accesskit.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-accesskit.workspace = true
 js-sys.workspace = true
 log.workspace = true
 # With no subscriber installed, an event becomes a log record, and the console shows it.

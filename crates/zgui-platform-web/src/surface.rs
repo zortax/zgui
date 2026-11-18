@@ -154,7 +154,10 @@ impl Surface for CanvasSurface {
         driver::with(|driver| driver.set_text_input(self.id, state));
     }
 
-    fn push_a11y_update(&self, _build: &mut dyn FnMut() -> TreeUpdate) {}
+    fn push_a11y_update(&self, build: &mut dyn FnMut() -> TreeUpdate) {
+        // The tree is built only when the page asked for it.
+        driver::with(|driver| driver.update_a11y(self.id, build));
+    }
 }
 
 /// The CSS name of a cursor.
