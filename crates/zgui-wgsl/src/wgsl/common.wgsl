@@ -186,7 +186,7 @@ struct Spatial {
 @group(0) @binding(3) var stops: texture_2d<u32>;
 @group(0) @binding(4) var spatial: texture_2d<u32>;
 
-/// How many texels wide every table is. `buffer::tables::TEXELS_WIDE` is the same number.
+/// How many texels wide every table is. A test compares it with `buffer::tables::TEXELS_WIDE`.
 const TABLE_TEXELS_WIDE: u32 = 256u;
 
 /// Where texel `index` of a table is.

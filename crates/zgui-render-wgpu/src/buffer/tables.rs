@@ -27,8 +27,8 @@ use crate::gpu::device::Gpu;
 /// How many texels wide every table is.
 ///
 /// A power of two, so the index a shader holds splits into a column and a row with a mask and a
-/// shift rather than a division. It is also what `common.wgsl` divides by, and the two have to
-/// agree — `TEXELS_WIDE` is written into the shader preamble rather than typed there twice.
+/// shift rather than a division. It is also what `common.wgsl` and the coverage shader divide by,
+/// as `TABLE_TEXELS_WIDE`. A test in each crate compares the shader's number with this one.
 pub const TEXELS_WIDE: u32 = 256;
 
 /// How many bytes one texel holds.
@@ -58,6 +58,8 @@ pub struct TableTexture {
     rows: u32,
     /// Changes whenever `texture` changes identity, for bind-group cache invalidation.
     generation: u64,
+    /// Whether the table was once asked to hold more rows than a texture can, and said so.
+    overflowed: bool,
 }
 
 impl TableTexture {
@@ -73,6 +75,7 @@ impl TableTexture {
             label,
             rows: Self::MINIMUM_ROWS,
             generation: 1,
+            overflowed: false,
         }
     }
 
@@ -102,10 +105,31 @@ impl TableTexture {
         end: usize,
     ) -> u64 {
         let all: &[u8] = bytemuck::cast_slice(values);
+        // A texture is at most as tall as the device allows. A table past that keeps the rows that
+        // fit, and a record past them reads zeros: `textureLoad` outside a texture is defined.
+        let limit = gpu.device().limits().max_texture_dimension_2d;
+        let wanted = all.len().div_ceil(ROW);
+        let all = if wanted > limit as usize {
+            if !std::mem::replace(&mut self.overflowed, true) {
+                tracing::error!(
+                    table = self.label,
+                    rows = wanted,
+                    limit,
+                    "a table holds more rows than a texture can; the records past the limit are \
+                     not drawn"
+                );
+            }
+            &all[..limit as usize * ROW]
+        } else {
+            all
+        };
         let needed = all.len().div_ceil(ROW) as u32;
         let grew = needed > self.rows;
         if grew {
-            self.rows = needed.next_power_of_two().max(Self::MINIMUM_ROWS);
+            self.rows = needed
+                .next_power_of_two()
+                .min(limit)
+                .max(Self::MINIMUM_ROWS);
             let (texture, view) = allocate(gpu, self.label, self.rows);
             self.texture = texture;
             self.view = view;
@@ -121,13 +145,14 @@ impl TableTexture {
         } else {
             (start, end)
         };
-        let first = (start * element) / ROW;
-        let last = ((end * element).div_ceil(ROW)).max(first + 1);
+        // Cut to the rows the table holds, for a table past the limit.
+        let held = all.len().div_ceil(ROW);
+        let first = ((start * element) / ROW).min(held - 1);
+        let last = ((end * element).div_ceil(ROW)).clamp(first + 1, held);
 
         // The tail row of a table is rarely full, and a write names whole rows, so the bytes are
-        // copied into a row-sized run and the remainder left as whatever the allocation held. What
-        // is past the last element is never read: an index past the table is a fault the caller
-        // does not make.
+        // copied into a row-sized run and the remainder is zero. What is past the last element is
+        // never read: an index past the table is a fault the caller does not make.
         //
         // A table that fits in one row is narrowed to the texels it really holds. A copy is
         // rectangular, so only a single row can be shortened without dropping what follows it —
@@ -205,4 +230,19 @@ fn allocate(gpu: &Gpu, label: &'static str, rows: u32) -> (wgpu::Texture, wgpu::
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TEXELS_WIDE;
+
+    #[test]
+    fn the_shaders_divide_by_the_width_the_tables_are_allocated_at() {
+        let source = zgui_wgsl::module("quad").expect("the quad module exists");
+        let declared = format!("const TABLE_TEXELS_WIDE: u32 = {TEXELS_WIDE}u;");
+        assert!(
+            source.contains(&declared),
+            "common.wgsl does not declare `{declared}`"
+        );
+    }
 }

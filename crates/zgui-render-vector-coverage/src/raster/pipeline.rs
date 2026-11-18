@@ -140,3 +140,17 @@ fn build(
         cache: None,
     })
 }
+
+#[cfg(test)]
+mod width {
+    use zgui_render_wgpu::buffer::tables::TEXELS_WIDE;
+
+    #[test]
+    fn the_shader_divides_by_the_width_the_tables_are_allocated_at() {
+        let declared = format!("const TABLE_TEXELS_WIDE: u32 = {TEXELS_WIDE}u;");
+        assert!(
+            super::COVERAGE.contains(&declared),
+            "coverage.wgsl does not declare `{declared}`"
+        );
+    }
+}
