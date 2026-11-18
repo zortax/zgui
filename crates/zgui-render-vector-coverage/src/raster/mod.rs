@@ -780,7 +780,8 @@ impl VectorRaster for CoverageRaster {
             buffers: self.buffers.items.capacity()
                 + self.buffers.outlines.capacity()
                 + self.buffers.runs.capacity()
-                + self.buffers.bands.capacity(),
+                + self.buffers.bands.capacity()
+                + self.uploader.bytes(),
             ..MemoryReport::ZERO
         }
     }
@@ -791,6 +792,7 @@ impl VectorRaster for CoverageRaster {
         freed += self.buffers.outlines.shrink(&self.gpu);
         freed += self.buffers.runs.shrink(&self.gpu);
         freed += self.buffers.bands.shrink(&self.gpu);
+        freed += self.uploader.release_idle();
         self.items.clear();
         self.items.shrink_to_fit();
         self.outlines.clear();

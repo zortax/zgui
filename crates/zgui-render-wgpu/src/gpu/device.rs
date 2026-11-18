@@ -287,15 +287,12 @@ impl Gpu {
 
     /// Lets the device retire what it has finished, so mapped staging memory comes back.
     ///
-    /// `PollType::Poll` is documented as a poll which never waits. On the GL backend it has
-    /// measured as a block of 20.7 ms a frame — 61% of all wall time — on the oldest target this
-    /// runs on. The cause there was contention for a lock the driver holds process-wide rather
-    /// than the card itself, so the figure belongs to one driver and one moment.
+    /// The call is made after acquisition. What the compositor handed back is a buffer that
+    /// nothing in flight still reads, so the device has usually caught up there. On the GL backend
+    /// of one old driver, the same poll at the start of a frame blocked for 20 ms.
     ///
-    /// The rule it leaves behind does not: the frame loop has one place it may block, and this is
-    /// not it. So the call is made here alone, and only where the device is known to have caught
-    /// up — after acquisition, where what was handed back is a buffer nothing in flight still
-    /// reads. Never on the path that builds a frame.
+    /// `Queue::submit` also lets the device retire finished work, so a frame that acquires nothing
+    /// still gets its staging memory back.
     pub fn reclaim(&self) {
         let _ = self.device.poll(wgpu::PollType::Poll);
     }
