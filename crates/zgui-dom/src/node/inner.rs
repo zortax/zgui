@@ -340,13 +340,16 @@ impl NodeInner {
 // and twenty-four for the engine's style data.
 //
 // A 32-bit target holds the same fields in sixteen bytes fewer, because the words that are
-// pointers there are half as wide. Both numbers are pinned, so a field added without noticing
-// stops the build on either.
+// pointers there are half as wide. `wasm32` aligns a 64-bit word to eight bytes where the other
+// 32-bit targets align it to four, so the record is eight bytes larger there than on those. All
+// three numbers are pinned, so a field added without noticing stops the build on each.
 #[cfg(not(debug_assertions))]
 const _: () = assert!(
     size_of::<NodeInner>()
         == if cfg!(target_pointer_width = "64") {
             168
+        } else if cfg!(target_arch = "wasm32") {
+            160
         } else {
             152
         }
