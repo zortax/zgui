@@ -52,6 +52,7 @@ where
         )
         .await?;
         let precision = app.group_precision.unwrap_or_default();
+        describe(&graphics);
         recovery = Some(Recovery {
             graphics: graphics.clone(),
             canvas: canvas.clone(),
@@ -106,6 +107,40 @@ where
             zgui_platform_web::report(&format!("zgui: {error}"));
         }
     });
+}
+
+/// Says in the console which graphics interface the page draws with.
+///
+/// The two interfaces differ in what they can draw: WebGL 2 has no compute rasteriser and draws
+/// text with one coverage for each pixel. Which one a browser gave is the first thing to know
+/// when a page looks or runs unlike a native build.
+fn describe(graphics: &SharedGraphics) {
+    let Some(gpu) = graphics.gpu() else { return };
+    let adapter = gpu.adapter().get_info();
+    let capabilities = gpu.capabilities();
+    zgui_platform_web::note(&format!(
+        "zgui: drawing with {} on {} (vectors: {}, text: {})",
+        if adapter.backend == zgui_render_wgpu::wgpu::Backend::Gl {
+            "WebGL 2"
+        } else {
+            "WebGPU"
+        },
+        if adapter.name.is_empty() {
+            "an unnamed adapter"
+        } else {
+            &adapter.name
+        },
+        if capabilities.vector_compute {
+            "compute"
+        } else {
+            "coverage"
+        },
+        if capabilities.subpixel_text {
+            "per-channel"
+        } else {
+            "greyscale"
+        },
+    ));
 }
 
 /// What a page needs to open a new graphics device after it lost one.

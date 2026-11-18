@@ -166,6 +166,14 @@ pub mod desktop {
 }
 /// The pixel spaces and the geometry every stage agrees in.
 pub use zgui_geom as geom;
+/// The clocks an application reads.
+///
+/// On a native target these are the standard library's types. In a browser they read the page's
+/// clocks, where the standard library's `now` functions panic. An application that also runs in a
+/// browser takes its clocks from here.
+pub mod time {
+    pub use web_time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH};
+}
 /// The windowing contract every platform backend implements.
 pub use zgui_platform as platform;
 /// Signals, memos, stores, contexts, ownership and the flush the frame loop drives.

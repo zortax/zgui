@@ -41,3 +41,8 @@ pub fn report(message: &str) {
 pub fn report_panics() {
     crate::console::install();
 }
+
+/// Writes `message` to the page's console as information.
+pub fn note(message: &str) {
+    web_sys::console::info_1(&message.into());
+}

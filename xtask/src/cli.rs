@@ -65,7 +65,9 @@ usage:
                                       and its positive control, which must fire
   cargo xtask web build <example>     build an example for a browser into target/web/<example>;
                                       `--package <name>` names the package that holds it
-                                      (default zgui-examples), `--dev` builds unoptimised
+                                      (default zgui-examples), `--dev` builds unoptimised,
+                                      `--font <file>` names a font the page preloads (the
+                                      default is this machine's sans-serif and monospace)
   cargo xtask web serve <example>     build it, then serve it on http://127.0.0.1:8080/<example>/;
                                       `--port <n>` changes the port
   cargo xtask new-crate <name> --layer <L0..L8>
@@ -206,7 +208,7 @@ impl Command {
     }
 }
 
-/// Parses `web build|serve <example> [--package <name>] [--dev] [--port <n>]`.
+/// Parses `web build|serve <example> [--package <name>] [--dev] [--font <file>] [--port <n>]`.
 fn parse_web<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<Command, String> {
     let serving = match args.next() {
         Some("build") => false,
@@ -217,6 +219,7 @@ fn parse_web<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<Command, Str
     let mut example = None;
     let mut package = "zgui-examples".to_owned();
     let mut dev = false;
+    let mut fonts = Vec::new();
     let mut port = 8080;
     while let Some(argument) = args.next() {
         match argument {
@@ -227,6 +230,11 @@ fn parse_web<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<Command, Str
                     .to_owned();
             }
             "--dev" => dev = true,
+            "--font" => fonts.push(
+                args.next()
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| "--font needs a file".to_owned())?,
+            ),
             "--port" => {
                 port = args
                     .next()
@@ -242,6 +250,7 @@ fn parse_web<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<Command, Str
             example: example.ok_or_else(|| "web needs an example name".to_owned())?,
             package,
             dev,
+            fonts,
         },
         serve: serving.then_some(port),
     })

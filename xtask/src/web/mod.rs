@@ -25,8 +25,23 @@ use crate::process;
 /// The compilation target of a browser build.
 const TARGET: &str = "wasm32-unknown-unknown";
 
-/// The font the host page preloads: a browser gives a page no installed faces.
+/// The font the host page preloads where this machine names none: a browser gives a page no
+/// installed faces.
 const FONT: &str = "crates/zgui-text-parley/tests/fonts/NotoSans-Regular.ttf";
+
+/// What the host page asks this machine's font configuration for.
+///
+/// A native build draws with the installed faces, and a face of each weight an interface uses is
+/// one of them. A page that has the regular weight alone gets every heavier weight by thickening
+/// the regular outlines, which is visibly softer. So the page preloads the faces a native build
+/// on this machine resolves for the weights an interface commonly uses, and a monospace face.
+const WANTED: [&str; 5] = [
+    "sans-serif:weight=regular",
+    "sans-serif:weight=medium",
+    "sans-serif:weight=demibold",
+    "sans-serif:weight=bold",
+    "monospace:weight=regular",
+];
 
 /// What to build.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +52,8 @@ pub(crate) struct Build {
     pub(crate) package: String,
     /// Whether to build the unoptimised profile.
     pub(crate) dev: bool,
+    /// The font files the page preloads, in place of the ones this machine resolves.
+    pub(crate) fonts: Vec<PathBuf>,
 }
 
 impl Build {
@@ -99,15 +116,20 @@ pub(crate) fn build(root: &Path, build: &Build) -> Result<PathBuf> {
 
     let fonts = out.join("fonts");
     fs::create_dir_all(&fonts).map_err(|source| Error::io(&fonts, source))?;
-    let font = root.join(FONT);
-    let font_name = font
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    fs::copy(&font, fonts.join(&font_name)).map_err(|source| Error::io(&font, source))?;
+    let mut names = Vec::new();
+    for font in font_files(root, &build.fonts) {
+        let Some(name) = font
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        fs::copy(&font, fonts.join(&name)).map_err(|source| Error::io(&font, source))?;
+        names.push(name);
+    }
 
     let index = out.join("index.html");
-    fs::write(&index, page::render(&build.example, &font_name))
+    fs::write(&index, page::render(&build.example, &names))
         .map_err(|source| Error::io(&index, source))?;
     println!("wrote {}", out.display());
     Ok(out)
@@ -118,6 +140,32 @@ pub(crate) fn serve(root: &Path, what: &Build, port: u16) -> Result<()> {
     build(root, what)?;
     // Every example built so far is served, each under its own name.
     serve::run(&root.join("target/web"), &what.example, port)
+}
+
+/// The font files the page preloads.
+///
+/// The files named on the command line, or the ones this machine's font configuration resolves
+/// for [`WANTED`], or the one face the repository holds where the machine has no `fc-match`.
+fn font_files(root: &Path, named: &[PathBuf]) -> Vec<PathBuf> {
+    if !named.is_empty() {
+        return named.to_vec();
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    for wanted in WANTED {
+        let resolved = std::process::Command::new("fc-match")
+            .args(["--format=%{file}", wanted])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()));
+        if let Some(file) = resolved.filter(|file| file.is_file() && !files.contains(file)) {
+            files.push(file);
+        }
+    }
+    if files.is_empty() {
+        files.push(root.join(FONT));
+    }
+    files
 }
 
 /// Checks that the `wasm-bindgen` on the path is the version the lock file pins.

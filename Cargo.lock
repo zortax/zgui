@@ -5593,6 +5593,7 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
+ "web-time",
  "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
@@ -6543,7 +6544,6 @@ dependencies = [
 name = "zgui-ui-primitives"
 version = "0.1.0"
 dependencies = [
- "web-time",
  "zgui",
  "zgui-testkit-view",
 ]

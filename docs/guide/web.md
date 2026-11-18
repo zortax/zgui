@@ -19,7 +19,10 @@ cargo xtask web serve gallery --package zgui-ui
 ```
 
 `serve` builds the example and serves `target/web/` on `http://127.0.0.1:8080/<example>/`.
-`build` only builds. `--dev` builds without optimisation, which compiles faster and runs slower.
+`build` only builds. `--dev` builds without optimisation, which compiles faster and runs much
+slower: measure and judge with the default build. `--font <file>` names a font file the page
+preloads. With none named, the page preloads the faces this machine resolves for sans-serif at
+four weights and for monospace, so that the page shows the faces a native build shows.
 
 The output directory holds everything a static host needs:
 
@@ -77,6 +80,9 @@ interface needs, including the fonts for other scripts and for emoji. A register
 fallback for every other family. An application can register fonts from its own bytes with
 `Fonts::register` and `App::with_fonts`.
 
+Name a file for each weight the interface uses. A weight with no file is drawn by thickening the
+outlines of another weight, which is visibly softer than the real face.
+
 A page that names no font draws no text, and the console says so.
 
 ## Renderers
@@ -101,6 +107,7 @@ frame, and never when nothing changed. An animation's next step is answered by t
 an animation runs at the rate of the display.
 
 A notched wheel arrives as whole detents, and the framework carries each one over several frames.
+A detent travels the distance the browser gives it, as in any other page.
 A touch surface arrives as a stream the system already animates, and passes through unchanged. A
 touch on a phone pans and flings with the framework's own momentum. The canvas takes every wheel
 event over it. With the control key held, the wheel is the browser's zoom.
@@ -147,5 +154,6 @@ character by character.
 
 ## Console
 
-Warnings, errors and panics go to the browser console. An application that installs its own `log`
+At its start the application says which renderer it draws with, which vector rasteriser it has and
+how it draws text. Warnings, errors and panics go to the browser console. An application that installs its own `log`
 logger before it starts keeps it.

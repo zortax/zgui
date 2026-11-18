@@ -182,6 +182,8 @@ struct Entry {
     typing: Cell<bool>,
     /// Whether an input method is composing in the text area.
     composing: Cell<bool>,
+    /// Whether the size observer reports device pixels, which makes it the only measure needed.
+    precise: Cell<bool>,
     /// The device pixel ratio of the last size observation, and the scale it gave.
     observed_scale: Cell<Option<(f64, f64)>>,
     /// The elements that stand for the accessibility tree.
@@ -407,8 +409,10 @@ impl Driver {
         listeners.push(Listener::new(window, "resize", move |_| {
             if let Some(driver) = this.upgrade() {
                 let entries: Vec<Rc<Entry>> = driver.entries.borrow().clone();
-                for entry in entries {
-                    driver.measure(&entry, None);
+                // An observer that reports device pixels reports this change too, and measuring
+                // here as well would lay out and draw every step of a resize twice.
+                for entry in entries.iter().filter(|entry| !entry.precise.get()) {
+                    driver.measure(entry, None);
                 }
             }
         }));
@@ -716,6 +720,15 @@ impl Driver {
             channel.port1().set_onmessage(None);
         }
         self.page_listeners.borrow_mut().clear();
+        // A canvas the application made for itself goes with it. A canvas of the page stays.
+        if self.owns_page {
+            for entry in self.entries.borrow().iter() {
+                entry.canvas.remove();
+            }
+            if let Some(canvas) = self.canvas.borrow_mut().take() {
+                canvas.remove();
+            }
+        }
         self.entries.borrow_mut().clear();
         self.incoming.borrow_mut().clear();
         DRIVER.with(|driver| driver.borrow_mut().take());
@@ -748,6 +761,7 @@ impl Driver {
             area_listeners: RefCell::new(Vec::new()),
             typing: Cell::new(false),
             composing: Cell::new(false),
+            precise: Cell::new(false),
             observed_scale: Cell::new(None),
             mirror: RefCell::new(None),
             mirror_listeners: RefCell::new(Vec::new()),
@@ -938,6 +952,16 @@ impl Driver {
             &observer,
             &js_sys::Array::of2(entry.canvas.as_ref(), options.as_ref()),
         );
+        entry.precise.set(precise.is_ok());
+        if precise.is_ok() {
+            // The drawing buffer then has one texel for each device pixel of the canvas. On a
+            // display with a fractional scale, a browser may still filter the canvas when it
+            // composites it, which softens every edge. This asks for the texels as they are.
+            let _ = entry
+                .canvas
+                .style()
+                .set_property("image-rendering", "pixelated");
+        }
         if precise.is_err() {
             observer.observe(&entry.canvas);
         }

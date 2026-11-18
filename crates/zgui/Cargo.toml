@@ -19,6 +19,7 @@ include.workspace = true
 # decision the layers below deliberately leave open and an application should not have to make
 # before its first line of interface.
 [dependencies]
+web-time.workspace = true
 # The tile store, the display list and the damage set: an application that draws through a device
 # this framework has no backend for implements the renderer contract, and cannot do that without
 # naming what its methods take.
