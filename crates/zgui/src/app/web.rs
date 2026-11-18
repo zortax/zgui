@@ -54,7 +54,19 @@ where
         app.renderer = Some(factory(graphics, precision));
     }
     install_tasks();
-    load_page_fonts(&app).await;
+    // A page has no file system, so the `src` of an image is a URL there.
+    zgui_runtime::set_source_reader(std::rc::Rc::new(|url: String| {
+        Box::pin(async move { zgui_platform_web::fetch(&url).await })
+    }));
+    let named_fonts = app.fonts.get().is_some();
+    if load_page_fonts(&app).await == 0 && !named_fonts {
+        zgui_platform_web::report(
+            "zgui: this page has no font, so no text is drawn. A browser gives a page no \
+             installed faces: preload a font file with \
+             <link rel=\"preload\" as=\"fetch\" type=\"font/ttf\" href=\"…\" crossorigin>, \
+             or register one with `Fonts::register`.",
+        );
+    }
     let runtime = app.into_handler(view)?.into_runtime();
     let failure = runtime.failure();
     zgui_platform_web::run(Box::new(runtime), canvas, mount.owns_page(), move || {
@@ -160,7 +172,9 @@ async fn recover() {
 ///
 /// A browser gives a page no list of installed faces, so the page names the files: one preload
 /// link for each. A file that does not load, or that is no font, is reported and left out.
-async fn load_page_fonts(app: &App) {
+/// Returns how many files were registered.
+async fn load_page_fonts(app: &App) -> usize {
+    let mut loaded = 0;
     for url in zgui_platform_web::page_fonts() {
         let registered = match zgui_platform_web::fetch(&url).await {
             Ok(bytes) => app
@@ -169,10 +183,14 @@ async fn load_page_fonts(app: &App) {
                 .map_err(|error| format!("{url}: {error}")),
             Err(error) => Err(error),
         };
-        if let Err(error) = registered {
-            zgui_platform_web::report(&format!("zgui: a page font was not loaded: {error}"));
+        match registered {
+            Ok(()) => loaded += 1,
+            Err(error) => {
+                zgui_platform_web::report(&format!("zgui: a page font was not loaded: {error}"));
+            }
         }
     }
+    loaded
 }
 
 /// The graphics interfaces to try, in order.
