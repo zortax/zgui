@@ -37,6 +37,14 @@ pub mod clock;
 mod console;
 #[cfg(target_arch = "wasm32")]
 mod cx;
+#[cfg_attr(
+    not(target_arch = "wasm32"),
+    allow(
+        dead_code,
+        reason = "only the browser build calls what its tests check"
+    )
+)]
+mod density;
 #[cfg(target_arch = "wasm32")]
 pub mod driver;
 #[cfg(target_arch = "wasm32")]

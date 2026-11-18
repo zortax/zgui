@@ -182,6 +182,8 @@ struct Entry {
     typing: Cell<bool>,
     /// Whether an input method is composing in the text area.
     composing: Cell<bool>,
+    /// The device pixel ratio of the last size observation, and the scale it gave.
+    observed_scale: Cell<Option<(f64, f64)>>,
     /// The elements that stand for the accessibility tree.
     mirror: RefCell<Option<Mirror>>,
     /// The listeners on the mirror.
@@ -746,6 +748,7 @@ impl Driver {
             area_listeners: RefCell::new(Vec::new()),
             typing: Cell::new(false),
             composing: Cell::new(false),
+            observed_scale: Cell::new(None),
             mirror: RefCell::new(None),
             mirror_listeners: RefCell::new(Vec::new()),
             observer: RefCell::new(None),
@@ -943,7 +946,24 @@ impl Driver {
 
     /// Reads the size of a canvas and tells the application when it changed.
     fn measure(&self, entry: &Rc<Entry>, device: Option<(u32, u32)>) {
-        let scale = device_pixel_ratio();
+        let ratio = device_pixel_ratio();
+        // The observed pixels decide the scale where a browser reports a ratio it does not
+        // draw with.
+        let scale = match device {
+            Some((width, _)) => crate::density::scale(
+                ratio,
+                entry.canvas.get_bounding_client_rect().width(),
+                width,
+            ),
+            None => entry
+                .observed_scale
+                .get()
+                .filter(|(of_ratio, _)| *of_ratio == ratio)
+                .map_or(ratio, |(_, scale)| scale),
+        };
+        if device.is_some() {
+            entry.observed_scale.set(Some((ratio, scale)));
+        }
         let size = device.unwrap_or_else(|| laid_out_size(&entry.canvas, scale));
         let surface = &entry.surface;
         if size == surface.extent() && scale == surface.scale_factor() {

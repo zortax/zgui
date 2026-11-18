@@ -13,7 +13,7 @@ pub use crate::app::fonts::Fonts;
 #[cfg(target_arch = "wasm32")]
 pub use crate::app::web::Mounted;
 #[cfg(target_arch = "wasm32")]
-pub use zgui_platform_web::Mount;
+pub use zgui_platform_web::{Mount, enable_accessibility};
 
 /// Shaping text outside the paragraph pipeline: the shaper [`Fonts::shaper`] answers with, what one
 /// line is asked for in, the OpenType settings on top of that, and what the resolved face measures.

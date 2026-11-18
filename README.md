@@ -451,6 +451,14 @@ cargo run -p zgui-examples --example vector
 cargo run -p zgui-examples --example surface
 ```
 
+The same examples run in a browser, on WebGPU or WebGL 2:
+
+```console
+cargo xtask web serve gallery --package zgui-ui
+```
+
+See [running in a browser](docs/guide/web.md) for the build, the host page and the limits.
+
 The [`examples/`](https://github.com/zortax/zgui/tree/main/examples) directory also covers async
 work, multiple windows, images, canvas drawing, custom elements, custom shaders and custom window
 chrome. The [installation guide](https://zgui.zortax.de/docs/getting-started/installation) walks through a
