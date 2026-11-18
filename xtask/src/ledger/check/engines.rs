@@ -96,6 +96,12 @@ const LEDGER: &[(&str, &[&str])] = &[
     ("calloop", &["zgui-platform-wayland"]),
     ("calloop-wayland-source", &["zgui-platform-wayland"]),
     ("accesskit_unix", &["zgui-platform-wayland"]),
+    // The browser's interfaces, and one crate names them. A page is a platform like a compositor
+    // is: its canvas, its events and its callbacks stay behind the platform contract.
+    ("web-sys", &["zgui-platform-web"]),
+    ("js-sys", &["zgui-platform-web"]),
+    ("wasm-bindgen", &["zgui-platform-web"]),
+    ("wasm-bindgen-futures", &["zgui-platform-web"]),
     ("reactive_graph", &["zgui-reactive"]),
     ("reactive_stores", &["zgui-reactive"]),
     ("any_spawner", &["zgui-reactive"]),
@@ -155,6 +161,7 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-platform-headless",
             "zgui-platform-winit",
             "zgui-platform-wayland",
+            "zgui-platform-web",
             "zgui-platform-drm",
         ],
     ),

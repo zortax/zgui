@@ -5603,6 +5603,7 @@ dependencies = [
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-platform-wayland",
+ "zgui-platform-web",
  "zgui-platform-winit",
  "zgui-profile",
  "zgui-reactive",
@@ -6099,6 +6100,22 @@ dependencies = [
  "zgui-runtime",
  "zgui-testkit-scene",
  "zgui-view",
+ "zgui-vocab",
+]
+
+[[package]]
+name = "zgui-platform-web"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "js-sys",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "zgui-geom",
+ "zgui-platform",
  "zgui-vocab",
 ]
 

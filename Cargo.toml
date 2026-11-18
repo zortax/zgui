@@ -212,6 +212,57 @@ tracing = "0.1.44"
 # The monotonic and wall clocks. On a native target these are the `std::time` types themselves; on
 # wasm32 they read the browser's clock, where `std::time::Instant::now` panics.
 web-time = "1.1.0"
+
+# --- platform: named only by zgui-platform-web -----------------------------------------------
+# The browser, spoken to directly. A canvas, its events, the animation frame and the clipboard are
+# each one browser interface, and a windowing library between them and the frame loop would hide
+# the frame callback, the wheel's units and the text input element this backend needs.
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4.50"
+js-sys = "0.3.77"
+web-sys = { version = "0.3.77", features = [
+    "AddEventListenerOptions",
+    "Clipboard",
+    "ClipboardEvent",
+    "CompositionEvent",
+    "CssStyleDeclaration",
+    "DataTransfer",
+    "Document",
+    "DomRect",
+    "Element",
+    "Event",
+    "EventTarget",
+    "FocusEvent",
+    "FocusOptions",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlTextAreaElement",
+    "InputEvent",
+    "KeyboardEvent",
+    "Location",
+    "MediaQueryList",
+    "MessageChannel",
+    "MessageEvent",
+    "MessagePort",
+    "MouseEvent",
+    "Navigator",
+    "Node",
+    "NodeList",
+    "Performance",
+    "PointerEvent",
+    "ResizeObserver",
+    "ResizeObserverBoxOptions",
+    "ResizeObserverEntry",
+    "ResizeObserverOptions",
+    "ResizeObserverSize",
+    "Response",
+    "UiEvent",
+    "UrlSearchParams",
+    "VisibilityState",
+    "WheelEvent",
+    "Window",
+    "console",
+] }
 tracing-subscriber = "0.3"
 bitflags = "2.13"
 rustc-hash = "2.1"
@@ -277,3 +328,13 @@ undocumented_unsafe_blocks = "warn"
 # families and loaded faces from one paragraph to the next (see vendor/README.md for the changes).
 [patch.crates-io]
 fontique = { path = "vendor/fontique" }
+
+# A browser build. The module is downloaded before it runs, so its size is part of the start-up
+# time, and one thread runs all of it.
+[profile.web]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
