@@ -61,7 +61,7 @@ pub use crate::driver::{canvas_of, on_context_change, resume, run, stop, suspend
 #[cfg(target_arch = "wasm32")]
 pub use crate::fetch::{fetch, page_fonts};
 #[cfg(target_arch = "wasm32")]
-pub use crate::mount::{Mount, canvas, query};
+pub use crate::mount::{Mount, canvas, query, subpixel_text_suits};
 #[cfg(target_arch = "wasm32")]
 pub use crate::task::{defer, report, spawn_local};
 /// The canvas element type, for a crate that draws into one without naming the browser's

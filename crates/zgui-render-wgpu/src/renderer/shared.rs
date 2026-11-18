@@ -226,6 +226,8 @@ impl SharedGraphics {
     /// context to the fallback. The WebGL 2 tier selects its adapter with a surface on `canvas`,
     /// because a WebGL adapter is a context of one canvas.
     ///
+    /// `subpixel_text` is as for [`Gpu::open_async`].
+    ///
     /// The graphics that come back behave like adopted ones (see [`SharedGraphics::with_gpu`]):
     /// they open no second device, because opening one blocks. After a loss, the caller awaits
     /// this function again and gives the new device to [`SharedGraphics::adopt`].
@@ -236,6 +238,7 @@ impl SharedGraphics {
     pub async fn open_async(
         backends: wgpu::Backends,
         canvas: impl Into<wgpu::SurfaceTarget<'static>> + Clone,
+        subpixel_text: bool,
     ) -> Result<Self, GpuUnavailable> {
         let mut unavailable = GpuUnavailable::new();
         for tier in adapter::tiers(backends) {
@@ -271,7 +274,7 @@ impl SharedGraphics {
             };
             // The surface selected the adapter. The renderer makes its own surface on the canvas.
             drop(surface);
-            match Gpu::open_async(instance, selected).await {
+            match Gpu::open_async(instance, selected, subpixel_text).await {
                 Ok(gpu) => {
                     let gpu = Arc::new(gpu);
                     return Ok(Self(Rc::new(Shared {

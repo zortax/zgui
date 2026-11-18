@@ -163,15 +163,27 @@ impl Gpu {
     /// browser build awaits this function where a native build calls [`Gpu::open`]. The device
     /// has the features and limits [`Gpu::open`] asks for. No Vulkan device extension is enabled.
     ///
+    /// `subpixel_text` says whether text may be drawn with per-channel coverage, which needs to
+    /// know that the display has three stripes for each pixel and which way they run. A page
+    /// cannot ask, so its caller decides: without it the device does not get dual-source
+    /// blending, and text has one coverage for each pixel.
+    ///
     /// # Errors
     ///
     /// Returns the message `request_device` refused with.
     pub async fn open_async(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
+        subpixel_text: bool,
     ) -> Result<Self, String> {
+        let mut descriptor = descriptor(&adapter);
+        if !subpixel_text {
+            descriptor
+                .required_features
+                .remove(wgpu::Features::DUAL_SOURCE_BLENDING);
+        }
         let (device, queue) = adapter
-            .request_device(&descriptor(&adapter))
+            .request_device(&descriptor)
             .await
             .map_err(|error| error.to_string())?;
         Ok(Self::opened(instance, adapter, device, queue, Vec::new()))

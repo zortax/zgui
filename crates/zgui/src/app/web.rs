@@ -43,7 +43,12 @@ where
     let mut recovery = None;
     if app.renderer.is_none() {
         let backends = backends();
-        let graphics = SharedGraphics::open_async(backends, Canvas(canvas.clone())).await?;
+        let graphics = SharedGraphics::open_async(
+            backends,
+            Canvas(canvas.clone()),
+            zgui_platform_web::subpixel_text_suits(),
+        )
+        .await?;
         let precision = app.group_precision.unwrap_or_default();
         recovery = Some(Recovery {
             graphics: graphics.clone(),
@@ -149,7 +154,8 @@ async fn recover() {
         return;
     };
     zgui_platform_web::suspend();
-    match SharedGraphics::open_async(backends, Canvas(canvas)).await {
+    let subpixel_text = zgui_platform_web::subpixel_text_suits();
+    match SharedGraphics::open_async(backends, Canvas(canvas), subpixel_text).await {
         Ok(fresh) => {
             if let Some(gpu) = fresh.gpu() {
                 graphics.adopt(gpu);

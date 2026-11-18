@@ -98,3 +98,30 @@ pub fn query(name: &str) -> Option<String> {
         .ok()?
         .get(name)
 }
+
+/// Whether text on this page's display is likely to look right with per-channel coverage.
+///
+/// A page cannot ask how the subpixels of a display are arranged, so this is the rule browsers
+/// follow for their own text: a desktop display of ordinary density, on a system that draws its
+/// own text that way. A phone, a tablet and a display of double density or more draw text with
+/// one coverage for each pixel, and so does an Apple system.
+pub fn subpixel_text_suits() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let fine_pointer = window
+        .match_media("(pointer: fine)")
+        .ok()
+        .flatten()
+        .is_some_and(|query| query.matches());
+    fine_pointer && !is_apple(&window) && window.device_pixel_ratio() < 2.0
+}
+
+/// Whether the browser runs on an Apple system, where the command key is the shortcut modifier.
+pub(crate) fn is_apple(window: &web_sys::Window) -> bool {
+    window.navigator().platform().is_ok_and(|platform| {
+        ["Mac", "iPhone", "iPad", "iPod"]
+            .iter()
+            .any(|name| platform.contains(name))
+    })
+}

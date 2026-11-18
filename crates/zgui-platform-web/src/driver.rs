@@ -291,7 +291,7 @@ impl Driver {
             scheme: Cell::new(scheme),
             exiting: Cell::new(false),
             owns_page,
-            apple: is_apple(&window),
+            apple: crate::mount::is_apple(&window),
             canvas: RefCell::new(Some(canvas)),
             entries: RefCell::new(Vec::new()),
             next_surface: Cell::new(1),
@@ -1306,15 +1306,6 @@ fn composed(event: &Event) -> String {
         .dyn_ref::<web_sys::CompositionEvent>()
         .and_then(web_sys::CompositionEvent::data)
         .unwrap_or_default()
-}
-
-/// Whether the browser runs on an Apple machine, where the command key is the shortcut modifier.
-fn is_apple(window: &web_sys::Window) -> bool {
-    window.navigator().platform().is_ok_and(|platform| {
-        ["Mac", "iPhone", "iPad", "iPod"]
-            .iter()
-            .any(|name| platform.contains(name))
-    })
 }
 
 /// Whether the page is shown, which is when it gets animation frames.
