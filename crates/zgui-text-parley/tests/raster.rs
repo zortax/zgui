@@ -84,6 +84,45 @@ fn a_subpixel_glyph_is_three_bytes_per_pixel() {
     );
 }
 
+/// Where the coverage in one channel of a subpixel glyph sits along x, in pixels.
+fn channel_centre(image: &GlyphImage, channel: usize) -> f32 {
+    let (mut weight, mut moment) = (0.0, 0.0);
+    for (index, pixel) in image.bytes.chunks_exact(3).enumerate() {
+        let x = (index as u32 % image.size.width) as f32;
+        let coverage = f32::from(pixel[channel]);
+        weight += coverage;
+        moment += coverage * x;
+    }
+    moment / weight
+}
+
+/// The first byte of a pixel is the coverage of its left stripe and the third is the coverage of
+/// its right stripe.
+///
+/// The left stripe sees the glyph a third of a pixel to the right of where the middle stripe sees
+/// it. So the ink in the first channel sits two thirds of a pixel to the right of the ink in the
+/// third channel.
+#[test]
+fn subpixel_coverage_is_in_the_order_of_the_stripes() {
+    let (fonts, face, glyph) = first_glyph("l");
+    let raster = Rasteriser::new(fonts);
+    let image = raster
+        .raster(&GlyphKey::new(
+            face,
+            glyph,
+            32.0,
+            SubpixelOffset(0),
+            RasterStyle::Subpixel,
+        ))
+        .expect("rasterises");
+
+    let lead = channel_centre(&image, 0) - channel_centre(&image, 2);
+    assert!(
+        (0.5..0.8).contains(&lead),
+        "the first channel leads the third by {lead} pixels"
+    );
+}
+
 /// The four subpixel phases are four different rasterisations, which is what makes the phase in
 /// the key load-bearing rather than decorative.
 #[test]
