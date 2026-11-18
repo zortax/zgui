@@ -97,6 +97,12 @@ pub struct PlatformCapabilities {
     /// Where it does, an application can hide its last window and wait for
     /// [`AppEvent::Reopen`](crate::AppEvent::Reopen).
     pub reopen: bool,
+    /// Whether a window can be minimised, maximised and closed.
+    ///
+    /// An application that draws its own title bar offers those three buttons where this is
+    /// set. A page of a browser is no window: the browser owns the tab, and a button that closes
+    /// the application leaves an empty page.
+    pub window_controls: bool,
 }
 
 impl PlatformCapabilities {
@@ -128,6 +134,7 @@ impl PlatformCapabilities {
             system_color_scheme: false,
             app_menu: false,
             reopen: false,
+            window_controls: false,
         }
     }
 

@@ -88,10 +88,14 @@ impl Headless {
         // A read started through the loop is answered through the loop, which needs the waker the
         // platform hands out.
         clipboard.attach_waker(Arc::clone(&waker) as Arc<dyn Waker>);
+        // The platform stands in for a desktop, whose windows can be minimised, maximised and
+        // closed. An application under test then draws the title bar it draws on a desktop.
+        let mut capabilities = PlatformCapabilities::none();
+        capabilities.window_controls = true;
         Self {
             clock: Arc::new(VirtualClock::new()),
             clipboard,
-            capabilities: PlatformCapabilities::none(),
+            capabilities,
             waker,
             surfaces: Mutex::new(Vec::new()),
             next_surface: AtomicU64::new(1),

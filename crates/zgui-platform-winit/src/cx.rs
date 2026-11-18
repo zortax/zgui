@@ -390,6 +390,7 @@ fn capabilities(event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCap
     capabilities.system_color_scheme = knows_scheme;
     capabilities.app_menu = cfg!(target_os = "macos");
     capabilities.reopen = cfg!(target_os = "macos");
+    capabilities.window_controls = true;
     capabilities
 }
 

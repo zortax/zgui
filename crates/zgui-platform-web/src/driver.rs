@@ -549,10 +549,14 @@ impl Driver {
                     }
                 }
                 Incoming::Forget(id) => {
-                    handler.surface_event(cx, id, SurfaceEvent::Destroyed);
+                    // Forgotten first, so that the application's answer finds no surface.
+                    let known = self.entry(id).is_some();
                     self.entries
                         .borrow_mut()
                         .retain(|entry| entry.surface.id() != id);
+                    if known {
+                        handler.surface_event(cx, id, SurfaceEvent::Destroyed);
+                    }
                 }
             }
         }
@@ -777,7 +781,13 @@ impl Driver {
     }
 
     /// Forgets a surface after the application heard that it is gone.
+    ///
+    /// A surface that is already gone asks for nothing: the application answers the news that a
+    /// surface was destroyed by destroying it, and that answer must not be news again.
     pub(crate) fn destroy_surface(&self, id: SurfaceId) {
+        if self.entry(id).is_none() {
+            return;
+        }
         self.incoming.borrow_mut().push_back(Incoming::Forget(id));
         self.post_turn();
     }

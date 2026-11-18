@@ -62,6 +62,10 @@ let mounted = app()
 mounted.unmount();
 ```
 
+A page of a browser is no window. `capabilities().window_controls` is `false` there, and an
+application that draws its own title bar leaves out the buttons that minimise, maximise and close.
+An application that closes its window ends, and its canvas goes with it.
+
 A page runs one application, and an application has one window. A second window has no canvas to
 open on, and `use_windows().open` reports that the platform does not support it. Menus, dialogs and
 tooltips are layers of the window, so they work.
