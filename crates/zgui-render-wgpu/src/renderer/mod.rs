@@ -19,11 +19,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use zgui_geom::{Device, Size};
-use zgui_render::{ExternalTexture, RenderTarget, VectorBackend};
+use zgui_render::{ExternalTexture, RenderTarget, SubpixelOrder, VectorBackend};
 use zgui_scene::ExternalTextureId;
 
 use crate::atlas_backend::sink::AtlasTextures;
-use crate::bind::globals::SubpixelOrder;
 use crate::frame::fault::FaultInjector;
 use crate::frame::pass::AttachedTexture;
 use crate::frame::vector::VectorSource;

@@ -534,6 +534,10 @@ impl Surface for WaylandSurface {
         self.shared().scale
     }
 
+    fn subpixel_layout(&self) -> zgui_platform::SubpixelLayout {
+        self.shared().subpixel
+    }
+
     fn refresh_rate_millihertz(&self) -> Option<u32> {
         self.shared().timing.refresh_rate_millihertz()
     }

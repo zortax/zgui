@@ -375,6 +375,7 @@ impl Window {
         // from the surface this frame will actually present to.
         mark("f.reconfigure");
         self.reconfigure_surface();
+        self.settle_text_coverage();
         mark("f.device");
         self.device_epoch();
         // Frame callbacks before the animate stage and the flush, with the moment this frame is
@@ -950,6 +951,49 @@ impl Window {
             callback(at);
         }
         due.len()
+    }
+
+    /// Decides which coverage this frame draws its text with.
+    ///
+    /// Per-channel coverage needs a device that can blend it, an opaque surface, and a display
+    /// with horizontal stripes in a known order. The display is asked on every frame, because a
+    /// window moves between displays. A change of the answer changes every glyph on the surface,
+    /// so the whole surface is damaged.
+    fn settle_text_coverage(&mut self) {
+        let order = if self.renderer.capabilities().subpixel_text && !self.translucent {
+            self.text_antialiasing
+                .order(self.surface.subpixel_layout(), self.scale)
+        } else {
+            None
+        };
+        if order == self.subpixel_order {
+            return;
+        }
+        // Said on every change, because nothing on the screen names the reason for the coverage.
+        tracing::info!(
+            target: "zgui::runtime",
+            surface = ?self.surface.id(),
+            setting = ?self.text_antialiasing,
+            layout = ?self.surface.subpixel_layout(),
+            scale = self.scale,
+            translucent = self.translucent,
+            device = self.renderer.capabilities().subpixel_text,
+            "text is drawn with {}",
+            match order {
+                Some(zgui_render::SubpixelOrder::RedToBlue) => {
+                    "one coverage for each colour stripe, red to blue"
+                }
+                Some(zgui_render::SubpixelOrder::BlueToRed) => {
+                    "one coverage for each colour stripe, blue to red"
+                }
+                None => "one coverage for each pixel",
+            }
+        );
+        self.subpixel_order = order;
+        if let Some(order) = order {
+            self.renderer.set_subpixel_order(order);
+        }
+        self.damage = DamageSet::full();
     }
 
     /// Reconfigures the renderer for the surface, when the surface moved.
@@ -1563,7 +1607,9 @@ impl Window {
         let retired = self.layout.borrow_mut().drain_retired_paint();
         // Read before the sink is borrowed, because what the device can do changes what is
         // *emitted* and not only how it is drawn.
-        let capabilities = self.renderer.capabilities();
+        let mut capabilities = self.renderer.capabilities();
+        // What the device can blend is narrowed to what this window draws on its display.
+        capabilities.subpixel_text = self.subpixel_order.is_some();
         // Decided inside the borrow below, performed after it: the copy belongs in the renderer's
         // own frame, and the renderer is not reachable while the layout store is borrowed.
         let shift: Option<zgui_render::ScrollShift>;
@@ -1648,7 +1694,7 @@ impl Window {
                     pool,
                     zgui_paint::GlyphPrediction {
                         scale: self.scale,
-                        subpixel: capabilities.subpixel_text && !self.translucent,
+                        subpixel: capabilities.subpixel_text,
                     },
                 );
             }

@@ -82,5 +82,9 @@ objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
 
+# The font smoothing settings, which say how the system draws its own text.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys.workspace = true
+
 [lints]
 workspace = true

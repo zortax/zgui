@@ -2,7 +2,9 @@
 
 use zgui_geom::{Device, Point, Rect, Size};
 
-use crate::bind::globals::{Globals, SubpixelOrder};
+use zgui_render::SubpixelOrder;
+
+use crate::bind::globals::Globals;
 use crate::buffer::slots::SlotBuffer;
 use crate::buffer::vectors::VectorInstances;
 use crate::frame::segment::{EncoderOp, PassLoad, PlannedDraw, PlannedPass, Segment};

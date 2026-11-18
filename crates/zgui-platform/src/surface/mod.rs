@@ -9,6 +9,7 @@ mod icon;
 mod id;
 mod role;
 mod serial;
+mod subpixel;
 mod text_input;
 mod timing;
 mod watchdog;
@@ -27,6 +28,7 @@ pub use crate::surface::role::{
     PopupPlacement, SurfaceRole,
 };
 pub use crate::surface::serial::InputSerial;
+pub use crate::surface::subpixel::SubpixelLayout;
 pub use crate::surface::text_input::{TextInput, TextInputPurpose};
 pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
@@ -64,6 +66,13 @@ pub trait Surface: Send + Sync + 'static {
 
     /// How many physical pixels there are to a CSS pixel on this surface.
     fn scale_factor(&self) -> f64;
+
+    /// How the colour stripes of the display under this surface are arranged.
+    ///
+    /// Read once a frame. A backend asks for a redraw when the answer changes.
+    fn subpixel_layout(&self) -> SubpixelLayout {
+        SubpixelLayout::Unknown
+    }
 
     /// How many frames per second this surface is presented at, in thousandths.
     ///

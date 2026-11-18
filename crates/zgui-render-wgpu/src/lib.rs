@@ -64,7 +64,6 @@ pub mod target;
 /// format or creating a surface uses the same version of it that the renderer does.
 pub use wgpu;
 
-pub use crate::bind::globals::SubpixelOrder;
 pub use crate::effect::{
     EffectProgram, Effects, ParamsField, ParamsLayout, check_params as check_effect, declare,
 };
@@ -81,3 +80,4 @@ pub use crate::renderer::shared::SharedGraphics;
 pub use crate::target::acquire::{Acquisition, SurfaceAction};
 pub use crate::target::group_pool::{GroupPool, GroupPrecision};
 pub use crate::target::scale::TargetScale;
+pub use zgui_render::SubpixelOrder;

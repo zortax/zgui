@@ -358,18 +358,16 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
     let features = device.features();
     let limits = device.limits();
     let subpixel_text = features.contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-    // Said once, because it decides what every glyph small enough for the atlas looks like and
-    // there is otherwise no way to tell from outside which of the two a device settled on. Text
-    // above the atlas threshold is filled as outlines and is grayscale whatever this says, so a
-    // page carrying both sizes shows both answers at once.
+    // Said once, because there is otherwise no way to tell from outside which of the two a
+    // device settled on. A window still draws one coverage for each pixel where its display or
+    // its text antialiasing setting asks for that, and for every run above the size limit.
     tracing::info!(
         target: "zgui::render",
-        "text small enough to be cached is drawn {}",
+        "the device {} text with one coverage value per display subpixel",
         if subpixel_text {
-            "with one coverage value per display subpixel, which assumes the display's stripes run \
-             horizontally red, green, blue"
+            "can draw"
         } else {
-            "with one coverage value per pixel"
+            "cannot draw"
         }
     );
     RenderCapabilities {

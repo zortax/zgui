@@ -3,9 +3,9 @@
 use std::time::Duration;
 
 use smithay_client_toolkit::output::OutputInfo;
-use smithay_client_toolkit::reexports::client::protocol::wl_output::Transform;
+use smithay_client_toolkit::reexports::client::protocol::wl_output::{Subpixel, Transform};
 use zgui_geom::{CssPx, DevicePx, Point, Rect, Size};
-use zgui_platform::{MonitorId, MonitorInfo, MonitorTransform};
+use zgui_platform::{MonitorId, MonitorInfo, MonitorTransform, SubpixelLayout};
 
 /// What the contract knows about one output.
 ///
@@ -146,6 +146,20 @@ pub fn refresh_rate(info: &OutputInfo) -> Option<u32> {
 pub fn interval(info: &OutputInfo) -> Option<Duration> {
     let rate = refresh_rate(info)?;
     Some(Duration::from_secs_f64(1_000.0 / f64::from(rate)))
+}
+
+/// How the colour stripes of this output are arranged, as a surface on it sees them.
+///
+/// The compositor states the layout of the panel, and turns the picture of the surface by the
+/// transform of the output. So the transform is applied to the layout.
+pub fn subpixel(info: &OutputInfo) -> SubpixelLayout {
+    let panel = match info.subpixel {
+        Subpixel::None | Subpixel::VerticalRgb | Subpixel::VerticalBgr => SubpixelLayout::None,
+        Subpixel::HorizontalRgb => SubpixelLayout::HorizontalRgb,
+        Subpixel::HorizontalBgr => SubpixelLayout::HorizontalBgr,
+        _ => SubpixelLayout::Unknown,
+    };
+    panel.turned(transform(info.transform))
 }
 
 /// The scale of the sharpest output in `infos`, for a surface that is on all of them.

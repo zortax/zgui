@@ -6136,6 +6136,7 @@ dependencies = [
  "raw-window-handle",
  "smithay-clipboard",
  "tracing",
+ "windows-sys 0.61.2",
  "winit",
  "zgui-elements",
  "zgui-geom",

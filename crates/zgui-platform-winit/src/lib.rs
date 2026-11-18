@@ -70,8 +70,9 @@
 //! | [`theme`] | the light or dark preference, where it can be discovered |
 
 #![deny(missing_docs)]
-// This crate is on the unsafe ledger's allowlist for exactly one reason: the Wayland clipboard is
-// constructed from a raw display pointer through an unsafe constructor. Every unsafe block states
+// This crate is on the unsafe ledger's allowlist. The Wayland clipboard is
+// constructed from a raw display pointer through an unsafe constructor. The AppKit calls of the
+// macOS module and the font smoothing query of Windows are the others. Every unsafe block states
 // what makes it sound.
 #![allow(unsafe_code)]
 
@@ -84,6 +85,7 @@ pub mod input;
 mod macos;
 pub mod monitor;
 pub mod park;
+mod subpixel;
 pub mod surface;
 pub mod theme;
 pub mod waker;

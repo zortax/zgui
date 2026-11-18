@@ -144,6 +144,9 @@ smithay-clipboard = "0.7"
 muda = { version = "0.21.0", default-features = false }
 objc2 = "0.6.4"
 block2 = "0.6.2"
+# The font smoothing settings of Windows, which say whether the system draws text with one
+# coverage for each colour stripe and in which order. winit does not expose them.
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSUserDefaults", "NSGeometry", "NSObject", "NSNotification", "NSOperation", "block2"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSWindow", "NSView", "NSResponder", "NSButton", "NSControl", "NSGraphics", "NSRunningApplication", "NSEvent", "block2"] }
 zbus = "5.18"

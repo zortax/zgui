@@ -561,6 +561,30 @@ impl App {
         self
     }
 
+    /// How every window antialiases its text.
+    ///
+    /// The default is [`TextAntialiasing::Auto`](crate::TextAntialiasing::Auto), which follows
+    /// the subpixel layout the platform reports for the display. Text with one coverage for each
+    /// colour channel shows coloured edges on a display with no horizontal stripes, such as most
+    /// OLED panels, and no platform reports those reliably. An application for such a display
+    /// states [`TextAntialiasing::Grayscale`](crate::TextAntialiasing::Grayscale). The
+    /// `ZGUI_TEXT_AA` environment variable (`auto`, `gray`, `rgb` or `bgr`) overrides this value,
+    /// so a user can state the display.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_text_antialiasing(zgui::TextAntialiasing::Grayscale)
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_text_antialiasing(mut self, antialiasing: crate::TextAntialiasing) -> Self {
+        self.inner = self.inner.with_text_antialiasing(antialiasing);
+        self
+    }
+
     /// The faces this application draws with, for registering one of its own.
     ///
     /// Asking settles the question [`App::with_fonts`] would otherwise answer: an application that

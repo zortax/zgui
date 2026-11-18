@@ -84,7 +84,11 @@ the list should contain and not merely how it is drawn:
 - `subpixel_text` — per-channel text antialiasing needs dual-source blending, which is optional on
   real drivers and absent from software rasterisers. Where it is absent, ordinary coverage is
   emitted throughout. A pipeline gated on the feature with no fallback is a renderer that draws no
-  text at all on those devices.
+  text at all on those devices. A window narrows this capability further: it emits per-channel
+  coverage only where its display has horizontal colour stripes in a known order, see
+  `App::with_text_antialiasing` and the `ZGUI_TEXT_AA` environment variable (`auto`, `gray`, `rgb`,
+  `bgr`). The window states the stripe order with `Renderer::set_subpixel_order` and damages the
+  whole surface when the order changes. A renderer that wraps another must forward the call.
 - `vector_compute` — whether the device can run a compute path rasteriser. Where it cannot, a
   simpler rasteriser is bound instead.
 - `mutable_texture_formats` — decides whether a surface offering only an encoded format is handled

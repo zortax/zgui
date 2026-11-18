@@ -32,6 +32,13 @@ const COLOR_SOURCES: [Source; 3] = [
     Source::Outline,
 ];
 
+/// How far the outline moves along x for the red, the green and the blue coverage, in pixels.
+///
+/// The red stripe is a third of a pixel to the left of the centre of its pixel. The outline moves
+/// to the right by that distance, so the centre of the pixel reads the coverage at the red stripe.
+/// The blue stripe is the mirror of that.
+const STRIPE_OFFSETS: [f32; 3] = [1.0 / 3.0, 0.0, -1.0 / 3.0];
+
 /// Rasterises glyphs from the faces one font system holds.
 ///
 /// Hinted, and capable of subpixel coverage and of the face's own colour glyphs. Which of those a
@@ -147,7 +154,7 @@ fn renderer(key: &GlyphKey) -> Render<'static> {
     };
     let mut render = Render::new(sources);
     render.format(match key.style {
-        RasterStyle::Subpixel => Format::Subpixel,
+        RasterStyle::Subpixel => Format::CustomSubpixel(STRIPE_OFFSETS),
         RasterStyle::Grayscale | RasterStyle::Color => Format::Alpha,
     });
     // Positioning is in fractions of a pixel and the key carries the phase, so the same glyph at

@@ -154,6 +154,8 @@ pub struct App {
     style_threads: Option<usize>,
     /// How many workers the layout engine may use, when the default is not wanted.
     layout_threads: Option<usize>,
+    /// How every window antialiases its text.
+    text_antialiasing: crate::TextAntialiasing,
     /// Whether the application opens a window when it starts.
     primary_window: bool,
 }
@@ -181,6 +183,7 @@ impl App {
             menu: None,
             style_threads: None,
             layout_threads: None,
+            text_antialiasing: crate::TextAntialiasing::default(),
             primary_window: true,
         }
     }
@@ -233,6 +236,21 @@ impl App {
     pub fn with_style_threads(mut self, threads: usize) -> Self {
         self.style_threads = Some(threads);
         self
+    }
+
+    /// How every window antialiases its text.
+    ///
+    /// The default follows the display, see [`TextAntialiasing::Auto`](crate::TextAntialiasing).
+    /// The `ZGUI_TEXT_AA` environment variable overrides whatever is set here, so a user whose
+    /// display reports no layout or a wrong one can state it: `auto`, `gray`, `rgb` or `bgr`.
+    pub fn with_text_antialiasing(mut self, antialiasing: crate::TextAntialiasing) -> Self {
+        self.text_antialiasing = antialiasing;
+        self
+    }
+
+    /// Returns the setting stated with [`App::with_text_antialiasing`].
+    pub fn text_antialiasing(&self) -> crate::TextAntialiasing {
+        self.text_antialiasing
     }
 
     /// Returns the style worker count set with [`App::with_style_threads`], if one was set.
@@ -542,6 +560,8 @@ pub struct Runtime {
     ///
     /// Its workers start on the first batch or pre-shape that layout distributes.
     layout_pool: Option<std::sync::Arc<zgui_layout::tree::parallel::LayoutPool>>,
+    /// How every window antialiases its text.
+    text_antialiasing: crate::TextAntialiasing,
 }
 
 /// The cascade's worker pool, started on first use.
@@ -630,6 +650,8 @@ impl Runtime {
     fn new(mut app: App, view: ViewFactory) -> Self {
         let style_pool = style_pool_for(app.style_threads);
         let layout_pool = layout_pool_for(app.layout_threads);
+        let text_antialiasing =
+            crate::TextAntialiasing::from_env().unwrap_or(app.text_antialiasing);
         let commands = WindowCommands::new();
         let clipboards = crate::clipboard::Clipboards::new();
         // The scope above every window: what is provided here is visible in all of them, and what a
@@ -720,6 +742,7 @@ impl Runtime {
             clock: None,
             style_pool,
             layout_pool,
+            text_antialiasing,
             parked: Vec::new(),
             failure: Failure::default(),
         }
@@ -922,6 +945,7 @@ impl Runtime {
         // above this line is a wheel that is wrong on every machine but the one it was written on.
         window.set_scroll_settings(cx.scroll_settings());
         window.set_translucent(translucent);
+        window.set_text_antialiasing(self.text_antialiasing);
         window.assume_surface_focus(starts_focused);
         // A window opened hidden is hidden before its first frame, so that frame never reaches
         // the screen. Only the first open: a window shown since then is shown again on a resume.
