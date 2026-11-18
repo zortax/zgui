@@ -3,21 +3,21 @@
 //! Layer L2: backends.
 //!
 //! A browser gives a program no loop to block in. Each callback of the page (an input event, an
-//! animation frame, a timer) runs one turn of the application and returns. [`run`] installs the
+//! animation frame, a timer) runs one turn of the application and returns. `run` installs the
 //! application and returns at once; the page keeps it alive.
 //!
 //! | Module | Content |
 //! |---|---|
-//! | [`driver`] | the turn: events in, wakes, the idle policy, the next callback |
-//! | [`surface`] | the canvas as a [`zgui_platform::Surface`] |
-//! | [`input`] | pointer, keyboard and wheel events in the framework's vocabulary |
-//! | [`aria`] | an accessibility node in the vocabulary of a page |
-//! | [`clipboard`] | the page's asynchronous clipboard |
-//! | [`clock`] | the page's monotonic clock |
-//! | [`mount`] | where the canvas comes from |
-//! | [`fetch`] | bytes from a URL, and the fonts a page declares |
-//! | [`image`] | images, decoded by the browser |
-//! | [`task`] | local futures and deferred work |
+//! | `driver` | the turn: events in, wakes, the idle policy, the next callback |
+//! | `surface` | the canvas as a `zgui_platform::Surface` |
+//! | `input` | pointer, keyboard and wheel events in the framework's vocabulary |
+//! | `aria` | an accessibility node in the vocabulary of a page |
+//! | `clipboard` | the page's asynchronous clipboard |
+//! | `clock` | the page's monotonic clock |
+//! | `mount` | where the canvas comes from |
+//! | `fetch` | bytes from a URL, and the fonts a page declares |
+//! | `image` | images, decoded by the browser |
+//! | `task` | local futures and deferred work |
 //!
 //! On a target other than `wasm32` the crate holds only the translation that needs no browser:
 //! how a wheel event is classified, which key a name means, and what an input event asks for.
@@ -79,7 +79,7 @@ mod waker;
 
 #[cfg(target_arch = "wasm32")]
 pub use crate::driver::{
-    canvas_of, enable_accessibility, on_context_change, resume, run, stop, suspend,
+    canvas_of, enable_accessibility, is_running, on_context_change, resume, run, stop, suspend,
 };
 #[cfg(target_arch = "wasm32")]
 pub use crate::fetch::{fetch, page_fonts};

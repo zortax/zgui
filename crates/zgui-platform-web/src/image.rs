@@ -1,8 +1,8 @@
 //! Images, decoded by the browser.
 //!
 //! A browser decodes an image off the thread the page runs on, and it reads every format the
-//! page itself can show. So an image `src` is not fetched and decoded in the application: the
-//! browser loads it, scales it to the size it is shown at, and hands over the pixels.
+//! page itself can show. So the browser loads an image `src`, scales it to the size it is shown
+//! at, and hands over the pixels. The application fetches and decodes nothing.
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;

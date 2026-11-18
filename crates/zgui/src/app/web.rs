@@ -34,14 +34,40 @@ impl Mounted {
 }
 
 /// Starts `app` on `mount` and returns when the page drives it.
-pub(crate) async fn mount<F, V>(mut app: App, mount: Mount, view: F) -> Result<Mounted, AppError>
+pub(crate) async fn mount<F, V>(app: App, mount: Mount, view: F) -> Result<Mounted, AppError>
 where
     F: FnMut() -> V + 'static,
     V: IntoView,
 {
     // Before anything that can fail: a failure with no message is the hardest one to find.
     zgui_platform_web::report_panics();
+    // Asked first: making the canvas of a second application would cover the first one.
+    if zgui_platform_web::is_running() {
+        return Err(AppError::Platform(PlatformError::Backend(
+            "this page already runs an application".to_owned(),
+        )));
+    }
     let canvas = zgui_platform_web::canvas(&mount)?;
+    let started = start_on(app, &mount, canvas.clone(), view).await;
+    // A canvas the application made for itself goes when the start fails, so that it does not
+    // cover what the page shows in its place.
+    if started.is_err() && mount.owns_page() {
+        canvas.remove();
+    }
+    started
+}
+
+/// Opens the graphics device for `canvas` and hands the application to the page.
+async fn start_on<F, V>(
+    mut app: App,
+    mount: &Mount,
+    canvas: zgui_platform_web::HtmlCanvasElement,
+    view: F,
+) -> Result<Mounted, AppError>
+where
+    F: FnMut() -> V + 'static,
+    V: IntoView,
+{
     let mut recovery = None;
     if app.renderer.is_none() {
         let backends = backends();
@@ -76,8 +102,10 @@ where
     let runtime = app.into_handler(view)?.into_runtime();
     let failure = runtime.failure();
     zgui_platform_web::run(Box::new(runtime), canvas, mount.owns_page(), move || {
-        // The runtime is gone with the driver. Whatever is left in the task pool goes now.
+        // The runtime is gone with the driver. Whatever is left in the task pool goes now, and
+        // so does the device: a loss after this would open a new one for no application.
         zgui_reactive::shutdown();
+        RECOVERY.with(|held| held.borrow_mut().take());
         if let Some(error) = failure.take() {
             zgui_platform_web::report(&format!("zgui: {error}"));
         }

@@ -43,8 +43,8 @@ pub struct Reported {
 /// surface with, and where the browser reports no legacy delta. Every other pixel delta is a
 /// detent, and it keeps the distance the browser gave it.
 ///
-/// The ratio is the test, and the size of the legacy delta is not: it counts 120 for one detent
-/// only on a display of ordinary density, and a scaled display changes it.
+/// The ratio is the test. The size of the legacy delta cannot be one: it counts 120 for one
+/// detent only on a display of ordinary density, and a scaled display changes it.
 pub fn classify(event: Reported) -> (ScrollDelta, ScrollPhase) {
     let (x, y) = event.delta;
     match event.mode {

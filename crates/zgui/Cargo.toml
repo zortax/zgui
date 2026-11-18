@@ -99,7 +99,6 @@ workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 zgui-platform-wayland = { path = "../zgui-platform-wayland", version = "0.1.0" }
 
-# The `tokio` feature adds public API.
 # The portable desktop backend. A browser has its own backend, so wasm32 does not link winit.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
@@ -108,5 +107,6 @@ zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 zgui-platform-web = { path = "../zgui-platform-web", version = "0.1.0" }
 
+# The `tokio` feature adds public API.
 [package.metadata.docs.rs]
 features = ["tokio"]

@@ -58,8 +58,23 @@ pub(crate) fn check(tree: &Tree) -> Report {
 }
 
 /// The clock type `text` takes from `std::time`, if it takes one.
+///
+/// Every `std::time::` on the line is read, and so is a `time::` inside a `std::{…}` group.
 fn named_clock(text: &str) -> Option<&'static str> {
-    let rest = text.split("std::time::").nth(1)?;
+    let direct = text.split("std::time::").skip(1);
+    let grouped = text
+        .contains("std::{")
+        .then(|| text.split("time::").skip(1))
+        .into_iter()
+        .flatten();
+    direct.chain(grouped).find_map(clock_at)
+}
+
+/// The clock type at the start of `rest`, which follows a `time::`: a name or a group of names.
+fn clock_at(rest: &str) -> Option<&'static str> {
+    if rest.starts_with('*') {
+        return Some("Instant");
+    }
     if let Some(group) = rest.strip_prefix('{') {
         let group = group.split('}').next().unwrap_or(group);
         return CLOCKS.iter().copied().find(|clock| {
@@ -90,6 +105,20 @@ mod tests {
             named_clock("let now = std::time::Instant::now();"),
             Some("Instant")
         );
+    }
+
+    #[test]
+    fn a_clock_later_on_the_line_or_inside_a_group_of_std_is_found() {
+        assert_eq!(
+            named_clock("fn f(d: std::time::Duration) -> std::time::Instant {"),
+            Some("Instant")
+        );
+        assert_eq!(
+            named_clock("use std::{rc::Rc, time::Instant};"),
+            Some("Instant")
+        );
+        assert_eq!(named_clock("use std::time::*;"), Some("Instant"));
+        assert_eq!(named_clock("use std::{rc::Rc, time::Duration};"), None);
     }
 
     #[test]

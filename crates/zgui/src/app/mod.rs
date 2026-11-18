@@ -580,7 +580,7 @@ impl App {
     ///
     /// A page gives a program no thread to block, so on `wasm32` this function starts the
     /// application on a canvas that fills the page and returns `Ok(())` at once. A failure to
-    /// start goes to the page's console. [`App::mount`] is the entry point that reports it to the
+    /// start goes to the page's console. `App::mount` is the entry point that reports it to the
     /// caller, and the one that takes a canvas of the page.
     pub fn run<F, V>(self, view: F) -> Result<(), AppError>
     where

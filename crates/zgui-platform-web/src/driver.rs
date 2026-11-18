@@ -90,6 +90,11 @@ pub fn run(
     Ok(())
 }
 
+/// Whether this page runs an application already.
+pub fn is_running() -> bool {
+    DRIVER.with(|driver| driver.borrow().is_some())
+}
+
 /// Asks the application of this page to exit.
 pub fn stop() {
     with(Driver::request_exit);
@@ -273,6 +278,8 @@ pub(crate) struct Driver {
     turn_posted: Cell<bool>,
     /// The listeners on the page itself.
     page_listeners: RefCell<Vec<Listener>>,
+    /// Whether the accessibility tree was asked for. A surface made later starts with it.
+    a11y_wanted: Cell<bool>,
     /// Runs after the application shut down.
     on_exit: RefCell<Option<Box<dyn FnOnce()>>>,
     /// What is told when the canvas loses or regains its WebGL context.
@@ -328,6 +335,7 @@ impl Driver {
             channel: RefCell::new(None),
             turn_posted: Cell::new(false),
             page_listeners: RefCell::new(Vec::new()),
+            a11y_wanted: Cell::new(false),
             on_exit: RefCell::new(Some(on_exit)),
             context_watcher: RefCell::new(None),
         });
@@ -387,8 +395,8 @@ impl Driver {
                 }
             }));
         }
-        // On the canvas itself and not on a surface's entry: the context comes back after the
-        // surface that lost it is gone.
+        // The canvas holds these listeners. The context comes back after the surface that lost
+        // it is gone, and a listener of that surface would be gone with it.
         if let Some(canvas) = self.canvas.borrow().as_ref() {
             for (kind, restored) in [("webglcontextlost", false), ("webglcontextrestored", true)] {
                 let this = self.this.clone();
@@ -526,8 +534,8 @@ impl Driver {
                     }
                 }
                 Incoming::Frame => {
-                    // Read here and not when the frame began: a deadline delivered before this
-                    // is what asks for most frames.
+                    // Read at this point, after the deadline of this frame was delivered: that
+                    // deadline is what asks for most frames.
                     let wanting: Vec<SurfaceId> = self
                         .entries
                         .borrow()
@@ -550,11 +558,16 @@ impl Driver {
                 }
                 Incoming::Forget(id) => {
                     // Forgotten first, so that the application's answer finds no surface.
-                    let known = self.entry(id).is_some();
+                    let known = self.entry(id);
                     self.entries
                         .borrow_mut()
                         .retain(|entry| entry.surface.id() != id);
-                    if known {
+                    // The canvas outlives its surface: a window opened later draws on it, and
+                    // the end of the application removes a canvas it made.
+                    if let Some(entry) = known.as_ref() {
+                        *self.canvas.borrow_mut() = Some(entry.canvas.clone());
+                    }
+                    if known.is_some() {
                         handler.surface_event(cx, id, SurfaceEvent::Destroyed);
                     }
                 }
@@ -775,8 +788,17 @@ impl Driver {
         self.listen_to_mirror(&entry);
         self.listen(&entry);
         self.observe(&entry);
-        self.entries.borrow_mut().push(entry);
+        self.entries.borrow_mut().push(Rc::clone(&entry));
         self.set_title(attributes.title.as_str());
+        // After a lost device the application opens its surfaces again, and a person who asked
+        // for the accessibility tree still needs it.
+        if self.a11y_wanted.get() {
+            self.activate_a11y(&entry);
+        }
+        // An application that owns the page has the keyboard from the start, as a window has.
+        if self.owns_page {
+            entry.take_focus();
+        }
         Ok(surface)
     }
 
@@ -1125,6 +1147,7 @@ impl Driver {
         on("keyup", |driver, entry, event| {
             driver.on_key(entry, event, KeyState::Released);
         });
+        on("paste", Self::on_paste);
         *entry.mirror_listeners.borrow_mut() = listeners;
     }
 
@@ -1135,6 +1158,7 @@ impl Driver {
             .borrow_mut()
             .as_mut()
             .is_some_and(Mirror::activate);
+        self.a11y_wanted.set(true);
         if activated {
             self.waker
                 .wake(zgui_platform::WakeReason::A11yTreeRequested(
@@ -1180,12 +1204,14 @@ impl Driver {
                 return;
             };
             let before = mirror.focus();
+            // Asked before the update: an update that removes the focused node's element leaves
+            // the keyboard on the page's body, and the surface would seem to have lost it.
+            let held = entry.holds_focus_with(mirror);
             mirror.cover(&entry.canvas);
             mirror.apply(build());
             // The keyboard follows the application's focus, so that a screen reader announces
             // the node. A field that is typed into keeps the keyboard in its text area.
-            let follows =
-                mirror.focus() != before && !entry.typing.get() && entry.holds_focus_with(mirror);
+            let follows = mirror.focus() != before && !entry.typing.get() && held;
             follows.then(|| mirror.focus_target())
         };
         // After the mirror is released: moving the keyboard runs the focus listeners at once,
@@ -1277,10 +1303,9 @@ impl Driver {
         }
         if focused {
             // The keyboard came to the canvas while a field is typed into.
-            if entry.typing.get()
-                && let Some(area) = entry.area.borrow().as_ref()
-            {
-                text_input::focus(area);
+            let area = entry.area.borrow().clone().filter(|_| entry.typing.get());
+            if let Some(area) = area {
+                text_input::focus(&area);
             }
         } else {
             // A key released while another element has the keyboard is never reported here.
@@ -1517,10 +1542,14 @@ impl Entry {
 
     /// Gives the keyboard to the element that takes it now: the text area while a field is
     /// typed into, the canvas otherwise.
+    ///
+    /// The element is taken out of its cell first. Moving the keyboard runs the focus listeners
+    /// at once, and they may make the text area, which writes to the cell.
     fn take_focus(&self) {
-        match self.area.borrow().as_ref() {
-            Some(area) if self.typing.get() => text_input::focus(area),
-            _ => text_input::focus(&self.canvas),
+        let area = self.area.borrow().clone().filter(|_| self.typing.get());
+        match area {
+            Some(area) => text_input::focus(&area),
+            None => text_input::focus(&self.canvas),
         }
     }
 

@@ -62,9 +62,10 @@ let mounted = app()
 mounted.unmount();
 ```
 
-A page of a browser is no window. `capabilities().window_controls` is `false` there, and an
-application that draws its own title bar leaves out the buttons that minimise, maximise and close.
-An application that closes its window ends, and its canvas goes with it.
+A page of a browser is no window, and `capabilities().window_controls` is `false` there. An
+application that draws its own title bar reads it and leaves out the buttons that minimise,
+maximise and close. An application that closes its window ends, and a canvas it made for itself
+goes with it.
 
 A page runs one application, and an application has one window. A second window has no canvas to
 open on, and `use_windows().open` reports that the platform does not support it. Menus, dialogs and
@@ -155,6 +156,9 @@ character by character.
 - No file system. A style sheet comes from the binary, an image from a URL.
 - No dropped files and no drag out of the canvas.
 - A canvas inside a scrolling page keeps every wheel event over it.
+- A canvas under a CSS transform is measured wrong. Put transforms on an element around it.
+- A paste that an application starts from its own menu reads the text of the last paste or copy
+  in the page.
 
 ## Console
 
