@@ -107,7 +107,7 @@ impl TableTexture {
         let all: &[u8] = bytemuck::cast_slice(values);
         // A texture is at most as tall as the device allows. A table past that keeps the rows that
         // fit, and a record past them reads zeros: `textureLoad` outside a texture is defined.
-        let limit = gpu.device().limits().max_texture_dimension_2d;
+        let limit = row_limit(gpu);
         let wanted = all.len().div_ceil(ROW);
         let all = if wanted > limit as usize {
             if !std::mem::replace(&mut self.overflowed, true) {
@@ -229,8 +229,12 @@ pub(crate) fn write_texels(
     bytes: &[u8],
 ) {
     debug_assert_eq!(bytes.len() % TEXEL, 0, "a run is a whole number of texels");
+    // Cut to what the texture holds. A table at the row limit of the device holds less than it
+    // was asked to, and a copy past its last row is one the device refuses.
+    let held = u64::from(texture.height()) * u64::from(TEXELS_WIDE);
+    let room = held.saturating_sub(u64::from(first)) as usize * TEXEL;
     let mut texel = first;
-    let mut rest = bytes;
+    let mut rest = &bytes[..bytes.len().min(room)];
 
     while !rest.is_empty() {
         let column = texel % TEXELS_WIDE;
@@ -266,6 +270,11 @@ fn run_extent(texel: u32, held: u32) -> (u32, u32) {
     } else {
         ((TEXELS_WIDE - column).min(held), 1)
     }
+}
+
+/// The most rows a table can have on this device.
+pub(crate) fn row_limit(gpu: &Gpu) -> u32 {
+    gpu.device().limits().max_texture_dimension_2d
 }
 
 /// Allocates a table of `rows` rows, and the view a bind group names it by.

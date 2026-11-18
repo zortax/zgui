@@ -27,7 +27,7 @@ use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
 use zgui_scene::{ChunkNote, ChunkPrims, PrimitiveKind, Scene};
 
-use crate::buffer::tables::{TEXEL, TEXELS_WIDE, allocate_rows, write_texels};
+use crate::buffer::tables::{TEXEL, TEXELS_WIDE, allocate_rows, row_limit, write_texels};
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
@@ -169,6 +169,8 @@ struct Arena {
     tail: u32,
     /// Reclaimed ranges, coalesced on insert, first-fit on allocation.
     free: Vec<Range<u32>>,
+    /// Whether the arena was once asked for more than a texture can hold, and said so.
+    overflowed: bool,
 }
 
 impl Arena {
@@ -190,7 +192,31 @@ impl Arena {
             generation: 1,
             tail: 0,
             free: Vec::new(),
+            overflowed: false,
         }
+    }
+
+    /// The most elements a texture on this device can hold.
+    fn limit(&self, gpu: &Gpu) -> u32 {
+        let texels = u64::from(row_limit(gpu)) * u64::from(TEXELS_WIDE);
+        (texels / u64::from(self.stride / TEXEL as u32)).min(u64::from(u32::MAX)) as u32
+    }
+
+    /// A range past the end of the arena, for a request the largest texture cannot hold.
+    ///
+    /// Nothing is written there, because a write is cut to the texture. A record read there is
+    /// zeros, so it draws nothing. The frame stays correct for everything the arena does hold.
+    fn past(&mut self, len: u32) -> Range<u32> {
+        if !std::mem::replace(&mut self.overflowed, true) {
+            tracing::error!(
+                arena = self.label,
+                capacity = self.capacity,
+                asked = len,
+                "an arena holds more records than a texture can; the records past the limit are \
+                 not drawn"
+            );
+        }
+        self.capacity..self.capacity.saturating_add(len)
     }
 
     /// Takes `len` contiguous elements, first from the free list, else from the tail.
@@ -228,6 +254,8 @@ impl Arena {
     /// that merged only one side fragmented toward one entry per chunk — with every allocation
     /// scanning all of them.
     fn free(&mut self, range: Range<u32>) {
+        // A range from [`Arena::past`] was never part of the arena.
+        let range = range.start.min(self.capacity)..range.end.min(self.capacity);
         if range.is_empty() {
             return;
         }
@@ -280,7 +308,14 @@ impl Arena {
         }
 
         let texels = self.stride / TEXEL as u32;
-        write_texels(gpu, belt, encoder, &self.texture, start * texels, &run);
+        write_texels(
+            gpu,
+            belt,
+            encoder,
+            &self.texture,
+            start.saturating_mul(texels),
+            &run,
+        );
         run.len() as u64
     }
 
@@ -292,7 +327,8 @@ impl Arena {
         let bytes = (u64::from(needed) * u64::from(self.stride))
             .next_power_of_two()
             .max(Self::MINIMUM_BYTES);
-        self.capacity = (bytes / u64::from(self.stride)) as u32;
+        // Never past what a texture on this device can hold. See [`Arena::past`].
+        self.capacity = ((bytes / u64::from(self.stride)) as u32).min(self.limit(gpu));
         let (texture, view) = allocate(gpu, self.label, self.capacity, self.stride);
         self.texture = texture;
         self.view = view;
@@ -680,12 +716,19 @@ impl ChunkStore {
         if let Some(range) = self.arenas[arena].alloc(count) {
             return range;
         }
+        // An arena at the largest texture of the device cannot grow. A growth there would upload
+        // everything resident again on every frame and still not fit the request.
+        if self.arenas[arena].capacity >= self.arenas[arena].limit(gpu) {
+            return self.arenas[arena].past(count);
+        }
         // Grow the arena and settle everything resident into the new texture, then take the range
-        // that now must fit.
+        // that now fits unless the growth reached the limit.
         *uploaded += self.grow(gpu, belt, encoder, arena, count);
-        self.arenas[arena]
-            .alloc(count)
-            .expect("the arena was grown for exactly this request")
+        let arena = &mut self.arenas[arena];
+        match arena.alloc(count) {
+            Some(range) => range,
+            None => arena.past(count),
+        }
     }
 
     /// Drops one hold on the payload under `key`, and retires its ranges when none is left.
@@ -753,9 +796,10 @@ impl ChunkStore {
                 if count == 0 || shared.ranges[kind].is_none() {
                     continue;
                 }
-                let range = arena
-                    .alloc(count)
-                    .expect("the arena was sized for everything resident");
+                let range = match arena.alloc(count) {
+                    Some(range) => range,
+                    None => arena.past(count),
+                };
                 let written = arena.upload(gpu, belt, encoder, range.start, bytes);
                 counter::add(Counter::MarksPayloadBytes, written);
                 uploaded += written;
@@ -770,9 +814,10 @@ impl ChunkStore {
             if count == 0 {
                 continue;
             }
-            let range = arena
-                .alloc(count)
-                .expect("the arena was sized for everything resident");
+            let range = match arena.alloc(count) {
+                Some(range) => range,
+                None => arena.past(count),
+            };
             uploaded += arena.upload(gpu, belt, encoder, range.start, bytes);
             resident.ranges[lane] = Some(range);
         }
@@ -815,15 +860,7 @@ impl ChunkStore {
                 })
                 .count() as u32;
             let transient_range = if transients > 0 {
-                match self.arenas[lane].alloc(transients) {
-                    Some(range) => range,
-                    None => {
-                        uploaded += self.grow(gpu, belt, encoder, lane, transients);
-                        self.arenas[lane]
-                            .alloc(transients)
-                            .expect("the arena was grown for exactly this request")
-                    }
-                }
+                self.alloc(gpu, belt, encoder, lane, transients, &mut uploaded)
             } else {
                 0..0
             };
@@ -910,15 +947,7 @@ impl ChunkStore {
                 continue;
             }
             let arena = payload_arena(kind);
-            *range = match self.arenas[arena].alloc(transient[kind]) {
-                Some(range) => range,
-                None => {
-                    uploaded += self.grow(gpu, belt, encoder, arena, transient[kind]);
-                    self.arenas[arena]
-                        .alloc(transient[kind])
-                        .expect("the arena was grown for exactly this request")
-                }
-            };
+            *range = self.alloc(gpu, belt, encoder, arena, transient[kind], &mut uploaded);
         }
         let mut gathered: [Vec<u8>; PAYLOAD_LANES] = Default::default();
         let mut placed = [0u32; PAYLOAD_LANES];
@@ -1009,4 +1038,61 @@ fn resident_slot(
 /// The frame array of `lane`, as bytes.
 fn lane_bytes(scene: &Scene, lane: usize) -> &[u8] {
     lane_slice!(scene.primitives, LANES[lane])
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_geom::{Scale, Size};
+    use zgui_render::RenderTarget;
+
+    use super::Arena;
+    use crate::Builder;
+    use crate::buffer::upload::UploadBelt;
+
+    #[test]
+    fn a_request_past_the_arena_is_written_nowhere_and_given_back_to_nothing() {
+        let target = RenderTarget::new(Size::new(16, 16), Scale::new(1.0));
+        let Ok(renderer) = Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
+        else {
+            return;
+        };
+        let gpu = renderer.gpu();
+        let mut arena = Arena::new(gpu, "zgui.test.arena", 112);
+        let held = arena
+            .alloc(arena.capacity)
+            .expect("an empty arena holds its capacity");
+
+        // What an arena at the largest texture of the device answers.
+        let past = arena.past(3);
+        assert_eq!(past.start, arena.capacity);
+
+        // The device refuses a copy outside a texture, and wgpu panics on a refusal nobody
+        // catches. So a submission that returns is a write that was cut.
+        let mut belt = UploadBelt::default();
+        belt.begin_frame();
+        let mut encoder = gpu
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        arena.upload(gpu, &mut belt, &mut encoder, past.start, &[0_u8; 3 * 112]);
+        // A run that starts inside the arena and ends past it keeps the part that fits.
+        arena.upload(
+            gpu,
+            &mut belt,
+            &mut encoder,
+            arena.capacity - 1,
+            &[0_u8; 3 * 112],
+        );
+        belt.finish();
+        gpu.queue().submit([encoder.finish()]);
+        belt.recall();
+        gpu.wait();
+
+        arena.free(past);
+        assert!(
+            arena.free.is_empty(),
+            "a range past the arena is no free range"
+        );
+        arena.free(held);
+        assert_eq!(arena.tail, 0, "the arena's own range still drains it");
+    }
 }

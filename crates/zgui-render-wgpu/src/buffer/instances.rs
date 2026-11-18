@@ -2,7 +2,7 @@
 
 use bytemuck::Pod;
 
-use crate::buffer::tables::{ROW, TEXEL, allocate_rows, write_texels};
+use crate::buffer::tables::{ROW, TEXEL, allocate_rows, row_limit, write_texels};
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 
@@ -26,6 +26,8 @@ pub struct InstanceTable {
     rows: u32,
     /// Changes whenever `texture` changes identity, for bind-group cache invalidation.
     generation: u64,
+    /// Whether a frame once held more records than a texture can, and the table said so.
+    overflowed: bool,
 }
 
 impl InstanceTable {
@@ -41,6 +43,7 @@ impl InstanceTable {
             label,
             rows: Self::MINIMUM_ROWS,
             generation: 1,
+            overflowed: false,
         }
     }
 
@@ -62,9 +65,22 @@ impl InstanceTable {
         let element = size_of::<T>();
         let stride = element.div_ceil(TEXEL) * TEXEL;
         let bytes = values.len() * stride;
-        let rows = (bytes.div_ceil(ROW) as u32).max(Self::MINIMUM_ROWS);
+        // A table past the row limit of the device keeps the records that fit. The write below is
+        // cut to the texture, and a record past it reads zeros and draws nothing.
+        let limit = row_limit(gpu);
+        let wanted = bytes.div_ceil(ROW).max(Self::MINIMUM_ROWS as usize);
+        if wanted > limit as usize && !std::mem::replace(&mut self.overflowed, true) {
+            tracing::error!(
+                table = self.label,
+                rows = wanted,
+                limit,
+                "a frame holds more records than a texture can; the records past the limit are \
+                 not drawn"
+            );
+        }
+        let rows = wanted.min(limit as usize) as u32;
         if rows > self.rows {
-            self.rows = rows.next_power_of_two();
+            self.rows = rows.next_power_of_two().min(limit);
             let (texture, view) = allocate_rows(gpu, self.label, self.rows);
             self.texture = texture;
             self.view = view;
