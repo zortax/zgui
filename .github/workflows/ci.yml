@@ -232,6 +232,24 @@ jobs:
       - name: Check the browser target
         run: cargo check --target wasm32-unknown-unknown -p zgui -p zgui-ui
 
+  web:
+    # Builds an example for a browser: compile for wasm32, generate the bindings, write the page.
+    # It does not open a browser. It catches a bindings generator that no longer matches the
+    # lock file, and a link failure the type check of the cross job cannot see.
+    name: Browser build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the bindings generator the lock file pins
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build the hello example
+        run: cargo xtask web build hello --dev
+      - name: Test the translation that needs no browser
+        run: cargo test -p zgui-platform-web
+
   llvmpipe:
     # Runs the tests on a software Vulkan driver. Disabled: a debug build of the workspace fills
     # the runner disk before the tests start.
