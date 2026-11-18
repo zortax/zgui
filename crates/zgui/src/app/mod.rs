@@ -60,7 +60,22 @@ pub fn desktop() -> Driver {
     if wayland_wanted() {
         return zgui_platform_wayland::run;
     }
-    zgui_platform_winit::run
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        zgui_platform_winit::run
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        no_desktop
+    }
+}
+
+/// The driver on a target that has no desktop backend yet.
+#[cfg(target_arch = "wasm32")]
+fn no_desktop(_handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
+    Err(PlatformError::Backend(
+        "this target has no platform backend".to_owned(),
+    ))
 }
 
 /// Whether this program should speak to a compositor directly.
