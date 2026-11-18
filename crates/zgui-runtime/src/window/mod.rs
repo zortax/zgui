@@ -35,7 +35,7 @@ mod value;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_bits::DamageSet;
 use zgui_dom::Document;

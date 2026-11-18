@@ -1,6 +1,6 @@
 //! What a frame is handed, and what it may ask for.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, Rect, Size};
@@ -138,7 +138,7 @@ impl<F: FnMut(&mut FrameCx<'_>)> Pipeline for F {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     use super::Requests;
 

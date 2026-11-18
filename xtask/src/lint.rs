@@ -13,7 +13,7 @@
 //! produces an unused import: the only test that names it is a debug-build test.
 //!
 //! So both profiles run, over the whole workspace and every target in it, and `-D warnings` makes
-//! either one fatal. The second is cheap — clippy emits metadata rather than machine code, and the
+//! either one fatal. A third and a fourth run lint what a browser build links, for `wasm32`. The second is cheap — clippy emits metadata rather than machine code, and the
 //! two runs cache separately and do not invalidate each other, so a repeat costs seconds.
 //!
 //! [`PROFILES`] is the whole of the wiring, and every clippy invocation in this xtask goes through
@@ -35,8 +35,26 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     for profile in PROFILES {
         each(root, profile, &["--workspace", "--all-targets"])?;
     }
+    for profile in PROFILES {
+        each(root, profile, &BROWSER)?;
+    }
     Ok(())
 }
+
+/// What a browser build links, linted for the browser target.
+///
+/// The browser backend is an empty crate on a native target, and the crates above it take
+/// different paths on `wasm32`, so the workspace run sees none of that code.
+const BROWSER: [&str; 8] = [
+    "--target",
+    "wasm32-unknown-unknown",
+    "-p",
+    "zgui-platform-web",
+    "-p",
+    "zgui",
+    "-p",
+    "zgui-ui",
+];
 
 /// Lints one member's `target` test target with `feature` turned on, in both profiles.
 ///

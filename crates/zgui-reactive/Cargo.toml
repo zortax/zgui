@@ -18,6 +18,7 @@ include.workspace = true
 # wrapped in exactly one place. `reactive_graph`'s `effects` feature is forced from the workspace
 # manifest: without it every effect compiles, runs and silently never re-runs.
 [dependencies]
+web-time.workspace = true
 any_spawner.workspace = true
 futures.workspace = true
 reactive_graph.workspace = true

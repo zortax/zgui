@@ -12,6 +12,7 @@ use zgui_platform::{ClipboardFormat, DecorationSource, PlatformCapabilities};
 pub fn of(offered: Offered) -> PlatformCapabilities {
     let mut capabilities = PlatformCapabilities::none();
     capabilities.native_popup_surfaces = true;
+    capabilities.window_controls = true;
     capabilities.layer_surfaces = offered.layer_shell;
     // Receiving a drop is the data device's, so it arrives with the clipboard. What arrives is
     // always paths: a drag of anything else carries something no file system can open, and this

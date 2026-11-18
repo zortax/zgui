@@ -52,6 +52,7 @@ mod tsan;
 mod verify;
 mod wall_clock;
 mod wayland;
+mod web;
 mod workloads;
 
 use std::process::ExitCode;
@@ -98,6 +99,10 @@ fn main() -> ExitCode {
         Command::LedgerSelfTest => ledger::self_test::run(&root),
         Command::Wayland { args } => wayland::run(&root, &args),
         Command::Tsan => tsan::run(&root),
+        Command::Web { build, serve } => match serve {
+            Some(port) => web::serve(&root, &build, port),
+            None => web::build(&root, &build).map(|_| ()),
+        },
         Command::NewCrate { name, layer } => new_crate::run(&root, &name, layer),
         Command::Help => {
             println!("{}", cli::USAGE);

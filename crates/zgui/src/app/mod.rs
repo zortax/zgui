@@ -2,12 +2,18 @@
 
 pub mod fonts;
 mod graphics;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use zgui_platform::{AppHandler, Decorations, PlatformError};
 use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 pub use crate::app::fonts::Fonts;
+#[cfg(target_arch = "wasm32")]
+pub use crate::app::web::Mounted;
+#[cfg(target_arch = "wasm32")]
+pub use zgui_platform_web::{Mount, enable_accessibility};
 
 /// Shaping text outside the paragraph pipeline: the shaper [`Fonts::shaper`] answers with, what one
 /// line is asked for in, the OpenType settings on top of that, and what the resolved face measures.
@@ -60,7 +66,22 @@ pub fn desktop() -> Driver {
     if wayland_wanted() {
         return zgui_platform_wayland::run;
     }
-    zgui_platform_winit::run
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        zgui_platform_winit::run
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        no_desktop
+    }
+}
+
+/// The driver on a target with no desktop. A browser application starts with [`App::mount`].
+#[cfg(target_arch = "wasm32")]
+fn no_desktop(_handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
+    Err(PlatformError::Backend(
+        "a browser has no desktop to block on; start the application with `App::mount`".to_owned(),
+    ))
 }
 
 /// Whether this program should speak to a compositor directly.
@@ -554,12 +575,48 @@ impl App {
     ///
     /// Returns whatever stopped it: a desktop that would not open a window, a machine with no
     /// usable graphics device, or an executor slot another asynchronous runtime already holds.
+    ///
+    /// # In a browser
+    ///
+    /// A page gives a program no thread to block, so on `wasm32` this function starts the
+    /// application on a canvas that fills the page and returns `Ok(())` at once. A failure to
+    /// start goes to the page's console. `App::mount` is the entry point that reports it to the
+    /// caller, and the one that takes a canvas of the page.
     pub fn run<F, V>(self, view: F) -> Result<(), AppError>
     where
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
-        self.run_on(desktop(), view)
+        #[cfg(target_arch = "wasm32")]
+        {
+            web::start(self, view);
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.run_on(desktop(), view)
+        }
+    }
+
+    /// Starts the application in a page and resolves when the page drives it.
+    ///
+    /// `mount` names the canvas: one of the page, or a new one that fills the viewport. The page
+    /// sets the size of its own canvas with CSS, and [`App::with_size`] does not change it. The
+    /// future opens the graphics device, which a browser does through a promise, so the caller
+    /// awaits it. A page runs one application at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Platform`] when the canvas does not exist or the page already runs an
+    /// application, and [`AppError::GpuUnavailable`] when the browser offers neither WebGPU nor
+    /// WebGL 2. An error after the start goes to the page's console.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn mount<F, V>(self, mount: Mount, view: F) -> Result<Mounted, AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        web::mount(self, mount, view).await
     }
 
     /// The same, over a platform backend of the caller's choosing.

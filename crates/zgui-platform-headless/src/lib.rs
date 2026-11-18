@@ -22,7 +22,7 @@
 //! /// An application that asks to be woken once, seven hundred milliseconds from now.
 //! #[derive(Default)]
 //! struct Delayed {
-//!     deadline: Option<std::time::Instant>,
+//!     deadline: Option<web_time::Instant>,
 //!     frames: u32,
 //! }
 //!

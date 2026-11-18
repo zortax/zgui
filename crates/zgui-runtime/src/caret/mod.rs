@@ -15,7 +15,7 @@ pub mod blink;
 pub mod place;
 
 use std::hash::{Hash, Hasher};
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_color::Color;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};

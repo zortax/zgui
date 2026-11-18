@@ -15,7 +15,7 @@ pub(crate) mod share;
 pub mod snapshots;
 pub mod traversal;
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use rayon::ThreadPool;
 use style::animation::DocumentAnimationSet;

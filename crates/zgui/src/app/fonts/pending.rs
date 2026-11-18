@@ -47,6 +47,7 @@ impl Pending {
     }
 
     /// Starts building this machine's collection, and returns before it is built.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn system() -> Self {
         // A machine that will not start a thread still has to be able to draw text, so the work
         // happens here instead and the only thing lost is the overlap.

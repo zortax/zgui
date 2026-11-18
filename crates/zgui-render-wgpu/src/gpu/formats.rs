@@ -137,8 +137,9 @@ pub fn choose(
 /// The surface format, in preference order, and what has to be done about its encoding.
 ///
 /// `Bgra8Unorm` first because it is what Linux compositors hand out and it avoids a swizzle;
-/// `Rgba8Unorm` next; then any other unencoded format the surface offers. Only when every offered
-/// format is encoded does a fallback tier apply.
+/// `Rgba8Unorm` next; then any other unencoded format the surface offers. In a browser, the one of
+/// those two that the canvas offers first. Only when every offered format is encoded does a
+/// fallback tier apply.
 fn choose_surface_format(
     formats: &[wgpu::TextureFormat],
     mutable_texture_formats: bool,
@@ -147,6 +148,13 @@ fn choose_surface_format(
         wgpu::TextureFormat::Bgra8Unorm,
         wgpu::TextureFormat::Rgba8Unorm,
     ];
+    // A browser lists the format its compositor shows without a copy first, and that format
+    // differs between machines. The offered order says nothing on a native surface.
+    if cfg!(target_arch = "wasm32")
+        && let Some(first) = formats.iter().find(|format| preferred.contains(format))
+    {
+        return (*first, SrgbTier::Native);
+    }
     for candidate in preferred {
         if formats.contains(&candidate) {
             return (candidate, SrgbTier::Native);

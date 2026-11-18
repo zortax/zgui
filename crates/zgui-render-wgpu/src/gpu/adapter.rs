@@ -22,8 +22,9 @@ pub const BACKENDS_VARIABLE: &str = "ZGUI_BACKENDS";
 
 /// The backends enumerated when nothing restricts them.
 ///
-/// Each platform has one primary — Metal on Apple, DX12 on Windows, Vulkan elsewhere — and GL
-/// rides along as the fallback for a machine whose primary has no working driver. wgpu reaches
+/// Each platform has one primary — Metal on Apple, DX12 on Windows, WebGPU in a browser, Vulkan
+/// elsewhere — and GL rides along as the fallback for a machine whose primary has no working
+/// driver. In a browser GL is WebGL 2. wgpu reaches
 /// GL through EGL, which Apple platforms do not ship, so the Apple set is Metal alone. GL is
 /// enumerated only after the primary has failed — see [`tiers`].
 pub fn default_backends() -> wgpu::Backends {
@@ -35,7 +36,11 @@ pub fn default_backends() -> wgpu::Backends {
     {
         wgpu::Backends::DX12 | wgpu::Backends::GL
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
+    #[cfg(target_arch = "wasm32")]
+    {
+        wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_arch = "wasm32")))]
     {
         wgpu::Backends::VULKAN | wgpu::Backends::GL
     }
@@ -189,7 +194,8 @@ pub fn parse_backends(value: &str) -> wgpu::Backends {
             "vulkan" => backends |= wgpu::Backends::VULKAN,
             "metal" => backends |= wgpu::Backends::METAL,
             "dx12" | "d3d12" => backends |= wgpu::Backends::DX12,
-            "gl" | "gles" | "opengl" => backends |= wgpu::Backends::GL,
+            "gl" | "gles" | "opengl" | "webgl" | "webgl2" => backends |= wgpu::Backends::GL,
+            "webgpu" => backends |= wgpu::Backends::BROWSER_WEBGPU,
             "all" => backends |= default_backends(),
             _ => {}
         }

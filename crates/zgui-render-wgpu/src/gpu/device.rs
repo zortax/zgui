@@ -47,6 +47,32 @@ fn memory_hints() -> wgpu::MemoryHints {
     }
 }
 
+/// What a device on `adapter` is asked for.
+///
+/// Derived once and read by every path that opens a device. The hal path creates the device
+/// itself, so a feature set or a limit set of its own would give a device capabilities the
+/// ordinary path never grants, with nothing anywhere to report the difference.
+fn descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    let limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+        // Clamped to the adapter's own values, because the downlevel set asks for compute
+        // limits a GL 3.3 context reports zero for. `request_device` refuses a limit set as a
+        // whole, so asking for one number the adapter cannot meet costs the device — and with
+        // it the coverage rasteriser, which is the very thing such a context is for.
+        wgpu::Limits::downlevel_defaults()
+            .using_resolution(adapter.limits())
+            .or_worse_values_from(&adapter.limits())
+    } else {
+        adapter.limits()
+    };
+    wgpu::DeviceDescriptor {
+        label: Some("zgui.device"),
+        required_features: optional_features() & adapter.features(),
+        required_limits: limits,
+        memory_hints: memory_hints(),
+        ..Default::default()
+    }
+}
+
 /// A device, its queue, the adapter they came from and the instance behind all three.
 ///
 /// One of these per graphics device, shared by every surface drawn on it — which is what
@@ -117,28 +143,7 @@ impl Gpu {
         adapter: wgpu::Adapter,
         extensions: &[&'static CStr],
     ) -> Result<Self, String> {
-        let info = adapter.get_info();
-        let limits = if info.backend == wgpu::Backend::Gl {
-            // Clamped to the adapter's own values, because the downlevel set asks for compute
-            // limits a GL 3.3 context reports zero for. `request_device` refuses a limit set as a
-            // whole, so asking for one number the adapter cannot meet costs the device — and with
-            // it the coverage rasteriser, which is the very thing such a context is for.
-            wgpu::Limits::downlevel_defaults()
-                .using_resolution(adapter.limits())
-                .or_worse_values_from(&adapter.limits())
-        } else {
-            adapter.limits()
-        };
-        // Derived once and read by both paths. The hal path creates the device itself, so a
-        // feature set or a limit set of its own would give a device capabilities the ordinary path
-        // never grants, with nothing anywhere to report the difference.
-        let descriptor = wgpu::DeviceDescriptor {
-            label: Some("zgui.device"),
-            required_features: optional_features() & adapter.features(),
-            required_limits: limits,
-            memory_hints: memory_hints(),
-            ..Default::default()
-        };
+        let descriptor = descriptor(&adapter);
         let (device, queue, extensions) = match extensions::open(&adapter, extensions, &descriptor)
         {
             Some(opened) => opened,
@@ -149,18 +154,59 @@ impl Gpu {
                 (device, queue, Vec::new())
             }
         };
+        Ok(Self::opened(instance, adapter, device, queue, extensions))
+    }
 
-        // Registered outside the match, so that a device from either arm has it. A device opened
-        // through the hal reports a loss the same way, and one with no watcher would go on drawing
-        // into a dead device with nothing to notice it. No test would see an arm that lost this:
-        // the suite injects a loss through `DeviceLoss::report`, because a real one cannot be
-        // provoked.
+    /// Opens a device on `adapter` and does not block the thread while the request resolves.
+    ///
+    /// A browser resolves a device request only after the caller returns to its event loop, so a
+    /// browser build awaits this function where a native build calls [`Gpu::open`]. The device
+    /// has the features and limits [`Gpu::open`] asks for. No Vulkan device extension is enabled.
+    ///
+    /// `subpixel_text` says whether text may be drawn with per-channel coverage, which needs to
+    /// know that the display has three stripes for each pixel and which way they run. A page
+    /// cannot ask, so its caller decides: without it the device does not get dual-source
+    /// blending, and text has one coverage for each pixel.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message `request_device` refused with.
+    pub async fn open_async(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        subpixel_text: bool,
+    ) -> Result<Self, String> {
+        let mut descriptor = descriptor(&adapter);
+        if !subpixel_text {
+            descriptor
+                .required_features
+                .remove(wgpu::Features::DUAL_SOURCE_BLENDING);
+        }
+        let (device, queue) = adapter
+            .request_device(&descriptor)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Self::opened(instance, adapter, device, queue, Vec::new()))
+    }
+
+    /// The handle for a device this crate opened, with its loss watcher installed.
+    fn opened(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        extensions: Vec<&'static CStr>,
+    ) -> Self {
+        // Registered here, so that a device from every path has it. A device opened through the
+        // hal reports a loss the same way, and one with no watcher would go on drawing into a dead
+        // device with nothing to notice it. No test would see a path that lost this: the suite
+        // injects a loss through `DeviceLoss::report`, because a real one cannot be provoked.
         let loss = Arc::new(DeviceLoss::new());
         let watcher = Arc::clone(&loss);
         device.set_device_lost_callback(move |reason, message| watcher.report(reason, &message));
 
         let capabilities = probe(&adapter, &device);
-        Ok(Self {
+        Self {
             instance,
             adapter,
             device,
@@ -169,7 +215,7 @@ impl Gpu {
             extensions,
             loss,
             adopted: false,
-        })
+        }
     }
 
     /// Adopts a device that a host opened, with its queue, adapter and instance.

@@ -19,6 +19,7 @@ include.workspace = true
 # decision the layers below deliberately leave open and an application should not have to make
 # before its first line of interface.
 [dependencies]
+web-time.workspace = true
 # The tile store, the display list and the damage set: an application that draws through a device
 # this framework has no backend for implements the renderer contract, and cannot do that without
 # naming what its methods take.
@@ -34,7 +35,6 @@ zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 # wrapper lives with the layout algorithms that call it.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
-zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
 zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
@@ -98,6 +98,14 @@ workspace = true
 # start-up by whether a Wayland display exists.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 zgui-platform-wayland = { path = "../zgui-platform-wayland", version = "0.1.0" }
+
+# The portable desktop backend. A browser has its own backend, so wasm32 does not link winit.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
+
+# The browser backend. An application draws into a canvas of a page there.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+zgui-platform-web = { path = "../zgui-platform-web", version = "0.1.0" }
 
 # The `tokio` feature adds public API.
 [package.metadata.docs.rs]

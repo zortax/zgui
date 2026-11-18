@@ -4849,6 +4849,7 @@ dependencies = [
  "thiserror 2.0.19",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-emscripten",
+ "wgpu-core-deps-wasm",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
  "wgpu-naga-bridge",
@@ -4869,6 +4870,15 @@ name = "wgpu-core-deps-emscripten"
 version = "30.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55ccf093bd215ae9dc4f96df293e675513ac1f2569f8293a2911cc34ca3505d1"
+dependencies = [
+ "wgpu-hal",
+]
+
+[[package]]
+name = "wgpu-core-deps-wasm"
+version = "30.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d260ca2ca8adc654f513a869bf3cac0b47f5b8d3f87803d6942015f8de597aae"
 dependencies = [
  "wgpu-hal",
 ]
@@ -5583,6 +5593,7 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
+ "web-time",
  "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
@@ -5593,6 +5604,7 @@ dependencies = [
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-platform-wayland",
+ "zgui-platform-web",
  "zgui-platform-winit",
  "zgui-profile",
  "zgui-reactive",
@@ -5956,6 +5968,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
  "tracing",
+ "web-time",
  "zgui-arena",
  "zgui-bits",
  "zgui-css",
@@ -5986,6 +5999,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.19",
  "tracing",
+ "web-time",
  "zeno",
  "zgui-arena",
  "zgui-atlas",
@@ -6015,6 +6029,7 @@ dependencies = [
  "accesskit",
  "raw-window-handle",
  "thiserror 2.0.19",
+ "web-time",
  "zgui-geom",
  "zgui-vocab",
 ]
@@ -6049,6 +6064,7 @@ name = "zgui-platform-headless"
 version = "0.1.0"
 dependencies = [
  "accesskit",
+ "web-time",
  "zgui-geom",
  "zgui-platform",
  "zgui-vocab",
@@ -6089,6 +6105,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-platform-web"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "js-sys",
+ "log",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "zgui-geom",
+ "zgui-platform",
+ "zgui-vocab",
+]
+
+[[package]]
 name = "zgui-platform-winit"
 version = "0.1.0"
 dependencies = [
@@ -6123,6 +6156,7 @@ version = "0.1.0"
 dependencies = [
  "tracing",
  "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]
@@ -6138,6 +6172,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tracing",
  "trybuild",
+ "web-time",
 ]
 
 [[package]]
@@ -6145,6 +6180,7 @@ name = "zgui-render"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.19",
+ "web-time",
  "zgui-atlas",
  "zgui-bits",
  "zgui-color",
@@ -6213,6 +6249,7 @@ dependencies = [
  "naga",
  "rustc-hash 2.1.3",
  "tracing",
+ "web-time",
  "wgpu",
  "zgui-atlas",
  "zgui-bits",
@@ -6232,6 +6269,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
  "tracing",
+ "web-time",
  "zgui-a11y",
  "zgui-anim",
  "zgui-arena",
@@ -6274,6 +6312,7 @@ dependencies = [
  "proptest",
  "rustc-hash 2.1.3",
  "smallvec",
+ "web-time",
  "zgui-arena",
  "zgui-atlas",
  "zgui-bits",
@@ -6355,6 +6394,7 @@ dependencies = [
  "stylo",
  "stylo_dom",
  "tracing",
+ "web-time",
  "zgui-bits",
  "zgui-css",
  "zgui-dom",
@@ -6383,6 +6423,7 @@ name = "zgui-testkit-scene"
 version = "0.1.0"
 dependencies = [
  "smallvec",
+ "web-time",
  "zgui-atlas",
  "zgui-bits",
  "zgui-color",

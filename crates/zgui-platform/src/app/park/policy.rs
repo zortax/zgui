@@ -1,6 +1,6 @@
 //! The park state machine itself.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::app::idle::IdlePolicy;
 
@@ -58,7 +58,7 @@ impl Parked {
 /// all. There is no arm in which it is quietly forgotten.
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use web_time::{Duration, Instant};
 /// use zgui_platform::{IdlePolicy, Install, Park, Parked};
 ///
 /// let mut park = Park::new();
@@ -177,7 +177,7 @@ impl Park {
 mod tests {
     use super::{Install, Park, Parked};
     use crate::app::idle::IdlePolicy;
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     #[test]
     fn a_deadline_in_the_future_is_installed_as_itself() {

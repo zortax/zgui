@@ -36,7 +36,9 @@ struct ShaderParams {
     hovered: f32,
     // Unused, and present so the application's half begins on a sixteen-byte boundary.
     reserved: f32,
-    user: Params,
+    // Sized to the whole block the host writes, whatever the effect declares. The structure is
+    // then a multiple of sixteen bytes, which a uniform block has to be on WebGL 2.
+    @size(64) user: Params,
 }
 
 @group(1) @binding(0) var<uniform> shader_params: ShaderParams;

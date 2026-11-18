@@ -1,6 +1,6 @@
 //! An application that records what it was told, which is what a scripted test needs.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::app::{AppHandler, IdlePolicy, WakeReason};
 use crate::cx::PlatformCx;

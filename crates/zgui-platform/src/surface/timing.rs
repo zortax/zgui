@@ -1,6 +1,6 @@
 //! When a surface's frames reach the screen, and who decides that they do.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// Who waits for the display.
 ///
@@ -68,7 +68,7 @@ impl PresentationTiming {
     /// went stale while the loop was parked usable again rather than discarded.
     ///
     /// ```
-    /// use std::time::{Duration, Instant};
+    /// use web_time::{Duration, Instant};
     /// use zgui_platform::PresentationTiming;
     ///
     /// let now = Instant::now();
@@ -96,7 +96,7 @@ impl PresentationTiming {
 #[cfg(test)]
 mod tests {
     use super::{PresentPacing, PresentationTiming};
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     #[test]
     fn a_platform_that_says_nothing_predicts_nothing() {

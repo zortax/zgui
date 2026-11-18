@@ -57,12 +57,19 @@ usage:
                                       `ci` runs it without building the packages
   cargo xtask ledger [check]          run every ledger check, or just one of
                                       engines, unsafe, attribution, versions, pinned,
-                                      counters, skips, clock, mutation, inert, tag-syntax
+                                      counters, skips, clock, browser-clock, mutation, inert, tag-syntax
   cargo xtask ledger --self-test      prove every check fails on its planted fixture
   cargo xtask wayland [args]          run the Wayland backend's compositor tests on a
                                       nested headless sway; `args` go to `cargo test`
   cargo xtask tsan                    run the thread sanitiser over the threaded targets,
                                       and its positive control, which must fire
+  cargo xtask web build <example>     build an example for a browser into target/web/<example>;
+                                      `--package <name>` names the package that holds it
+                                      (default zgui-examples), `--dev` builds unoptimised,
+                                      `--font <file>` names a font the page preloads (the
+                                      default is this machine's sans-serif and monospace)
+  cargo xtask web serve <example>     build it, then serve it on http://127.0.0.1:8080/<example>/;
+                                      `--port <n>` changes the port
   cargo xtask new-crate <name> --layer <L0..L8>
                                       stamp out a workspace member that already passes the ledgers
   cargo xtask help                    print this text";
@@ -126,6 +133,13 @@ pub(crate) enum Command {
     },
     /// Run the thread sanitiser over the threaded targets and its positive control.
     Tsan,
+    /// Build an example for a browser, and optionally serve it.
+    Web {
+        /// What to build.
+        build: crate::web::Build,
+        /// The port to serve on, or `None` to build only.
+        serve: Option<u16>,
+    },
     /// Create a new workspace member from the template.
     NewCrate {
         /// The crate name, which is also its directory name under `crates/`.
@@ -187,10 +201,59 @@ impl Command {
                 args: args.map(str::to_owned).collect(),
             }),
             Some("tsan") => Ok(Self::Tsan),
+            Some("web") => parse_web(args),
             Some("new-crate") => parse_new_crate(args),
             Some(other) => Err(format!("unknown command `{other}`")),
         }
     }
+}
+
+/// Parses `web build|serve <example> [--package <name>] [--dev] [--font <file>] [--port <n>]`.
+fn parse_web<'a>(mut args: impl Iterator<Item = &'a str>) -> Result<Command, String> {
+    let serving = match args.next() {
+        Some("build") => false,
+        Some("serve") => true,
+        Some(other) => return Err(format!("unknown web command `{other}`")),
+        None => return Err("web needs `build` or `serve`".to_owned()),
+    };
+    let mut example = None;
+    let mut package = "zgui-examples".to_owned();
+    let mut dev = false;
+    let mut fonts = Vec::new();
+    let mut port = 8080;
+    while let Some(argument) = args.next() {
+        match argument {
+            "--package" => {
+                package = args
+                    .next()
+                    .ok_or_else(|| "--package needs a name".to_owned())?
+                    .to_owned();
+            }
+            "--dev" => dev = true,
+            "--font" => fonts.push(
+                args.next()
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| "--font needs a file".to_owned())?,
+            ),
+            "--port" => {
+                port = args
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .ok_or_else(|| "--port needs a number".to_owned())?;
+            }
+            name if !name.starts_with('-') && example.is_none() => example = Some(name.to_owned()),
+            other => return Err(format!("unknown web option `{other}`")),
+        }
+    }
+    Ok(Command::Web {
+        build: crate::web::Build {
+            example: example.ok_or_else(|| "web needs an example name".to_owned())?,
+            package,
+            dev,
+            fonts,
+        },
+        serve: serving.then_some(port),
+    })
 }
 
 /// Parses `new-crate <name> --layer <layer>`.
