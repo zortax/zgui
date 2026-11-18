@@ -103,5 +103,9 @@ zgui-platform-wayland = { path = "../zgui-platform-wayland", version = "0.1.0" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 
+# The browser backend. An application draws into a canvas of a page there.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+zgui-platform-web = { path = "../zgui-platform-web", version = "0.1.0" }
+
 [package.metadata.docs.rs]
 features = ["tokio"]
