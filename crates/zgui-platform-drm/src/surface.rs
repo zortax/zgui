@@ -166,6 +166,11 @@ impl Surface for DrmSurface {
         1.0
     }
 
+    /// Returns the layout the kernel states for the display.
+    fn subpixel_layout(&self) -> zgui_platform::SubpixelLayout {
+        self.output.subpixel
+    }
+
     /// Returns the mode's rate, which the kernel's timings give to the millihertz.
     fn refresh_rate_millihertz(&self) -> Option<u32> {
         // Zero is a mode whose timings give no rate at all, which is absent rather than infinitely
