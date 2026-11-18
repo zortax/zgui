@@ -94,8 +94,12 @@ pub fn plan_segments(
         backdrop_reach(scene, &batches)
     };
     // What this frame replaces outright, which is what decides whether a rectangle needs erasing.
+    // A cover is its fill inset by a pixel, so no cover contains the whole surface, and a frame
+    // that redraws everything does not look for one.
     let mut opaque = Vec::new();
-    scene.opaque_covers(&mut opaque);
+    if !damage.is_full() {
+        scene.opaque_covers(&mut opaque);
+    }
     for rect in rects {
         plan_rect(
             &mut builder,
