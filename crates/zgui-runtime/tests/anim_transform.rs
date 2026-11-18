@@ -604,6 +604,9 @@ const OUTLASTED_CSS: &str = "root { display: block; width: 400px; height: 300px 
 fn a_transform_that_ends_before_a_colour_stays_at_its_end() {
     use zgui_reactive::prelude::*;
 
+    // This case reads no counter, and its transition places the bar. The counters are one set
+    // for the process, so it holds the lock for the cases that count placements.
+    let _guard = measuring();
     let on = zgui_reactive::RwSignal::new(false);
     let mut harness = support::app(OUTLASTED_CSS, move |cx: &mut BuildCx<'_>| {
         let view = zgui_elements::column().class("root").child(
