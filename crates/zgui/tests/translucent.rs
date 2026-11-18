@@ -43,6 +43,8 @@ struct Frame {
     subpixel: usize,
     /// How many glyphs were emitted with ordinary coverage.
     mono: usize,
+    /// Whether the device can blend per-channel coverage.
+    capable: bool,
 }
 
 /// What one run recorded.
@@ -90,8 +92,13 @@ impl Renderer for Recording {
             pixels,
             subpixel: scene.primitives.subpixel_sprites.len(),
             mono: scene.primitives.mono_sprites.len(),
+            capable: self.renderer.capabilities().subpixel_text,
         });
         outcome
+    }
+
+    fn set_subpixel_order(&mut self, order: zgui::render::SubpixelOrder) {
+        Renderer::set_subpixel_order(&mut self.renderer, order);
     }
 
     fn register_external(
@@ -136,6 +143,11 @@ static DEVICE: Mutex<()> = Mutex::new(());
 
 /// Runs the document in a window that is transparent or not, and returns what it recorded.
 fn run(transparent: bool) -> Record {
+    run_with(transparent, zgui::TextAntialiasing::Auto)
+}
+
+/// Runs the document with a stated text antialiasing, and returns what it recorded.
+fn run_with(transparent: bool, antialiasing: zgui::TextAntialiasing) -> Record {
     let _device = DEVICE.lock().unwrap_or_else(|held| held.into_inner());
     let record = Arc::new(Mutex::new(Record::default()));
     let factory_record = Arc::clone(&record);
@@ -168,6 +180,7 @@ fn run(transparent: bool) -> Record {
         .with_title("translucent")
         .with_size(WIDTH as f32, HEIGHT as f32)
         .with_transparent(transparent)
+        .with_text_antialiasing(antialiasing)
         .with_stylesheet(SHEET)
         .with_renderer(Box::new(factory))
         .run_on(drive, || {
@@ -251,4 +264,26 @@ fn an_opaque_window_keeps_opaque_targets() {
         frame.mono + frame.subpixel > 0,
         "the label reached the display list"
     );
+}
+
+/// The stated antialiasing decides the coverage of an opaque window on a device that can blend
+/// per-channel coverage.
+#[test]
+fn an_opaque_window_draws_the_coverage_its_antialiasing_states() {
+    if !available() || std::env::var_os("ZGUI_TEXT_AA").is_some() {
+        return;
+    }
+    let grey = run_with(false, zgui::TextAntialiasing::Grayscale);
+    let frame = grey.frames.last().expect("the window drew a frame");
+    assert!(frame.mono > 0, "the label reached the display list");
+    assert_eq!(frame.subpixel, 0, "grayscale text has no per-channel glyph");
+
+    let striped = run_with(false, zgui::TextAntialiasing::Rgb);
+    let frame = striped.frames.last().expect("the window drew a frame");
+    if frame.capable {
+        assert!(frame.subpixel > 0, "the label has per-channel coverage");
+        assert_eq!(frame.mono, 0, "no glyph of the label has ordinary coverage");
+    } else {
+        eprintln!("skipped: the device draws no per-channel coverage");
+    }
 }

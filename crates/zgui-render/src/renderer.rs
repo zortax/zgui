@@ -64,6 +64,15 @@ pub trait Renderer {
         false
     }
 
+    /// States which way round the subpixels of the display run, for text drawn with one coverage
+    /// for each colour channel.
+    ///
+    /// The caller damages the whole surface when the order changes. Nothing by default, which is
+    /// correct for a renderer that draws no such text.
+    fn set_subpixel_order(&mut self, order: crate::SubpixelOrder) {
+        let _ = order;
+    }
+
     /// Whether the picture composed before the last [`Renderer::configure`] is still there to draw
     /// over.
     ///

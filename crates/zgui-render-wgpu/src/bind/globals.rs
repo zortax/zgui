@@ -2,6 +2,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use zgui_geom::{Device, Point, Size};
+pub use zgui_render::SubpixelOrder;
 use zgui_scene::FrameClock;
 
 use crate::target::scale::TargetScale;
@@ -96,19 +97,6 @@ impl Globals {
         self.frame = clock.to_lane();
         self
     }
-}
-
-/// Which way round a display's subpixels run.
-///
-/// It decides which channel of a per-channel coverage tile is which, and getting it backwards
-/// puts a colour fringe on the wrong side of every stroke.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SubpixelOrder {
-    /// Red, green, blue — the overwhelmingly common arrangement.
-    #[default]
-    RedToBlue,
-    /// Blue, green, red.
-    BlueToRed,
 }
 
 #[cfg(test)]

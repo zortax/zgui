@@ -23,6 +23,10 @@ impl Renderer for WgpuRenderer {
         self.gpu.capabilities()
     }
 
+    fn set_subpixel_order(&mut self, order: zgui_render::SubpixelOrder) {
+        WgpuRenderer::set_subpixel_order(self, order);
+    }
+
     fn configure(&mut self, target: RenderTarget) {
         // A change of scale or of opacity changes what every composed pixel means, and moves no
         // allocation that would otherwise say so. A change of size alone keeps the composed target

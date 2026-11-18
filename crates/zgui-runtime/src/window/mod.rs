@@ -30,6 +30,7 @@ mod secure;
 mod select;
 mod sheets;
 mod surface_focus;
+pub mod text_aa;
 mod value;
 
 use std::cell::{Cell, RefCell};
@@ -450,6 +451,11 @@ pub struct Window {
     /// every frame it paints, because text with per-channel coverage has no meaning over a
     /// destination that is not opaque.
     translucent: bool,
+    /// How this window antialiases its text.
+    text_antialiasing: text_aa::TextAntialiasing,
+    /// The stripe order the last frame drew per-channel text coverage for, or `None` when it drew
+    /// one coverage for each pixel.
+    subpixel_order: Option<zgui_render::SubpixelOrder>,
     /// Whether the surface is entirely hidden.
     occluded: bool,
     /// Whether the surface is the one receiving the keyboard.
@@ -804,6 +810,8 @@ impl Window {
             scale,
             scheme: viewport.scheme,
             translucent: false,
+            text_antialiasing: text_aa::TextAntialiasing::default(),
+            subpixel_order: None,
             occluded: false,
             surface_focused: true,
             menu_keys: crate::desktop::MenuKeys::default(),
@@ -1356,6 +1364,19 @@ impl Window {
             self.translucent = translucent;
             self.reconfigure = true;
         }
+    }
+
+    /// States how this window antialiases its text, from the next frame on.
+    pub fn set_text_antialiasing(&mut self, antialiasing: text_aa::TextAntialiasing) {
+        if self.text_antialiasing != antialiasing {
+            self.text_antialiasing = antialiasing;
+            self.request_frame();
+        }
+    }
+
+    /// Returns how this window antialiases its text.
+    pub fn text_antialiasing(&self) -> text_aa::TextAntialiasing {
+        self.text_antialiasing
     }
 
     /// Returns `true` where this window is drawn translucent.
