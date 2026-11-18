@@ -39,7 +39,9 @@
 //! cache was trimmed.
 
 use std::cell::RefCell;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -51,6 +53,39 @@ use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::ContentCache;
 
 use crate::replaced::IntrinsicTable;
+
+/// Reads the bytes a `src` names, where a file system cannot.
+///
+/// The reader answers later, on the UI thread: a page reads a URL through a promise.
+pub type SourceReader = Rc<dyn Fn(String) -> SourceRead>;
+
+/// One read of a `src` in flight: the bytes, or why they could not be read.
+pub type SourceRead = Pin<Box<dyn Future<Output = Result<Vec<u8>, String>>>>;
+
+thread_local! {
+    /// The reader every window of this thread loads an image `src` through, once one is set.
+    static READER: RefCell<Option<SourceReader>> = const { RefCell::new(None) };
+}
+
+/// Routes every image `src` that is not registered bytes through `reader`.
+///
+/// Without a reader a `src` is a path on disk. A platform with no file system sets one: in a
+/// browser a `src` is a URL, and the reader fetches it. The reader serves every window made on
+/// this thread afterwards.
+pub fn set_source_reader(reader: SourceReader) {
+    READER.with(|held| *held.borrow_mut() = Some(reader));
+}
+
+/// The bytes `src` names, read through the reader that is set, if one is.
+fn read_source(src: &str) -> Option<SourceRead> {
+    let reader = READER.with(|held| held.borrow().clone())?;
+    Some(reader(src.to_owned()))
+}
+
+/// The error of a reader that could not produce the bytes.
+fn unread(reason: String) -> zgui_image::DecodeError {
+    zgui_image::DecodeError::Io(std::io::Error::other(reason))
+}
 
 /// What one `src` string names.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -975,6 +1010,18 @@ fn intrinsic_of(native: Size<u32, Device>) -> Intrinsic {
 /// the blocking pool. The wake edge when it finishes is what requests the frame whose settle will
 /// apply the result.
 fn kick_probe(key: SourceKey, completed: DecodeQueue) {
+    if let SourceKey::Path(src) = &key
+        && let Some(read) = read_source(src)
+    {
+        zgui_reactive::spawn_local(async move {
+            let result = match read.await {
+                Ok(bytes) => zgui_reactive::blocking(move || zgui_image::probe(&bytes)).await,
+                Err(reason) => Err(unread(reason)),
+            };
+            completed.borrow_mut().push((key, Arrival::Probe(result)));
+        });
+        return;
+    }
     let work = match &key {
         SourceKey::Path(path) => {
             let path = PathBuf::from(path);
@@ -1007,6 +1054,25 @@ fn kick_decode(key: SourceKey, class: Class, completed: DecodeQueue, limits: zgu
         };
         DecodedVariant { decoded, mips }
     };
+    if let SourceKey::Path(src) = &key
+        && let Some(read) = read_source(src)
+    {
+        zgui_reactive::spawn_local(async move {
+            let result = match read.await {
+                Ok(bytes) => {
+                    zgui_reactive::blocking(move || {
+                        zgui_image::decode_scaled(&bytes, class, limits).map(with_levels)
+                    })
+                    .await
+                }
+                Err(reason) => Err(unread(reason)),
+            };
+            completed
+                .borrow_mut()
+                .push((key, Arrival::Variant(class, result)));
+        });
+        return;
+    }
     let work = match &key {
         SourceKey::Path(path) => {
             let path = PathBuf::from(path);

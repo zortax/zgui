@@ -112,6 +112,7 @@ pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;
 pub use crate::grab::{ClearedGuard, FocusGrab};
 pub use crate::host::RuntimeHost;
+pub use crate::images::{SourceRead, SourceReader, set_source_reader};
 pub use crate::lock::{LockError, LockHandle, SessionLock};
 pub use crate::monitors::{try_use_monitors, use_monitors};
 pub use crate::probe::FrameProbe;
