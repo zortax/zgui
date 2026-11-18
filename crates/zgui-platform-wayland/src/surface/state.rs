@@ -170,6 +170,8 @@ pub(crate) struct Shared {
     pub(crate) pending_configure: Option<Pending>,
     /// The outputs the compositor says the surface is on.
     pub(crate) outputs: Vec<WlOutput>,
+    /// How the colour stripes of those outputs are arranged.
+    pub(crate) subpixel: zgui_platform::SubpixelLayout,
     /// The output a shell layer was opened on, when the application named one.
     pub(crate) bound: Option<WlOutput>,
     /// Whether an output the surface was bound to or on has gone.
@@ -232,6 +234,7 @@ impl Shared {
             bounds: (None, None),
             pending_configure: None,
             outputs: Vec::new(),
+            subpixel: zgui_platform::SubpixelLayout::Unknown,
             bound: None,
             output_lost: false,
             layer: None,

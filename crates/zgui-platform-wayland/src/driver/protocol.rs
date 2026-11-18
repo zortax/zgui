@@ -345,6 +345,13 @@ impl WaylandState {
             .filter_map(|output| self.outputs.info(output))
             .collect();
         let sharpest = output::mode::sharpest(infos.iter());
+        // The layout of the stripes changes what every glyph looks like and moves no extent, so
+        // a change asks for a frame of its own.
+        let layout =
+            zgui_platform::SubpixelLayout::across(infos.iter().map(output::mode::subpixel));
+        if std::mem::replace(&mut held.shared().subpixel, layout) != layout {
+            zgui_platform::Surface::request_redraw(&*held);
+        }
         self.scale_changed(id, |ladder| ladder.outputs(sharpest));
     }
 
