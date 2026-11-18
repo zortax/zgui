@@ -192,4 +192,31 @@ impl Device {
             },
         )
     }
+
+    /// Returns `true` where a display is plugged into this card.
+    ///
+    /// A machine with two cards can have the screen on either one, and a card with nothing plugged
+    /// in lights nothing however well it draws. So a caller choosing between cards asks this.
+    ///
+    /// A card this answers `false` for can still be the right one to draw with. The question is
+    /// what the card *displays*, and a machine that renders on one card and scans out on another
+    /// asks it only of the second.
+    ///
+    /// Reading a connector needs no DRM master, so this can be asked before a card is taken.
+    ///
+    /// A connector that cannot be read is skipped. A connector can go away between the two
+    /// requests, for example when a dock is unplugged, and the other connectors still answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the list of
+    /// connectors, and [`Error::Unusable`](crate::Error::Unusable) when the counts kept moving.
+    pub fn has_a_display(&self) -> Result<bool> {
+        Ok(self
+            .resources()?
+            .connectors
+            .into_iter()
+            .filter_map(|id| self.connector(id).ok())
+            .any(|connector| connector.is_connected()))
+    }
 }

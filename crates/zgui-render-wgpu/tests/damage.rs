@@ -393,6 +393,71 @@ fn a_backdrop_with_a_small_or_zero_blur_is_redrawn_without_a_seam() {
     }
 }
 
+/// A page, three rectangles, an opaque panel over them, and a translucent rectangle at `x` on the
+/// panel.
+fn covered(x: f32) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let solid = |scene: &mut Scene, bounds: (f32, f32, f32, f32), color: zgui_color::Color| {
+        let paint = scene.paints.add(zgui_scene::Paint::Solid(color));
+        scene.push_quad(Quad::filled(
+            rect(bounds.0, bounds.1, bounds.2, bounds.3),
+            paint,
+        ));
+    };
+    solid(
+        &mut scene,
+        (0.0, 0.0, SIDE as f32, SIDE as f32),
+        opaque(255, 255, 255),
+    );
+    solid(&mut scene, (10.0, 10.0, 60.0, 30.0), opaque(200, 30, 30));
+    solid(&mut scene, (40.0, 30.0, 60.0, 50.0), opaque(30, 160, 30));
+    solid(&mut scene, (20.0, 70.0, 80.0, 40.0), opaque(240, 200, 20));
+    solid(&mut scene, (16.0, 16.0, 96.0, 96.0), opaque(20, 40, 160));
+    solid(
+        &mut scene,
+        (x, 48.0, 20.0, 20.0),
+        zgui_color::Color::srgb_u8(255, 255, 255, 128),
+    );
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+#[test]
+fn a_rectangle_under_an_opaque_fill_is_redrawn_to_the_frame_drawn_whole() {
+    // The replay of a damage rectangle starts at the latest opaque fill that covers it. The fill
+    // here is the fifth quad, so the erasure and four quads are left out, and the translucent
+    // rectangle blends with the fill alone.
+    let Some((mut tracked, mut whole_surface)) = support::renderer_pair() else {
+        return;
+    };
+    let mut covers = Vec::new();
+    covered(30.0).opaque_covers(&mut covers);
+    assert!(
+        covers.iter().any(|cover| cover.at == 4),
+        "the fixture's panel is not an opaque cover: {covers:?}"
+    );
+
+    present(&mut tracked, &covered(30.0));
+    for step in 1..6 {
+        let (was, is) = (30.0 + 6.0 * (step - 1) as f32, 30.0 + 6.0 * step as f32);
+        let mut damage: DamageSet = DamageSet::new();
+        damage.absorb(whole(rect(was, 48.0, 20.0, 20.0)));
+        damage.absorb(whole(rect(is, 48.0, 20.0, 20.0)));
+        let outcome = tracked.draw(&covered(is), &damage);
+        assert!(outcome.retires_damage(), "{outcome:?}");
+        let damaged = tracked
+            .read_presented()
+            .expect("a stand-in surface can be read back");
+        let full = present(&mut whole_surface, &covered(is));
+        assert_eq!(
+            damaged.max_difference(&full),
+            0,
+            "step {step}: the rectangle under the fill differs from the frame drawn whole"
+        );
+    }
+}
+
 #[test]
 fn nothing_outside_a_damage_rectangle_is_touched() {
     // The mechanism, rather than the outcome: a frame whose damage names one corner has to leave

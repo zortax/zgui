@@ -27,11 +27,32 @@ struct Quad {
     paint_origin: Vector2,
 }
 
-@group(1) @binding(0) var<storage, read> quads: array<Quad>;
-// The draw-order permutation: the instance array keeps push order, and a draw's instance
-// range walks this list.
-@group(1) @binding(1) var<storage, read> remap: array<u32>;
-@group(1) @binding(2) var<storage, read> chunk_offsets: array<vec2<f32>>;
+@group(1) @binding(0) var quads: texture_2d<u32>;
+
+/// One `Quad`, which the arena pads to 7 texels.
+fn load_quad(slot: u32) -> Quad {
+    let base = slot * 7u;
+    let t0 = textureLoad(quads, table_texel(base + 0u), 0);
+    let t1 = textureLoad(quads, table_texel(base + 1u), 0);
+    let t2 = textureLoad(quads, table_texel(base + 2u), 0);
+    let t3 = textureLoad(quads, table_texel(base + 3u), 0);
+    let t4 = textureLoad(quads, table_texel(base + 4u), 0);
+    let t5 = textureLoad(quads, table_texel(base + 5u), 0);
+    let t6 = textureLoad(quads, table_texel(base + 6u), 0);
+    return Quad(
+        t0.x,
+        t0.y,
+        Bounds(bitcast<f32>(t0.z), bitcast<f32>(t0.w), bitcast<f32>(t1.x), bitcast<f32>(t1.y)),
+        Radii(bitcast<f32>(t1.z), bitcast<f32>(t1.w), bitcast<f32>(t2.x), bitcast<f32>(t2.y), bitcast<f32>(t2.z), bitcast<f32>(t2.w), bitcast<f32>(t3.x), bitcast<f32>(t3.y)),
+        Edges(bitcast<f32>(t3.z), bitcast<f32>(t3.w), bitcast<f32>(t4.x), bitcast<f32>(t4.y)),
+        PaintRef(t4.z, t4.w),
+        PaintRef(t5.x, t5.y),
+        t5.z,
+        t5.w,
+        bitcast<f32>(t6.x),
+        Vector2(bitcast<f32>(t6.y), bitcast<f32>(t6.z)),
+    );
+}
 
 const BORDER_SOLID: u32 = 0u;
 const BORDER_DASHED: u32 = 1u;
@@ -41,26 +62,49 @@ struct QuadVarying {
     @builtin(position) position: vec4<f32>,
     // The point, from the quad's origin in the space it was encoded in.
     @location(0) local: vec2<f32>,
-    @location(1) @interpolate(flat) instance: u32,
     // The quad's origin in that space.
-    @location(2) @interpolate(flat) origin: vec2<f32>,
+    @location(1) @interpolate(flat) origin: vec2<f32>,
+    // The record the fragment stage used to read again, carried across instead.
+    @location(2) @interpolate(flat) v_bounds: vec4<f32>,
+    @location(3) @interpolate(flat) v_radii_lo: vec4<f32>,
+    @location(4) @interpolate(flat) v_radii_hi: vec4<f32>,
+    @location(5) @interpolate(flat) v_border: vec4<f32>,
+    @location(6) @interpolate(flat) v_origin_shape: vec4<f32>,
+    @location(7) @interpolate(flat) v_refs: vec4<u32>,
+    // The style, the clip, how many rounded tests the clip has, and the system it is measured in.
+    @location(8) @interpolate(flat) v_ids: vec4<u32>,
+    // The clip's own box, and the fill's colour where the fill is one colour. Both are properties
+    // of the primitive rather than of the pixel, and both were read at every fragment: the box to
+    // reject a fragment outside the clip, the colour to shade every fragment inside it.
+    @location(9) @interpolate(flat) v_clip_box: vec4<f32>,
+    @location(10) @interpolate(flat) v_fill: vec4<f32>,
 }
 
 @vertex
 fn vs_quad(
     @builtin(vertex_index) vertex: u32,
-    @builtin(instance_index) instance: u32,
+    @location(0) slot: u32,
+    @location(1) shift: vec2<f32>,
 ) -> QuadVarying {
-    let packed = remap[instance];
-    let slot = packed & REMAP_SLOT_MASK;
-    let shift = chunk_offsets[packed >> REMAP_OFFSET_SHIFT];
-    let quad = quads[slot];
+    let quad = load_quad(slot);
     let local = inflated_corner(vertex, quad.bounds) + shift;
     var out: QuadVarying;
     out.position = to_clip_position(local, quad.transform);
     out.local = inflated_offset(vertex, quad.bounds);
-    out.instance = slot;
     out.origin = bounds_origin(quad.bounds);
+    out.v_bounds = bounds_of(quad.bounds);
+    out.v_radii_lo = radii_lo(quad.radii);
+    out.v_radii_hi = radii_hi(quad.radii);
+    out.v_border = vec4<f32>(quad.border.top, quad.border.right, quad.border.bottom, quad.border.left);
+    out.v_origin_shape = vec4<f32>(quad.paint_origin.x, quad.paint_origin.y, quad.shape, 0.0);
+    out.v_refs = vec4<u32>(quad.fill.kind, quad.fill.index, quad.stroke.kind, quad.stroke.index);
+    out.v_ids = vec4<u32>(quad.style, quad.clip, clip_count(quad.clip), clip_space(quad.clip));
+    out.v_clip_box = bounds_of(clip_aabb(quad.clip));
+    var fill = vec4<f32>(0.0);
+    if quad.fill.kind == PAINT_SOLID {
+        fill = rgba_of(load_paint(quad.fill.index).color);
+    }
+    out.v_fill = fill;
     return out;
 }
 
@@ -69,16 +113,46 @@ fn fs_quad(in: QuadVarying) -> @location(0) vec4<f32> {
     // How long one device pixel is in the primitive's own space. Read before any branch, because
     // a derivative is only defined where every fragment of the quad takes it.
     let unit = max(max(fwidth(in.local).x, fwidth(in.local).y), 1e-6);
-    let quad = quads[in.instance];
+    let quad = Quad(
+        0u,
+        in.v_ids.x,
+        bounds_from_vec4(in.v_bounds),
+        radii_from_vec4(in.v_radii_lo, in.v_radii_hi),
+        Edges(in.v_border.x, in.v_border.y, in.v_border.z, in.v_border.w),
+        PaintRef(in.v_refs.x, in.v_refs.y),
+        PaintRef(in.v_refs.z, in.v_refs.w),
+        in.v_ids.y,
+        0u,
+        in.v_origin_shape.z,
+        Vector2(in.v_origin_shape.x, in.v_origin_shape.y),
+    );
     // The clip is in device space, so it is evaluated at the real pixel; the shape is in the
-    // primitive's own space, so it is evaluated at the point that maps to this pixel.
-    let clip = clip_coverage(device_position(in.position.xy), quad.clip);
+    // primitive's own space, so it is evaluated at the point that maps to this pixel. The box and
+    // the count of rounded tests came across from the vertex stage, so an unclipped rectangle
+    // tests the box it was handed and reads no table here at all.
+    let at = device_position(in.position.xy);
+    if outside_bounds(at, bounds_from_vec4(in.v_clip_box)) {
+        return vec4<f32>(0.0);
+    }
+    var clip = 1.0;
+    if in.v_ids.w != NO_SPACE {
+        // A clip measured in a system of its own needs the kept part, which only the table holds.
+        // That reads the box a second time, which is the price of the case that has one.
+        clip = clip_coverage(at, quad.clip);
+    } else if in.v_ids.z > 0u {
+        clip = clip_rounded_coverage(at, quad.clip, in.v_ids.z);
+    }
     if clip <= 0.0 {
         return vec4<f32>(0.0);
     }
     let point = in.origin + in.local;
     let paint_origin = vec2<f32>(quad.paint_origin.x, quad.paint_origin.y);
-    let background = paint_color(quad.fill, point, paint_origin);
+    // One colour came across with the vertices. A gradient still resolves per fragment, because
+    // that genuinely varies across the primitive.
+    var background = in.v_fill;
+    if quad.fill.kind != PAINT_SOLID {
+        background = paint_color(quad.fill, point, paint_origin);
+    }
 
     let size = bounds_size(quad.bounds);
     let half_size = size * 0.5;
@@ -203,7 +277,7 @@ fn sides_color(
     widths: vec2<f32>,
     unit: f32,
 ) -> vec4<f32> {
-    let paint = paints[reference.index];
+    let paint = load_paint(reference.index);
     let vertical = side_color(paint, select(1u, 3u, center_to_point.x < 0.0));
     let horizontal = side_color(paint, select(2u, 0u, center_to_point.y < 0.0));
     var toward_vertical = 0.0;

@@ -63,9 +63,12 @@ retain damage because no work was recorded.
 
 A renderer that has to be given the buffer it composes into — one drawing straight into what a
 display scans out of — asks for that buffer *before* it composes. A frame refused there recorded
-nothing, so it reports `Unacquired` and keeps its damage. `Timeout` is the same refusal met after
-composing, where the target does hold the frame's pixels. Report the one that matches where your
-renderer stopped.
+nothing, so it reports `Unacquired` and keeps its damage. A refusal met after composing has two
+words, and the target holds the frame's pixels for both. `Declined` is a display answering at once,
+because the buffer it would take is still on its way to the screen. `Timeout` is an acquisition that
+blocked for as long as the graphics API allows; the runtime reads a run of those as a surface nobody
+is consuming and probes at a growing distance, so a decline reported as one costs the window its
+frame rate. Report the one that matches where your renderer stopped and what it waited for.
 
 Three skip reasons also say *do not ask for another frame*: `Occluded`, `Undamaged`, and
 `DeviceUnavailable`. A platform event wakes an occluded window. A new frame cannot improve an

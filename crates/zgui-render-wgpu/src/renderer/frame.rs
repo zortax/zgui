@@ -8,9 +8,11 @@ use crate::bind::globals::Globals;
 use bytemuck::Pod;
 
 use crate::bind::tables::{DirtySlots, PreparedTables};
-use crate::buffer::instances::StorageBuffer;
-use crate::buffer::persist::{LANES, PAYLOAD_LANES};
+use crate::buffer::instances::{InstanceTable, OrderBuffer};
+use crate::buffer::persist::OrderEntry;
+use crate::buffer::persist::{LANES, MARKS_LANE, PAYLOAD_LANES};
 use crate::buffer::slots::SlotBuffer;
+use crate::buffer::tables::TableTexture;
 use crate::buffer::upload::UploadBelt;
 use crate::buffer::vectors::VectorInstances;
 use crate::gpu::device::Gpu;
@@ -45,28 +47,34 @@ pub struct FrameBuffers {
     /// One quad per vector composite this frame draws.
     pub vectors: VectorInstances,
     /// The clip chains.
-    pub clips: StorageBuffer,
+    pub clips: TableTexture,
     /// The paint sources.
-    pub paints: StorageBuffer,
+    pub paints: TableTexture,
     /// Every ramp's stops.
-    pub stops: StorageBuffer,
+    pub stops: TableTexture,
     /// The coordinate systems.
-    pub spatial: StorageBuffer,
+    pub spatial: TableTexture,
     /// The persistent chunk arenas the six instanced pipelines draw out of, and the residence
     /// over them.
     pub chunks: crate::buffer::persist::ChunkStore,
-    /// The resolved remap of each instanced kind — packed offset-and-slot entries in draw order.
-    pub remaps: [StorageBuffer; LANES.len()],
-    /// What each remap buffer holds, so an unchanged frame skips the upload entirely.
-    last_remaps: [Vec<u32>; LANES.len()],
-    /// The frame's chunk offsets, named by the high bits of a remap entry.
-    offsets: StorageBuffer,
-    /// What the offsets buffer holds, so a frame that moved nothing skips the upload.
-    last_offsets: Vec<[f32; 2]>,
+    /// The resolved draw order of each instanced kind, as the vertex stream carries it.
+    pub orders: [OrderBuffer; LANES.len()],
+    /// The mark lane's draw order, as a table it can index.
+    ///
+    /// The other lanes are fed the order as vertex input. A mark cannot be: its instances are its
+    /// payload's items and its draw names its *position* in the order, so it needs random access,
+    /// and a table is how a GL 3.3 context gives that. The mark lane's `orders` entry stays empty
+    /// for the same reason — nothing fetches it.
+    mark_order: InstanceTable,
+    /// What each order buffer holds, so an unchanged frame skips the upload entirely.
+    last_orders: [Vec<OrderEntry>; LANES.len()],
     /// Bind groups whose resources are the stable frame side-table buffers.
     frame_bind: RefCell<Option<([u64; 5], wgpu::BindGroup)>>,
-    /// One bind group per lane, keyed by its instance, remap and offset allocation epochs.
-    instance_binds: RefCell<[Keyed<3>; LANES.len()]>,
+    /// One bind group per lane, keyed by its arena's and its order's allocation epochs.
+    ///
+    /// Two epochs, where there were three: the chunk offsets are resolved into the order stream
+    /// on the host, so nothing binds them any more.
+    instance_binds: RefCell<[Keyed<2>; LANES.len()]>,
     /// One bind group per mark payload kind, keyed by its block and payload allocation epochs.
     mark_binds: RefCell<[Keyed<2>; PAYLOAD_LANES]>,
     /// The bind groups draws read a block, a texture and a sampler through.
@@ -102,24 +110,23 @@ impl FrameBuffers {
             effect_offsets: Vec::new(),
             mark_draws: SlotBuffer::new::<crate::pipeline::marks::MarkDraw>(gpu, "zgui.mark_draws"),
             vectors: VectorInstances::new(gpu),
-            clips: StorageBuffer::new(gpu, "zgui.clips"),
-            paints: StorageBuffer::new(gpu, "zgui.paints"),
-            stops: StorageBuffer::new(gpu, "zgui.stops"),
-            spatial: StorageBuffer::new(gpu, "zgui.spatial"),
+            clips: TableTexture::new(gpu, "zgui.clips"),
+            paints: TableTexture::new(gpu, "zgui.paints"),
+            stops: TableTexture::new(gpu, "zgui.stops"),
+            spatial: TableTexture::new(gpu, "zgui.spatial"),
             chunks: crate::buffer::persist::ChunkStore::new(gpu),
-            remaps: [
-                StorageBuffer::new(gpu, "zgui.remap.quads"),
-                StorageBuffer::new(gpu, "zgui.remap.shadows"),
-                StorageBuffer::new(gpu, "zgui.remap.decorations"),
-                StorageBuffer::new(gpu, "zgui.remap.mono_sprites"),
-                StorageBuffer::new(gpu, "zgui.remap.subpixel_sprites"),
-                StorageBuffer::new(gpu, "zgui.remap.color_sprites"),
-                StorageBuffer::new(gpu, "zgui.remap.shaded"),
-                StorageBuffer::new(gpu, "zgui.remap.marks"),
+            orders: [
+                OrderBuffer::new(gpu, "zgui.order.quads"),
+                OrderBuffer::new(gpu, "zgui.order.shadows"),
+                OrderBuffer::new(gpu, "zgui.order.decorations"),
+                OrderBuffer::new(gpu, "zgui.order.mono_sprites"),
+                OrderBuffer::new(gpu, "zgui.order.subpixel_sprites"),
+                OrderBuffer::new(gpu, "zgui.order.color_sprites"),
+                OrderBuffer::new(gpu, "zgui.order.shaded"),
+                OrderBuffer::new(gpu, "zgui.order.marks"),
             ],
-            last_remaps: Default::default(),
-            offsets: StorageBuffer::new(gpu, "zgui.remap.offsets"),
-            last_offsets: Vec::new(),
+            mark_order: InstanceTable::new(gpu, "zgui.mark_order"),
+            last_orders: Default::default(),
             frame_bind: RefCell::new(None),
             instance_binds: RefCell::default(),
             mark_binds: RefCell::default(),
@@ -132,8 +139,8 @@ impl FrameBuffers {
     }
 
     /// Releases every block staged for the previous frame and reclaims completed upload chunks.
-    pub fn begin_frame(&mut self, gpu: &Gpu) {
-        self.uploader.begin_frame(gpu);
+    pub fn begin_frame(&mut self) {
+        self.uploader.begin_frame();
         self.globals.reset();
         self.blocks.reset();
         self.effect_params.reset();
@@ -159,24 +166,18 @@ impl FrameBuffers {
         let tables = self.prepared.tables();
         let mut uploaded = if self.tables_released {
             self.tables_released = false;
-            let mut uploaded = self
-                .clips
-                .upload(gpu, &mut self.uploader, encoder, &tables.clips);
-            uploaded += self
-                .paints
-                .upload(gpu, &mut self.uploader, encoder, &tables.paints);
-            uploaded += self
-                .stops
-                .upload(gpu, &mut self.uploader, encoder, &tables.stops);
-            uploaded += self
-                .spatial
-                .upload(gpu, &mut self.uploader, encoder, &tables.spatial);
+            let belt = &mut self.uploader;
+            let mut uploaded = self.clips.upload(gpu, belt, encoder, &tables.clips);
+            uploaded += self.paints.upload(gpu, belt, encoder, &tables.paints);
+            uploaded += self.stops.upload(gpu, belt, encoder, &tables.stops);
+            uploaded += self.spatial.upload(gpu, belt, encoder, &tables.spatial);
             uploaded
         } else {
             let dirty = self.prepared.dirty();
+            let belt = &mut self.uploader;
             let mut uploaded = upload_dirty(
                 gpu,
-                &mut self.uploader,
+                belt,
                 encoder,
                 &mut self.clips,
                 &tables.clips,
@@ -184,7 +185,7 @@ impl FrameBuffers {
             );
             uploaded += upload_dirty(
                 gpu,
-                &mut self.uploader,
+                belt,
                 encoder,
                 &mut self.paints,
                 &tables.paints,
@@ -192,7 +193,7 @@ impl FrameBuffers {
             );
             uploaded += upload_dirty(
                 gpu,
-                &mut self.uploader,
+                belt,
                 encoder,
                 &mut self.stops,
                 &tables.stops,
@@ -200,7 +201,7 @@ impl FrameBuffers {
             );
             uploaded += upload_dirty(
                 gpu,
-                &mut self.uploader,
+                belt,
                 encoder,
                 &mut self.spatial,
                 &tables.spatial,
@@ -215,24 +216,21 @@ impl FrameBuffers {
         uploaded += self
             .chunks
             .upload_frame(gpu, &mut self.uploader, encoder, scene);
-        for (lane, buffer) in self.remaps.iter_mut().enumerate() {
-            let resolved = self.chunks.resolved_remap(lane);
+        for (lane, buffer) in self.orders.iter_mut().enumerate() {
+            let resolved = self.chunks.resolved_order(lane);
             // A frame whose visible set and residence held still resolves to the same list — a
             // blink, an animation elsewhere — and owes the buffer nothing.
-            if resolved == self.last_remaps[lane].as_slice() {
+            if resolved == self.last_orders[lane].as_slice() {
                 continue;
             }
-            uploaded += buffer.upload(gpu, &mut self.uploader, encoder, resolved);
-            self.last_remaps[lane].clear();
-            self.last_remaps[lane].extend_from_slice(resolved);
-        }
-        let offsets = self.chunks.frame_offsets();
-        if offsets != self.last_offsets.as_slice() {
-            uploaded += self
-                .offsets
-                .upload(gpu, &mut self.uploader, encoder, offsets);
-            self.last_offsets.clear();
-            self.last_offsets.extend_from_slice(offsets);
+            uploaded += if lane == MARKS_LANE {
+                self.mark_order
+                    .upload(gpu, &mut self.uploader, encoder, resolved)
+            } else {
+                buffer.upload(gpu, &mut self.uploader, encoder, resolved)
+            };
+            self.last_orders[lane].clear();
+            self.last_orders[lane].extend_from_slice(resolved);
         }
         uploaded += self.globals.upload_with(gpu, &mut self.uploader, encoder);
         uploaded += self.blocks.upload_with(gpu, &mut self.uploader, encoder);
@@ -478,7 +476,8 @@ impl FrameBuffers {
             + self.stops.capacity()
             + self.spatial.capacity()
             + self.chunks.bytes()
-            + self.remaps.iter().map(StorageBuffer::capacity).sum::<u64>()
+            + self.orders.iter().map(OrderBuffer::capacity).sum::<u64>()
+            + self.mark_order.capacity()
             + self.uploader.bytes()
     }
 
@@ -492,10 +491,12 @@ impl FrameBuffers {
         freed += self.spatial.shrink(gpu);
         self.tables_released = true;
         freed += self.chunks.release(gpu);
-        for (lane, remap) in self.remaps.iter_mut().enumerate() {
-            freed += remap.shrink(gpu);
-            self.last_remaps[lane].clear();
+        for (lane, order) in self.orders.iter_mut().enumerate() {
+            freed += order.shrink(gpu);
+            self.last_orders[lane].clear();
         }
+        // The mark lane's order is a table of its own, and it is released with the others.
+        freed += self.mark_order.shrink(gpu);
         freed += self.uploader.release_idle();
         *self.frame_bind.borrow_mut() = None;
         *self.instance_binds.borrow_mut() = Default::default();
@@ -570,12 +571,7 @@ impl FrameBuffers {
         layouts: &Layouts,
         lane: usize,
     ) -> Option<wgpu::BindGroup> {
-        let remap = self.remaps.get(lane)?;
-        let signature = [
-            self.chunks.generation(lane),
-            remap.generation(),
-            self.offsets.generation(),
-        ];
+        let signature = [self.chunks.generation(lane), self.mark_order.generation()];
         if let Some((held, bind)) = self.instance_binds.borrow().get(lane)?
             && *held == signature
         {
@@ -591,11 +587,7 @@ impl FrameBuffers {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: remap.binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.offsets.binding(),
+                    resource: self.mark_order.binding(),
                 },
             ],
         });
@@ -705,7 +697,7 @@ fn upload_dirty<T: Pod>(
     gpu: &Gpu,
     belt: &mut UploadBelt,
     encoder: &mut wgpu::CommandEncoder,
-    buffer: &mut StorageBuffer,
+    table: &mut TableTexture,
     values: &[T],
     dirty: &DirtySlots,
 ) -> u64 {
@@ -717,7 +709,7 @@ fn upload_dirty<T: Pod>(
         .count()
         + usize::from(!dirty.slots.is_empty());
     if dirty.all || dirty.slots.len().saturating_mul(2) >= values.len() || ranges > MAX_RANGES {
-        return buffer.upload(gpu, belt, encoder, values);
+        return table.upload(gpu, belt, encoder, values);
     }
     let mut uploaded = 0;
     let mut slots = dirty.slots.iter().copied().peekable();
@@ -726,7 +718,7 @@ fn upload_dirty<T: Pod>(
         while slots.next_if_eq(&end).is_some() {
             end += 1;
         }
-        uploaded += buffer.upload_range(gpu, belt, encoder, values, first as usize, end as usize);
+        uploaded += table.upload_range(gpu, belt, encoder, values, first as usize, end as usize);
     }
     uploaded
 }

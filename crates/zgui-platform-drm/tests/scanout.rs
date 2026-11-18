@@ -14,6 +14,7 @@
 //! ledger ignored` prescribes for a test that cannot be switched off. Run it on a free virtual
 //! terminal to make it assert anything.
 
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use zgui_bits::DamageSet;
@@ -38,21 +39,49 @@ const DEADLINE: Duration = Duration::from_secs(2);
 /// How long the wait sleeps between reads of the device.
 const POLL: Duration = Duration::from_millis(2);
 
+/// The environment variable that names one device to test against.
+///
+/// [`Device::open_first_with`] sorts `/dev/dri/card*` and opens the first that answers, which is
+/// the right default and the wrong thing on a machine whose screen hangs off the second card. A
+/// card with no display plugged in asserts nothing here, so this is how the one with the screen on
+/// it is named rather than hoped for. `zgui-drm`'s own tests read the same name.
+const DEVICE: &str = "ZGUI_DRM_DEVICE";
+
+/// Returns the device to test against, or nothing.
+///
+/// [`DEVICE`] names one where it is set, and the first card that answers where it is not.
+fn open(test: &str) -> Option<Device> {
+    let named = std::env::var_os(DEVICE).map(PathBuf::from);
+    let opened = match &named {
+        Some(path) => Device::open_with(path, Interface::Preferred),
+        None => Device::open_first_with(Interface::Preferred),
+    };
+
+    match opened {
+        Ok(device) => Some(device),
+        Err(error) => {
+            match &named {
+                Some(path) => eprintln!(
+                    "{test}: {DEVICE} names {}, which does not open, so nothing was asserted: \
+                     {error}",
+                    path.display()
+                ),
+                None => eprintln!(
+                    "{test}: no DRM device on this machine, so nothing was asserted: {error}\n\
+                     load the virtual driver with `sudo modprobe vkms` to run it"
+                ),
+            }
+            None
+        }
+    }
+}
+
 /// Returns a device this process is DRM master of, or nothing.
 ///
-/// Two ways to get nothing, and each says which it was: no device at all, and a device somebody
-/// else is driving.
+/// Three ways to get nothing, and each says which it was: no device to open, a named device that
+/// does not open, and a device somebody else is driving.
 fn master(test: &str) -> Option<Device> {
-    let device = match Device::open_first_with(Interface::Preferred) {
-        Ok(device) => device,
-        Err(error) => {
-            eprintln!(
-                "{test}: no DRM device on this machine, so nothing was asserted: {error}\n\
-                 load the virtual driver with `sudo modprobe vkms` to run it"
-            );
-            return None;
-        }
-    };
+    let device = open(test)?;
     if let Err(error) = device.become_master() {
         eprintln!(
             "{test}: this process is not DRM master, so nothing was asserted: {error}\n\
@@ -275,15 +304,8 @@ fn a_display_that_never_presented_has_nothing_to_put_back() {
     // This needs no master, and that is the assertion: a `restore` that committed anyway would be
     // refused with `EPERM` here and the result below would be an error rather than `false`.
     let test = "a_display_that_never_presented_has_nothing_to_put_back";
-    let device = match Device::open_first_with(Interface::Preferred) {
-        Ok(device) => device,
-        Err(error) => {
-            eprintln!(
-                "{test}: no DRM device on this machine, so nothing was asserted: {error}\n\
-                 load the virtual driver with `sudo modprobe vkms` to run it"
-            );
-            return;
-        }
+    let Some(device) = open(test) else {
+        return;
     };
     let outputs = Output::discover(&device).expect("the device is readable");
     let Some(output) = outputs.first() else {

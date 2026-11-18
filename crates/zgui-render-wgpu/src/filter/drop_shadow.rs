@@ -20,14 +20,15 @@ use crate::pipeline::composite::CompositeParams;
 pub fn plan(
     builder: &mut PlanBuilder<'_>,
     source: TargetRef,
-    region: Rect<i32, Device>,
+    output: Rect<i32, Device>,
+    valid: Rect<i32, Device>,
     offset: (f32, f32),
     deviation: f32,
     color: [f32; 4],
 ) -> Option<ShadowLayer> {
-    let blurred = blur::plan(builder, source, region, deviation)?;
+    let blurred = blur::plan(builder, source, output, valid, deviation)?;
     let params = CompositeParams::new(
-        region.to_unit(),
+        output.to_unit(),
         builder.extent_of(blurred.target),
         blurred.target.scale(),
         blurred.target.origin(),
