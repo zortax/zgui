@@ -16,7 +16,7 @@
 //! frame to trim its resources, and draws nothing then. The harness counts that resume apart from
 //! the ones that ask for a frame: each frame allows one of each.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_platform::{AppHandler, Clock, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId};
 
@@ -509,7 +509,7 @@ mod tests {
     #[derive(Default)]
     struct Delayed {
         /// When it wants to be woken, if it does.
-        deadline: Option<std::time::Instant>,
+        deadline: Option<web_time::Instant>,
         /// How many frames it has drawn.
         frames: u32,
         /// How many times it was told a deadline was reached.
@@ -620,9 +620,9 @@ mod tests {
     #[derive(Default)]
     struct Trims {
         /// When the next timed frame is due.
-        timer: Option<std::time::Instant>,
+        timer: Option<web_time::Instant>,
         /// When the trim after the last frame is due.
-        trim: Option<std::time::Instant>,
+        trim: Option<web_time::Instant>,
         /// How many frames it has drawn.
         frames: u32,
         /// How many times it trimmed.
@@ -631,7 +631,7 @@ mod tests {
 
     impl Trims {
         /// Services every deadline that has passed by `now`.
-        fn service(&mut self, cx: &dyn PlatformCx, now: std::time::Instant) {
+        fn service(&mut self, cx: &dyn PlatformCx, now: web_time::Instant) {
             if self.timer.is_some_and(|at| at <= now) {
                 self.timer = None;
                 for surface in cx.surfaces() {
@@ -715,7 +715,7 @@ mod tests {
         // The positive control. Without it, `resumes <= frames + 1` is an assertion nobody has ever
         // seen fail — and an assertion nobody has seen fail is an assertion nobody has checked.
         struct NeverDraws {
-            deadline: Option<std::time::Instant>,
+            deadline: Option<web_time::Instant>,
         }
 
         impl AppHandler for NeverDraws {

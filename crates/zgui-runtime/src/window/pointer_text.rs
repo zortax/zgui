@@ -14,7 +14,7 @@
 //! bytes of a line are drawn in the order shaping decided, which on a line holding two directions
 //! is not the order they are written in.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Rect};

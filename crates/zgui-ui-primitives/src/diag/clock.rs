@@ -1,6 +1,6 @@
 //! The stamp every trace line carries.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 /// Microseconds on the wall clock.
 ///

@@ -376,8 +376,8 @@ mod tests {
 
         // Wait for the worker without spinning the reactive runtime. The deadline only stops a
         // broken wake from hanging the suite; a loaded machine can take far longer than one yield.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while waker.count() == 0 && std::time::Instant::now() < deadline {
+        let deadline = web_time::Instant::now() + std::time::Duration::from_secs(10);
+        while waker.count() == 0 && web_time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         assert_eq!(waker.take(), 1, "the finished worker asked for one frame");

@@ -19,6 +19,7 @@ include.workspace = true
 # the first arrives as the platform contract and the second as the renderer contract — which is
 # what lets the whole loop be exercised with no display server at all.
 [dependencies]
+web-time.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

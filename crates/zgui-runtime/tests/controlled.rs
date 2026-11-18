@@ -220,7 +220,7 @@ impl Script {
     /// In this fixture nothing animates, no timer is set and no resize is pending, so the only
     /// thing that can install one is the caret's own blink — which makes this the way to ask
     /// whether the window is still waking up to draw an insertion point.
-    fn next_wake(&self) -> Option<std::time::Instant> {
+    fn next_wake(&self) -> Option<web_time::Instant> {
         let now = self.harness.now();
         self.harness.app().windows()[0].merged_deadline(now)
     }

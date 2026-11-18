@@ -24,7 +24,7 @@
 
 mod support;
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use support::text::{first_inline_root, lines, paragraph};
 use support::{Content, Element, Fixture, lay_out, lay_out_only, measurer};

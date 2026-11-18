@@ -1,6 +1,7 @@
 //! The ledger checks, and the registry that names them.
 
 pub(crate) mod attribution;
+pub(crate) mod browser_clock;
 pub(crate) mod clock;
 pub(crate) mod counters;
 pub(crate) mod engines;
@@ -80,6 +81,11 @@ pub(crate) const CHECKS: &[Check] = &[
         name: "clock",
         description: "every wall-clock assertion lives in a target the gate runs in release",
         run: clock::check,
+    },
+    Check {
+        name: "browser-clock",
+        description: "every portable crate reads its clocks through web_time, which a browser can answer",
+        run: browser_clock::check,
     },
     Check {
         name: "mutation",

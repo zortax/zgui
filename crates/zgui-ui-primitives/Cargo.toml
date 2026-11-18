@@ -18,6 +18,7 @@ include.workspace = true
 # application author has: anything they cannot express here is a hole in that API rather than a
 # reason to reach past it.
 [dependencies]
+web-time.workspace = true
 zgui = { path = "../zgui", version = "0.1.0" }
 
 [dev-dependencies]

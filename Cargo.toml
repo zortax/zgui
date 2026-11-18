@@ -209,6 +209,9 @@ proc-macro2 = "1.0"
 # --- general utilities -----------------------------------------------------------------------
 thiserror = "2.0.19"
 tracing = "0.1.44"
+# The monotonic and wall clocks. On a native target these are the `std::time` types themselves; on
+# wasm32 they read the browser's clock, where `std::time::Instant::now` panics.
+web-time = "1.1.0"
 tracing-subscriber = "0.3"
 bitflags = "2.13"
 rustc-hash = "2.1"

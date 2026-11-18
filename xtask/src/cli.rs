@@ -57,7 +57,7 @@ usage:
                                       `ci` runs it without building the packages
   cargo xtask ledger [check]          run every ledger check, or just one of
                                       engines, unsafe, attribution, versions, pinned,
-                                      counters, skips, clock, mutation, inert, tag-syntax
+                                      counters, skips, clock, browser-clock, mutation, inert, tag-syntax
   cargo xtask ledger --self-test      prove every check fails on its planted fixture
   cargo xtask wayland [args]          run the Wayland backend's compositor tests on a
                                       nested headless sway; `args` go to `cargo test`
