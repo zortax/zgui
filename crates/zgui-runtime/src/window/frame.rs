@@ -969,6 +969,26 @@ impl Window {
         if order == self.subpixel_order {
             return;
         }
+        // Said on every change, because nothing on the screen names the reason for the coverage.
+        tracing::info!(
+            target: "zgui::runtime",
+            surface = ?self.surface.id(),
+            setting = ?self.text_antialiasing,
+            layout = ?self.surface.subpixel_layout(),
+            scale = self.scale,
+            translucent = self.translucent,
+            device = self.renderer.capabilities().subpixel_text,
+            "text is drawn with {}",
+            match order {
+                Some(zgui_render::SubpixelOrder::RedToBlue) => {
+                    "one coverage for each colour stripe, red to blue"
+                }
+                Some(zgui_render::SubpixelOrder::BlueToRed) => {
+                    "one coverage for each colour stripe, blue to red"
+                }
+                None => "one coverage for each pixel",
+            }
+        );
         self.subpixel_order = order;
         if let Some(order) = order {
             self.renderer.set_subpixel_order(order);
