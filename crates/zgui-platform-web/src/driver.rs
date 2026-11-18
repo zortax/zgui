@@ -115,6 +115,8 @@ enum Incoming {
     Surface(SurfaceId, SurfaceEvent),
     /// A surface gets the frame it asked for, if it still wants one.
     Redraw(SurfaceId),
+    /// An animation frame began: every surface that wants a frame gets one.
+    Frame,
     /// A deadline was reached.
     Deadline,
     /// A surface was destroyed and is forgotten after the application heard of it.
@@ -212,6 +214,8 @@ pub(crate) struct Driver {
     timer_callback: RefCell<Option<Closure<dyn FnMut()>>>,
     /// The armed timer and the deadline it answers.
     timer: Cell<Option<(i32, Instant)>>,
+    /// The deadline the next animation frame answers in place of a timer.
+    frame_deadline: Cell<Option<Instant>>,
     /// The channel a wake is posted on, and its callback.
     channel: RefCell<Option<(MessageChannel, EventCallback)>>,
     /// Whether a wake message is on its way.
@@ -267,6 +271,7 @@ impl Driver {
             cadence: Cell::new(Cadence::default()),
             timer_callback: RefCell::new(None),
             timer: Cell::new(None),
+            frame_deadline: Cell::new(None),
             channel: RefCell::new(None),
             turn_posted: Cell::new(false),
             page_listeners: RefCell::new(Vec::new()),
@@ -447,6 +452,20 @@ impl Driver {
                         handler.surface_event(cx, id, SurfaceEvent::RedrawRequested);
                     }
                 }
+                Incoming::Frame => {
+                    // Read here and not when the frame began: a deadline delivered before this
+                    // is what asks for most frames.
+                    let wanting: Vec<SurfaceId> = self
+                        .entries
+                        .borrow()
+                        .iter()
+                        .filter(|entry| entry.surface.take_redraw())
+                        .map(|entry| entry.surface.id())
+                        .collect();
+                    for id in wanting {
+                        handler.surface_event(cx, id, SurfaceEvent::RedrawRequested);
+                    }
+                }
                 Incoming::Deadline => handler.deadline_reached(cx),
                 Incoming::Forget(id) => {
                     handler.surface_event(cx, id, SurfaceEvent::Destroyed);
@@ -492,18 +511,13 @@ impl Driver {
     fn on_frame(&self, stamp: f64) {
         self.frame_pending.set(None);
         self.measure_cadence(stamp);
-        let wanting: Vec<SurfaceId> = self
-            .entries
-            .borrow()
-            .iter()
-            .filter(|entry| entry.surface.wants_redraw())
-            .map(|entry| entry.surface.id())
-            .collect();
         {
             let mut incoming = self.incoming.borrow_mut();
-            for id in wanting {
-                incoming.push_back(Incoming::Redraw(id));
+            if self.frame_deadline.take().is_some() {
+                self.park.borrow_mut().resumed();
+                incoming.push_back(Incoming::Deadline);
             }
+            incoming.push_back(Incoming::Frame);
         }
         self.pump();
     }
@@ -550,8 +564,23 @@ impl Driver {
         })
     }
 
-    /// Arms the timer for `deadline`, unless it is armed for it already.
+    /// Arranges a callback for `deadline`.
+    ///
+    /// A deadline within the next frame or so is an animation asking for its next step. The
+    /// animation frame answers it: a timer fires at a moment that has nothing to do with the
+    /// display, and a step that just misses a frame is shown one refresh late. A frame that
+    /// begins before the deadline answers early, the application finds nothing due, and the
+    /// following frame answers again. A page that is not visible gets no animation frames, so
+    /// every deadline is a timer there.
     fn arm(&self, deadline: Instant, now: Instant) {
+        let wait = deadline.saturating_duration_since(now);
+        if wait <= self.frame_reach() && page_is_visible() {
+            self.disarm();
+            self.frame_deadline.set(Some(deadline));
+            self.schedule_frame();
+            return;
+        }
+        self.frame_deadline.set(None);
         if let Some((_, armed)) = self.timer.get()
             && armed == deadline
         {
@@ -562,17 +591,28 @@ impl Driver {
         let (Some(window), Some(callback)) = (web_sys::window(), callback.as_ref()) else {
             return;
         };
-        let wait = deadline.saturating_duration_since(now).as_secs_f64() * 1000.0;
         if let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
             callback.as_ref().unchecked_ref(),
-            wait.ceil() as i32,
+            (wait.as_secs_f64() * 1000.0).ceil() as i32,
         ) {
             self.timer.set(Some((handle, deadline)));
         }
     }
 
-    /// Clears the timer.
+    /// How far ahead a deadline is answered by an animation frame: one and a half frames.
+    fn frame_reach(&self) -> Duration {
+        let cadence = self.cadence.get();
+        let interval = if cadence.samples >= 12 {
+            cadence.interval_ms
+        } else {
+            1000.0 / 60.0
+        };
+        Duration::from_secs_f64((interval * 1.5).min(40.0) / 1000.0)
+    }
+
+    /// Clears the timer and the deadline an animation frame would answer.
     fn disarm(&self) {
+        self.frame_deadline.set(None);
         if let Some((handle, _)) = self.timer.take()
             && let Some(window) = web_sys::window()
         {
@@ -1220,6 +1260,13 @@ fn is_apple(window: &web_sys::Window) -> bool {
             .iter()
             .any(|name| platform.contains(name))
     })
+}
+
+/// Whether the page is shown, which is when it gets animation frames.
+fn page_is_visible() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| !document.hidden())
 }
 
 /// The scheme a dark-mode query answers.
