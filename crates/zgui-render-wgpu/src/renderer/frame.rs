@@ -495,6 +495,8 @@ impl FrameBuffers {
             freed += order.shrink(gpu);
             self.last_orders[lane].clear();
         }
+        // The mark lane's order is a table of its own, and it is released with the others.
+        freed += self.mark_order.shrink(gpu);
         freed += self.uploader.release_idle();
         *self.frame_bind.borrow_mut() = None;
         *self.instance_binds.borrow_mut() = Default::default();
