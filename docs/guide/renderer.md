@@ -47,6 +47,39 @@ the surface it is given is not the surface it drew into last time.
 If you are writing a renderer over a swap chain, this is the decision to make first, and it is not
 reversible later without changing everything above it.
 
+### Copying only what changed
+
+The kept target is copied into the texture that is presented. How much of it is copied depends on
+whether that texture keeps its contents between frames:
+
+- A texture of wgpu's swap chain keeps nothing. wgpu discards its contents at each acquisition, so
+  the whole frame is copied every time.
+- A texture a display supplies, and an image of a swap chain the renderer makes itself, keep their
+  contents. Such a texture is copied only where it *owes* pixels.
+
+Two damage sets are kept apart, because each answers a different question:
+
+- **Image debt**: what was written into the kept target since this texture was last copied into.
+  A set of rotated textures owes each texture what was drawn while another one was in use. This
+  decides what the copy covers.
+- **Present damage**: what changed since the previous present. This is what the compositor or the
+  display engine is told, so that it redraws only that part.
+
+Both record what the renderer *wrote*, never only the damage it was given. A scroll shift, a resize
+that carries the old picture over, and a backdrop that widens its rectangles all write outside that
+damage. A frame that is composed and not presented, because the platform held it or no texture was
+free, adds its rectangles to both sets for the next present.
+
+`zgui-render-wgpu` makes its own Vulkan swap chain when `ZGUI_PRESENTER=native` is set. Its images
+keep their contents, and `VK_KHR_incremental_present` tells the compositor which rectangles
+changed. `ZGUI_PRESENT_VERIFY=1` reads every presented image back and compares it with the kept
+target, which finds a damage bug at the frame where it occurs.
+
+To measure the effect, run `anim-cadence` from `zgui-bench` once with `ZGUI_PRESENTER=native` and
+once without it. Its report gives `copy_px_per_frame` and `damage_px_per_frame`, which do not depend
+on the hardware. The counters `present_copy_px` and `present_damage_px` give the same totals to any
+other tool.
+
 ## Rule two: damage is retired on submission, not on presentation
 
 `draw` returns a `FrameOutcome`, deliberately not a `Result`. Most of the ways a frame fails to
