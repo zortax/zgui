@@ -50,6 +50,65 @@ fn a_blurred_fragment_is_in_the_read_extent_registry_and_leaves_it_when_the_blur
 }
 
 #[test]
+fn a_blurred_fragment_rebuilt_in_place_is_listed_once() {
+    // A rebuild writes the fragment's flags again. When it dropped the registry's own flag, every
+    // rebuild listed the fragment once more, and removal took back one entry of many. The damage
+    // expansion walks the registry on every frame, so each rebuild made every later frame slower.
+    let mut fixture = Fixture::new(
+        Element::new("root").children(vec![Element::new("panel").classes(&["blur"])]),
+        "root { display: block; width: 200px }
+         panel { display: block; height: 50px }
+         .blur { backdrop-filter: blur(4px) }
+         .tall { height: 80px }",
+    );
+    let mut store = fixture.box_tree();
+    let mut content = measurer();
+    let mut frame = lay_out(&mut store, &mut content, 200.0, 200.0);
+    let target = fixture
+        .document
+        .store()
+        .core(fixture.root)
+        .first_child()
+        .expect("the panel");
+    let first = own_fragment(&store, box_named(&store, &fixture, "panel")).key;
+
+    for round in 0..4 {
+        fixture.edit_restyle_and_patch(&mut store, |edit| {
+            let tall = zgui_interned::ClassName::new("tall");
+            if round % 2 == 0 {
+                edit.add_class(target, tall);
+            } else {
+                edit.remove_class(target, tall);
+            }
+        });
+        relayout(&mut frame, &mut store, &mut content, 200.0, 200.0);
+        let fragment = own_fragment(&store, box_named(&store, &fixture, "panel"));
+        assert_eq!(fragment.key, first, "the fragment is rebuilt in place");
+        assert_eq!(store.read_extents(), &[first], "after rebuild {round}");
+    }
+
+    // The kept flag must still clear when the blur goes away in place.
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.remove_class(target, zgui_interned::ClassName::new("blur"));
+    });
+    relayout(&mut frame, &mut store, &mut content, 200.0, 200.0);
+    let fragment = own_fragment(&store, box_named(&store, &fixture, "panel"));
+    assert_eq!(fragment.key, first);
+    assert!(!fragment.flags.contains(FragmentFlags::HAS_READ_EXTENT));
+    assert!(store.read_extents().is_empty());
+
+    fixture.edit_restyle_and_patch(&mut store, |edit| {
+        edit.add_class(target, zgui_interned::ClassName::new("blur"));
+    });
+    relayout(&mut frame, &mut store, &mut content, 200.0, 200.0);
+    assert_eq!(store.read_extents(), &[first]);
+
+    fixture.edit_and_sync_boxes(&mut store, |edit| edit.remove(target));
+    relayout(&mut frame, &mut store, &mut content, 200.0, 200.0);
+    assert!(store.read_extents().is_empty());
+}
+
+#[test]
 fn a_blending_descendant_is_folded_all_the_way_up() {
     let fixture = Fixture::new(
         Element::new("root").children(vec![

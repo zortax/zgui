@@ -1882,7 +1882,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         if let Some(fragment) = self.store.fragment_mut(frag) {
             fragment.kind = kind;
             fragment.parent = parent;
-            let kept = fragment.flags.intersection(FragmentFlags::FOLDED);
+            // The registry flag records membership, which `set_read_extent` below changes. A
+            // rebuild that drops it lists the fragment again.
+            let kept = fragment
+                .flags
+                .intersection(FragmentFlags::FOLDED.union(FragmentFlags::HAS_READ_EXTENT));
             fragment.border_box = next.border_box;
             fragment.border = next.border;
             fragment.padding = next.padding;
