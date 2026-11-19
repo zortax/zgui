@@ -21,9 +21,9 @@
 //! frame per refresh over an animation is worth nothing if it also produces them over a still
 //! window.
 //!
-//! The report goes to a file named by `ZGUI_CADENCE_OUT`, written by a thread of its own so that
-//! nothing in the measurement is paid for on the loop. That thread also ends the process, which is
-//! what makes a run a fixed length rather than something to be killed from outside.
+//! The report goes to a file named by `ZGUI_CADENCE_OUT`, written off the UI thread so that nothing
+//! in the measurement is paid for on the loop. When the report is written, the application quits,
+//! which is what makes a run a fixed length rather than something to be killed from outside.
 //!
 //! The report also states how many pixels each frame's present copied, and how many it told the
 //! compositor had changed (`copy_px_per_frame`, `damage_px_per_frame`).
@@ -97,7 +97,8 @@ fn main() -> Result<(), zgui::Error> {
     let idle = args.next().is_some_and(|arg| arg == "idle");
 
     let stamps: Stamps = Arc::new(Mutex::new(Vec::with_capacity(1 << 14)));
-    reporting(Arc::clone(&stamps), seconds, idle);
+    // The view closure may be built more than once, and the run is measured once.
+    let mut measured = Some(Arc::clone(&stamps));
 
     let counted = Arc::clone(&stamps);
     let app = zgui::app()
@@ -112,30 +113,49 @@ fn main() -> Result<(), zgui::Error> {
             )))
         }));
     if idle {
-        app.run(|| view! { Still() })
+        app.run(move || {
+            if let Some(stamps) = measured.take() {
+                reporting(stamps, seconds, idle);
+            }
+            view! { Still() }
+        })
     } else {
-        app.run(|| view! { Animating() })
+        app.run(move || {
+            if let Some(stamps) = measured.take() {
+                reporting(stamps, seconds, idle);
+            }
+            view! { Animating() }
+        })
     }
 }
 
-/// Starts the thread that writes the report and ends the run.
+/// Measures off the UI thread, writes the report, and then quits the application.
 ///
-/// A thread rather than a timer in the window, because a timer is a deadline and a deadline is
+/// The wait runs off the UI thread because a timer in the window is a deadline, and a deadline is
 /// exactly what is being measured: a window woken twice a second to write a file is a window whose
-/// park has been changed by the act of observing it. This one touches nothing the loop owns beyond
-/// a mutex it holds for the length of a `Vec` copy.
+/// park has been changed by the act of observing it. The measurement touches nothing the loop owns
+/// beyond a mutex it holds for the length of a `Vec` copy, and the loop wakes once, at the end, to
+/// quit.
+///
+/// The application quits through its own loop. A call to `std::process::exit` from another thread
+/// runs the exit handlers of the graphics driver while the loop still draws, and the next frame
+/// then writes to memory the driver has unmapped.
 fn reporting(stamps: Stamps, seconds: f64, idle: bool) {
     let out = std::env::var("ZGUI_CADENCE_OUT").unwrap_or_else(|_| "/dev/stdout".to_owned());
-    std::thread::spawn(move || {
-        settled(&stamps, idle);
-        stamps.lock().map(|mut held| held.clear()).ok();
-        let before = Present::now();
-        let wall = Instant::now();
-        std::thread::sleep(Duration::from_secs_f64(seconds));
-        let taken = stamps.lock().map(|held| held.clone()).unwrap_or_default();
-        let present = Present::now().since(before);
-        let _ = std::fs::write(&out, report(&taken, wall.elapsed(), idle, present));
-        std::process::exit(0);
+    let windows = use_windows();
+    zgui::task::spawn_local(async move {
+        zgui::task::blocking(move || {
+            settled(&stamps, idle);
+            stamps.lock().map(|mut held| held.clear()).ok();
+            let before = Present::now();
+            let wall = Instant::now();
+            std::thread::sleep(Duration::from_secs_f64(seconds));
+            let taken = stamps.lock().map(|held| held.clone()).unwrap_or_default();
+            let present = Present::now().since(before);
+            let _ = std::fs::write(&out, report(&taken, wall.elapsed(), idle, present));
+        })
+        .await;
+        windows.quit();
     });
 }
 
