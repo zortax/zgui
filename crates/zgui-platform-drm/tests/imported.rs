@@ -26,6 +26,8 @@
 //! asserts nothing, which is the shape `cargo xtask ledger ignored` prescribes for a test that
 //! cannot be switched off.
 
+#![cfg(target_os = "linux")]
+
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::os::fd::{AsRawFd, OwnedFd};

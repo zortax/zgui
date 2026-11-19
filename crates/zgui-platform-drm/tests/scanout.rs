@@ -14,6 +14,8 @@
 //! ledger ignored` prescribes for a test that cannot be switched off. Run it on a free virtual
 //! terminal to make it assert anything.
 
+#![cfg(target_os = "linux")]
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
