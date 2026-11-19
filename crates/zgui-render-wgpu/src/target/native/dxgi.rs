@@ -284,17 +284,19 @@ impl Chain {
     }
 
     /// Releases the buffer at `slot` and presents it.
+    ///
+    /// Answers what the present said, and how many pixels it named as changed.
     pub(crate) fn present(
         &mut self,
         slot: usize,
         frame: Size<i32, Device>,
         damage: &[Rect<i32, Device>],
-    ) -> Acquisition {
+    ) -> (Acquisition, u64) {
         let (Some(swapchain), Some(buffer)) = (&self.swapchain, self.buffers.get(slot)) else {
-            return Acquisition::Validation;
+            return (Acquisition::Validation, 0);
         };
         let Ok(list) = buffer.release.cast::<ID3D12CommandList>() else {
-            return Acquisition::Validation;
+            return (Acquisition::Validation, 0);
         };
         // SAFETY: the list is closed and names the buffer the frame was just copied into.
         unsafe { self.queue.ExecuteCommandLists(&[Some(list)]) };
@@ -336,32 +338,29 @@ impl Chain {
         // SAFETY: the parameters point at `rects`, which outlives the call, and every rectangle
         // lies inside the buffer.
         let result = unsafe { swapchain.Present1(interval, flags, &parameters) };
-        zgui_profile::counter::add(
-            zgui_profile::Counter::PresentDamagePx,
-            if rects.is_empty() {
-                frame.width.max(0) as u64 * frame.height.max(0) as u64
-            } else {
-                rects
-                    .iter()
-                    .map(|rect| (rect.right - rect.left) as u64 * (rect.bottom - rect.top) as u64)
-                    .sum()
-            },
-        );
+        let damaged = if rects.is_empty() {
+            frame.width.max(0) as u64 * frame.height.max(0) as u64
+        } else {
+            rects
+                .iter()
+                .map(|rect| (rect.right - rect.left) as u64 * (rect.bottom - rect.top) as u64)
+                .sum()
+        };
         if result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET {
             self.presented = None;
             self.gpu.loss().report(
                 wgpu::DeviceLostReason::Unknown,
                 "the device was removed while presenting",
             );
-            return Acquisition::Validation;
+            return (Acquisition::Validation, 0);
         }
         if result.is_err() {
             self.presented = None;
             tracing::warn!(%result, "a present was refused");
-            return Acquisition::Validation;
+            return (Acquisition::Validation, 0);
         }
         self.presented = Some(frame);
-        Acquisition::Success
+        (Acquisition::Success, damaged)
     }
 
     /// Makes the swap chain.

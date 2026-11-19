@@ -440,14 +440,16 @@ impl Chain {
     }
 
     /// Releases the image at `slot` and presents it.
+    ///
+    /// Answers what the present said, and how many pixels it named as changed.
     pub(crate) fn present(
         &mut self,
         slot: usize,
         frame: Size<i32, Device>,
         damage: &[Rect<i32, Device>],
-    ) -> Acquisition {
+    ) -> (Acquisition, u64) {
         let Some(image) = self.images.get(slot) else {
-            return Acquisition::Validation;
+            return (Acquisition::Validation, 0);
         };
         let signals = [image.rendered];
         let commands = [image.release];
@@ -462,7 +464,7 @@ impl Chain {
         };
         if let Err(error) = submitted {
             tracing::warn!(%error, "the barrier that gives a swap chain image back was refused");
-            return self.classify(error);
+            return (self.classify(error), 0);
         }
 
         // A changed frame extent is a changed viewport source, and a compositor compares the new
@@ -505,18 +507,15 @@ impl Chain {
         // signalled by that release, and the rectangles lie inside the image. The queue is used
         // only from this thread.
         let presented = unsafe { self.swapchain_fns.queue_present(self.queue, &info) };
-        zgui_profile::counter::add(
-            zgui_profile::Counter::PresentDamagePx,
-            if rects.is_empty() {
-                damage_area(&[Rect::new(zgui_geom::Point::new(0, 0), frame)])
-            } else {
-                rects
-                    .iter()
-                    .map(|rect| u64::from(rect.extent.width) * u64::from(rect.extent.height))
-                    .sum()
-            },
-        );
-        match presented {
+        let damaged = if rects.is_empty() {
+            damage_area(&[Rect::new(zgui_geom::Point::new(0, 0), frame)])
+        } else {
+            rects
+                .iter()
+                .map(|rect| u64::from(rect.extent.width) * u64::from(rect.extent.height))
+                .sum()
+        };
+        let answer = match presented {
             Ok(false) => {
                 self.presented = Some(frame);
                 Acquisition::Success
@@ -529,9 +528,10 @@ impl Chain {
                 // The compositor did not get this frame, so the next present is compared with a
                 // frame it never showed.
                 self.presented = None;
-                self.classify(error)
+                return (self.classify(error), 0);
             }
-        }
+        };
+        (answer, damaged)
     }
 
     /// The answer an acquisition gives for a Vulkan error.

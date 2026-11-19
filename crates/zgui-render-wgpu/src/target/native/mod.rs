@@ -224,13 +224,13 @@ impl NativeChain {
     /// Presents the image at `slot`, which changed `damage` since the frame presented before it.
     ///
     /// `frame` is the extent of the frame inside the image. Answers what the present said, in the
-    /// terms an acquisition answers in.
+    /// terms an acquisition answers in, and how many pixels it named as changed.
     pub(crate) fn present(
         &mut self,
         slot: usize,
         frame: Size<i32, Device>,
         damage: &[Rect<i32, Device>],
-    ) -> Acquisition {
+    ) -> (Acquisition, u64) {
         match self {
             #[cfg(vulkan_hal)]
             Self::Vulkan(chain) => chain.present(slot, frame, damage),

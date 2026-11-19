@@ -80,17 +80,19 @@ impl Presentation {
 
     /// Presents the image at `slot` of a swap chain this crate made, which changed `damage` since
     /// the frame presented before it.
+    ///
+    /// Answers what the present said, and how many pixels it named as changed.
     pub(crate) fn present_native(
         &mut self,
         slot: usize,
         frame: Size<i32, Device>,
         damage: &[Rect<i32, Device>],
-    ) -> Acquisition {
+    ) -> (Acquisition, u64) {
         match self {
-            Self::Surface(surface) => surface.native().map_or(Acquisition::Lost, |native| {
+            Self::Surface(surface) => surface.native().map_or((Acquisition::Lost, 0), |native| {
                 native.present(slot, frame, damage)
             }),
-            Self::Offscreen(_) | Self::Supplied(_) => Acquisition::Lost,
+            Self::Offscreen(_) | Self::Supplied(_) => (Acquisition::Lost, 0),
         }
     }
 

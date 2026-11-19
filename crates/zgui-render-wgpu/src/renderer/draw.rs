@@ -731,9 +731,10 @@ impl WgpuRenderer {
             && response.presents
         {
             let frame = self.target.size;
-            let answer =
+            let (answer, damaged) =
                 self.presentation
                     .present_native(image.slot, frame, &self.presented_damage);
+            counter::add(Counter::PresentDamagePx, damaged);
             let after = answer.response();
             if !after.presents {
                 // The frame is composed and its image never reached the compositor, so the next
