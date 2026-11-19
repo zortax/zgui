@@ -836,3 +836,70 @@ fn a_backdrop_widening_is_owed_to_every_buffer() {
 fn centre_of(pixels: &Pixels, x: i32, y: i32) -> [u8; 4] {
     pixels.rgba(x, y)
 }
+
+#[test]
+fn present_damage_covers_every_frame_since_the_last_present() {
+    // What the display is told changed is relative to the frame it showed before. A frame that
+    // was composed and held in between changed the picture too, so its rectangles go with the
+    // next present.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, _textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let gate = Arc::clone(&open);
+    renderer.set_present_gate(Box::new(move || {
+        gate.load(std::sync::atomic::Ordering::Relaxed)
+    }));
+    let full = DamageSet::full();
+    assert!(renderer.present_into(0));
+    assert!(
+        renderer
+            .draw(&square_at((8.0, 8.0), opaque(0, 0, 0), &full), &full)
+            .stats()
+            .is_some()
+    );
+    assert_eq!(
+        renderer.presented_damage(),
+        [Rect::new(Point::new(0, 0), extent())],
+        "the first frame changes everything"
+    );
+
+    open.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(renderer.present_into(1));
+    let left = damage_of(8, 8, 16, 16);
+    let outcome = renderer.draw(&square_at((8.0, 8.0), opaque(255, 0, 0), &left), &left);
+    assert_eq!(outcome, FrameOutcome::Skipped(SkipReason::Held));
+    open.store(true, std::sync::atomic::Ordering::Relaxed);
+    let right = damage_of(100, 100, 16, 16);
+    let mut scene = square_at((8.0, 8.0), opaque(255, 0, 0), &right);
+    let paint = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(0, 255, 0)));
+    scene.push_quad(Quad::filled(rect(100.0, 100.0, 16.0, 16.0), paint));
+    scene.finish(&right);
+    assert!(renderer.draw(&scene, &right).stats().is_some());
+
+    let covered = |x: i32, y: i32| {
+        renderer
+            .presented_damage()
+            .iter()
+            .any(|rect| rect.contains(Point::new(x, y)))
+    };
+    assert!(
+        covered(10, 10),
+        "the held frame's rectangle: {:?}",
+        renderer.presented_damage()
+    );
+    assert!(
+        covered(110, 110),
+        "this frame's rectangle: {:?}",
+        renderer.presented_damage()
+    );
+    assert!(
+        !covered(64, 64),
+        "nothing else changed: {:?}",
+        renderer.presented_damage()
+    );
+}

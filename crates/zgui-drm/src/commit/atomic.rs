@@ -24,7 +24,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::os::fd::{AsRawFd, BorrowedFd};
 
-use crate::commit::{Commit, Pipe, legacy};
+use crate::commit::{Commit, DamageClip, Pipe, legacy};
 use crate::cursor::{CursorImage, CursorPlane};
 use crate::device::Device;
 use crate::error::{Error, Result};
@@ -38,6 +38,10 @@ use crate::sys;
 // belongs to a field. A `u32`, ten `u16`, three more `u32` and a 32-byte name sum to 68, and the
 // structure is 68 bytes with an alignment of 4, so it has no interior and no trailing padding.
 // This is the claim the safety comment on `raw_bytes` rests on, checked where it is made.
+const _: () = assert!(
+    size_of::<sys::drm_mode_rect>() == 4 * 4,
+    "drm_mode_rect gained padding, so its bytes are no longer all initialised"
+);
 const _: () = assert!(
     size_of::<sys::drm_mode_modeinfo>() == 4 + 10 * 2 + 4 + 4 + 4 + 32,
     "drm_mode_modeinfo gained padding, so its bytes are no longer all initialised"
@@ -182,6 +186,39 @@ impl AtomicCommit {
                     "{kind:?} {object} has no {name} property, which an atomic commit needs"
                 ))
             })
+    }
+
+    /// Shows `framebuffer` on `pipe`, setting `extra` on the plane as well when it is given.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Unusable`] when the plane lacks a property a flip names, and
+    /// [`Error::Ioctl`] when the kernel refuses the flip.
+    fn flip_with(
+        &mut self,
+        device: &Device,
+        pipe: Pipe,
+        framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
+        extra: Option<(u32, u64)>,
+    ) -> Result<()> {
+        let mut wanted = vec![("FB_ID", u64::from(framebuffer.id()))];
+        // The fast path a caller drawing with a graphics device takes: the frame is committed while
+        // the device is still finishing it, and the kernel holds the flip back until this fence
+        // signals.
+        if let Some(fence) = fence {
+            wanted.push(("IN_FENCE_FD", fenced(fence)));
+        }
+        let mut plane = self.resolve(device, pipe.plane, ObjectKind::Plane, &wanted)?;
+        plane.extend(extra);
+
+        let mut request = Request::default();
+        request.add(pipe.plane, &plane);
+        // Without the event flag nothing ever tells a frame loop the old buffer is free again.
+        request.issue(
+            device,
+            sys::DRM_MODE_ATOMIC_NONBLOCK | sys::DRM_MODE_PAGE_FLIP_EVENT,
+        )
     }
 
     /// Turns each named property of `object` into its id, keeping the value beside it.
@@ -378,22 +415,39 @@ impl Commit for AtomicCommit {
         framebuffer: Framebuffer,
         fence: Option<BorrowedFd<'_>>,
     ) -> Result<()> {
-        let mut wanted = vec![("FB_ID", u64::from(framebuffer.id()))];
-        // The fast path a caller drawing with a graphics device takes: the frame is committed while
-        // the device is still finishing it, and the kernel holds the flip back until this fence
-        // signals.
-        if let Some(fence) = fence {
-            wanted.push(("IN_FENCE_FD", fenced(fence)));
-        }
-        let plane = self.resolve(device, pipe.plane, ObjectKind::Plane, &wanted)?;
+        self.flip_with(device, pipe, framebuffer, fence, None)
+    }
 
-        let mut request = Request::default();
-        request.add(pipe.plane, &plane);
-        // Without the event flag nothing ever tells a frame loop the old buffer is free again.
-        request.issue(
+    fn flip_damaged(
+        &mut self,
+        device: &Device,
+        pipe: Pipe,
+        framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
+        damage: &[DamageClip],
+    ) -> Result<()> {
+        // A plane without the property takes no damage, and the kernel then counts the whole
+        // plane as changed. So does a commit that names no clips.
+        let clips = self
+            .properties(device, pipe.plane, ObjectKind::Plane)?
+            .id("FB_DAMAGE_CLIPS");
+        let Some(clips) = clips.filter(|_| !damage.is_empty()) else {
+            return self.flip(device, pipe, framebuffer, fence);
+        };
+        let rects: Vec<sys::drm_mode_rect> = damage.iter().map(|clip| clip_rect(*clip)).collect();
+        let blob = device.create_blob(rect_bytes(&rects))?;
+        let flipped = self.flip_with(
             device,
-            sys::DRM_MODE_ATOMIC_NONBLOCK | sys::DRM_MODE_PAGE_FLIP_EVENT,
-        )
+            pipe,
+            framebuffer,
+            fence,
+            Some((clips, u64::from(blob))),
+        );
+        // The header allows the release as soon as the commit has been issued. The kernel keeps
+        // its own reference for the plane state that names the blob. A failed release changes
+        // nothing on the screen, so the outcome of the flip is what the caller is told.
+        drop(device.destroy_blob(blob));
+        flipped
     }
 
     fn set_cursor(
@@ -572,6 +626,25 @@ fn fenced(fence: BorrowedFd<'_>) -> u64 {
     signed(fence.as_raw_fd())
 }
 
+/// Returns `clip` as the kernel's rectangle, whose far edges are exclusive.
+fn clip_rect(clip: DamageClip) -> sys::drm_mode_rect {
+    sys::drm_mode_rect {
+        x1: clip.x,
+        y1: clip.y,
+        x2: clip.x.saturating_add(clip.width),
+        y2: clip.y.saturating_add(clip.height),
+    }
+}
+
+/// Returns the bytes of `rects`, as the kernel reads them out of an `FB_DAMAGE_CLIPS` blob.
+fn rect_bytes(rects: &[sys::drm_mode_rect]) -> &[u8] {
+    // SAFETY: `drm_mode_rect` is `#[repr(C)]` and holds four `i32`, so it has no padding, every
+    // byte of it is initialised, and every bit pattern is a value of it. The pointer comes from a
+    // live slice, so it is non-null and aligned for `u8`, and the result borrows `rects` for
+    // exactly as long as it lives.
+    unsafe { std::slice::from_raw_parts(rects.as_ptr().cast::<u8>(), std::mem::size_of_val(rects)) }
+}
+
 /// Returns the bytes of `mode`, as the kernel's own structure.
 ///
 /// These go into the `MODE_ID` blob. The kernel copies them back out as a `drm_mode_modeinfo`, so
@@ -605,6 +678,36 @@ mod tests {
     use super::*;
 
     use std::os::fd::AsFd;
+
+    #[test]
+    fn a_damage_clip_reaches_the_kernel_with_exclusive_far_edges() {
+        let clips = [
+            DamageClip {
+                x: 10,
+                y: 20,
+                width: 30,
+                height: 40,
+            },
+            DamageClip {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+        ];
+        let rects: Vec<sys::drm_mode_rect> = clips.iter().map(|clip| clip_rect(*clip)).collect();
+        let bytes = rect_bytes(&rects);
+        assert_eq!(
+            bytes.len(),
+            2 * 16,
+            "four i32 per rectangle and nothing between them"
+        );
+        let words: Vec<i32> = bytes
+            .chunks_exact(4)
+            .map(|word| i32::from_ne_bytes(word.try_into().expect("four bytes")))
+            .collect();
+        assert_eq!(words, [10, 20, 40, 60, 0, 0, 1, 1]);
+    }
 
     #[test]
     fn a_commit_holds_one_count_per_object_and_the_properties_in_object_order() {

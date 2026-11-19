@@ -278,6 +278,9 @@ impl Renderer for WgpuRenderer {
         }
         damage::rows_of(&self.composed_rects, &mut self.composed_rows);
         self.presentation.note_written(&self.composed_rects);
+        for rect in &self.composed_rects {
+            self.unpresented.absorb(*rect);
+        }
         zgui_profile::latency::mark("r.buffers");
         let uploaded = self.buffers.upload_frame(&self.gpu, &mut encoder, scene);
         let upload_allocations = self.buffers.upload_allocations();
@@ -698,6 +701,22 @@ impl WgpuRenderer {
         // copied that persistent target to the surface. A retry with no new damage must still run
         // through acquisition and the final blit rather than taking the undamaged early return.
         self.present_composed_next = !response.presents;
+        if response.presents {
+            let whole = Rect::new(zgui_geom::Point::new(0, 0), self.target.size);
+            let unpresented = core::mem::take(&mut self.unpresented);
+            self.presented_damage.clear();
+            if unpresented.is_full() {
+                self.presented_damage.push(whole);
+            } else {
+                self.presented_damage.extend(
+                    unpresented
+                        .rects()
+                        .iter()
+                        .filter_map(|rect| rect.intersection(whole))
+                        .filter(|rect| !rect.is_empty()),
+                );
+            }
+        }
         if response.presents
             && let Some(notify) = &self.pre_present
         {

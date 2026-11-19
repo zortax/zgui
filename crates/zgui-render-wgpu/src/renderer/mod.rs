@@ -154,6 +154,13 @@ pub struct WgpuRenderer {
     /// changed forty-eight scattered places the difference between the two is a third of the
     /// pixels.
     composed_rects: Vec<Rect<i32, Device>>,
+    /// What frames wrote into the composed target since the last frame that was presented.
+    ///
+    /// A frame that is composed and then held or not acquired still changed the picture, so its
+    /// rectangles go to the next present together with that frame's own.
+    unpresented: zgui_bits::DamageSet<{ crate::target::swapchain::STALE }>,
+    /// What the last presented frame changed, compared with the frame presented before it.
+    presented_damage: Vec<Rect<i32, Device>>,
     /// The buffer a readback of the composed target copies through.
     ///
     /// One buffer for the life of the renderer rather than one a frame. A console reads its whole
@@ -276,6 +283,8 @@ impl WgpuRenderer {
             present_composed_next: false,
             composed_rows: Vec::new(),
             composed_rects: Vec::new(),
+            unpresented: zgui_bits::DamageSet::full(),
+            presented_damage: Vec::new(),
             staging: crate::renderer::readback::Staging::new(),
             target,
             subpixel_order: SubpixelOrder::default(),
@@ -636,6 +645,17 @@ impl WgpuRenderer {
     /// form a copy made by the processor needs, and why they are not the same list.
     pub fn composed_rects(&self) -> &[Rect<i32, Device>] {
         &self.composed_rects
+    }
+
+    /// The rectangles the last presented frame changed, compared with the frame presented before
+    /// it.
+    ///
+    /// What a display or a compositor is told changed, so that it reads or recomposites only
+    /// those. It differs from [`WgpuRenderer::composed_rects`] when frames were composed and not
+    /// presented in between: their rectangles are part of this list. Read it after a frame that
+    /// presented and before the next draw.
+    pub fn presented_damage(&self) -> &[Rect<i32, Device>] {
+        &self.presented_damage
     }
 
     /// Reads the rows `bands` names of what was presented into `into`, keeping the rest of it.

@@ -18,7 +18,7 @@ use zgui_geom::{Device, Rect, Size};
 /// The other end of the trade is a scissor and a draw per rectangle, inside a pass that is open
 /// anyway. A draw costs about seventeen microseconds on the slowest driver this was measured
 /// against, and a rectangle merged away wastes far more than that in pixels.
-const STALE: usize = zgui_bits::MAX_DAMAGE * 2;
+pub(crate) const STALE: usize = zgui_bits::MAX_DAMAGE * 2;
 
 use crate::gpu::device::Gpu;
 use crate::gpu::formats::{self, Formats};

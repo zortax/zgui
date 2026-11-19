@@ -39,6 +39,21 @@ pub struct Pipe {
     pub plane: u32,
 }
 
+/// A rectangle of a framebuffer that changed since the frame committed before it, in pixels.
+///
+/// The origin is the framebuffer's top left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DamageClip {
+    /// The left edge.
+    pub x: i32,
+    /// The top edge.
+    pub y: i32,
+    /// The width.
+    pub width: i32,
+    /// The height.
+    pub height: i32,
+}
+
 /// The modesetting interface a device is driven through.
 pub trait Commit {
     /// Returns `true` when a configuration can be tested before it is applied.
@@ -104,6 +119,29 @@ pub trait Commit {
         framebuffer: Framebuffer,
         fence: Option<BorrowedFd<'_>>,
     ) -> Result<()>;
+
+    /// [`Commit::flip`], with the rectangles of `framebuffer` that differ from the frame committed
+    /// before it.
+    ///
+    /// The display engine can then read or send only those rectangles: a display behind a slow
+    /// link, a virtual display, and a panel that refreshes only what changed all use this. The
+    /// damage is a hint. An interface or a plane that cannot carry it shows the frame as wholly
+    /// changed, which is always correct. An empty list also says that the whole frame changed.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Commit::flip`].
+    fn flip_damaged(
+        &mut self,
+        device: &Device,
+        pipe: Pipe,
+        framebuffer: Framebuffer,
+        fence: Option<BorrowedFd<'_>>,
+        damage: &[DamageClip],
+    ) -> Result<()> {
+        let _ = damage;
+        self.flip(device, pipe, framebuffer, fence)
+    }
 
     /// Puts `image` on `plane`, with its top left corner at `x`, `y` on the CRTC.
     ///

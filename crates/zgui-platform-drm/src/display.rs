@@ -36,7 +36,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use zgui_drm::Device;
-use zgui_drm::commit::Commit;
+use zgui_drm::commit::{Commit, DamageClip};
 use zgui_platform::{PlatformError, SurfaceId};
 use zgui_render_wgpu::{Pixels, wgpu};
 
@@ -224,16 +224,32 @@ impl DrmDisplay {
     /// The pointer is not drawn: a display on this shape has one on a plane, which is the condition
     /// [`Scanout::imported`] chose it under.
     ///
+    /// `damage` is what the frame changed, compared with the frame given over before it. The
+    /// display engine is told so where the plane takes damage. An empty list says that the whole
+    /// frame changed.
+    ///
     /// # Errors
     ///
     /// Returns [`PlatformError::Backend`] when this display is on the copied shape, when the buffer
     /// was never taken back, when the graphics device refuses or does not finish the barrier, and
     /// when the driver refuses the mode or the flip.
-    pub fn present_drawn(&self) -> Result<bool, PlatformError> {
+    pub fn present_drawn(
+        &self,
+        damage: &[zgui_geom::Rect<i32, zgui_geom::Device>],
+    ) -> Result<bool, PlatformError> {
+        let clips: Vec<DamageClip> = damage
+            .iter()
+            .map(|rect| DamageClip {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            })
+            .collect();
         let mut commit = self.commit.borrow_mut();
         self.scanout
             .borrow_mut()
-            .present_drawn(&self.device, &mut **commit)
+            .present_drawn(&self.device, &mut **commit, &clips)
     }
 }
 
